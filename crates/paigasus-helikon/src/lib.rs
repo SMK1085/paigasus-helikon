@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 
-/// Trait surface and concrete types shared by every Paigasus Helikon crate.
+/// Trait surface and concrete types shared by every Paigasus Helikon crate. Always available.
 pub use paigasus_helikon_core as core;
 
 /// Proc macros for the SDK. Enabled via the `macros` feature.
