@@ -35,6 +35,7 @@ trap 'rm -f "$json"' EXIT
 total_items=0
 total_documented=0
 summary_rows=()
+failed_crates=()
 
 for crate in "${crates[@]}"; do
   if is_excluded "$crate"; then
@@ -45,7 +46,8 @@ for crate in "${crates[@]}"; do
   if ! cargo "+${NIGHTLY}" rustdoc -p "$crate" --all-features -- \
         -Z unstable-options --show-coverage --output-format json \
         > "$json" 2> /dev/null; then
-    echo "::warning::rustdoc --show-coverage failed for ${crate}; treating as 0/0"
+    echo "::warning::rustdoc --show-coverage failed for ${crate}; marking crate as failed"
+    failed_crates+=("$crate")
     summary_rows+=("| \`${crate}\` | n/a | n/a | _rustdoc error_ |")
     continue
   fi
@@ -81,6 +83,11 @@ fi
   echo "| --- | ---: | ---: | ---: |"
   printf '%s\n' "${summary_rows[@]}"
 } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+
+if [[ "${#failed_crates[@]}" -gt 0 ]]; then
+  echo "::error::Doc coverage could not be computed for: ${failed_crates[*]}"
+  exit 1
+fi
 
 awk "BEGIN { exit !($workspace_pct >= $THRESHOLD) }" || {
   echo "::error::Doc coverage ${workspace_pct}% is below threshold ${THRESHOLD}%"

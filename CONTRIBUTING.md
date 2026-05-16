@@ -6,7 +6,7 @@ This file documents the policies CI enforces. Reviewers will not relitigate what
 
 All non-bot branches must match this regex (enforced via the SMA-309 repository ruleset once it lands):
 
-```
+```text
 ^(feature|hotfix)\/[a-z0-9._-]+$
 ```
 
@@ -18,7 +18,7 @@ Linear's "Copy git branch name" produces compliant names (e.g. `feature/sma-305-
 
 Use the Conventional-Commits-style prefix with the Linear ticket ID:
 
-```
+```text
 <type>(<scope>): SMA-### <message>
 ```
 
@@ -31,7 +31,7 @@ The workspace MSRV is **1.75** (declared in `[workspace.package].rust-version`).
 CI verifies MSRV two ways:
 
 1. `ci / test (… , 1.75)` matrix rows actually compile and run on 1.75.
-2. `msrv / verify` runs `cargo msrv verify --workspace` to confirm the declared MSRV is truthful.
+2. `msrv / verify` runs `cargo msrv --path crates/paigasus-helikon-core verify` to confirm the declared MSRV is truthful. (cargo-msrv has no `--workspace` flag; since every member inherits `rust-version` from `[workspace.package]`, verifying one representative crate is sufficient.)
 
 ## Docstring coverage
 
