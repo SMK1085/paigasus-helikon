@@ -65,6 +65,14 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 
 The required-status-check IDs SMA-309 will gate merge on are: `ci / fmt`, `ci / clippy`, `ci / test (ubuntu-latest, stable)`, `ci / docs`, `ci / doc-coverage`. Other matrix variants run as signals. Concurrency cancels in-flight PR runs but lets `main` pushes complete; both workflows declare `permissions: contents: read`.
 
+Supply-chain workflows (`.github/workflows/audit.yml`, `deny.yml`, `sbom.yml`) are separate from `ci.yml` because they have independent triggers and failure semantics. Required status checks added in SMA-306: `audit / audit`, `deny / deny`. The `audit` workflow has two jobs gated by `github.event_name`: the PR-time `audit` job uses `taiki-e/install-action` for deterministic behavior; the daily `scheduled-audit` job uses `rustsec/audit-check@v2` for its auto-issue-filing behavior on advisory hits — these are the only places in the repo where a wrapper action is preferred over direct tool invocation.
+
+The SBOM workflow invokes `cargo cyclonedx --manifest-path crates/paigasus-helikon/Cargo.toml --format json --spec-version 1.5 --all-features`. cargo-cyclonedx 0.5.x has no `-p` flag (must target via `--manifest-path`) and defaults to `--spec-version 1.3`, so 1.5 is pinned explicitly. With `--all-features` the facade's dep graph equals the workspace's dep graph, so one SBOM covers everything. The workflow's `find crates/paigasus-helikon -maxdepth 1 -name '*.cdx.json'` picks the facade's SBOM specifically — cargo-cyclonedx 0.5 walks the workspace and emits one SBOM under each member directory regardless of which member you point at, so scoping the find pattern matters.
+
+`deny.toml` declares `version = 2` under both `[advisories]` and `[licenses]` — v1 fields (`vulnerability`, `unmaintained`, `unsound`, `copyleft`, etc.) are removed in modern cargo-deny and adding them will fail with a schema error. The license allowlist includes `Unicode-3.0` in addition to the ticket-prescribed `Unicode-DFS-2016` because `unicode-ident ≥ 1.0.13` (pulled transitively by `serde_derive`) relicensed in 2024. cargo-deny's advisory DB lives at `~/.cargo/advisory-dbs` (plural) per `deny.toml`'s `db-path`; cargo-audit's DB is at `~/.cargo/advisory-db` (singular) — each tool caches its own, and the CI cache directories are scoped per-workflow.
+
+Dependabot is configured for `cargo` + `github-actions` ecosystems, weekly Monday 06:00 UTC (aligned with the daily audit cron), with patch + minor updates grouped into one PR per ecosystem.
+
 ## Cargo.lock
 
 Committed (workspace contains a binary).

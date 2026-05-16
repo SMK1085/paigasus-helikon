@@ -89,3 +89,36 @@ cargo msrv --path crates/paigasus-helikon-core verify
 ```
 
 (`cargo-msrv` has no `--workspace` flag. Since every crate's `rust-version` inherits from `[workspace.package]`, verifying one representative crate covers the whole workspace.)
+
+## Supply-chain security
+
+Three workflows complement CI and gate PRs alongside the build matrix:
+
+- `audit` — `cargo audit --deny warnings` against the [RustSec Advisory DB](https://rustsec.org/).
+  Runs on every PR + push to `main`, plus a daily scheduled run on `main` that
+  auto-files a GitHub issue if a new advisory affects the locked deps.
+- `deny` — `cargo deny --all-features check` enforces the license allowlist,
+  ban list, source registry restrictions, and a second advisory pass. Policy
+  lives in `deny.toml` at the workspace root.
+- `sbom` — on every `v*` tag push, generates a CycloneDX SBOM via
+  `cargo-cyclonedx` and uploads it as a release asset.
+
+Local repro:
+
+```bash
+cargo install cargo-audit cargo-deny cargo-cyclonedx   # one-time
+cargo audit --deny warnings
+cargo deny --all-features check
+cargo cyclonedx --manifest-path crates/paigasus-helikon/Cargo.toml \
+  --format json --spec-version 1.5 --all-features
+```
+
+Adding a new dependency that pulls a license outside the allowlist will fail
+`deny`. Either add the license to `deny.toml`'s `[licenses].allow` list (if
+permissively compatible) or carve a per-crate exception under
+`[licenses].exceptions`. Do **not** lower `confidence-threshold` or add to
+`[advisories].ignore` without recording a rationale in the same commit.
+
+Dependabot watches `cargo` and `github-actions` weekly (Monday 06:00 UTC),
+grouping patch + minor updates per ecosystem. Major bumps remain ungrouped
+so breaking changes are reviewed in isolation.
