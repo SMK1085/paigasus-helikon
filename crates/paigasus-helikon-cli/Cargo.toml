@@ -19,3 +19,6 @@ path = "src/bin/helikon.rs"
 [[bin]]
 name = "paigasus-helikon"
 path = "src/bin/paigasus_helikon.rs"
+
+[lints.rust]
+missing_docs = "allow"  # SMA-305: CLI opts out until Stage 3 public API stabilizes

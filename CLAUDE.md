@@ -13,12 +13,22 @@ The full architectural reference lives in Notion: ["Crate Reference"](https://ww
 ```bash
 cargo build --workspace                              # all 13 crates
 cargo build --workspace --all-features               # facade with every optional crate
-cargo doc --workspace --all-features --no-deps       # docs (matches CI)
 cargo run -p paigasus-helikon-cli --bin helikon
 cargo run -p paigasus-helikon-cli --bin paigasus-helikon
 ```
 
-To reproduce CI locally: `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
+To reproduce **every** CI gate locally (matches `.github/workflows/ci.yml` job-for-job):
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+cargo test --workspace --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
+  bash scripts/check-doc-coverage.sh                 # requires: rustup toolchain install nightly-2026-05-01
+```
+
+The full list lives in `CONTRIBUTING.md` (single source of truth for contributor policies).
 
 ## Workspace layout
 
@@ -36,6 +46,9 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 - **The `paigasus-helikon` facade lib shares its name with the `paigasus-helikon` CLI binary by design** (Notion ref's "fully-qualified shim alias"). This produces a non-fatal `cargo doc` filename-collision warning. Don't "fix" it by renaming either — both names are user-facing API. The accepted future fix is `doc = false` on the CLI binary entry.
 - **License is MIT only** (decided 2026-05-16). Don't add `LICENSE-APACHE` or set `license = "Apache-2.0 OR MIT"` even though the Cargo ecosystem convention is dual-licensing.
 - **MSRV is `1.75`** (workspace-package level). If a dep raises MSRV, bump `rust-version` to what cargo demands rather than downgrading the dep.
+- **Workspace-wide `missing_docs` enforcement** lives in root `Cargo.toml` (`[workspace.lints.rust] missing_docs = "warn"`). Each non-CLI crate opts in with `[lints] workspace = true`. The CLI overrides locally with `[lints.rust] missing_docs = "allow"` and does **not** include `workspace = true` — cargo treats `[lints] workspace = true` and an inline `[lints.<tool>]` table as mutually exclusive. When adding a new crate, copy the opt-in block. When adding a new `pub use` re-export to the facade, give it a `///` doc comment or `-D warnings` will fail the docs job.
+- **`cargo msrv` has no `--workspace` flag.** The msrv workflow verifies one representative inheriting crate: `cargo msrv --path crates/paigasus-helikon-core verify`. Because every member uses `rust-version.workspace = true`, success on one is success on all. Don't "fix" the workflow by adding `--workspace`; that's what the first SMA-305 CI run died on.
+- **Nightly is date-pinned** (`NIGHTLY_TOOLCHAIN: nightly-2026-05-01` at the workflow `env:` level in `ci.yml`, threaded into the doc-coverage script as `NIGHTLY_CHANNEL`). The rustdoc JSON coverage format is `-Z unstable-options` and can shift between nightlies; floating `nightly` would be a CI footgun. Bumping is a one-line follow-up chore, not an emergency.
 
 ## Workflow conventions
 
@@ -46,7 +59,11 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 
 ## CI
 
-`.github/workflows/ci.yml` runs `cargo build --workspace` + `cargo doc --workspace --all-features --no-deps` with `RUSTDOCFLAGS=-D warnings` on push/PR. No `fmt`/`clippy` gate yet despite `rust-toolchain.toml` installing both — both are tracked follow-ups for the first real-Rust ticket.
+`.github/workflows/ci.yml` runs five jobs on every PR and every push to `main`: `fmt`, `clippy`, `test` (matrix: `{ubuntu, macos, windows} × {stable, 1.75}`, `fail-fast: false`), `docs` (with `RUSTDOCFLAGS=-D warnings`), and `doc-coverage` (nightly rustdoc `--show-coverage`, aggregated by `scripts/check-doc-coverage.sh`, gated at `DOC_COVERAGE_THRESHOLD` — default 80%). The `paigasus-helikon-cli` crate is excluded from both the `missing_docs` lint and the coverage aggregator until its public API stabilizes.
+
+`.github/workflows/msrv.yml` runs `cargo msrv --path crates/paigasus-helikon-core verify` as a non-required signal that the declared MSRV is truthful.
+
+The required-status-check IDs SMA-309 will gate merge on are: `ci / fmt`, `ci / clippy`, `ci / test (ubuntu-latest, stable)`, `ci / docs`, `ci / doc-coverage`. Other matrix variants run as signals. Concurrency cancels in-flight PR runs but lets `main` pushes complete; both workflows declare `permissions: contents: read`.
 
 ## Cargo.lock
 
