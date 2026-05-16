@@ -9,3 +9,11 @@ version = "0.0.0"
 [[package]]
 name = "paigasus-helikon-macros"
 version = "0.0.0"
+
+[[package]]
+name = "paigasus-helikon-providers-anthropic"
+version = "0.0.0"
+
+[[package]]
+name = "paigasus-helikon-providers-openai"
+version = "0.0.0"
