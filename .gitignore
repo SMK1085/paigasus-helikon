@@ -1,1 +1,3 @@
 /target
+# cargo-cyclonedx SBOM artifacts (regenerated per build; uploaded by sbom workflow)
+crates/**/*.cdx.json
