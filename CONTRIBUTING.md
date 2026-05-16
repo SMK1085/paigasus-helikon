@@ -85,5 +85,7 @@ Optionally (CI also runs this):
 
 ```bash
 cargo install cargo-msrv      # or: cargo binstall cargo-msrv
-cargo msrv verify --workspace
+cargo msrv --path crates/paigasus-helikon-core verify
 ```
+
+(`cargo-msrv` has no `--workspace` flag. Since every crate's `rust-version` inherits from `[workspace.package]`, verifying one representative crate covers the whole workspace.)

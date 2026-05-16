@@ -22,4 +22,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-msrv
-      - run: cargo msrv verify --workspace
+      # cargo-msrv has no --workspace flag; verify one representative crate
+      # whose rust-version inherits from [workspace.package]. Since every
+      # member uses `rust-version.workspace = true`, a green check on one
+      # inheriting crate is a green check on all of them.
+      - run: cargo msrv --path crates/paigasus-helikon-core verify
