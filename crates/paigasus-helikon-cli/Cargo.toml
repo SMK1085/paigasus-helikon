@@ -1,0 +1,21 @@
+[package]
+name     = "paigasus-helikon-cli"
+description = "CLI binaries (helikon, paigasus-helikon) for the Paigasus Helikon AI SDK."
+autobins = false
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[[bin]]
+name = "helikon"
+path = "src/bin/helikon.rs"
+
+[[bin]]
+name = "paigasus-helikon"
+path = "src/bin/paigasus_helikon.rs"
