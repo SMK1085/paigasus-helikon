@@ -109,7 +109,8 @@ Local repro:
 cargo install cargo-audit cargo-deny cargo-cyclonedx   # one-time
 cargo audit --deny warnings
 cargo deny --all-features check
-cargo cyclonedx --format json --all-features -p paigasus-helikon
+cargo cyclonedx --manifest-path crates/paigasus-helikon/Cargo.toml \
+  --format json --spec-version 1.5 --all-features
 ```
 
 Adding a new dependency that pulls a license outside the allowlist will fail
