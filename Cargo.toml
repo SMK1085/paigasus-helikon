@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members  = ["crates/*"]
+
+[workspace.package]
+version       = "0.0.0"
+edition       = "2021"
+rust-version  = "1.75"
+authors       = ["Sven Maschek"]
+license       = "MIT"
+repository    = "https://github.com/SMK1085/paigasus-helikon"
+homepage      = "https://github.com/SMK1085/paigasus-helikon"
+keywords      = ["ai", "llm", "agents", "sdk", "openai"]
+categories    = ["api-bindings", "asynchronous"]
+
+[workspace.dependencies]
+serde         = { version = "1", features = ["derive"] }
+serde_json    = "1"
+schemars      = "1"
+tokio         = { version = "1", features = ["full"] }
+tracing       = "0.1"
+opentelemetry = "0.27"
+rmcp          = "0.16"
+thiserror     = "2"
+anyhow        = "1"
+async-trait   = "0.1"
