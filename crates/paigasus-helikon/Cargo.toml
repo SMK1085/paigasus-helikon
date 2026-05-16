@@ -1,0 +1,38 @@
+[package]
+name        = "paigasus-helikon"
+description = "Paigasus AI SDK — facade crate. Re-exports core plus feature-gated providers and runtimes."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+keywords.workspace     = true
+categories.workspace   = true
+
+[dependencies]
+paigasus-helikon-core                = { workspace = true }
+paigasus-helikon-macros              = { workspace = true, optional = true }
+paigasus-helikon-providers-openai    = { workspace = true, optional = true }
+paigasus-helikon-providers-anthropic = { workspace = true, optional = true }
+paigasus-helikon-mcp                 = { workspace = true, optional = true }
+paigasus-helikon-tools               = { workspace = true, optional = true }
+paigasus-helikon-runtime-tokio       = { workspace = true, optional = true }
+paigasus-helikon-runtime-axum        = { workspace = true, optional = true }
+paigasus-helikon-runtime-temporal    = { workspace = true, optional = true }
+paigasus-helikon-runtime-agentcore   = { workspace = true, optional = true }
+paigasus-helikon-evals               = { workspace = true, optional = true }
+
+[features]
+default            = []
+macros             = ["dep:paigasus-helikon-macros"]
+openai             = ["dep:paigasus-helikon-providers-openai"]
+anthropic          = ["dep:paigasus-helikon-providers-anthropic"]
+mcp                = ["dep:paigasus-helikon-mcp"]
+tools              = ["dep:paigasus-helikon-tools"]
+evals              = ["dep:paigasus-helikon-evals"]
+runtime-tokio      = ["dep:paigasus-helikon-runtime-tokio"]
+runtime-axum       = ["dep:paigasus-helikon-runtime-axum"]
+runtime-temporal   = ["dep:paigasus-helikon-runtime-temporal"]
+runtime-agentcore  = ["dep:paigasus-helikon-runtime-agentcore"]

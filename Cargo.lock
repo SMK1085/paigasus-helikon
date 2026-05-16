@@ -3,6 +3,23 @@
 version = 3
 
 [[package]]
+name = "paigasus-helikon"
+version = "0.0.0"
+dependencies = [
+ "paigasus-helikon-core",
+ "paigasus-helikon-evals",
+ "paigasus-helikon-macros",
+ "paigasus-helikon-mcp",
+ "paigasus-helikon-providers-anthropic",
+ "paigasus-helikon-providers-openai",
+ "paigasus-helikon-runtime-agentcore",
+ "paigasus-helikon-runtime-axum",
+ "paigasus-helikon-runtime-temporal",
+ "paigasus-helikon-runtime-tokio",
+ "paigasus-helikon-tools",
+]
+
+[[package]]
 name = "paigasus-helikon-cli"
 version = "0.0.0"
 
