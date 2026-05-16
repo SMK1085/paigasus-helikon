@@ -23,5 +23,21 @@ name = "paigasus-helikon-providers-openai"
 version = "0.0.0"
 
 [[package]]
+name = "paigasus-helikon-runtime-agentcore"
+version = "0.0.0"
+
+[[package]]
+name = "paigasus-helikon-runtime-axum"
+version = "0.0.0"
+
+[[package]]
+name = "paigasus-helikon-runtime-temporal"
+version = "0.0.0"
+
+[[package]]
+name = "paigasus-helikon-runtime-tokio"
+version = "0.0.0"
+
+[[package]]
 name = "paigasus-helikon-tools"
 version = "0.0.0"

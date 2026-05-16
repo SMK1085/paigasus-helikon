@@ -1,0 +1,12 @@
+[package]
+name        = "paigasus-helikon-runtime-temporal"
+description = "Temporal-backed durable runtime for the Paigasus Helikon AI SDK."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+keywords.workspace     = true
+categories.workspace   = true
