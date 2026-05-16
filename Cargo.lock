@@ -5,3 +5,7 @@ version = 3
 [[package]]
 name = "paigasus-helikon-core"
 version = "0.0.0"
+
+[[package]]
+name = "paigasus-helikon-macros"
+version = "0.0.0"
