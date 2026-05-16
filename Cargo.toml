@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members  = ["crates/*"]
+
+[workspace.package]
+version       = "0.0.0"
+edition       = "2021"
+rust-version  = "1.75"
+authors       = ["Sven Maschek"]
+license       = "MIT"
+repository    = "https://github.com/SMK1085/paigasus-helikon"
+homepage      = "https://github.com/SMK1085/paigasus-helikon"
+keywords      = ["ai", "llm", "agents", "sdk", "openai"]
+categories    = ["api-bindings", "asynchronous"]
+
+[workspace.dependencies]
+serde         = { version = "1", features = ["derive"] }
+serde_json    = "1"
+schemars      = "1"
+tokio         = { version = "1", features = ["full"] }
+tracing       = "0.1"
+opentelemetry = "0.27"
+rmcp          = "0.16"
+thiserror     = "2"
+anyhow        = "1"
+async-trait   = "0.1"
+
+# Internal — single source of truth so members depend via `workspace = true`
+paigasus-helikon-core                = { path = "crates/paigasus-helikon-core",                version = "0.0.0" }
+paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros",              version = "0.0.0" }
+paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai",    version = "0.0.0" }
+paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.0.0" }
+paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp",                 version = "0.0.0" }
+paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools",               version = "0.0.0" }
+paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio",       version = "0.0.0" }
+paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum",        version = "0.0.0" }
+paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.0.0" }
+paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
+paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
