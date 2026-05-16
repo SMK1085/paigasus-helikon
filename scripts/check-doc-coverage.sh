@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Requires bash >= 4.0 (mapfile). On macOS: `brew install bash`.
 # SMA-305: aggregate workspace-wide docstring coverage and gate on a threshold.
 # Per-spec: docs/superpowers/specs/2026-05-16-sma-305-ci-design.md §6.
 
@@ -20,10 +21,16 @@ is_excluded() {
   return 1
 }
 
-mapfile -t crates < <(
-  cargo metadata --format-version 1 --no-deps \
-    | jq -r '.packages[] | .name'
-)
+# Run cargo metadata in the main shell so set -e applies; using a
+# herestring keeps jq's exit status visible too. Process substitution
+# `<(...)` runs in a subshell where pipefail does NOT propagate, so a
+# failure of cargo metadata or jq would silently produce an empty list
+# and the script would report a vacuous 100% pass.
+metadata="$(cargo metadata --format-version 1 --no-deps)"
+mapfile -t crates < <(jq -r '.packages[] | .name' <<< "$metadata")
+
+json="$(mktemp)"
+trap 'rm -f "$json"' EXIT
 
 total_items=0
 total_documented=0
@@ -35,7 +42,6 @@ for crate in "${crates[@]}"; do
     continue
   fi
 
-  json="$(mktemp)"
   if ! cargo "+${NIGHTLY}" rustdoc -p "$crate" --all-features -- \
         -Z unstable-options --show-coverage --output-format json \
         > "$json" 2> /dev/null; then
