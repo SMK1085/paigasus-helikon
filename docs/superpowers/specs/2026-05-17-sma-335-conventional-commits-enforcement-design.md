@@ -32,6 +32,7 @@
 .versionrc                                                        # NEW (workspace root; YAML, auto-discovered by convco)
 crates/paigasus-helikon/Cargo.toml                                # add cargo-husky dev-dep
 .cargo-husky/hooks/commit-msg                                     # NEW (workspace root; cargo-husky resolves relative to .git)
+.cargo-husky/hooks/pre-commit                                     # NEW (deliberate no-op; see §4.4)
 CONTRIBUTING.md                                                   # new "Conventional Commits" section
 docs/superpowers/specs/2026-05-17-sma-335-…-design.md             # this doc
 docs/superpowers/plans/2026-05-17-sma-335-….md                    # follow-up plan
@@ -126,12 +127,12 @@ CONTRIBUTING.md will document this explicitly:
 
 The ticket's "Hooks install automatically on first `cargo build` after clone" is slightly optimistic; the corrected wording above is the safe form.
 
-### 4.3 Hook script
+### 4.3 commit-msg hook script
 
 ```sh
 #!/usr/bin/env sh
 # .cargo-husky-managed commit-msg hook for paigasus-helikon.
-# See SMA-335 design doc and CONTRIBUTING.md "Conventional Commits".
+# Enforces Conventional Commits via convco (see .versionrc).
 # Bypass for emergencies: git commit --no-verify
 
 if ! command -v convco >/dev/null 2>&1; then
@@ -144,7 +145,20 @@ fi
 exec convco check --from-stdin < "$1"
 ```
 
-The exit-with-hint behavior on missing `convco` is intentional: a silent pass would defeat the hook's purpose; the one-line install hint converts a frustrating failure into a self-serve fix.
+The exit-with-hint behavior on missing `convco` is intentional: a silent pass would defeat the hook's purpose; the install hint converts a frustrating failure into a self-serve fix. Three install paths are listed because the `cargo install convco --locked` route builds from source and requires `cmake` (a common omission on fresh macOS dev machines); `cargo binstall convco` and `brew install convco` are both prebuilt-binary alternatives.
+
+### 4.4 pre-commit hook script (deliberate no-op)
+
+```sh
+#!/usr/bin/env sh
+# Intentional no-op. cargo-husky with user-hooks feature installs every
+# file in .cargo-husky/hooks/ into .git/hooks/. We declare pre-commit
+# explicitly so an empty/missing file doesn't get filled in later by
+# accident and surprise contributors with new pre-commit behavior.
+exit 0
+```
+
+Rationale: cargo-husky with `features = ["user-hooks"]` installs every executable file under `.cargo-husky/hooks/` into `.git/hooks/` on every dev's machine. Without an explicit `pre-commit` file, a future contributor who adds `pre-commit` to that directory would silently activate it for everyone on their next `cargo test` run. Declaring a no-op closes that surface: any subsequent edit becomes a deliberate change with a visible diff.
 
 ## 5. CI jobs
 
