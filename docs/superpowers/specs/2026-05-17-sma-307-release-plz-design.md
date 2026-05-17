@@ -391,3 +391,31 @@ If step 3 is missed (release-plz opens a kitchen-sink PR first), follow the §6.
 - **`semver_check` noise.** If release-plz runs become slow once real API surface lands, revisit the default. No action needed now.
 - **Auto-merging release-plz PRs.** Out of scope. Reviewers manually merge today.
 - **release-plz `workflow_dispatch` trigger.** Not added in this PR. If the §6.4 fallback bites in practice, a one-line addition to the workflow (`workflow_dispatch:` under `on:`) makes manual retriggering trivial. Document as a follow-up if observed.
+
+## 11. Post-implementation findings (2026-05-17)
+
+Two issues discovered during the post-merge runbook that the design didn't anticipate. Both deferred to Stage 1 rather than fixed in SMA-307.
+
+### 11.1 `[workspace.changelog]` is invalid release-plz schema
+
+Initial `release-plz.toml` nested the changelog config under `[workspace]`. release-plz parses this as TOML successfully but rejects it during schema validation with `unknown field 'changelog'` under `[workspace]`, blocking the workflow end-to-end. The correct layout is `[changelog]` as a **top-level** section. Fixed in-tree (commit `0cbb5c3`). The local TOML well-formedness check (Task 6 Step 2) is insufficient — proper validation requires running `release-plz check-updates`, which depends on having `release-plz` installed locally. Spec §4 and plan Task 6 corrected to the right layout.
+
+### 11.2 release-plz cannot propose Conventional-Commits-driven bumps under workspace-wide `publish = false`
+
+The plan's Verification 2 (a `feat(core):` commit producing a release PR with a bump) is **structurally unsatisfiable in Stage 0**. The mechanism:
+
+1. release-plz computes per-crate diffs by running `cargo package --list` at each historical commit and comparing packaged file contents.
+2. With `publish = false` workspace-wide, the crate has never been on crates.io → `registry_package_exists: false`.
+3. release-plz's `cargo package` calls at older commits hit `cannot canonicalize path "<crate>/Cargo.lock"` errors because of how the package-walk machinery interacts with the worktree state at historical commits.
+4. With no successful packaged-file diff and `semver_check: Skipped` (no registry baseline to check against), release-plz falls back to `next_version: 0.0.0` regardless of commit types.
+
+The conventional-commits parsing itself works — the smoketest commit `feat(core): SMA-307 add release-plz smoketest docstring (#7)` appears correctly in release-plz's `Diff.commits` list. The breakdown is in the bump-decision logic that depends on the packaged-file comparison.
+
+**What this means for SMA-307 acceptance:**
+
+- Verification 1 (no spurious release PR after baseline tags) — **passed**, plumbing operational.
+- Verification 2 (smoketest produces a core bump) — **deferred to Stage 1**. The release-plz workflow runs to completion successfully but reports `{"prs":[]}` because it can't compute a bump under `publish = false`.
+
+**Stage 1 must verify the bump path** as part of its rollout (alongside lifting `publish = false` and adding `CARGO_REGISTRY_TOKEN`). Once the first crate is on crates.io, subsequent `feat(...)` commits should produce proper bump PRs.
+
+**Why not deeper investigation in SMA-307:** the alternatives (private registry, manual version bump, configuration workaround) all either invert significant Stage-0 architectural decisions or don't actually exercise the Conventional-Commits→bump path the spec wanted to verify. Stage 1's real publishing flow is the natural verification surface.
