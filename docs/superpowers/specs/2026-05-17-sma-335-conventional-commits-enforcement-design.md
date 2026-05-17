@@ -31,7 +31,7 @@
 .github/workflows/pr-title.yml                                    # NEW
 .versionrc                                                        # NEW (workspace root; YAML, auto-discovered by convco)
 crates/paigasus-helikon/Cargo.toml                                # add cargo-husky dev-dep
-crates/paigasus-helikon/.cargo-husky/hooks/commit-msg             # NEW
+.cargo-husky/hooks/commit-msg                                     # NEW (workspace root; cargo-husky resolves relative to .git)
 CONTRIBUTING.md                                                   # new "Conventional Commits" section
 docs/superpowers/specs/2026-05-17-sma-335-…-design.md             # this doc
 docs/superpowers/plans/2026-05-17-sma-335-….md                    # follow-up plan
@@ -106,13 +106,15 @@ runtime, runtime-tokio, runtime-axum, runtime-temporal, runtime-agentcore
 
 ### 4.1 Placement
 
-cargo-husky requires `.cargo-husky/hooks/` to live under the crate that declares it as a dev-dependency. We declare it on the facade crate (`paigasus-helikon`), so hooks live at:
+cargo-husky's build script (in the `cargo-husky` dep itself) resolves the hook source directory by walking up the filesystem until it finds a `.git` directory, then reading from `.cargo-husky/hooks/` at that location. **The crate that declares the dev-dependency only controls when the install fires, not where hooks are read from.** Hooks therefore live at the workspace root:
 
 ```
-crates/paigasus-helikon/.cargo-husky/hooks/commit-msg
+.cargo-husky/hooks/commit-msg     (workspace root, NOT under the facade crate)
 ```
 
-Putting workspace-level tooling under one crate's tree is mildly awkward but it is how cargo-husky resolves the path. The alternative (per-crate dev-dep on every crate) would be far worse.
+The dev-dep itself lives on the facade crate (`paigasus-helikon`) so `cargo test -p paigasus-helikon --no-run` triggers the install (§4.2).
+
+**Correction note (verified 2026-05-17):** The original spec said cargo-husky required `.cargo-husky/hooks/` under the consumer crate. That was wrong — cargo-husky resolves relative to `.git`. The first `cargo test` attempt that placed the hooks under `crates/paigasus-helikon/.cargo-husky/` failed with `InvalidUserHooksDir`, confirming the workspace-root location is the correct one.
 
 ### 4.2 Activation footgun
 
@@ -134,7 +136,8 @@ The ticket's "Hooks install automatically on first `cargo build` after clone" is
 
 if ! command -v convco >/dev/null 2>&1; then
   echo "commit-msg hook: convco not on PATH." >&2
-  echo "Install: cargo install convco   (or: cargo binstall convco)" >&2
+  echo "Install: cargo install convco --locked" >&2
+  echo "  alternates: cargo binstall convco   |   brew install convco" >&2
   exit 1
 fi
 
@@ -361,7 +364,7 @@ SMA-308 §11.1's switch to the clean `chore(deps):` form is already merged. SMA-
 |---|---|---|
 | Tool | **convco** | Rust-native single binary; no Node toolchain; release-plz already covers bumps/changelogs so a lighter linter suffices. |
 | Scope allowlist breadth | **Hybrid (crate scopes + cross-cutting scopes)** | Strict crate-names-only would break Dependabot and ~half of historical commits. Hybrid keeps signal without forcing contortions. |
-| cargo-husky placement | **`crates/paigasus-helikon/.cargo-husky/hooks/`** | Required by cargo-husky's path resolution (consumer crate, not workspace root). |
+| cargo-husky placement | **`.cargo-husky/hooks/` at workspace root** | cargo-husky's build script walks up to `.git` and reads `.cargo-husky/hooks/` from there — independent of which crate declares the dev-dep. The original spec said the opposite; corrected at implementation time after `InvalidUserHooksDir` failure. |
 | cargo-husky activation note | **Explicit `cargo test -p paigasus-helikon --no-run`** | `cargo build --workspace` without `--tests` does not reliably trigger the build script. The ticket's "first cargo build" wording is slightly optimistic. |
 | SMA-### body enforcement | **Documented but not gated** | convco cannot enforce body content. Bots are already exempt in practice. A separate regex gate is deferrable. |
 | PR title casing | **subjectPattern `^([A-Z]{2,4}-\d+ )?[^A-Z].+$`** | Rejects `feat: Add foo` (the most common mistake) while allowing `feat(core): SMA-304 add foo`. |

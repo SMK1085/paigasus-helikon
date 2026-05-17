@@ -175,11 +175,13 @@
 
 **Files:**
 - Modify: `crates/paigasus-helikon/Cargo.toml` (add `[dev-dependencies]` block)
-- Create: `crates/paigasus-helikon/.cargo-husky/hooks/commit-msg`
-- Create: `crates/paigasus-helikon/.cargo-husky/hooks/pre-commit` (a do-nothing override — see Step 2.3)
+- Create: `.cargo-husky/hooks/commit-msg` (workspace root — cargo-husky resolves the hook source dir relative to `.git`, not the dev-dep crate)
+- Create: `.cargo-husky/hooks/pre-commit` (a do-nothing override — see Step 2.3)
 - Test: manual `git commit` attempts
 
 **Why:** Local enforcement is the fastest feedback loop. The hook is installed by cargo-husky's build script when the facade's dev-deps are realized.
+
+> **Location correction (verified 2026-05-17):** The plan originally put hooks under `crates/paigasus-helikon/.cargo-husky/`, based on the (mistaken) reading that cargo-husky's source dir is relative to the consumer crate. Reality: cargo-husky's `build.rs` walks up to `.git` and uses `.cargo-husky/hooks/` at the git root. The first `cargo test` attempt under the crate dir failed with `InvalidUserHooksDir`. Hooks live at the workspace root; Steps 2.3, 2.4, 2.7 reflect the verified location.
 
 - [ ] **Step 2.1: Confirm the negative test currently passes (i.e., no hook is enforcing)**
 
@@ -207,7 +209,7 @@
 
 - [ ] **Step 2.3: Create the `commit-msg` hook**
 
-  Create `crates/paigasus-helikon/.cargo-husky/hooks/commit-msg`:
+  Create `.cargo-husky/hooks/commit-msg` at the **workspace root**:
   ```sh
   #!/usr/bin/env sh
   # .cargo-husky-managed commit-msg hook for paigasus-helikon.
@@ -216,14 +218,15 @@
 
   if ! command -v convco >/dev/null 2>&1; then
     echo "commit-msg hook: convco not on PATH." >&2
-    echo "Install: cargo install convco   (or: cargo binstall convco)" >&2
+    echo "Install: cargo install convco --locked" >&2
+    echo "  alternates: cargo binstall convco   |   brew install convco" >&2
     exit 1
   fi
 
   exec convco check --from-stdin < "$1"
   ```
 
-  Also create `crates/paigasus-helikon/.cargo-husky/hooks/pre-commit` as a deliberate no-op:
+  Also create `.cargo-husky/hooks/pre-commit` (workspace root) as a deliberate no-op:
   ```sh
   #!/usr/bin/env sh
   # Intentional no-op. cargo-husky with user-hooks feature installs every
@@ -235,8 +238,8 @@
 
   Make both executable:
   ```bash
-  chmod +x crates/paigasus-helikon/.cargo-husky/hooks/commit-msg
-  chmod +x crates/paigasus-helikon/.cargo-husky/hooks/pre-commit
+  chmod +x .cargo-husky/hooks/commit-msg
+  chmod +x .cargo-husky/hooks/pre-commit
   ```
 
 - [ ] **Step 2.4: Trigger cargo-husky's build script to install the hooks**
@@ -255,9 +258,9 @@
 
   Diff against the source:
   ```bash
-  diff .git/hooks/commit-msg crates/paigasus-helikon/.cargo-husky/hooks/commit-msg
+  diff .git/hooks/commit-msg .cargo-husky/hooks/commit-msg
   ```
-  Expected: identical content (cargo-husky may prepend a generated header — that's fine; the body should match).
+  Expected: nearly identical (cargo-husky 1.5.x prepends two lines: a blank `#` line and `# This hook was set by cargo-husky v1.5.0: …`). The body should match exactly.
 
 - [ ] **Step 2.5: Negative test — the hook should now reject bad messages**
 
@@ -285,7 +288,7 @@
 - [ ] **Step 2.7: Commit**
 
   ```bash
-  git add crates/paigasus-helikon/Cargo.toml crates/paigasus-helikon/.cargo-husky/
+  git add crates/paigasus-helikon/Cargo.toml .cargo-husky/
   git commit -m "$(cat <<'EOF'
   chore(facade): SMA-335 add cargo-husky dev-dep and commit-msg hook
 
@@ -625,7 +628,7 @@
   ```
 
   This compiles cargo-husky's build script, which copies
-  `crates/paigasus-helikon/.cargo-husky/hooks/commit-msg` into
+  `.cargo-husky/hooks/commit-msg` (at the workspace root) into
   `.git/hooks/`. Verify with `ls .git/hooks/commit-msg`.
 
   The hook execs `convco check`. If `convco` is not on `$PATH`, the
@@ -633,9 +636,13 @@
 
   ```bash
   cargo install convco --locked
-  # or, faster:
+  # or, faster (prebuilt binary):
   cargo binstall convco
+  # or, macOS:
+  brew install convco
   ```
+
+  (`cargo install convco --locked` builds from source and requires `cmake`; on machines without `cmake`, prefer `cargo binstall` or `brew install`.)
 
   Emergency bypass (use sparingly):
 
