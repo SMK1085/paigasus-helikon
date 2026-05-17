@@ -122,3 +122,51 @@ permissively compatible) or carve a per-crate exception under
 Dependabot watches `cargo` and `github-actions` weekly (Monday 06:00 UTC),
 grouping patch + minor updates per ecosystem. Major bumps remain ungrouped
 so breaking changes are reviewed in isolation.
+
+## Releases
+
+Releases are automated by [release-plz](https://release-plz.dev). The contract:
+
+1. **Conventional Commits drive bumps.** The mapping below applies to
+   post-1.0 versions; release-plz adjusts the effective bump level for
+   pre-1.0 (`0.x.y`) versions automatically per its own conventions —
+   consult the [release-plz docs](https://release-plz.dev/docs) for the
+   precise pre-1.0 rules. `feat(<scope>):` → minor. `fix(<scope>):` →
+   patch. `feat!:` / `BREAKING CHANGE:` footer → major. `chore`, `docs`,
+   `ci`, `refactor`, `test`, `style` → no bump. `<scope>` is informational
+   — release-plz attributes by files changed.
+
+2. **A rolling release PR.** The `release-plz` workflow runs on every push to
+   `main` and maintains one open release PR titled `chore: release v...`. It
+   enumerates which crates will bump and to what version, and shows the
+   generated `CHANGELOG.md` additions. Reviewers verify, then squash-merge.
+
+3. **Merging the release PR** triggers the workflow's `release-plz-release`
+   job, which creates per-crate git tags (`<crate>-v<version>`), GitHub
+   releases, and — once Stage 1 lifts `publish = false` — publishes to
+   crates.io. The CLI crate (`paigasus-helikon-cli`) is permanently
+   `publish = false` because it's a binary, not a library dependency.
+
+4. **Overriding release-plz.** If the proposed bumps are wrong, edit the
+   release PR's `Cargo.toml` / `CHANGELOG.md` directly — release-plz
+   respects manual edits and won't clobber them on subsequent runs.
+
+5. **Bootstrap commits on release infrastructure.** Any commit that edits
+   `release-plz.toml`, `.github/workflows/release-plz.yml`, or every crate's
+   `Cargo.toml` simultaneously must use `chore(...)` or `docs(...)` types —
+   never `feat`/`fix`. Otherwise release-plz attributes a workspace-wide bump
+   to the infrastructure change. See CLAUDE.md for the full rule.
+
+### Authentication
+
+release-plz authenticates as the [release-plz GitHub App](https://github.com/apps/release-plz)
+installation on this repo. The workflow mints a per-job installation token
+via `actions/create-github-app-token@v1` from two repo secrets
+(`RELEASE_PLZ_APP_ID`, `RELEASE_PLZ_APP_PRIVATE_KEY`). The App identity is
+listed as a bypass actor in SMA-309's branch-name ruleset, so release-plz's
+`release-plz-<timestamp>` branch prefix is permitted.
+
+A fine-grained PAT (with `contents: write` + `pull-requests: write` scoped
+to this repo, stored as `RELEASE_PLZ_TOKEN`) is the documented fallback if
+the App becomes unavailable. The workflow would be changed to read
+`secrets.RELEASE_PLZ_TOKEN` instead of minting an App token.

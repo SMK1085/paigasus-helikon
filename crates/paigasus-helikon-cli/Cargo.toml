@@ -2,7 +2,7 @@
 name     = "paigasus-helikon-cli"
 description = "CLI binaries (helikon, paigasus-helikon) for the Paigasus Helikon AI SDK."
 autobins = false
-version.workspace      = true
+version                = "0.0.0"
 edition.workspace      = true
 rust-version.workspace = true
 authors.workspace      = true
