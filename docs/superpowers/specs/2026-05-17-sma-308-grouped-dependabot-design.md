@@ -224,7 +224,7 @@ The first Dependabot run after merge produced PR #9 with the title `chore(deps)(
 
 §3.3 and §4 of this doc were updated to drop the `commit-message.include` row and the `include: "scope"` line, respectively. §6, §7, and §8.1 are left as the historical design-time analysis — they document *why* we initially accepted the doubled-parens form, even though the contingency in §7 was eventually triggered.
 
-PR for the fix: see git history for `chore(deps): drop dependabot include: scope` (2026-05-17, post-merge of SMA-308's main PR #8).
+Fix landed in [PR #11](https://github.com/SMK1085/paigasus-helikon/pull/11) (commit `chore(deps): drop dependabot include: scope to fix doubled prefix`, 2026-05-17), opened immediately after SMA-308's main PR #8 merged.
 
 ### 11.2 Still pending
 
