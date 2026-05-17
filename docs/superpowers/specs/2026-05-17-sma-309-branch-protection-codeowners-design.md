@@ -186,7 +186,7 @@ POSIX `sh`, idempotent (re-runs produce the same state), runnable from any maint
 Behavior, in order:
 
 1. **Preflight.** `gh auth status` → fail fast if unauthenticated. `command -v jq` → fail with install hint if missing.
-2. **Resolve Integration IDs.** Call `gh api /repos/SMK1085/paigasus-helikon/installations` once. `jq` extracts `app_id` for `app_slug == "dependabot"` and `app_slug == "release-plz"`. If either App is not installed, fail with a clear message including the install URL.
+2. **Resolve Integration IDs.** Call the public `GET /apps/{app_slug}` endpoint twice — once for `dependabot`, once for `release-plz` — and read `.id` from each response. This endpoint is unauthenticated-friendly and returns each App's stable global numeric ID (dependabot=29110, release-plz=205377 at the time of writing). Installation status is intentionally *not* checked: the App ID is the same whether the App is installed on this repo or not, and listing repo-level installations requires an App-authorized token (not the maintainer's PAT). A bypass actor entry for an uninstalled App is inert and harmless; the maintainer can install the App at any time and the entry takes effect immediately.
 3. **Apply each ruleset.** For each `.github/rulesets/*.json`:
    1. `sed` substitutes the literal tokens `"DEPENDABOT_APP_ID"` and `"RELEASE_PLZ_APP_ID"` (including the surrounding double-quotes) with the resolved numeric App IDs, producing a temp file with a valid request body. (Committed JSON keeps the string placeholders so the files remain portable across forks.) Files that don't reference those placeholders are passed through unchanged.
    2. Query `gh api /repos/SMK1085/paigasus-helikon/rulesets` for a ruleset with the same `name`.
