@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, edited, synchronize]
 
+concurrency:
+  group: pr-title-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   pull-requests: read
   statuses: write
