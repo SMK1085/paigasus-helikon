@@ -7,14 +7,34 @@ updates:
       day: monday
       time: "06:00"
       timezone: "Etc/UTC"
-    open-pull-requests-limit: 10
-    groups:
-      cargo-minor-and-patch:
-        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
     labels: ["area:deps"]
+    assignees: ["SMK1085"]
+    groups:
+      tokio-stack:
+        patterns:
+          - "tokio*"
+          - "tower*"
+          - "hyper*"
+          - "reqwest*"
+      tracing-otel:
+        patterns:
+          - "tracing*"
+          - "opentelemetry*"
+      serde-stack:
+        patterns:
+          - "serde*"
+          - "schemars"
+          - "serde_with*"
+      rust-major:
+        patterns: ["*"]
+        update-types: ["major"]
+      rust-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
     directory: "/"
@@ -24,10 +44,11 @@ updates:
       time: "06:00"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
-    groups:
-      actions-minor-and-patch:
-        update-types: ["minor", "patch"]
     commit-message:
-      prefix: "chore(ci)"
+      prefix: "chore(deps)"
       include: "scope"
-    labels: ["area:ci"]
+    labels: ["area:deps"]
+    assignees: ["SMK1085"]
+    groups:
+      gh-actions:
+        patterns: ["*"]
