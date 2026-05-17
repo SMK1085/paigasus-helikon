@@ -1,0 +1,70 @@
+name: pr-title
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize]
+
+permissions:
+  pull-requests: read
+  statuses: write
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      # amannn/action-semantic-pull-request v5.5.3
+      # Pinned to SHA; Dependabot's gh-actions group keeps this updated.
+      - uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # keep-in-sync-with: .versionrc types
+          types: |
+            feat
+            fix
+            build
+            chore
+            ci
+            docs
+            style
+            refactor
+            perf
+            test
+            revert
+          # keep-in-sync-with: .versionrc scopeRegex
+          scopes: |
+            core
+            cli
+            facade
+            macros
+            mcp
+            tools
+            evals
+            providers
+            providers-openai
+            providers-anthropic
+            runtime
+            runtime-tokio
+            runtime-axum
+            runtime-temporal
+            runtime-agentcore
+            workspace
+            workflows
+            ci
+            deps
+            release
+            repo
+            docs
+            contributing
+            readme
+            claude
+            spec
+            specs
+            plan
+            lints
+          requireScope: false
+          subjectPattern: '^([A-Z]{2,4}-\d+ )?[^A-Z].+$'
+          subjectPatternError: |
+            PR title subject must not start with an uppercase letter.
+            Use sentence case after the colon, e.g. `feat(core): add Model trait`.
+            An optional `SMA-### ` prefix is accepted, e.g. `feat(core): SMA-304 add Model trait`.
