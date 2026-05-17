@@ -14,15 +14,131 @@ Linear's "Copy git branch name" produces compliant names (e.g. `feature/sma-305-
 
 `release-plz[bot]` and `dependabot[bot]` are allow-listed bypass actors for their own automation branches.
 
-## Commit messages
+## Conventional Commits
 
-Use the Conventional-Commits-style prefix with the Linear ticket ID:
+Every commit message **and** every PR title must conform to
+[Conventional Commits 1.0](https://www.conventionalcommits.org/en/v1.0.0/),
+with the type and scope constrained as below. Three layers enforce
+this:
+
+| Layer | Fires when | Bypass |
+|---|---|---|
+| Local `commit-msg` hook | `git commit` | `git commit --no-verify` |
+| `ci / commits` job | PR open + sync | none — fix the message |
+| `pr-title / pr-title` job | PR open/edit/sync | none — fix the title |
+
+### Allowed types and semver effect
+
+This project is currently pre-1.0 (`0.x.y` across every crate);
+release-plz applies its own pre-1.0 bump rules — consult the
+[release-plz docs](https://release-plz.dev/docs) for the exact
+mapping in effect today. The table below shows the **post-1.0**
+mapping that becomes operative after the first `1.0.0` release:
+
+| Type | Semver effect (post-1.0) | Use for |
+|---|---|---|
+| `feat` | minor | New user-visible capability |
+| `fix` | patch | Bug fix |
+| `feat!` or any type with `BREAKING CHANGE:` footer | major | API break |
+| `chore`, `docs`, `refactor`, `test`, `perf`, `style`, `build`, `ci`, `revert` | none | Everything else |
+
+### Scope allowlist
+
+Scope is optional. If present, must match one of:
+
+- **Crate scopes** (one per workspace member, facade collapsed to `facade`):
+  `core`, `cli`, `facade`, `macros`, `mcp`, `tools`, `evals`,
+  `providers`, `providers-openai`, `providers-anthropic`,
+  `runtime`, `runtime-tokio`, `runtime-axum`, `runtime-temporal`, `runtime-agentcore`
+- **Cross-cutting scopes:** `workspace`, `workflows`, `ci`, `deps`,
+  `release`, `repo`, `docs`, `contributing`, `readme`, `claude`,
+  `spec`, `specs`, `plan`, `lints`
+
+Canonical source is [`.versionrc`](./.versionrc). The
+`pr-title.yml` workflow mirrors the same list — they must change
+together.
+
+### Examples
+
+Valid:
 
 ```text
-<type>(<scope>): SMA-### <message>
+feat(core): SMA-304 add Model trait
+fix(providers-openai): SMA-312 handle 429 retry-after header
+chore(deps): bump tokio from 1.40 to 1.41
+docs(contributing): SMA-310 document supply-chain section
+ci(workflows): SMA-306 add cargo-audit workflow
+feat(facade)!: SMA-400 reshape feature flag names
 ```
 
-`<type>` is one of `feat`, `fix`, `docs`, `ci`, `chore`, `refactor`, `test`. `<scope>` is the affected area (`workspace`, `facade`, `workflows`, `lints`, …). Once SMA-335 lands, a GitHub Action enforces this in PR titles too.
+Invalid:
+
+```text
+wip                                  # no type
+fix typo                             # no type/scope structure
+Update README                        # wrong format; PR title would also fail subjectPattern
+feat(unknown-scope): SMA-### foo     # scope not in allowlist
+feat(core): Add Model trait          # PR title would fail subjectPattern (uppercase start)
+```
+
+### Optional Linear ticket prefix
+
+Include `SMA-###` in the subject when the change is tied to a Linear
+ticket. This is recommended for traceability but **not** CI-enforced
+— bot commits (Dependabot, release-plz) don't carry an SMA-### and
+are exempt. The PR-title check accepts both `feat(core): add foo`
+and `feat(core): SMA-304 add foo`.
+
+The PR-title regex tolerates any 2–4 letter Linear-style project
+prefix followed by a hyphen and digits (`[A-Z]{2,4}-\d+`), not only
+`SMA-`. If a second Linear project ever lands in this repo, that
+project's prefix passes the same gate without a config change.
+
+### Local commit-msg hook
+
+The hook is a POSIX `sh` script and works on Unix, macOS, and
+Windows via Git Bash or WSL (plain PowerShell will not invoke it).
+Installation is driven by `cargo-husky`'s build script, which fires
+when the facade's dev-deps are realized. After cloning, run once:
+
+```bash
+cargo test -p paigasus-helikon --no-run
+```
+
+This compiles cargo-husky's build script, which copies
+`.cargo-husky/hooks/commit-msg` (at the workspace root) into
+`.git/hooks/`. Verify with `ls .git/hooks/commit-msg`.
+
+The hook execs `convco check`. If `convco` is not on `$PATH`, the
+hook prints an install hint and exits non-zero:
+
+```bash
+cargo install convco --locked
+# or, faster (prebuilt binary):
+cargo binstall convco
+# or, macOS:
+brew install convco
+```
+
+(`cargo install convco --locked` builds from source and requires `cmake`; on machines without `cmake`, prefer `cargo binstall` or `brew install`.)
+
+Emergency bypass (use sparingly):
+
+```bash
+git commit --no-verify -m "..."
+```
+
+CI re-runs the same checks regardless of `--no-verify`, so anything
+the bypass lets through still has to be fixed before merge.
+
+### Bot exceptions
+
+- `dependabot[bot]` commits use `chore(deps): …` — valid under the allowlist.
+- `release-plz[bot]` commits use `chore: release v…` — valid (scope optional).
+
+No bot bypass is configured. If a future bot's output violates the
+allowlist, amend the spec and the allowlist *before* enabling the
+bot — not after.
 
 ## MSRV
 
@@ -127,14 +243,10 @@ so breaking changes are reviewed in isolation.
 
 Releases are automated by [release-plz](https://release-plz.dev). The contract:
 
-1. **Conventional Commits drive bumps.** The mapping below applies to
-   post-1.0 versions; release-plz adjusts the effective bump level for
-   pre-1.0 (`0.x.y`) versions automatically per its own conventions —
-   consult the [release-plz docs](https://release-plz.dev/docs) for the
-   precise pre-1.0 rules. `feat(<scope>):` → minor. `fix(<scope>):` →
-   patch. `feat!:` / `BREAKING CHANGE:` footer → major. `chore`, `docs`,
-   `ci`, `refactor`, `test`, `style` → no bump. `<scope>` is informational
-   — release-plz attributes by files changed.
+1. **Conventional Commits drive bumps.** See the
+   [Conventional Commits](#conventional-commits) section above for the
+   type → semver mapping; `<scope>` is informational at release time
+   (release-plz attributes by files changed, not by scope).
 
 2. **A rolling release PR.** The `release-plz` workflow runs on every push to
    `main` and maintains one open release PR titled `chore: release v...`. It

@@ -57,14 +57,24 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 - Design artifacts per ticket (`docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`) land on the feature branch alongside the implementation — not pre-merged to `main`.
 - Commit prefix: `<type>(<scope>): SMA-### <message>` (e.g. `feat(facade): SMA-304 ...`).
 - Linear auto-closes the linked SMA-* issue when its PR merges; no manual status move needed.
+- **Always implement GitHub Actions against the latest stable major.** Before adding or updating any `uses:` line in `.github/workflows/`, resolve the latest release of the action and pin to its commit SHA (never a moving `@vN` tag). Use:
+  ```bash
+  gh api repos/<owner>/<repo>/releases/latest | jq -r '.tag_name'
+  gh api repos/<owner>/<repo>/git/ref/tags/<tag> | jq -r '.object.sha'
+  # if .object.type == "tag" (annotated), dereference:
+  # gh api repos/<owner>/<repo>/git/tags/<sha> | jq -r '.object.sha'
+  ```
+  Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `github-actions` group track patch/minor updates from there. The above-the-fold human-readable version stays as a `# action vX.Y.Z` comment so the SHA is auditable.
 
 ## CI
 
-`.github/workflows/ci.yml` runs five jobs on every PR and every push to `main`: `fmt`, `clippy`, `test` (matrix: `{ubuntu, macos, windows} × {stable, 1.75}`, `fail-fast: false`), `docs` (with `RUSTDOCFLAGS=-D warnings`), and `doc-coverage` (nightly rustdoc `--show-coverage`, aggregated by `scripts/check-doc-coverage.sh`, gated at `DOC_COVERAGE_THRESHOLD` — default 80%). The `paigasus-helikon-cli` crate is excluded from both the `missing_docs` lint and the coverage aggregator until its public API stabilizes.
+`.github/workflows/ci.yml` runs six jobs on every PR (the `commits` job is PR-only; the other five also run on push to `main`): `fmt`, `clippy`, `test` (matrix: `{ubuntu, macos, windows} × {stable, 1.75}`, `fail-fast: false`), `docs` (with `RUSTDOCFLAGS=-D warnings`), `doc-coverage` (nightly rustdoc `--show-coverage`, aggregated by `scripts/check-doc-coverage.sh`, gated at `DOC_COVERAGE_THRESHOLD` — default 80%), and `commits` (SMA-335: `convco check` against the PR's commit range, gated by `if: github.event_name == 'pull_request'`). The `paigasus-helikon-cli` crate is excluded from both the `missing_docs` lint and the coverage aggregator until its public API stabilizes.
+
+`.github/workflows/pr-title.yml` (SMA-335) runs `amannn/action-semantic-pull-request` on `pull_request_target` to gate the PR title — the squashed commit on `main`. Permissions are minimal (`pull-requests: read`, `statuses: write`); no `actions/checkout` step under `pull_request_target` keeps PR-controlled code out of the runner. Concurrency keys on `github.event.pull_request.number` because `pull_request_target` sets `github.ref` to the base ref and keying on it would cross-cancel different PRs.
 
 `.github/workflows/msrv.yml` runs `cargo msrv --path crates/paigasus-helikon-core verify` as a non-required signal that the declared MSRV is truthful.
 
-The required-status-check IDs SMA-309 will gate merge on are: `ci / fmt`, `ci / clippy`, `ci / test (ubuntu-latest, stable)`, `ci / docs`, `ci / doc-coverage`. Other matrix variants run as signals. Concurrency cancels in-flight PR runs but lets `main` pushes complete; both workflows declare `permissions: contents: read`.
+The required-status-check IDs SMA-309 will gate merge on are: `ci / fmt`, `ci / clippy`, `ci / test (ubuntu-latest, stable)`, `ci / docs`, `ci / doc-coverage`, `ci / commits`, and `pr-title / pr-title` (the last two from SMA-335). Other matrix variants run as signals. Concurrency cancels in-flight PR runs but lets `main` pushes complete; both workflows declare `permissions: contents: read`.
 
 Supply-chain workflows (`.github/workflows/audit.yml`, `deny.yml`, `sbom.yml`) are separate from `ci.yml` because they have independent triggers and failure semantics. Required status checks added in SMA-306: `audit / audit`, `deny / deny`. The `audit` workflow has two jobs gated by `github.event_name`: the PR-time `audit` job uses `taiki-e/install-action` for deterministic behavior; the daily `scheduled-audit` job uses `rustsec/audit-check@v2` for its auto-issue-filing behavior on advisory hits — these are the only places in the repo where a wrapper action is preferred over direct tool invocation.
 

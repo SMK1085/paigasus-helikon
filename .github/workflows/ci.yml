@@ -74,3 +74,17 @@ jobs:
       - run: bash scripts/check-doc-coverage.sh
         env:
           NIGHTLY_CHANNEL: ${{ env.NIGHTLY_TOOLCHAIN }}
+
+  commits:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      # actions/checkout v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      # taiki-e/install-action v2.79.0
+      - uses: taiki-e/install-action@7be9fd86bd1707236395105d6e9329dd1511a7e1
+        with:
+          tool: convco@0.6.3
+      - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD

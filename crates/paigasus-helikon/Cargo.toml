@@ -37,5 +37,11 @@ runtime-axum       = ["dep:paigasus-helikon-runtime-axum"]
 runtime-temporal   = ["dep:paigasus-helikon-runtime-temporal"]
 runtime-agentcore  = ["dep:paigasus-helikon-runtime-agentcore"]
 
+[dev-dependencies]
+# Installs git hooks from .cargo-husky/hooks/ when this crate's
+# dev-deps are realized (e.g. `cargo test -p paigasus-helikon --no-run`).
+# See SMA-335 design doc §4.
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+
 [lints]
 workspace = true

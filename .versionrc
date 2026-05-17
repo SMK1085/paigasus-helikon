@@ -1,0 +1,21 @@
+# Conventional Commits enforcement for paigasus-helikon.
+# Single source of truth for allowed types and scope allowlist.
+# See docs/superpowers/specs/2026-05-17-sma-335-conventional-commits-enforcement-design.md
+# and CONTRIBUTING.md "Conventional Commits".
+# convco auto-discovers this file at the git repo root.
+types:
+- {type: feat,     increment: Minor, section: Features,       hidden: false}
+- {type: fix,      increment: Patch,  section: Fixes,          hidden: false}
+- {type: build,    increment: None,   section: Other,          hidden: true}
+- {type: chore,    increment: None,   section: Other,          hidden: true}
+- {type: ci,       increment: None,   section: Other,          hidden: true}
+- {type: docs,     increment: None,   section: Documentation,  hidden: true}
+- {type: style,    increment: None,   section: Other,          hidden: true}
+- {type: refactor, increment: None,   section: Other,          hidden: true}
+- {type: perf,     increment: None,   section: Other,          hidden: true}
+- {type: test,     increment: None,   section: Other,          hidden: true}
+- {type: revert,   increment: None,   section: Other,          hidden: true}
+scopeRegex: '^(core|cli|facade|macros|mcp|tools|evals|providers|providers-openai|providers-anthropic|runtime|runtime-tokio|runtime-axum|runtime-temporal|runtime-agentcore|workspace|workflows|ci|deps|release|repo|docs|contributing|readme|claude|spec|specs|plan|lints)$'
+description:
+  length:
+    min: 1

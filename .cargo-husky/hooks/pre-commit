@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Intentional no-op. cargo-husky with user-hooks feature installs every
+# file in .cargo-husky/hooks/ into .git/hooks/. We declare pre-commit
+# explicitly so an empty/missing file doesn't get filled in later by
+# accident and surprise contributors with new pre-commit behavior.
+exit 0

@@ -1,0 +1,78 @@
+name: pr-title
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize]
+
+concurrency:
+  # pull_request_target sets github.ref to the base branch (refs/heads/main),
+  # so keying on github.ref would cause two open PRs to cancel each other.
+  # Key on the PR number instead — cancel-in-progress then only kills stale
+  # runs for the *same* PR.
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: read
+  statuses: write
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      # amannn/action-semantic-pull-request v6.1.1
+      # Pinned to SHA; Dependabot's gh-actions group keeps this updated.
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # keep-in-sync-with: .versionrc types
+          types: |
+            feat
+            fix
+            build
+            chore
+            ci
+            docs
+            style
+            refactor
+            perf
+            test
+            revert
+          # keep-in-sync-with: .versionrc scopeRegex
+          scopes: |
+            core
+            cli
+            facade
+            macros
+            mcp
+            tools
+            evals
+            providers
+            providers-openai
+            providers-anthropic
+            runtime
+            runtime-tokio
+            runtime-axum
+            runtime-temporal
+            runtime-agentcore
+            workspace
+            workflows
+            ci
+            deps
+            release
+            repo
+            docs
+            contributing
+            readme
+            claude
+            spec
+            specs
+            plan
+            lints
+          requireScope: false
+          subjectPattern: '^([A-Z]{2,4}-\d+ )?[^A-Z].+$'
+          subjectPatternError: |
+            PR title subject must not start with an uppercase letter.
+            Use sentence case after the colon, e.g. `feat(core): add Model trait`.
+            An optional `SMA-### ` prefix is accepted, e.g. `feat(core): SMA-304 add Model trait`.

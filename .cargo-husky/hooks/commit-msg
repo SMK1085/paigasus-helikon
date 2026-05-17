@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# .cargo-husky-managed commit-msg hook for paigasus-helikon.
+# Enforces Conventional Commits via convco (see .versionrc).
+# Bypass for emergencies: git commit --no-verify
+
+if ! command -v convco >/dev/null 2>&1; then
+  echo "commit-msg hook: convco not on PATH." >&2
+  echo "Install: cargo install convco --locked" >&2
+  echo "  alternates: cargo binstall convco   |   brew install convco" >&2
+  exit 1
+fi
+
+exec convco check --from-stdin < "$1"
