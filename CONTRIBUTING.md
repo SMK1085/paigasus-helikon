@@ -90,7 +90,7 @@ are exempt. The PR-title check accepts both `feat(core): add foo`
 and `feat(core): SMA-304 add foo`.
 
 The PR-title regex tolerates any 2–4 letter Linear-style project
-prefix followed by a hyphen and digits (`[A-Z]{2,4}-\d+ `), not only
+prefix followed by a hyphen and digits (`[A-Z]{2,4}-\d+`), not only
 `SMA-`. If a second Linear project ever lands in this repo, that
 project's prefix passes the same gate without a config change.
 
