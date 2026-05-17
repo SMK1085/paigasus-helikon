@@ -827,12 +827,12 @@ When all six tasks are complete, you should be able to confirm:
 |---|---|---|
 | 1 | convco accepts every commit on the branch | `convco check origin/main..HEAD` exits 0 locally |
 | 2 | `ci / commits` is green on the PR | `gh pr checks` |
-| 3 | `pr-title / pr-title` is green on the PR | `gh pr checks` |
+| 3 | `pr-title / pr-title` starts validating on the next PR after merge | Next PR's `gh pr checks` (this PR introduces the workflow; `pull_request_target` reads from the default branch — see Task 6 / Step 6.6) |
 | 4 | Fresh-clone hook install works | `cargo test -p paigasus-helikon --no-run && ls .git/hooks/commit-msg` |
 | 5 | Local hook rejects `wip` | `echo wip \| .git/hooks/commit-msg /dev/stdin; echo "exit=$?"` → exit=1 |
 | 6 | convco rejects type/scope violations | Step 1.4 fixtures |
 | 7 | convco accepts bot prefixes | Step 1.5 fixtures |
-| 8 | `pr-title` rejects bad titles | Step 6.6 negative test |
+| 8 | `pr-title` rejects bad titles | Post-merge negative test on the next PR (per Step 6.6) |
 | 9 | The PR's squashed commit on `main` matches the gated PR title | After merge, `git log -1 --format=%s main` matches the PR title |
 
 The `BREAKING CHANGE:` footer test (spec §9, post-merge item 4) is deferred to the next real release cycle that includes such a commit — synthetic exercise is not part of this PR.
