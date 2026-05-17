@@ -54,7 +54,7 @@ jobs:
             "paigasus-helikon-${REF_NAME}-cyclonedx.json"
 
       - name: Upload SBOM to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: "paigasus-helikon-${{ github.ref_name }}-cyclonedx.json"
           fail_on_unmatched_files: true
