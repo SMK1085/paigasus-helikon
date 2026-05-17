@@ -29,10 +29,13 @@ this:
 
 ### Allowed types and semver effect
 
-Mapping below applies to post-1.0 versions; release-plz adjusts the
-effective bump for pre-1.0 (`0.x.y`) automatically.
+This project is currently pre-1.0 (`0.x.y` across every crate);
+release-plz applies its own pre-1.0 bump rules — consult the
+[release-plz docs](https://release-plz.dev/docs) for the exact
+mapping in effect today. The table below shows the **post-1.0**
+mapping that becomes operative after the first `1.0.0` release:
 
-| Type | Semver effect | Use for |
+| Type | Semver effect (post-1.0) | Use for |
 |---|---|---|
 | `feat` | minor | New user-visible capability |
 | `fix` | patch | Bug fix |
@@ -86,10 +89,17 @@ ticket. This is recommended for traceability but **not** CI-enforced
 are exempt. The PR-title check accepts both `feat(core): add foo`
 and `feat(core): SMA-304 add foo`.
 
+The PR-title regex tolerates any 2–4 letter Linear-style project
+prefix followed by a hyphen and digits (`[A-Z]{2,4}-\d+ `), not only
+`SMA-`. If a second Linear project ever lands in this repo, that
+project's prefix passes the same gate without a config change.
+
 ### Local commit-msg hook
 
-The hook is installed by `cargo-husky` when the facade's dev-deps
-are realized. After cloning, run once:
+The hook is a POSIX `sh` script and works on Unix, macOS, and
+Windows via Git Bash or WSL (plain PowerShell will not invoke it).
+Installation is driven by `cargo-husky`'s build script, which fires
+when the facade's dev-deps are realized. After cloning, run once:
 
 ```bash
 cargo test -p paigasus-helikon --no-run
@@ -233,14 +243,10 @@ so breaking changes are reviewed in isolation.
 
 Releases are automated by [release-plz](https://release-plz.dev). The contract:
 
-1. **Conventional Commits drive bumps.** The mapping below applies to
-   post-1.0 versions; release-plz adjusts the effective bump level for
-   pre-1.0 (`0.x.y`) versions automatically per its own conventions —
-   consult the [release-plz docs](https://release-plz.dev/docs) for the
-   precise pre-1.0 rules. `feat(<scope>):` → minor. `fix(<scope>):` →
-   patch. `feat!:` / `BREAKING CHANGE:` footer → major. `chore`, `docs`,
-   `ci`, `refactor`, `test`, `style` → no bump. `<scope>` is informational
-   — release-plz attributes by files changed.
+1. **Conventional Commits drive bumps.** See the
+   [Conventional Commits](#conventional-commits) section above for the
+   type → semver mapping; `<scope>` is informational at release time
+   (release-plz attributes by files changed, not by scope).
 
 2. **A rolling release PR.** The `release-plz` workflow runs on every push to
    `main` and maintains one open release PR titled `chore: release v...`. It
