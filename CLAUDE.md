@@ -54,9 +54,9 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 ## Workflow conventions
 
 - Branch per Linear issue: `feature/<sma-####>-<kebab-title>`. The branch name is pre-computed in each Linear ticket's `gitBranchName` field.
-- Design artifacts per ticket land under `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and `docs/superpowers/plans/YYYY-MM-DD-<topic>.md` on `main` before implementation starts.
+- Design artifacts per ticket (`docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`) land on the feature branch alongside the implementation — not pre-merged to `main`.
 - Commit prefix: `<type>(<scope>): SMA-### <message>` (e.g. `feat(facade): SMA-304 ...`).
-- Don't auto-close Linear issues from PR merge — move status manually after review.
+- Linear auto-closes the linked SMA-* issue when its PR merges; no manual status move needed.
 
 ## CI
 
