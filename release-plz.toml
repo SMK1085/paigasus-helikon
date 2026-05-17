@@ -20,7 +20,7 @@ publish = false
 # starting version is `0.x.y`. No explicit flag is needed; this comment
 # exists so future-you doesn't add one while looking for it.
 
-[workspace.changelog]
+[changelog]
 sort_commits = "newest"
 
 # Skip the CLI from crates.io even after Stage 1 lifts the workspace-level
