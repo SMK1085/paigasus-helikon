@@ -29,9 +29,9 @@
   ```bash
   convco --version
   ```
-  Expected output (version may differ; record the exact value for use in Task 3):
+  Expected output (version may differ; record the exact value for use in Task 3 — at implementation time this was `0.6.3`):
   ```
-  convco 0.6.2
+  convco 0.6.3
   ```
 
 - [ ] **Step P2: Confirm working tree state**
