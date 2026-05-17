@@ -880,7 +880,7 @@ Run:
 ```bash
 cd /Users/smaschek/dev/paigasus/paigasus-helikon && \
   gh pr create --base main --head feature/sma-307-automated-versioning-with-release-plz \
-    --title "feat: SMA-307 automated versioning with release-plz" \
+    --title "chore: SMA-307 automated versioning with release-plz" \
     --body "$(cat <<'EOF'
 ## Summary
 
@@ -1088,11 +1088,14 @@ Expected: exit 0.
 
 - [ ] **Step 2: Confirm no release PR was opened**
 
-Run:
+`gh pr list --head <branch>` does exact-match (not prefix). release-plz
+branches are `release-plz-<timestamp>`, so a `--head 'release-plz-'`
+filter would miss every real branch. Use JSON output + `startswith()`:
 ```bash
-gh pr list --label "" --head 'release-plz-' --state open --limit 5
+gh pr list --state open --limit 50 --json number,title,headRefName \
+  --jq '.[] | select(.headRefName | startswith("release-plz-"))'
 ```
-Or simply:
+Or simply scan all open PRs:
 ```bash
 gh pr list --state open --limit 10
 ```
