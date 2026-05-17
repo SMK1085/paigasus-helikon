@@ -333,21 +333,31 @@
 
 - [ ] **Step 3.3: Append the `commits` job**
 
+  Per the CLAUDE.md "Workflow conventions" rule, resolve the latest commit SHA for each action and pin to it. The values resolved at implementation time were `actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd` (v6.0.2) and `taiki-e/install-action@7be9fd86bd1707236395105d6e9329dd1511a7e1` (v2.79.0). If re-running this plan, re-resolve via:
+  ```bash
+  gh api repos/actions/checkout/releases/latest | jq -r '.tag_name'
+  gh api repos/actions/checkout/git/ref/tags/<tag> | jq -r '.object.sha'
+  gh api repos/taiki-e/install-action/releases/latest | jq -r '.tag_name'
+  gh api repos/taiki-e/install-action/git/ref/tags/<tag> | jq -r '.object.sha'
+  ```
+
   Add this job to `.github/workflows/ci.yml` after `doc-coverage:` (preserve the existing indentation style — 2-space, jobs at top of file):
   ```yaml
     commits:
       runs-on: ubuntu-latest
       if: github.event_name == 'pull_request'
       steps:
-        - uses: actions/checkout@v6
+        # actions/checkout v6.0.2
+        - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
           with:
             fetch-depth: 0
-        - uses: taiki-e/install-action@v2
+        # taiki-e/install-action v2.79.0
+        - uses: taiki-e/install-action@7be9fd86bd1707236395105d6e9329dd1511a7e1
           with:
-            tool: convco@0.6.2
+            tool: convco@0.6.3
         - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD
   ```
-  Replace `0.6.2` with the version recorded in Step 3.2 if different.
+  Replace `0.6.3` with the version recorded in Step 3.2 if different.
 
 - [ ] **Step 3.4: Sanity-check the YAML is parseable**
 
@@ -398,9 +408,10 @@
 
 - [ ] **Step 4.1: Resolve the action SHA pin**
 
-  Look up the latest v5 tag's commit SHA:
+  Per the CLAUDE.md "Workflow conventions" rule, resolve the latest release of `amannn/action-semantic-pull-request` and pin to its commit SHA. Use the `releases/latest` endpoint (which targets the current stable major automatically):
   ```bash
-  gh api repos/amannn/action-semantic-pull-request/git/ref/tags/v5 \
+  TAG=$(gh api repos/amannn/action-semantic-pull-request/releases/latest | jq -r '.tag_name')
+  gh api repos/amannn/action-semantic-pull-request/git/ref/tags/$TAG \
     | jq -r '.object | "type=\(.type) sha=\(.sha)"'
   ```
   Expected output looks like: `type=tag sha=<40-hex>` (annotated tag) **or** `type=commit sha=<40-hex>` (lightweight tag).
@@ -411,6 +422,8 @@
       | jq -r '.object.sha'
     ```
     Use the dereferenced SHA.
+
+  At implementation time (2026-05-17), `releases/latest` resolved to **v6.1.1** with commit SHA `48f256284bd46cdaab1048c3721360e808335d50` — the values embedded in Step 4.2 below.
 
   Record the SHA — it goes into Step 4.2. Also record the human-readable version tag (e.g., `v5.5.3`) for the comment in the workflow.
 
