@@ -761,9 +761,9 @@
   ## Test plan
 
   - [ ] `ci / commits` is green on this PR.
-  - [ ] `pr-title / pr-title` is green on this PR.
-  - [ ] Negative test: temporarily edit this PR's title to `Some change` — `pr-title` turns red. Restore the title; it turns green.
+  - [ ] **`pr-title / pr-title` cannot self-validate on this PR.** `pull_request_target` only fires for workflow files that already exist on the default branch. Since `pr-title.yml` is *introduced* by this PR, the gate doesn't run here. It will fire on the next PR opened after this one merges to `main`. The PR title above is constructed as a positive fixture so it'll pass on first run.
   - [ ] After merging, the squashed commit on `main` matches the PR title verbatim and parses cleanly under `convco check`.
+  - [ ] **Post-merge negative test** (on the next PR opened after merge): a PR titled `Some change` should be rejected by `pr-title`. A PR titled `feat(unknown-scope): foo` should be rejected. A PR with a valid title should pass.
 
   Linear: SMA-335
   EOF
@@ -771,9 +771,9 @@
   ```
   Expected: PR URL is printed.
 
-  **The PR title above intentionally has type `feat` and scope `workspace`** — the change is user-visible (`feat`) in the sense that future commits are now gated, and `workspace` is the right scope because the policy is workspace-wide. This title is itself a positive fixture for the gate.
+  **The PR title above intentionally has type `feat` and scope `workspace`** — the change is user-visible (`feat`) in the sense that future commits are now gated, and `workspace` is the right scope because the policy is workspace-wide. This title is itself a positive fixture for the gate — but the gate only fires on the *next* PR, see below.
 
-- [ ] **Step 6.5: Verify `ci / commits` and `pr-title / pr-title` go green**
+- [ ] **Step 6.5: Verify `ci / commits` goes green**
 
   Watch the PR's checks:
   ```bash
@@ -781,34 +781,31 @@
   ```
   Expected: every check eventually green. Specifically:
   - `ci / fmt`, `ci / clippy`, `ci / test (...)`, `ci / docs`, `ci / doc-coverage` — pre-existing; should pass.
-  - `ci / commits` — NEW; should pass against the 6 commits on the branch.
-  - `pr-title / pr-title` — NEW; should pass against the PR title from Step 6.4.
+  - `ci / commits` — NEW; should pass against the commits on the branch.
+  - `pr-title / pr-title` — **does not run on this PR** (see Step 6.6 below). The check will simply not appear in the list.
 
   If `ci / commits` fails:
   - Read its log. If the error is the convco install (`taiki-e/install-action` couldn't find the tool), verify the pin in `ci.yml` matches an existing convco release. Fix in a fresh commit (`ci(workflows): SMA-335 correct convco version pin`).
   - If the error is a real commit rejection, the local hook should have caught it — re-run `convco check origin/main..HEAD` locally and reconcile.
 
-  If `pr-title / pr-title` fails:
-  - Read its log. If the error is "subject must not start with uppercase" — fix the PR title. If the error references an unknown scope, check the `scopes:` list in `pr-title.yml` against the title's scope.
-  - If the action fails to run at all (e.g., SHA not found), re-resolve the SHA from Step 4.1 and update the workflow.
+- [ ] **Step 6.6: Document the `pr-title` self-validation limitation in the PR body**
 
-- [ ] **Step 6.6: Negative test — confirm `pr-title` actually rejects bad titles**
+  GitHub's `pull_request_target` runs workflow files from the **default branch**. Since `pr-title.yml` is introduced by *this* PR, it doesn't run on this PR — it'll fire on the next PR after merge. There is nothing to negative-test here.
 
-  Edit the PR title to something deliberately invalid:
+  Update the PR description to flag this explicitly (so reviewers don't expect a `pr-title` check that won't appear):
   ```bash
-  gh pr edit --title "Some change"
-  ```
-  Wait ~30s for the `pull_request_target` workflow to fire, then check:
-  ```bash
-  gh pr checks
-  ```
-  Expected: `pr-title / pr-title` is **red** with a subject/format error.
+  gh pr edit <PR_NUMBER> --body "$(cat <<'EOF'
+  ... (existing summary) ...
 
-  Restore the correct title:
-  ```bash
-  gh pr edit --title "feat(workspace): SMA-335 enforce Conventional Commits (CI + PR title + local hook)"
+  ## Test plan
+  - [x] `ci / commits` green on this PR
+  - [ ] **`pr-title / pr-title` cannot self-validate on this PR** (pull_request_target reads workflows from main; this PR introduces the file). Will fire on the next PR after merge.
+  - [ ] Post-merge negative test (next PR): `Some change` title rejected; valid title passes.
+  EOF
+  )"
   ```
-  Re-watch checks: `pr-title / pr-title` returns to green.
+
+  The negative test (editing the title to an invalid form to confirm `pr-title` rejects it) must happen on a **subsequent PR** opened after this one merges — not on this PR itself.
 
 - [ ] **Step 6.7: Report PR URL**
 
