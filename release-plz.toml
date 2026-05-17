@@ -1,0 +1,31 @@
+# release-plz.toml — automated versioning, changelogs, GitHub releases.
+# Reference: https://release-plz.dev/docs/config
+
+[workspace]
+# Bump dependent crates whenever a dep's version changes. The facade
+# (paigasus-helikon) depends on every sibling via `[workspace.dependencies]`,
+# so a `feat(core):` commit triggers: paigasus-helikon-core bumped →
+# facade's `[workspace.dependencies].paigasus-helikon-core` line updated →
+# facade itself gets a patch bump.
+dependencies_update = true
+
+# Workspace-wide kill-switch for crates.io publishing. release-plz still
+# bumps versions, generates CHANGELOG.md, creates per-crate git tags, and
+# creates GitHub releases — it just skips `cargo publish`. Stage 1 removes
+# this line to enable real publishing. The per-package override on
+# `paigasus-helikon-cli` (below) survives that flip.
+publish = false
+
+# release-plz uses pre-1.0 (0.x.y) bump semantics automatically when the
+# starting version is `0.x.y`. No explicit flag is needed; this comment
+# exists so future-you doesn't add one while looking for it.
+
+[workspace.changelog]
+sort_commits = "newest"
+
+# Skip the CLI from crates.io even after Stage 1 lifts the workspace-level
+# `publish = false`. The CLI's public surface is binary-only and isn't
+# intended as a library dependency.
+[[package]]
+name = "paigasus-helikon-cli"
+publish = false
