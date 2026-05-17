@@ -57,6 +57,14 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 - Design artifacts per ticket (`docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`) land on the feature branch alongside the implementation — not pre-merged to `main`.
 - Commit prefix: `<type>(<scope>): SMA-### <message>` (e.g. `feat(facade): SMA-304 ...`).
 - Linear auto-closes the linked SMA-* issue when its PR merges; no manual status move needed.
+- **Always implement GitHub Actions against the latest stable major.** Before adding or updating any `uses:` line in `.github/workflows/`, resolve the latest release of the action and pin to its commit SHA (never a moving `@vN` tag). Use:
+  ```bash
+  gh api repos/<owner>/<repo>/releases/latest | jq -r '.tag_name'
+  gh api repos/<owner>/<repo>/git/ref/tags/<tag> | jq -r '.object.sha'
+  # if .object.type == "tag" (annotated), dereference:
+  # gh api repos/<owner>/<repo>/git/tags/<sha> | jq -r '.object.sha'
+  ```
+  Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `github-actions` group track patch/minor updates from there. The above-the-fold human-readable version stays as a `# action vX.Y.Z` comment so the SHA is auditable.
 
 ## CI
 
