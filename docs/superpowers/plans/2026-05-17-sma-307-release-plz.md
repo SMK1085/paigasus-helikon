@@ -1006,13 +1006,9 @@ No commit in this task.
 
 - [ ] **Step 1: Squash-merge the PR**
 
-In the PR UI: **Squash and merge**. The squash-commit subject must remain a `feat:` type (the PR title is `feat: SMA-307 automated versioning with release-plz`).
+In the PR UI: **Squash and merge**. Keep the squash-commit subject as `chore: SMA-307 automated versioning with release-plz` (matching the PR title set in Task 13). This aligns with the bootstrap rule from spec §6.2 / CLAUDE.md: release-infra commits must use `chore`/`docs`, never `feat`/`fix`.
 
-Wait — but earlier we said all bootstrap commits must be `chore`/`docs`. Why is the PR title `feat:`?
-
-**Answer:** the individual PR commits on the feature branch are all `chore`/`docs` (verified in Task 11). After squash-merge, the SINGLE commit on `main` carries the PR title. release-plz parses commits since the last per-crate tag. The strategy in this plan is to **create the baseline tags AT the squash-merge commit**, so release-plz starts counting commits *after* the merge. The squash-merge commit's type (`feat:`) is therefore invisible to release-plz — it's at or before the baseline tags, not after.
-
-If you'd prefer belt-and-braces, change the PR title to `chore: SMA-307 automated versioning with release-plz` before squash-merging. The plan's correctness doesn't depend on it, but it removes one variable.
+Belt-and-braces note: even without `chore:`, the strategy in this plan creates the baseline tags AT the squash-merge commit so release-plz starts counting commits *after* the merge — meaning the squash-commit's type is invisible to release-plz regardless. But aligning the squash-commit type with the bootstrap rule removes the timing dependency and the cross-doc inconsistency, so the plan now requires `chore:` rather than treating it as an override.
 
 - [ ] **Step 2: Switch to main and pull**
 
@@ -1276,4 +1272,4 @@ No commit in this task. SMA-307 is complete.
 
 **Type consistency** — the per-crate `Cargo.toml` edit pattern is identical across all 13 crates (verified by Task 3 Step 14's grep). The `release-plz.toml` content matches spec §4 verbatim. The workflow YAML matches spec §5 verbatim. The CONTRIBUTING.md section matches spec §7.2 verbatim. The CLAUDE.md edits match spec §7.1 verbatim.
 
-**Known one-off** — the squash-merge commit's `feat:` type (Task 16 Step 1) does not violate the spec's "no `feat`/`fix` in bootstrap" rule because the baseline tags created immediately after merge mean that commit is at-or-before the tag from release-plz's perspective. The plan offers the operator a belt-and-braces option to rename the PR title to `chore:` if desired.
+**Cross-doc consistency** — the PR title (Task 13), the squash-merge subject (Task 16 Step 1), and the bootstrap-only-uses-`chore`/`docs` rule (spec §6.2 / CLAUDE.md) all agree: this bootstrap PR uses `chore:` throughout. The plan's correctness doesn't actually depend on this — the baseline tags created immediately after merge would shield release-plz from a `feat:` squash-merge anyway — but aligning the squash-commit type with the bootstrap rule removes the timing dependency and the documentation ambiguity.
