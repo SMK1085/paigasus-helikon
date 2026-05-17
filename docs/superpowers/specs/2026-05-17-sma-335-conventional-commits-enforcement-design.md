@@ -29,7 +29,7 @@
 ```
 .github/workflows/ci.yml                                          # add `commits` job
 .github/workflows/pr-title.yml                                    # NEW
-convco.toml                                                       # NEW (workspace root)
+.versionrc                                                        # NEW (workspace root; YAML, auto-discovered by convco)
 crates/paigasus-helikon/Cargo.toml                                # add cargo-husky dev-dep
 crates/paigasus-helikon/.cargo-husky/hooks/commit-msg             # NEW
 CONTRIBUTING.md                                                   # new "Conventional Commits" section
@@ -98,9 +98,9 @@ runtime, runtime-tokio, runtime-axum, runtime-temporal, runtime-agentcore
 
 ### 3.2 Mechanism — single source of truth
 
-`convco.toml` declares the canonical regex. `pr-title.yml`'s `scopes:` list mirrors the same set. CONTRIBUTING.md documents both as derived from `convco.toml`. When the allowlist changes, both files must change together; the implementation plan adds a `<!-- keep-in-sync-with: convco.toml -->` comment in `pr-title.yml`.
+`.versionrc` declares the canonical regex. `pr-title.yml`'s `scopes:` list mirrors the same set. CONTRIBUTING.md documents both as derived from `.versionrc`. When the allowlist changes, both files must change together; the implementation plan adds a `<!-- keep-in-sync-with: .versionrc -->` comment in `pr-title.yml`.
 
-**convco config key.** convco supports scope-regex enforcement under `[commit]`. The exact key name (`scope_regex` vs `scope-regex`) is verified during implementation and the spec is amended if reality differs from the proposed name in §5.3.
+**convco config format.** convco 0.6.3 auto-discovers `.versionrc` at the git repo root. The file is YAML (not TOML). Scope enforcement uses the top-level `scopeRegex` key (camelCase). Type enforcement uses a top-level `types` list of objects with `{type, increment, section, hidden}` fields (matching the schema shown by `convco config --default`). A `description.length.min: 1` override avoids the default minimum-length gate (default is 10 characters) blocking short-but-valid descriptions.
 
 ## 4. The local hook — cargo-husky
 
@@ -198,7 +198,7 @@ jobs:
             build
             ci
             revert
-          # keep-in-sync-with: convco.toml [commit].scope_regex
+          # keep-in-sync-with: .versionrc scopeRegex
           scopes: |
             core
             cli
@@ -250,22 +250,34 @@ Three subtle decisions baked in:
   | `feat(core): SMA-304 add Model trait` | `SMA-304 add Model trait` | yes | optional group consumes `SMA-304 `, remainder starts lowercase |
   | `feat(core): SMA-304 Add Model trait` | `SMA-304 Add Model trait` | no | optional group consumes `SMA-304 `, remainder starts uppercase |
 
-### 5.3 `convco.toml`
+### 5.3 `.versionrc`
 
-```toml
+> **Implementation note (verified 2026-05-17):** The plan originally proposed `convco.toml` (TOML format) with keys `scope_regex` and `types = [...]`. This was incorrect. convco 0.6.3 uses YAML format, auto-discovers the file as `.versionrc` at the git repo root, and expects `scopeRegex` (camelCase, top-level) for scope enforcement. Types are specified as full objects matching the schema from `convco config --default`. The deliverables list in §1 is updated to reflect `.versionrc` instead of `convco.toml`.
+
+```yaml
 # Conventional Commits enforcement for paigasus-helikon.
 # Single source of truth for type + scope allowlists.
 # See SMA-335 design doc and CONTRIBUTING.md "Conventional Commits".
-
-[commit]
-types = [
-  "feat", "fix", "chore", "docs", "refactor",
-  "test", "perf", "style", "build", "ci", "revert",
-]
-scope_regex = "^(core|cli|facade|macros|mcp|tools|evals|providers|providers-openai|providers-anthropic|runtime|runtime-tokio|runtime-axum|runtime-temporal|runtime-agentcore|workspace|workflows|ci|deps|release|repo|docs|contributing|readme|claude|spec|specs|plan|lints)$"
+# convco auto-discovers this file at the git repo root.
+types:
+- {type: feat,     increment: Minor, section: Features,       hidden: false}
+- {type: fix,      increment: Patch,  section: Fixes,          hidden: false}
+- {type: build,    increment: None,   section: Other,          hidden: true}
+- {type: chore,    increment: None,   section: Other,          hidden: true}
+- {type: ci,       increment: None,   section: Other,          hidden: true}
+- {type: docs,     increment: None,   section: Documentation,  hidden: true}
+- {type: style,    increment: None,   section: Other,          hidden: true}
+- {type: refactor, increment: None,   section: Other,          hidden: true}
+- {type: perf,     increment: None,   section: Other,          hidden: true}
+- {type: test,     increment: None,   section: Other,          hidden: true}
+- {type: revert,   increment: None,   section: Other,          hidden: true}
+scopeRegex: '^(core|cli|facade|macros|mcp|tools|evals|providers|providers-openai|providers-anthropic|runtime|runtime-tokio|runtime-axum|runtime-temporal|runtime-agentcore|workspace|workflows|ci|deps|release|repo|docs|contributing|readme|claude|spec|specs|plan|lints)$'
+description:
+  length:
+    min: 1
 ```
 
-If convco's actual config key for scope validation differs (e.g., `scope-regex` with a hyphen, or a different table location), the implementation plan adjusts and this section is amended with the verified form. The implementation verification step (`convco check` on a fixture of known-bad messages) confirms enforcement is actually happening before merge.
+The implementation verification step (`convco check` on fixtures of known-bad messages) confirmed enforcement fires before merge.
 
 ## 6. The SMA-### body convention
 
@@ -314,7 +326,7 @@ CONTRIBUTING.md exists. This ticket replaces the current "Commit messages" stub 
 - 3–5 good examples and 3–5 bad examples with reasons.
 - Local hook activation (`cargo test -p paigasus-helikon --no-run`) and bypass (`git commit --no-verify`).
 - Bot exceptions (no SMA-### in bot commits; bots produce valid CC without bypass).
-- Pointer to `convco.toml` as canonical source.
+- Pointer to `.versionrc` as canonical source.
 
 ### 8.3 SMA-307 (release-plz) — no file change
 

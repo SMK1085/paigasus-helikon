@@ -4,7 +4,9 @@
 
 **Goal:** Enforce Conventional Commits at three layers — local commit-msg hook, in-PR commit lint, PR-title check — so SMA-307 (release-plz) and SMA-308 (Dependabot prefix) gain a real gate instead of an assumed convention.
 
-**Architecture:** `convco.toml` is the single source of truth for allowed types and scope regex. `convco check` runs (a) from a cargo-husky-installed `commit-msg` hook locally and (b) in a new `ci / commits` GitHub Actions job. A separate `pr-title` workflow uses `amannn/action-semantic-pull-request` against the same allowlist (mirrored, comment-linked to `convco.toml`). The whole change ships behind the SMA-335 feature branch; nothing lands on `main` outside a PR.
+**Architecture:** `.versionrc` (YAML, auto-discovered by convco at the git repo root) is the single source of truth for allowed types and scope regex. `convco check` runs (a) from a cargo-husky-installed `commit-msg` hook locally and (b) in a new `ci / commits` GitHub Actions job. A separate `pr-title` workflow uses `amannn/action-semantic-pull-request` against the same allowlist (mirrored, comment-linked to `.versionrc`). The whole change ships behind the SMA-335 feature branch; nothing lands on `main` outside a PR.
+
+> **Config format correction (verified 2026-05-17):** convco 0.6.3 uses YAML (not TOML) and auto-discovers the config file as `.versionrc` at the git repo root. The config key for scope enforcement is `scopeRegex` (camelCase, top-level). Types are full objects (`{type, increment, section, hidden}`). The original plan proposed `convco.toml` with TOML syntax and `scope_regex` — both incorrect. Steps below reflect the verified form.
 
 **Tech Stack:** convco (Rust binary), cargo-husky (v1, dev-dep on facade crate), `amannn/action-semantic-pull-request` (pinned to SHA), `taiki-e/install-action` for the CI convco install (matches existing audit/deny pattern).
 
@@ -49,10 +51,10 @@
 
 ---
 
-## Task 1: `convco.toml` + verified enforcement
+## Task 1: `.versionrc` + verified enforcement
 
 **Files:**
-- Create: `convco.toml`
+- Create: `.versionrc` (YAML; convco auto-discovers this file name at git repo root)
 - (None modified.)
 - Test: ad-hoc shell fixtures (no test file committed)
 
@@ -82,25 +84,35 @@
   ```bash
   echo "frobnicate(core): foo" | convco check --from-stdin
   ```
-  Expected (with no `convco.toml` present): exit code 0. convco's defaults accept any type. This proves the config is what does the work.
+  Expected (with no `.versionrc` present): convco 0.6.3 has a built-in default type allowlist that already rejects unknown types. However, scope enforcement is absent without a config — `feat(notascope): foo` exits 0. This confirms the config is what adds scope enforcement.
 
-  If exit code is non-zero, a `convco.toml` from a parent directory may be in scope — investigate before proceeding.
+  If `frobnicate(core): foo` exits 1 without a config file, that is expected for convco 0.6.3 (it has a built-in type allowlist). The important baseline check is that scope violations pass without a config.
 
-- [ ] **Step 1.3: Write `convco.toml`**
+- [ ] **Step 1.3: Write `.versionrc`**
 
-  Create `convco.toml` at the workspace root:
-  ```toml
+  Create `.versionrc` at the workspace root (YAML format — convco auto-discovers this file name):
+  ```yaml
   # Conventional Commits enforcement for paigasus-helikon.
   # Single source of truth for allowed types and scopes.
   # See docs/superpowers/specs/2026-05-17-sma-335-…-design.md
   # and CONTRIBUTING.md "Conventional Commits".
-
-  [commit]
-  types = [
-    "feat", "fix", "chore", "docs", "refactor",
-    "test", "perf", "style", "build", "ci", "revert",
-  ]
-  scope_regex = "^(core|cli|facade|macros|mcp|tools|evals|providers|providers-openai|providers-anthropic|runtime|runtime-tokio|runtime-axum|runtime-temporal|runtime-agentcore|workspace|workflows|ci|deps|release|repo|docs|contributing|readme|claude|spec|specs|plan|lints)$"
+  # convco auto-discovers this file at the git repo root.
+  types:
+  - {type: feat,     increment: Minor, section: Features,       hidden: false}
+  - {type: fix,      increment: Patch,  section: Fixes,          hidden: false}
+  - {type: build,    increment: None,   section: Other,          hidden: true}
+  - {type: chore,    increment: None,   section: Other,          hidden: true}
+  - {type: ci,       increment: None,   section: Other,          hidden: true}
+  - {type: docs,     increment: None,   section: Documentation,  hidden: true}
+  - {type: style,    increment: None,   section: Other,          hidden: true}
+  - {type: refactor, increment: None,   section: Other,          hidden: true}
+  - {type: perf,     increment: None,   section: Other,          hidden: true}
+  - {type: test,     increment: None,   section: Other,          hidden: true}
+  - {type: revert,   increment: None,   section: Other,          hidden: true}
+  scopeRegex: '^(core|cli|facade|macros|mcp|tools|evals|providers|providers-openai|providers-anthropic|runtime|runtime-tokio|runtime-axum|runtime-temporal|runtime-agentcore|workspace|workflows|ci|deps|release|repo|docs|contributing|readme|claude|spec|specs|plan|lints)$'
+  description:
+    length:
+      min: 1
   ```
 
 - [ ] **Step 1.4: Run negative fixtures — they should now fail**
@@ -113,12 +125,10 @@
   ```
   Expected: each prints a convco error and `exit=1` (or any non-zero).
 
-  **If `feat(notascope): foo` exits 0**, the scope_regex key name is wrong. Try the alternates:
-  ```toml
-  scope-regex = "^(...)$"        # variant 1: hyphen
-  scopes = ["core", "cli", ...]   # variant 2: enum list under [commit]
-  ```
-  Re-run the `feat(notascope)` fixture after each edit until it fails. Update §5.3 of the spec to reflect the verified form, and update Step 1.3 above for future readers. Commit the spec amendment with `docs(spec): SMA-335 correct convco scope-config key name` *before* moving on.
+  **If `feat(notascope): foo` exits 0**, the `.versionrc` is not being auto-discovered. Check:
+  - File is named exactly `.versionrc` (with leading dot) at the git repo root.
+  - The `scopeRegex` key is spelled exactly as shown (camelCase, no hyphens).
+  - convco is being run from within the git repo (or with `-C /path/to/repo`).
 
 - [ ] **Step 1.5: Run positive fixtures — they should now pass**
 
@@ -143,7 +153,7 @@
 
   Run:
   ```bash
-  git add convco.toml
+  git add .versionrc
   git commit -m "$(cat <<'EOF'
   chore(workspace): SMA-335 add convco config for commit linting
 
@@ -201,7 +211,7 @@
   ```sh
   #!/usr/bin/env sh
   # .cargo-husky-managed commit-msg hook for paigasus-helikon.
-  # Enforces Conventional Commits via convco (see convco.toml).
+  # Enforces Conventional Commits via convco (see .versionrc).
   # Bypass for emergencies: git commit --no-verify
 
   if ! command -v convco >/dev/null 2>&1; then
@@ -282,7 +292,7 @@
   cargo-husky installs hooks via build script when the facade's
   dev-deps are realized (cargo test -p paigasus-helikon --no-run).
   The commit-msg hook execs `convco check --from-stdin`, enforcing
-  the allowlist from convco.toml. An empty pre-commit hook is
+  the allowlist from .versionrc. An empty pre-commit hook is
   declared explicitly so accidental additions later don't surprise
   contributors.
 
@@ -350,7 +360,7 @@
   ```bash
   convco check origin/main..HEAD
   ```
-  Expected: pass. (Three commits at this point — the spec commit from `94df409`, Task 1's convco.toml commit, and Task 2's cargo-husky commit. All use valid types/scopes per the allowlist.)
+  Expected: pass. (Three commits at this point — the spec commit from `94df409`, Task 1's `.versionrc` commit, and Task 2's cargo-husky commit. All use valid types/scopes per the allowlist.)
 
 - [ ] **Step 3.6: Commit**
 
@@ -437,7 +447,7 @@
               build
               ci
               revert
-            # keep-in-sync-with: convco.toml [commit].scope_regex
+            # keep-in-sync-with: .versionrc scopeRegex
             scopes: |
               core
               cli
@@ -497,7 +507,7 @@
   code. Action is pinned to a SHA; Dependabot's gh-actions group
   keeps it updated.
 
-  The scope list mirrors convco.toml — keep them in sync via the
+  The scope list mirrors `.versionrc` — keep them in sync via the
   `keep-in-sync-with` comment. subjectPattern rejects uppercase
   message starts while accepting an optional SMA-### prefix.
 
@@ -516,7 +526,7 @@
 - Modify: `CONTRIBUTING.md` (replace the existing "Commit messages" section)
 - Test: rendered review (manual)
 
-**Why:** Per spec §8.2, the docs need to cover allowed types + semver, the hybrid scope allowlist, examples, hook activation and bypass, bot exceptions, and the pointer to `convco.toml` as canonical.
+**Why:** Per spec §8.2, the docs need to cover allowed types + semver, the hybrid scope allowlist, examples, hook activation and bypass, bot exceptions, and the pointer to `.versionrc` as canonical.
 
 - [ ] **Step 5.1: Read the current "Commit messages" section**
 
@@ -572,7 +582,7 @@
     `release`, `repo`, `docs`, `contributing`, `readme`, `claude`,
     `spec`, `specs`, `plan`, `lints`
 
-  Canonical source is [`convco.toml`](./convco.toml). The
+  Canonical source is [`.versionrc`](./.versionrc). The
   `pr-title.yml` workflow mirrors the same list — they must change
   together.
 
@@ -664,7 +674,7 @@
   Conventional Commits policy: allowed types + semver mapping,
   hybrid scope allowlist (crate scopes + cross-cutting scopes),
   good/bad examples, local hook activation + bypass, and bot
-  exceptions. Points to convco.toml as the canonical allowlist
+  exceptions. Points to `.versionrc` as the canonical allowlist
   source.
 
   Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -698,7 +708,7 @@
   ```bash
   convco check origin/main..HEAD
   ```
-  Expected: pass against the six commits on the branch — spec doc, `convco.toml`, cargo-husky + hook, `ci/commits` job, `pr-title.yml`, `CONTRIBUTING.md`.
+  Expected: pass against the six+ commits on the branch — spec doc, plan amendment, `.versionrc`, cargo-husky + hook, `ci/commits` job, `pr-title.yml`, `CONTRIBUTING.md`.
 
   If convco rejects any commit, fix locally before pushing. (The hook would have caught it on commit; this is belt-and-braces.)
 
@@ -717,7 +727,7 @@
     --body "$(cat <<'EOF'
   ## Summary
 
-  - Adds `convco.toml` with the allowed types and hybrid scope allowlist (crate scopes + cross-cutting scopes already in active use).
+  - Adds `.versionrc` (YAML) with the allowed types and hybrid scope allowlist (crate scopes + cross-cutting scopes already in active use).
   - Installs a local `commit-msg` hook via cargo-husky on the facade crate; the hook execs `convco check --from-stdin`.
   - Adds the `ci / commits` job to `.github/workflows/ci.yml`, running `convco check` against the PR's commit range.
   - Adds `.github/workflows/pr-title.yml` using `amannn/action-semantic-pull-request` (SHA-pinned), mirroring the allowlist.
@@ -816,4 +826,4 @@ The `BREAKING CHANGE:` footer test (spec §9, post-merge item 4) is deferred to 
 
 - **If cargo-husky misbehaves** (e.g., hook never lands despite `cargo test --no-run`): the hook is just a convenience. CI catches what the hook misses; merging without local-hook coverage is still safe. File a follow-up to replace cargo-husky with a `scripts/install-hooks.sh`.
 - **If convco's scope-regex enforcement turns out to be the wrong config key** (Step 1.4 fallback): the spec already covers this; the plan amends the spec inline and re-runs fixtures before moving on.
-- **If `pr-title` blocks legitimate work in the next ticket** (e.g., the next contributor proposes a scope we didn't anticipate): amend the allowlist in *both* `convco.toml` and `pr-title.yml` (kept in sync via the comment), under a fresh `chore(workspace): SMA-### add <scope> to convco allowlist` commit.
+- **If `pr-title` blocks legitimate work in the next ticket** (e.g., the next contributor proposes a scope we didn't anticipate): amend the allowlist in *both* `.versionrc` and `pr-title.yml` (kept in sync via the comment), under a fresh `chore(workspace): SMA-### add <scope> to convco allowlist` commit.
