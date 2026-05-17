@@ -743,7 +743,7 @@
 
   ```bash
   gh pr create \
-    --title "feat(workspace): SMA-335 enforce Conventional Commits (CI + PR title + local hook)" \
+    --title "chore(workspace): SMA-335 enforce Conventional Commits (CI + PR title + local hook)" \
     --body "$(cat <<'EOF'
   ## Summary
 
@@ -771,7 +771,7 @@
   ```
   Expected: PR URL is printed.
 
-  **The PR title above intentionally has type `feat` and scope `workspace`** — the change is user-visible (`feat`) in the sense that future commits are now gated, and `workspace` is the right scope because the policy is workspace-wide. This title is itself a positive fixture for the gate — but the gate only fires on the *next* PR, see below.
+  **The PR title above intentionally uses type `chore` and scope `workspace`** — per the CLAUDE.md bootstrap rule, release-infrastructure changes use `chore(...)` (or `docs(...)`), never `feat`/`fix`. A `feat(workspace):` here would mis-attribute a workspace-wide minor bump on the next release-plz run. `workspace` is the right scope because the policy is workspace-wide. This title is also a positive fixture for the new gate — but the gate only fires on the *next* PR, see below.
 
 - [ ] **Step 6.5: Verify `ci / commits` goes green**
 
