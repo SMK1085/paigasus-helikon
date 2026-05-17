@@ -1076,9 +1076,12 @@ gh run list --workflow=release-plz --branch=main --limit=1
 ```
 Expected: a run is listed and its status is `completed` and conclusion is `success`. If still `in_progress`, re-run after ~30s.
 
-Or watch in real-time:
+Or watch in real-time (`gh run watch` takes a positional run-id, not a
+`--workflow` filter, so resolve the latest run first):
 ```bash
-gh run watch --workflow=release-plz --exit-status
+RUN_ID="$(gh run list --workflow=release-plz --branch=main --limit=1 \
+  --json databaseId --jq '.[0].databaseId')"
+gh run watch "$RUN_ID" --exit-status
 ```
 Expected: exit 0.
 
@@ -1202,8 +1205,11 @@ The squash-merge commit's subject must remain `feat(core): SMA-307 add release-p
 
 - [ ] **Step 8: Observe the release-plz workflow re-run on `main`**
 
+`gh run watch` takes a positional run-id, not a `--workflow` filter — resolve the latest run first:
 ```bash
-gh run watch --workflow=release-plz --exit-status
+RUN_ID="$(gh run list --workflow=release-plz --branch=main --limit=1 \
+  --json databaseId --jq '.[0].databaseId')"
+gh run watch "$RUN_ID" --exit-status
 ```
 Expected: exit 0.
 
