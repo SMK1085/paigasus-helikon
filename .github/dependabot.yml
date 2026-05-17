@@ -10,7 +10,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
-      include: "scope"
     labels: ["area:deps"]
     assignees: ["SMK1085"]
     groups:
@@ -46,7 +45,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
-      include: "scope"
     labels: ["area:deps"]
     assignees: ["SMK1085"]
     groups:

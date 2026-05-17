@@ -71,7 +71,6 @@ One group:
 | `schedule.timezone` | `"Etc/UTC"` | **Deliberate deviation from the ticket's `Europe/Vienna`.** Holds the cron alignment with `audit.yml`'s daily 06:00 UTC schedule, which CLAUDE.md documents as an intentional architectural property. DST drift between Vienna and UTC would silently desync the two crons twice a year. |
 | `open-pull-requests-limit` | `5` | Per ticket. Replaces the SMA-306 baseline's `10` (cargo) and `5` (actions). |
 | `commit-message.prefix` | `chore(deps)` | Per ticket. Replaces SMA-306's `chore(ci)` for the actions ecosystem so all dep-bump commits share a prefix — simpler for release-plz changelog filtering. |
-| `commit-message.include` | `scope` | Carried from the SMA-306 baseline; appends the ecosystem to the prefix (e.g. `chore(deps)(deps):`). See §8.1. |
 | `labels` | `["area:deps"]` | Per ticket. Same label across both ecosystems — no `area:ci` for actions. |
 | `assignees` | `["SMK1085"]` | Inline list, no CODEOWNERS dependency (see §1 non-goals). |
 
@@ -90,7 +89,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
-      include: "scope"
     labels: ["area:deps"]
     assignees: ["SMK1085"]
     groups:
@@ -126,7 +124,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
-      include: "scope"
     labels: ["area:deps"]
     assignees: ["SMK1085"]
     groups:
@@ -218,8 +215,20 @@ If criteria 3–5 fail on the first Monday, the implementation plan includes a s
 
 ## 11. Post-implementation findings
 
-(To be filled in after the PR lands, in the style of SMA-307 §11. Topics to cover:
-- Did the first Monday run produce the expected number of grouped PRs?
-- Did any group's patterns behave differently than predicted?
-- Did SMA-335's eventual PR-title linter accept the doubled-parens form, or did we drop `include: scope`?
-- Were CODEOWNERS introduced separately, and did we migrate assignees there?)
+### 11.1 `include: scope` dropped — doubled prefix was uglier than predicted
+
+The first Dependabot run after merge produced PR #9 with the title `chore(deps)(deps): Bump the gh-actions group with 2 updates`. Two findings:
+
+1. **§6's predicted output was wrong about the scope contents.** The doc claimed `include: scope` would inject the *ecosystem* name (`(cargo)`, `(github-actions)`), so the example showed `chore(deps)(cargo): …`. Actual Dependabot behavior is that `include: scope` always injects the literal token `deps`, regardless of ecosystem — hence `chore(deps)(deps): …` for *both* cargo and github-actions PRs. The ecosystem distinction surfaces only in the group name within the title body (e.g., "Bump the gh-actions group").
+2. **The doubled prefix was net-negative.** It carried no information (`deps` twice says nothing the single `chore(deps):` doesn't already say) and added visual noise. Per §7's contingency, we removed `include: "scope"` from both ecosystems. Future Dependabot PRs use the clean `chore(deps): …` form.
+
+§3.3 and §4 of this doc were updated to drop the `commit-message.include` row and the `include: "scope"` line, respectively. §6, §7, and §8.1 are left as the historical design-time analysis — they document *why* we initially accepted the doubled-parens form, even though the contingency in §7 was eventually triggered.
+
+Fix landed in [PR #11](https://github.com/SMK1085/paigasus-helikon/pull/11) (commit `chore(deps): drop dependabot include: scope to fix doubled prefix`, 2026-05-17), opened immediately after SMA-308's main PR #8 merged.
+
+### 11.2 Still pending
+
+- Whether subsequent Monday runs match the ≤5-grouped-PRs-per-ecosystem and `area:deps` label/assignee predictions (need at least one full week).
+- Whether any group pattern misses an obvious dep (likely none until tower/hyper/reqwest land in a future ticket).
+- Whether CODEOWNERS is introduced separately and the inline `assignees` is migrated there.
+- Whether SMA-335's eventual PR-title linter accepts `chore(deps): bump …` cleanly (should be straightforward now that the form is canonical).
