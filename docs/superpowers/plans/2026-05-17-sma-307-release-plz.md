@@ -265,10 +265,11 @@ In `/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-tools/
 
 - [ ] **Step 14: Verify all 13 crates are updated**
 
-Run:
+Run (note the `^version` anchor — a loose `version.workspace` pattern would
+also match `rust-version.workspace`, producing false positives):
 ```bash
 cd /Users/smaschek/dev/paigasus/paigasus-helikon && \
-  grep -c 'version.workspace' crates/*/Cargo.toml
+  grep -cE '^version[[:space:]]*\.workspace' crates/*/Cargo.toml
 ```
 Expected: every line ends `:0` (zero hits per file). If any file shows `:1`, that crate was missed — go back and fix it.
 

@@ -127,11 +127,14 @@ so breaking changes are reviewed in isolation.
 
 Releases are automated by [release-plz](https://release-plz.dev). The contract:
 
-1. **Conventional Commits drive bumps.** `feat(<scope>):` → minor (pre-1.0:
-   typically patch — release-plz applies pre-1.0 semantics automatically).
-   `fix(<scope>):` → patch. `feat!:` / `BREAKING CHANGE:` footer → minor pre-1.0
-   / major post-1.0. `chore`, `docs`, `ci`, `refactor`, `test`, `style` → no bump.
-   `<scope>` is informational — release-plz attributes by files changed.
+1. **Conventional Commits drive bumps.** The mapping below applies to
+   post-1.0 versions; release-plz adjusts the effective bump level for
+   pre-1.0 (`0.x.y`) versions automatically per its own conventions —
+   consult the [release-plz docs](https://release-plz.dev/docs) for the
+   precise pre-1.0 rules. `feat(<scope>):` → minor. `fix(<scope>):` →
+   patch. `feat!:` / `BREAKING CHANGE:` footer → major. `chore`, `docs`,
+   `ci`, `refactor`, `test`, `style` → no bump. `<scope>` is informational
+   — release-plz attributes by files changed.
 
 2. **A rolling release PR.** The `release-plz` workflow runs on every push to
    `main` and maintains one open release PR titled `chore: release v...`. It
