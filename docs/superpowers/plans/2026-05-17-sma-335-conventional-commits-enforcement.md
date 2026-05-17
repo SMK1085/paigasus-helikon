@@ -416,7 +416,7 @@
 
 - [ ] **Step 4.2: Create `.github/workflows/pr-title.yml`**
 
-  Replace `<RESOLVED_SHA>` and `<RESOLVED_VERSION>` with values from Step 4.1:
+  The values resolved at implementation time were **v6.1.1** and SHA `48f256284bd46cdaab1048c3721360e808335d50`. If you're re-running this plan against a newer release, replace both with the values from Step 4.1.
   ```yaml
   name: pr-title
 
@@ -432,9 +432,9 @@
     pr-title:
       runs-on: ubuntu-latest
       steps:
-        # amannn/action-semantic-pull-request <RESOLVED_VERSION>
+        # amannn/action-semantic-pull-request v6.1.1
         # Pinned to SHA; Dependabot's gh-actions group keeps this updated.
-        - uses: amannn/action-semantic-pull-request@<RESOLVED_SHA>
+        - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           with:

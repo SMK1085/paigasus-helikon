@@ -5,7 +5,11 @@ on:
     types: [opened, edited, synchronize]
 
 concurrency:
-  group: pr-title-${{ github.ref }}
+  # pull_request_target sets github.ref to the base branch (refs/heads/main),
+  # so keying on github.ref would cause two open PRs to cancel each other.
+  # Key on the PR number instead — cancel-in-progress then only kills stale
+  # runs for the *same* PR.
+  group: pr-title-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
