@@ -1,0 +1,35 @@
+{
+  "name": "main-protection-checks",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [],
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "required_status_checks": [
+          { "context": "fmt" },
+          { "context": "clippy" },
+          { "context": "test (ubuntu-latest, stable)" },
+          { "context": "docs" },
+          { "context": "doc-coverage" },
+          { "context": "commits" },
+          { "context": "pr-title" },
+          { "context": "audit" },
+          { "context": "deny" }
+        ],
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false
+      }
+    },
+    { "type": "required_linear_history" },
+    { "type": "non_fast_forward" },
+    { "type": "deletion" }
+  ]
+}
