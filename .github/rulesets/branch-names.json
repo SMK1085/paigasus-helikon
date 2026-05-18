@@ -1,0 +1,26 @@
+{
+  "name": "branch-names",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["~ALL"],
+      "exclude": ["refs/heads/main"]
+    }
+  },
+  "bypass_actors": [
+    { "actor_id": "DEPENDABOT_APP_ID",  "actor_type": "Integration", "bypass_mode": "always" },
+    { "actor_id": "RELEASE_PLZ_APP_ID", "actor_type": "Integration", "bypass_mode": "always" }
+  ],
+  "rules": [
+    {
+      "type": "branch_name_pattern",
+      "parameters": {
+        "operator": "regex",
+        "pattern": "^(feature|hotfix)/[a-z0-9._-]+$",
+        "negate": false,
+        "name": "Branch name must be feature/<slug> or hotfix/<slug>"
+      }
+    }
+  ]
+}
