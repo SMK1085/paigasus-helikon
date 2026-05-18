@@ -3,7 +3,7 @@
 #
 # Usage:
 #   gh auth login              # one-time; needs `repo` scope minimum
-#   bash scripts/apply-repo-config.sh
+#   sh scripts/apply-repo-config.sh
 #
 # What this script does:
 #   1. Preflight: ensure `gh` is authenticated and `jq` is installed.
@@ -57,11 +57,13 @@ echo "Resolved App IDs: dependabot=$DEPENDABOT_APP_ID release-plz=$RELEASE_PLZ_A
 
 EXISTING_RULESETS_JSON="$(gh api "repos/$REPO/rulesets")"
 
+tmp_file="$(mktemp)"
+trap 'rm -f "$tmp_file"' EXIT INT TERM
+
 RULESET_COUNT=0
 for ruleset_file in "$RULESET_DIR"/*.json; do
     RULESET_COUNT=$((RULESET_COUNT + 1))
     name="$(jq -r '.name' < "$ruleset_file")"
-    tmp_file="$(mktemp)"
     # Substitute the literal quoted placeholders with bare numerics.
     # The quoted-token approach keeps the committed JSON parseable
     # while still producing a numerically-typed actor_id post-substitution.
@@ -81,7 +83,6 @@ for ruleset_file in "$RULESET_DIR"/*.json; do
         gh api -X PUT "repos/$REPO/rulesets/$existing_id" --input "$tmp_file" >/dev/null
         printf '  %-30s updated\n' "$name"
     fi
-    rm -f "$tmp_file"
 done
 
 # ---------- 4. Apply merge settings ----------
