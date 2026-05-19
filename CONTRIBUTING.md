@@ -4,13 +4,13 @@ This file documents the policies CI enforces. Reviewers will not relitigate what
 
 ## Branch naming
 
-All non-bot branches must match this regex (enforced via the `branch-names` repository ruleset; see `.github/rulesets/branch-names.json`):
+All non-bot branches must follow this convention:
 
 ```text
 ^(feature|hotfix)\/[a-z0-9._-]+$
 ```
 
-Linear's "Copy git branch name" produces compliant names (e.g. `feature/sma-305-ci-build-test-clippy-fmt-matrix`).
+The `branch-names` repository ruleset (`.github/rulesets/branch-names.json`) enforces the **prefix** — any branch that is not `main`, not under `refs/heads/feature/**`, and not under `refs/heads/hotfix/**` is rejected on creation, update, or deletion. The character-set portion (`[a-z0-9._-]+`) is a social convention rather than a hard gate, because GitHub's `branch_name_pattern` rule (which would have enforced the full regex) is not available on user-owned repository rulesets. Linear's "Copy git branch name" produces compliant names (e.g. `feature/sma-305-ci-build-test-clippy-fmt-matrix`), so following Linear avoids the character-set ambiguity in practice.
 
 `release-plz[bot]` and `dependabot[bot]` are allow-listed bypass actors for their own automation branches.
 
@@ -249,7 +249,7 @@ settings are checked in as JSON + a POSIX `sh` apply script:
 | `.github/CODEOWNERS` | Review routing — currently `* @SMK1085`. |
 | `.github/rulesets/main-protection-checks.json` | Required status checks, linear history, no force-push, no deletion. Enforced on admins (no bypass). |
 | `.github/rulesets/main-protection-reviews.json` | 1 approval, dismiss stale, CODEOWNERS review, thread resolution. Admin role bypass — solo-maintainer self-merge is intentional and will auto-engage for non-admins once a second human joins. |
-| `.github/rulesets/branch-names.json` | `^(feature\|hotfix)/[a-z0-9._-]+$` on all branches except `main`. Bypass: dependabot (resolved at apply time) + the maintainer's private release-plz App `paigasusbot` (hardcoded ID — private Apps can't be looked up via the public `/apps/{slug}` endpoint). |
+| `.github/rulesets/branch-names.json` | `creation` / `update` / `deletion` blocked on branches not under `refs/heads/feature/**`, `refs/heads/hotfix/**`, or `refs/heads/main`. Enforces the *prefix* portion of the documented branch-naming convention (full regex isn't enforceable on user-owned repository rulesets — `branch_name_pattern` is org-only). Bypass: dependabot (resolved at apply time) + the maintainer's private release-plz App `paigasusbot` (hardcoded ID — private Apps can't be looked up via the public `/apps/{slug}` endpoint). |
 | `scripts/apply-repo-config.sh` | Idempotent applier. Resolves bot App IDs at apply time and POST/PUTs each ruleset; sets merge methods + squash-commit format via `gh repo edit`. |
 
 To re-apply (or replay on a fork) after `gh auth login`:
