@@ -84,13 +84,19 @@ for ruleset_file in "$RULESET_DIR"/*.json; do
 done
 
 # ---------- 4. Apply merge settings ----------
+#
+# `gh repo edit`'s boolean toggles use --enable-X (no --enable-X=false syntax;
+# the flag is a parameterless toggle and `=false` is silently dropped), and the
+# CLI does not expose `--squash-merge-commit-title` at all. Talk to the
+# underlying PATCH endpoint directly to avoid both quirks. `-F` for booleans
+# (gh auto-types), `-f` for string enums.
 
-gh repo edit "$REPO" \
-    --enable-merge-commit=false \
-    --enable-rebase-merge=false \
-    --enable-squash-merge=true \
-    --delete-branch-on-merge=true \
-    --squash-merge-commit-title=PR_TITLE \
-    --squash-merge-commit-message=BLANK
+gh api -X PATCH "repos/$REPO" \
+    -F allow_merge_commit=false \
+    -F allow_rebase_merge=false \
+    -F allow_squash_merge=true \
+    -F delete_branch_on_merge=true \
+    -f squash_merge_commit_title=PR_TITLE \
+    -f squash_merge_commit_message=BLANK >/dev/null
 
 echo "Applied $RULESET_COUNT rulesets, repo settings updated."
