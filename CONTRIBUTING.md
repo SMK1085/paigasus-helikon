@@ -249,7 +249,7 @@ settings are checked in as JSON + a POSIX `sh` apply script:
 | `.github/CODEOWNERS` | Review routing — currently `* @SMK1085`. |
 | `.github/rulesets/main-protection-checks.json` | Required status checks, linear history, no force-push, no deletion. Enforced on admins (no bypass). |
 | `.github/rulesets/main-protection-reviews.json` | 1 approval, dismiss stale, CODEOWNERS review, thread resolution. Admin role bypass — solo-maintainer self-merge is intentional and will auto-engage for non-admins once a second human joins. |
-| `.github/rulesets/branch-names.json` | `^(feature\|hotfix)/[a-z0-9._-]+$` on all branches except `main`. Bypass: dependabot + release-plz integrations. |
+| `.github/rulesets/branch-names.json` | `^(feature\|hotfix)/[a-z0-9._-]+$` on all branches except `main`. Bypass: dependabot (resolved at apply time) + the maintainer's private release-plz App `paigasusbot` (hardcoded ID — private Apps can't be looked up via the public `/apps/{slug}` endpoint). |
 | `scripts/apply-repo-config.sh` | Idempotent applier. Resolves bot App IDs at apply time and POST/PUTs each ruleset; sets merge methods + squash-commit format via `gh repo edit`. |
 
 To re-apply (or replay on a fork) after `gh auth login`:

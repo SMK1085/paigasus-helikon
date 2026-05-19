@@ -9,8 +9,8 @@
     }
   },
   "bypass_actors": [
-    { "actor_id": "DEPENDABOT_APP_ID",  "actor_type": "Integration", "bypass_mode": "always" },
-    { "actor_id": "RELEASE_PLZ_APP_ID", "actor_type": "Integration", "bypass_mode": "always" }
+    { "actor_id": "DEPENDABOT_APP_ID", "actor_type": "Integration", "bypass_mode": "always" },
+    { "actor_id": 3742291,             "actor_type": "Integration", "bypass_mode": "always" }
   ],
   "rules": [
     {
