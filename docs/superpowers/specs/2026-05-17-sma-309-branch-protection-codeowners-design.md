@@ -141,33 +141,32 @@ Notes:
   "conditions": {
     "ref_name": {
       "include": ["~ALL"],
-      "exclude": ["refs/heads/main"]
+      "exclude": [
+        "refs/heads/main",
+        "refs/heads/feature/**",
+        "refs/heads/hotfix/**"
+      ]
     }
   },
   "bypass_actors": [
-    { "actor_id": "DEPENDABOT_APP_ID",  "actor_type": "Integration", "bypass_mode": "always" },
+    { "actor_id": "DEPENDABOT_APP_ID", "actor_type": "Integration", "bypass_mode": "always" },
     { "actor_id": 3742291,             "actor_type": "Integration", "bypass_mode": "always" }
   ],
   "rules": [
-    {
-      "type": "branch_name_pattern",
-      "parameters": {
-        "operator": "regex",
-        "pattern": "^(feature|hotfix)/[a-z0-9._-]+$",
-        "negate": false,
-        "name": "Branch name must be feature/<slug> or hotfix/<slug>"
-      }
-    }
+    { "type": "creation" },
+    { "type": "update" },
+    { "type": "deletion" }
   ]
 }
 ```
 
 Notes:
-- `exclude: ["refs/heads/main"]` keeps `main` out of the regex check (it doesn't match `^(feature|hotfix)/…` and we don't want the ruleset competing with `main` protection).
+- **Why not `branch_name_pattern`?** The original design called for a single `branch_name_pattern` rule with a regex. Empirically the Rulesets API silently rejects `branch_name_pattern` on **user-owned** repository rulesets (it returns the opaque error `Invalid rule 'branch_name_pattern': ` with an empty diagnostic for any populated parameters). The rule type is org-only at the repository-ruleset level. GitHub's own "available rules for rulesets" docs page consistently omits a "Restrict branch names" section, which is the same gap viewed from the docs side. Until either (a) `paigasus-helikon` is transferred to an organization, or (b) GitHub extends `branch_name_pattern` to user-owned repos, the rule must be expressed differently.
+- **Approach: invert the conditions, restrict with `creation`/`update`/`deletion`.** The ruleset's `conditions.ref_name` targets *everything except* the allowed prefixes (`~ALL` minus `feature/**`, `hotfix/**`, `main`). Within that target, the three rules each block their respective action for non-bypass actors. Effect: anyone (including the maintainer when not invoking bypass) is prevented from creating, updating, or deleting a branch outside the allowlist; bypass actors (admin + the two bots) are exempt.
+- **What this loses vs the regex.** The glob patterns `feature/**` and `hotfix/**` accept any character sequence after the prefix, so `feature/Foo-Bar` (uppercase), `feature/x/y/z` (deep paths), and `feature/foo!bar` (special characters) all pass the ruleset's gate. The full regex `^(feature|hotfix)/[a-z0-9._-]+$` is still documented in CONTRIBUTING.md as the social convention; reviewers and Linear's "Copy git branch name" (which produces compliant names) close most of the practical gap.
 - The `"DEPENDABOT_APP_ID"` string placeholder is intentional. The committed JSON is a valid JSON document with a string value in that slot; the apply script (§6) substitutes the whole quoted token with a bare numeric ID (29110 at the time of writing), producing a valid request body. Dependabot is a public GitHub App, so its ID is resolvable at apply time via the unauthenticated `/apps/dependabot` endpoint.
 - The second bypass actor's `actor_id` is **hardcoded** to `3742291`. This is the maintainer's private GitHub App `paigasusbot` — the workflow's `RELEASE_PLZ_APP_ID` + `RELEASE_PLZ_APP_PRIVATE_KEY` secrets hold its credentials, and release-plz acts under this App's identity (not the public `release-plz` App). Private Apps return 404 from the public `/apps/{slug}` endpoint, so runtime resolution isn't possible without elevated auth. The App ID is verifiable from the bot user's avatar URL (`https://avatars.githubusercontent.com/in/3742291?v=4` — the path segment after `/in/` is the App ID).
 - Fork users who want this ruleset to apply to their own infrastructure must edit `branch-names.json` to substitute their own App's ID (or remove the bypass entry entirely if they don't run release-plz).
-- The regex uses unescaped `/` (GitHub's regex dialect does not treat `/` as a metacharacter). The Linear ticket's `\/` is JavaScript-flavored escaping; both forms work, but the unescaped form is clearer in raw JSON.
 
 ## 5. CODEOWNERS
 
@@ -278,6 +277,7 @@ Two implicit checks worth verifying explicitly:
 - **Required-status-check naming.** Ticket lists `ci / fmt`, `cargo-deny`, etc. Implementation uses the actual check-run contexts: `fmt`, `clippy`, `test (ubuntu-latest, stable)`, `docs`, `doc-coverage`, `commits`, `pr-title`, `audit`, `deny`. (CLAUDE.md has the same error, fixed in this PR — see §8.)
 - **Release-plz bypass on review ruleset.** Ticket says "override for release-plz bot" on the approval requirement. Implementation omits release-plz from `main-protection-reviews` bypass — the maintainer reviews and merges the release PR by hand (per existing CONTRIBUTING.md §Releases), and admin bypass covers that. Release-plz only needs `branch-names` bypass, which it has.
 - **release-plz App identity (discovered at apply time).** Earlier drafts of this spec assumed release-plz on this repo acted under the public `release-plz` GitHub App (ID 205377), so the apply script resolved that ID via `/apps/release-plz`. Both halves were wrong: (a) the maintainer's `release-plz.yml` workflow uses their **own private App** `paigasusbot` (ID 3742291), and (b) the Rulesets API rejects POSTs whose `Integration` bypass actors are not installed on the ruleset source. Resolution: hardcode `3742291` in `branch-names.json` (private Apps return 404 from `/apps/{slug}` so runtime resolution isn't possible) and drop the release-plz resolution from the apply script. Dependabot's bypass entry continues to use the placeholder + runtime resolution (29110, public App).
+- **`branch_name_pattern` rule unavailable on user-owned repos (discovered at apply time).** Original design used a single `branch_name_pattern` rule with regex `^(feature|hotfix)/[a-z0-9._-]+$`. The Rulesets API silently rejects this rule type on user-owned repository rulesets — every populated request returns the opaque error `Invalid rule 'branch_name_pattern': ` (empty diagnostic). The rule is org-only at the repository-ruleset level; GitHub's "available rules for rulesets" docs page confirms this by omitting a "Restrict branch names" section. Resolution: invert the ruleset's `conditions.ref_name` to target everything *except* the allowed prefixes and use `creation` + `update` + `deletion` rules to block actions in that inverted target. Loses character-set enforcement (uppercase, special chars, deep paths now pass); CONTRIBUTING.md was updated to call the full regex a social convention rather than a hard gate. See §4.3 for the new JSON and trade-offs.
 
 ## 11. Risks
 
