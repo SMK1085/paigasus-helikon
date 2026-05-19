@@ -146,7 +146,7 @@ Notes:
   },
   "bypass_actors": [
     { "actor_id": "DEPENDABOT_APP_ID",  "actor_type": "Integration", "bypass_mode": "always" },
-    { "actor_id": "RELEASE_PLZ_APP_ID", "actor_type": "Integration", "bypass_mode": "always" }
+    { "actor_id": 3742291,             "actor_type": "Integration", "bypass_mode": "always" }
   ],
   "rules": [
     {
@@ -164,7 +164,9 @@ Notes:
 
 Notes:
 - `exclude: ["refs/heads/main"]` keeps `main` out of the regex check (it doesn't match `^(feature|hotfix)/…` and we don't want the ruleset competing with `main` protection).
-- The string placeholders `"DEPENDABOT_APP_ID"` and `"RELEASE_PLZ_APP_ID"` are intentional. The committed JSON is a valid JSON document with string values in those slots; the apply script (§6) substitutes the whole quoted token (e.g. `"DEPENDABOT_APP_ID"`) with a bare numeric ID (e.g. `49363`), producing a valid request body. Committed-form portability is preserved across forks where the same Apps may have different installation IDs.
+- The `"DEPENDABOT_APP_ID"` string placeholder is intentional. The committed JSON is a valid JSON document with a string value in that slot; the apply script (§6) substitutes the whole quoted token with a bare numeric ID (29110 at the time of writing), producing a valid request body. Dependabot is a public GitHub App, so its ID is resolvable at apply time via the unauthenticated `/apps/dependabot` endpoint.
+- The second bypass actor's `actor_id` is **hardcoded** to `3742291`. This is the maintainer's private GitHub App `paigasusbot` — the workflow's `RELEASE_PLZ_APP_ID` + `RELEASE_PLZ_APP_PRIVATE_KEY` secrets hold its credentials, and release-plz acts under this App's identity (not the public `release-plz` App). Private Apps return 404 from the public `/apps/{slug}` endpoint, so runtime resolution isn't possible without elevated auth. The App ID is verifiable from the bot user's avatar URL (`https://avatars.githubusercontent.com/in/3742291?v=4` — the path segment after `/in/` is the App ID).
+- Fork users who want this ruleset to apply to their own infrastructure must edit `branch-names.json` to substitute their own App's ID (or remove the bypass entry entirely if they don't run release-plz).
 - The regex uses unescaped `/` (GitHub's regex dialect does not treat `/` as a metacharacter). The Linear ticket's `\/` is JavaScript-flavored escaping; both forms work, but the unescaped form is clearer in raw JSON.
 
 ## 5. CODEOWNERS
@@ -186,9 +188,9 @@ POSIX `sh`, idempotent (re-runs produce the same state), runnable from any maint
 Behavior, in order:
 
 1. **Preflight.** `gh auth status` → fail fast if unauthenticated. `command -v jq` → fail with install hint if missing.
-2. **Resolve Integration IDs.** Call the public `GET /apps/{app_slug}` endpoint twice — once for `dependabot`, once for `release-plz` — and read `.id` from each response. This endpoint is unauthenticated-friendly and returns each App's stable global numeric ID (dependabot=29110, release-plz=205377 at the time of writing). Installation status is intentionally *not* checked: the App ID is the same whether the App is installed on this repo or not, and listing repo-level installations requires an App-authorized token (not the maintainer's PAT). A bypass actor entry for an uninstalled App is inert and harmless; the maintainer can install the App at any time and the entry takes effect immediately.
+2. **Resolve Integration IDs.** Call the public `GET /apps/dependabot` endpoint once and read `.id` (29110). Only dependabot needs runtime resolution; the second bypass actor (paigasusbot, ID 3742291) is hardcoded in `branch-names.json` because it is a private App and the public `/apps/{slug}` endpoint returns 404 for private Apps. Earlier drafts of this spec assumed the public `release-plz` App (ID 205377) would be the right bypass actor and added it via the same resolution mechanism — that was wrong on two counts: (a) the maintainer's repo authenticates release-plz via their own private App, not the public one; (b) the GitHub Rulesets API DOES validate that an `Integration` bypass actor is installed on the ruleset source, rejecting POST requests that reference uninstalled Apps with `Actor X must be part of the ruleset source or owner organization`.
 3. **Apply each ruleset.** For each `.github/rulesets/*.json`:
-   1. `sed` substitutes the literal tokens `"DEPENDABOT_APP_ID"` and `"RELEASE_PLZ_APP_ID"` (including the surrounding double-quotes) with the resolved numeric App IDs, producing a temp file with a valid request body. (Committed JSON keeps the string placeholders so the files remain portable across forks.) Files that don't reference those placeholders are passed through unchanged.
+   1. `sed` substitutes the literal token `"DEPENDABOT_APP_ID"` (including the surrounding double-quotes) with the resolved numeric App ID, producing a temp file with a valid request body. (Committed JSON keeps the string placeholder so the files remain portable across forks.) Files that don't reference the placeholder are passed through unchanged.
    2. Query `gh api /repos/SMK1085/paigasus-helikon/rulesets` for a ruleset with the same `name`.
    3. If absent: `POST /repos/SMK1085/paigasus-helikon/rulesets` with the temp JSON. Print `created`.
    4. If present: `PUT /repos/SMK1085/paigasus-helikon/rulesets/<id>` with the temp JSON. Print `updated`. (No client-side diff — PUT is idempotent at the resource level, so re-running with unchanged JSON converges to the same state.)
@@ -275,10 +277,11 @@ Two implicit checks worth verifying explicitly:
 - **Single ruleset → three rulesets.** Ticket describes "branch protection on main" as a single configuration. Implementation splits into `main-protection-checks` and `main-protection-reviews` so admin bypass can apply to reviews without skipping status checks. See §2.
 - **Required-status-check naming.** Ticket lists `ci / fmt`, `cargo-deny`, etc. Implementation uses the actual check-run contexts: `fmt`, `clippy`, `test (ubuntu-latest, stable)`, `docs`, `doc-coverage`, `commits`, `pr-title`, `audit`, `deny`. (CLAUDE.md has the same error, fixed in this PR — see §8.)
 - **Release-plz bypass on review ruleset.** Ticket says "override for release-plz bot" on the approval requirement. Implementation omits release-plz from `main-protection-reviews` bypass — the maintainer reviews and merges the release PR by hand (per existing CONTRIBUTING.md §Releases), and admin bypass covers that. Release-plz only needs `branch-names` bypass, which it has.
+- **release-plz App identity (discovered at apply time).** Earlier drafts of this spec assumed release-plz on this repo acted under the public `release-plz` GitHub App (ID 205377), so the apply script resolved that ID via `/apps/release-plz`. Both halves were wrong: (a) the maintainer's `release-plz.yml` workflow uses their **own private App** `paigasusbot` (ID 3742291), and (b) the Rulesets API rejects POSTs whose `Integration` bypass actors are not installed on the ruleset source. Resolution: hardcode `3742291` in `branch-names.json` (private Apps return 404 from `/apps/{slug}` so runtime resolution isn't possible) and drop the release-plz resolution from the apply script. Dependabot's bypass entry continues to use the placeholder + runtime resolution (29110, public App).
 
 ## 11. Risks
 
-- **Release-plz App reinstall changes installation ID.** The apply script resolves the App by `app_slug`, not by hardcoded ID, so reinstall is fine. If the App is missing entirely, the script fails fast with the install URL.
+- **paigasusbot App re-creation changes its App ID.** If the maintainer deletes and re-registers the `paigasusbot` GitHub App, its new App ID will differ from `3742291` and the hardcoded bypass actor in `branch-names.json` will be silently inert (release-plz pushes to its branch prefix will be rejected by the branch-name rule). Mitigation: a re-create is a deliberate maintainer action and they will update the JSON in the same change. Dependabot's bypass continues to be resolved dynamically by the apply script and is unaffected by reinstalls.
 - **`pr-title` check race.** `pr-title.yml` runs on `pull_request_target`. If the workflow has never run on a PR (e.g. immediate merge attempt before sync), the required check is missing — GitHub treats missing required checks as blocking, which is the desired behavior. No mitigation needed; documented for future debugging.
 - **Self-bypass blast radius.** Admin bypass on `main-protection-reviews` is total for that ruleset (skips approvals, CODEOWNERS review, **and** thread resolution). The `checks` ruleset has no bypass, so the safety floor — green CI — is preserved.
 
