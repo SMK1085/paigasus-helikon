@@ -1,0 +1,5 @@
+# Ownership for review routing. With one owner, this functions mostly as
+# auto-review-request. Path-specific stanzas can be added once a second
+# human maintainer joins.
+
+*  @SMK1085
