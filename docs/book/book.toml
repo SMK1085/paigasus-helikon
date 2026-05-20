@@ -1,0 +1,22 @@
+[book]
+title       = "Paigasus Helikon"
+description = "Public documentation for the Paigasus AI SDK (Rust)."
+authors     = ["Sven Maschek"]
+language    = "en"
+src         = "src"
+
+[output.html]
+site-url             = "/paigasus-helikon/"
+git-repository-url   = "https://github.com/SMK1085/paigasus-helikon"
+edit-url-template    = "https://github.com/SMK1085/paigasus-helikon/edit/main/docs/book/{path}"
+default-theme        = "rust"
+preferred-dark-theme = "ayu"
+
+[output.html.fold]
+enable = true
+level  = 1
+
+[output.linkcheck]
+follow-web-links = false
+warning-policy   = "error"
+exclude          = []
