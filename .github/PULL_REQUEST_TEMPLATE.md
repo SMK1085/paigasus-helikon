@@ -6,13 +6,6 @@
 
 <!-- e.g. Closes SMA-###. Linear auto-closes on merge regardless of the keyword. -->
 
-## Type of change
-
-<!--
-The PR title must follow Conventional Commits (e.g. `feat(scope): SMA-### message`).
-CI (`pr-title`, `commits`) will reject otherwise. See CONTRIBUTING.md.
--->
-
 ## Checklist
 
 - [ ] Tests added or updated
