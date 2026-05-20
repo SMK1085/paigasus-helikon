@@ -1,5 +1,13 @@
 # SMA-309 Branch Protection + CODEOWNERS Implementation Plan
 
+> **⚠ Superseded by spec §10 deviations (SMA-344 followup).** This plan was authored before two apply-time discoveries forced corrections that are now reflected in the spec but **not** here. If you are reading this plan for the as-shipped design, prefer `../specs/2026-05-17-sma-309-branch-protection-codeowners-design.md` §4.3 + §10 — in particular:
+>
+> 1. **release-plz App ID is `3742291`** (the maintainer's private App `paigasusbot`), not the public `release-plz` App's `205377`. The "Pre-resolved constants" block and Task 4's `RELEASE_PLZ_APP_ID` placeholder below are wrong; the shipped `branch-names.json` hardcodes `3742291` and the apply script does not resolve a second App ID.
+> 2. **`branch_name_pattern` is not usable on user-owned repository rulesets** (the Rulesets API silently rejects it; the rule is org-only). The shipped `branch-names.json` uses `creation` + `update` + `deletion` rules with `conditions.ref_name.exclude` enumerating the allowed prefixes — see spec §4.3 for the as-shipped JSON.
+> 3. **`gh repo edit` doesn't expose `--squash-merge-commit-title` and silently drops `--enable-X=false` toggles.** The shipped apply script uses `gh api -X PATCH /repos/{owner}/{repo}` directly.
+>
+> Tasks 4, 5, 9 and the acceptance-criteria verification commands below still reference the pre-deviation design and should be read with the above corrections in mind. The plan is preserved verbatim as a historical record of the original implementation strategy.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Lock down `main` and stop stray branch names by landing three GitHub Repository Rulesets, a `CODEOWNERS` file, and a `gh repo edit` setup — all driven from checked-in JSON + a POSIX `sh` apply script.
