@@ -16,7 +16,7 @@ The SDK does not pick a deployment story, a hosting story, or an observability s
 
 ## The codename
 
-In Greek myth, Mount Helicon (Greek: Ἑλικών, *Helikōn*) is the home of the Muses. When Pegasus struck the mountainside with his hoof, the **Hippocrene** spring burst forth — the literal source of poetic inspiration that the Muses drew from.
+In Greek myth, Mount Helicon (Greek: Ἑλικῶν, *Helikōn*) is the home of the Muses. When Pegasus struck the mountainside with his hoof, the **Hippocrene** spring burst forth — the literal source of poetic inspiration that the Muses drew from.
 
 Paigasus is the umbrella; Helikon is the spring. The SDK is the artifact you draw from when building agents on top.
 
@@ -57,8 +57,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for branching, testing, and release wor
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](./LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](./LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+- Apache License, Version 2.0 ([LICENSE-APACHE](./LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](./LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
 
 at your option.
 
