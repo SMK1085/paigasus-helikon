@@ -2,6 +2,10 @@
 
 This file documents the policies CI enforces. Reviewers will not relitigate what the gates have already checked — failing CI blocks merge.
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant 2.1](./CODE_OF_CONDUCT.md). By participating, you agree to its terms. Report unacceptable behavior to `dev@paigasus.com`.
+
 ## Branch naming
 
 All non-bot branches must follow this convention:
@@ -238,6 +242,10 @@ permissively compatible) or carve a per-crate exception under
 Dependabot watches `cargo` and `github-actions` weekly (Monday 06:00 UTC),
 grouping patch + minor updates per ecosystem. Major bumps remain ungrouped
 so breaking changes are reviewed in isolation.
+
+## Reporting security issues
+
+Please do not file public issues for vulnerabilities. See [SECURITY.md](./SECURITY.md) for the private reporting channel.
 
 ## Repo configuration
 
