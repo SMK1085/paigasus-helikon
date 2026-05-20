@@ -383,7 +383,9 @@ Both are documented in the PR description and CONTRIBUTING.md (§9.3).
 
 ## 11. Commit shape
 
-Single PR on `feature/sma-311-mdbook-docs-scaffold`. Commit type for the implementation commit(s): `docs(book): SMA-311 ...`.
+Single PR on `feature/sma-311-mdbook-docs-scaffold`. Commit type for the implementation commit(s): `docs(repo): SMA-311 ...`.
+
+The repo's `.versionrc` enforces an explicit `scopeRegex` allowlist; `book` is not in it, but `repo` is. `repo` is also the SMA-309 / SMA-310 precedent for repo-wide tooling and infrastructure changes. Adding `book` to the scope allowlist would be a separate, defensible follow-up but is out of scope for SMA-311.
 
 Per CLAUDE.md's "bootstrap commits on release infrastructure must use `chore(...)` or `docs(...)`" rule, **no `feat(...)` or `fix(...)` commits in this PR.** This is documentation infrastructure; a `feat` commit would mis-attribute a version bump across the workspace via release-plz.
 
