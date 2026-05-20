@@ -250,7 +250,7 @@ settings are checked in as JSON + a POSIX `sh` apply script:
 | `.github/rulesets/main-protection-checks.json` | Required status checks, linear history, no force-push, no deletion. Enforced on admins (no bypass). |
 | `.github/rulesets/main-protection-reviews.json` | 1 approval, dismiss stale, CODEOWNERS review, thread resolution. Admin role bypass — solo-maintainer self-merge is intentional and will auto-engage for non-admins once a second human joins. |
 | `.github/rulesets/branch-names.json` | `creation` / `update` / `deletion` blocked on branches not under `refs/heads/feature/**`, `refs/heads/hotfix/**`, or `refs/heads/main`. Enforces the *prefix* portion of the documented branch-naming convention (full regex isn't enforceable on user-owned repository rulesets — `branch_name_pattern` is org-only). Bypass: dependabot (resolved at apply time) + the maintainer's private release-plz App `paigasusbot` (hardcoded ID — private Apps can't be looked up via the public `/apps/{slug}` endpoint). |
-| `scripts/apply-repo-config.sh` | Idempotent applier. Resolves bot App IDs at apply time and POST/PUTs each ruleset; sets merge methods + squash-commit format via `gh repo edit`. |
+| `scripts/apply-repo-config.sh` | Idempotent applier. Resolves bot App IDs at apply time and POST/PUTs each ruleset; sets merge methods + squash-commit format via a direct `gh api -X PATCH` call (not `gh repo edit` — its boolean toggles silently drop `=false` and it doesn't expose `--squash-merge-commit-title`). |
 
 To re-apply (or replay on a fork) after `gh auth login`:
 

@@ -15,7 +15,10 @@
 #      "Repo configuration" for the rationale.)
 #   3. For each .github/rulesets/*.json, substitute the dependabot
 #      placeholder and POST (create) or PUT (update) via the rulesets API.
-#   4. Apply merge-method and squash-format settings via `gh repo edit`.
+#   4. Apply merge-method and squash-format settings via a direct
+#      `gh api -X PATCH /repos/{owner}/{repo}` call. (Not `gh repo edit`:
+#      its `--enable-X=false` toggles are silently dropped, and it doesn't
+#      expose `--squash-merge-commit-title` at all.)
 #
 # Idempotent: re-running converges to the same state.
 
