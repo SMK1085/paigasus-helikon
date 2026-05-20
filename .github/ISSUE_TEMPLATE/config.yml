@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Tracked work (Linear)
+    url: https://linear.app/smaschek/project/paigasus-helikon
+    about: For roadmap items, internally-tracked work, or anything labeled SMA-###, use Linear.
+  - name: Security vulnerabilities
+    url: https://github.com/SMK1085/paigasus-helikon/security/advisories/new
+    about: Report security issues privately via GitHub Security Advisories — do not file a public issue.
