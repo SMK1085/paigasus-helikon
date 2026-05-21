@@ -1,0 +1,12 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 83
+expression: roundtrip(&part)
+---
+{
+  "type": "image",
+  "source": {
+    "type": "url",
+    "url": "https://example.com/cat.png"
+  }
+}

@@ -1,0 +1,14 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 57
+expression: roundtrip(&item)
+---
+{
+  "type": "assistant_message",
+  "content": [
+    {
+      "type": "text",
+      "text": "anonymous reply"
+    }
+  ]
+}

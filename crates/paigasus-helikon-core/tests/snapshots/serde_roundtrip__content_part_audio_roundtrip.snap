@@ -1,0 +1,13 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 94
+expression: roundtrip(&part)
+---
+{
+  "type": "audio",
+  "source": {
+    "type": "base64",
+    "mime_type": "audio/wav",
+    "data": "UklGRg=="
+  }
+}

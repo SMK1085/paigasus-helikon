@@ -1,0 +1,19 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 40
+expression: roundtrip(&item)
+---
+{
+  "type": "assistant_message",
+  "content": [
+    {
+      "type": "text",
+      "text": "let me check"
+    },
+    {
+      "type": "reasoning",
+      "text": "the user asked X"
+    }
+  ],
+  "agent": "triage"
+}
