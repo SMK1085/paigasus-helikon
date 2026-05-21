@@ -20,6 +20,7 @@
 // plan).
 #![allow(rustdoc::broken_intra_doc_links)]
 
+pub mod agent;
 pub mod context;
 pub mod guardrail;
 pub mod hook;
@@ -27,6 +28,7 @@ pub mod model;
 pub mod session;
 pub mod tool;
 
+pub use agent::*;
 pub use context::*;
 pub use guardrail::*;
 pub use hook::*;
