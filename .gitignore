@@ -1,3 +1,5 @@
 /target
 # cargo-cyclonedx SBOM artifacts (regenerated per build; uploaded by sbom workflow)
 crates/**/*.cdx.json
+# Local scratch binary occasionally emitted by `cargo run` without -p
+/rust_out
