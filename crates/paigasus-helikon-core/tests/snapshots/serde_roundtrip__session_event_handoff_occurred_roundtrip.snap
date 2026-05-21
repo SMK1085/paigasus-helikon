@@ -1,0 +1,10 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 349
+expression: roundtrip(&ev)
+---
+{
+  "type": "handoff_occurred",
+  "from": "triage",
+  "to": "billing"
+}

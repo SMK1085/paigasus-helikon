@@ -8,6 +8,8 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::{ContentPart, Item};
+
 /// Conversation persistence as an append-only event log.
 ///
 /// See the *Sessions* concept page for the rationale.
@@ -57,23 +59,26 @@ pub trait Session: Send + Sync {
 
 /// One entry in the conversation event log.
 ///
-/// Variant fields (content/timestamp shapes) will graduate from the
-/// placeholder types here to the canonical `Item` and `DateTime<Utc>`
-/// types with later tickets.
+/// `UserMessage` / `AssistantMessage` / `ToolReturned` carry
+/// `Vec<ContentPart>` directly (not `Item`) because the SessionEvent
+/// variant *is* the role — wrapping `Item::UserMessage` inside
+/// `SessionEvent::UserMessage` would double-tag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SessionEvent {
     /// A user-authored message.
     UserMessage {
-        /// Message text.
-        text: String,
+        /// Content blocks of the message.
+        content: Vec<ContentPart>,
     },
     /// An assistant-authored message attributed to a named agent.
     AssistantMessage {
-        /// Message text.
-        text: String,
-        /// Name of the emitting [`crate::Agent`].
+        /// Content blocks of the message.
+        content: Vec<ContentPart>,
+        /// Name of the emitting [`crate::Agent`]. `String` (not `Option`)
+        /// because the runner always knows which agent emitted when
+        /// appending to the log.
         agent: String,
     },
     /// The runner invoked a tool.
@@ -89,8 +94,9 @@ pub enum SessionEvent {
     ToolReturned {
         /// Matching call identifier.
         call_id: String,
-        /// JSON output.
-        output: serde_json::Value,
+        /// Content blocks of the tool's output (Anthropic permits
+        /// text + image inside a tool result).
+        content: Vec<ContentPart>,
     },
     /// Control transferred from one agent to another.
     HandoffOccurred {
@@ -103,9 +109,9 @@ pub enum SessionEvent {
     Compacted {
         /// LLM-produced summary.
         summary: String,
-        /// Number of events the summary replaces. `u64` (not `usize`) because
-        /// the value is serialized into the persisted event log — a 32-bit
-        /// consumer must read what a 64-bit producer wrote without truncation.
+        /// Number of events the summary replaces. `u64` (not `usize`)
+        /// because the value is serialized into the persisted log — a
+        /// 32-bit consumer must read what a 64-bit producer wrote.
         original_count: u64,
     },
 }
@@ -114,11 +120,15 @@ pub enum SessionEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SequenceId(pub u64);
 
-/// A computed projection of a [`Session`]'s log into a single conversation
-/// state. Field shape lands with later tickets.
+/// A computed projection of a [`Session`]'s log into a single
+/// conversation state. The `messages` field is the canonical view a
+/// session emits.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct ConversationSnapshot {}
+pub struct ConversationSnapshot {
+    /// Canonical message list, in conversational order.
+    pub messages: Vec<Item>,
+}
 
 /// Errors raised by [`Session`] methods.
 #[derive(Debug, thiserror::Error)]

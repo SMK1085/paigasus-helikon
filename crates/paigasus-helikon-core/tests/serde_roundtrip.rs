@@ -304,3 +304,63 @@ fn agent_event_run_failed_roundtrip() {
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }
+
+// --- SessionEvent ---
+
+#[test]
+fn session_event_user_message_roundtrip() {
+    let ev = SessionEvent::UserMessage {
+        content: vec![ContentPart::Text {
+            text: "hello".into(),
+        }],
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn session_event_assistant_message_roundtrip() {
+    let ev = SessionEvent::AssistantMessage {
+        content: vec![ContentPart::Text {
+            text: "hi back".into(),
+        }],
+        agent: "triage".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn session_event_tool_called_roundtrip() {
+    let ev = SessionEvent::ToolCalled {
+        call_id: "call_1".into(),
+        name: "calc".into(),
+        args: serde_json::json!({ "expr": "1+1" }),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn session_event_tool_returned_roundtrip() {
+    let ev = SessionEvent::ToolReturned {
+        call_id: "call_1".into(),
+        content: vec![ContentPart::Text { text: "2".into() }],
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn session_event_handoff_occurred_roundtrip() {
+    let ev = SessionEvent::HandoffOccurred {
+        from: "triage".into(),
+        to: "billing".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn session_event_compacted_roundtrip() {
+    let ev = SessionEvent::Compacted {
+        summary: "user asked for a refund; assistant agreed".into(),
+        original_count: 12,
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}

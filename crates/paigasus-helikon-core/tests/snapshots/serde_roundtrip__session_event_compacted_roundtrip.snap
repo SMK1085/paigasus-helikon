@@ -1,0 +1,10 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 358
+expression: roundtrip(&ev)
+---
+{
+  "type": "compacted",
+  "summary": "user asked for a refund; assistant agreed",
+  "original_count": 12
+}
