@@ -22,12 +22,14 @@
 
 pub mod context;
 pub mod guardrail;
+pub mod hook;
 pub mod model;
 pub mod session;
 pub mod tool;
 
 pub use context::*;
 pub use guardrail::*;
+pub use hook::*;
 pub use model::*;
 pub use session::*;
 pub use tool::*;
