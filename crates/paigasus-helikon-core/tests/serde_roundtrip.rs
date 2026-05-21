@@ -162,3 +162,145 @@ fn media_source_base64_roundtrip() {
     };
     insta::assert_snapshot!(roundtrip(&src));
 }
+
+// --- AgentEvent ---
+
+#[test]
+fn agent_event_run_started_roundtrip() {
+    let ev = AgentEvent::RunStarted {
+        agent: "triage".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_turn_started_roundtrip() {
+    let ev = AgentEvent::TurnStarted { turn: 1 };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_token_delta_roundtrip() {
+    let ev = AgentEvent::TokenDelta { text: "hel".into() };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_reasoning_delta_roundtrip() {
+    let ev = AgentEvent::ReasoningDelta {
+        text: "let me think".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_tool_call_delta_roundtrip() {
+    let ev = AgentEvent::ToolCallDelta {
+        call_id: "call_1".into(),
+        name: Some("calc".into()),
+        args_delta: "{\"x\":".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_tool_call_delta_no_name_roundtrip() {
+    let ev = AgentEvent::ToolCallDelta {
+        call_id: "call_1".into(),
+        name: None,
+        args_delta: "1+1}".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_message_output_roundtrip() {
+    let ev = AgentEvent::MessageOutput {
+        item: Item::AssistantMessage {
+            content: vec![ContentPart::Text {
+                text: "hello".into(),
+            }],
+            agent: Some("triage".into()),
+        },
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_tool_call_item_roundtrip() {
+    let ev = AgentEvent::ToolCallItem {
+        item: Item::ToolCall {
+            call_id: "call_1".into(),
+            name: "calc".into(),
+            args: serde_json::json!({ "expr": "1+1" }),
+        },
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_tool_output_item_roundtrip() {
+    let ev = AgentEvent::ToolOutputItem {
+        item: Item::ToolResult {
+            call_id: "call_1".into(),
+            content: vec![ContentPart::Text { text: "2".into() }],
+        },
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_handoff_item_roundtrip() {
+    let ev = AgentEvent::HandoffItem {
+        from: "triage".into(),
+        to: "billing".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_agent_updated_roundtrip() {
+    let ev = AgentEvent::AgentUpdated {
+        agent: "billing".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_guardrail_triggered_roundtrip() {
+    let ev = AgentEvent::GuardrailTriggered {
+        kind: GuardrailKind::InputPolicy,
+        info: serde_json::json!({ "score": 0.92 }),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_approval_requested_roundtrip() {
+    let ev = AgentEvent::ApprovalRequested {
+        call_id: "call_1".into(),
+        tool: "delete_file".into(),
+        args: serde_json::json!({ "path": "/etc/passwd" }),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_run_completed_roundtrip() {
+    let mut usage = TokenUsage::default();
+    usage.input_tokens = 100;
+    usage.output_tokens = 50;
+    usage.cached_input_tokens = 30;
+    usage.reasoning_tokens = 10;
+    usage.total_tokens = 160;
+    let ev = AgentEvent::RunCompleted { usage };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_run_failed_roundtrip() {
+    let ev = AgentEvent::RunFailed {
+        error: "model unavailable".into(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}

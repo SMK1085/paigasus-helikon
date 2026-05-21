@@ -1,0 +1,9 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 173
+expression: roundtrip(&ev)
+---
+{
+  "type": "run_started",
+  "agent": "triage"
+}

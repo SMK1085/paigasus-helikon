@@ -1,0 +1,9 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 179
+expression: roundtrip(&ev)
+---
+{
+  "type": "turn_started",
+  "turn": 1
+}
