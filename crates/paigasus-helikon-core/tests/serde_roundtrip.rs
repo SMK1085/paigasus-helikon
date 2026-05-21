@@ -375,3 +375,24 @@ fn session_event_compacted_roundtrip() {
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }
+
+// --- ConversationSnapshot ---
+
+#[test]
+fn conversation_snapshot_roundtrip() {
+    let mut snapshot = ConversationSnapshot::default();
+    snapshot.messages = vec![
+        Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "hello".into(),
+            }],
+        },
+        Item::AssistantMessage {
+            content: vec![ContentPart::Text {
+                text: "hi back".into(),
+            }],
+            agent: Some("triage".into()),
+        },
+    ];
+    insta::assert_snapshot!(roundtrip(&snapshot));
+}

@@ -98,14 +98,19 @@ where
 
     /// Project the narrower [`ToolContext`] from this [`RunContext`].
     ///
-    /// Tools receive `user_ctx`, `tracer`, and `cancel` — they do **not**
-    /// see the session handle (the runner owns persistence) or the hook
-    /// registry (hooks fire around tool invocations, not from inside).
+    /// Tools receive `user_ctx`, `tracer`, and a **child** cancellation
+    /// token. The child observes the parent's cancellation but tool-side
+    /// `cancel()` calls only cancel the tool's subtree — they do not
+    /// propagate back to the run.
+    ///
+    /// Tools do not see the session handle (the runner owns persistence)
+    /// or the hook registry (hooks fire around tool invocations, not
+    /// from inside).
     pub fn to_tool_context(&self) -> ToolContext<Ctx> {
         ToolContext::new(
             Arc::clone(&self.user_ctx),
             self.tracer.clone(),
-            self.cancel.clone(),
+            self.cancel.child_token(),
         )
     }
 }

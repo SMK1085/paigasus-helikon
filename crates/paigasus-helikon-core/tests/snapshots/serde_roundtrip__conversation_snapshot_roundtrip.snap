@@ -1,0 +1,28 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 397
+expression: roundtrip(&snapshot)
+---
+{
+  "messages": [
+    {
+      "type": "user_message",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello"
+        }
+      ]
+    },
+    {
+      "type": "assistant_message",
+      "content": [
+        {
+          "type": "text",
+          "text": "hi back"
+        }
+      ],
+      "agent": "triage"
+    }
+  ]
+}
