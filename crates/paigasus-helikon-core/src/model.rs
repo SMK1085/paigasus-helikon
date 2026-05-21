@@ -63,16 +63,51 @@ pub trait Model: Send + Sync {
 
 /// The request envelope crossing the model boundary.
 ///
-/// Field shape (messages, tools, `tool_choice`, `response_format`,
-/// temperature, `previous_response_id`, …) lands with the provider tickets
-/// that exercise it. Today the type exists so trait signatures resolve and
-/// rustdoc examples compile.
+/// Carries the conversation, the tools available for the model to
+/// invoke, and provider-tuning knobs. Field shape is the minimum SMA-314
+/// needs to drive the loop; SMA-316 / SMA-317 add `tool_choice`,
+/// `response_format`, `temperature`, and `previous_response_id`.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub struct ModelRequest {}
+pub struct ModelRequest {
+    /// The full accumulated conversation so far.
+    pub messages: Vec<crate::Item>,
+    /// Tool definitions the model may invoke this turn.
+    pub tools: Vec<ToolDef>,
+    /// Provider-tuning knobs.
+    pub model_settings: ModelSettings,
+}
 
 impl ModelRequest {
-    /// Construct an empty [`ModelRequest`].
+    /// Construct an empty request. Callers populate fields directly.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Owned snapshot of a [`crate::Tool`] for cross-async-boundary use
+/// inside [`ModelRequest`].
+#[derive(Debug, Clone)]
+pub struct ToolDef {
+    /// Identifier the model uses when emitting a tool call.
+    pub name: String,
+    /// One-line tool description shown to the model.
+    pub description: String,
+    /// JSON Schema for the tool's argument object.
+    pub schema: serde_json::Value,
+}
+
+/// Provider-tuning knobs (temperature, max tokens, sampling, ...).
+///
+/// Field shape lands with SMA-316 / SMA-317. Today this is a
+/// `#[non_exhaustive]` placeholder so [`ModelRequest::model_settings`]
+/// has a type.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct ModelSettings {}
+
+impl ModelSettings {
+    /// Construct default model settings.
     pub fn new() -> Self {
         Self::default()
     }
