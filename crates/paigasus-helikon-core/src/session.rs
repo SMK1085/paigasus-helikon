@@ -103,8 +103,10 @@ pub enum SessionEvent {
     Compacted {
         /// LLM-produced summary.
         summary: String,
-        /// Number of events the summary replaces.
-        original_count: usize,
+        /// Number of events the summary replaces. `u64` (not `usize`) because
+        /// the value is serialized into the persisted event log — a 32-bit
+        /// consumer must read what a 64-bit producer wrote without truncation.
+        original_count: u64,
     },
 }
 
