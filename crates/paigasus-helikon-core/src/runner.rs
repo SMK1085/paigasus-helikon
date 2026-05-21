@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Agent, AgentError, AgentInput, RunContext};
+use crate::{Agent, AgentError, AgentEvent, AgentInput, RunContext};
 
 /// Pluggable execution backend.
 ///
@@ -83,12 +83,42 @@ where
 #[non_exhaustive]
 pub struct RunConfig {}
 
-/// The aggregated outcome of a non-streaming [`Runner::run`]. Field shape
-/// (final response, trajectory, token counts) lands with the runner
-/// ticket.
-#[derive(Debug, Default)]
+/// The aggregated outcome of a non-streaming [`Runner::run`].
+///
+/// Generic over the structured-output type. The default `T = String`
+/// makes the common case ergonomic; structured-output callers build
+/// `RunResult<MyStruct>` via [`RunResult::parse_final`].
+#[derive(Debug, Default, Clone)]
 #[non_exhaustive]
-pub struct RunResult {}
+pub struct RunResult<T = String> {
+    /// The model's final assistant output, deserialized into `T`. For
+    /// the default `T = String` this is the literal text.
+    pub final_output: T,
+    /// Every [`AgentEvent`] emitted during the run, in order.
+    pub events: Vec<AgentEvent>,
+    /// Aggregated token usage across every turn of the run.
+    pub usage: TokenUsage,
+}
+
+impl RunResult<String> {
+    /// Deserialize `final_output` into `T`, producing a typed
+    /// [`RunResult`].
+    ///
+    /// The `T: JsonSchema` bound is the marker that the caller has
+    /// configured structured output upstream — without it,
+    /// `parse_final` is just a JSON parse over unstructured text.
+    pub fn parse_final<T>(self) -> Result<RunResult<T>, serde_json::Error>
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema,
+    {
+        let final_output = serde_json::from_str::<T>(&self.final_output)?;
+        Ok(RunResult {
+            final_output,
+            events: self.events,
+            usage: self.usage,
+        })
+    }
+}
 
 /// A streaming handle returned by [`Runner::run_streamed`]. Field shape
 /// (the inner `BoxStream<AgentEvent>` and the final-result future) lands
