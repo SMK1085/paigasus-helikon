@@ -97,6 +97,42 @@ pub struct RunResult {}
 #[non_exhaustive]
 pub struct RunResultStreaming {}
 
+/// Token usage aggregated across all turns of a run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct TokenUsage {
+    /// Prompt tokens billed for this run.
+    pub input_tokens: u64,
+    /// Completion tokens billed for this run.
+    pub output_tokens: u64,
+    /// Tokens served from prompt cache (OpenAI prompt-caching, Anthropic
+    /// prompt-caching). Counted as `input_tokens` by the provider; this
+    /// field is informational.
+    pub cached_input_tokens: u64,
+    /// Reasoning tokens billed (OpenAI o-series, Anthropic extended
+    /// thinking).
+    pub reasoning_tokens: u64,
+    /// Provider-reported total. May differ from
+    /// `input_tokens + output_tokens` when the provider excludes cached or
+    /// reasoning tokens from the billed total. Preserve the provider's
+    /// value; do not recompute it.
+    pub total_tokens: u64,
+}
+
+impl TokenUsage {
+    /// Add another usage record (per-turn aggregation across a run).
+    ///
+    /// `total_tokens` is summed alongside the other fields rather than
+    /// recomputed from them, preserving each turn's provider-reported total.
+    pub fn add(&mut self, other: TokenUsage) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cached_input_tokens += other.cached_input_tokens;
+        self.reasoning_tokens += other.reasoning_tokens;
+        self.total_tokens += other.total_tokens;
+    }
+}
+
 /// Errors raised by [`Runner`] methods.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
