@@ -79,11 +79,50 @@ where
 
 /// The input envelope crossing the agent boundary.
 ///
-/// Field shape (user text, attachments, previous-response handles) lands
-/// with the agent-loop ticket.
+/// User-supplied input that seeds the run.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub struct AgentInput {}
+pub struct AgentInput {
+    /// The initial conversation. Typically one [`crate::Item::UserMessage`].
+    pub messages: Vec<crate::Item>,
+}
+
+impl AgentInput {
+    /// Construct an empty input. Populate `messages` directly.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seed the run with one user text message — the common case.
+    pub fn from_user_text(text: impl Into<String>) -> Self {
+        Self {
+            messages: vec![crate::Item::UserMessage {
+                content: vec![crate::ContentPart::Text { text: text.into() }],
+            }],
+        }
+    }
+}
+
+/// Structured-output type marker — the JSON Schema the model is asked
+/// to produce.
+///
+/// SMA-320 promotes the typed-output path (`output_type::<T>()`
+/// honesty); SMA-314 only defines the field type so [`LlmAgent`] has a
+/// place to store it.
+#[derive(Debug, Clone)]
+pub struct OutputType {
+    /// The JSON Schema the model should produce.
+    pub schema: schemars::Schema,
+}
+
+impl OutputType {
+    /// Construct from a type that derives [`schemars::JsonSchema`].
+    pub fn from_schema<T: schemars::JsonSchema>() -> Self {
+        Self {
+            schema: schemars::schema_for!(T),
+        }
+    }
+}
 
 /// The unified event stream emitted by an [`Agent`].
 ///
@@ -227,6 +266,18 @@ pub enum AgentError {
     /// allowed by ADR-10.
     #[error("invalid structured output after one repair attempt")]
     InvalidStructuredOutput,
+
+    /// New in SMA-314: `max_turns` budget exhausted.
+    #[error("max turns ({0}) exceeded")]
+    MaxTurnsExceeded(u32),
+
+    /// New in SMA-314: reached a `LoopState` variant SMA-314 does not
+    /// yet drive (handoff, compaction, approval).
+    #[error("not yet implemented: {feature}")]
+    NotImplemented {
+        /// The unimplemented loop feature.
+        feature: &'static str,
+    },
 
     /// Escape hatch.
     #[error(transparent)]
