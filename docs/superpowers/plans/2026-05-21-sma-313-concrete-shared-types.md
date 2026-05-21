@@ -1736,7 +1736,7 @@ Expected: 6 new tests fail with `[new]` markers; the existing 27 pass.
 INSTA_UPDATE=auto cargo test -p paigasus-helikon-core --test serde_roundtrip
 ```
 
-Expected: all 33 tests pass; 6 new `.snap` files appear.
+Expected: all 36 tests pass; 6 new `.snap` files appear.
 
 - [ ] **Step 7: Re-run without auto-update to confirm round-trip stability**
 
@@ -1744,7 +1744,7 @@ Expected: all 33 tests pass; 6 new `.snap` files appear.
 cargo test -p paigasus-helikon-core --test serde_roundtrip
 ```
 
-Expected: all 33 tests pass.
+Expected: all 36 tests pass.
 
 - [ ] **Step 8: Run the full crate test suite**
 
@@ -1927,7 +1927,7 @@ cargo test --workspace --all-features
 ```
 
 Expected: exits 0. The new `paigasus-helikon-core` test files all pass:
-- `tests/serde_roundtrip.rs` — 33 tests
+- `tests/serde_roundtrip.rs` — 37 tests
 - `tests/compile_run_result_typed.rs` — 4 tests
 - `tests/object_safety.rs` — 1 test (unchanged AC lock from SMA-312)
 - Plus any doctests (`Session`, `RunContext` example).
@@ -2016,7 +2016,7 @@ Closes SMA-313.
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-features --all-targets -- -D warnings`
-- [ ] `cargo test --workspace --all-features` (33 serde round-trip tests + 4 RunResult<T> compile tests + object-safety test from SMA-312)
+- [ ] `cargo test --workspace --all-features` (37 serde round-trip tests + 4 RunResult<T> compile tests + object-safety test from SMA-312)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`
 - [ ] `DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 bash scripts/check-doc-coverage.sh`
 - [ ] `cargo msrv --path crates/paigasus-helikon-core verify`

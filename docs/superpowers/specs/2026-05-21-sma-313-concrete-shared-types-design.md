@@ -77,7 +77,7 @@ A future ticket may introduce a `Runner::run_structured<T>` method gated by `whe
 | `crates/paigasus-helikon-core/src/item.rs` | `Item`, `ContentPart`, `MediaSource` |
 | `crates/paigasus-helikon-core/tests/serde_roundtrip.rs` | AC #1 lock — snapshot + re-serialize round-trip per variant |
 | `crates/paigasus-helikon-core/tests/compile_run_result_typed.rs` | AC #2 lock — `RunResult<MyStruct>` direct construction + `parse_final::<MyStruct>()` |
-| `crates/paigasus-helikon-core/tests/snapshots/*.snap` | ~33 `insta` snapshot files (one per round-trip variant) |
+| `crates/paigasus-helikon-core/tests/snapshots/*.snap` | ~37 `insta` snapshot files (one per round-trip variant) |
 | `docs/superpowers/specs/2026-05-21-sma-313-concrete-shared-types-design.md` | This design |
 
 ### Modified
@@ -112,7 +112,7 @@ crates/paigasus-helikon-core/
 │   ├── lib.rs             # adds: pub mod item; pub use item::*;
 │   ├── agent.rs           # AgentEvent: 4 -> 14 variants
 │   ├── context.rs         # RunContext: PhantomData -> real fields; +HookRegistry, +TracerHandle
-│   ├── guardrail.rs       # unchanged
+│   ├── guardrail.rs       # GuardrailKind: +serde derives, Other(String) -> Other { reason }
 │   ├── hook.rs            # unchanged
 │   ├── item.rs            # NEW: Item, ContentPart, MediaSource
 │   ├── model.rs           # unchanged
@@ -127,7 +127,7 @@ crates/paigasus-helikon-core/
         ├── ...item_user_message...snap
         ├── ...content_part_text...snap
         ├── ...agent_event_run_started...snap
-        └── (~33 files total)
+        └── (~37 files total)
 ```
 
 `lib.rs` re-exports stay flat:
@@ -608,7 +608,8 @@ Variant coverage:
 | `MediaSource` | `Url`, `Base64` | 2 |
 | `AgentEvent` | 14 variants per §5.2, plus a second `ToolCallDelta` test (`name: None`) and a second `GuardrailTriggered` test (`kind: GuardrailKind::Other { reason }` — locks the internally-tagged wire shape for the changed variant) | 16 |
 | `SessionEvent` | `UserMessage`, `AssistantMessage`, `ToolCalled`, `ToolReturned`, `HandoffOccurred`, `Compacted` | 6 |
-| **Total** | | **36** |
+| `ConversationSnapshot` | `messages: Vec<Item>` projection | 1 |
+| **Total** | | **37** |
 
 Two pairs of tests lock `#[serde(skip_serializing_if = "Option::is_none")]` wire shapes: the second `Item::AssistantMessage` test (`agent: None`) and the second `ToolCallDelta` test (`name: None`). Both confirm the optional field is **omitted** from JSON when unknown, not emitted as `null`.
 
@@ -771,7 +772,7 @@ This design document lands on the same feature branch (not pre-merged to `main`)
 
 ## 11. Risks and notes
 
-- **Snapshot churn from variant-shape evolution.** ~33 snapshots is meaningful surface area. Mitigation: snapshots only capture prettified JSON; round-trip equality is a separate assertion. If a variant gains a field in a follow-up, only that one snapshot regenerates.
+- **Snapshot churn from variant-shape evolution.** ~37 snapshots is meaningful surface area. Mitigation: snapshots only capture prettified JSON; round-trip equality is a separate assertion. If a variant gains a field in a follow-up, only that one snapshot regenerates.
 - **`Item::ToolCall` / `Item::ToolResult` looks redundant with `ContentPart::ToolUse` / `ContentPart::ToolResult`.** This is deliberate (OpenAI vs Anthropic wire-format split) and documented inline on every involved variant. Provider crates serialize the variant native to their wire format; the other is unused in their context but never goes away on the type.
 - **`Runner::run` signature is "the same" but its return type *means* `RunResult<String>` now.** A consumer who previously wrote `let r: RunResult = runner.run(...).await?;` keeps compiling because the default type parameter kicks in. A consumer who writes `let r: RunResult<MyStruct> = runner.run(...).await?;` will *not* compile, and that's correct — they must go through `parse_final::<MyStruct>()`. The compile-test in `tests/compile_run_result_typed.rs` documents the supported path.
 - **`SessionEvent` migration is a breaking change to a freshly-shipped enum.** Acceptable because SMA-312 merged on 2026-05-21 with no downstream consumers yet, and the migration is the explicit purpose of SMA-313. release-plz handles the pre-1.0 bump automatically.
@@ -784,7 +785,7 @@ This design document lands on the same feature branch (not pre-merged to `main`)
 
 | AC | Lock |
 |---|---|
-| **AC #1** — Round-trip serde on all variants (snapshot tests) | `tests/serde_roundtrip.rs` (33 tests; one snapshot file per variant under `tests/snapshots/`). `cargo test --workspace --all-features` must exit 0. |
+| **AC #1** — Round-trip serde on all variants (snapshot tests) | `tests/serde_roundtrip.rs` (37 tests; one snapshot file per variant or pair under `tests/snapshots/`). `cargo test --workspace --all-features` must exit 0. |
 | **AC #2** — `RunResult<MyStruct>` compiles when `MyStruct: DeserializeOwned + JsonSchema` | `tests/compile_run_result_typed.rs`. `cargo test --workspace --all-features` must exit 0. |
 | **Object-safety from SMA-312 still holds** | `tests/object_safety.rs` (modified to use new `RunContext` / `ToolContext` constructors). |
 | **Workspace lints clean** | `cargo clippy --workspace --all-features --all-targets -- -D warnings` exits 0. |
