@@ -10,4 +10,4 @@ This documentation site is published from the [`paigasus-helikon`](https://githu
 
 ## What's not yet here
 
-API documentation lives on [docs.rs](https://docs.rs) once the workspace is published. Internal architectural design notes live in Notion until they migrate here. Tracked work lives in [Linear](https://linear.app/smaschek) under the project **Paigasus Helikon**.
+API documentation lives on [docs.rs](https://docs.rs) once the workspace is published. Internal architectural design notes live in Notion until they migrate here. Tracked work lives in Linear under the project **Paigasus Helikon**.
