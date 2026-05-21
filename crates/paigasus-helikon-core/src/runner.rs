@@ -22,9 +22,11 @@ use crate::{Agent, AgentError, AgentEvent, AgentInput, RunContext};
 ///
 /// ```
 /// use async_trait::async_trait;
+/// use futures_core::stream::BoxStream;
+/// use futures_util::stream::empty;
 /// use paigasus_helikon_core::{
-///     Agent, AgentInput, RunConfig, RunContext, RunError, RunResult,
-///     RunResultStreaming, Runner,
+///     Agent, AgentEvent, AgentInput, RunConfig, RunContext, RunError,
+///     RunResult, RunResultStreaming, Runner,
 /// };
 ///
 /// struct NoopRunner;
@@ -48,7 +50,8 @@ use crate::{Agent, AgentError, AgentEvent, AgentInput, RunContext};
 ///         _input: AgentInput,
 ///         _config: RunConfig,
 ///     ) -> Result<RunResultStreaming, RunError> {
-///         Ok(RunResultStreaming::default())
+///         let stream: BoxStream<'static, AgentEvent> = Box::pin(empty());
+///         Ok(RunResultStreaming::new(stream))
 ///     }
 /// }
 /// ```
@@ -76,12 +79,27 @@ where
     ) -> Result<RunResultStreaming, RunError>;
 }
 
-/// Configuration for a single [`Runner::run`] / [`Runner::run_streamed`]
-/// invocation. Field shape (max iterations, retry policy, tracing
-/// settings) lands with the runner ticket.
-#[derive(Debug, Clone, Default)]
+/// Per-run configuration.
+///
+/// SMA-314 ships only `max_turns`. SMA-321 (TokioRunner) adds
+/// `timeout`, `parallel_tool_call_limit`, `retry_policy`, and
+/// `cancellation`.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
-pub struct RunConfig {}
+pub struct RunConfig {
+    /// Maximum number of model turns before the loop fails with
+    /// [`crate::AgentError::MaxTurnsExceeded`]. Default `16`.
+    pub max_turns: u32,
+}
+
+impl Default for RunConfig {
+    fn default() -> Self { Self { max_turns: 16 } }
+}
+
+impl RunConfig {
+    /// Construct a default config (`max_turns = 16`).
+    pub fn new() -> Self { Self::default() }
+}
 
 /// The aggregated outcome of a non-streaming [`Runner::run`].
 ///
@@ -120,12 +138,52 @@ impl RunResult<String> {
     }
 }
 
-/// A streaming handle returned by [`Runner::run_streamed`]. Field shape
-/// (the inner `BoxStream<AgentEvent>` and the final-result future) lands
-/// with the runner ticket.
-#[derive(Default)]
-#[non_exhaustive]
-pub struct RunResultStreaming {}
+/// Streaming counterpart of [`RunResult`].
+///
+/// Wraps the unified [`crate::AgentEvent`] stream emitted by an agent
+/// and offers an `async fn collect` that drains the stream into a
+/// `RunResult<String>`. Callers may consume `events` directly for raw
+/// streaming.
+pub struct RunResultStreaming {
+    /// The event stream produced by the agent's run.
+    pub events: futures_core::stream::BoxStream<'static, crate::AgentEvent>,
+}
+
+impl RunResultStreaming {
+    /// Wrap an event stream.
+    pub fn new(events: futures_core::stream::BoxStream<'static, crate::AgentEvent>) -> Self {
+        Self { events }
+    }
+
+    /// Drain the stream and aggregate into a `RunResult<String>`.
+    ///
+    /// `final_output` is the concatenated text from every
+    /// `AgentEvent::TokenDelta`. Structured-output callers go through
+    /// `RunResult::<String>::parse_final::<T>()` (SMA-313).
+    pub async fn collect(mut self) -> Result<RunResult, RunError> {
+        use futures_util::stream::StreamExt;
+        let mut events = Vec::new();
+        let mut final_output = String::new();
+        let mut usage = crate::TokenUsage::default();
+        let mut failed: Option<String> = None;
+
+        while let Some(ev) = self.events.next().await {
+            match &ev {
+                crate::AgentEvent::TokenDelta { text } => final_output.push_str(text),
+                crate::AgentEvent::RunCompleted { usage: u } => usage = *u,
+                crate::AgentEvent::RunFailed { error } => failed = Some(error.clone()),
+                _ => {}
+            }
+            events.push(ev);
+        }
+
+        if let Some(e) = failed {
+            return Err(RunError::Other(anyhow::anyhow!(e)));
+        }
+
+        Ok(RunResult { final_output, events, usage })
+    }
+}
 
 /// Token usage aggregated across all turns of a run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
