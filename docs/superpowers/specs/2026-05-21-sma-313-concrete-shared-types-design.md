@@ -286,6 +286,9 @@ pub enum AgentEvent {
     /// An incremental tool-call-arguments chunk.
     ToolCallDelta {
         call_id: String,
+        /// `skip_serializing_if` so subsequent deltas (where the name
+        /// is unknown) omit the field rather than emit `"name": null`.
+        #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         args_delta: String,
     },
@@ -603,11 +606,11 @@ Variant coverage:
 | `Item` | `UserMessage`, `AssistantMessage` (×2 — `Some(agent)` and `None`), `System`, `ToolCall`, `ToolResult` | 6 |
 | `ContentPart` | `Text`, `Image`, `Audio`, `ToolUse`, `ToolResult`, `Reasoning` | 6 |
 | `MediaSource` | `Url`, `Base64` | 2 |
-| `AgentEvent` | 14 variants per §5.2 | 14 |
+| `AgentEvent` | 14 variants per §5.2, plus a second `ToolCallDelta` test (`name: None`) to lock the omit-when-none wire shape | 15 |
 | `SessionEvent` | `UserMessage`, `AssistantMessage`, `ToolCalled`, `ToolReturned`, `HandoffOccurred`, `Compacted` | 6 |
-| **Total** | | **34** |
+| **Total** | | **35** |
 
-The second `Item::AssistantMessage` test exercises the `agent: None` path and locks the `skip_serializing_if` wire shape — i.e. confirms the `"agent"` key is **omitted** from the JSON when unknown.
+Two pairs of tests lock `#[serde(skip_serializing_if = "Option::is_none")]` wire shapes: the second `Item::AssistantMessage` test (`agent: None`) and the second `ToolCallDelta` test (`name: None`). Both confirm the optional field is **omitted** from JSON when unknown, not emitted as `null`.
 
 Snapshot files live in `tests/snapshots/` and are checked into git per `insta` convention. Reviewers diff the JSON shapes; the round-trip equality is a separate assertion (not snapshotted) so a JSON-formatting hiccup in `serde_json` doesn't masquerade as a semantic regression.
 
