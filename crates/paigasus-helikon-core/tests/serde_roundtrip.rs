@@ -276,6 +276,17 @@ fn agent_event_guardrail_triggered_roundtrip() {
 }
 
 #[test]
+fn agent_event_guardrail_triggered_other_roundtrip() {
+    let ev = AgentEvent::GuardrailTriggered {
+        kind: GuardrailKind::Other {
+            reason: "custom policy".into(),
+        },
+        info: serde_json::json!({ "detail": "matched X" }),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
 fn agent_event_approval_requested_roundtrip() {
     let ev = AgentEvent::ApprovalRequested {
         call_id: "call_1".into(),
