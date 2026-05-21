@@ -11,10 +11,10 @@ use crate::{Agent, AgentError, AgentInput, RunContext};
 
 /// Pluggable execution backend.
 ///
-/// `Runner` is object-safe: the per-method bound `A: Agent<Ctx> + ?Sized`
-/// (rather than a `<A: Agent<Ctx>>` parameter on the trait) keeps the
-/// trait itself dyn-safe while accepting both concrete `&LlmAgent<…>` and
-/// `&dyn Agent<Ctx>` at the call site.
+/// `Runner` is object-safe: both methods accept `&dyn Agent<Ctx>` rather
+/// than a generic `<A: Agent<Ctx>>` parameter, which keeps the trait
+/// vtable-friendly while remaining compatible with both concrete and
+/// trait-object agent references.
 ///
 /// See ADR-6 (*Library + pluggable Runner trait*).
 ///
@@ -31,29 +31,23 @@ use crate::{Agent, AgentError, AgentInput, RunContext};
 ///
 /// #[async_trait]
 /// impl Runner<()> for NoopRunner {
-///     async fn run<A>(
+///     async fn run(
 ///         &self,
-///         _agent: &A,
+///         _agent: &(dyn Agent<()> + '_),
 ///         _ctx: RunContext<()>,
 ///         _input: AgentInput,
 ///         _config: RunConfig,
-///     ) -> Result<RunResult, RunError>
-///     where
-///         A: Agent<()> + ?Sized,
-///     {
+///     ) -> Result<RunResult, RunError> {
 ///         Ok(RunResult::default())
 ///     }
 ///
-///     async fn run_streamed<A>(
+///     async fn run_streamed(
 ///         &self,
-///         _agent: &A,
+///         _agent: &(dyn Agent<()> + '_),
 ///         _ctx: RunContext<()>,
 ///         _input: AgentInput,
 ///         _config: RunConfig,
-///     ) -> Result<RunResultStreaming, RunError>
-///     where
-///         A: Agent<()> + ?Sized,
-///     {
+///     ) -> Result<RunResultStreaming, RunError> {
 ///         Ok(RunResultStreaming::default())
 ///     }
 /// }
@@ -64,26 +58,22 @@ where
     Ctx: Send + Sync + 'static,
 {
     /// Run the agent to completion and return the aggregated result.
-    async fn run<A>(
+    async fn run(
         &self,
-        agent: &A,
+        agent: &(dyn Agent<Ctx> + '_),
         ctx: RunContext<Ctx>,
         input: AgentInput,
         config: RunConfig,
-    ) -> Result<RunResult, RunError>
-    where
-        A: Agent<Ctx> + ?Sized;
+    ) -> Result<RunResult, RunError>;
 
     /// Run the agent and return a streaming result handle.
-    async fn run_streamed<A>(
+    async fn run_streamed(
         &self,
-        agent: &A,
+        agent: &(dyn Agent<Ctx> + '_),
         ctx: RunContext<Ctx>,
         input: AgentInput,
         config: RunConfig,
-    ) -> Result<RunResultStreaming, RunError>
-    where
-        A: Agent<Ctx> + ?Sized;
+    ) -> Result<RunResultStreaming, RunError>;
 }
 
 /// Configuration for a single [`Runner::run`] / [`Runner::run_streamed`]
