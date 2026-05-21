@@ -188,6 +188,22 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
 
 The CI job posts a per-crate breakdown to the PR's Checks tab via `$GITHUB_STEP_SUMMARY`.
 
+## Documentation site
+
+The public docs site is built from `docs/book/`.
+
+```bash
+cargo install mdbook --version 0.4.43 --locked
+cargo install mdbook-linkcheck --version 0.7.7 --locked
+cd docs/book && mdbook serve
+```
+
+`mdbook serve` opens `http://localhost:3000` with live-reload. The CI `book-build` job runs `mdbook build`, which includes linkcheck because the `[output.linkcheck]` backend is declared in `book.toml`; broken internal links fail the build.
+
+Deployment to GitHub Pages happens automatically on push to `main` via `.github/workflows/docs.yml`. The repo's Pages source is configured as **GitHub Actions** (Settings → Pages); future contributors do not need to touch this setting unless the workflow's deploy strategy changes.
+
+The `mdbook build` output lands under `docs/book/book/html/` (because the `[output.linkcheck]` backend reorganizes the output tree). This path is only relevant for CI artifact uploads — `mdbook serve` reads from its own in-memory tree.
+
 ## Local pre-PR checklist
 
 Run these before pushing — they are the same gates CI runs:
