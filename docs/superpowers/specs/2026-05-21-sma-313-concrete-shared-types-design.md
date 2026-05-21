@@ -64,8 +64,8 @@ A future ticket may introduce a `Runner::run_structured<T>` method gated by `whe
 | `HookRegistry<Ctx>` shape today | `Vec<Arc<dyn Hook<Ctx>>>` with `new` / `push` / `iter` / `is_empty` / `Default`. | Minimum surface needed for the agent loop to iterate registered hooks. |
 | `SessionEvent` migration shape | `UserMessage { content: Vec<ContentPart> }`, `AssistantMessage { content: Vec<ContentPart>, agent: String }`, `ToolReturned { call_id, content: Vec<ContentPart> }`. `ToolCalled`, `HandoffOccurred`, `Compacted` unchanged. | Variants carry `Vec<ContentPart>` directly (not `Item`) because the variant *is* the role — wrapping `Item::UserMessage` inside `SessionEvent::UserMessage` would double-tag. |
 | `ConversationSnapshot` shape | `messages: Vec<Item>`. `#[non_exhaustive]` retained. | Single canonical projection a session can return; consumers iterate `Item`s without rebuilding from `SessionEvent`s. |
-| JSON Schema dep | `schemars = "0.8"` as a workspace dep; `JsonSchema` derived on `Item`, `ContentPart`, `MediaSource` (not `AgentEvent` — see §6). | `JsonSchema` on `Item` enables future schema-generation for structured-output contracts. 0.8 is the current stable; 1.0 is in beta as of 2026-05. |
-| Snapshot testing | `insta = "1.39"` as `[dev-dependencies]` only. | Industry-standard Rust snapshot tester. Apache-2.0 (already on the deny.toml allowlist). |
+| JSON Schema dep | `schemars` (already pinned `= "1"` in workspace deps from SMA-304); `JsonSchema` derived on `Item`, `ContentPart`, `MediaSource` (not `AgentEvent` — see §6). Wire into `paigasus-helikon-core`'s `[dependencies]` as `schemars = { workspace = true }`. | `JsonSchema` on `Item` enables future schema-generation for structured-output contracts. SMA-304 already pinned `schemars = "1"`; no workspace-deps edit needed. |
+| Snapshot testing | Add `insta = "1"` to workspace deps; reference in `paigasus-helikon-core`'s `[dev-dependencies]` as `insta = { workspace = true, features = ["yaml", "json"] }`. | Industry-standard Rust snapshot tester. Apache-2.0 (already on the deny.toml allowlist). |
 | Serde tagging | `#[serde(tag = "type", rename_all = "snake_case")]` on every new enum (`Item`, `ContentPart`, `MediaSource`, `AgentEvent`) and on the migrated `SessionEvent`. | Consistent wire format; matches SMA-312's existing `SessionEvent` tagging. |
 
 ## 3. Files added / modified
@@ -93,7 +93,7 @@ A future ticket may introduce a `Runner::run_structured<T>` method gated by `whe
 | `crates/paigasus-helikon-core/src/guardrail.rs` | Add `Serialize` + `Deserialize` derives to `GuardrailKind` so `AgentEvent::GuardrailTriggered` round-trips. See §11. |
 | `crates/paigasus-helikon-core/tests/object_safety.rs` | Update trivial impls to use the new `RunContext` / `ToolContext` constructors; the dyn-cast assertions themselves are unchanged |
 | `crates/paigasus-helikon-core/Cargo.toml` | Add `schemars = { workspace = true }` to `[dependencies]`; add `insta`, `schemars`, `serde_json` to `[dev-dependencies]` |
-| `Cargo.toml` (workspace root) | Add `schemars = "0.8"` and `insta = { version = "1.39", features = ["yaml", "json"] }` to `[workspace.dependencies]` |
+| `Cargo.toml` (workspace root) | Add `insta = "1"` to `[workspace.dependencies]`. `schemars = "1"` already pinned from SMA-304 — no change. |
 
 ### Not modified
 
@@ -572,7 +572,7 @@ Every public item (enum variant, struct field, free function) carries a `///` do
 
 1. **One-line variant docs** — e.g. `/// The run has started.` Multi-paragraph descriptions live in the type-level doc, not the variant-level doc.
 2. **Cross-link expected `Item` shapes** — `AgentEvent::MessageOutput`'s doc names `Item::AssistantMessage` as the expected inner variant. Same for `ToolCallItem` and `ToolOutputItem`. Runtime checks are intentionally absent; the docs are the contract.
-3. **`// SMA-3xx —` markers** are reserved for cross-ticket references that genuinely won't be obvious from grep, not for routine TODOs. Two land in this ticket — one near the `schemars 0.8` derives (`// SMA-3xx — bump to schemars 1.0 when stable`) and one on `TracerHandle::_private` (`// SMA-3xx — gains real fields with the observability ticket`).
+3. **`// SMA-3xx —` markers** are reserved for cross-ticket references that genuinely won't be obvious from grep, not for routine TODOs. One lands in this ticket — on `TracerHandle::_private` (`// SMA-3xx — gains real fields with the observability ticket`).
 
 `AgentEvent` derives `Serialize` and `Deserialize` but **not** `JsonSchema`. Reason: `AgentEvent` is an event stream, not a contract callers exchange with the model — `JsonSchema` on it would add coverage burden with no consumer. `Item`, `ContentPart`, and `MediaSource` do derive `JsonSchema` because the canonical wire format may show up in schema-generated structured-output contracts later.
 
@@ -701,15 +701,14 @@ All six commands must exit 0 locally before requesting review.
 
 ## 8. Workspace dependency adds
 
-Two new pins in root `Cargo.toml` `[workspace.dependencies]`:
+One new pin in root `Cargo.toml` `[workspace.dependencies]`:
 
 ```toml
-schemars = "0.8"
-insta    = { version = "1.39", features = ["yaml", "json"] }
+insta = "1"
 ```
 
-- **`schemars = "0.8"`** — current stable line. 1.0 is in beta as of 2026-05; bumping is a one-PR follow-up workspace-wide. License: MIT OR Apache-2.0. MSRV well below 1.75.
-- **`insta = "1.39"`** — current stable. Used only as `[dev-dependencies]` of `paigasus-helikon-core` in this ticket. License: Apache-2.0. The `yaml` feature enables the `.snap` format; `json` enables `insta::assert_json_snapshot!` for the rare case where YAML masks JSON-key-order issues.
+- **`schemars = "1"`** — **already pinned** in `[workspace.dependencies]` from the SMA-304 bootstrap; no workspace edit needed. SMA-313 only wires it into `paigasus-helikon-core/Cargo.toml`'s `[dependencies]` block via `schemars = { workspace = true }`. License: MIT OR Apache-2.0. MSRV well below 1.75.
+- **`insta = "1"`** — new workspace pin, major-version only per the existing convention (`serde = "1"`, `thiserror = "2"`, etc.). Used only as `[dev-dependencies]` of `paigasus-helikon-core` in this ticket. License: Apache-2.0. The `yaml` and `json` features are enabled at the per-crate dev-dep site (not the workspace pin); `yaml` selects the `.snap` format, `json` enables `insta::assert_json_snapshot!` for the rare case where YAML masks JSON-key-order issues.
 
 `paigasus-helikon-core/Cargo.toml`:
 
@@ -725,7 +724,7 @@ tokio-util   = { workspace = true }
 schemars     = { workspace = true }    # NEW
 
 [dev-dependencies]
-insta        = { workspace = true }    # NEW
+insta        = { workspace = true, features = ["yaml", "json"] }    # NEW
 schemars     = { workspace = true }    # NEW (the JsonSchema bound on the compile test's struct)
 serde_json   = { workspace = true }    # NEW (already in [dependencies] but reused in tests)
 
@@ -752,7 +751,6 @@ workspace = true
 | Default backends — `MemorySession`, `SqliteSession`, `OpenAiModel`, `AnthropicModel` | Per-crate tickets |
 | `#[tool]` proc macro | `paigasus-helikon-macros` macro ticket |
 | `paigasus::schema::strict()` JSON-schema rewriter | Provider tickets / open question |
-| `schemars 0.8 → 1.0` bump | Workspace-wide chore once schemars 1.0 stabilizes |
 
 ## 10. Commit shape
 
@@ -767,7 +765,7 @@ This design document lands on the same feature branch (not pre-merged to `main`)
 - **`Runner::run` signature is "the same" but its return type *means* `RunResult<String>` now.** A consumer who previously wrote `let r: RunResult = runner.run(...).await?;` keeps compiling because the default type parameter kicks in. A consumer who writes `let r: RunResult<MyStruct> = runner.run(...).await?;` will *not* compile, and that's correct — they must go through `parse_final::<MyStruct>()`. The compile-test in `tests/compile_run_result_typed.rs` documents the supported path.
 - **`SessionEvent` migration is a breaking change to a freshly-shipped enum.** Acceptable because SMA-312 merged on 2026-05-21 with no downstream consumers yet, and the migration is the explicit purpose of SMA-313. release-plz handles the pre-1.0 bump automatically.
 - **`GuardrailKind` gains `Serialize` + `Deserialize` derives.** Needed for `AgentEvent::GuardrailTriggered` to round-trip. Minor surface-area expansion of a SMA-312 type — captured in §3 as an implied `guardrail.rs` modification.
-- **`schemars 0.8` is a deliberate pin, not a default.** schemars 1.0 is in beta as of 2026-05 and changes the derive API. We pin 0.8 across the workspace and bump in a separate chore when 1.0 stabilizes — same playbook as the SMA-305 nightly toolchain pin.
+- **`schemars 1` was pinned during SMA-304 bootstrap.** No workspace-deps edit in this ticket; SMA-313 only wires the dep into `paigasus-helikon-core`'s manifest. If schemars 2.0 ships before the workspace bumps, the migration is a separate chore — same playbook as the SMA-305 nightly toolchain pin.
 - **`RunContext::new` has five required arguments.** Awkward at the call site. A builder pattern would help but is premature here; the agent-loop / Runner crates will introduce convenience constructors when their concrete agent / runner types know which defaults make sense.
 - **Removing `Default` on `RunContext` / `ToolContext` is a (theoretical) source-compat break** from SMA-312, which derived `Default` on the `PhantomData`-only versions. Acceptable for the same reason as the `SessionEvent` migration: no downstream consumers yet.
 
@@ -781,4 +779,4 @@ This design document lands on the same feature branch (not pre-merged to `main`)
 | **Workspace lints clean** | `cargo clippy --workspace --all-features --all-targets -- -D warnings` exits 0. |
 | **Rustdoc clean** | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` exits 0. |
 | **Doc coverage ≥ 80%** | `DOC_COVERAGE_THRESHOLD=80 bash scripts/check-doc-coverage.sh` exits 0. |
-| **MSRV holds** | `cargo msrv --path crates/paigasus-helikon-core verify` exits 0. `schemars 0.8` and `insta 1.39` both have MSRV ≤ 1.75. |
+| **MSRV holds** | `cargo msrv --path crates/paigasus-helikon-core verify` exits 0. `schemars 1` (already pinned) and `insta 1` both have MSRV ≤ 1.75. |
