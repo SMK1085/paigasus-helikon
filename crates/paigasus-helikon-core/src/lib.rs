@@ -14,6 +14,12 @@
 //! [`paigasus-helikon`]: https://docs.rs/paigasus-helikon
 //! [project documentation site]: https://smk1085.github.io/paigasus-helikon/
 
+// The crate-doc intra-doc links above forward-reference traits that land
+// progressively in the SMA-312 module tasks. The suppression is removed
+// once all seven trait modules exist (latest by Task 9 of the SMA-312
+// plan).
+#![allow(rustdoc::broken_intra_doc_links)]
+
 pub mod context;
 
 pub use context::*;
