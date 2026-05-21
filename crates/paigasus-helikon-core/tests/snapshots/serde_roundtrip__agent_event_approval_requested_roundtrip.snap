@@ -1,0 +1,13 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 275
+expression: roundtrip(&ev)
+---
+{
+  "type": "approval_requested",
+  "call_id": "call_1",
+  "tool": "delete_file",
+  "args": {
+    "path": "/etc/passwd"
+  }
+}

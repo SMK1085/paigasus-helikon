@@ -1,0 +1,9 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 295
+expression: roundtrip(&ev)
+---
+{
+  "type": "run_failed",
+  "error": "model unavailable"
+}

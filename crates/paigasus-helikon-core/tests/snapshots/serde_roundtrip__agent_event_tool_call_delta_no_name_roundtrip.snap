@@ -1,0 +1,10 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 213
+expression: roundtrip(&ev)
+---
+{
+  "type": "tool_call_delta",
+  "call_id": "call_1",
+  "args_delta": "1+1}"
+}

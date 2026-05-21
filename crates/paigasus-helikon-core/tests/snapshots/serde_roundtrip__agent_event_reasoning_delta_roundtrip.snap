@@ -1,0 +1,9 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 193
+expression: roundtrip(&ev)
+---
+{
+  "type": "reasoning_delta",
+  "text": "let me think"
+}

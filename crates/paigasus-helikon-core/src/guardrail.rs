@@ -74,15 +74,20 @@ pub enum GuardrailVerdict {
 }
 
 /// The category of a fired tripwire.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum GuardrailKind {
     /// Input failed a policy check.
     InputPolicy,
     /// Output failed a policy check.
     OutputPolicy,
-    /// User-defined category.
-    Other(String),
+    /// Provider-specific or custom tripwire that does not map to a known
+    /// variant.
+    Other {
+        /// Human-readable reason supplied by the guardrail.
+        reason: String,
+    },
 }
 
 /// Errors raised by [`Guardrail::check`] itself (distinct from a tripwire

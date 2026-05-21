@@ -3,9 +3,11 @@
 //! Tools are object-safe by design — applications hold heterogeneous
 //! registries as `Vec<Arc<dyn Tool<Ctx>>>`.
 
-use std::marker::PhantomData;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+
+use crate::{CancellationToken, TracerHandle};
 
 /// A tool an agent can call.
 ///
@@ -66,32 +68,45 @@ where
     ) -> Result<ToolOutput, ToolError>;
 }
 
-/// A narrower view of [`crate::RunContext`] passed to [`Tool::invoke`].
+/// Narrower view of [`crate::RunContext`] passed to [`Tool::invoke`].
 ///
-/// Field shape lands with the agent-loop ticket.
+/// Deliberately excludes the session handle and hook registry: tools
+/// must not bypass the runner's persistence by writing directly to the
+/// session log, and hooks fire *around* tool invocations, not from
+/// inside them.
 pub struct ToolContext<Ctx>
 where
     Ctx: Send + Sync + 'static,
 {
-    _ctx: PhantomData<fn() -> Ctx>,
+    user_ctx: Arc<Ctx>,
+    tracer: TracerHandle,
+    cancel: CancellationToken,
 }
 
 impl<Ctx> ToolContext<Ctx>
 where
     Ctx: Send + Sync + 'static,
 {
-    /// Construct a bare [`ToolContext`].
-    pub fn new() -> Self {
-        Self { _ctx: PhantomData }
+    /// Construct a new [`ToolContext`].
+    pub fn new(user_ctx: Arc<Ctx>, tracer: TracerHandle, cancel: CancellationToken) -> Self {
+        Self {
+            user_ctx,
+            tracer,
+            cancel,
+        }
     }
-}
 
-impl<Ctx> Default for ToolContext<Ctx>
-where
-    Ctx: Send + Sync + 'static,
-{
-    fn default() -> Self {
-        Self::new()
+    /// Borrow the user context.
+    pub fn user_ctx(&self) -> &Arc<Ctx> {
+        &self.user_ctx
+    }
+    /// Borrow the tracer handle.
+    pub fn tracer(&self) -> &TracerHandle {
+        &self.tracer
+    }
+    /// Borrow the cancellation token.
+    pub fn cancel(&self) -> &CancellationToken {
+        &self.cancel
     }
 }
 

@@ -1,0 +1,13 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 104
+expression: roundtrip(&part)
+---
+{
+  "type": "tool_use",
+  "call_id": "call_xyz",
+  "name": "search",
+  "args": {
+    "q": "rust"
+  }
+}

@@ -1,0 +1,14 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 265
+expression: roundtrip(&ev)
+---
+{
+  "type": "guardrail_triggered",
+  "kind": {
+    "type": "input_policy"
+  },
+  "info": {
+    "score": 0.92
+  }
+}

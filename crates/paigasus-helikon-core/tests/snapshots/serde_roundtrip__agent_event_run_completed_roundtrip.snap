@@ -1,0 +1,15 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 287
+expression: roundtrip(&ev)
+---
+{
+  "type": "run_completed",
+  "usage": {
+    "input_tokens": 100,
+    "output_tokens": 50,
+    "cached_input_tokens": 30,
+    "reasoning_tokens": 10,
+    "total_tokens": 160
+  }
+}

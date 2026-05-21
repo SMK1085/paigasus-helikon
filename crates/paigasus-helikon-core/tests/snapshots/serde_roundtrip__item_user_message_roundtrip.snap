@@ -1,0 +1,14 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 28
+expression: roundtrip(&item)
+---
+{
+  "type": "user_message",
+  "content": [
+    {
+      "type": "text",
+      "text": "hello"
+    }
+  ]
+}

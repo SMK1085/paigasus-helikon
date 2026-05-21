@@ -1,0 +1,14 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 48
+expression: roundtrip(&item)
+---
+{
+  "type": "system",
+  "content": [
+    {
+      "type": "text",
+      "text": "you are a helpful assistant"
+    }
+  ]
+}

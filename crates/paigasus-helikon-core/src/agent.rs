@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 
-use crate::{GuardrailKind, ModelError, RunContext, SessionError, ToolError};
+use crate::{GuardrailKind, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError};
 
 /// One trait for both LLM-driven and workflow agents.
 ///
@@ -87,24 +87,111 @@ pub struct AgentInput {}
 
 /// The unified event stream emitted by an [`Agent`].
 ///
-/// The full 14-variant ADT (token deltas, semantic items, approvals,
-/// guardrail signals, …) lands with the agent-loop ticket. This trimmed
-/// set covers the lifecycle the trait surface needs.
-#[derive(Debug, Clone)]
+/// Fourteen variants spanning lifecycle, raw streaming deltas,
+/// post-aggregation semantic items, agent transitions, control signals,
+/// and terminal outcomes. The semantic-item variants
+/// (`MessageOutput`, `ToolCallItem`, `ToolOutputItem`) carry a full
+/// [`Item`] — the doc on each variant names the expected inner variant.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AgentEvent {
+    // --- Lifecycle ---
     /// The run has started; the named agent is active.
     RunStarted {
         /// Agent name.
         agent: String,
     },
-    /// A token-level delta in the assistant channel (for low-latency UIs).
+    /// A new turn (one model invocation plus any tool calls) has begun.
+    TurnStarted {
+        /// Zero-based turn index within the run.
+        turn: u32,
+    },
+
+    // --- Raw deltas (for low-latency UIs) ---
+    /// An incremental assistant-text chunk.
     TokenDelta {
         /// Text fragment.
         text: String,
     },
+    /// An incremental reasoning-text chunk.
+    ReasoningDelta {
+        /// Text fragment.
+        text: String,
+    },
+    /// An incremental tool-call-arguments chunk.
+    ToolCallDelta {
+        /// Provider-assigned call identifier.
+        call_id: String,
+        /// Tool name; `Some` on the first delta only.
+        ///
+        /// `skip_serializing_if = "Option::is_none"` so subsequent deltas
+        /// (which have no name) omit the field entirely rather than emitting
+        /// `"name": null`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// JSON-encoded argument fragment.
+        args_delta: String,
+    },
+
+    // --- Semantic items (post-aggregation; carry Item) ---
+    /// A complete assistant message produced by the model. The inner
+    /// [`Item`] is expected to be [`Item::AssistantMessage`].
+    MessageOutput {
+        /// The complete message.
+        item: Item,
+    },
+    /// A complete tool call resolved during the turn. The inner [`Item`]
+    /// is expected to be [`Item::ToolCall`].
+    ToolCallItem {
+        /// The complete tool call.
+        item: Item,
+    },
+    /// A complete tool result returned by a tool. The inner [`Item`] is
+    /// expected to be [`Item::ToolResult`].
+    ToolOutputItem {
+        /// The complete tool result.
+        item: Item,
+    },
+    /// A handoff item recorded in the trajectory.
+    HandoffItem {
+        /// Outgoing agent name.
+        from: String,
+        /// Incoming agent name.
+        to: String,
+    },
+
+    // --- Agent transitions ---
+    /// The currently-active agent changed.
+    AgentUpdated {
+        /// Name of the newly-active agent.
+        agent: String,
+    },
+
+    // --- Control ---
+    /// A guardrail tripwire fired during the run.
+    GuardrailTriggered {
+        /// Which kind of tripwire fired.
+        kind: GuardrailKind,
+        /// Free-form context supplied by the guardrail.
+        info: serde_json::Value,
+    },
+    /// The runner is awaiting an approval decision before proceeding.
+    ApprovalRequested {
+        /// Provider-assigned call identifier.
+        call_id: String,
+        /// Tool name.
+        tool: String,
+        /// JSON arguments the model proposed to call the tool with.
+        args: serde_json::Value,
+    },
+
+    // --- Terminal ---
     /// The run finished normally.
-    RunCompleted,
+    RunCompleted {
+        /// Aggregated usage across the run.
+        usage: TokenUsage,
+    },
     /// The run finished with an error.
     RunFailed {
         /// Human-readable error message.

@@ -1,0 +1,9 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 256
+expression: roundtrip(&ev)
+---
+{
+  "type": "agent_updated",
+  "agent": "billing"
+}

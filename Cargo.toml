@@ -26,6 +26,7 @@ anyhow        = "1"
 async-trait   = "0.1"
 futures-core  = "0.3"
 tokio-util    = { version = "0.7", default-features = false, features = ["rt"] }
+insta         = "1"
 
 # Internal — single source of truth so members depend via `workspace = true`
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core",                version = "0.0.0" }

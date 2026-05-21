@@ -1,0 +1,9 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+assertion_line: 185
+expression: roundtrip(&ev)
+---
+{
+  "type": "token_delta",
+  "text": "hel"
+}
