@@ -45,7 +45,11 @@ Thirteen crates under `crates/`:
 
 ## Documentation
 
-The architectural reference lives in Notion: ["Crate Reference"](https://www.notion.so/355830e8fbaa813c92e8c1aa9985fd3f). An mdBook-hosted equivalent will replace the Notion page once published.
+The public documentation site is published at <https://smk1085.github.io/paigasus-helikon/>. It is currently a scaffold — full chapters land alongside their feature tickets.
+
+To build it locally: `cd docs/book && mdbook serve` (requires `mdbook` and `mdbook-linkcheck` installed via `cargo install`; see [CONTRIBUTING.md](./CONTRIBUTING.md#documentation-site-mdbook) for exact versions).
+
+The architectural source-of-truth currently lives in Notion: ["Crate Reference"](https://www.notion.so/355830e8fbaa813c92e8c1aa9985fd3f). Content migrates into the published book as the SDK lands.
 
 Tracked work lives in Linear under the project **Paigasus Helikon** (issues are prefixed `SMA-`).
 
