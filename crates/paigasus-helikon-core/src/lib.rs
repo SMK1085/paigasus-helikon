@@ -22,6 +22,8 @@
 
 pub mod context;
 pub mod model;
+pub mod tool;
 
 pub use context::*;
 pub use model::*;
+pub use tool::*;
