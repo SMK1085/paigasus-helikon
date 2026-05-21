@@ -606,9 +606,9 @@ Variant coverage:
 | `Item` | `UserMessage`, `AssistantMessage` (×2 — `Some(agent)` and `None`), `System`, `ToolCall`, `ToolResult` | 6 |
 | `ContentPart` | `Text`, `Image`, `Audio`, `ToolUse`, `ToolResult`, `Reasoning` | 6 |
 | `MediaSource` | `Url`, `Base64` | 2 |
-| `AgentEvent` | 14 variants per §5.2, plus a second `ToolCallDelta` test (`name: None`) to lock the omit-when-none wire shape | 15 |
+| `AgentEvent` | 14 variants per §5.2, plus a second `ToolCallDelta` test (`name: None`) and a second `GuardrailTriggered` test (`kind: GuardrailKind::Other { reason }` — locks the internally-tagged wire shape for the changed variant) | 16 |
 | `SessionEvent` | `UserMessage`, `AssistantMessage`, `ToolCalled`, `ToolReturned`, `HandoffOccurred`, `Compacted` | 6 |
-| **Total** | | **35** |
+| **Total** | | **36** |
 
 Two pairs of tests lock `#[serde(skip_serializing_if = "Option::is_none")]` wire shapes: the second `Item::AssistantMessage` test (`agent: None`) and the second `ToolCallDelta` test (`name: None`). Both confirm the optional field is **omitted** from JSON when unknown, not emitted as `null`.
 
