@@ -22,6 +22,8 @@ jobs:
     steps:
       # actions/checkout v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
       # taiki-e/install-action v2.79.3
       - uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468
         with:

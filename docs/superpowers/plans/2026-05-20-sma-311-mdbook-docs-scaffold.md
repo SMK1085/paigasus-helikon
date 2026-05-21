@@ -572,7 +572,7 @@ Record the result.
 
 - [ ] **Step 5: Sanity-check majors**
 
-Confirm `actions/checkout` resolves to v4 or v5 or v6 (any modern major works), `actions/upload-pages-artifact` to v3.x, `actions/deploy-pages` to v4.x, `taiki-e/install-action` to v2.x. If any resolves to an older major (because no release in the modern major has shipped yet), use the older version and note it in the PR description.
+Use whatever major version each action's `releases/latest` returns at execution time — this is the "latest stable major" per CLAUDE.md. The pin lives in the workflow as the resolved commit SHA, with the human-readable version in a trailing `# vX.Y.Z` comment. If `releases/latest` returns an older major because nothing in a newer major has shipped yet, use what is returned and note the choice in the PR description.
 
 ---
 

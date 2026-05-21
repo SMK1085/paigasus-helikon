@@ -251,9 +251,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v6.x — SHA resolved at implementation time
-      - uses: actions/checkout@<sha>  # v6.x
+      - uses: actions/checkout@<sha>  # <tag resolved at implementation time>
       # taiki-e/install-action v2.x — SHA resolved at implementation time
-      - uses: taiki-e/install-action@<sha>  # v2.x
+      - uses: taiki-e/install-action@<sha>  # <tag resolved at implementation time>
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }}
       - name: Build mdBook (HTML + linkcheck)
@@ -262,7 +262,7 @@ jobs:
       # actions/upload-pages-artifact v3.x — SHA resolved at implementation time
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/upload-pages-artifact@<sha>  # v3.x
+        uses: actions/upload-pages-artifact@<sha>  # <tag resolved at implementation time>
         with:
           path: docs/book/book/html
 
@@ -282,7 +282,7 @@ jobs:
     steps:
       # actions/deploy-pages v4.x — SHA resolved at implementation time
       - id: deployment
-        uses: actions/deploy-pages@<sha>  # v4.x
+        uses: actions/deploy-pages@<sha>  # <tag resolved at implementation time>
 ```
 
 Design notes:
