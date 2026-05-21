@@ -107,7 +107,7 @@ impl AgentInput {
 /// to produce.
 ///
 /// SMA-320 promotes the typed-output path (`output_type::<T>()`
-/// honesty); SMA-314 only defines the field type so [`LlmAgent`] has a
+/// honesty); SMA-314 only defines the field type so `LlmAgent` has a
 /// place to store it.
 #[derive(Debug, Clone)]
 pub struct OutputType {
