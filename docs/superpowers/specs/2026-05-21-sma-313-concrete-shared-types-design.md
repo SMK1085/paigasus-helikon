@@ -183,6 +183,12 @@ pub enum Item {
         /// attribution — e.g. a raw provider response deserialized
         /// without any agent context. The session log keeps `String`
         /// because the runner always knows which agent emitted.
+        ///
+        /// `skip_serializing_if = "Option::is_none"` so the field is
+        /// omitted from the JSON (not emitted as `"agent": null`) when
+        /// unknown. Provider APIs conventionally treat omitted optional
+        /// fields differently from explicit `null`.
+        #[serde(skip_serializing_if = "Option::is_none")]
         agent: Option<String>,
     },
     System {
@@ -594,12 +600,14 @@ Variant coverage:
 
 | Type | Variants | Count |
 |---|---|---|
-| `Item` | `UserMessage`, `AssistantMessage`, `System`, `ToolCall`, `ToolResult` | 5 |
+| `Item` | `UserMessage`, `AssistantMessage` (×2 — `Some(agent)` and `None`), `System`, `ToolCall`, `ToolResult` | 6 |
 | `ContentPart` | `Text`, `Image`, `Audio`, `ToolUse`, `ToolResult`, `Reasoning` | 6 |
 | `MediaSource` | `Url`, `Base64` | 2 |
 | `AgentEvent` | 14 variants per §5.2 | 14 |
 | `SessionEvent` | `UserMessage`, `AssistantMessage`, `ToolCalled`, `ToolReturned`, `HandoffOccurred`, `Compacted` | 6 |
-| **Total** | | **33** |
+| **Total** | | **34** |
+
+The second `Item::AssistantMessage` test exercises the `agent: None` path and locks the `skip_serializing_if` wire shape — i.e. confirms the `"agent"` key is **omitted** from the JSON when unknown.
 
 Snapshot files live in `tests/snapshots/` and are checked into git per `insta` convention. Reviewers diff the JSON shapes; the round-trip equality is a separate assertion (not snapshotted) so a JSON-formatting hiccup in `serde_json` doesn't masquerade as a semantic regression.
 
