@@ -21,11 +21,13 @@
 #![allow(rustdoc::broken_intra_doc_links)]
 
 pub mod context;
+pub mod guardrail;
 pub mod model;
 pub mod session;
 pub mod tool;
 
 pub use context::*;
+pub use guardrail::*;
 pub use model::*;
 pub use session::*;
 pub use tool::*;
