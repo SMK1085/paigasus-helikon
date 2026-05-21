@@ -19,6 +19,7 @@
           { "context": "test (ubuntu-latest, stable)" },
           { "context": "docs" },
           { "context": "doc-coverage" },
+          { "context": "book-build" },
           { "context": "commits" },
           { "context": "pr-title" },
           { "context": "audit" },
