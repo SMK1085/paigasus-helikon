@@ -12,19 +12,22 @@ keywords.workspace     = true
 categories.workspace   = true
 
 [dependencies]
-async-trait  = { workspace = true }
-thiserror    = { workspace = true }
-anyhow       = { workspace = true }
-serde        = { workspace = true }
-serde_json   = { workspace = true }
-futures-core = { workspace = true }
-tokio-util   = { workspace = true }
-schemars     = { workspace = true }
+async-trait    = { workspace = true }
+thiserror      = { workspace = true }
+anyhow         = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+futures-core   = { workspace = true }
+tokio-util     = { workspace = true }
+schemars       = { workspace = true }
+futures-util   = { workspace = true }
+async-stream   = { workspace = true }
 
 [dev-dependencies]
 insta        = { workspace = true, features = ["yaml", "json"] }
 schemars     = { workspace = true }
 serde_json   = { workspace = true }
+tokio        = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
 
 [lints]
 workspace = true
