@@ -1,0 +1,13 @@
+error: empty `description`; provide a non-empty literal or remove the attr to fall back to doc comments
+  --> tests/ui/empty_description.rs:14:22
+   |
+14 | #[tool(description = "")]
+   |                      ^^
+
+warning: unused imports: `ToolContext` and `ToolError`
+ --> tests/ui/empty_description.rs:1:29
+  |
+1 | use paigasus_helikon_core::{ToolContext, ToolError};
+  |                             ^^^^^^^^^^^  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

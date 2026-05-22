@@ -1,0 +1,13 @@
+error: tool name must match `[A-Za-z_][A-Za-z0-9_-]*`; got "has spaces"
+  --> tests/ui/bad_name.rs:15:15
+   |
+15 | #[tool(name = "has spaces")]
+   |               ^^^^^^^^^^^^
+
+warning: unused imports: `ToolContext` and `ToolError`
+ --> tests/ui/bad_name.rs:1:29
+  |
+1 | use paigasus_helikon_core::{ToolContext, ToolError};
+  |                             ^^^^^^^^^^^  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
