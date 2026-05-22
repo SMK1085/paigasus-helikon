@@ -259,6 +259,39 @@ pub fn transition(
                 next_action: NextAction::Terminate,
             }
         }
+        // Tool results complete → bump turn and ask the model again.
+        (LoopState::ExecutingTools { turn, .. }, TransitionInput::ToolResults { outcomes }) => {
+            let next_turn = turn + 1;
+            if next_turn >= ctx.max_turns {
+                return TransitionOutcome {
+                    next_state: LoopState::Failed(AgentError::MaxTurnsExceeded(ctx.max_turns)),
+                    events: vec![AgentEvent::RunFailed {
+                        error: format!("max turns ({}) exceeded", ctx.max_turns),
+                    }],
+                    next_action: NextAction::Terminate,
+                };
+            }
+            let mut events: Vec<AgentEvent> = outcomes
+                .into_iter()
+                .map(|o| AgentEvent::ToolOutputItem {
+                    item: Item::ToolResult {
+                        call_id: o.call_id,
+                        content: o.result.unwrap_or_else(|e| vec![ContentPart::Text { text: e }]),
+                    },
+                })
+                .collect();
+            events.push(AgentEvent::TurnStarted { turn: next_turn });
+            let request = ModelRequest {
+                messages: ctx.conversation.to_vec(),
+                tools: ctx.tools.to_vec(),
+                model_settings: ctx.model_settings.clone(),
+            };
+            TransitionOutcome {
+                next_state: LoopState::CallingModel { turn: next_turn },
+                events,
+                next_action: NextAction::CallModel { request },
+            }
+        }
         // Other cases land in subsequent tasks.
         (s, i) => TransitionOutcome {
             next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(

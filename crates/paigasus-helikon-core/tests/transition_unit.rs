@@ -3,7 +3,8 @@
 
 use paigasus_helikon_core::{
     AgentEvent, ContentPart, FinishReason, Item, LoopState, ModelSettings,
-    NextAction, TokenUsage, TransitionCtx, TransitionInput, transition,
+    NextAction, TokenUsage, TransitionCtx, TransitionInput, ToolCallOutcome,
+    ToolCallRequest, transition,
 };
 
 macro_rules! assert_matches {
@@ -111,4 +112,44 @@ fn model_response_with_tool_calls_fans_out() {
     assert_matches!(&outcome.events[0], AgentEvent::MessageOutput { .. });
     assert_matches!(&outcome.events[1], AgentEvent::ToolCallItem { .. });
     assert_matches!(&outcome.events[2], AgentEvent::ToolCallItem { .. });
+}
+
+#[test]
+fn tool_results_advance_to_next_call_model() {
+    let calls = vec![
+        ToolCallRequest {
+            call_id: "1".into(),
+            name: "a".into(),
+            args: serde_json::json!({}),
+        },
+        ToolCallRequest {
+            call_id: "2".into(),
+            name: "b".into(),
+            args: serde_json::json!({}),
+        },
+    ];
+    let state = LoopState::ExecutingTools { calls: calls.clone(), turn: 0 };
+    let outcomes = vec![
+        ToolCallOutcome {
+            call_id: "1".into(),
+            result: Ok(vec![ContentPart::Text { text: "ok-a".into() }]),
+        },
+        ToolCallOutcome {
+            call_id: "2".into(),
+            result: Ok(vec![ContentPart::Text { text: "ok-b".into() }]),
+        },
+    ];
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let input = TransitionInput::ToolResults { outcomes };
+
+    let outcome = transition(&state, input, &ctx_with(16, &conversation, &settings));
+
+    assert_matches!(outcome.next_state, LoopState::CallingModel { turn: 1 });
+    assert_matches!(outcome.next_action, NextAction::CallModel { .. });
+    // Expected: ToolOutputItem × 2 + TurnStarted { turn: 1 }
+    assert_eq!(outcome.events.len(), 3);
+    assert_matches!(&outcome.events[0], AgentEvent::ToolOutputItem { .. });
+    assert_matches!(&outcome.events[1], AgentEvent::ToolOutputItem { .. });
+    assert_matches!(&outcome.events[2], AgentEvent::TurnStarted { turn: 1 });
 }
