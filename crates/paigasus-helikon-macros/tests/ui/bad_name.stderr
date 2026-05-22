@@ -1,0 +1,5 @@
+error: tool name must match `[A-Za-z_][A-Za-z0-9_-]*`; got "has spaces"
+  --> tests/ui/bad_name.rs:16:15
+   |
+16 | #[tool(name = "has spaces")]
+   |               ^^^^^^^^^^^^

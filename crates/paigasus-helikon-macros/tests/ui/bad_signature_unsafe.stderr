@@ -1,0 +1,5 @@
+error: #[tool] cannot wrap an `unsafe fn`; `Tool::invoke` is safe — drop the `unsafe` qualifier or inline the unsafe block inside the body
+  --> tests/ui/bad_signature_unsafe.rs:17:7
+   |
+17 | async unsafe fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+   |       ^^^^^^

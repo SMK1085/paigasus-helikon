@@ -1,0 +1,5 @@
+error: #[tool] does not support generic free fns or `where` clauses; instantiate the generic and apply #[tool] to the concrete fn
+  --> tests/ui/bad_signature_generic.rs:17:14
+   |
+17 | async fn nope<T>(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError>
+   |              ^^^

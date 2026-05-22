@@ -1,0 +1,28 @@
+error[E0277]: the trait bound `A: JsonSchema` is not satisfied
+  --> tests/ui/bad_args_not_jsonschema.rs:17:45
+   |
+16 | #[tool]
+   | ------- required by a bound introduced by this call
+17 | async fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+   |                                             ^ unsatisfied trait bound
+   |
+help: the trait `JsonSchema` is not implemented for `A`
+  --> tests/ui/bad_args_not_jsonschema.rs:10:1
+   |
+10 | struct A {}
+   | ^^^^^^^^
+   = help: the following other types implement trait `JsonSchema`:
+             &'a T
+             &'a mut T
+             ()
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+             (T0, T1, T2, T3, T4, T5)
+           and $N others
+note: required by a bound in `SchemaGenerator::into_root_schema_for`
+  --> $CARGO/schemars-$VERSION/src/generate.rs
+   |
+   |     pub fn into_root_schema_for<T: ?Sized + JsonSchema>(mut self) -> Schema {
+   |                                             ^^^^^^^^^^ required by this bound in `SchemaGenerator::into_root_schema_for`

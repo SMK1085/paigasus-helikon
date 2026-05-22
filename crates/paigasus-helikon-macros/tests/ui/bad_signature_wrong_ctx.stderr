@@ -1,0 +1,13 @@
+error: #[tool] expects the first argument to be `&…::ToolContext<Ctx>` (matched on the trailing path segment `ToolContext` with one type argument); aliases and renames are not unwrapped — name the type directly
+  --> tests/ui/bad_signature_wrong_ctx.rs:16:22
+   |
+16 | async fn nope(_ctx: &C, _args: A) -> Result<O, ToolError> {
+   |                      ^
+
+warning: unused import: `paigasus_helikon_core::ToolError`
+ --> tests/ui/bad_signature_wrong_ctx.rs:1:5
+  |
+1 | use paigasus_helikon_core::ToolError;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

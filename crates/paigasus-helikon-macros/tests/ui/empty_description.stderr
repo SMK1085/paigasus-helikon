@@ -1,0 +1,5 @@
+error: empty `description`; provide a non-empty literal or remove the attr to fall back to doc comments
+  --> tests/ui/empty_description.rs:15:22
+   |
+15 | #[tool(description = "")]
+   |                      ^^

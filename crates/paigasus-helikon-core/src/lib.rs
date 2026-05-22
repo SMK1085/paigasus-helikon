@@ -25,6 +25,9 @@ pub mod runner;
 pub mod session;
 pub mod tool;
 
+#[doc(hidden)]
+pub mod __private;
+
 pub use agent::*;
 pub use context::*;
 pub use guardrail::*;

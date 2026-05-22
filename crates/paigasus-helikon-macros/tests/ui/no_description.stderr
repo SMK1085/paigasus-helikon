@@ -1,0 +1,5 @@
+error: tool `nope` requires a description: add `#[tool(description = "…")]` or a `///` doc comment
+  --> tests/ui/no_description.rs:16:10
+   |
+16 | async fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+   |          ^^^^

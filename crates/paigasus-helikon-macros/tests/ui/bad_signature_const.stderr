@@ -1,0 +1,5 @@
+error: #[tool] cannot wrap a `const fn`; `Tool::invoke` is not const
+  --> tests/ui/bad_signature_const.rs:17:1
+   |
+17 | const async fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+   | ^^^^^
