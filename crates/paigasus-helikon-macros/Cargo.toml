@@ -14,5 +14,24 @@ categories.workspace   = true
 [lib]
 proc-macro = true
 
+[dependencies]
+proc-macro2      = { workspace = true }
+proc-macro-crate = { workspace = true }
+quote            = { workspace = true }
+syn              = { workspace = true }
+
+[dev-dependencies]
+paigasus-helikon-core = { path = "../paigasus-helikon-core" }
+paigasus-helikon      = { path = "../paigasus-helikon", features = ["macros"] }
+async-trait  = { workspace = true }
+schemars     = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+tokio        = { workspace = true, features = ["macros", "rt"] }
+anyhow       = { workspace = true }
+trybuild     = { workspace = true }
+insta        = { workspace = true, features = ["json"] }
+rustversion  = { workspace = true }
+
 [lints]
 workspace = true
