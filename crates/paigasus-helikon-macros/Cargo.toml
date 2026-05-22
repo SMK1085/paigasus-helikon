@@ -31,7 +31,6 @@ tokio        = { workspace = true, features = ["macros", "rt"] }
 anyhow       = { workspace = true }
 trybuild     = { workspace = true }
 insta        = { workspace = true, features = ["json"] }
-rustversion  = { workspace = true }
 
 [lints]
 workspace = true
