@@ -173,6 +173,45 @@ where
     }
 }
 
+/// The concrete LLM-driven agent. Implements [`crate::Agent`].
+///
+/// Constructed via direct field assignment in SMA-314; the ergonomic
+/// typestate builder lands in SMA-319. **Not** `#[non_exhaustive]` —
+/// the typestate builder needs struct-literal construction from
+/// outside the crate.
+pub struct LlmAgent<Ctx, M>
+where
+    Ctx: Send + Sync + 'static,
+    M: crate::Model + 'static,
+{
+    /// Agent identifier (used in events and trace spans).
+    pub name: String,
+    /// One-line description.
+    pub description: String,
+    /// System-prompt renderer.
+    pub instructions: std::sync::Arc<dyn Instructions<Ctx>>,
+    /// The model the agent calls each turn.
+    pub model: std::sync::Arc<M>,
+    /// Tools the model may call. Each invocation snapshots these into
+    /// `ModelRequest.tools` via [`crate::ToolDef`].
+    pub tools: Vec<std::sync::Arc<dyn crate::Tool<Ctx>>>,
+    /// Candidate agents this one may hand off to. Stored but not
+    /// driven in SMA-314.
+    pub handoffs: Vec<std::sync::Arc<dyn crate::Agent<Ctx>>>,
+    /// Structured-output type marker. SMA-320 makes this honest.
+    pub output_type: Option<OutputType>,
+    /// Pre-input guardrails. Stored but not driven in SMA-314.
+    pub input_guardrails: Vec<std::sync::Arc<dyn crate::Guardrail<Ctx>>>,
+    /// Post-output guardrails. Stored but not driven in SMA-314.
+    pub output_guardrails: Vec<std::sync::Arc<dyn crate::Guardrail<Ctx>>>,
+    /// Lifecycle hooks. Stored but not driven in SMA-314.
+    pub hooks: Vec<std::sync::Arc<dyn crate::Hook<Ctx>>>,
+    /// Provider-tuning knobs. Field shape lands with SMA-316 / SMA-317.
+    pub model_settings: crate::ModelSettings,
+    /// Per-run config. At SMA-314 only `max_turns` is meaningful.
+    pub config: crate::RunConfig,
+}
+
 /// The unified event stream emitted by an [`Agent`].
 ///
 /// Fourteen variants spanning lifecycle, raw streaming deltas,
