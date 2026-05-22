@@ -8,7 +8,7 @@
 
 ## 1. Goal
 
-Ship the ergonomic path for in-process Rust tools. An `async fn` annotated with `#[tool]` (plus a `#[derive(Deserialize, JsonSchema)]` args struct) expands into a fully-formed `impl Tool<Ctx>` — `name`, `description`, `schema`, `output_schema`, `invoke` — that downstream agent code can hold as `Arc<dyn Tool<Ctx>>`. A companion `tools![ … ]` declarative macro boxes a heterogeneous set into `Vec<Arc<dyn Tool<Ctx>>>`.
+Ship the ergonomic path for in-process Rust tools. An `async fn` annotated with `#[tool]` (plus a `#[derive(Deserialize, JsonSchema)]` args struct) expands into a fully-formed `impl Tool<Ctx>` — `name`, `description`, `schema`, `output_schema`, `invoke` — that downstream agent code can hold as `Arc<dyn Tool<Ctx>>`. A companion `tools![ … ]` macro boxes a heterogeneous set into `Vec<Arc<dyn Tool<Ctx>>>`.
 
 The Linear ticket's acceptance criteria are:
 
@@ -16,28 +16,29 @@ The Linear ticket's acceptance criteria are:
 2. `cargo expand` output is readable (no surprising lifetimes).
 3. A bad args struct (e.g. non-`Deserialize`) fails to compile with a clear diagnostic via `compile_fail` tests in `trybuild`.
 
-AC #1 is locked by `tests/schema_golden.rs` with `insta` snapshots (§6). AC #3 is locked by a set of UI tests under `tests/ui/` driven by `trybuild` (§6). AC #2 is a manual-review checklist on the PR — a representative expansion is captured in §4.4 of this spec as the reference point.
+AC #1 is locked by `tests/schema_golden.rs` with `insta` snapshots (§6). AC #3 is locked by a set of UI tests under `tests/ui/` driven by `trybuild` (§6). AC #2 is a manual-review checklist on the PR — a representative expansion is captured in §4.2 of this spec as the reference point.
 
 ### 1.1 Scope boundary (against peer tickets)
 
 The trait surface this ticket implements against — `Tool<Ctx>`, `ToolContext<Ctx>`, `ToolOutput`, `ToolError` — was landed by SMA-312 and SMA-313 and is **not modified** by SMA-315. `paigasus-helikon-tools` (first-party tool crates) stays a stub; HTTP/FS/exec tools land in later tickets and will consume `#[tool]` as their primary authoring path.
 
-A second proc-macro (`#[agent]`, planned in a downstream ticket) will share infrastructure with `#[tool]` — attribute parsing patterns, doc-comment extraction, the `crate = …` override knob. SMA-315 builds those primitives without pre-abstracting them; refactoring lands when the second consumer arrives.
+A second proc-macro (`#[agent]`, planned in a downstream ticket) will share infrastructure with `#[tool]` — attribute parsing patterns, doc-comment extraction, crate-path resolution. SMA-315 builds those primitives without pre-abstracting them; refactoring lands when the second consumer arrives.
 
 ## 2. Decisions and rationale
 
-Eight decisions, scoped to the SMA-315 surface.
+Nine decisions, scoped to the SMA-315 surface.
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Function signature shape | **`async fn foo(ctx: &ToolContext<Ctx>, args: Args) -> Result<Out, ToolError>`** — two positional args, mandatory `ToolContext` first. | Mirrors `Tool::invoke` 1:1, makes expansion mechanical, and keeps the macro's job to "wire JSON ↔ Args/Out and forward". The `&ToolContext<Ctx>` is mandatory even when the tool body ignores it — uniformity beats a per-tool arity-detection branch in the macro, and `_` patterns are free at the call site. |
-| Generated artifact | **Hide the fn, emit a unit struct of the same ident** plus `impl Tool<Ctx>` for it. The original fn body moves into a private `__helikon_orig_<ident>` free fn the impl calls. | Lets `tools![add, mul]` use bare idents — no `()` constructor, no `Tool`-suffix naming convention to remember. The bare-ident UX is the dominant call-site readability win cited in the ticket. |
-| Description source | **`#[tool(description = "…")]` wins; fall back to `///` doc comments; compile error if neither.** | Description is required for the LLM contract (the trait returns `&str`, not `Option<&str>`). Attr-wins matches typical Rust semantics ("the explicit thing overrides the implicit thing"). Doc-comment fallback satisfies the ticket's "reads doc comments from the function" requirement and removes duplication for users who already wrote rustdoc. |
-| Output schema generation | **Auto-emit when `Out: JsonSchema`; else fall back to `None`.** Implemented via the autoref-specialization trick (§4.3). | Zero-config for users who derive `JsonSchema` on the output type (the common path), no hard `JsonSchema` bound on users returning `serde_json::Value` or other non-schemars types. Autoref-specialization is well-trodden on stable Rust (cf. `tracing-error`, `anyhow`'s context). |
-| Crate-path resolution | **Default `::paigasus_helikon_core::…`, override via `#[tool(crate = ::path)]`.** | Matches serde/schemars/clap convention. The direct-core consumer pays no syntax cost; facade-only consumers opt in with `crate = ::paigasus_helikon::core`. Avoids the trap of routing through the facade unconditionally (which would force a `paigasus-helikon` dep on every consumer). |
-| `tools![]` host crate | **`paigasus-helikon-core`** — `tools!` is a `macro_rules!` macro, not a proc-macro, and proc-macro crates can't export `macro_rules!`. Co-locates with the `Tool` trait so `$crate::Tool` resolves naturally. The facade re-exports it. | Single re-export site keeps the surface coherent (`paigasus_helikon::{tool, tools}`). Putting `tools!` in the facade would force the facade to host a `macro_rules!` definition for a trait it doesn't define — awkward layering. |
-| Attribute parsing | **Hand-rolled `syn`/`quote`, no `darling`.** | The attribute surface is three keys (`description`, `name`, `crate`). `darling`'s diagnostics are marginally worse than well-spanned `syn::Error`s, and pulling a 5-crate parsing framework for ~30 LoC of attr parsing is the wrong default. If `#[agent]` later adds 8+ attribute keys, revisit. |
-| Schema cache | **`OnceLock<serde_json::Value>` per tool.** Lazy-initialize on the first `schema()` call. | `Tool::schema()` returns `&Value` (per the trait), so per-call computation isn't an option. Eager `lazy_static`-style initialization at module load is overkill; `OnceLock` pays the schemars cost once on first registration and never again. |
+| Function signature shape | **`async fn foo(ctx: &ToolContext<Ctx>, args: Args) -> Result<Out, E>` where `E: Into<ToolError>`.** The `ToolContext` is mandatory and positionally first; the user's `E` is preserved through the helper fn and `?` does the `From` conversion. | Mirrors `Tool::invoke` 1:1 on the call side, but does **not** force users into `ToolError` everywhere. `ToolError::Other(#[from] anyhow::Error)` already exists in `paigasus-helikon-core`, so `Result<_, anyhow::Error>` "just works" via `?` — which is the exact ergonomic tax the macro should eliminate. Matches the Notion *Tools* page reference example. |
+| Generated artifact | **Replace the fn with a unit struct of the same ident** plus `impl Tool<Ctx>` for it. The original fn body moves into a sibling **module** `__helikon_tool_<ident>` to scope the helper fn safely. | Bare-ident call site (`tools![add, mul]`) — no `()` constructor, no `Tool`-suffix naming convention. The module wrapper namespaces the helper fn so a hand-written `__helikon_orig_add` in the user's crate cannot collide. |
+| Generated struct visibility | **Preserve the user's `vis` token on the fn.** A `pub(crate) async fn foo` produces `pub(crate) struct foo;`; a private fn produces a private struct. | Silently widening visibility (e.g. by hardcoding `pub`) would leak internal tools into the user's public API. Preservation is the only safe default. |
+| Description source | **`#[tool(description = "lit")]` (non-empty) wins; fall back to the first paragraph of `///` doc comments; compile error if neither.** Both `///` and `#[doc = "…"]` syntactic forms are accepted (they parse to the same AST node). | Description is required by the LLM contract (the trait returns `&str`). Attr-wins matches typical Rust semantics. *First paragraph* (split on `\n\n`) keeps the model-facing description focused and avoids dumping entire rustdoc bodies (rationale paragraphs, examples, code fences) into prompts. Users who want the full rustdoc as description override with the explicit attr. |
+| Output schema generation | **Auto-emit when `Out: JsonSchema`; else fall back to `None`.** Implemented via the autoref-specialization trick (§4.3). | Zero-config when the user already derives `JsonSchema` on the output type; no hard `JsonSchema` bound on users returning `serde_json::Value` or other non-schemars types. Autoref-specialization is well-trodden on stable Rust. |
+| Crate-path resolution | **Auto-resolve via `proc-macro-crate`.** The macro probes the consumer's `Cargo.toml` for `paigasus-helikon-core` first (preferred) and falls back to `paigasus-helikon` (facade — expands paths as `::paigasus_helikon::core::…`). `#[tool(crate = ::path)]` exists as an escape hatch for renamed deps. | Solves the "facade-only consumer compile-fails on `::paigasus_helikon_core::Tool`" trap *automatically* rather than asking the user to remember a `crate = …` knob. Same pattern as `serde`/`thiserror`. |
+| `tools![ … ]` shape | **Function-like proc-macro `tools!(...)` in `paigasus-helikon-macros`.** Not a `macro_rules!` macro — that form cannot resolve crate paths through the facade re-export (`$crate` always points to the *defining* crate). | Unifies path resolution with `#[tool]` (same `proc-macro-crate` probe). Facade-only consumers `paigasus_helikon::tools![a, b]` work without ceremony. The `macros` feature on the facade gates both macros together. Manual `vec![Arc::new(t) as Arc<dyn Tool<_>>, …]` is the no-feature fallback for users who don't pull `macros`. |
+| Attribute parsing | **Hand-rolled `syn`/`quote`, no `darling`.** | The attribute surface is three keys (`description`, `name`, `crate`). Well-spanned `syn::Error`s are at parity with `darling`'s diagnostics, and a 5-crate parsing framework is the wrong default at this scale. Revisit if `#[agent]` later adds 8+ keys. |
+| Schema cache | **`OnceLock<serde_json::Value>` per tool, lazy on first `schema()` call.** | `Tool::schema()` returns `&Value`, so per-call computation is impossible. `OnceLock` (stable since 1.70, comfortably below our 1.75 MSRV) pays the schemars cost once on first registration. `LazyLock` would be cleaner but stabilized in 1.80 — revisit at the next MSRV bump. |
 
 ## 3. Files added / modified
 
@@ -45,32 +46,37 @@ Eight decisions, scoped to the SMA-315 surface.
 
 | Path | Purpose |
 |---|---|
-| `crates/paigasus-helikon-macros/src/lib.rs` | `#[proc_macro_attribute] tool` entry point + module imports. |
-| `crates/paigasus-helikon-macros/src/attr.rs` | Parse `#[tool(description = …, name = …, crate = …)]`. |
-| `crates/paigasus-helikon-macros/src/signature.rs` | Parse and validate the target `async fn` signature; extract `Args`, `Out`, `Ctx`. |
-| `crates/paigasus-helikon-macros/src/expand.rs` | Codegen — emit the unit struct, the `impl Tool<Ctx>`, the moved body fn, the `OnceLock` statics, and the autoref-specialization helper. |
+| `crates/paigasus-helikon-macros/src/lib.rs` | `#[proc_macro_attribute] tool` + `#[proc_macro] tools` entry points; module imports. |
+| `crates/paigasus-helikon-macros/src/attr.rs` | Parse `#[tool(description = …, name = …, crate = …)]` and the optional `crate = …` prefix on `tools!(…)`. |
+| `crates/paigasus-helikon-macros/src/signature.rs` | Parse and validate the target `async fn` signature; extract `Args`, `Out`, `Ctx`; check `ToolContext` path-match. |
+| `crates/paigasus-helikon-macros/src/resolve.rs` | `proc-macro-crate` wrapper — resolves the consumer's path to `paigasus-helikon-core` (direct) or `paigasus-helikon` (facade), or honors the `crate = ::path` override. |
+| `crates/paigasus-helikon-macros/src/expand.rs` | Codegen — unit struct (with preserved vis), `impl Tool<Ctx>`, helper module containing the moved body, `OnceLock` statics. |
 | `crates/paigasus-helikon-macros/tests/schema_golden.rs` | Snapshot test for the two-arg-tool schema (AC #1). Uses `insta::assert_snapshot!`. |
 | `crates/paigasus-helikon-macros/tests/snapshots/schema_golden__add_schema.snap` | Golden file for the schema snapshot. |
-| `crates/paigasus-helikon-macros/tests/trybuild.rs` | Entry point for the `trybuild` UI suite. |
+| `crates/paigasus-helikon-macros/tests/trybuild.rs` | Entry point for the `trybuild` UI suite (compile-fail + compile-pass). |
 | `crates/paigasus-helikon-macros/tests/ui/bad_args_not_deserialize.rs` (+ `.stderr`) | Compile-fail: args struct missing `Deserialize`. |
 | `crates/paigasus-helikon-macros/tests/ui/bad_args_not_jsonschema.rs` (+ `.stderr`) | Compile-fail: args struct missing `JsonSchema`. |
+| `crates/paigasus-helikon-macros/tests/ui/bad_out_not_serialize.rs` (+ `.stderr`) | Compile-fail: output type missing `Serialize`. |
 | `crates/paigasus-helikon-macros/tests/ui/no_description.rs` (+ `.stderr`) | Compile-fail: no attr description and no doc comment. |
+| `crates/paigasus-helikon-macros/tests/ui/empty_description.rs` (+ `.stderr`) | Compile-fail: `#[tool(description = "")]`. |
 | `crates/paigasus-helikon-macros/tests/ui/bad_signature_wrong_ctx.rs` (+ `.stderr`) | Compile-fail: first arg isn't `&ToolContext<_>`. |
 | `crates/paigasus-helikon-macros/tests/ui/bad_signature_not_async.rs` (+ `.stderr`) | Compile-fail: non-async fn. |
+| `crates/paigasus-helikon-macros/tests/ui/bad_signature_generic.rs` (+ `.stderr`) | Compile-fail: generic free fn (`async fn foo<T>(…)`). |
 | `crates/paigasus-helikon-macros/tests/ui/bad_name.rs` (+ `.stderr`) | Compile-fail: `#[tool(name = "has spaces")]`. |
-| `crates/paigasus-helikon-macros/tests/end_to_end.rs` | Behavioral test — invoke a generated tool, assert `name`/`description`/`schema`/`invoke` semantics and the `tools![…]` macro shape. |
-| `crates/paigasus-helikon-core/src/macros.rs` | Hosts the `tools!` `macro_rules!` definition. |
+| `crates/paigasus-helikon-macros/tests/ui/facade_only_consumer.rs` (+ `.stderr` empty / compile-pass) | **Compile-pass** case where the test crate depends *only* on `paigasus-helikon` (no direct core dep). Locks the `proc-macro-crate` resolution path. |
+| `crates/paigasus-helikon-macros/tests/end_to_end.rs` | Behavioral test — invoke a generated tool, assert `name`/`description`/`schema`/`invoke` semantics and `tools!(…)` macro output shape. |
+| `crates/paigasus-helikon-core/src/__private.rs` | **Semver-exempt** `#[doc(hidden)] pub mod __private` — hosts `OutputSchemaProbe`/`OutputSchemaProbeSpec` and a `pub use async_trait` re-export for use by macro-generated code. Module docstring states the semver exemption. |
 
 ### Modified
 
 | Path | Change |
 |---|---|
-| `crates/paigasus-helikon-macros/Cargo.toml` | Add `proc-macro2`, `quote`, `syn` (deps); `paigasus-helikon-core` (path), `async-trait`, `schemars`, `serde`, `serde_json`, `tokio` (features `macros`, `rt`), `trybuild`, `insta` (dev-deps). |
-| `crates/paigasus-helikon-core/Cargo.toml` | No dependency change. The new `macros` module is pure `macro_rules!`. |
-| `crates/paigasus-helikon-core/src/lib.rs` | `mod macros;` + module-level docstring; the `#[macro_export]` on `tools!` makes it available as `paigasus_helikon_core::tools`. |
-| `crates/paigasus-helikon/Cargo.toml` | No structural change. `paigasus-helikon-macros` stays optional behind the existing `macros` feature, per the facade convention (core unconditional, siblings feature-gated). |
-| `crates/paigasus-helikon/src/lib.rs` | Add a `#[cfg(feature = "macros")] pub use paigasus_helikon_macros::tool;` re-export. `tools!` is `macro_rules!` in `paigasus-helikon-core` (always present) and is reachable as `paigasus_helikon::tools` via a `pub use paigasus_helikon_core::tools;` re-export at the crate root. |
-| `Cargo.toml` (workspace) | Add `proc-macro2 = "1"`, `quote = "1"`, `syn = { version = "2", features = ["full", "extra-traits"] }`, `trybuild = "1"` to `[workspace.dependencies]`. (`schemars`, `serde`, `serde_json`, `tokio`, `async-trait`, `insta` are already declared.) |
+| `crates/paigasus-helikon-macros/Cargo.toml` | Deps: `proc-macro2`, `quote`, `syn`, `proc-macro-crate`. Dev-deps: `paigasus-helikon-core` (path), `paigasus-helikon` (path, `features = ["macros"]` — for the facade-only-consumer trybuild case), `async-trait`, `schemars`, `serde`, `serde_json`, `tokio` (features `macros`, `rt`), `trybuild`, `insta`. |
+| `crates/paigasus-helikon-core/Cargo.toml` | No dependency change. `async-trait` and `schemars` are already direct deps; the new `__private` module re-exports them via `pub use`. |
+| `crates/paigasus-helikon-core/src/lib.rs` | Add `#[doc(hidden)] pub mod __private;` (the module file is added; the re-export makes it reachable as `paigasus_helikon_core::__private`). |
+| `crates/paigasus-helikon/Cargo.toml` | No structural change. `paigasus-helikon-macros` stays optional behind the existing `macros` feature, per the facade convention. |
+| `crates/paigasus-helikon/src/lib.rs` | Add `#[cfg(feature = "macros")] pub use paigasus_helikon_macros::{tool, tools};`. (Core is already re-exported as `paigasus_helikon::core`, which is what the macro's `proc-macro-crate` resolution uses for facade-only consumers.) |
+| `Cargo.toml` (workspace) | Add `proc-macro2 = "1"`, `quote = "1"`, `syn = { version = "2", features = ["full"] }`, `proc-macro-crate = "3"`, `trybuild = "1"` to `[workspace.dependencies]`. (`schemars`, `serde`, `serde_json`, `tokio`, `async-trait`, `insta` already declared.) |
 
 ## 4. Generated code shape
 
@@ -78,7 +84,7 @@ Eight decisions, scoped to the SMA-315 surface.
 
 ```rust
 use paigasus_helikon::{tool, tools};
-use paigasus_helikon_core::{Tool, ToolContext, ToolError};
+use paigasus_helikon_core::{Tool, ToolContext};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -99,11 +105,13 @@ struct AddOut {
 }
 
 /// Adds two numbers.
+///
+/// (Subsequent paragraphs are NOT sent to the model — see §5.)
 #[tool]
 async fn add(
     _ctx: &ToolContext<MyCtx>,
     args: AddArgs,
-) -> Result<AddOut, ToolError> {
+) -> Result<AddOut, anyhow::Error> {        // user picks any E: Into<ToolError>
     Ok(AddOut { sum: args.a + args.b })
 }
 
@@ -112,36 +120,51 @@ let registry: Vec<Arc<dyn Tool<MyCtx>>> = tools![add /* , mul, … */];
 
 ### 4.2 Reference expansion (for AC #2 "readable" criterion)
 
-The expansion of the `#[tool]` block above, edited for spacing only:
+Expansion of the `#[tool]` block above (paths shown for a direct-core consumer; facade-only consumers see `::paigasus_helikon::core::…` everywhere):
 
 ```rust
 #[allow(non_camel_case_types)]
-pub struct add;
+struct add;     // vis preserved from `async fn add` (private here)
 
-static ADD_INPUT_SCHEMA: ::std::sync::OnceLock<::serde_json::Value> =
-    ::std::sync::OnceLock::new();
-static ADD_OUTPUT_SCHEMA: ::std::sync::OnceLock<Option<::serde_json::Value>> =
-    ::std::sync::OnceLock::new();
+mod __helikon_tool_add {
+    use super::*;
 
-#[::async_trait::async_trait]
+    pub(super) static INPUT_SCHEMA: ::std::sync::OnceLock<::serde_json::Value> =
+        ::std::sync::OnceLock::new();
+    pub(super) static OUTPUT_SCHEMA: ::std::sync::OnceLock<Option<::serde_json::Value>> =
+        ::std::sync::OnceLock::new();
+
+    pub(super) async fn run(
+        _ctx: &::paigasus_helikon_core::ToolContext<MyCtx>,
+        args: AddArgs,
+    ) -> ::std::result::Result<AddOut, ::anyhow::Error> {
+        // user's body, verbatim
+        Ok(AddOut { sum: args.a + args.b })
+    }
+}
+
+#[::paigasus_helikon_core::__private::async_trait::async_trait]
 impl ::paigasus_helikon_core::Tool<MyCtx> for add {
     fn name(&self) -> &str { "add" }
     fn description(&self) -> &str { "Adds two numbers." }
+
     fn schema(&self) -> &::serde_json::Value {
-        ADD_INPUT_SCHEMA.get_or_init(|| {
+        __helikon_tool_add::INPUT_SCHEMA.get_or_init(|| {
             ::serde_json::to_value(::schemars::schema_for!(AddArgs))
                 .expect("schemars schema must serialize")
         })
     }
-    fn output_schema(&self) -> Option<&::serde_json::Value> {
-        ADD_OUTPUT_SCHEMA
+
+    fn output_schema(&self) -> ::std::option::Option<&::serde_json::Value> {
+        __helikon_tool_add::OUTPUT_SCHEMA
             .get_or_init(|| {
-                // Autoref-specialization picks the JsonSchema impl if available.
-                (&&::paigasus_helikon_macros::__private::OutputSchemaProbe::<AddOut>::NEW)
+                // Autoref-specialization — see §4.3.
+                (&&::paigasus_helikon_core::__private::OutputSchemaProbe::<AddOut>::NEW)
                     .schema()
             })
             .as_ref()
     }
+
     async fn invoke(
         &self,
         ctx: &::paigasus_helikon_core::ToolContext<MyCtx>,
@@ -154,20 +177,14 @@ impl ::paigasus_helikon_core::Tool<MyCtx> for add {
             .map_err(|e| ::paigasus_helikon_core::ToolError::InvalidArgs {
                 schema_errors: ::std::vec![e.to_string()],
             })?;
-        let out = __helikon_orig_add(ctx, parsed).await?;
+        // `?` converts the user's `E` via `ToolError: From<E>` (e.g. `From<anyhow::Error>`).
+        let out = __helikon_tool_add::run(ctx, parsed).await?;
         let content = ::serde_json::to_value(&out)
             .map_err(|e| ::paigasus_helikon_core::ToolError::Other(e.into()))?;
         ::std::result::Result::Ok(
             ::paigasus_helikon_core::ToolOutput::new(content)
         )
     }
-}
-
-async fn __helikon_orig_add(
-    _ctx: &::paigasus_helikon_core::ToolContext<MyCtx>,
-    args: AddArgs,
-) -> ::std::result::Result<AddOut, ::paigasus_helikon_core::ToolError> {
-    Ok(AddOut { sum: args.a + args.b })
 }
 ```
 
@@ -176,14 +193,14 @@ async fn __helikon_orig_add(
 The proc-macro cannot ask "does `Out: JsonSchema`?" at expansion time — proc-macros operate on syntax, not types. The autoref-specialization trick gives us trait-aware codegen on stable Rust by arranging two `schema(&self)` candidates at different deref levels and letting method resolution pick the closer one:
 
 ```rust
-// In paigasus_helikon_macros::__private (re-exported privately for macro use):
+// In paigasus_helikon_core::__private (semver-exempt, only macro-generated code touches it):
 pub struct OutputSchemaProbe<T>(::std::marker::PhantomData<T>);
 
 impl<T> OutputSchemaProbe<T> {
     pub const NEW: Self = Self(::std::marker::PhantomData);
 }
 
-// Specialized arm — gated trait impl on `&OutputSchemaProbe<T>` (one autoref).
+// Specialized arm — trait impl on `&OutputSchemaProbe<T>` (one deref).
 pub trait OutputSchemaProbeSpec {
     fn schema(&self) -> Option<::serde_json::Value>;
 }
@@ -195,48 +212,101 @@ impl<T: ::schemars::JsonSchema> OutputSchemaProbeSpec
     }
 }
 
-// Fallback arm — inherent method on `OutputSchemaProbe<T>` (two autoref steps).
+// Fallback arm — inherent method on `OutputSchemaProbe<T>` (two deref steps via autoref).
 impl<T> OutputSchemaProbe<T> {
     pub fn schema(&self) -> Option<::serde_json::Value> { None }
 }
 ```
 
-When the macro emits `(&&OutputSchemaProbe::<Out>::NEW).schema()`, method resolution starts at `&&Probe<Out>`, auto-derefs once to `&Probe<Out>`, and finds the `OutputSchemaProbeSpec::schema` impl **iff** `Out: JsonSchema`. If the bound holds, that impl wins because it's fewer deref steps away. If it doesn't, resolution falls through to `Probe<Out>` and finds the inherent `fn schema(&self) -> None` — the fallback. No nightly features, no `JsonSchema` bound leaked onto the user's `Out`.
+When the macro emits `(&&OutputSchemaProbe::<Out>::NEW).schema()`, method resolution starts at `&&Probe<Out>`, auto-derefs once to `&Probe<Out>`, and finds the `OutputSchemaProbeSpec::schema` impl **iff** `Out: JsonSchema`. If the bound holds, that impl wins — it's fewer deref steps away. If it doesn't, resolution falls through to `Probe<Out>` and finds the inherent `fn schema(&self) -> None` — the fallback. No nightly features, no `JsonSchema` bound leaked onto the user's `Out`.
 
-The probe lives in `paigasus_helikon_macros::__private` (semver-exempt). User code never references it directly; only the generated code does.
+**This probe lives in `paigasus-helikon-core`, not `paigasus-helikon-macros`.** Proc-macro crates (`[lib] proc-macro = true`) cannot publicly export anything other than `#[proc_macro*]` items, so the support module must sit in a regular lib. This mirrors the `serde_derive` ↔ `serde::__private` pattern.
 
-### 4.4 `tools![]` expansion
+### 4.4 `tools!(…)` proc-macro
+
+`tools!` is a function-like proc-macro (`#[proc_macro] pub fn tools(...)`). It accepts a comma-separated list of tool expressions, optionally prefixed with a `crate = ::path;` override:
 
 ```rust
-#[macro_export]
-macro_rules! tools {
-    () => {
-        ::std::vec::Vec::<
-            ::std::sync::Arc<dyn $crate::Tool<_>>
-        >::new()
-    };
-    ($($tool:expr),+ $(,)?) => {
-        ::std::vec![
-            $(
-                ::std::sync::Arc::new($tool)
-                    as ::std::sync::Arc<dyn $crate::Tool<_>>
-            ),+
-        ]
-    };
+// Common case (auto-resolved path):
+let r: Vec<Arc<dyn Tool<MyCtx>>> = tools![add, mul];
+
+// Explicit override (renamed dep / unusual setup):
+let r: Vec<Arc<dyn Tool<MyCtx>>> = tools!(crate = ::my_renamed_helikon; add, mul);
+```
+
+Expansion (direct-core consumer):
+
+```rust
+{
+    let __r: ::std::vec::Vec<
+        ::std::sync::Arc<dyn ::paigasus_helikon_core::Tool<_>>
+    > = ::std::vec![
+        ::std::sync::Arc::new(add)
+            as ::std::sync::Arc<dyn ::paigasus_helikon_core::Tool<_>>,
+        ::std::sync::Arc::new(mul)
+            as ::std::sync::Arc<dyn ::paigasus_helikon_core::Tool<_>>,
+    ];
+    __r
 }
 ```
 
-Defined in `paigasus_helikon_core::macros`. `$crate::Tool` resolves to `paigasus_helikon_core::Tool` at expansion. The empty arm is necessary because a `vec![]` with no elements can't infer the `Tool<_>` element type without explicit annotation, and an empty registry is occasionally useful (e.g. building one progressively from config).
+**No empty arm.** `tools![]` is rejected by the parser with a diagnostic pointing at the macro invocation: ``tools! expects at least one tool; use `Vec::<Arc<dyn Tool<Ctx>>>::new()` for an empty registry``. The empty case is rare and an explicit `Vec::new` is more honest than a turbofish-driven macro arm that compiles only when an LHS annotation pins `Ctx`. The trailing comma is allowed.
+
+The `Ctx` parameter is inferred at the call site from the LHS type annotation or from how the registry is consumed downstream. Mismatched `Ctx` across tools surfaces as a stock rustc trait-bound error. The canonical error text is reproduced in the `tools!` rustdoc so users can grep for it (see §10).
 
 ## 5. Description, name, and crate resolution — exact rules
 
-| Aspect | Resolution order | On failure |
-|---|---|---|
-| Description | `#[tool(description = "lit")]` → concat `///` doc lines (strip leading space, join `\n`, trim trailing whitespace) → **error** | ``compile_error!("tool `<name>` requires a description: add `#[tool(description = \"…\")]` or a `///` doc comment");`` spanned to the fn ident. |
-| Tool name | `#[tool(name = "lit")]` → fn ident as string | If override fails the `[A-Za-z_][A-Za-z0-9_-]*` regex, `compile_error!("tool name must match [A-Za-z_][A-Za-z0-9_-]*");` spanned to the name literal. |
-| Crate path | `#[tool(crate = ::path)]` → `::paigasus_helikon_core` | Path is taken verbatim; invalid paths surface as rustc errors on the expanded code. |
+### 5.1 Description
 
-Argument-field descriptions are **not** handled by the `#[tool]` macro. They flow through `#[derive(JsonSchema)]`, which already extracts `///` doc comments on struct fields into the schema's `description` field. This is the explicit boundary between the two derives — `JsonSchema` owns the args struct, `#[tool]` owns the fn glue.
+| Input | Behavior |
+|---|---|
+| `#[tool(description = "non-empty literal")]` | Use the literal verbatim. Wins over any doc comments. |
+| `#[tool(description = "")]` | **Compile error** — empty descriptions are useless to the model. Diagnostic: ``empty `description`; provide a non-empty literal or remove the attr to fall back to doc comments``. |
+| `///` doc comments or `#[doc = "…"]` attrs (semantically identical AST node) | Concatenate lines, strip the leading space, join with `\n`, trim trailing whitespace. **Take the first paragraph only** — everything up to the first `\n\n`. Use as description. |
+| Neither attr nor doc | **Compile error**: ``tool `<name>` requires a description: add `#[tool(description = "…")]` or a `///` doc comment``. |
+
+Argument-field descriptions are **not** handled by the `#[tool]` macro. They flow through `#[derive(JsonSchema)]`, which already extracts `///` doc comments on struct fields. This is the explicit boundary — `JsonSchema` owns the args struct, `#[tool]` owns the fn glue.
+
+### 5.2 Tool name
+
+| Input | Behavior |
+|---|---|
+| `#[tool(name = "lit")]` | Use the literal. Validated against `^[A-Za-z_][A-Za-z0-9_-]*$`. |
+| Otherwise | Use the fn ident as a string. **Raw idents** (`r#async`) — strip the `r#` prefix; document this rule in the macro rustdoc. The validation regex still applies to the stripped form. |
+
+If the validated name fails the regex, emit ``tool name must match `[A-Za-z_][A-Za-z0-9_-]*`; got "<actual>"`` spanned at the literal (or the fn ident).
+
+### 5.3 Crate path
+
+Resolution is automatic, with a manual override:
+
+```text
+resolve_crate_path() {
+    if attr `crate = ::path` is present:
+        return that path
+    via proc-macro-crate, look up `paigasus-helikon-core` in the consumer Cargo.toml:
+        if FoundCrate::Itself          → ::paigasus_helikon_core
+        if FoundCrate::Name(n)         → ::<n>
+        if NotFound, look up `paigasus-helikon`:
+            if FoundCrate::Itself       → ::paigasus_helikon::core
+            if FoundCrate::Name(n)      → ::<n>::core
+            if NotFound                 → compile_error!
+                "#[tool] requires either `paigasus-helikon-core` or
+                 `paigasus-helikon` (features=[\"macros\"]) as a
+                 direct dependency; or set `#[tool(crate = ::path)]`."
+}
+```
+
+The resolved path stem is used for `<stem>::Tool`, `<stem>::ToolContext`, `<stem>::ToolError`, `<stem>::ToolOutput`, `<stem>::__private::OutputSchemaProbe`, and `<stem>::__private::async_trait`. `serde_json` and `schemars` and the user's `anyhow` (when used as `E`) are referenced by `::serde_json`, `::schemars`, `::anyhow` — they are guaranteed direct deps of the user's crate because the user's source already names them (`#[derive(Deserialize, JsonSchema)]`; user-typed return type).
+
+### 5.4 `ToolContext` match rule
+
+The macro determines `Ctx` by inspecting the first fn argument's type, which must take one of these shapes:
+
+- `&ToolContext<T>`
+- `&<path::segments>::ToolContext<T>` where the trailing path segment is `ToolContext`
+
+The macro **does not** dereference type aliases — it operates on syntax. If the user writes `type Ctx = ToolContext<App>; … _ctx: &Ctx`, the macro emits a diagnostic: ``#[tool] expects `&ToolContext<…>` (matched by trailing path segment); type aliases are not resolved, write `&ToolContext<App>` directly``. The macro accepts any number of leading path segments (`&core::ToolContext<…>`, `&paigasus_helikon::core::ToolContext<…>`), as long as the trailing segment is `ToolContext` with exactly one angle-bracketed generic argument.
 
 ## 6. Testing strategy
 
@@ -247,14 +317,12 @@ Three layers, all under `crates/paigasus-helikon-macros/tests/`.
 `tests/schema_golden.rs`:
 
 - Defines `AddArgs` and `AddOut` exactly as in §4.1.
-- Constructs `add` (the macro-generated unit struct), calls `.schema()`, serializes the returned `&Value` with `serde_json::to_string_pretty`.
+- Constructs `add` (the macro-generated unit struct), calls `.schema()`, serializes via `serde_json::to_string_pretty`.
 - `insta::assert_snapshot!(serialized)`.
 
-First-run writes `tests/snapshots/schema_golden__add_schema.snap`. The reviewer eyeballs the snapshot during PR — it's the "schema matching golden file" artifact the AC names. Subsequent runs diff; `cargo insta review` updates intentionally.
+First-run writes `tests/snapshots/schema_golden__add_schema.snap`. Reviewer eyeballs the snapshot during PR — it's the "schema matching golden file" artifact the AC names. Subsequent runs diff; `cargo insta review` updates intentionally. Snapshot covers type mapping (`i64` → `integer`), `required` array population, per-field `description` from doc comments.
 
-The snapshot covers the things the AC implicitly cares about: type mapping (`i64` → `integer`), `required` array population, per-field `description` from doc comments.
-
-### 6.2 `trybuild` compile-fail UI tests (AC #3)
+### 6.2 `trybuild` UI tests (AC #3 + path-resolution coverage)
 
 `tests/trybuild.rs`:
 
@@ -262,20 +330,25 @@ The snapshot covers the things the AC implicitly cares about: type mapping (`i64
 #[test]
 fn ui() {
     let t = trybuild::TestCases::new();
-    t.compile_fail("tests/ui/*.rs");
+    t.compile_fail("tests/ui/bad_*.rs");
+    t.compile_fail("tests/ui/no_description.rs");
+    t.compile_fail("tests/ui/empty_description.rs");
+    t.pass("tests/ui/facade_only_consumer.rs");
 }
 ```
 
-UI cases (each paired with a `.stderr` golden):
-
-| Case | What it exercises |
+| Case | Verifies |
 |---|---|
-| `bad_args_not_deserialize.rs` | Args struct lacks `Deserialize` → rustc trait-bound error from the generated `from_value` call. |
-| `bad_args_not_jsonschema.rs` | Args struct lacks `JsonSchema` → rustc trait-bound error from the generated `schema_for!` call. |
-| `no_description.rs` | `#[tool]` with no description attr and no doc comment → macro-emitted `compile_error!`. |
-| `bad_signature_wrong_ctx.rs` | First arg is `&MyCtx` instead of `&ToolContext<MyCtx>` → macro-emitted diagnostic spanned at the first arg. |
-| `bad_signature_not_async.rs` | `fn` instead of `async fn` → macro-emitted diagnostic. |
-| `bad_name.rs` | `#[tool(name = "has spaces")]` → macro-emitted diagnostic. |
+| `bad_args_not_deserialize.rs` | Args struct lacks `Deserialize` → rustc trait-bound error from generated `from_value` call. |
+| `bad_args_not_jsonschema.rs` | Args struct lacks `JsonSchema` → rustc trait-bound error from generated `schema_for!` call. |
+| `bad_out_not_serialize.rs` | Output type lacks `Serialize` → rustc trait-bound error from generated `to_value(&out)` call. |
+| `no_description.rs` | No attr description and no doc comment → macro `compile_error!`. |
+| `empty_description.rs` | `#[tool(description = "")]` → macro `compile_error!`. |
+| `bad_signature_wrong_ctx.rs` | First arg is `&MyCtx` instead of `&ToolContext<MyCtx>` → macro diagnostic spanned at the first arg. |
+| `bad_signature_not_async.rs` | `fn` instead of `async fn` → macro diagnostic. |
+| `bad_signature_generic.rs` | `async fn foo<T: JsonSchema>(…)` → macro diagnostic, *before* the autoref probe expands across the user's screen. |
+| `bad_name.rs` | `#[tool(name = "has spaces")]` → macro diagnostic spanned at the name literal. |
+| `facade_only_consumer.rs` | **Compile-pass.** Test crate depends only on `paigasus-helikon = { features = ["macros"] }` — no direct `paigasus-helikon-core` dep. Locks the `proc-macro-crate` resolution of `paigasus-helikon` → `::paigasus_helikon::core::…`. |
 
 Stderr files are regenerated with `TRYBUILD=overwrite cargo test --test trybuild` when a diagnostic intentionally changes. Reviewers diff the `.stderr` files alongside the source.
 
@@ -285,62 +358,69 @@ Stderr files are regenerated with `TRYBUILD=overwrite cargo test --test trybuild
 
 1. Construct the registry via `tools![add]`.
 2. Assert `registry.len() == 1`, `registry[0].name() == "add"`, `registry[0].description() == "Adds two numbers."`.
-3. Build a minimal `ToolContext<MyCtx>` (via `ToolContext::new` with default tracer/cancel/user_ctx).
+3. Build a minimal `ToolContext<MyCtx>` via `ToolContext::new`.
 4. Invoke with valid JSON `{"a": 2, "b": 3}` → assert `Ok(ToolOutput { content: json!({"sum": 5}) })`.
 5. Invoke with invalid JSON `{"a": "not a number", "b": 3}` → assert `Err(ToolError::InvalidArgs { schema_errors })` with non-empty `schema_errors`.
-6. Call `schema()` twice; assert pointer equality on the returned `&Value` (proves `OnceLock` caching works).
+6. Call `schema()` twice; assert pointer equality on the returned `&Value` (proves `OnceLock` caching).
 7. Call `output_schema()`; assert `Some(_)` (because `AddOut: JsonSchema`).
 8. Define a second tool `OpaqueTool` whose `Out` is a non-`JsonSchema` newtype; assert its `output_schema()` returns `None`.
+9. Define a third tool returning `Result<…, anyhow::Error>`; assert it `impl`s `Tool<MyCtx>` and a body-side `Err(anyhow!("boom"))` surfaces as `ToolError::Other` at the runner level.
 
 ### 6.4 The "readable `cargo expand`" criterion (AC #2)
 
 Not automatable. Captured as:
 
-- The reference expansion in §4.2 of this spec — kept current when the macro changes.
-- A PR-description checklist item: "Ran `cargo expand --test end_to_end` and verified expansion matches §4.2 within whitespace/comment differences."
+- The reference expansion in §4.2, kept current when the macro changes.
+- PR-description checklist: "Ran `cargo expand --test end_to_end` and verified expansion matches §4.2 within whitespace/comment differences."
 
 ## 7. Error handling & diagnostics
 
 ### 7.1 Compile-time (proc-macro side)
 
-All parse failures use `syn::Error::new_spanned(tok, msg).to_compile_error()` so the error span lands on the offending token, not on `#[tool]`.
+All parse failures use `syn::Error::new_spanned(tok, msg).to_compile_error()` so the error span lands on the offending token.
 
 | Condition | Span | Message |
 |---|---|---|
 | Missing description | fn ident | ``tool `<name>` requires a description: add `#[tool(description = "…")]` or a `///` doc comment`` |
+| Empty description literal | description literal | ``empty `description`; provide a non-empty literal or remove the attr to fall back to doc comments`` |
 | Non-async fn | `fn` keyword | ``#[tool] requires an `async fn` `` |
+| Generic free fn | `fn` keyword (or first generic param) | ``#[tool] does not support generic free fns; instantiate the generic and apply #[tool] to the concrete fn`` |
 | Wrong arity | fn signature | ``#[tool] expects two args: `&ToolContext<Ctx>` and an args struct`` |
-| First arg not `&ToolContext<_>` | first arg's pattern | ``#[tool] expects the first argument to be `&ToolContext<Ctx>`, found `<actual>` `` |
+| First arg not `&ToolContext<…>` (path-segment match) | first arg's pattern | ``#[tool] expects `&ToolContext<…>` (matched by trailing path segment); type aliases are not resolved, write `&ToolContext<App>` directly`` |
 | `Self` or trait-method form | fn keyword | ``#[tool] applies to free `async fn` only`` |
-| Bad `name = …` | name literal | ``tool name must match `[A-Za-z_][A-Za-z0-9_-]*` `` |
+| Bad `name = …` | name literal | ``tool name must match `[A-Za-z_][A-Za-z0-9_-]*`; got "<actual>" `` |
 | Unknown attribute key | key token | ``unknown #[tool] attribute `<key>`; expected one of `description`, `name`, `crate` `` |
+| Neither `paigasus-helikon-core` nor `paigasus-helikon` dep | macro span | ``#[tool] requires either `paigasus-helikon-core` or `paigasus-helikon` (features=["macros"]) as a direct dependency; or set `#[tool(crate = ::path)]` `` |
 
-Trait-bound failures on `Args` (missing `Deserialize`/`JsonSchema`) and `Out` (missing `Serialize`) are caught downstream by rustc when the expanded code references those traits. The `trybuild` UI tests pin the resulting rustc diagnostics.
+Trait-bound failures on `Args` (missing `Deserialize`/`JsonSchema`), `Out` (missing `Serialize`), and the user's `E` (missing `Into<ToolError>`) are caught downstream by rustc when the expanded code references those traits. The `trybuild` UI tests pin the resulting rustc diagnostics.
 
 ### 7.2 Runtime (generated code)
 
 | Failure | Outcome |
 |---|---|
 | `serde_json::from_value::<Args>(args)` fails | `Err(ToolError::InvalidArgs { schema_errors: vec![e.to_string()] })` — recoverable per ADR-10. |
-| User body returns `Err(ToolError)` | Propagated verbatim via `?`. |
-| `serde_json::to_value(&out)` fails | `Err(ToolError::Other(e.into()))` — non-recoverable. Output serialization failures are programmer errors (e.g. non-string map keys); the loop should not retry. |
+| User body returns `Err(E)` where `E: Into<ToolError>` | `?` invokes `ToolError::from(E)` automatically. For `E = anyhow::Error`, the existing `#[from] anyhow::Error` impl on `ToolError::Other` carries it through. For `E = ToolError`, identity conversion. |
+| `serde_json::to_value(&out)` fails | `Err(ToolError::Other(e.into()))` — non-recoverable. Output serialization failures are programmer errors (non-string map keys, etc.). |
 
-`schemars::schema_for!` failure is impossible at runtime — schemars generates the schema infallibly given the type compiles. The `OnceLock` initializer asserts via `.expect("schemars schema must serialize")` for the `to_value` step; failure here is a `serde_json` bug and panicking on first use is correct.
+`schemars::schema_for!` cannot fail at runtime — schemars generates the schema infallibly given the type compiles. The `OnceLock` initializer's `.expect("schemars schema must serialize")` covers the `to_value` step; failure there is a `serde_json` bug and panicking on first use is correct.
 
 ## 8. Cargo wiring
 
 ### 8.1 Workspace `[workspace.dependencies]` additions
 
-The workspace already declares `schemars = "1"`, `serde`, `serde_json`, `tokio`, `async-trait`, and `insta = "1"`. Genuinely new pins for SMA-315:
+The workspace already declares `schemars = "1"`, `serde`, `serde_json`, `tokio`, `async-trait`, `insta = "1"`. New pins for SMA-315:
 
 ```toml
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits"] }
+syn = { version = "2", features = ["full"] }
+proc-macro-crate = "3"
 trybuild = "1"
 ```
 
-`schemars` 1.x is the current stable line as of 2026-05. The schema layout it emits is what the golden file pins; bumping to a hypothetical 2.x is a follow-up chore that updates the snapshot.
+`syn` uses `features = ["full"]` only — `extra-traits` (Debug/Eq/Hash across the whole AST) measurably slows macro-crate compile times and is a debugging convenience we don't need for codegen. `proc-macro-crate` 3.x is the current major as of 2026-05.
+
+Schemars 1.x is the current stable line; the schema layout it emits is what the golden file pins. See §11 (open questions) — bumping to 2.x is not a chore.
 
 ### 8.2 `crates/paigasus-helikon-macros/Cargo.toml`
 
@@ -349,27 +429,61 @@ trybuild = "1"
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+proc-macro-crate.workspace = true
 
 [dev-dependencies]
 paigasus-helikon-core = { path = "../paigasus-helikon-core" }
+paigasus-helikon = { path = "../paigasus-helikon", features = ["macros"] }   # for the facade-only trybuild case
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
+anyhow.workspace = true   # for end_to_end.rs and bad_args trybuild cases
 trybuild.workspace = true
 insta.workspace = true
 ```
 
-A `__private` module is published behind a `#[doc(hidden)]` re-export so the macro can reference `::paigasus_helikon_macros::__private::OutputSchemaProbe`. This module is **semver-exempt** and documented as such in its module docstring — only the macro-generated code touches it.
+### 8.3 `crates/paigasus-helikon-core/Cargo.toml` and source
 
-### 8.3 `crates/paigasus-helikon-core/Cargo.toml`
+No `Cargo.toml` change — `async-trait` and `schemars` are already direct deps. Source changes:
 
-No dep change. `tools!` is `macro_rules!`, no proc-macro toolchain needed.
+- New file `crates/paigasus-helikon-core/src/__private.rs`:
+
+  ```rust
+  //! Implementation details exposed to macro-generated code.
+  //!
+  //! **Semver-exempt.** Items in this module are not part of the public
+  //! API. Only the `#[tool]` and `tools!` macros in
+  //! `paigasus-helikon-macros` are expected to reference them. Direct
+  //! use by application code is unsupported and may break without notice.
+
+  use std::marker::PhantomData;
+
+  pub use async_trait;          // re-export so generated code can name it absolutely
+
+  pub struct OutputSchemaProbe<T>(PhantomData<T>);
+  impl<T> OutputSchemaProbe<T> {
+      pub const NEW: Self = Self(PhantomData);
+  }
+  pub trait OutputSchemaProbeSpec {
+      fn schema(&self) -> Option<serde_json::Value>;
+  }
+  impl<T: schemars::JsonSchema> OutputSchemaProbeSpec for &OutputSchemaProbe<T> {
+      fn schema(&self) -> Option<serde_json::Value> {
+          serde_json::to_value(schemars::schema_for!(T)).ok()
+      }
+  }
+  impl<T> OutputSchemaProbe<T> {
+      pub fn schema(&self) -> Option<serde_json::Value> { None }
+  }
+  ```
+
+- In `crates/paigasus-helikon-core/src/lib.rs`: `#[doc(hidden)] pub mod __private;`.
 
 ### 8.4 `crates/paigasus-helikon/Cargo.toml` (facade)
 
-No structural change. The existing wiring stays:
+No structural change. Existing wiring stays:
 
 ```toml
 [dependencies]
@@ -383,37 +497,54 @@ In `src/lib.rs`:
 
 ```rust
 #[cfg(feature = "macros")]
-pub use paigasus_helikon_macros::tool;
-
-pub use paigasus_helikon_core::tools;
+pub use paigasus_helikon_macros::{tool, tools};
 ```
 
-`tools!` is `macro_rules!` in `paigasus-helikon-core` (unconditional), so it's always reachable as `paigasus_helikon::tools`. `#[tool]` requires `features = ["macros"]` from the facade — same convention as every other Stage-1 crate.
+`paigasus_helikon::core` is already re-exported unconditionally — that's the path `proc-macro-crate` resolution targets for facade-only consumers.
 
 ## 9. Non-goals (out of scope for SMA-315)
 
 - **No first-party tool implementations.** `paigasus-helikon-tools` stays a stub.
 - **No streaming tool outputs.** `ToolOutput` is single-shot.
-- **No multi-modal content.** `ToolOutput.content` stays `serde_json::Value`. The `#[non_exhaustive]` on the struct preserves room for later.
-- **No `JsonSchema`-driven validation pass before `serde` deserialize.** We rely on `serde` to reject bad inputs. Schemars-level validation as a pre-deserialize step is a follow-up if real "schema accepts but serde rejects" cases emerge.
-- **No `Ctx` inference fallback in `tools![]`.** Mismatched `Ctx` across tools surfaces as a stock rustc type error, not a macro-supplied diagnostic.
+- **No multi-modal content.** `ToolOutput.content` stays `serde_json::Value`. The `#[non_exhaustive]` preserves room for later.
+- **No `JsonSchema`-driven pre-deserialize validation.** We rely on `serde`. Schemars-level validation as a pre-deserialize step is a follow-up if real "schema accepts but serde rejects" cases emerge.
+- **No `Ctx` inference fallback in `tools!`.** Mismatched `Ctx` across tools surfaces as a stock rustc trait-bound error. The canonical text is reproduced in §10 and in the `tools!` rustdoc.
 - **No trait-method or `impl`-block `#[tool]` form.** Free `async fn` only.
+- **No generic free fns.** `async fn foo<T: …>(…)` is rejected with a dedicated diagnostic.
 - **No registry-side name collision detection** — that's a runtime registry concern.
-- **No third macro for `#[derive(ToolArgs)]` ergonomics.** Users write `#[derive(Deserialize, JsonSchema)]` directly; collapsing the derive list is a deliberate non-goal.
+- **No third macro for `#[derive(ToolArgs)]` ergonomics.** Users write `#[derive(Deserialize, JsonSchema)]` directly.
+- **No panic-handling around the user body.** A panic in the user body propagates as a Rust panic; the runner's tool-call scheduler decides whether to `catch_unwind` (out of scope here).
 - **No `#[agent]` proc-macro.** Its own ticket will land later and may refactor shared parsing helpers out of `paigasus-helikon-macros`.
 
-## 10. Acceptance criteria → evidence map
+## 10. `tools!` rustdoc — canonical Ctx-mismatch error
+
+Reproduced verbatim in the `tools!` macro rustdoc so users can grep when they hit it:
+
+```text
+error[E0277]: the trait bound `<X>: Tool<MyCtx>` is not satisfied
+  --> src/main.rs:N:NN
+   |
+N  |   tools![add_my_ctx, mul_other_ctx]
+   |          ^^^^^^^^^^ the trait `Tool<MyCtx>` is not implemented for `mul_other_ctx`
+```
+
+The rustdoc explains: every tool in a single `tools!` invocation must `impl Tool<Ctx>` for the *same* `Ctx`. The shared `Ctx` is inferred from the first tool, or from the LHS type annotation if present.
+
+## 11. Acceptance criteria → evidence map
 
 | AC | Evidence |
 |---|---|
 | 1. Two-arg tool with doc comments → schema matches golden file | `tests/schema_golden.rs` + `tests/snapshots/schema_golden__add_schema.snap`. |
-| 2. `cargo expand` output is readable | §4.2 of this spec (reference expansion) + PR-description checklist. |
-| 3. Bad args struct → clear compile-fail diagnostic | `tests/trybuild.rs` + `tests/ui/bad_args_*.rs` and `.stderr` goldens. |
-| (Implied) `tools![]` companion macro exists | `crates/paigasus-helikon-core/src/macros.rs`, exercised by `tests/end_to_end.rs`. |
+| 2. `cargo expand` output is readable | §4.2 (reference expansion) + PR-description checklist. |
+| 3. Bad args struct → clear compile-fail diagnostic | `tests/trybuild.rs` + `tests/ui/bad_args_*.rs`, `bad_out_not_serialize.rs`, `bad_signature_*.rs`. |
+| (Implied) `tools![ … ]` companion macro exists | `tests/end_to_end.rs` (step 1) and the proc-macro entry in `paigasus-helikon-macros`. |
+| (Implied) Facade-only consumers can use `#[tool]` and `tools!` | `tests/ui/facade_only_consumer.rs` (compile-pass). |
 
-## 11. Open questions
+## 12. Open questions
 
-None at design time. Likely revisits during implementation:
+Carried into implementation review:
 
-- Whether to publicize a `Tool::name() -> &'static str` change (currently `&str`) to align with the macro's compile-time string. Out of scope for SMA-315; would be a trait edit owned by core.
-- Whether `OnceLock` becomes `LazyLock` (stabilized 1.80) when MSRV moves past 1.80. MSRV is 1.75 today; `OnceLock` is the correct primitive at MSRV.
+- **Schemars 1.x → 2.x risk.** A schemars major-version bump is **not** a routine chore — it changes the JSON-Schema layout the model sees and may require re-prompting evals. Surface this in the workspace's dependency policy when 2.x ships; for SMA-315 we pin 1.x and document the migration risk in the macro rustdoc.
+- **`OutputType` (agent.rs) carries `schemars::Schema`; `Tool::schema()` returns `serde_json::Value`.** Two representations for the same concept in one workspace. SMA-320 (structured output) is the natural home for unifying these. SMA-315 stays on `serde_json::Value` because that's the trait's return type today; flag the asymmetry for the future trait-edit ticket.
+- **`OnceLock` → `LazyLock`.** When the workspace MSRV moves past 1.80, `LazyLock` lets us drop the `get_or_init` closure. Trivial follow-up chore.
+- **`Tool::name()` return type.** Today `&str`. The macro has a compile-time string; a future trait edit to `&'static str` would match what the macro can guarantee. Out of scope for SMA-315 — would be a core trait edit owned separately.
