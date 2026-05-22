@@ -21,8 +21,8 @@ quote            = { workspace = true }
 syn              = { workspace = true }
 
 [dev-dependencies]
-paigasus-helikon-core = { path = "../paigasus-helikon-core" }
-paigasus-helikon      = { path = "../paigasus-helikon", features = ["macros"] }
+paigasus-helikon-core = { workspace = true }
+paigasus-helikon      = { workspace = true, features = ["macros"] }
 async-trait  = { workspace = true }
 schemars     = { workspace = true }
 serde        = { workspace = true }
