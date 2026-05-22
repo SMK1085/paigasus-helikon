@@ -14,21 +14,27 @@ keywords      = ["ai", "llm", "agents", "sdk", "openai"]
 categories    = ["api-bindings", "asynchronous"]
 
 [workspace.dependencies]
-serde         = { version = "1", features = ["derive"] }
-serde_json    = "1"
-schemars      = "1"
-tokio         = { version = "1", features = ["full"] }
-tracing       = "0.1"
-opentelemetry = "0.27"
-rmcp          = "0.16"
-thiserror     = "2"
-anyhow        = "1"
-async-trait   = "0.1"
-async-stream  = "0.3"
-futures-core  = "0.3"
-futures-util  = { version = "0.3", default-features = false, features = ["std"] }
-tokio-util    = { version = "0.7", default-features = false, features = ["rt"] }
-insta         = "1"
+anyhow                = "1"
+async-stream          = "0.3"
+async-trait           = "0.1"
+futures-core          = "0.3"
+futures-util          = { version = "0.3", default-features = false, features = ["std"] }
+insta                 = "1"
+opentelemetry         = "0.27"
+proc-macro-crate      = "3"
+proc-macro2           = "1"
+quote                 = "1"
+rmcp                  = "0.16"
+rustversion           = "1"
+schemars              = "1"
+serde                 = { version = "1", features = ["derive"] }
+serde_json            = "1"
+syn                   = { version = "2", features = ["full"] }
+thiserror             = "2"
+tokio                 = { version = "1", features = ["full"] }
+tokio-util            = { version = "0.7", default-features = false, features = ["rt"] }
+tracing               = "0.1"
+trybuild              = "1"
 
 # Internal — single source of truth so members depend via `workspace = true`
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core",                version = "0.1.0" }
