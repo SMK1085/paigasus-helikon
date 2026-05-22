@@ -205,6 +205,32 @@ pub fn transition(
                 next_action: NextAction::CallModel { request },
             }
         }
+        // Model produced a response with no tool calls → terminate.
+        (LoopState::CallingModel { .. }, TransitionInput::ModelResponse { items, usage, .. })
+            if !items.iter().any(|i| matches!(i, Item::ToolCall { .. })) =>
+        {
+            let mut events: Vec<AgentEvent> = items
+                .iter()
+                .filter(|i| matches!(i, Item::AssistantMessage { .. }))
+                .cloned()
+                .map(|item| AgentEvent::MessageOutput { item })
+                .collect();
+            // Extract terminal content from the last AssistantMessage.
+            let content = items
+                .iter()
+                .rev()
+                .find_map(|i| match i {
+                    Item::AssistantMessage { content, .. } => Some(content.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            events.push(AgentEvent::RunCompleted { usage });
+            TransitionOutcome {
+                next_state: LoopState::Done(FinalOutput { content, usage }),
+                events,
+                next_action: NextAction::Terminate,
+            }
+        }
         // Other cases land in subsequent tasks.
         (s, i) => TransitionOutcome {
             next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(
