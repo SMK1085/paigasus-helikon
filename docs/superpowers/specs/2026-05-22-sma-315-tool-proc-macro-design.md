@@ -26,7 +26,7 @@ A second proc-macro (`#[agent]`, planned in a downstream ticket) will share infr
 
 ## 2. Decisions and rationale
 
-Nine decisions, scoped to the SMA-315 surface.
+Ten decisions, scoped to the SMA-315 surface.
 
 | Decision | Choice | Rationale |
 |---|---|---|
@@ -39,6 +39,7 @@ Nine decisions, scoped to the SMA-315 surface.
 | `tools![ … ]` shape | **Function-like proc-macro `tools!(...)` in `paigasus-helikon-macros`.** Not a `macro_rules!` macro — that form cannot resolve crate paths through the facade re-export (`$crate` always points to the *defining* crate). | Unifies path resolution with `#[tool]` (same `proc-macro-crate` probe). Facade-only consumers `paigasus_helikon::tools![a, b]` work without ceremony. The `macros` feature on the facade gates both macros together. Manual `vec![Arc::new(t) as Arc<dyn Tool<_>>, …]` is the no-feature fallback for users who don't pull `macros`. |
 | Attribute parsing | **Hand-rolled `syn`/`quote`, no `darling`.** | The attribute surface is three keys (`description`, `name`, `crate`). Well-spanned `syn::Error`s are at parity with `darling`'s diagnostics, and a 5-crate parsing framework is the wrong default at this scale. Revisit if `#[agent]` later adds 8+ keys. |
 | Schema cache | **`OnceLock<serde_json::Value>` per tool, lazy on first `schema()` call.** | `Tool::schema()` returns `&Value`, so per-call computation is impossible. `OnceLock` (stable since 1.70, comfortably below our 1.75 MSRV) pays the schemars cost once on first registration. `LazyLock` would be cleaner but stabilized in 1.80 — revisit at the next MSRV bump. |
+| Attribute forwarding | **Forward every non-`#[tool(...)]`, non-doc attribute on the user fn to the helper `run` fn unchanged.** `#[cfg(...)]` is evaluated by rustc before `#[tool]` fires (no action needed); `#[tool(...)]` and `#[doc = "..."]`/`///` are consumed; everything else (`#[tracing::instrument]`, `#[allow(...)]`, `#[deprecated]`, user attribute macros) lands on the helper. | The helper is the only thing the user's body lives inside; `#[tracing::instrument]` on the unit struct or the impl block would trace nothing meaningful. The rule works regardless of attribute order — if another proc-macro fires before `#[tool]`, it has already rewritten the body and `#[tool]` simply moves the result; if it fires after `#[tool]`, the forwarded attribute on the helper does the right thing. |
 
 ## 3. Files added / modified
 
@@ -61,6 +62,8 @@ Nine decisions, scoped to the SMA-315 surface.
 | `crates/paigasus-helikon-macros/tests/ui/empty_description.rs` (+ `.stderr`) | Compile-fail: `#[tool(description = "")]`. |
 | `crates/paigasus-helikon-macros/tests/ui/bad_signature_wrong_ctx.rs` (+ `.stderr`) | Compile-fail: first arg isn't `&ToolContext<_>`. |
 | `crates/paigasus-helikon-macros/tests/ui/bad_signature_not_async.rs` (+ `.stderr`) | Compile-fail: non-async fn. |
+| `crates/paigasus-helikon-macros/tests/ui/bad_signature_unsafe.rs` (+ `.stderr`) | Compile-fail: `unsafe async fn`. |
+| `crates/paigasus-helikon-macros/tests/ui/bad_signature_const.rs` (+ `.stderr`) | Compile-fail: `const fn`. |
 | `crates/paigasus-helikon-macros/tests/ui/bad_signature_generic.rs` (+ `.stderr`) | Compile-fail: generic free fn (`async fn foo<T>(…)`). |
 | `crates/paigasus-helikon-macros/tests/ui/bad_name.rs` (+ `.stderr`) | Compile-fail: `#[tool(name = "has spaces")]`. |
 | `crates/paigasus-helikon-macros/tests/ui/facade_only_consumer.rs` (+ `.stderr` empty / compile-pass) | **Compile-pass** case where the test crate depends *only* on `paigasus-helikon` (no direct core dep). Locks the `proc-macro-crate` resolution path. |
@@ -81,6 +84,8 @@ Nine decisions, scoped to the SMA-315 surface.
 ## 4. Generated code shape
 
 ### 4.1 User-facing example
+
+(Facade-only consumers replace `paigasus_helikon_core` with `paigasus_helikon::core` in the imports below; the `proc-macro-crate` resolution in §5.3 makes the generated code follow the same substitution.)
 
 ```rust
 use paigasus_helikon::{tool, tools};
@@ -127,6 +132,8 @@ Expansion of the `#[tool]` block above (paths shown for a direct-core consumer; 
 struct add;     // vis preserved from `async fn add` (private here)
 
 mod __helikon_tool_add {
+    // Pulls in the user's args/output types and any third-party imports
+    // they wrote at module scope (AddArgs, AddOut, anyhow, etc.).
     use super::*;
 
     pub(super) static INPUT_SCHEMA: ::std::sync::OnceLock<::serde_json::Value> =
@@ -134,10 +141,13 @@ mod __helikon_tool_add {
     pub(super) static OUTPUT_SCHEMA: ::std::sync::OnceLock<Option<::serde_json::Value>> =
         ::std::sync::OnceLock::new();
 
+    // Signature is forwarded *verbatim* from the user's source — no
+    // path rewriting. `&ToolContext<MyCtx>` and `anyhow::Error` resolve
+    // via the `use super::*;` glob above.
     pub(super) async fn run(
-        _ctx: &::paigasus_helikon_core::ToolContext<MyCtx>,
+        _ctx: &ToolContext<MyCtx>,
         args: AddArgs,
-    ) -> ::std::result::Result<AddOut, ::anyhow::Error> {
+    ) -> Result<AddOut, anyhow::Error> {
         // user's body, verbatim
         Ok(AddOut { sum: args.a + args.b })
     }
@@ -188,6 +198,10 @@ impl ::paigasus_helikon_core::Tool<MyCtx> for add {
 }
 ```
 
+**Note on the helper's signature.** The macro emits the helper `run` fn's signature by cloning the user's `syn::Signature` token-tree verbatim. Absolute-path normalization is reserved for the macro-generated items (struct, `impl Tool<Ctx>`, `__private` references) where the absolute paths do load-bearing work. The helper's signature resolves through the `use super::*;` glob, which means whatever the user wrote at the call site — `&ToolContext<Ctx>`, `&core::ToolContext<Ctx>`, `Result<_, anyhow::Error>`, `Result<_, MyError>` — works without the macro caring how it was named.
+
+**Trade-off on `use super::*;`.** A wildcard glob also pulls in every other `#[tool]`-generated symbol in the same parent module, so rustc's diagnostics inside the body can occasionally surface "did you mean `other_tool`?" suggestions. The alternative — emitting a narrow `use` list — requires re-parsing the body to find identifiers, which would defeat the verbatim-body invariant. The diagnostic noise is acceptable; the verbatim guarantee is not negotiable.
+
 ### 4.3 Autoref-specialization for `output_schema`
 
 The proc-macro cannot ask "does `Out: JsonSchema`?" at expansion time — proc-macros operate on syntax, not types. The autoref-specialization trick gives us trait-aware codegen on stable Rust by arranging two `schema(&self)` candidates at different deref levels and letting method resolution pick the closer one:
@@ -224,15 +238,17 @@ When the macro emits `(&&OutputSchemaProbe::<Out>::NEW).schema()`, method resolu
 
 ### 4.4 `tools!(…)` proc-macro
 
-`tools!` is a function-like proc-macro (`#[proc_macro] pub fn tools(...)`). It accepts a comma-separated list of tool expressions, optionally prefixed with a `crate = ::path;` override:
+`tools!` is a function-like proc-macro (`#[proc_macro] pub fn tools(...)`). It accepts a comma-separated list of tool expressions, optionally prefixed with a `crate = ::path;` override. The bracket form `tools![…]` is the canonical invocation syntax (matches Rust's collection-macro convention); paren form is equivalent but not used in docs.
 
 ```rust
 // Common case (auto-resolved path):
 let r: Vec<Arc<dyn Tool<MyCtx>>> = tools![add, mul];
 
 // Explicit override (renamed dep / unusual setup):
-let r: Vec<Arc<dyn Tool<MyCtx>>> = tools!(crate = ::my_renamed_helikon; add, mul);
+let r: Vec<Arc<dyn Tool<MyCtx>>> = tools![crate = ::my_renamed_helikon; add, mul];
 ```
+
+**Argument contract:** each comma-separated argument must be a value of a type that implements `Tool<Ctx>` directly. Do **not** pre-wrap with `Arc` — `tools![Arc::new(t)]` would generate `Arc::new(Arc::new(t)) as Arc<dyn Tool<_>>`, which fails the cast because `Arc<T>` does not itself implement `Tool<Ctx>`. The resulting rustc diagnostic is recoverable but ugly; the macro's rustdoc spells this rule out.
 
 Expansion (direct-core consumer):
 
@@ -306,7 +322,7 @@ The macro determines `Ctx` by inspecting the first fn argument's type, which mus
 - `&ToolContext<T>`
 - `&<path::segments>::ToolContext<T>` where the trailing path segment is `ToolContext`
 
-The macro **does not** dereference type aliases — it operates on syntax. If the user writes `type Ctx = ToolContext<App>; … _ctx: &Ctx`, the macro emits a diagnostic: ``#[tool] expects `&ToolContext<…>` (matched by trailing path segment); type aliases are not resolved, write `&ToolContext<App>` directly``. The macro accepts any number of leading path segments (`&core::ToolContext<…>`, `&paigasus_helikon::core::ToolContext<…>`), as long as the trailing segment is `ToolContext` with exactly one angle-bracketed generic argument.
+The macro operates on **syntax**, not types — it cannot tell a type alias apart from a struct it doesn't recognize. The diagnostic is therefore phrased about what the macro looked for, not about what the user did: ``#[tool] expects the first argument to be `&…::ToolContext<Ctx>` (matched on the trailing path segment `ToolContext` with one type argument); aliases and renames are not unwrapped — name the type directly``. The macro accepts any number of leading path segments (`&core::ToolContext<…>`, `&paigasus_helikon::core::ToolContext<…>`), as long as the trailing segment is `ToolContext` with one type argument.
 
 ## 6. Testing strategy
 
@@ -346,18 +362,22 @@ fn ui() {
 | `empty_description.rs` | `#[tool(description = "")]` → macro `compile_error!`. |
 | `bad_signature_wrong_ctx.rs` | First arg is `&MyCtx` instead of `&ToolContext<MyCtx>` → macro diagnostic spanned at the first arg. |
 | `bad_signature_not_async.rs` | `fn` instead of `async fn` → macro diagnostic. |
+| `bad_signature_unsafe.rs` | `unsafe async fn` → macro diagnostic spanned at the `unsafe` keyword. |
+| `bad_signature_const.rs` | `const fn` → macro diagnostic spanned at the `const` keyword. |
 | `bad_signature_generic.rs` | `async fn foo<T: JsonSchema>(…)` → macro diagnostic, *before* the autoref probe expands across the user's screen. |
 | `bad_name.rs` | `#[tool(name = "has spaces")]` → macro diagnostic spanned at the name literal. |
 | `facade_only_consumer.rs` | **Compile-pass.** Test crate depends only on `paigasus-helikon = { features = ["macros"] }` — no direct `paigasus-helikon-core` dep. Locks the `proc-macro-crate` resolution of `paigasus-helikon` → `::paigasus_helikon::core::…`. |
 
 Stderr files are regenerated with `TRYBUILD=overwrite cargo test --test trybuild` when a diagnostic intentionally changes. Reviewers diff the `.stderr` files alongside the source.
 
+**Note on `facade_only_consumer.rs`:** `trybuild` generates a transient `Cargo.toml` for each UI test that inherits the host crate's dev-dependencies. So a UI test file can `use schemars::JsonSchema;` and `use serde::{Deserialize, Serialize};` despite its synthesized manifest listing only `paigasus-helikon = { features = ["macros"] }` — the dev-deps from `paigasus-helikon-macros` carry over. This is correct behavior and is the only way the facade-only compile-pass case can also use the derive crates the user's code references; it's worth noting because a reviewer who expects strict crate isolation per UI test will be surprised.
+
 ### 6.3 End-to-end behavioral test
 
 `tests/end_to_end.rs` — a single `#[tokio::test]`:
 
 1. Construct the registry via `tools![add]`.
-2. Assert `registry.len() == 1`, `registry[0].name() == "add"`, `registry[0].description() == "Adds two numbers."`.
+2. Assert `registry.len() == 1`, `registry[0].name() == "add"`, `registry[0].description() == "Adds two numbers."`. Also define a sibling tool with a long multi-paragraph `///` doc comment **and** an explicit `#[tool(description = "Short.")]`; assert `description() == "Short."` (locks attr-wins-over-doc-comments precedence).
 3. Build a minimal `ToolContext<MyCtx>` via `ToolContext::new`.
 4. Invoke with valid JSON `{"a": 2, "b": 3}` → assert `Ok(ToolOutput { content: json!({"sum": 5}) })`.
 5. Invoke with invalid JSON `{"a": "not a number", "b": 3}` → assert `Err(ToolError::InvalidArgs { schema_errors })` with non-empty `schema_errors`.
@@ -365,6 +385,7 @@ Stderr files are regenerated with `TRYBUILD=overwrite cargo test --test trybuild
 7. Call `output_schema()`; assert `Some(_)` (because `AddOut: JsonSchema`).
 8. Define a second tool `OpaqueTool` whose `Out` is a non-`JsonSchema` newtype; assert its `output_schema()` returns `None`.
 9. Define a third tool returning `Result<…, anyhow::Error>`; assert it `impl`s `Tool<MyCtx>` and a body-side `Err(anyhow!("boom"))` surfaces as `ToolError::Other` at the runner level.
+10. Define a fourth tool with `#[allow(non_snake_case)]` and `#[deprecated(note = "use new_add")]` on the user fn (alongside `#[tool]`), and rename the fn to `legacyAdd`. Assert the tool compiles and `invoke` works end-to-end — the `non_snake_case` lint must be silenced by the forwarded `#[allow]`, proving the attribute reached the helper `run` fn (where the body uses the renamed identifier). Locks the attribute-forwarding rule from §2.
 
 ### 6.4 The "readable `cargo expand`" criterion (AC #2)
 
@@ -384,9 +405,12 @@ All parse failures use `syn::Error::new_spanned(tok, msg).to_compile_error()` so
 | Missing description | fn ident | ``tool `<name>` requires a description: add `#[tool(description = "…")]` or a `///` doc comment`` |
 | Empty description literal | description literal | ``empty `description`; provide a non-empty literal or remove the attr to fall back to doc comments`` |
 | Non-async fn | `fn` keyword | ``#[tool] requires an `async fn` `` |
+| `unsafe async fn` | `unsafe` keyword | ``#[tool] cannot wrap an `unsafe fn`; `Tool::invoke` is safe — drop the `unsafe` qualifier or inline the unsafe block inside the body`` |
+| `const fn` | `const` keyword | ``#[tool] cannot wrap a `const fn`; `Tool::invoke` is not const`` |
+| `extern "<abi>" fn` | `extern` keyword | ``#[tool] cannot wrap a fn with an `extern` ABI; remove the ABI specifier`` |
 | Generic free fn | `fn` keyword (or first generic param) | ``#[tool] does not support generic free fns; instantiate the generic and apply #[tool] to the concrete fn`` |
 | Wrong arity | fn signature | ``#[tool] expects two args: `&ToolContext<Ctx>` and an args struct`` |
-| First arg not `&ToolContext<…>` (path-segment match) | first arg's pattern | ``#[tool] expects `&ToolContext<…>` (matched by trailing path segment); type aliases are not resolved, write `&ToolContext<App>` directly`` |
+| First arg not `&ToolContext<…>` (path-segment match) | first arg's pattern | ``#[tool] expects the first argument to be `&…::ToolContext<Ctx>` (matched on the trailing path segment `ToolContext` with one type argument); aliases and renames are not unwrapped — name the type directly`` |
 | `Self` or trait-method form | fn keyword | ``#[tool] applies to free `async fn` only`` |
 | Bad `name = …` | name literal | ``tool name must match `[A-Za-z_][A-Za-z0-9_-]*`; got "<actual>" `` |
 | Unknown attribute key | key token | ``unknown #[tool] attribute `<key>`; expected one of `description`, `name`, `crate` `` |
@@ -518,17 +542,9 @@ pub use paigasus_helikon_macros::{tool, tools};
 
 ## 10. `tools!` rustdoc — canonical Ctx-mismatch error
 
-Reproduced verbatim in the `tools!` macro rustdoc so users can grep when they hit it:
+The `tools!` macro rustdoc explains the rule: every tool in a single `tools!` invocation must `impl Tool<Ctx>` for the *same* `Ctx`. The shared `Ctx` is inferred from the first tool, or from the LHS type annotation if present.
 
-```text
-error[E0277]: the trait bound `<X>: Tool<MyCtx>` is not satisfied
-  --> src/main.rs:N:NN
-   |
-N  |   tools![add_my_ctx, mul_other_ctx]
-   |          ^^^^^^^^^^ the trait `Tool<MyCtx>` is not implemented for `mul_other_ctx`
-```
-
-The rustdoc explains: every tool in a single `tools!` invocation must `impl Tool<Ctx>` for the *same* `Ctx`. The shared `Ctx` is inferred from the first tool, or from the LHS type annotation if present.
+The macro deliberately does **not** emit a custom diagnostic for `Ctx` mismatches — rustc's stock trait-bound error already names the offending tool. The rustdoc points users at the search string: when rustc reports ``the trait `Tool<…>` is not implemented for ``<tool-name>``, the cause is a `Ctx` mismatch inside `tools!`. (Exact rustc wording drifts across stable releases; the rustdoc paraphrases the grep target rather than pinning a verbatim transcript.)
 
 ## 11. Acceptance criteria → evidence map
 
@@ -548,3 +564,4 @@ Carried into implementation review:
 - **`OutputType` (agent.rs) carries `schemars::Schema`; `Tool::schema()` returns `serde_json::Value`.** Two representations for the same concept in one workspace. SMA-320 (structured output) is the natural home for unifying these. SMA-315 stays on `serde_json::Value` because that's the trait's return type today; flag the asymmetry for the future trait-edit ticket.
 - **`OnceLock` → `LazyLock`.** When the workspace MSRV moves past 1.80, `LazyLock` lets us drop the `get_or_init` closure. Trivial follow-up chore.
 - **`Tool::name()` return type.** Today `&str`. The macro has a compile-time string; a future trait edit to `&'static str` would match what the macro can guarantee. Out of scope for SMA-315 — would be a core trait edit owned separately.
+- **No-context-tool sugar.** SMA-315 mandates `&ToolContext<Ctx>` as the first arg. Loosening this to "first arg is optional, defaulting to `Ctx = ()`" is a possible future ergonomic — the path-segment matching rule in §5.4 would need an "if first arg is absent, infer `Ctx = ()`" branch. Not on the SMA-315 path; flagged as a future-ticket trade-off so the decision isn't sliding in implicitly.
