@@ -1,0 +1,13 @@
+---
+source: crates/paigasus-helikon-core/tests/loop_happy_path.rs
+expression: kinds
+---
+- RunStarted
+- TurnStarted
+- ToolCallDelta
+- ToolCallItem
+- ToolOutputItem
+- TurnStarted
+- TokenDelta
+- MessageOutput
+- RunCompleted
