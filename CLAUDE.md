@@ -56,6 +56,7 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 - Branch per Linear issue: `feature/<sma-####>-<kebab-title>`. The branch name is pre-computed in each Linear ticket's `gitBranchName` field.
 - Design artifacts per ticket (`docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`) land on the feature branch alongside the implementation — not pre-merged to `main`.
 - Commit prefix: `<type>(<scope>): SMA-### <message>` (e.g. `feat(facade): SMA-304 ...`).
+- **PR titles must use sentence case after the `SMA-### ` prefix.** The `pr-title.yml` workflow enforces `subjectPattern: ^([A-Z]{2,4}-\d+ )?[^A-Z].+$` on the squashed-merge title — the next character after the optional `SMA-### ` prefix must be non-uppercase. Lead the subject with a lowercase verb (`add`, `wire`, `pin`, `promote`, `implement`, `fix`). `feat(core): SMA-314 add LlmAgent + ...` passes; `feat(core): SMA-314 LlmAgent + ...` fails because `L` trips the regex. Per-commit Conventional Commit titles on the feature branch don't trip this — only the PR title (which becomes the squashed `main` commit) is gated.
 - Linear auto-closes the linked SMA-* issue when its PR merges; no manual status move needed.
 - **Always implement GitHub Actions against the latest stable major.** Before adding or updating any `uses:` line in `.github/workflows/`, resolve the latest release of the action and pin to its commit SHA (never a moving `@vN` tag). Use:
   ```bash
