@@ -512,8 +512,10 @@ where
                                     args_delta,
                                 }) => {
                                     let a = tool_accum.entry(call_id.clone()).or_default();
-                                    if let Some(n) = name.as_deref() {
-                                        a.name = Some(n.into());
+                                    if a.name.is_none() {
+                                        if let Some(n) = name.as_deref() {
+                                            a.name = Some(n.into());
+                                        }
                                     }
                                     a.args_str.push_str(&args_delta);
                                     yield crate::AgentEvent::ToolCallDelta {
