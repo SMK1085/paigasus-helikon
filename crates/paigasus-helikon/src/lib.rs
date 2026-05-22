@@ -7,6 +7,14 @@ pub use paigasus_helikon_core as core;
 #[cfg(feature = "macros")]
 pub use paigasus_helikon_macros as macros;
 
+/// `#[tool]` attribute macro — enabled via the `macros` feature.
+#[cfg(feature = "macros")]
+pub use paigasus_helikon_macros::tool;
+
+/// `tools!` function-like macro — enabled via the `macros` feature.
+#[cfg(feature = "macros")]
+pub use paigasus_helikon_macros::tools;
+
 /// OpenAI provider. Enabled via the `openai` feature.
 #[cfg(feature = "openai")]
 pub use paigasus_helikon_providers_openai as openai;
