@@ -31,7 +31,7 @@ Ten decisions, scoped to the SMA-315 surface.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Function signature shape | **`async fn foo(ctx: &ToolContext<Ctx>, args: Args) -> Result<Out, E>` where `E: Into<ToolError>`.** The `ToolContext` is mandatory and positionally first; the user's `E` is preserved through the helper fn and `?` does the `From` conversion. | Mirrors `Tool::invoke` 1:1 on the call side, but does **not** force users into `ToolError` everywhere. `ToolError::Other(#[from] anyhow::Error)` already exists in `paigasus-helikon-core`, so `Result<_, anyhow::Error>` "just works" via `?` — which is the exact ergonomic tax the macro should eliminate. Matches the Notion *Tools* page reference example. |
-| Generated artifact | **Replace the fn with a unit struct of the same ident** plus `impl Tool<Ctx>` for it. The original fn body moves into a sibling **module** `__helikon_tool_<ident>` to scope the helper fn safely. | Bare-ident call site (`tools![add, mul]`) — no `()` constructor, no `Tool`-suffix naming convention. The module wrapper namespaces the helper fn so a hand-written `__helikon_orig_add` in the user's crate cannot collide. |
+| Generated artifact | **Replace the fn with a unit struct of the same ident** plus `impl Tool<Ctx>` for it. The original fn body, two `OnceLock` schema statics, and the `impl Tool` block all sit inside a `const _: () = { … }` block (the "dummy const" pattern used by serde / thiserror). | Bare-ident call site (`tools![add, mul]`) — no `()` constructor, no `Tool`-suffix naming convention. The `const _` block gives the helper fn and impl access to ambient names without a wildcard glob, and unlike a sibling `mod`, it works inside doctests (where rustdoc's anonymous wrapper module breaks `use super::*;`). |
 | Generated struct visibility | **Preserve the user's `vis` token on the fn.** A `pub(crate) async fn foo` produces `pub(crate) struct foo;`; a private fn produces a private struct. | Silently widening visibility (e.g. by hardcoding `pub`) would leak internal tools into the user's public API. Preservation is the only safe default. |
 | Description source | **`#[tool(description = "lit")]` (non-empty) wins; fall back to the first paragraph of `///` doc comments; compile error if neither.** Both `///` and `#[doc = "…"]` syntactic forms are accepted (they parse to the same AST node). | Description is required by the LLM contract (the trait returns `&str`). Attr-wins matches typical Rust semantics. *First paragraph* (split on `\n\n`) keeps the model-facing description focused and avoids dumping entire rustdoc bodies (rationale paragraphs, examples, code fences) into prompts. Users who want the full rustdoc as description override with the explicit attr. |
 | Output schema generation | **Auto-emit when `Out: JsonSchema`; else fall back to `None`.** Implemented via the autoref-specialization trick (§4.3). | Zero-config when the user already derives `JsonSchema` on the output type; no hard `JsonSchema` bound on users returning `serde_json::Value` or other non-schemars types. Autoref-specialization is well-trodden on stable Rust. |
@@ -131,81 +131,81 @@ Expansion of the `#[tool]` block above (paths shown for a direct-core consumer; 
 #[allow(non_camel_case_types)]
 struct add;     // vis preserved from `async fn add` (private here)
 
-// `non_snake_case` allow is required because the module name embeds the
-// user's identifier — e.g. `__helikon_tool_legacyAdd` for `async fn
-// legacyAdd`. Without this, a project-wide `#![deny(non_snake_case)]`
-// would fail the build inside macro-expanded code the user can't fix.
-#[allow(non_snake_case)]
-mod __helikon_tool_add {
-    // Pulls in the user's args/output types and any third-party imports
-    // they wrote at module scope (AddArgs, AddOut, anyhow, etc.).
-    use super::*;
+// `const _` gives the helper fn and the `impl Tool` block access to all
+// ambient names (use-imports, struct defs) in the caller's scope without
+// requiring a glob, and it works in every Rust compilation context
+// including doctests. (An earlier draft used a sibling `mod __helikon_…
+// { use super::*; }`, but doctests wrap items in an anonymous module
+// that `use super::*` can't pierce.)
+const _: () = {
+    use ::paigasus_helikon_core::__private::OutputSchemaProbeSpec as _;
 
-    pub(super) static INPUT_SCHEMA: ::std::sync::OnceLock<::serde_json::Value> =
+    static __HELIKON_INPUT_SCHEMA: ::std::sync::OnceLock<::serde_json::Value> =
         ::std::sync::OnceLock::new();
-    pub(super) static OUTPUT_SCHEMA: ::std::sync::OnceLock<Option<::serde_json::Value>> =
-        ::std::sync::OnceLock::new();
+    static __HELIKON_OUTPUT_SCHEMA: ::std::sync::OnceLock<
+        ::std::option::Option<::serde_json::Value>,
+    > = ::std::sync::OnceLock::new();
 
     // Signature is forwarded *verbatim* from the user's source — no
     // path rewriting. `&ToolContext<MyCtx>` and `anyhow::Error` resolve
-    // via the `use super::*;` glob above.
-    pub(super) async fn run(
+    // naturally because the const block sits at the caller's scope.
+    async fn add(
         _ctx: &ToolContext<MyCtx>,
         args: AddArgs,
     ) -> Result<AddOut, anyhow::Error> {
         // user's body, verbatim
         Ok(AddOut { sum: args.a + args.b })
     }
-}
 
-#[::paigasus_helikon_core::__private::async_trait::async_trait]
-impl ::paigasus_helikon_core::Tool<MyCtx> for add {
-    fn name(&self) -> &str { "add" }
-    fn description(&self) -> &str { "Adds two numbers." }
+    #[::paigasus_helikon_core::__private::async_trait::async_trait]
+    impl ::paigasus_helikon_core::Tool<MyCtx> for add {
+        fn name(&self) -> &str { "add" }
+        fn description(&self) -> &str { "Adds two numbers." }
 
-    fn schema(&self) -> &::serde_json::Value {
-        __helikon_tool_add::INPUT_SCHEMA.get_or_init(|| {
-            ::serde_json::to_value(::schemars::schema_for!(AddArgs))
-                .expect("schemars schema must serialize")
-        })
-    }
-
-    fn output_schema(&self) -> ::std::option::Option<&::serde_json::Value> {
-        __helikon_tool_add::OUTPUT_SCHEMA
-            .get_or_init(|| {
-                // Autoref-specialization — see §4.3.
-                (&&::paigasus_helikon_core::__private::OutputSchemaProbe::<AddOut>::NEW)
-                    .schema()
+        fn schema(&self) -> &::serde_json::Value {
+            __HELIKON_INPUT_SCHEMA.get_or_init(|| {
+                ::serde_json::to_value(::schemars::schema_for!(AddArgs))
+                    .expect("schemars schema must serialize")
             })
-            .as_ref()
-    }
+        }
 
-    async fn invoke(
-        &self,
-        ctx: &::paigasus_helikon_core::ToolContext<MyCtx>,
-        args: ::serde_json::Value,
-    ) -> ::std::result::Result<
-        ::paigasus_helikon_core::ToolOutput,
-        ::paigasus_helikon_core::ToolError,
-    > {
-        let parsed: AddArgs = ::serde_json::from_value(args)
-            .map_err(|e| ::paigasus_helikon_core::ToolError::InvalidArgs {
-                schema_errors: ::std::vec![e.to_string()],
-            })?;
-        // `?` converts the user's `E` via `ToolError: From<E>` (e.g. `From<anyhow::Error>`).
-        let out = __helikon_tool_add::run(ctx, parsed).await?;
-        let content = ::serde_json::to_value(&out)
-            .map_err(|e| ::paigasus_helikon_core::ToolError::Other(e.into()))?;
-        ::std::result::Result::Ok(
-            ::paigasus_helikon_core::ToolOutput::new(content)
-        )
+        fn output_schema(&self) -> ::std::option::Option<&::serde_json::Value> {
+            __HELIKON_OUTPUT_SCHEMA
+                .get_or_init(|| {
+                    // Autoref-specialization — see §4.3.
+                    (&&::paigasus_helikon_core::__private::OutputSchemaProbe::<AddOut>::NEW)
+                        .schema()
+                })
+                .as_ref()
+        }
+
+        async fn invoke(
+            &self,
+            ctx: &::paigasus_helikon_core::ToolContext<MyCtx>,
+            args: ::serde_json::Value,
+        ) -> ::std::result::Result<
+            ::paigasus_helikon_core::ToolOutput,
+            ::paigasus_helikon_core::ToolError,
+        > {
+            let parsed: AddArgs = ::serde_json::from_value(args)
+                .map_err(|e| ::paigasus_helikon_core::ToolError::InvalidArgs {
+                    schema_errors: ::std::vec![e.to_string()],
+                })?;
+            // `?` converts the user's `E` via `ToolError: From<E>` (e.g. `From<anyhow::Error>`).
+            let out = add(ctx, parsed).await?;
+            let content = ::serde_json::to_value(&out)
+                .map_err(|e| ::paigasus_helikon_core::ToolError::Other(e.into()))?;
+            ::std::result::Result::Ok(
+                ::paigasus_helikon_core::ToolOutput::new(content),
+            )
+        }
     }
-}
+};
 ```
 
-**Note on the helper's signature.** The macro emits the helper `run` fn's signature by cloning the user's `syn::Signature` token-tree verbatim. Absolute-path normalization is reserved for the macro-generated items (struct, `impl Tool<Ctx>`, `__private` references) where the absolute paths do load-bearing work. The helper's signature resolves through the `use super::*;` glob, which means whatever the user wrote at the call site — `&ToolContext<Ctx>`, `&core::ToolContext<Ctx>`, `Result<_, anyhow::Error>`, `Result<_, MyError>` — works without the macro caring how it was named.
+**Note on the helper's signature.** The macro emits the helper fn's signature by cloning the user's `syn::Signature` token-tree verbatim. Absolute-path normalization is reserved for the macro-generated items (struct, `impl Tool<Ctx>`, `__private` references) where the absolute paths do load-bearing work. The helper's signature resolves through the const-block's enclosing scope, which means whatever the user wrote at the call site — `&ToolContext<Ctx>`, `&core::ToolContext<Ctx>`, `Result<_, anyhow::Error>`, `Result<_, MyError>` — works without the macro caring how it was named. The helper fn keeps the user's original ident (e.g. `add`) inside the const block; `invoke` calls it directly as `add(ctx, parsed)`.
 
-**Trade-off on `use super::*;`.** A wildcard glob also pulls in every other `#[tool]`-generated symbol in the same parent module, so rustc's diagnostics inside the body can occasionally surface "did you mean `other_tool`?" suggestions. The alternative — emitting a narrow `use` list — requires re-parsing the body to find identifiers, which would defeat the verbatim-body invariant. The diagnostic noise is acceptable; the verbatim guarantee is not negotiable.
+**Why `const _: () = { … }` and not `mod __helikon_tool_X { use super::*; … }`.** The first draft used a sibling module with a `use super::*;` glob, but rustdoc wraps doctests in an anonymous module that `use super::*;` cannot pierce — every doctest using `#[tool]` failed at type resolution. The `const _: () = { … }` form is the idiomatic Rust workaround (used by serde, thiserror, and similar) and has the additional advantage that it does not pull in unrelated names via a wildcard glob.
 
 ### 4.3 Autoref-specialization for `output_schema`
 
@@ -402,7 +402,7 @@ Stderr files are regenerated with `TRYBUILD=overwrite cargo test --test trybuild
 7. Call `output_schema()`; assert `Some(_)` (because `AddOut: JsonSchema`).
 8. Define a second tool `OpaqueTool` whose `Out` is a non-`JsonSchema` newtype; assert its `output_schema()` returns `None`.
 9. Define a third tool returning `Result<…, anyhow::Error>`; assert it `impl`s `Tool<MyCtx>` and a body-side `Err(anyhow!("boom"))` surfaces as `ToolError::Other` at the runner level.
-10. Put `#![deny(non_snake_case)]` at the top of `tests/end_to_end.rs`. Define a fourth tool with `#[allow(non_snake_case)]` on the user fn (alongside `#[tool]`) and rename the fn to `legacyAdd`. The test compiles **only** if the forwarded `#[allow]` reaches the helper `run` fn — without forwarding, the `deny` at the file level turns the `non_snake_case` warning into a hard error. Locks the attribute-forwarding rule from §2. The same `deny` also exercises the codegen rule that the generated `mod __helikon_tool_<ident>` must carry `#[allow(non_snake_case)]` itself (the module name embeds the user's possibly-camelCase ident — see §4.2).
+10. Put `#![deny(non_snake_case)]` at the top of `tests/end_to_end.rs`. Define a fourth tool with `#[allow(non_snake_case)]` on the user fn (alongside `#[tool]`) and rename the fn to `legacyAdd`. The test compiles **only** if the forwarded `#[allow]` reaches the helper fn inside the generated `const _: () = { … }` block — without forwarding, the file-level `deny` turns the `non_snake_case` warning into a hard error (the helper fn carries the user's camelCase ident verbatim). Locks the attribute-forwarding rule from §2. The unit struct itself is silenced by the macro-emitted `#[allow(non_camel_case_types)]`, so the only path to a `non_snake_case` failure is the helper fn.
 
 ### 6.4 The "readable `cargo expand`" criterion (AC #2)
 
