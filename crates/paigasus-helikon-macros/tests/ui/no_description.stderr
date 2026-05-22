@@ -1,13 +1,5 @@
 error: tool `nope` requires a description: add `#[tool(description = "…")]` or a `///` doc comment
-  --> tests/ui/no_description.rs:15:10
+  --> tests/ui/no_description.rs:16:10
    |
-15 | async fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+16 | async fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
    |          ^^^^
-
-warning: unused imports: `ToolContext` and `ToolError`
- --> tests/ui/no_description.rs:1:29
-  |
-1 | use paigasus_helikon_core::{ToolContext, ToolError};
-  |                             ^^^^^^^^^^^  ^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

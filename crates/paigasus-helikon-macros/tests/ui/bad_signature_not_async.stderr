@@ -1,13 +1,5 @@
 error: #[tool] requires an `async fn`
-  --> tests/ui/bad_signature_not_async.rs:16:1
+  --> tests/ui/bad_signature_not_async.rs:17:1
    |
-16 | fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+17 | fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
    | ^^
-
-warning: unused imports: `ToolContext` and `ToolError`
- --> tests/ui/bad_signature_not_async.rs:1:29
-  |
-1 | use paigasus_helikon_core::{ToolContext, ToolError};
-  |                             ^^^^^^^^^^^  ^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

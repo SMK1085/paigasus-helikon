@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use paigasus_helikon_core::{ToolContext, ToolError};
 use paigasus_helikon_macros::tool;
 use schemars::JsonSchema;

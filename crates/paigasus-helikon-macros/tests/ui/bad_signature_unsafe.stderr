@@ -1,13 +1,5 @@
 error: #[tool] cannot wrap an `unsafe fn`; `Tool::invoke` is safe — drop the `unsafe` qualifier or inline the unsafe block inside the body
-  --> tests/ui/bad_signature_unsafe.rs:16:7
+  --> tests/ui/bad_signature_unsafe.rs:17:7
    |
-16 | async unsafe fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+17 | async unsafe fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
    |       ^^^^^^
-
-warning: unused imports: `ToolContext` and `ToolError`
- --> tests/ui/bad_signature_unsafe.rs:1:29
-  |
-1 | use paigasus_helikon_core::{ToolContext, ToolError};
-  |                             ^^^^^^^^^^^  ^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
