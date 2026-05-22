@@ -13,8 +13,9 @@ use futures_core::stream::BoxStream;
 use futures_util::stream;
 
 use paigasus_helikon_core::{
-    CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
-    Tool, ToolContext, ToolError, ToolOutput,
+    CancellationToken, ConversationSnapshot, HookRegistry, Model, ModelCapabilities, ModelError,
+    ModelEvent, ModelRequest, RunContext, Session, SessionError, SessionEvent, SequenceId,
+    Tool, ToolContext, ToolError, ToolOutput, TracerHandle,
 };
 
 /// A scripted [`Model`] that emits a pre-recorded sequence of
@@ -143,4 +144,37 @@ where
         self.barrier.wait().await;
         Ok(ToolOutput { content: serde_json::json!({"ok": true}) })
     }
+}
+
+/// A no-op [`Session`] implementation. `append` discards;
+/// `events` / `snapshot` return empty.
+pub struct NoopSession;
+
+#[async_trait]
+impl Session for NoopSession {
+    async fn append(&self, _events: &[SessionEvent]) -> Result<(), SessionError> {
+        Ok(())
+    }
+
+    async fn events(&self, _since: Option<SequenceId>) -> Result<Vec<SessionEvent>, SessionError> {
+        Ok(Vec::new())
+    }
+
+    async fn snapshot(&self) -> Result<ConversationSnapshot, SessionError> {
+        Ok(ConversationSnapshot::default())
+    }
+}
+
+/// Build a minimal [`RunContext`] suitable for integration tests.
+pub fn noop_run_context<Ctx>() -> RunContext<Ctx>
+where
+    Ctx: Default + Send + Sync + 'static,
+{
+    RunContext::new(
+        Arc::new(Ctx::default()),
+        Arc::new(NoopSession) as Arc<dyn Session>,
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    )
 }
