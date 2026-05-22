@@ -326,6 +326,247 @@ pub enum AgentEvent {
     },
 }
 
+// ── Private helpers for the LlmAgent driver ─────────────────────────────────
+
+/// Accumulates the in-progress tool call across `ModelEvent::ToolCallDelta` chunks.
+#[derive(Default)]
+struct ToolCallAccum {
+    name: Option<String>,
+    args_str: String,
+}
+
+/// Reassemble streamed model output into [`Item`]s.
+fn build_items(
+    agent_name: &str,
+    text: String,
+    reasoning: String,
+    tool_accum: std::collections::HashMap<String, ToolCallAccum>,
+) -> Vec<crate::Item> {
+    let mut items = Vec::new();
+    if !text.is_empty() || !reasoning.is_empty() {
+        let mut content = Vec::new();
+        if !reasoning.is_empty() {
+            content.push(crate::ContentPart::Reasoning { text: reasoning });
+        }
+        if !text.is_empty() {
+            content.push(crate::ContentPart::Text { text });
+        }
+        items.push(crate::Item::AssistantMessage {
+            content,
+            agent: Some(agent_name.to_owned()),
+        });
+    }
+    for (call_id, accum) in tool_accum {
+        items.push(crate::Item::ToolCall {
+            call_id,
+            name: accum.name.unwrap_or_default(),
+            args: serde_json::from_str(&accum.args_str).unwrap_or(serde_json::Value::Null),
+        });
+    }
+    items
+}
+
+/// Conversion convention: `ToolOutput.content` (SMA-313's
+/// `serde_json::Value`) becomes one `ContentPart::Text`.
+/// `Value::String(s) -> ContentPart::Text { text: s }`; other JSON
+/// values are stringified via `Value::to_string()`.
+fn tool_output_to_content_parts(output: &crate::ToolOutput) -> Vec<crate::ContentPart> {
+    let text = match &output.content {
+        serde_json::Value::String(s) => s.clone(),
+        v => v.to_string(),
+    };
+    vec![crate::ContentPart::Text { text }]
+}
+
+async fn run_tools_concurrent<Ctx>(
+    tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
+    calls: &[crate::ToolCallRequest],
+    tool_ctx: &crate::ToolContext<Ctx>,
+) -> Vec<crate::ToolCallOutcome>
+where
+    Ctx: Send + Sync + 'static,
+{
+    let futures = calls.iter().map(|call| {
+        let tool = tools.iter().find(|t| t.name() == call.name).cloned();
+        let call_id = call.call_id.clone();
+        let args = call.args.clone();
+        let name = call.name.clone();
+        async move {
+            match tool {
+                Some(t) => match t.invoke(tool_ctx, args).await {
+                    Ok(output) => crate::ToolCallOutcome {
+                        call_id,
+                        result: Ok(tool_output_to_content_parts(&output)),
+                    },
+                    Err(e) => crate::ToolCallOutcome {
+                        call_id,
+                        result: Err(e.to_string()),
+                    },
+                },
+                None => crate::ToolCallOutcome {
+                    call_id,
+                    result: Err(format!("unknown tool: {name}")),
+                },
+            }
+        }
+    });
+    futures_util::future::join_all(futures).await
+}
+
+// ── Agent impl for LlmAgent ──────────────────────────────────────────────────
+
+#[async_trait::async_trait]
+impl<Ctx, M> crate::Agent<Ctx> for LlmAgent<Ctx, M>
+where
+    Ctx: Send + Sync + 'static,
+    M: crate::Model + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    async fn run(
+        &self,
+        ctx: crate::RunContext<Ctx>,
+        input: AgentInput,
+    ) -> Result<futures_core::stream::BoxStream<'static, crate::AgentEvent>, AgentError> {
+        use futures_util::stream::StreamExt as _;
+
+        // Snapshot everything the stream needs — it outlives `&self`.
+        let model = std::sync::Arc::clone(&self.model);
+        let tools = self.tools.clone();
+        let max_turns = self.config.max_turns;
+        let model_settings = self.model_settings.clone();
+        let agent_name = self.name.clone();
+        let instructions_text = self.instructions.render(&ctx);
+        let tool_defs: Vec<crate::ToolDef> = tools
+            .iter()
+            .map(|t| crate::ToolDef {
+                name: t.name().to_owned(),
+                description: t.description().to_owned(),
+                schema: t.schema().clone(),
+            })
+            .collect();
+
+        let stream = async_stream::stream! {
+            // Seed conversation: optional system message + user input.
+            let mut conversation: Vec<crate::Item> = Vec::new();
+            if !instructions_text.is_empty() {
+                conversation.push(crate::Item::System {
+                    content: vec![crate::ContentPart::Text { text: instructions_text }],
+                });
+            }
+            conversation.extend(input.messages.iter().cloned());
+
+            let mut loop_state = crate::LoopState::CallingModel { turn: 0 };
+            let mut tx_input = crate::TransitionInput::Start { messages: input.messages };
+
+            yield crate::AgentEvent::RunStarted { agent: agent_name.clone() };
+
+            loop {
+                let tx_ctx = crate::TransitionCtx {
+                    tools: &tool_defs,
+                    model_settings: &model_settings,
+                    max_turns,
+                    conversation: &conversation,
+                };
+                let outcome = crate::transition(&loop_state, tx_input, &tx_ctx);
+                let crate::TransitionOutcome { next_state, events, next_action } = outcome;
+                for ev in events { yield ev; }
+                loop_state = next_state;
+
+                match next_action {
+                    crate::NextAction::CallModel { request } => {
+                        let cancel = ctx.cancel().clone();
+                        let mut model_stream = match model.invoke(request, cancel).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                yield crate::AgentEvent::RunFailed { error: e.to_string() };
+                                return;
+                            }
+                        };
+
+                        let mut text = String::new();
+                        let mut reasoning = String::new();
+                        let mut tool_accum: std::collections::HashMap<String, ToolCallAccum> =
+                            std::collections::HashMap::new();
+                        let mut finish_reason = crate::FinishReason::Stop;
+
+                        while let Some(evt) = model_stream.next().await {
+                            match evt {
+                                Ok(crate::ModelEvent::TokenDelta { text: t }) => {
+                                    text.push_str(&t);
+                                    yield crate::AgentEvent::TokenDelta { text: t };
+                                }
+                                Ok(crate::ModelEvent::ReasoningDelta { text: t }) => {
+                                    reasoning.push_str(&t);
+                                    yield crate::AgentEvent::ReasoningDelta { text: t };
+                                }
+                                Ok(crate::ModelEvent::ToolCallDelta {
+                                    call_id,
+                                    name,
+                                    args_delta,
+                                }) => {
+                                    let a = tool_accum.entry(call_id.clone()).or_default();
+                                    if let Some(n) = name.as_deref() {
+                                        a.name = Some(n.into());
+                                    }
+                                    a.args_str.push_str(&args_delta);
+                                    yield crate::AgentEvent::ToolCallDelta {
+                                        call_id,
+                                        name,
+                                        args_delta,
+                                    };
+                                }
+                                Ok(crate::ModelEvent::Finish { reason }) => {
+                                    finish_reason = reason;
+                                }
+                                Err(e) => {
+                                    yield crate::AgentEvent::RunFailed { error: e.to_string() };
+                                    return;
+                                }
+                            }
+                        }
+
+                        let items = build_items(&agent_name, text, reasoning, tool_accum);
+                        conversation.extend(items.iter().cloned());
+                        // Usage stubbed until SMA-316/SMA-317 add ModelEvent::Usage.
+                        let usage = crate::TokenUsage::default();
+                        tx_input = crate::TransitionInput::ModelResponse {
+                            items,
+                            usage,
+                            finish_reason,
+                        };
+                    }
+                    crate::NextAction::ExecuteTools { calls } => {
+                        let tool_ctx = ctx.to_tool_context();
+                        let outcomes =
+                            run_tools_concurrent(&tools, &calls, &tool_ctx).await;
+                        for o in &outcomes {
+                            conversation.push(crate::Item::ToolResult {
+                                call_id: o.call_id.clone(),
+                                content: o.result.clone().unwrap_or_else(|e| {
+                                    vec![crate::ContentPart::Text { text: e }]
+                                }),
+                            });
+                        }
+                        tx_input = crate::TransitionInput::ToolResults { outcomes };
+                    }
+                    crate::NextAction::Terminate => return,
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+}
+
+// ── Error types ───────────────────────────────────────────────────────────────
+
 /// Errors raised by [`Agent::run`] or [`crate::Runner`] methods.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
