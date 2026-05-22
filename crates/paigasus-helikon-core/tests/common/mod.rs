@@ -50,12 +50,7 @@ impl Model for MockModel {
     }
 
     fn capabilities(&self) -> ModelCapabilities {
-        ModelCapabilities {
-            streaming: true,
-            tools: true,
-            parallel_tool_calls: true,
-            ..Default::default()
-        }
+        ModelCapabilities::default()
     }
 }
 
@@ -100,7 +95,7 @@ where
         args: serde_json::Value,
     ) -> Result<ToolOutput, ToolError> {
         self.invocations.lock().unwrap().push((args, Instant::now()));
-        Ok(ToolOutput { content: self.output.clone() })
+        Ok(ToolOutput::new(self.output.clone()))
     }
 }
 
@@ -142,7 +137,7 @@ where
         _args: serde_json::Value,
     ) -> Result<ToolOutput, ToolError> {
         self.barrier.wait().await;
-        Ok(ToolOutput { content: serde_json::json!({"ok": true}) })
+        Ok(ToolOutput::new(serde_json::json!({"ok": true})))
     }
 }
 
