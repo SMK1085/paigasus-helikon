@@ -1,30 +1,21 @@
 //! Attribute parsing for `#[tool(...)]`.
 
-use proc_macro2::Span;
 use syn::{
     parse::{Parse, ParseStream},
     Error, Ident, LitStr, Path, Token,
 };
 
 /// Parsed form of `#[tool(description = "...", name = "...", crate = ::path)]`.
-// TODO(SMA-315): drop the dead_code allow once expand::tool (Task C1)
-// consumes ToolAttrArgs.
 #[derive(Default)]
-#[allow(dead_code)]
 pub(crate) struct ToolAttrArgs {
     pub description: Option<LitStr>,
     pub name: Option<LitStr>,
     pub crate_path: Option<Path>,
-    pub span: Option<Span>,
 }
 
 impl Parse for ToolAttrArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let span = Some(input.span());
-        let mut out = ToolAttrArgs {
-            span,
-            ..Default::default()
-        };
+        let mut out = ToolAttrArgs::default();
         if input.is_empty() {
             return Ok(out);
         }

@@ -77,6 +77,9 @@ pub(crate) fn tool(args: TokenStream, item: TokenStream) -> Result<TokenStream, 
             fn output_schema(&self) -> ::std::option::Option<&::serde_json::Value> {
                 #helper_mod::OUTPUT_SCHEMA
                     .get_or_init(|| {
+                        // Autoref-specialization: trait impl on `&Probe<T: JsonSchema>`
+                        // wins (one deref) when bound holds; otherwise inherent
+                        // fallback returns None. See core::__private.
                         (&&#core::__private::OutputSchemaProbe::<#out_ty>::NEW)
                             .schema()
                     })
@@ -146,9 +149,7 @@ fn resolve_tool_name(attr: &ToolAttrArgs, item_fn: &ItemFn) -> Result<TokenStrea
     if !is_valid_name(&name_str) {
         return Err(Error::new(
             span,
-            format!(
-                "tool name must match `[A-Za-z_][A-Za-z0-9_-]*`; got \"{name_str}\""
-            ),
+            format!("tool name must match `[A-Za-z_][A-Za-z0-9_-]*`; got \"{name_str}\""),
         ));
     }
 
@@ -158,7 +159,9 @@ fn resolve_tool_name(attr: &ToolAttrArgs, item_fn: &ItemFn) -> Result<TokenStrea
 
 fn is_valid_name(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false; };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }

@@ -1,13 +1,15 @@
 //! Validation and decomposition of the `async fn` a `#[tool]` attribute targets.
 
-// TODO(SMA-315): drop these dead_code allows once expand::tool consumes ToolSignature + PartitionedAttrs.
-
 use syn::{
-    Attribute, Error, FnArg, GenericArgument, ItemFn, Pat, PatType, PathArguments,
-    Result, ReturnType, Type, TypePath, TypeReference,
+    Attribute, Error, FnArg, GenericArgument, ItemFn, Pat, PatType, PathArguments, Result,
+    ReturnType, Type, TypePath, TypeReference,
 };
 
 /// Decomposed view of the user's `async fn`.
+///
+/// `item` is retained for future diagnostics keyed off the full fn AST
+/// (not currently consumed by expand.rs — caller already holds the
+/// `&ItemFn` it passed in).
 #[allow(dead_code)]
 pub(crate) struct ToolSignature<'a> {
     pub item: &'a ItemFn,
@@ -22,7 +24,6 @@ pub(crate) struct ToolSignature<'a> {
 impl<'a> ToolSignature<'a> {
     /// Parse + validate. Errors describe what the macro looked for,
     /// not what the user did.
-    #[allow(dead_code)]
     pub(crate) fn from_item(item: &'a ItemFn) -> Result<Self> {
         let sig = &item.sig;
 
@@ -180,10 +181,9 @@ fn extract_out_ty(output: &ReturnType) -> Result<Type> {
         }
     };
 
-    let last = path
-        .segments
-        .last()
-        .ok_or_else(|| Error::new_spanned(path, "#[tool] expects a `Result<Out, E>` return type"))?;
+    let last = path.segments.last().ok_or_else(|| {
+        Error::new_spanned(path, "#[tool] expects a `Result<Out, E>` return type")
+    })?;
     if last.ident != "Result" {
         return Err(Error::new_spanned(
             path,
@@ -205,26 +205,27 @@ fn extract_out_ty(output: &ReturnType) -> Result<Type> {
         GenericArgument::Type(t) => Some(t.clone()),
         _ => None,
     });
-    tys.next()
-        .ok_or_else(|| Error::new_spanned(generics, "#[tool] expects a `Result<Out, E>` return type"))
+    tys.next().ok_or_else(|| {
+        Error::new_spanned(generics, "#[tool] expects a `Result<Out, E>` return type")
+    })
 }
 
-/// Separates `#[tool(...)]` and `#[doc = "..."]` from forwarded attrs.
-#[allow(dead_code)]
+/// Separates `#[doc = "..."]` attrs (sent to description extraction)
+/// from forward-to-helper attrs (`#[tracing::instrument]`, `#[allow]`, …).
+///
+/// `#[tool(...)]` attrs are discarded here — they were consumed by the
+/// macro itself and would cause infinite recursion if forwarded.
 pub(crate) struct PartitionedAttrs {
-    pub tool_attrs: Vec<Attribute>,
     pub doc_attrs: Vec<Attribute>,
     pub forward_attrs: Vec<Attribute>,
 }
 
-#[allow(dead_code)]
 pub(crate) fn partition_attrs(attrs: &[Attribute]) -> PartitionedAttrs {
-    let mut tool_attrs = Vec::new();
     let mut doc_attrs = Vec::new();
     let mut forward_attrs = Vec::new();
     for a in attrs {
         if a.path().is_ident("tool") {
-            tool_attrs.push(a.clone());
+            // Discard — already consumed by `#[tool]` itself.
         } else if a.path().is_ident("doc") {
             doc_attrs.push(a.clone());
         } else {
@@ -232,7 +233,6 @@ pub(crate) fn partition_attrs(attrs: &[Attribute]) -> PartitionedAttrs {
         }
     }
     PartitionedAttrs {
-        tool_attrs,
         doc_attrs,
         forward_attrs,
     }
@@ -240,7 +240,6 @@ pub(crate) fn partition_attrs(attrs: &[Attribute]) -> PartitionedAttrs {
 
 /// First-paragraph description extracted from `#[doc = "…"]` attrs.
 /// Returns `None` when no doc attrs are present.
-#[allow(dead_code)]
 pub(crate) fn description_from_docs(doc_attrs: &[Attribute]) -> Option<String> {
     let mut lines: Vec<String> = Vec::new();
     for a in doc_attrs {

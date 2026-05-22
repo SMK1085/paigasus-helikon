@@ -18,8 +18,6 @@ use syn::{Error, Path};
 ///    - `FoundCrate::Itself` → `::paigasus_helikon::core`
 ///    - `FoundCrate::Name(n)` → `::<n>::core`
 /// 4. Neither found → compile error.
-#[allow(dead_code)]
-// TODO(sma): Called from expand::tool (Task C1) and expand::tools (Task C2)
 pub(crate) fn resolve_core_path(
     override_path: Option<&Path>,
     error_span: Span,
