@@ -1,0 +1,13 @@
+error: #[tool] does not support generic free fns or `where` clauses; instantiate the generic and apply #[tool] to the concrete fn
+  --> tests/ui/bad_signature_generic.rs:16:14
+   |
+16 | async fn nope<T>(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError>
+   |              ^^^
+
+warning: unused imports: `ToolContext` and `ToolError`
+ --> tests/ui/bad_signature_generic.rs:1:29
+  |
+1 | use paigasus_helikon_core::{ToolContext, ToolError};
+  |                             ^^^^^^^^^^^  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

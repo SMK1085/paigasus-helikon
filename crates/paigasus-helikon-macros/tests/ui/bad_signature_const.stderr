@@ -1,0 +1,13 @@
+error: #[tool] cannot wrap a `const fn`; `Tool::invoke` is not const
+  --> tests/ui/bad_signature_const.rs:16:1
+   |
+16 | const async fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
+   | ^^^^^
+
+warning: unused imports: `ToolContext` and `ToolError`
+ --> tests/ui/bad_signature_const.rs:1:29
+  |
+1 | use paigasus_helikon_core::{ToolContext, ToolError};
+  |                             ^^^^^^^^^^^  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
