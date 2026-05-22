@@ -51,11 +51,11 @@ impl<'a> ToolSignature<'a> {
                 "#[tool] cannot wrap a fn with an `extern` ABI; remove the ABI specifier",
             ));
         }
-        if !sig.generics.params.is_empty() {
+        if !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
             return Err(Error::new_spanned(
                 &sig.generics,
-                "#[tool] does not support generic free fns; instantiate the generic \
-                 and apply #[tool] to the concrete fn",
+                "#[tool] does not support generic free fns or `where` clauses; \
+                 instantiate the generic and apply #[tool] to the concrete fn",
             ));
         }
 
