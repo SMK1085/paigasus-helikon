@@ -161,9 +161,12 @@ impl RunResultStreaming {
 
     /// Drain the stream and aggregate into a `RunResult<String>`.
     ///
-    /// `final_output` is the concatenated text from every
-    /// `AgentEvent::TokenDelta`. Structured-output callers go through
-    /// `RunResult::<String>::parse_final::<T>()` (SMA-313).
+    /// `final_output` is the concatenated text from the *last*
+    /// `AgentEvent::MessageOutput { item: AssistantMessage }`. In multi-turn
+    /// flows, each new assistant message resets `final_output`, ensuring
+    /// the result is the terminal assistant output, not intermediate text.
+    /// Structured-output callers go through `RunResult::<String>::parse_final::<T>()`
+    /// (SMA-313).
     pub async fn collect(mut self) -> Result<RunResult, RunError> {
         use futures_util::stream::StreamExt;
         let mut events = Vec::new();
@@ -172,7 +175,16 @@ impl RunResultStreaming {
 
         while let Some(ev) = self.events.next().await {
             match &ev {
-                crate::AgentEvent::TokenDelta { text } => final_output.push_str(text),
+                crate::AgentEvent::MessageOutput {
+                    item: crate::Item::AssistantMessage { content, .. },
+                } => {
+                    final_output.clear();
+                    for part in content {
+                        if let crate::ContentPart::Text { text } = part {
+                            final_output.push_str(text);
+                        }
+                    }
+                }
                 crate::AgentEvent::RunCompleted { usage: u } => usage = *u,
                 crate::AgentEvent::RunFailed { error } => {
                     let err_msg = error.clone();
