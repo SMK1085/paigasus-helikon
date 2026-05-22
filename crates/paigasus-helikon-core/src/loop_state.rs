@@ -8,8 +8,8 @@
 //! function with their own driver.
 
 use crate::{
-    AgentError, AgentEvent, ContentPart, FinishReason, Item,
-    ModelRequest, ModelSettings, TokenUsage, ToolDef,
+    AgentError, AgentEvent, ContentPart, FinishReason, Item, ModelRequest, ModelSettings,
+    TokenUsage, ToolDef,
 };
 
 /// The explicit, observable state of the agent loop.
@@ -189,7 +189,31 @@ pub fn transition(
     input: TransitionInput,
     ctx: &TransitionCtx<'_>,
 ) -> TransitionOutcome {
-    // Implementation lands in subsequent tasks via TDD.
-    let _ = (state, input, ctx);
-    unimplemented!("transition cases implemented in Phase B tasks B2-B7")
+    match (state, input) {
+        // Start seeds the loop: emit TurnStarted, request CallModel.
+        (LoopState::CallingModel { turn }, TransitionInput::Start { .. })
+            if *turn < ctx.max_turns =>
+        {
+            let request = ModelRequest {
+                messages: ctx.conversation.to_vec(),
+                tools: ctx.tools.to_vec(),
+                model_settings: ctx.model_settings.clone(),
+            };
+            TransitionOutcome {
+                next_state: LoopState::CallingModel { turn: *turn },
+                events: vec![AgentEvent::TurnStarted { turn: *turn }],
+                next_action: NextAction::CallModel { request },
+            }
+        }
+        // Other cases land in subsequent tasks.
+        (s, i) => TransitionOutcome {
+            next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(
+                "invalid transition: {s:?} ← {i:?}"
+            ))),
+            events: vec![AgentEvent::RunFailed {
+                error: format!("invalid transition: {s:?} ← {i:?}"),
+            }],
+            next_action: NextAction::Terminate,
+        },
+    }
 }
