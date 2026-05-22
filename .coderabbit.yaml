@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration. Most review behavior is configured at the
+# org level (review profile, languages, scope). This file overrides
+# only what must live in the repo — currently the Linear integration,
+# which defaults to disabled on public repositories.
+
+knowledge_base:
+  linear:
+    usage: enabled
+    team_keys:
+      - SMA
+
+chat:
+  integrations:
+    linear:
+      usage: enabled

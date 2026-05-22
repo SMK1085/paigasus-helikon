@@ -147,7 +147,8 @@ impl Runner<()> for NoopRunner {
         _input: AgentInput,
         _config: RunConfig,
     ) -> Result<RunResultStreaming, RunError> {
-        Ok(RunResultStreaming::default())
+        let stream: BoxStream<'static, AgentEvent> = Box::pin(EmptyAgentEvents);
+        Ok(RunResultStreaming::new(stream))
     }
 }
 
