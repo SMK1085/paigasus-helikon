@@ -23,11 +23,10 @@ struct AddOut {
 
 /// Adds two numbers.
 #[tool]
-async fn add(
-    _ctx: &ToolContext<MyCtx>,
-    args: AddArgs,
-) -> Result<AddOut, ToolError> {
-    Ok(AddOut { sum: args.a + args.b })
+async fn add(_ctx: &ToolContext<MyCtx>, args: AddArgs) -> Result<AddOut, ToolError> {
+    Ok(AddOut {
+        sum: args.a + args.b,
+    })
 }
 
 #[test]

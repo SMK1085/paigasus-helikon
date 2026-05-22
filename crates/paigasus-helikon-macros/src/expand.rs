@@ -57,6 +57,11 @@ pub(crate) fn tool(args: TokenStream, item: TokenStream) -> Result<TokenStream, 
                 ::std::sync::OnceLock<::std::option::Option<::serde_json::Value>> =
                 ::std::sync::OnceLock::new();
 
+            // Bring the specialization trait into scope so that the autoref
+            // trick resolves to the trait method (Some) when Out: JsonSchema,
+            // rather than falling through to the inherent fallback (None).
+            use #core::__private::OutputSchemaProbeSpec as _;
+
             #(#forward_attrs)*
             #helper_sig #helper_body
 
