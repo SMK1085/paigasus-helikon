@@ -7,6 +7,8 @@ use syn::{
 };
 
 /// Parsed form of `#[tool(description = "...", name = "...", crate = ::path)]`.
+// TODO(SMA-315): drop the dead_code allow once expand::tool (Task C1)
+// consumes ToolAttrArgs.
 #[derive(Default)]
 #[allow(dead_code)]
 pub(crate) struct ToolAttrArgs {
