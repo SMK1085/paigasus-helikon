@@ -170,11 +170,10 @@ fn is_valid_name(s: &str) -> bool {
 
 pub(crate) fn tools(input: TokenStream) -> Result<TokenStream, Error> {
     use syn::parse::Parser;
-    use syn::spanned::Spanned as _;
 
-    let parsed = ToolsInput::parse
-        .parse2(input.clone())
-        .map_err(|e| Error::new(input.span(), format!("invalid `tools!` invocation: {e}")))?;
+    // Propagate syn's error directly so the diagnostic points at the
+    // offending token, not at the macro call site as a whole.
+    let parsed = ToolsInput::parse.parse2(input)?;
 
     if parsed.tools.is_empty() {
         return Err(Error::new(
