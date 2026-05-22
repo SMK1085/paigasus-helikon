@@ -18,7 +18,37 @@ use proc_macro::TokenStream;
 
 /// Attribute macro that generates an `impl Tool<Ctx>` for an `async fn`.
 ///
-/// See the crate-level documentation for the full design.
+/// # Example
+///
+/// ```
+/// use paigasus_helikon_core::{Tool, ToolContext, ToolError};
+/// use paigasus_helikon_macros::tool;
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// struct MyCtx;
+///
+/// #[derive(Deserialize, JsonSchema)]
+/// struct AddArgs { a: i64, b: i64 }
+///
+/// #[derive(Serialize, JsonSchema)]
+/// struct AddOut { sum: i64 }
+///
+/// /// Adds two numbers.
+/// #[tool]
+/// async fn add(
+///     _ctx: &ToolContext<MyCtx>,
+///     args: AddArgs,
+/// ) -> Result<AddOut, ToolError> {
+///     Ok(AddOut { sum: args.a + args.b })
+/// }
+///
+/// assert_eq!(add.name(), "add");
+/// assert_eq!(add.description(), "Adds two numbers.");
+/// ```
+///
+/// See the SMA-315 design doc for the full attribute surface and
+/// edge-case behavior.
 #[proc_macro_attribute]
 pub fn tool(args: TokenStream, item: TokenStream) -> TokenStream {
     match expand::tool(args.into(), item.into()) {
@@ -31,8 +61,47 @@ pub fn tool(args: TokenStream, item: TokenStream) -> TokenStream {
 /// expressions into `Vec<Arc<dyn Tool<Ctx>>>`.
 ///
 /// Each argument must be a value of a type implementing `Tool<Ctx>`
-/// directly. Do not pre-wrap with `Arc`. An optional `crate = ::path;`
-/// prefix overrides the auto-resolved support-crate path.
+/// directly. Do not pre-wrap with `Arc` — `tools![Arc::new(t)]`
+/// generates `Arc::new(Arc::new(t)) as Arc<dyn Tool<_>>` and fails
+/// the cast.
+///
+/// An optional `crate = ::path;` prefix overrides the auto-resolved
+/// support-crate path; use only for renamed deps or unusual setups.
+///
+/// **Ctx-mismatch diagnostics:** every tool in a single `tools!`
+/// invocation must implement `Tool<Ctx>` for the *same* `Ctx`. The
+/// shared `Ctx` is inferred from the first tool or from the LHS type
+/// annotation. When rustc reports something like
+/// ``the trait `Tool<…>` is not implemented for <tool-name>``,
+/// the cause is a `Ctx` mismatch inside `tools!`.
+///
+/// # Example
+///
+/// ```
+/// use std::sync::Arc;
+/// use paigasus_helikon_core::{Tool, ToolContext, ToolError};
+/// use paigasus_helikon_macros::{tool, tools};
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// struct MyCtx;
+///
+/// #[derive(Deserialize, JsonSchema)]
+/// struct AddArgs { a: i64, b: i64 }
+/// #[derive(Serialize, JsonSchema)]
+/// struct AddOut { sum: i64 }
+///
+/// /// Adds two numbers.
+/// #[tool]
+/// async fn add(_ctx: &ToolContext<MyCtx>, args: AddArgs)
+///     -> Result<AddOut, ToolError>
+/// {
+///     Ok(AddOut { sum: args.a + args.b })
+/// }
+///
+/// let registry: Vec<Arc<dyn Tool<MyCtx>>> = tools![add];
+/// assert_eq!(registry.len(), 1);
+/// ```
 #[proc_macro]
 pub fn tools(input: TokenStream) -> TokenStream {
     match expand::tools(input.into()) {

@@ -1,7 +1,7 @@
 //! Codegen for `#[tool]` and `tools!`.
 
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{parse2, Error, ItemFn, LitStr};
 
 use crate::attr::ToolAttrArgs;
@@ -25,7 +25,6 @@ pub(crate) fn tool(args: TokenStream, item: TokenStream) -> Result<TokenStream, 
 
     let vis = &item_fn.vis;
     let fn_ident = &item_fn.sig.ident;
-    let helper_mod = format_ident!("__helikon_tool_{}", fn_ident);
 
     let ctx_ty = &sig.ctx_ty;
     let args_ty = &sig.args_ty;
@@ -34,8 +33,12 @@ pub(crate) fn tool(args: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let forward_attrs = &partitioned.forward_attrs;
 
     // Helper fn signature is forwarded *verbatim* from the user's syn::Signature
-    // (no path normalization). Inside `mod __helikon_tool_<ident> { use super::*; … }`
-    // the user's `&ToolContext<Ctx>` and `Result<Out, anyhow::Error>` resolve via the glob.
+    // (no path normalization). The helper fn and the `impl Tool` block both live
+    // inside `const _: () = { … }`, which gives them direct access to the caller's
+    // ambient `use` imports and type definitions without relying on `use super::*`.
+    // This approach works in all Rust compilation contexts, including doctests, where
+    // child `mod` blocks cannot reach the anonymous doctest wrapper module's items
+    // via a glob import.
     let helper_sig = &item_fn.sig;
     let helper_body = &item_fn.block;
 
@@ -43,64 +46,60 @@ pub(crate) fn tool(args: TokenStream, item: TokenStream) -> Result<TokenStream, 
         #[allow(non_camel_case_types)]
         #vis struct #fn_ident;
 
-        // `non_snake_case` allow is required because the module name embeds
-        // the user's identifier — e.g. `__helikon_tool_legacyAdd` for
-        // `async fn legacyAdd`. Without this, a project-wide
-        // `#![deny(non_snake_case)]` would fail inside macro-expanded code.
-        #[allow(non_snake_case)]
-        mod #helper_mod {
-            use super::*;
-
-            pub(super) static INPUT_SCHEMA:
+        // `const _` gives the helper fn and impl block access to all ambient names
+        // (use-imports, struct defs, etc.) in the caller's scope. It also avoids
+        // polluting the caller's namespace with `__helikon_*` identifiers.
+        const _: () = {
+            static __HELIKON_INPUT_SCHEMA:
                 ::std::sync::OnceLock<::serde_json::Value> =
                 ::std::sync::OnceLock::new();
-            pub(super) static OUTPUT_SCHEMA:
+            static __HELIKON_OUTPUT_SCHEMA:
                 ::std::sync::OnceLock<::std::option::Option<::serde_json::Value>> =
                 ::std::sync::OnceLock::new();
 
             #(#forward_attrs)*
-            pub(super) #helper_sig #helper_body
-        }
+            #helper_sig #helper_body
 
-        #[#core::__private::async_trait::async_trait]
-        impl #core::Tool<#ctx_ty> for #fn_ident {
-            fn name(&self) -> &str { #tool_name }
-            fn description(&self) -> &str { #description }
+            #[#core::__private::async_trait::async_trait]
+            impl #core::Tool<#ctx_ty> for #fn_ident {
+                fn name(&self) -> &str { #tool_name }
+                fn description(&self) -> &str { #description }
 
-            fn schema(&self) -> &::serde_json::Value {
-                #helper_mod::INPUT_SCHEMA.get_or_init(|| {
-                    ::serde_json::to_value(::schemars::schema_for!(#args_ty))
-                        .expect("schemars schema must serialize")
-                })
-            }
-
-            fn output_schema(&self) -> ::std::option::Option<&::serde_json::Value> {
-                #helper_mod::OUTPUT_SCHEMA
-                    .get_or_init(|| {
-                        // Autoref-specialization: trait impl on `&Probe<T: JsonSchema>`
-                        // wins (one deref) when bound holds; otherwise inherent
-                        // fallback returns None. See core::__private.
-                        (&&#core::__private::OutputSchemaProbe::<#out_ty>::NEW)
-                            .schema()
+                fn schema(&self) -> &::serde_json::Value {
+                    __HELIKON_INPUT_SCHEMA.get_or_init(|| {
+                        ::serde_json::to_value(::schemars::schema_for!(#args_ty))
+                            .expect("schemars schema must serialize")
                     })
-                    .as_ref()
-            }
+                }
 
-            async fn invoke(
-                &self,
-                ctx: &#core::ToolContext<#ctx_ty>,
-                args: ::serde_json::Value,
-            ) -> ::std::result::Result<#core::ToolOutput, #core::ToolError> {
-                let parsed: #args_ty = ::serde_json::from_value(args)
-                    .map_err(|e| #core::ToolError::InvalidArgs {
-                        schema_errors: ::std::vec![e.to_string()],
-                    })?;
-                let out = #helper_mod::#fn_ident(ctx, parsed).await?;
-                let content = ::serde_json::to_value(&out)
-                    .map_err(|e| #core::ToolError::Other(e.into()))?;
-                ::std::result::Result::Ok(#core::ToolOutput::new(content))
+                fn output_schema(&self) -> ::std::option::Option<&::serde_json::Value> {
+                    __HELIKON_OUTPUT_SCHEMA
+                        .get_or_init(|| {
+                            // Autoref-specialization: trait impl on `&Probe<T: JsonSchema>`
+                            // wins (one deref) when bound holds; otherwise inherent
+                            // fallback returns None. See core::__private.
+                            (&&#core::__private::OutputSchemaProbe::<#out_ty>::NEW)
+                                .schema()
+                        })
+                        .as_ref()
+                }
+
+                async fn invoke(
+                    &self,
+                    ctx: &#core::ToolContext<#ctx_ty>,
+                    args: ::serde_json::Value,
+                ) -> ::std::result::Result<#core::ToolOutput, #core::ToolError> {
+                    let parsed: #args_ty = ::serde_json::from_value(args)
+                        .map_err(|e| #core::ToolError::InvalidArgs {
+                            schema_errors: ::std::vec![e.to_string()],
+                        })?;
+                    let out = #fn_ident(ctx, parsed).await?;
+                    let content = ::serde_json::to_value(&out)
+                        .map_err(|e| #core::ToolError::Other(e.into()))?;
+                    ::std::result::Result::Ok(#core::ToolOutput::new(content))
+                }
             }
-        }
+        };
     };
 
     Ok(expanded)

@@ -21,30 +21,36 @@ impl Parse for ToolAttrArgs {
         }
 
         loop {
-            let key: Ident = input.parse()?;
-            let _: Token![=] = input.parse()?;
+            // `crate` is a keyword; syn's `Ident` parser rejects keywords by default.
+            // We must handle it explicitly before falling back to regular identifiers.
+            if input.peek(Token![crate]) {
+                let kw: Token![crate] = input.parse()?;
+                let _: Token![=] = input.parse()?;
+                let path: Path = input.parse()?;
+                out.crate_path = Some(path);
+                let _ = kw; // span consumed above; suppress unused-variable lint
+            } else {
+                let key: Ident = input.parse()?;
+                let _: Token![=] = input.parse()?;
 
-            match key.to_string().as_str() {
-                "description" => {
-                    let lit: LitStr = input.parse()?;
-                    out.description = Some(lit);
-                }
-                "name" => {
-                    let lit: LitStr = input.parse()?;
-                    out.name = Some(lit);
-                }
-                "crate" => {
-                    let path: Path = input.parse()?;
-                    out.crate_path = Some(path);
-                }
-                other => {
-                    return Err(Error::new(
-                        key.span(),
-                        format!(
-                            "unknown #[tool] attribute `{other}`; expected one of \
-                             `description`, `name`, `crate`",
-                        ),
-                    ));
+                match key.to_string().as_str() {
+                    "description" => {
+                        let lit: LitStr = input.parse()?;
+                        out.description = Some(lit);
+                    }
+                    "name" => {
+                        let lit: LitStr = input.parse()?;
+                        out.name = Some(lit);
+                    }
+                    other => {
+                        return Err(Error::new(
+                            key.span(),
+                            format!(
+                                "unknown #[tool] attribute `{other}`; expected one of \
+                                 `description`, `name`, `crate`",
+                            ),
+                        ));
+                    }
                 }
             }
 
