@@ -124,6 +124,55 @@ impl OutputType {
     }
 }
 
+/// Renders the system prompt for one turn of the loop.
+///
+/// Implemented for `String`, `&'static str`, and any
+/// `Fn(&RunContext<Ctx>) -> String + Send + Sync`.
+///
+/// ```
+/// use std::sync::Arc;
+/// use paigasus_helikon_core::{Instructions, RunContext};
+///
+/// let a: Arc<dyn Instructions<()>> = Arc::new("You are a helpful assistant.".to_string());
+/// let b: Arc<dyn Instructions<()>> = Arc::new(|_: &RunContext<()>| "Dynamic".into());
+/// let _ = (a, b);
+/// ```
+pub trait Instructions<Ctx>: Send + Sync
+where
+    Ctx: Send + Sync + 'static,
+{
+    /// Produce the system-prompt text for this run.
+    fn render(&self, ctx: &crate::RunContext<Ctx>) -> String;
+}
+
+impl<Ctx> Instructions<Ctx> for String
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn render(&self, _ctx: &crate::RunContext<Ctx>) -> String {
+        self.clone()
+    }
+}
+
+impl<Ctx> Instructions<Ctx> for &'static str
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn render(&self, _ctx: &crate::RunContext<Ctx>) -> String {
+        (*self).to_owned()
+    }
+}
+
+impl<Ctx, F> Instructions<Ctx> for F
+where
+    Ctx: Send + Sync + 'static,
+    F: Fn(&crate::RunContext<Ctx>) -> String + Send + Sync,
+{
+    fn render(&self, ctx: &crate::RunContext<Ctx>) -> String {
+        (self)(ctx)
+    }
+}
+
 /// The unified event stream emitted by an [`Agent`].
 ///
 /// Fourteen variants spanning lifecycle, raw streaming deltas,
