@@ -67,3 +67,48 @@ fn model_response_without_tool_calls_terminates() {
     assert_matches!(&outcome.events[0], AgentEvent::MessageOutput { .. });
     assert_matches!(&outcome.events[1], AgentEvent::RunCompleted { .. });
 }
+
+#[test]
+fn model_response_with_tool_calls_fans_out() {
+    let state = LoopState::CallingModel { turn: 0 };
+    let assistant = Item::AssistantMessage {
+        content: vec![ContentPart::Text { text: "calling tools".into() }],
+        agent: Some("test".into()),
+    };
+    let call_a = Item::ToolCall {
+        call_id: "1".into(),
+        name: "a".into(),
+        args: serde_json::json!({}),
+    };
+    let call_b = Item::ToolCall {
+        call_id: "2".into(),
+        name: "b".into(),
+        args: serde_json::json!({}),
+    };
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let input = TransitionInput::ModelResponse {
+        items: vec![assistant, call_a, call_b],
+        usage: paigasus_helikon_core::TokenUsage::default(),
+        finish_reason: paigasus_helikon_core::FinishReason::ToolCalls,
+    };
+
+    let outcome = transition(&state, input, &ctx_with(16, &conversation, &settings));
+
+    match outcome.next_state {
+        LoopState::ExecutingTools { ref calls, turn } => {
+            assert_eq!(calls.len(), 2);
+            assert_eq!(turn, 0);
+        }
+        other => panic!("expected ExecutingTools, got {other:?}"),
+    }
+    match outcome.next_action {
+        NextAction::ExecuteTools { ref calls } => assert_eq!(calls.len(), 2),
+        ref other => panic!("expected ExecuteTools, got {other:?}"),
+    }
+    // Expected events: MessageOutput, ToolCallItem, ToolCallItem.
+    assert_eq!(outcome.events.len(), 3);
+    assert_matches!(&outcome.events[0], AgentEvent::MessageOutput { .. });
+    assert_matches!(&outcome.events[1], AgentEvent::ToolCallItem { .. });
+    assert_matches!(&outcome.events[2], AgentEvent::ToolCallItem { .. });
+}

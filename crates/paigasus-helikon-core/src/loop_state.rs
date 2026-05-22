@@ -205,6 +205,34 @@ pub fn transition(
                 next_action: NextAction::CallModel { request },
             }
         }
+        // Model produced tool calls → fan out to ExecutingTools.
+        (LoopState::CallingModel { turn }, TransitionInput::ModelResponse { items, .. })
+            if items.iter().any(|i| matches!(i, Item::ToolCall { .. })) =>
+        {
+            let mut events: Vec<AgentEvent> = Vec::new();
+            let mut calls: Vec<ToolCallRequest> = Vec::new();
+            for item in &items {
+                match item {
+                    Item::AssistantMessage { .. } => {
+                        events.push(AgentEvent::MessageOutput { item: item.clone() });
+                    }
+                    Item::ToolCall { call_id, name, args } => {
+                        events.push(AgentEvent::ToolCallItem { item: item.clone() });
+                        calls.push(ToolCallRequest {
+                            call_id: call_id.clone(),
+                            name: name.clone(),
+                            args: args.clone(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            TransitionOutcome {
+                next_state: LoopState::ExecutingTools { calls: calls.clone(), turn: *turn },
+                events,
+                next_action: NextAction::ExecuteTools { calls },
+            }
+        }
         // Model produced a response with no tool calls → terminate.
         (LoopState::CallingModel { .. }, TransitionInput::ModelResponse { items, usage, .. })
             if !items.iter().any(|i| matches!(i, Item::ToolCall { .. })) =>
