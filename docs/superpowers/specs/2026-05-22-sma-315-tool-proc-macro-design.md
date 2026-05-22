@@ -39,7 +39,7 @@ Ten decisions, scoped to the SMA-315 surface.
 | `tools![ … ]` shape | **Function-like proc-macro `tools!(...)` in `paigasus-helikon-macros`.** Not a `macro_rules!` macro — that form cannot resolve crate paths through the facade re-export (`$crate` always points to the *defining* crate). | Unifies path resolution with `#[tool]` (same `proc-macro-crate` probe). Facade-only consumers `paigasus_helikon::tools![a, b]` work without ceremony. The `macros` feature on the facade gates both macros together. Manual `vec![Arc::new(t) as Arc<dyn Tool<_>>, …]` is the no-feature fallback for users who don't pull `macros`. |
 | Attribute parsing | **Hand-rolled `syn`/`quote`, no `darling`.** | The attribute surface is three keys (`description`, `name`, `crate`). Well-spanned `syn::Error`s are at parity with `darling`'s diagnostics, and a 5-crate parsing framework is the wrong default at this scale. Revisit if `#[agent]` later adds 8+ keys. |
 | Schema cache | **`OnceLock<serde_json::Value>` per tool, lazy on first `schema()` call.** | `Tool::schema()` returns `&Value`, so per-call computation is impossible. `OnceLock` (stable since 1.70, comfortably below our 1.75 MSRV) pays the schemars cost once on first registration. `LazyLock` would be cleaner but stabilized in 1.80 — revisit at the next MSRV bump. |
-| Attribute forwarding | **Forward every non-`#[tool(...)]`, non-doc attribute on the user fn to the helper `run` fn unchanged.** `#[cfg(...)]` is evaluated by rustc before `#[tool]` fires (no action needed); `#[tool(...)]` and `#[doc = "..."]`/`///` are consumed; everything else (`#[tracing::instrument]`, `#[allow(...)]`, `#[deprecated]`, user attribute macros) lands on the helper. | The helper is the only thing the user's body lives inside; `#[tracing::instrument]` on the unit struct or the impl block would trace nothing meaningful. The rule works regardless of attribute order — if another proc-macro fires before `#[tool]`, it has already rewritten the body and `#[tool]` simply moves the result; if it fires after `#[tool]`, the forwarded attribute on the helper does the right thing. |
+| Attribute forwarding | **Forward every non-`#[tool(...)]`, non-doc attribute on the user fn to the helper `run` fn unchanged.** `#[cfg(...)]` is evaluated by rustc before `#[tool]` fires (no action needed); `#[tool(...)]` and `#[doc = "..."]`/`///` are consumed; everything else (`#[tracing::instrument]`, `#[allow(...)]`, `#[deprecated]`, user attribute macros) lands on the helper. | The helper is the only thing the user's body lives inside; `#[tracing::instrument]` on the unit struct or the impl block would trace nothing meaningful. The rule produces valid expansions regardless of attribute order; **semantic correctness with other proc-macros depends on the other macro's behavior**. Concretely, `#[tracing::instrument] #[tool]` produces a span named after the user's fn (`add`), whereas `#[tool] #[tracing::instrument]` produces a span named after the helper (`run`). The `#[tool]` rustdoc points users at the first ordering when tracing-span identity matters. |
 
 ## 3. Files added / modified
 
@@ -74,7 +74,7 @@ Ten decisions, scoped to the SMA-315 surface.
 
 | Path | Change |
 |---|---|
-| `crates/paigasus-helikon-macros/Cargo.toml` | Deps: `proc-macro2`, `quote`, `syn`, `proc-macro-crate`. Dev-deps: `paigasus-helikon-core` (path), `paigasus-helikon` (path, `features = ["macros"]` — for the facade-only-consumer trybuild case), `async-trait`, `schemars`, `serde`, `serde_json`, `tokio` (features `macros`, `rt`), `trybuild`, `insta`. |
+| `crates/paigasus-helikon-macros/Cargo.toml` | Deps: `proc-macro2`, `quote`, `syn`, `proc-macro-crate`. Dev-deps: `paigasus-helikon-core` (path), `paigasus-helikon` (path, `features = ["macros"]` — for the facade-only-consumer trybuild case), `async-trait`, `schemars`, `serde`, `serde_json`, `tokio` (features `macros`, `rt`), `trybuild`, `insta`, `rustversion` (gates trybuild to stable). |
 | `crates/paigasus-helikon-core/Cargo.toml` | No dependency change. `async-trait` and `schemars` are already direct deps; the new `__private` module re-exports them via `pub use`. |
 | `crates/paigasus-helikon-core/src/lib.rs` | Add `#[doc(hidden)] pub mod __private;` (the module file is added; the re-export makes it reachable as `paigasus_helikon_core::__private`). |
 | `crates/paigasus-helikon/Cargo.toml` | No structural change. `paigasus-helikon-macros` stays optional behind the existing `macros` feature, per the facade convention. |
@@ -131,6 +131,11 @@ Expansion of the `#[tool]` block above (paths shown for a direct-core consumer; 
 #[allow(non_camel_case_types)]
 struct add;     // vis preserved from `async fn add` (private here)
 
+// `non_snake_case` allow is required because the module name embeds the
+// user's identifier — e.g. `__helikon_tool_legacyAdd` for `async fn
+// legacyAdd`. Without this, a project-wide `#![deny(non_snake_case)]`
+// would fail the build inside macro-expanded code the user can't fix.
+#[allow(non_snake_case)]
 mod __helikon_tool_add {
     // Pulls in the user's args/output types and any third-party imports
     // they wrote at module scope (AddArgs, AddOut, anyhow, etc.).
@@ -278,7 +283,7 @@ The `Ctx` parameter is inferred at the call site from the LHS type annotation or
 |---|---|
 | `#[tool(description = "non-empty literal")]` | Use the literal verbatim. Wins over any doc comments. |
 | `#[tool(description = "")]` | **Compile error** — empty descriptions are useless to the model. Diagnostic: ``empty `description`; provide a non-empty literal or remove the attr to fall back to doc comments``. |
-| `///` doc comments or `#[doc = "…"]` attrs (semantically identical AST node) | Concatenate lines, strip the leading space, join with `\n`, trim trailing whitespace. **Take the first paragraph only** — everything up to the first `\n\n`. Use as description. |
+| `///` doc comments or `#[doc = "…"]` attrs (semantically identical AST node) | **Per-`#[doc]`-attribute** processing: for each `#[doc = "..."]` attribute on the fn, take its string contents and strip a single leading space (the one rustc inserts after `///`). Join the resulting lines with `\n`, trim trailing whitespace, then take the first paragraph only — everything up to the first `\n\n`. Use as description. |
 | Neither attr nor doc | **Compile error**: ``tool `<name>` requires a description: add `#[tool(description = "…")]` or a `///` doc comment``. |
 
 Argument-field descriptions are **not** handled by the `#[tool]` macro. They flow through `#[derive(JsonSchema)]`, which already extracts `///` doc comments on struct fields. This is the explicit boundary — `JsonSchema` owns the args struct, `#[tool]` owns the fn glue.
@@ -338,11 +343,21 @@ Three layers, all under `crates/paigasus-helikon-macros/tests/`.
 
 First-run writes `tests/snapshots/schema_golden__add_schema.snap`. Reviewer eyeballs the snapshot during PR — it's the "schema matching golden file" artifact the AC names. Subsequent runs diff; `cargo insta review` updates intentionally. Snapshot covers type mapping (`i64` → `integer`), `required` array population, per-field `description` from doc comments.
 
+**Snapshot churn from schemars bumps.** Schemars patch/minor releases occasionally tweak the emitted JSON-Schema layout (whitespace, key ordering, default-value handling). Dependabot's grouped `cargo` updates will trigger snapshot review on such bumps — this is routine; review the diff via `cargo insta review` and accept layout-only changes. Major-version bumps are not routine; see §12.
+
 ### 6.2 `trybuild` UI tests (AC #3 + path-resolution coverage)
 
 `tests/trybuild.rs`:
 
 ```rust
+// `.stderr` captures pin rustc diagnostic text byte-for-byte, and that
+// text drifts across rustc releases — including between stable and
+// 1.75 (our MSRV). Running this test under the 1.75 matrix entry
+// would diff against captures taken on stable and turn red on every
+// PR. Gate the suite to stable only; the MSRV matrix still type-checks
+// the macro crate via the normal `cargo test` invocation (which
+// resolves to skipping this `#[ignore]`d test).
+#[rustversion::attr(not(stable), ignore)]
 #[test]
 fn ui() {
     let t = trybuild::TestCases::new();
@@ -352,6 +367,8 @@ fn ui() {
     t.pass("tests/ui/facade_only_consumer.rs");
 }
 ```
+
+**Why stable-only:** trybuild's `.stderr` files are not portable across rustc versions; rustc occasionally reshuffles error formatting, error codes, even punctuation. Pinning the suite to stable is the convention used by `serde`, `thiserror`, `anyhow`, and most established proc-macro crates. The MSRV matrix entry still exercises every other test in the macros crate; only the UI suite is skipped.
 
 | Case | Verifies |
 |---|---|
@@ -385,7 +402,7 @@ Stderr files are regenerated with `TRYBUILD=overwrite cargo test --test trybuild
 7. Call `output_schema()`; assert `Some(_)` (because `AddOut: JsonSchema`).
 8. Define a second tool `OpaqueTool` whose `Out` is a non-`JsonSchema` newtype; assert its `output_schema()` returns `None`.
 9. Define a third tool returning `Result<…, anyhow::Error>`; assert it `impl`s `Tool<MyCtx>` and a body-side `Err(anyhow!("boom"))` surfaces as `ToolError::Other` at the runner level.
-10. Define a fourth tool with `#[allow(non_snake_case)]` and `#[deprecated(note = "use new_add")]` on the user fn (alongside `#[tool]`), and rename the fn to `legacyAdd`. Assert the tool compiles and `invoke` works end-to-end — the `non_snake_case` lint must be silenced by the forwarded `#[allow]`, proving the attribute reached the helper `run` fn (where the body uses the renamed identifier). Locks the attribute-forwarding rule from §2.
+10. Put `#![deny(non_snake_case)]` at the top of `tests/end_to_end.rs`. Define a fourth tool with `#[allow(non_snake_case)]` on the user fn (alongside `#[tool]`) and rename the fn to `legacyAdd`. The test compiles **only** if the forwarded `#[allow]` reaches the helper `run` fn — without forwarding, the `deny` at the file level turns the `non_snake_case` warning into a hard error. Locks the attribute-forwarding rule from §2. The same `deny` also exercises the codegen rule that the generated `mod __helikon_tool_<ident>` must carry `#[allow(non_snake_case)]` itself (the module name embeds the user's possibly-camelCase ident — see §4.2).
 
 ### 6.4 The "readable `cargo expand`" criterion (AC #2)
 
@@ -440,9 +457,10 @@ quote = "1"
 syn = { version = "2", features = ["full"] }
 proc-macro-crate = "3"
 trybuild = "1"
+rustversion = "1"
 ```
 
-`syn` uses `features = ["full"]` only — `extra-traits` (Debug/Eq/Hash across the whole AST) measurably slows macro-crate compile times and is a debugging convenience we don't need for codegen. `proc-macro-crate` 3.x is the current major as of 2026-05.
+`syn` uses `features = ["full"]` only — `extra-traits` (Debug/Eq/Hash across the whole AST) measurably slows macro-crate compile times and is a debugging convenience we don't need for codegen. `proc-macro-crate` 3.x is the current major as of 2026-05. `rustversion` 1.x is the ecosystem-standard way to gate proc-macro tests across toolchain versions; it adds no runtime cost (compile-time attribute only).
 
 Schemars 1.x is the current stable line; the schema layout it emits is what the golden file pins. See §11 (open questions) — bumping to 2.x is not a chore.
 
