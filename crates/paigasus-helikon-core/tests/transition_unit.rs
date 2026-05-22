@@ -153,3 +153,24 @@ fn tool_results_advance_to_next_call_model() {
     assert_matches!(&outcome.events[1], AgentEvent::ToolOutputItem { .. });
     assert_matches!(&outcome.events[2], AgentEvent::TurnStarted { turn: 1 });
 }
+
+#[test]
+fn calling_model_at_max_turns_fails() {
+    let max_turns = 4;
+    let state = LoopState::CallingModel { turn: max_turns };
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let input = TransitionInput::Start { messages: vec![] };
+
+    let outcome = transition(&state, input, &ctx_with(max_turns, &conversation, &settings));
+
+    match outcome.next_state {
+        LoopState::Failed(paigasus_helikon_core::AgentError::MaxTurnsExceeded(n)) => {
+            assert_eq!(n, max_turns);
+        }
+        other => panic!("expected Failed(MaxTurnsExceeded), got {other:?}"),
+    }
+    assert_matches!(outcome.next_action, NextAction::Terminate);
+    assert_eq!(outcome.events.len(), 1);
+    assert_matches!(&outcome.events[0], AgentEvent::RunFailed { .. });
+}

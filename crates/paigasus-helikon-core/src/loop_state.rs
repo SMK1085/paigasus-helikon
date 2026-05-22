@@ -190,6 +190,16 @@ pub fn transition(
     ctx: &TransitionCtx<'_>,
 ) -> TransitionOutcome {
     match (state, input) {
+        // Max turns reached at the CallingModel boundary → fail fast.
+        (LoopState::CallingModel { turn }, _) if *turn >= ctx.max_turns => {
+            TransitionOutcome {
+                next_state: LoopState::Failed(AgentError::MaxTurnsExceeded(ctx.max_turns)),
+                events: vec![AgentEvent::RunFailed {
+                    error: format!("max turns ({}) exceeded", ctx.max_turns),
+                }],
+                next_action: NextAction::Terminate,
+            }
+        }
         // Start seeds the loop: emit TurnStarted, request CallModel.
         (LoopState::CallingModel { turn }, TransitionInput::Start { .. })
             if *turn < ctx.max_turns =>
