@@ -341,7 +341,7 @@ fn build_items(
     text: String,
     reasoning: String,
     tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
-) -> Vec<crate::Item> {
+) -> Result<Vec<crate::Item>, String> {
     let mut items = Vec::new();
     if !text.is_empty() || !reasoning.is_empty() {
         let mut content = Vec::new();
@@ -357,13 +357,19 @@ fn build_items(
         });
     }
     for (call_id, accum) in tool_accum {
+        let args = serde_json::from_str(&accum.args_str).map_err(|e| {
+            format!(
+                "invalid tool args for call_id={call_id} (name={}): {e}",
+                accum.name.as_deref().unwrap_or("?")
+            )
+        })?;
         items.push(crate::Item::ToolCall {
             call_id,
             name: accum.name.unwrap_or_default(),
-            args: serde_json::from_str(&accum.args_str).unwrap_or(serde_json::Value::Null),
+            args,
         });
     }
-    items
+    Ok(items)
 }
 
 /// Conversion convention: `ToolOutput.content` (SMA-313's
@@ -534,7 +540,13 @@ where
                             }
                         }
 
-                        let items = build_items(&agent_name, text, reasoning, tool_accum);
+                        let items = match build_items(&agent_name, text, reasoning, tool_accum) {
+                            Ok(items) => items,
+                            Err(e) => {
+                                yield crate::AgentEvent::RunFailed { error: e };
+                                return;
+                            }
+                        };
                         conversation.extend(items.iter().cloned());
                         // Usage stubbed until SMA-316/SMA-317 add ModelEvent::Usage.
                         let usage = crate::TokenUsage::default();

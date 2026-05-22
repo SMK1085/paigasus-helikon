@@ -260,3 +260,61 @@ fn needs_approval_surfaces_not_implemented() {
     }
     assert_matches!(outcome.next_action, NextAction::Terminate);
 }
+
+#[test]
+fn tool_results_at_max_turns_preserves_outputs_before_failing() {
+    let max_turns = 4u32;
+    let calls = vec![
+        ToolCallRequest {
+            call_id: "1".into(),
+            name: "a".into(),
+            args: serde_json::json!({}),
+        },
+        ToolCallRequest {
+            call_id: "2".into(),
+            name: "b".into(),
+            args: serde_json::json!({}),
+        },
+    ];
+    // turn = max_turns - 1, so next_turn = max_turns trips the budget.
+    let state = LoopState::ExecutingTools {
+        calls: calls.clone(),
+        turn: max_turns - 1,
+    };
+    let outcomes = vec![
+        ToolCallOutcome {
+            call_id: "1".into(),
+            result: Ok(vec![ContentPart::Text {
+                text: "ok-a".into(),
+            }]),
+        },
+        ToolCallOutcome {
+            call_id: "2".into(),
+            result: Ok(vec![ContentPart::Text {
+                text: "ok-b".into(),
+            }]),
+        },
+    ];
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let input = TransitionInput::ToolResults { outcomes };
+
+    let outcome = transition(
+        &state,
+        input,
+        &ctx_with(max_turns, &conversation, &settings),
+    );
+
+    match outcome.next_state {
+        LoopState::Failed(paigasus_helikon_core::AgentError::MaxTurnsExceeded(n)) => {
+            assert_eq!(n, max_turns);
+        }
+        other => panic!("expected Failed(MaxTurnsExceeded), got {other:?}"),
+    }
+    assert_matches!(outcome.next_action, NextAction::Terminate);
+    // Expected events: ToolOutputItem × 2, then RunFailed.
+    assert_eq!(outcome.events.len(), 3);
+    assert_matches!(&outcome.events[0], AgentEvent::ToolOutputItem { .. });
+    assert_matches!(&outcome.events[1], AgentEvent::ToolOutputItem { .. });
+    assert_matches!(&outcome.events[2], AgentEvent::RunFailed { .. });
+}

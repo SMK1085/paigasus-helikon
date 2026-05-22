@@ -169,20 +169,19 @@ impl RunResultStreaming {
         let mut events = Vec::new();
         let mut final_output = String::new();
         let mut usage = crate::TokenUsage::default();
-        let mut failed: Option<String> = None;
 
         while let Some(ev) = self.events.next().await {
             match &ev {
                 crate::AgentEvent::TokenDelta { text } => final_output.push_str(text),
                 crate::AgentEvent::RunCompleted { usage: u } => usage = *u,
-                crate::AgentEvent::RunFailed { error } => failed = Some(error.clone()),
+                crate::AgentEvent::RunFailed { error } => {
+                    let err_msg = error.clone();
+                    events.push(ev);
+                    return Err(RunError::Other(anyhow::anyhow!(err_msg)));
+                }
                 _ => {}
             }
             events.push(ev);
-        }
-
-        if let Some(e) = failed {
-            return Err(RunError::Other(anyhow::anyhow!(e)));
         }
 
         Ok(RunResult {

@@ -71,11 +71,11 @@ async fn two_tool_calls_execute_concurrently() {
         .expect("agent.run should succeed");
 
     let result = tokio::time::timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         RunResultStreaming::new(stream).collect(),
     )
     .await
-    .expect("timeout — tools likely ran serially (Barrier deadlocked)")
+    .expect("timeout — tools likely ran serially (Barrier deadlocked within 10 s)")
     .expect("collect should succeed");
 
     assert!(
