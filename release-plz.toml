@@ -16,9 +16,14 @@ dependencies_update = true
 # `paigasus-helikon-cli` (below) survives that flip.
 publish = false
 
-# release-plz uses pre-1.0 (0.x.y) bump semantics automatically when the
-# starting version is `0.x.y`. No explicit flag is needed; this comment
-# exists so future-you doesn't add one while looking for it.
+# Pre-1.0 (0.x.y) bump semantics work fine once the starting version is
+# non-zero. But `version = "0.0.0"` combined with a matching `v0.0.0`
+# git tag (from the very first release-plz PR) is interpreted as
+# "already published — nothing to do" and release-plz never proposes
+# the first bump. SMA-347 escaped that trap by manually bumping
+# `paigasus-helikon-core` and `paigasus-helikon` to 0.1.0; the
+# remaining stub crates stay at 0.0.0 until they gain features and
+# will need the same manual nudge if/when they ship their first API.
 
 [changelog]
 sort_commits = "newest"

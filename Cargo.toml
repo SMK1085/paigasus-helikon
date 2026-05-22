@@ -31,7 +31,7 @@ tokio-util    = { version = "0.7", default-features = false, features = ["rt"] }
 insta         = "1"
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon-core                = { path = "crates/paigasus-helikon-core",                version = "0.0.0" }
+paigasus-helikon-core                = { path = "crates/paigasus-helikon-core",                version = "0.1.0" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros",              version = "0.0.0" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai",    version = "0.0.0" }
 paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.0.0" }
