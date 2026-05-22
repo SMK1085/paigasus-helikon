@@ -6,6 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
@@ -13,6 +14,7 @@ use futures_util::stream;
 
 use paigasus_helikon_core::{
     CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
+    Tool, ToolContext, ToolError, ToolOutput,
 };
 
 /// A scripted [`Model`] that emits a pre-recorded sequence of
@@ -53,5 +55,92 @@ impl Model for MockModel {
             parallel_tool_calls: true,
             ..Default::default()
         }
+    }
+}
+
+/// A [`Tool`] that records every invocation and returns a static
+/// `serde_json::Value` as its output.
+pub struct MockTool {
+    name: String,
+    description: String,
+    schema: serde_json::Value,
+    invocations: Mutex<Vec<(serde_json::Value, Instant)>>,
+    output: serde_json::Value,
+}
+
+impl MockTool {
+    pub fn new(name: &str, output: serde_json::Value) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.into(),
+            description: format!("mock tool {name}"),
+            schema: serde_json::json!({"type": "object"}),
+            invocations: Mutex::new(Vec::new()),
+            output,
+        })
+    }
+
+    pub fn invocations(&self) -> Vec<(serde_json::Value, Instant)> {
+        self.invocations.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl<Ctx> Tool<Ctx> for MockTool
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str { &self.name }
+    fn description(&self) -> &str { &self.description }
+    fn schema(&self) -> &serde_json::Value { &self.schema }
+
+    async fn invoke(
+        &self,
+        _ctx: &ToolContext<Ctx>,
+        args: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        self.invocations.lock().unwrap().push((args, Instant::now()));
+        Ok(ToolOutput { content: self.output.clone() })
+    }
+}
+
+/// A [`Tool`] that synchronizes its invocations through a
+/// [`tokio::sync::Barrier`]. Use with `Barrier::new(N)` and N tool
+/// instances to verify concurrent execution: if the tools run
+/// serially, the first invocation blocks forever waiting for the
+/// second waiter.
+pub struct MockToolBarrier {
+    name: String,
+    description: String,
+    schema: serde_json::Value,
+    barrier: Arc<tokio::sync::Barrier>,
+}
+
+impl MockToolBarrier {
+    pub fn new(name: &str, barrier: Arc<tokio::sync::Barrier>) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.into(),
+            description: format!("barrier-synced mock tool {name}"),
+            schema: serde_json::json!({"type": "object"}),
+            barrier,
+        })
+    }
+}
+
+#[async_trait]
+impl<Ctx> Tool<Ctx> for MockToolBarrier
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str { &self.name }
+    fn description(&self) -> &str { &self.description }
+    fn schema(&self) -> &serde_json::Value { &self.schema }
+
+    async fn invoke(
+        &self,
+        _ctx: &ToolContext<Ctx>,
+        _args: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        self.barrier.wait().await;
+        Ok(ToolOutput { content: serde_json::json!({"ok": true}) })
     }
 }
