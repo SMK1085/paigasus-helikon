@@ -191,15 +191,13 @@ pub fn transition(
 ) -> TransitionOutcome {
     match (state, input) {
         // Max turns reached at the CallingModel boundary → fail fast.
-        (LoopState::CallingModel { turn }, _) if *turn >= ctx.max_turns => {
-            TransitionOutcome {
-                next_state: LoopState::Failed(AgentError::MaxTurnsExceeded(ctx.max_turns)),
-                events: vec![AgentEvent::RunFailed {
-                    error: format!("max turns ({}) exceeded", ctx.max_turns),
-                }],
-                next_action: NextAction::Terminate,
-            }
-        }
+        (LoopState::CallingModel { turn }, _) if *turn >= ctx.max_turns => TransitionOutcome {
+            next_state: LoopState::Failed(AgentError::MaxTurnsExceeded(ctx.max_turns)),
+            events: vec![AgentEvent::RunFailed {
+                error: format!("max turns ({}) exceeded", ctx.max_turns),
+            }],
+            next_action: NextAction::Terminate,
+        },
         // Start seeds the loop: emit TurnStarted, request CallModel.
         (LoopState::CallingModel { turn }, TransitionInput::Start { .. })
             if *turn < ctx.max_turns =>
@@ -226,7 +224,11 @@ pub fn transition(
                     Item::AssistantMessage { .. } => {
                         events.push(AgentEvent::MessageOutput { item: item.clone() });
                     }
-                    Item::ToolCall { call_id, name, args } => {
+                    Item::ToolCall {
+                        call_id,
+                        name,
+                        args,
+                    } => {
                         events.push(AgentEvent::ToolCallItem { item: item.clone() });
                         calls.push(ToolCallRequest {
                             call_id: call_id.clone(),
@@ -238,7 +240,10 @@ pub fn transition(
                 }
             }
             TransitionOutcome {
-                next_state: LoopState::ExecutingTools { calls: calls.clone(), turn: *turn },
+                next_state: LoopState::ExecutingTools {
+                    calls: calls.clone(),
+                    turn: *turn,
+                },
                 events,
                 next_action: NextAction::ExecuteTools { calls },
             }
@@ -286,7 +291,9 @@ pub fn transition(
                 .map(|o| AgentEvent::ToolOutputItem {
                     item: Item::ToolResult {
                         call_id: o.call_id,
-                        content: o.result.unwrap_or_else(|e| vec![ContentPart::Text { text: e }]),
+                        content: o
+                            .result
+                            .unwrap_or_else(|e| vec![ContentPart::Text { text: e }]),
                     },
                 })
                 .collect();
@@ -302,6 +309,10 @@ pub fn transition(
                 next_action: NextAction::CallModel { request },
             }
         }
+        // Unreachable-in-SMA-314 variants surface NotImplemented and Terminate.
+        (LoopState::ApplyingHandoff { .. }, _) => not_implemented("handoff"),
+        (LoopState::Compacting, _) => not_implemented("compaction"),
+        (LoopState::NeedsApproval { .. }, _) => not_implemented("approval"),
         // Other cases land in subsequent tasks.
         (s, i) => TransitionOutcome {
             next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(
@@ -312,5 +323,16 @@ pub fn transition(
             }],
             next_action: NextAction::Terminate,
         },
+    }
+}
+
+/// Helper to surface `NotImplemented` for deferred-variant transitions.
+fn not_implemented(feature: &'static str) -> TransitionOutcome {
+    TransitionOutcome {
+        next_state: LoopState::Failed(AgentError::NotImplemented { feature }),
+        events: vec![AgentEvent::RunFailed {
+            error: format!("not yet implemented: {feature}"),
+        }],
+        next_action: NextAction::Terminate,
     }
 }

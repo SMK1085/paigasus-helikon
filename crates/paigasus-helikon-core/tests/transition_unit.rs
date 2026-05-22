@@ -2,9 +2,8 @@
 //! no IO. Locks SMA-314's state-machine determinism guarantees.
 
 use paigasus_helikon_core::{
-    AgentEvent, ContentPart, FinishReason, Item, LoopState, ModelSettings,
-    NextAction, TokenUsage, TransitionCtx, TransitionInput, ToolCallOutcome,
-    ToolCallRequest, transition,
+    transition, AgentEvent, ContentPart, FinishReason, Item, LoopState, ModelSettings, NextAction,
+    TokenUsage, ToolCallOutcome, ToolCallRequest, TransitionCtx, TransitionInput,
 };
 
 macro_rules! assert_matches {
@@ -12,12 +11,19 @@ macro_rules! assert_matches {
         let val = $expr;
         match val {
             $pat => {}
-            other => panic!("assertion failed: {other:?} does not match {}", stringify!($pat)),
+            other => panic!(
+                "assertion failed: {other:?} does not match {}",
+                stringify!($pat)
+            ),
         }
     };
 }
 
-fn ctx_with<'a>(max_turns: u32, conversation: &'a [Item], settings: &'a ModelSettings) -> TransitionCtx<'a> {
+fn ctx_with<'a>(
+    max_turns: u32,
+    conversation: &'a [Item],
+    settings: &'a ModelSettings,
+) -> TransitionCtx<'a> {
     TransitionCtx {
         tools: &[],
         model_settings: settings,
@@ -33,7 +39,9 @@ fn start_seeds_turn_zero_and_emits_call_model() {
         content: vec![ContentPart::Text { text: "hi".into() }],
     };
     let conversation = vec![user_msg.clone()];
-    let input = TransitionInput::Start { messages: vec![user_msg] };
+    let input = TransitionInput::Start {
+        messages: vec![user_msg],
+    };
     let settings = ModelSettings::new();
 
     let outcome = transition(&state, input, &ctx_with(16, &conversation, &settings));
@@ -48,7 +56,9 @@ fn start_seeds_turn_zero_and_emits_call_model() {
 fn model_response_without_tool_calls_terminates() {
     let state = LoopState::CallingModel { turn: 0 };
     let assistant = Item::AssistantMessage {
-        content: vec![ContentPart::Text { text: "hello".into() }],
+        content: vec![ContentPart::Text {
+            text: "hello".into(),
+        }],
         agent: Some("test".into()),
     };
     let conversation = vec![];
@@ -73,7 +83,9 @@ fn model_response_without_tool_calls_terminates() {
 fn model_response_with_tool_calls_fans_out() {
     let state = LoopState::CallingModel { turn: 0 };
     let assistant = Item::AssistantMessage {
-        content: vec![ContentPart::Text { text: "calling tools".into() }],
+        content: vec![ContentPart::Text {
+            text: "calling tools".into(),
+        }],
         agent: Some("test".into()),
     };
     let call_a = Item::ToolCall {
@@ -128,15 +140,22 @@ fn tool_results_advance_to_next_call_model() {
             args: serde_json::json!({}),
         },
     ];
-    let state = LoopState::ExecutingTools { calls: calls.clone(), turn: 0 };
+    let state = LoopState::ExecutingTools {
+        calls: calls.clone(),
+        turn: 0,
+    };
     let outcomes = vec![
         ToolCallOutcome {
             call_id: "1".into(),
-            result: Ok(vec![ContentPart::Text { text: "ok-a".into() }]),
+            result: Ok(vec![ContentPart::Text {
+                text: "ok-a".into(),
+            }]),
         },
         ToolCallOutcome {
             call_id: "2".into(),
-            result: Ok(vec![ContentPart::Text { text: "ok-b".into() }]),
+            result: Ok(vec![ContentPart::Text {
+                text: "ok-b".into(),
+            }]),
         },
     ];
     let conversation = vec![];
@@ -162,7 +181,11 @@ fn calling_model_at_max_turns_fails() {
     let settings = ModelSettings::new();
     let input = TransitionInput::Start { messages: vec![] };
 
-    let outcome = transition(&state, input, &ctx_with(max_turns, &conversation, &settings));
+    let outcome = transition(
+        &state,
+        input,
+        &ctx_with(max_turns, &conversation, &settings),
+    );
 
     match outcome.next_state {
         LoopState::Failed(paigasus_helikon_core::AgentError::MaxTurnsExceeded(n)) => {
@@ -173,4 +196,65 @@ fn calling_model_at_max_turns_fails() {
     assert_matches!(outcome.next_action, NextAction::Terminate);
     assert_eq!(outcome.events.len(), 1);
     assert_matches!(&outcome.events[0], AgentEvent::RunFailed { .. });
+}
+
+#[test]
+fn applying_handoff_surfaces_not_implemented() {
+    let state = LoopState::ApplyingHandoff {
+        target: "other".into(),
+        transcript: vec![],
+    };
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let outcome = transition(
+        &state,
+        TransitionInput::Start { messages: vec![] },
+        &ctx_with(16, &conversation, &settings),
+    );
+
+    match outcome.next_state {
+        LoopState::Failed(paigasus_helikon_core::AgentError::NotImplemented { feature }) => {
+            assert_eq!(feature, "handoff");
+        }
+        other => panic!("expected Failed(NotImplemented), got {other:?}"),
+    }
+    assert_matches!(outcome.next_action, NextAction::Terminate);
+}
+
+#[test]
+fn compacting_surfaces_not_implemented() {
+    let state = LoopState::Compacting;
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let outcome = transition(
+        &state,
+        TransitionInput::Start { messages: vec![] },
+        &ctx_with(16, &conversation, &settings),
+    );
+
+    match outcome.next_state {
+        LoopState::Failed(paigasus_helikon_core::AgentError::NotImplemented { feature }) => {
+            assert_eq!(feature, "compaction");
+        }
+        other => panic!("expected Failed(NotImplemented), got {other:?}"),
+    }
+}
+
+#[test]
+fn needs_approval_surfaces_not_implemented() {
+    let state = LoopState::NeedsApproval { pending: vec![] };
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let outcome = transition(
+        &state,
+        TransitionInput::Start { messages: vec![] },
+        &ctx_with(16, &conversation, &settings),
+    );
+
+    match outcome.next_state {
+        LoopState::Failed(paigasus_helikon_core::AgentError::NotImplemented { feature }) => {
+            assert_eq!(feature, "approval");
+        }
+        other => panic!("expected Failed(NotImplemented), got {other:?}"),
+    }
 }
