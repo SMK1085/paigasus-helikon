@@ -168,9 +168,64 @@ fn is_valid_name(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-pub(crate) fn tools(_input: TokenStream) -> Result<TokenStream, Error> {
-    Err(Error::new(
-        Span::call_site(),
-        "tools! not implemented yet — placeholder from Phase C1",
-    ))
+pub(crate) fn tools(input: TokenStream) -> Result<TokenStream, Error> {
+    use syn::parse::Parser;
+    use syn::spanned::Spanned as _;
+
+    let parsed = ToolsInput::parse
+        .parse2(input.clone())
+        .map_err(|e| Error::new(input.span(), format!("invalid `tools!` invocation: {e}")))?;
+
+    if parsed.tools.is_empty() {
+        return Err(Error::new(
+            Span::call_site(),
+            "tools! expects at least one tool; use \
+             `Vec::<Arc<dyn Tool<Ctx>>>::new()` for an empty registry",
+        ));
+    }
+
+    let core = resolve_core_path(parsed.crate_path.as_ref(), Span::call_site())?;
+    let tools = &parsed.tools;
+
+    Ok(quote! {
+        {
+            let __r: ::std::vec::Vec<::std::sync::Arc<dyn #core::Tool<_>>> = ::std::vec![
+                #(
+                    ::std::sync::Arc::new(#tools)
+                        as ::std::sync::Arc<dyn #core::Tool<_>>
+                ),*
+            ];
+            __r
+        }
+    })
+}
+
+struct ToolsInput {
+    crate_path: Option<syn::Path>,
+    tools: Vec<syn::Expr>,
+}
+
+impl ToolsInput {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let crate_path = if input.peek(syn::Token![crate]) {
+            let _: syn::Token![crate] = input.parse()?;
+            let _: syn::Token![=] = input.parse()?;
+            let path: syn::Path = input.parse()?;
+            let _: syn::Token![;] = input.parse()?;
+            Some(path)
+        } else {
+            None
+        };
+
+        let mut tools = Vec::new();
+        while !input.is_empty() {
+            tools.push(input.parse::<syn::Expr>()?);
+            if input.is_empty() {
+                break;
+            }
+            let _: syn::Token![,] = input.parse()?;
+        }
+
+        Ok(ToolsInput { crate_path, tools })
+    }
 }
