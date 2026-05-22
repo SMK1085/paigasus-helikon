@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use paigasus_helikon_core::{
-    Agent, AgentEvent, AgentInput, FinishReason, Instructions, LlmAgent,
-    ModelEvent, ModelSettings, RunConfig, RunResultStreaming,
+    Agent, AgentEvent, AgentInput, FinishReason, Instructions, LlmAgent, ModelEvent, ModelSettings,
+    RunConfig, RunResultStreaming,
 };
 
 use common::{noop_run_context, MockModel, MockToolBarrier};
@@ -33,11 +33,17 @@ async fn two_tool_calls_execute_concurrently() {
                 name: Some("b".into()),
                 args_delta: "{}".into(),
             },
-            ModelEvent::Finish { reason: FinishReason::ToolCalls },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
         ],
         vec![
-            ModelEvent::TokenDelta { text: "done".into() },
-            ModelEvent::Finish { reason: FinishReason::Stop },
+            ModelEvent::TokenDelta {
+                text: "done".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
         ],
     ]);
 
@@ -74,6 +80,7 @@ async fn two_tool_calls_execute_concurrently() {
 
     assert!(
         matches!(result.events.last(), Some(AgentEvent::RunCompleted { .. })),
-        "expected RunCompleted as last event, got: {:?}", result.events.last(),
+        "expected RunCompleted as last event, got: {:?}",
+        result.events.last(),
     );
 }

@@ -4,8 +4,8 @@
 
 #![allow(dead_code)]
 
-use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -14,8 +14,8 @@ use futures_util::stream;
 
 use paigasus_helikon_core::{
     CancellationToken, ConversationSnapshot, HookRegistry, Model, ModelCapabilities, ModelError,
-    ModelEvent, ModelRequest, RunContext, Session, SessionError, SessionEvent, SequenceId,
-    Tool, ToolContext, ToolError, ToolOutput, TracerHandle,
+    ModelEvent, ModelRequest, RunContext, SequenceId, Session, SessionError, SessionEvent, Tool,
+    ToolContext, ToolError, ToolOutput, TracerHandle,
 };
 
 /// A scripted [`Model`] that emits a pre-recorded sequence of
@@ -85,16 +85,25 @@ impl<Ctx> Tool<Ctx> for MockTool
 where
     Ctx: Send + Sync + 'static,
 {
-    fn name(&self) -> &str { &self.name }
-    fn description(&self) -> &str { &self.description }
-    fn schema(&self) -> &serde_json::Value { &self.schema }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
 
     async fn invoke(
         &self,
         _ctx: &ToolContext<Ctx>,
         args: serde_json::Value,
     ) -> Result<ToolOutput, ToolError> {
-        self.invocations.lock().unwrap().push((args, Instant::now()));
+        self.invocations
+            .lock()
+            .unwrap()
+            .push((args, Instant::now()));
         Ok(ToolOutput::new(self.output.clone()))
     }
 }
@@ -127,9 +136,15 @@ impl<Ctx> Tool<Ctx> for MockToolBarrier
 where
     Ctx: Send + Sync + 'static,
 {
-    fn name(&self) -> &str { &self.name }
-    fn description(&self) -> &str { &self.description }
-    fn schema(&self) -> &serde_json::Value { &self.schema }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
 
     async fn invoke(
         &self,

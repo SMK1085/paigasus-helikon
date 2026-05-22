@@ -93,12 +93,16 @@ pub struct RunConfig {
 }
 
 impl Default for RunConfig {
-    fn default() -> Self { Self { max_turns: 16 } }
+    fn default() -> Self {
+        Self { max_turns: 16 }
+    }
 }
 
 impl RunConfig {
     /// Construct a default config (`max_turns = 16`).
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 /// The aggregated outcome of a non-streaming [`Runner::run`].
@@ -181,7 +185,11 @@ impl RunResultStreaming {
             return Err(RunError::Other(anyhow::anyhow!(e)));
         }
 
-        Ok(RunResult { final_output, events, usage })
+        Ok(RunResult {
+            final_output,
+            events,
+            usage,
+        })
     }
 }
 
