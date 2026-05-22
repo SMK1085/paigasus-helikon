@@ -6,13 +6,7 @@ use syn::{
 };
 
 /// Decomposed view of the user's `async fn`.
-///
-/// `item` is retained for future diagnostics keyed off the full fn AST
-/// (not currently consumed by expand.rs — caller already holds the
-/// `&ItemFn` it passed in).
-#[allow(dead_code)]
-pub(crate) struct ToolSignature<'a> {
-    pub item: &'a ItemFn,
+pub(crate) struct ToolSignature {
     /// `Ctx` extracted from `&ToolContext<Ctx>`.
     pub ctx_ty: Type,
     /// Type of the args struct (second positional argument).
@@ -21,10 +15,10 @@ pub(crate) struct ToolSignature<'a> {
     pub out_ty: Type,
 }
 
-impl<'a> ToolSignature<'a> {
+impl ToolSignature {
     /// Parse + validate. Errors describe what the macro looked for,
     /// not what the user did.
-    pub(crate) fn from_item(item: &'a ItemFn) -> Result<Self> {
+    pub(crate) fn from_item(item: &ItemFn) -> Result<Self> {
         let sig = &item.sig;
 
         if sig.asyncness.is_none() {
@@ -84,7 +78,6 @@ impl<'a> ToolSignature<'a> {
         let out_ty = extract_out_ty(&sig.output)?;
 
         Ok(ToolSignature {
-            item,
             ctx_ty,
             args_ty,
             out_ty,

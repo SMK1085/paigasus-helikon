@@ -22,13 +22,12 @@ impl Parse for ToolAttrArgs {
 
         loop {
             // `crate` is a keyword; syn's `Ident` parser rejects keywords by default.
-            // We must handle it explicitly before falling back to regular identifiers.
+            // Handle it explicitly before falling back to regular identifiers.
             if input.peek(Token![crate]) {
-                let kw: Token![crate] = input.parse()?;
+                let _: Token![crate] = input.parse()?;
                 let _: Token![=] = input.parse()?;
                 let path: Path = input.parse()?;
                 out.crate_path = Some(path);
-                let _ = kw; // span consumed above; suppress unused-variable lint
             } else {
                 let key: Ident = input.parse()?;
                 let _: Token![=] = input.parse()?;
