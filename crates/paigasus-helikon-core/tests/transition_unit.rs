@@ -238,6 +238,7 @@ fn compacting_surfaces_not_implemented() {
         }
         other => panic!("expected Failed(NotImplemented), got {other:?}"),
     }
+    assert_matches!(outcome.next_action, NextAction::Terminate);
 }
 
 #[test]
@@ -257,4 +258,5 @@ fn needs_approval_surfaces_not_implemented() {
         }
         other => panic!("expected Failed(NotImplemented), got {other:?}"),
     }
+    assert_matches!(outcome.next_action, NextAction::Terminate);
 }

@@ -340,7 +340,7 @@ fn build_items(
     agent_name: &str,
     text: String,
     reasoning: String,
-    tool_accum: std::collections::HashMap<String, ToolCallAccum>,
+    tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
 ) -> Vec<crate::Item> {
     let mut items = Vec::new();
     if !text.is_empty() || !reasoning.is_empty() {
@@ -492,8 +492,8 @@ where
 
                         let mut text = String::new();
                         let mut reasoning = String::new();
-                        let mut tool_accum: std::collections::HashMap<String, ToolCallAccum> =
-                            std::collections::HashMap::new();
+                        let mut tool_accum: std::collections::BTreeMap<String, ToolCallAccum> =
+                            std::collections::BTreeMap::new();
                         let mut finish_reason = crate::FinishReason::Stop;
 
                         while let Some(evt) = model_stream.next().await {
