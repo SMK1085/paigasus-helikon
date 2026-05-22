@@ -2,6 +2,8 @@
 //! If this test breaks, the #[tool] macro's output_schema() codegen
 //! will silently regress.
 
+#![allow(clippy::needless_borrow)]
+
 use paigasus_helikon_core::__private::{OutputSchemaProbe, OutputSchemaProbeSpec as _};
 use schemars::JsonSchema;
 use serde::Serialize;
