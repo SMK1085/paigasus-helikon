@@ -1,0 +1,26 @@
+---
+source: crates/paigasus-helikon-macros/tests/schema_golden.rs
+assertion_line: 36
+expression: serialized
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "a": {
+      "description": "First addend.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "b": {
+      "description": "Second addend.",
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "a",
+    "b"
+  ],
+  "title": "AddArgs",
+  "type": "object"
+}
