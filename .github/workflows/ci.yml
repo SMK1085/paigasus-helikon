@@ -22,6 +22,8 @@ jobs:
     steps:
       # actions/checkout v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
@@ -34,6 +36,8 @@ jobs:
     steps:
       # actions/checkout v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
@@ -58,6 +62,8 @@ jobs:
     steps:
       # actions/checkout v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
@@ -71,6 +77,8 @@ jobs:
     steps:
       # actions/checkout v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
@@ -88,6 +96,8 @@ jobs:
     steps:
       # actions/checkout v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
@@ -106,6 +116,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
       # taiki-e/install-action v2.79.0
       - uses: taiki-e/install-action@7be9fd86bd1707236395105d6e9329dd1511a7e1
         with:
