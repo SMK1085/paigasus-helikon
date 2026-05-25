@@ -59,6 +59,7 @@ No changes to any crate's `src/`, to `Cargo.toml` (root or member), to `release-
 | Adding caching | **No.** | Decided in brainstorming. Out of the ticket's explicit scope; release-plz runs are infrequent (one per merge to main), so the cache hit rate is low and the diff stays minimal. |
 | Action SHAs | Resolved at spec-write time against `gh api repos/<owner>/<repo>/releases/latest` per the CLAUDE.md "always implement against the latest stable major" rule. | See §4. No new majors have shipped; staying on `actions/create-github-app-token@v3` and `release-plz/action@v0.5` is correct. |
 | Commit shape | **One commit on the feature branch**, squash-merged to a single commit on `main`. Type/scope `ci(workflows)`. | `ci(workflows): SMA-351 combine release-plz jobs to share one App token mint` (lowercase verb after the SMA-### prefix — required by `pr-title.yml`'s subject regex). `workflows` is in the `.versionrc` scope allowlist. |
+| App-token permission scoping | **Explicit `permission-contents: write` + `permission-pull-requests: write` on the `create-github-app-token` step.** Added during PR review in response to a CodeRabbit / zizmor finding. | Defense-in-depth: without explicit `permission-*` overrides, the minted token inherits the paigasusbot App installation's full permission surface, even if release-plz only needs two scopes. The two scopes here match the workflow-level `permissions:` block and release-plz's own quickstart recommendation. This is a token-scoping change, not an App-permissions change — the App itself is untouched, consistent with the §1 non-goal. |
 
 ## 4. Target structure
 
@@ -111,6 +112,8 @@ jobs:
         with:
           client-id: ${{ secrets.RELEASE_PLZ_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       # release-plz/action v0.5.129
       - uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db
         with:

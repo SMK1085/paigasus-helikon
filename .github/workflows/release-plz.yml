@@ -35,6 +35,8 @@ jobs:
         with:
           client-id: ${{ secrets.RELEASE_PLZ_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       # release-plz/action v0.5.129
       - uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db
         with:
