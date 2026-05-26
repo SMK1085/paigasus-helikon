@@ -501,6 +501,7 @@ where
                         let mut tool_accum: std::collections::BTreeMap<String, ToolCallAccum> =
                             std::collections::BTreeMap::new();
                         let mut finish_reason = crate::FinishReason::Stop;
+                        let mut latest_usage: Option<crate::TokenUsage> = None;
 
                         while let Some(evt) = model_stream.next().await {
                             match evt {
@@ -530,12 +531,24 @@ where
                                         args_delta,
                                     };
                                 }
-                                Ok(crate::ModelEvent::Usage { .. }) => {
-                                    // Usage events are consumed silently here; downstream
-                                    // usage accounting is wired through the TokenUsage stub
-                                    // a few lines below and accumulated by the runner into
-                                    // AgentEvent::RunCompleted. SMA-318 will replace the
-                                    // stub with real per-turn accumulation.
+                                Ok(crate::ModelEvent::Usage {
+                                    input_tokens,
+                                    output_tokens,
+                                    cached_input_tokens,
+                                    reasoning_tokens,
+                                }) => {
+                                    latest_usage = Some(crate::TokenUsage {
+                                        input_tokens: u64::from(input_tokens),
+                                        output_tokens: u64::from(output_tokens),
+                                        cached_input_tokens: cached_input_tokens
+                                            .map(u64::from)
+                                            .unwrap_or(0),
+                                        reasoning_tokens: reasoning_tokens
+                                            .map(u64::from)
+                                            .unwrap_or(0),
+                                        total_tokens: u64::from(input_tokens)
+                                            + u64::from(output_tokens),
+                                    });
                                 }
                                 Ok(crate::ModelEvent::Finish { reason }) => {
                                     finish_reason = reason;
@@ -555,7 +568,7 @@ where
                             }
                         };
                         conversation.extend(items.iter().cloned());
-                        let usage = crate::TokenUsage::default();
+                        let usage = latest_usage.unwrap_or_default();
                         tx_input = crate::TransitionInput::ModelResponse {
                             items,
                             usage,
