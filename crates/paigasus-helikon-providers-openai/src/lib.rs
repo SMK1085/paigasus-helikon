@@ -18,8 +18,6 @@
 //!
 //! [SMA-316]: https://linear.app/smaschek/issue/SMA-316
 
-#![allow(missing_docs)] // module stubs are filled in by subsequent SMA-316 tasks
-
 mod backend;
 mod builder;
 mod capabilities;
