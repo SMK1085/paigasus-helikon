@@ -97,17 +97,36 @@ pub struct ToolDef {
     pub schema: serde_json::Value,
 }
 
-/// Provider-tuning knobs (temperature, max tokens, sampling, ...).
+/// Provider-tuning knobs.
 ///
-/// Field shape lands with SMA-316 / SMA-317. Today this is a
-/// `#[non_exhaustive]` placeholder so [`ModelRequest::model_settings`]
-/// has a type.
+/// Field shape grew in SMA-316 to cover the surface OpenAI needs;
+/// SMA-317 (Anthropic) may reshape if Anthropic's protocol demands it.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub struct ModelSettings {}
+pub struct ModelSettings {
+    /// Sampling temperature. Provider-defined default when unset.
+    pub temperature: Option<f32>,
+    /// Nucleus-sampling top-p. Provider-defined default when unset.
+    pub top_p: Option<f32>,
+    /// Cap on output tokens per response. Maps to `max_tokens` on
+    /// OpenAI Chat and to `max_output_tokens` on OpenAI Responses.
+    pub max_output_tokens: Option<u32>,
+    /// Caller's tool-selection preference. See [`ToolChoice`].
+    pub tool_choice: Option<ToolChoice>,
+    /// Caller's response-shape preference. See [`ResponseFormat`].
+    pub response_format: Option<ResponseFormat>,
+    /// OpenAI Responses-API server-side state token. **Caller-managed:**
+    /// when set, callers MUST trim [`ModelRequest::messages`] to only
+    /// the items added since the response identified by this id. The
+    /// provider passes `messages` through as-is — it does not filter.
+    /// Integration with [`crate::LlmAgent`]'s automatic conversation
+    /// accumulation is out of scope for SMA-316; see follow-up ticket.
+    /// Ignored by non-OpenAI-Responses providers.
+    pub previous_response_id: Option<String>,
+}
 
 impl ModelSettings {
-    /// Construct default model settings.
+    /// Construct default model settings (all fields unset).
     pub fn new() -> Self {
         Self::default()
     }
@@ -340,5 +359,30 @@ mod tests {
         assert_eq!(ResponseFormat::Text, ResponseFormat::Text);
         assert_eq!(ResponseFormat::JsonObject, ResponseFormat::JsonObject);
         assert_ne!(ResponseFormat::Text, ResponseFormat::JsonObject);
+    }
+
+    #[test]
+    fn model_settings_default_is_all_none() {
+        let s = ModelSettings::default();
+        assert!(s.temperature.is_none());
+        assert!(s.top_p.is_none());
+        assert!(s.max_output_tokens.is_none());
+        assert!(s.tool_choice.is_none());
+        assert!(s.response_format.is_none());
+        assert!(s.previous_response_id.is_none());
+    }
+
+    #[test]
+    fn model_settings_fields_are_settable() {
+        let s = ModelSettings {
+            temperature: Some(0.7),
+            top_p: Some(0.95),
+            max_output_tokens: Some(1024),
+            tool_choice: Some(ToolChoice::Auto),
+            response_format: Some(ResponseFormat::Text),
+            previous_response_id: Some("resp_abc".to_owned()),
+        };
+        assert_eq!(s.temperature, Some(0.7));
+        assert_eq!(s.previous_response_id.as_deref(), Some("resp_abc"));
     }
 }
