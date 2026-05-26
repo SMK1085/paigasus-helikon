@@ -232,10 +232,6 @@ fn openai_tool_call(call_id: &str, name: &str, args: &Value) -> Value {
     })
 }
 
-// Suppress dead-code warnings until backends consume to_chat_messages.
-#[allow(dead_code)]
-const _SILENCE_DEAD_CODE: fn(&[Item]) -> Value = to_chat_messages;
-
 /// Translate a conversation `Vec<Item>` into OpenAI Responses-API
 /// `input: [...]` form.
 ///
@@ -344,10 +340,6 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
     }
     Value::Array(out)
 }
-
-// Suppress dead-code warning until backend/responses.rs consumes this.
-#[allow(dead_code)]
-const _SILENCE_DEAD_CODE_RESPONSES: fn(&[Item]) -> Value = to_responses_input;
 
 #[cfg(test)]
 mod chat_tests {

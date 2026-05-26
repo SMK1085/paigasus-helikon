@@ -18,10 +18,8 @@ use crate::capabilities::Backend;
 /// Construct via [`Self::chat`] or [`Self::responses`].
 #[derive(Debug)]
 pub struct OpenAiModel {
-    #[allow(dead_code)] // consumed by backend::chat / backend::responses (SMA-316 E+F phases)
     pub(crate) model_id: String,
     pub(crate) backend: Backend,
-    #[allow(dead_code)] // consumed by backend::chat / backend::responses (SMA-316 E+F phases)
     pub(crate) client: Client<OpenAIConfig>,
     pub(crate) capabilities: ModelCapabilities,
 }

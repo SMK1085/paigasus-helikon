@@ -61,11 +61,6 @@ fn rewrite_in_place(v: &mut Value) {
     }
 }
 
-// Suppress dead-code warnings until response_format (Task C4) and the
-// backends (E1+/F1+) consume to_strict_schema.
-#[allow(dead_code)]
-const _SILENCE_DEAD_CODE: fn(&Value) -> Value = to_strict_schema;
-
 #[cfg(test)]
 mod tests {
     use super::*;

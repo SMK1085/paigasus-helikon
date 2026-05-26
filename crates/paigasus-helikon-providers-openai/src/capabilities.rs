@@ -14,7 +14,6 @@ use paigasus_helikon_core::ModelCapabilities;
 /// Crate-internal because it lives on the `OpenAiModel`'s
 /// backend-dispatch surface, not the public builder API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // used by D2 (OpenAiModel backend dispatch)
 pub(crate) enum Backend {
     /// Chat Completions (`/v1/chat/completions`).
     Chat,
@@ -28,7 +27,6 @@ pub(crate) enum Backend {
 /// proxies (vLLM, LiteLLM, Ollama, llama.cpp) don't support parallel tool
 /// calls, and a loop that expects multiple-call responses fails worse than
 /// one that expects single-call.
-#[allow(dead_code)] // used by lookup(); lookup() used by D2
 pub(crate) const fn conservative_defaults() -> ModelCapabilities {
     ModelCapabilities::empty().with_streaming().with_tools()
     // parallel_tool_calls intentionally not set — see doc comment
@@ -39,7 +37,6 @@ pub(crate) const fn conservative_defaults() -> ModelCapabilities {
 /// Cross-check entries against OpenAI's published model docs at
 /// implementation time. Entries that diverge are bugs — file follow-up
 /// chore-PRs to keep this table aligned with reality.
-#[allow(dead_code)] // used by lookup(); lookup() used by D2
 pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
     // Chat Completions family
     (
@@ -145,7 +142,6 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
 /// [`conservative_defaults`]. Callers apply [`mask_for_backend`] after
 /// this to clear Responses-only capabilities when the caller chose the
 /// Chat backend.
-#[allow(dead_code)] // used by D2 (OpenAiModel backend dispatch)
 pub(crate) fn lookup(model_id: &str) -> ModelCapabilities {
     KNOWN_MODELS
         .iter()
@@ -160,7 +156,6 @@ pub(crate) fn lookup(model_id: &str) -> ModelCapabilities {
 /// they get cleared when paired with [`Backend::Chat`]. Forwards-compatible:
 /// add new masking rules here when future capabilities turn out to be
 /// backend-specific.
-#[allow(dead_code)] // used by D2 (OpenAiModel backend dispatch)
 pub(crate) fn mask_for_backend(mut caps: ModelCapabilities, backend: Backend) -> ModelCapabilities {
     match backend {
         Backend::Chat => {

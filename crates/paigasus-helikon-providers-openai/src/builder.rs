@@ -10,9 +10,6 @@ use crate::model::OpenAiModel;
 use async_openai::config::OpenAIConfig;
 use paigasus_helikon_core::ModelCapabilities;
 
-#[allow(dead_code)]
-const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
-
 #[derive(Debug, Clone)]
 enum AuthSource {
     Env,

@@ -67,11 +67,6 @@ fn map_api_error_response(resp: ApiErrorResponse) -> ModelError {
     }
 }
 
-// Silence dead-code warnings until the backend modules consume map_openai_error
-// (Task E1+).
-#[allow(dead_code)]
-const _SILENCE_DEAD_CODE: fn(OpenAIError) -> ModelError = map_openai_error;
-
 #[cfg(test)]
 mod tests {
     use super::*;

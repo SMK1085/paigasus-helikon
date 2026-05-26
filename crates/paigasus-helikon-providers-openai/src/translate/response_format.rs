@@ -38,10 +38,6 @@ pub(crate) fn to_openai_response_format(format: &ResponseFormat) -> Option<Value
     }
 }
 
-// Silence dead-code warnings until the backend modules (E1+/F1+) consume this.
-#[allow(dead_code)]
-const _SILENCE_DEAD_CODE: fn(&ResponseFormat) -> Option<Value> = to_openai_response_format;
-
 #[cfg(test)]
 mod tests {
     use super::*;

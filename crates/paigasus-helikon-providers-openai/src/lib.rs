@@ -8,7 +8,8 @@
 //! # Quick start
 //!
 //! ```ignore
-//! // Wired by SMA-316 Task D2 — example compiles once OpenAiModel::chat exists.
+//! // Ignored under doctest because the example reads OPENAI_API_KEY
+//! // from env, which isn't available in `cargo doc` runs.
 //! use paigasus_helikon_providers_openai::OpenAiModel;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
