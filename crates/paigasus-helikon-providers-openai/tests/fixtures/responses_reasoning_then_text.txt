@@ -1,0 +1,8 @@
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":1,"item_id":"rs_01","output_index":0,"summary_index":0,"delta":"thinking..."}
+
+data: {"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_01","output_index":1,"content_index":0,"delta":"answer"}
+
+data: {"type":"response.completed","sequence_number":3,"response":{"id":"resp_01","object":"response","created_at":1,"model":"gpt-5","output":[],"status":"completed","usage":{"input_tokens":10,"output_tokens":3,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":2},"total_tokens":13}}}
+
+data: [DONE]
+

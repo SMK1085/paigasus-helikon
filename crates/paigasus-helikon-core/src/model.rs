@@ -51,6 +51,17 @@ pub trait Model: Send + Sync {
     /// Invoke the model. Returns a stream of [`ModelEvent`]s on success or a
     /// [`ModelError`] if the request could not be sent. Individual events in
     /// the stream may themselves carry a [`ModelError`].
+    ///
+    /// **Event-ordering contract:**
+    /// - `TokenDelta`, `ReasoningDelta`, and `ToolCallDelta` may interleave
+    ///   freely while the model is generating.
+    /// - `Usage` MAY appear anywhere; most providers emit one immediately
+    ///   before `Finish` but Anthropic emits incremental updates.
+    /// - `Finish` is the terminal event; nothing follows it.
+    ///
+    /// Implementations that cannot honor cancellation MUST still terminate
+    /// the stream when the [`CancellationToken`] fires (drop the underlying
+    /// connection and end the stream without emitting `Finish`).
     async fn invoke(
         &self,
         request: ModelRequest,
@@ -97,23 +108,42 @@ pub struct ToolDef {
     pub schema: serde_json::Value,
 }
 
-/// Provider-tuning knobs (temperature, max tokens, sampling, ...).
+/// Provider-tuning knobs.
 ///
-/// Field shape lands with SMA-316 / SMA-317. Today this is a
-/// `#[non_exhaustive]` placeholder so [`ModelRequest::model_settings`]
-/// has a type.
+/// Field shape grew in SMA-316 to cover the surface OpenAI needs;
+/// SMA-317 (Anthropic) may reshape if Anthropic's protocol demands it.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub struct ModelSettings {}
+pub struct ModelSettings {
+    /// Sampling temperature. Provider-defined default when unset.
+    pub temperature: Option<f32>,
+    /// Nucleus-sampling top-p. Provider-defined default when unset.
+    pub top_p: Option<f32>,
+    /// Cap on output tokens per response. Maps to `max_tokens` on
+    /// OpenAI Chat and to `max_output_tokens` on OpenAI Responses.
+    pub max_output_tokens: Option<u32>,
+    /// Caller's tool-selection preference. See [`ToolChoice`].
+    pub tool_choice: Option<ToolChoice>,
+    /// Caller's response-shape preference. See [`ResponseFormat`].
+    pub response_format: Option<ResponseFormat>,
+    /// OpenAI Responses-API server-side state token. **Caller-managed:**
+    /// when set, callers MUST trim [`ModelRequest::messages`] to only
+    /// the items added since the response identified by this id. The
+    /// provider passes `messages` through as-is — it does not filter.
+    /// Integration with [`crate::LlmAgent`]'s automatic conversation
+    /// accumulation is out of scope for SMA-316; see follow-up ticket.
+    /// Ignored by non-OpenAI-Responses providers.
+    pub previous_response_id: Option<String>,
+}
 
 impl ModelSettings {
-    /// Construct default model settings.
+    /// Construct default model settings (all fields unset).
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-/// Streaming union — token, reasoning, tool-call delta, finish.
+/// Streaming union — token / reasoning / tool-call deltas, usage snapshots, finish.
 ///
 /// See ADR-1 (*Single Model trait with capabilities flags*).
 #[derive(Debug, Clone)]
@@ -140,6 +170,27 @@ pub enum ModelEvent {
         name: Option<String>,
         /// JSON-encoded argument fragment.
         args_delta: String,
+    },
+    /// Token-usage snapshot emitted by the provider.
+    ///
+    /// **Ordering contract** (per [`Model::invoke`] docs): a `Usage` MAY
+    /// appear anywhere in the stream. `Finish` is always terminal.
+    /// OpenAI emits one `Usage` immediately before `Finish`; Anthropic
+    /// emits incremental usage updates. Consumers tracking final
+    /// totals should retain the last `Usage` seen.
+    Usage {
+        /// Prompt / input tokens consumed.
+        input_tokens: u32,
+        /// Completion / output tokens generated.
+        output_tokens: u32,
+        /// Cached input tokens (OpenAI prompt-caching, Anthropic
+        /// ephemeral cache). `None` when the provider does not report
+        /// caching or none was hit.
+        cached_input_tokens: Option<u32>,
+        /// Reasoning tokens (OpenAI o1/o3/gpt-5; Anthropic extended
+        /// thinking). `None` when the provider does not separate
+        /// reasoning from output tokens.
+        reasoning_tokens: Option<u32>,
     },
     /// Terminal event for a single response.
     Finish {
@@ -191,6 +242,117 @@ pub struct ModelCapabilities {
     pub audio: bool,
 }
 
+impl ModelCapabilities {
+    /// Construct an all-`false` [`ModelCapabilities`] value.
+    ///
+    /// External crates use this as the starting point for chained
+    /// `with_*` builders; the struct's `#[non_exhaustive]` attribute
+    /// otherwise blocks direct struct-literal construction.
+    pub const fn empty() -> Self {
+        Self {
+            streaming: false,
+            tools: false,
+            parallel_tool_calls: false,
+            structured_output: false,
+            server_managed_state: false,
+            reasoning: false,
+            vision: false,
+            audio: false,
+        }
+    }
+
+    /// Mark `streaming` as supported.
+    pub const fn with_streaming(mut self) -> Self {
+        self.streaming = true;
+        self
+    }
+    /// Mark `tools` (function calling) as supported.
+    pub const fn with_tools(mut self) -> Self {
+        self.tools = true;
+        self
+    }
+    /// Mark `parallel_tool_calls` as supported.
+    pub const fn with_parallel_tool_calls(mut self) -> Self {
+        self.parallel_tool_calls = true;
+        self
+    }
+    /// Mark `structured_output` as supported.
+    pub const fn with_structured_output(mut self) -> Self {
+        self.structured_output = true;
+        self
+    }
+    /// Mark `server_managed_state` as supported.
+    pub const fn with_server_managed_state(mut self) -> Self {
+        self.server_managed_state = true;
+        self
+    }
+    /// Mark `reasoning` token emission as supported.
+    pub const fn with_reasoning(mut self) -> Self {
+        self.reasoning = true;
+        self
+    }
+    /// Mark `vision` (image input) as supported.
+    pub const fn with_vision(mut self) -> Self {
+        self.vision = true;
+        self
+    }
+    /// Mark `audio` (input) as supported.
+    pub const fn with_audio(mut self) -> Self {
+        self.audio = true;
+        self
+    }
+}
+
+/// Caller's preference for whether the model invokes a tool this turn.
+///
+/// Maps onto each provider's native `tool_choice` shape. Providers that
+/// do not accept a `tool_choice` (older Anthropic builds, some
+/// OpenAI-compatible proxies) treat any non-`None` setting as
+/// best-effort.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ToolChoice {
+    /// Default — the model decides whether to call a tool.
+    Auto,
+    /// The model **must** call at least one tool.
+    Required,
+    /// The model **must not** call a tool this turn.
+    None,
+    /// The model **must** call exactly the named tool.
+    Tool {
+        /// Tool name (matching [`crate::Tool::name`]).
+        name: String,
+    },
+}
+
+/// Caller's preference for the assistant message's content shape.
+///
+/// Maps onto each provider's native `response_format` (OpenAI),
+/// `response_format`/`tool` (Anthropic), or structured-output equivalent.
+/// Providers that lack native support degrade to `Text`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ResponseFormat {
+    /// Default — assistant text is unconstrained.
+    Text,
+    /// Assistant message must be a valid JSON object (no schema).
+    JsonObject,
+    /// Assistant message must conform to the JSON Schema below.
+    ///
+    /// When `strict` is `true`, providers that support strict mode (OpenAI
+    /// Responses, OpenAI Chat with `response_format.json_schema.strict`)
+    /// enforce the schema server-side; providers without strict-mode
+    /// support best-effort it.
+    JsonSchema {
+        /// Schema identifier (echoed back by some providers in traces).
+        name: String,
+        /// The JSON Schema describing the response.
+        schema: serde_json::Value,
+        /// Whether to request strict-mode enforcement.
+        strict: bool,
+    },
+}
+
 /// Errors raised by [`Model::invoke`] or surfaced through the
 /// [`ModelEvent`] stream.
 ///
@@ -231,4 +393,115 @@ pub enum ModelError {
     /// Escape hatch for arbitrary upstream failures. See ADR-10.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_choice_variants_are_constructible() {
+        let _ = ToolChoice::Auto;
+        let _ = ToolChoice::Required;
+        let _ = ToolChoice::None;
+        let _ = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
+    }
+
+    #[test]
+    fn tool_choice_clones_and_debug_prints() {
+        let c = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
+        let c2 = c.clone();
+        assert!(format!("{c2:?}").contains("echo"));
+    }
+
+    #[test]
+    fn tool_choice_equality_for_tool_variant() {
+        let a = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
+        let b = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
+        let c = ToolChoice::Tool {
+            name: "other".to_owned(),
+        };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(ToolChoice::Auto, ToolChoice::Auto);
+        assert_ne!(ToolChoice::Auto, ToolChoice::Required);
+    }
+
+    #[test]
+    fn response_format_variants_are_constructible() {
+        let _ = ResponseFormat::Text;
+        let _ = ResponseFormat::JsonObject;
+        let _ = ResponseFormat::JsonSchema {
+            name: "Person".to_owned(),
+            schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        };
+    }
+
+    #[test]
+    fn response_format_clones_and_debug_prints() {
+        let f = ResponseFormat::JsonSchema {
+            name: "X".to_owned(),
+            schema: serde_json::Value::Null,
+            strict: false,
+        };
+        let f2 = f.clone();
+        assert!(format!("{f2:?}").contains("X"));
+    }
+
+    #[test]
+    fn response_format_partial_eq_for_text_and_json_object() {
+        assert_eq!(ResponseFormat::Text, ResponseFormat::Text);
+        assert_eq!(ResponseFormat::JsonObject, ResponseFormat::JsonObject);
+        assert_ne!(ResponseFormat::Text, ResponseFormat::JsonObject);
+    }
+
+    #[test]
+    fn model_settings_default_is_all_none() {
+        let s = ModelSettings::default();
+        assert!(s.temperature.is_none());
+        assert!(s.top_p.is_none());
+        assert!(s.max_output_tokens.is_none());
+        assert!(s.tool_choice.is_none());
+        assert!(s.response_format.is_none());
+        assert!(s.previous_response_id.is_none());
+    }
+
+    #[test]
+    fn model_settings_fields_are_settable() {
+        let s = ModelSettings {
+            temperature: Some(0.7),
+            top_p: Some(0.95),
+            max_output_tokens: Some(1024),
+            tool_choice: Some(ToolChoice::Auto),
+            response_format: Some(ResponseFormat::Text),
+            previous_response_id: Some("resp_abc".to_owned()),
+        };
+        assert_eq!(s.temperature, Some(0.7));
+        assert_eq!(s.previous_response_id.as_deref(), Some("resp_abc"));
+    }
+
+    #[test]
+    fn model_event_usage_constructs() {
+        let _ = ModelEvent::Usage {
+            input_tokens: 100,
+            output_tokens: 42,
+            cached_input_tokens: Some(20),
+            reasoning_tokens: Some(8),
+        };
+        let _ = ModelEvent::Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+        };
+    }
 }

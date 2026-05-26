@@ -1,0 +1,6 @@
+data: {"type":"response.refusal.delta","sequence_number":1,"item_id":"msg_01","output_index":0,"content_index":0,"delta":"sorry, I can't help with that"}
+
+data: {"type":"response.incomplete","sequence_number":2,"response":{"id":"resp_03","object":"response","created_at":1,"model":"gpt-5","output":[],"status":"incomplete","incomplete_details":{"reason":"content_filter"},"usage":{"input_tokens":4,"output_tokens":8,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0},"total_tokens":12}}}
+
+data: [DONE]
+

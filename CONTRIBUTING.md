@@ -226,6 +226,8 @@ cargo msrv --path crates/paigasus-helikon-core verify
 
 (`cargo-msrv` has no `--workspace` flag. Since every crate's `rust-version` inherits from `[workspace.package]`, verifying one representative crate covers the whole workspace.)
 
+To exercise the OpenAI provider against the real API, set `OPENAI_API_KEY` and run `cargo test -p paigasus-helikon-providers-openai -- --ignored`. Live tests are not part of CI.
+
 ## Supply-chain security
 
 Three workflows complement CI and gate PRs alongside the build matrix:
