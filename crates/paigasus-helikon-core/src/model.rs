@@ -240,6 +240,10 @@ pub struct ModelCapabilities {
     pub vision: bool,
     /// Provider accepts audio inputs.
     pub audio: bool,
+    /// Provider supports prompt caching of repeated request prefixes.
+    /// On OpenAI this is automatic prefix caching; on Anthropic it is
+    /// opt-in via the provider crate's `CacheStrategy`.
+    pub prompt_caching: bool,
 }
 
 impl ModelCapabilities {
@@ -258,6 +262,7 @@ impl ModelCapabilities {
             reasoning: false,
             vision: false,
             audio: false,
+            prompt_caching: false,
         }
     }
 
@@ -299,6 +304,11 @@ impl ModelCapabilities {
     /// Mark `audio` (input) as supported.
     pub const fn with_audio(mut self) -> Self {
         self.audio = true;
+        self
+    }
+    /// Mark `prompt_caching` as supported.
+    pub const fn with_prompt_caching(mut self) -> Self {
+        self.prompt_caching = true;
         self
     }
 }
@@ -503,5 +513,13 @@ mod tests {
             cached_input_tokens: None,
             reasoning_tokens: None,
         };
+    }
+
+    #[test]
+    fn prompt_caching_capability_round_trips() {
+        let c = ModelCapabilities::empty().with_prompt_caching();
+        assert!(c.prompt_caching, "with_prompt_caching must set the flag");
+        let d = ModelCapabilities::default();
+        assert!(!d.prompt_caching, "default must be false");
     }
 }
