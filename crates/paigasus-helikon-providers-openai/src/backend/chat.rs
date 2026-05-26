@@ -337,16 +337,20 @@ impl ChatTranslator {
         } = self.pending.remove(&index).unwrap_or_default();
 
         // Emit name on the first delta that has it (and only once per index).
-        // Prefer a buffered name (may be a concatenation of multiple pre-id
-        // fragments) over the current chunk's name.
+        // Concatenate any buffered pre-id fragments with the current chunk's
+        // name fragment so neither is dropped (mirrors args concatenation).
+        let current_name = tc
+            .function
+            .as_ref()
+            .and_then(|f| f.name.as_deref())
+            .unwrap_or("");
         let name_to_emit = if self.name_emitted.contains(&index) {
             None
-        } else if !buffered_name.is_empty() {
+        } else if !buffered_name.is_empty() || !current_name.is_empty() {
+            let mut name = buffered_name;
+            name.push_str(current_name);
             self.name_emitted.insert(index);
-            Some(buffered_name)
-        } else if let Some(fname) = tc.function.as_ref().and_then(|f| f.name.as_deref()) {
-            self.name_emitted.insert(index);
-            Some(fname.to_owned())
+            Some(name)
         } else {
             None
         };
@@ -470,6 +474,39 @@ mod tests {
                 assert_eq!(args_delta, "{");
             }
             other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+    }
+
+    /// Chunk 1: first name fragment ("sea"), no id.
+    /// Chunk 2: id arrives AND carries a name continuation ("rch").
+    /// Both fragments must be concatenated in order → "search".
+    #[test]
+    fn orphan_name_concatenates_with_id_bearing_name() {
+        let mut t = ChatTranslator::new();
+        let mut out = Vec::new();
+
+        // Chunk 1: name="sea", no id — buffer, no emission.
+        t.handle_tool_call_chunk(&make_chunk(0, None, Some("sea"), None), &mut out);
+        assert!(out.is_empty(), "no emission until id arrives");
+
+        // Chunk 2: id arrives + name="rch" (continuation) — emit buffered + current.
+        t.handle_tool_call_chunk(&make_chunk(0, Some("c1"), Some("rch"), None), &mut out);
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "c1");
+                assert_eq!(
+                    name.as_deref(),
+                    Some("search"),
+                    "buffered + id-chunk name must be concatenated"
+                );
+                assert_eq!(args_delta, "");
+            }
+            other => panic!("unexpected: {other:?}"),
         }
     }
 
