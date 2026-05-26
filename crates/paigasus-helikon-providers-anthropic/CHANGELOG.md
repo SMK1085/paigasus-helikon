@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-providers-anthropic-v0.1.0) - 2026-05-26
+
+### Added
+
+- *(providers-anthropic)* SMA-317 add Anthropic provider with streaming, tools, caching ([#33](https://github.com/SMK1085/paigasus-helikon/pull/33))
+- *(providers)* SMA-304 add openai and anthropic provider stubs
+
+### Other
+
+- release v0.0.0 ([#6](https://github.com/SMK1085/paigasus-helikon/pull/6))
+- SMA-307 automated versioning with release-plz ([#5](https://github.com/SMK1085/paigasus-helikon/pull/5))
+- SMA-305 build, test, clippy, fmt + doc-coverage matrix ([#2](https://github.com/SMK1085/paigasus-helikon/pull/2))
+
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-providers-anthropic-v0.0.0) - 2026-05-17
 
 ### Added
