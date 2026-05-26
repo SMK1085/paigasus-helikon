@@ -14,7 +14,9 @@ Unblocks SMA-317 (Anthropic provider) by landing the cross-provider `ModelSettin
 
 ### Wire layer — wrap `async-openai`
 
-Per ticket. We sit on async-openai 0.27 for its typed request/response structs, HTTP client, and Chat Completions SSE handling. For Responses-API streaming events that async-openai does not yet model, we layer a thin SSE parser on top of its raw HTTP client. This decision can be revisited if upstream cadence becomes a problem; the translation layer is the natural insulator.
+Per ticket. We sit on async-openai **0.40** for its typed request/response structs, HTTP client, and Chat Completions SSE handling. For Responses-API streaming events that async-openai does not yet model, we layer a thin SSE parser on top of its raw HTTP client. This decision can be revisited if upstream cadence becomes a problem; the translation layer is the natural insulator.
+
+**TLS feature graph verified.** `cargo tree -e features` on `async-openai = "0.40"` with default features resolves to a rustls-only graph (`aws-lc-rs`) with no `native-tls` or `openssl`. The implementer must re-verify on any future async-openai version bump — if upstream regresses, supply-chain checks (`audit`, `deny`) may flip on transitive advisories.
 
 ### Type shape — single `OpenAiModel` with internal `Backend` enum
 
@@ -41,7 +43,7 @@ Ordering contract on `Model::invoke`'s stream: `Usage` events MAY appear anywher
 
 ### Capabilities — hardcoded table with builder override
 
-OpenAI exposes no machine-readable capability manifest (`GET /v1/models` returns only `{id, object, created, owned_by}`). We maintain `KNOWN_MODELS: &[(&str, ModelCapabilities)]` inside the crate. Unknown ids fall through to conservative defaults (`streaming: true, tools: true, parallel_tool_calls: true`, everything else `false`). `OpenAiModelBuilder::with_capabilities(...)` lets callers override for models the table hasn't catalogued.
+OpenAI exposes no machine-readable capability manifest (`GET /v1/models` returns only `{id, object, created, owned_by}`). We maintain `KNOWN_MODELS: &[(&str, ModelCapabilities)]` inside the crate. Unknown ids fall through to conservative defaults (`streaming: true, tools: true`, everything else including `parallel_tool_calls: false`). `OpenAiModelBuilder::with_capabilities(...)` lets callers override for models the table hasn't catalogued.
 
 ## Cross-crate changes — `paigasus-helikon-core`
 
@@ -56,6 +58,13 @@ pub struct ModelSettings {
     pub max_output_tokens: Option<u32>,
     pub tool_choice: Option<ToolChoice>,
     pub response_format: Option<ResponseFormat>,
+    /// OpenAI Responses-API server-side state token. **Caller-managed:**
+    /// when set, callers MUST trim [`ModelRequest::messages`] to only the
+    /// items added since the response identified by this id. The provider
+    /// passes `messages` through as-is — it does not filter. Integration
+    /// with [`crate::LlmAgent`]'s automatic conversation accumulation is
+    /// out of scope for SMA-316; see follow-up ticket. Ignored by
+    /// non-OpenAI-Responses providers.
     pub previous_response_id: Option<String>,
 }
 
@@ -106,7 +115,7 @@ Doc-comment on `Model::invoke` documents the `Usage` ordering contract.
 crates/paigasus-helikon-providers-openai/src/
 ├── lib.rs                  # re-exports
 ├── model.rs                # OpenAiModel + impl Model
-├── builder.rs              # OpenAiModelBuilder, AuthMethod, BuildError
+├── builder.rs              # OpenAiModelBuilder, BuildError
 ├── capabilities.rs         # KNOWN_MODELS table, lookup, conservative_defaults
 ├── error.rs                # async-openai::Error -> ModelError mapping
 ├── backend/
@@ -131,7 +140,7 @@ tests/
     └── responses_*.txt
 ```
 
-Public surface re-exported through `lib.rs`: `OpenAiModel`, `OpenAiModelBuilder`, `AuthMethod`, `BuildError`.
+Public surface re-exported through `lib.rs`: `OpenAiModel`, `OpenAiModelBuilder`, `BuildError`.
 
 ## Public API
 
@@ -142,21 +151,18 @@ impl OpenAiModel {
 }
 
 impl OpenAiModelBuilder {
+    /// Set the API key explicitly. If unset, `build()` reads `OPENAI_API_KEY`
+    /// from the process environment.
     pub fn api_key(mut self, key: impl Into<String>) -> Self;
+    /// Use a pre-minted bearer token (Azure AD, custom proxy). Mutually
+    /// exclusive with `api_key`; the last-set value wins.
+    pub fn bearer(mut self, token: impl Into<String>) -> Self;
     pub fn base_url(mut self, url: impl Into<String>) -> Self;
     pub fn organization(mut self, org: impl Into<String>) -> Self;
     pub fn project(mut self, project: impl Into<String>) -> Self;
     pub fn http_client(mut self, client: reqwest::Client) -> Self;
     pub fn with_capabilities(mut self, caps: ModelCapabilities) -> Self;
     pub fn build(self) -> Result<OpenAiModel, BuildError>;
-}
-
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum AuthMethod {
-    Env,                  // read OPENAI_API_KEY at build()
-    ApiKey(String),
-    Bearer(String),       // Azure AD, custom proxy
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -171,6 +177,8 @@ pub enum BuildError {
 
 `OpenAiModel::chat("gpt-4o").build()?` reads `OPENAI_API_KEY` from env, targets `https://api.openai.com/v1`, looks up caps in `KNOWN_MODELS`. `base_url` override is what makes LiteLLM, vLLM, Azure-via-proxy, and OpenAI-compatible local servers work.
 
+The earlier draft of this spec exposed an `AuthMethod` enum; it was dropped because `Env` is just the default, leaving only two distinguishable cases (api-key vs bearer) which are clearer as two builder methods.
+
 ## Wire translation
 
 ### Messages — `Vec<Item>` → OpenAI input
@@ -180,13 +188,15 @@ pub enum BuildError {
 | `Item` variant                            | Maps to                                                                                  |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `System { content }`                      | `{role: "system", content: <text>}`                                                      |
-| `UserMessage { content }`                 | `{role: "user", content: <text-or-multimodal-parts>}`                                    |
-| `AssistantMessage { content, agent }`     | `{role: "assistant", content, tool_calls: [...]}` — `ContentPart::ToolUse` blocks hoisted to sibling `tool_calls`; `agent` attribution is dropped (OpenAI has no slot for it); `content: null` when only tool calls and no text |
-| `ToolCall { call_id, name, args }`        | Folded into preceding `AssistantMessage`'s `tool_calls`                                  |
+| `UserMessage { content }` (text/media)    | `{role: "user", content: <text-or-multimodal-parts>}`                                    |
+| `UserMessage { content }` containing `ContentPart::ToolResult` (Anthropic-nested shape) | Each nested `ToolResult` is **hoisted** to a top-level `{role: "tool", tool_call_id, content}` message; any remaining text/media parts emit as a separate `{role: "user", content: ...}` |
+| `AssistantMessage { content, agent }`     | `{role: "assistant", content, tool_calls: [...]}` — `ContentPart::ToolUse` blocks hoisted to sibling `tool_calls`; `agent` attribution is dropped (OpenAI has no slot for it); `content: null` when only tool calls and no text; **`ContentPart::Image`/`Audio` inside an `AssistantMessage` are dropped with `tracing::warn!`** (OpenAI Chat assistant role accepts only string-or-null content, no multimodal parts) |
+| `ToolCall { call_id, name, args }`        | **Standalone `ToolCall`s** (no preceding `AssistantMessage` carrier in this turn, e.g. when the model emitted only tool calls with no text) are gathered into a **synthesized** `{role: "assistant", content: null, tool_calls: [...]}` message. When a preceding `AssistantMessage` exists in the same turn, fold instead. (This is the common case — `LlmAgent::build_items` does not synthesize a carrier when text+reasoning are empty.) |
 | `ToolResult { call_id, content }`         | `{role: "tool", tool_call_id, content: <text>}`                                          |
 | `ContentPart::Reasoning { .. }`           | Dropped (OpenAI does not accept reasoning input on Chat)                                 |
+| `MediaSource::Base64 { mime_type, data }` | Rendered as `data:<mime_type>;base64,<data>` inside `image_url.url` / `input_audio` shape |
 
-**Responses API:** equivalent mapping into `input: Vec<InputItem>` (`{type, role, content}`, `{type: "function_call", call_id, name, arguments}`, `{type: "function_call_output", call_id, output}`). When `previous_response_id` is set, prior turns are omitted — server holds state.
+**Responses API:** equivalent mapping into `input: Vec<InputItem>` (`{type, role, content}`, `{type: "function_call", call_id, name, arguments}`, `{type: "function_call_output", call_id, output}`). The standalone-ToolCall synthesis rule applies identically. **`previous_response_id` is caller-managed:** when set, the backend passes `input` through as the caller built it — no filtering, no trimming. Per the rustdoc on `ModelSettings::previous_response_id`, the caller is responsible for ensuring `messages` contains only items added since the previous response.
 
 ### Tools — `ToolDef::schema` → OpenAI strict tool
 
@@ -197,6 +207,10 @@ pub enum BuildError {
 3. Return rewritten schema.
 
 Schemas with features OpenAI rejects (`pattern` outside the allowlist, unsupported `format`, discriminated `oneOf`) surface as `ModelError::Other(anyhow!(...))` at request time. We translate, we do not pre-validate. The `#[tool]` proc-macro (SMA-315) already emits `schemars`-friendly schemas that round-trip cleanly.
+
+**Verified for `Option<T>`:** schemars 1.x emits `Option<T>` as `"type": ["T", "null"]` natively (confirmed empirically — not `oneOf`/`anyOf`). Combined with the rewriter's `required`-forcing pass, this produces exactly OpenAI's nullable-required pattern. No collapse pass is needed for the proc-macro path. The `tools_strict_schema.rs` suite includes an `Option<String>` snapshot test to lock this behavior in against future schemars regressions.
+
+Hand-authored schemas using Draft-7-style `oneOf: [X, {type: "null"}]` patterns are not rewritten by us — they pass through and may produce a strict-mode rejection from OpenAI as `ModelError::Other`. If a user files an issue, we can add a collapse pass then (deferred per YAGNI).
 
 `Tool::output_schema()` is ignored — OpenAI does not accept a return-payload schema.
 
@@ -213,13 +227,13 @@ Schemas with features OpenAI rejects (`pattern` outside the allowlist, unsupport
 - `temperature`, `top_p` — passthrough.
 - `max_output_tokens` → `max_tokens` (Chat) or `max_output_tokens` (Responses).
 - `tool_choice` → `auto | required | none | {type: "function", function: {name}}`.
-- `previous_response_id` → `previous_response_id` (Responses); ignored with `tracing::debug!` on Chat.
+- `previous_response_id` → `previous_response_id` (Responses only). Set with no filtering applied to `messages`; the caller-managed contract on `ModelSettings::previous_response_id` is load-bearing. Ignored with `tracing::debug!` on Chat.
 
 ## Streaming
 
 ### Chat Completions
 
-`stream_options: { include_usage: true }` is always set so we receive a final usage chunk.
+`stream_options: { include_usage: true }` is set on streaming requests only (the option is invalid on non-streaming bodies). Non-streaming Chat returns usage on the response root.
 
 `ChatTranslator` accumulator state:
 
@@ -246,10 +260,14 @@ Per-chunk output is a small `Vec<ModelEvent>`, flattened via `futures::stream::i
 | -------------------------------------------------- | --------------------------------------------------------------- |
 | `response.output_text.delta`                       | `TokenDelta { text }`                                           |
 | `response.reasoning_summary_text.delta`            | `ReasoningDelta { text }`                                       |
+| `response.refusal.delta`                           | `TokenDelta { text }` (the refusal is the model's response text; consumer sees it as content) |
 | `response.output_item.added` (function_call)       | (internal — register call_id, mark name un-emitted)             |
 | `response.function_call.arguments.delta`           | `ToolCallDelta { call_id, name: Some on first / None after, args_delta }` |
-| `response.completed`                               | `Usage` (from `event.response.usage`) then `Finish { reason }`  |
-| `response.failed`, `response.incomplete`           | terminate stream with `ModelError`                              |
+| `response.completed`                               | `Usage` (from `event.response.usage`) then `Finish { reason }` derived from `event.response.status` + `incomplete_details` (see below) |
+| `response.incomplete`                              | Map per `incomplete_details.reason` to a `Finish` event:<br>• `"max_output_tokens"` → `Finish { reason: Length }`<br>• `"content_filter"` → `Finish { reason: ContentFilter }`<br>• other / unknown → `Finish { reason: Other(reason) }`<br>This matches Chat's symmetric treatment of `finish_reason: length` / `content_filter` and never produces a `ModelError` for in-band terminations. |
+| `response.failed`                                  | terminate stream with `ModelError` (mapped from `event.error`)  |
+| `response.error`                                   | terminate stream with `ModelError::Transport(err.message)`      |
+| `response.refusal.done`, `*.done` variants, `response.created`, `response.in_progress`, `response.content_part.*`, `response.output_item.done` | dropped with `tracing::debug!(target = "paigasus::openai::responses", event = …)` — deltas already conveyed the content |
 
 `ResponsesTranslator` owns a `HashMap<String, bool>` (call_id → name_emitted) to gate the `name: Some/None` decision.
 
@@ -314,33 +332,35 @@ fn lookup(model_id: &str) -> ModelCapabilities { /* table or conservative_defaul
 
 fn conservative_defaults() -> ModelCapabilities {
     ModelCapabilities {
-        streaming: true, tools: true, parallel_tool_calls: true,
+        streaming: true, tools: true, parallel_tool_calls: false,
         structured_output: false, server_managed_state: false,
         reasoning: false, vision: false, audio: false,
     }
 }
 ```
 
-`server_managed_state` is set to `lookup(model_id).server_managed_state AND backend == Responses` in `OpenAiModel::build()` — so `chat("o3")` (legal but weird) does not claim server-managed state. `with_capabilities()` always wins.
+`parallel_tool_calls` defaults to `false` for unknown ids because most OpenAI-compatible servers (vLLM, LiteLLM, Ollama-via-OpenAI-shim, llama.cpp's server) do not support parallel tool calls. The agent loop expecting multiple tool calls per response and getting only one is a worse failure mode than the inverse. `streaming: true` and `tools: true` stay on as defaults because their absence produces obvious errors rather than subtle misbehavior.
 
-Ids above are illustrative — cross-checked against OpenAI's docs during implementation.
+**Backend-dependent capability masking.** `server_managed_state` is computed as `lookup(model_id).server_managed_state AND backend == Responses` in `OpenAiModel::build()` — so `chat("o3")` (legal but weird) does not claim server-managed state. `reasoning` follows the same pattern (`AND backend == Responses` for the o-series). If the table grows further backend-dependent capabilities, the masking logic generalizes to a `backend_masked(caps, backend)` helper in `capabilities.rs`. `with_capabilities()` always wins over both lookup and masking.
+
+**Table verification.** Ids above are illustrative. The implementer MUST cross-check each entry against OpenAI's published model docs at implementation time — capability claims that diverge from official docs are bugs, and `gpt-5` / `o-series` coverage is unstable as of the spec's authoring date (2026-05-26). The capability table is the single artifact most likely to drift from reality; treat updates to it as low-ceremony chore-PRs.
 
 ## Testing strategy
 
 ### Unit tests (in-crate)
 
-- `translate/tools.rs` — `to_strict_schema` snapshots via `insta`. Covers nested objects, arrays-of-objects, partial-`required`, `additionalProperties: true` override.
-- `translate/request.rs` — `Item` → OpenAI messages: assistant with hoisted `ContentPart::ToolUse`, tool-call/tool-result pairs, vision parts, system messages, reasoning-content drop.
+- `translate/tools.rs` — `to_strict_schema` snapshots via `insta::assert_json_snapshot!` (key-order normalized; protects against schemars BTreeMap/IndexMap shuffling across patch bumps). Covers nested objects, arrays-of-objects, partial-`required`, `additionalProperties: true` override, **`Option<T>` round-trip** (locks in schemars 1.x's `type: ["T","null"]` emission).
+- `translate/request.rs` — `Item` → OpenAI messages: assistant with hoisted `ContentPart::ToolUse`, **`UserMessage` containing nested `ContentPart::ToolResult` (Anthropic shape)**, tool-call/tool-result pairs, vision parts, system messages, reasoning-content drop, **standalone-`ToolCall` synthesis into assistant carrier**, **multimodal-on-assistant drop**.
 - `error.rs` — table-driven mapping for representative `OpenAIError` shapes.
-- `capabilities.rs` — unknown id falls through to defaults; override wins; Responses-backend constraint on `server_managed_state`.
+- `capabilities.rs` — unknown id falls through to defaults; override wins; Responses-backend constraint on `server_managed_state` and `reasoning`; **`parallel_tool_calls: false` in conservative defaults**.
 
 ### Wire integration tests (`tests/`, wiremock)
 
-- `chat_wire.rs` — non-streaming Chat happy path, tool-call response, 429 with `Retry-After`, content-filter response, context-length error.
-- `responses_wire.rs` — non-streaming Responses, `previous_response_id` round-trip, structured output with `json_schema` strict, tool-call response.
-- `chat_streaming.rs` — hand-authored SSE fixtures under `tests/fixtures/chat_*.txt`. Plain text deltas + finish, parallel tool calls interleaved by `index`, mid-stream rate-limit, usage on final chunk.
-- `responses_streaming.rs` — `tests/fixtures/responses_*.txt`. Text delta + completed, reasoning summary deltas, function-call argument deltas, failed/incomplete terminal events.
-- `tools_strict_schema.rs` — large `insta` snapshot suite for schema translation.
+- `chat_wire.rs` — non-streaming Chat happy path, tool-call response, 429 with `Retry-After`, content-filter response, context-length error, **synthesized assistant carrier for standalone-`ToolCall` items**.
+- `responses_wire.rs` — non-streaming Responses, `previous_response_id` round-trip (verifies caller-managed pass-through with no filtering), structured output with `json_schema` strict, tool-call response.
+- `chat_streaming.rs` — hand-authored SSE fixtures under `tests/fixtures/chat_*.txt`. Plain text deltas + finish, parallel tool calls interleaved by `index`, mid-stream rate-limit, usage on final chunk. JSON content asserted via `assert_json_snapshot!`. **Header comment notes the limitation:** wiremock serves fixture bytes in one buffer; these tests prove byte-level correctness, not resilience to slow chunk delivery.
+- `responses_streaming.rs` — `tests/fixtures/responses_*.txt`. Text delta + completed, reasoning summary deltas, function-call argument deltas, **`response.incomplete` with `max_output_tokens` → `Finish { Length }`**, **`response.incomplete` with `content_filter` → `Finish { ContentFilter }`**, **`response.refusal.delta` → `TokenDelta`**, `response.failed` → `ModelError`.
+- `tools_strict_schema.rs` — large `assert_json_snapshot!` suite for schema translation.
 
 Fixtures are raw SSE bytes (`data: {...}\n\n`, `data: [DONE]\n\n`), `include_str!`-loaded. Hand-authored — they double as wire-format documentation.
 
@@ -375,22 +395,29 @@ Kebab-case feature, snake_case alias, doc-comment on the `pub use` so `-D warnin
 Added to `[workspace.dependencies]`:
 
 ```toml
-async-openai = "0.27"
-wiremock     = "0.6"   # dev-only
-reqwest      = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+async-openai = "0.40"   # default features = ["rustls"] — verified rustls-only graph, no native-tls
+wiremock     = "0.6"    # dev-only
 ```
 
-MSRV stays at 1.75. If async-openai or wiremock has raised their MSRV by implementation time, we bump `[workspace.package].rust-version` per the CLAUDE.md rule, not downgrade the dep.
+No explicit `reqwest` pin: async-openai owns reqwest internally and only exposes it through its `rustls` feature flag (verified via `cargo tree -e features` against 0.40.2). If a future async-openai bump regresses this — e.g. adds a non-default feature that pulls native-tls — the implementer must restore an explicit `default-features = false` + curated feature list, and re-document the verification.
+
+MSRV stays at 1.75. async-openai 0.40 declares `rust-version = "1.75"`, matching. If a future bump raises MSRV, we bump `[workspace.package].rust-version` per the CLAUDE.md rule, not downgrade the dep.
 
 ## Out of scope
 
 YAGNI for SMA-316:
 
-- Azure-AD-specific authentication flow. Azure works today via `base_url` + `AuthMethod::Bearer`; deeper integration is a follow-up if asked.
+- Azure-AD-specific token-refresh authentication flow. Azure works today via `base_url` + the `bearer(token)` builder for a pre-minted token; auto-refreshing AAD credentials are a follow-up if asked.
 - Request-level tracing instrumentation beyond what async-openai emits. Spans live on `RunContext::Tracer`.
 - Provider-level retry. Per ADR-10, retries are a `RunConfig::retry_policy` concern.
 - Fine-tuning, embeddings, image-gen, audio-gen, files API. Out of `Model`-trait scope.
 - `Tool::output_schema()` translation. OpenAI does not accept return-payload schemas.
+- **`LlmAgent::run` integration with `previous_response_id`.** The agent loop accumulates the full conversation and re-sends it each turn. For `previous_response_id` to be useful through `LlmAgent`, the loop would need response-id tracking and per-turn message trimming — non-trivial. SMA-316 ships the field as caller-managed (direct `Model::invoke` callers only); automated `LlmAgent` integration is a separate follow-up ticket.
+- **Hand-authored `oneOf: [_, {type: "null"}]` collapse in the strict-schema rewriter.** The proc-macro path emits schemars 1.x output which uses `type: ["_", "null"]` natively. Defer until a user files an issue.
+
+## Known open questions
+
+- **Provider-specific knobs on shared `ModelSettings`.** `previous_response_id` is OpenAI-Responses-specific and lives on the shared `ModelSettings` struct for SMA-316. If SMA-317 (Anthropic) introduces its own provider-specific knobs (e.g. extended-thinking budget, cache control), revisit before landing them: introduce a typed `ProviderExtensions` enum or `extensions: HashMap<String, serde_json::Value>` rather than accreting more single-provider fields onto the shared struct. One field is below the threshold to abstract; two is the threshold to act.
 
 ## Acceptance criteria (ticket-restated)
 
