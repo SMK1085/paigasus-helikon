@@ -1,0 +1,6 @@
+data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"sorry, I can't"}}]}
+
+data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}],"usage":{"prompt_tokens":4,"completion_tokens":4,"total_tokens":8}}
+
+data: [DONE]
+
