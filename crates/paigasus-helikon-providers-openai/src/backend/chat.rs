@@ -316,10 +316,7 @@ impl ChatTranslator {
                 .and_then(|f| f.arguments.as_deref())
                 .unwrap_or("");
             if !delta.is_empty() {
-                self.pending_args
-                    .entry(index)
-                    .or_default()
-                    .push_str(delta);
+                self.pending_args.entry(index).or_default().push_str(delta);
             }
             return;
         };

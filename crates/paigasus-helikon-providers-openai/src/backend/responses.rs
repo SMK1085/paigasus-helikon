@@ -329,33 +329,32 @@ impl ResponsesTranslator {
             // `call_id` and `name` from the map built by `OutputItemAdded`.
             ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
                 let already_emitted = self.name_emitted.contains(&e.item_id);
-                let (call_id, name) = if let Some((call_id, fn_name)) =
-                    self.item_to_call.get(&e.item_id)
-                {
-                    let name = if already_emitted {
-                        None
+                let (call_id, name) =
+                    if let Some((call_id, fn_name)) = self.item_to_call.get(&e.item_id) {
+                        let name = if already_emitted {
+                            None
+                        } else {
+                            self.name_emitted.insert(e.item_id.clone());
+                            Some(fn_name.clone())
+                        };
+                        (call_id.clone(), name)
                     } else {
-                        self.name_emitted.insert(e.item_id.clone());
-                        Some(fn_name.clone())
+                        // item_id not yet registered — emit with item_id as a
+                        // best-effort call_id so downstream at least sees a delta.
+                        tracing::warn!(
+                            target: "paigasus::openai::responses",
+                            item_id = %e.item_id,
+                            "function_call_arguments.delta arrived before output_item.added; \
+                             using item_id as call_id"
+                        );
+                        let name = if already_emitted {
+                            None
+                        } else {
+                            self.name_emitted.insert(e.item_id.clone());
+                            Some(String::new())
+                        };
+                        (e.item_id.clone(), name)
                     };
-                    (call_id.clone(), name)
-                } else {
-                    // item_id not yet registered — emit with item_id as a
-                    // best-effort call_id so downstream at least sees a delta.
-                    tracing::warn!(
-                        target: "paigasus::openai::responses",
-                        item_id = %e.item_id,
-                        "function_call_arguments.delta arrived before output_item.added; \
-                         using item_id as call_id"
-                    );
-                    let name = if already_emitted {
-                        None
-                    } else {
-                        self.name_emitted.insert(e.item_id.clone());
-                        Some(String::new())
-                    };
-                    (e.item_id.clone(), name)
-                };
                 Ok(vec![ModelEvent::ToolCallDelta {
                     call_id,
                     name,

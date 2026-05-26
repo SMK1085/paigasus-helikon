@@ -148,13 +148,10 @@ fn user_message(parts: &[&ContentPart]) -> Value {
         .filter_map(|p| match p {
             ContentPart::Text { text } => Some(json!({"type": "text", "text": text})),
             ContentPart::Image { source } => {
-                media_url(source)
-                    .map(|url| json!({"type": "image_url", "image_url": {"url": url}}))
+                media_url(source).map(|url| json!({"type": "image_url", "image_url": {"url": url}}))
             }
-            ContentPart::Audio { source } => {
-                media_url(source)
-                    .map(|data| json!({"type": "input_audio", "input_audio": {"data": data}}))
-            }
+            ContentPart::Audio { source } => media_url(source)
+                .map(|data| json!({"type": "input_audio", "input_audio": {"data": data}})),
             _ => None,
         })
         .collect();
@@ -169,9 +166,7 @@ fn user_message(parts: &[&ContentPart]) -> Value {
 fn media_url(src: &MediaSource) -> Option<String> {
     match src {
         MediaSource::Url { url } => Some(url.clone()),
-        MediaSource::Base64 { mime_type, data } => {
-            Some(format!("data:{mime_type};base64,{data}"))
-        }
+        MediaSource::Base64 { mime_type, data } => Some(format!("data:{mime_type};base64,{data}")),
         _ => {
             tracing::warn!(
                 target: "paigasus::openai::translate",
@@ -277,9 +272,7 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
                         }
                         ContentPart::Image { source } => {
                             if let Some(url) = media_url(source) {
-                                text_parts.push(
-                                    json!({"type": "input_image", "image_url": url}),
-                                );
+                                text_parts.push(json!({"type": "input_image", "image_url": url}));
                             }
                         }
                         ContentPart::ToolResult { call_id, content } => {
