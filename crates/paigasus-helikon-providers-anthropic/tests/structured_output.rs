@@ -41,10 +41,16 @@ fn synth_tool_use_stream() -> String {
 }
 
 fn user(s: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: s.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text { text: s.to_owned() }],
+    }
 }
 
-fn req_with(messages: Vec<Item>, tools: Vec<ToolDef>, mutate: impl FnOnce(&mut ModelRequest)) -> ModelRequest {
+fn req_with(
+    messages: Vec<Item>,
+    tools: Vec<ToolDef>,
+    mutate: impl FnOnce(&mut ModelRequest),
+) -> ModelRequest {
     let mut r = ModelRequest::new();
     r.messages = messages;
     r.tools = tools;
@@ -54,7 +60,9 @@ fn req_with(messages: Vec<Item>, tools: Vec<ToolDef>, mutate: impl FnOnce(&mut M
 
 #[tokio::test]
 async fn json_schema_synthesizes_forced_tool_and_remaps_to_text() {
-    let responder = CapturingResponder { body: synth_tool_use_stream() };
+    let responder = CapturingResponder {
+        body: synth_tool_use_stream(),
+    };
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -89,13 +97,22 @@ async fn json_schema_synthesizes_forced_tool_and_remaps_to_text() {
         .collect();
     assert_eq!(text, "{\"name\":\"Ada\"}");
 
-    assert!(!events.iter().any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
-        "synthesized tool must NOT surface as ToolCallDelta");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
+        "synthesized tool must NOT surface as ToolCallDelta"
+    );
 
-    assert!(matches!(
-        events.last().unwrap(),
-        ModelEvent::Finish { reason: FinishReason::Stop },
-    ), "tool_use stop_reason rewrites to Stop for synthesized-only path");
+    assert!(
+        matches!(
+            events.last().unwrap(),
+            ModelEvent::Finish {
+                reason: FinishReason::Stop
+            },
+        ),
+        "tool_use stop_reason rewrites to Stop for synthesized-only path"
+    );
 
     // The mock captured the request body — verify synthesized tool + tool_choice.
     let received = server.received_requests().await.unwrap();
@@ -125,11 +142,16 @@ async fn json_schema_plus_caller_tool_choice_tool_returns_synchronous_other() {
         }],
         |r| {
             r.model_settings.response_format = Some(ResponseFormat::JsonObject);
-            r.model_settings.tool_choice = Some(ToolChoice::Tool { name: "search".to_owned() });
+            r.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "search".to_owned(),
+            });
         },
     );
     let result = model.invoke(req, CancellationToken::new()).await;
-    assert!(matches!(result, Err(ModelError::Other(_))), "expected ModelError::Other, got Ok");
+    assert!(
+        matches!(result, Err(ModelError::Other(_))),
+        "expected ModelError::Other, got Ok"
+    );
 }
 
 #[tokio::test]
@@ -150,5 +172,8 @@ async fn reserved_tool_name_returns_synchronous_other() {
         |_| {},
     );
     let result = model.invoke(req, CancellationToken::new()).await;
-    assert!(matches!(result, Err(ModelError::Other(_))), "expected ModelError::Other, got Ok");
+    assert!(
+        matches!(result, Err(ModelError::Other(_))),
+        "expected ModelError::Other, got Ok"
+    );
 }

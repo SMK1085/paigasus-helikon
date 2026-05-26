@@ -45,7 +45,9 @@ impl Respond for SwitchingResponder {
 }
 
 fn user(s: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: s.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text { text: s.to_owned() }],
+    }
 }
 
 fn req_with(messages: Vec<Item>, tools: Vec<ToolDef>) -> ModelRequest {
@@ -84,7 +86,11 @@ async fn second_turn_cached_input_tokens_reflects_prefix_reuse() {
         .unwrap();
 
     let base_messages = vec![
-        Item::System { content: vec![ContentPart::Text { text: SYSTEM.to_owned() }] },
+        Item::System {
+            content: vec![ContentPart::Text {
+                text: SYSTEM.to_owned(),
+            }],
+        },
         user("Tell me about Athens."),
     ];
     let req1 = req_with(base_messages.clone(), vec![tool.clone()]);
@@ -97,7 +103,10 @@ async fn second_turn_cached_input_tokens_reflects_prefix_reuse() {
     let usage1 = events1
         .iter()
         .find_map(|e| match e {
-            ModelEvent::Usage { cached_input_tokens, .. } => Some(*cached_input_tokens),
+            ModelEvent::Usage {
+                cached_input_tokens,
+                ..
+            } => Some(*cached_input_tokens),
             _ => None,
         })
         .unwrap();
@@ -106,7 +115,9 @@ async fn second_turn_cached_input_tokens_reflects_prefix_reuse() {
     // Turn 2: identical prefix + new question.
     let mut messages2 = base_messages.clone();
     messages2.push(Item::AssistantMessage {
-        content: vec![ContentPart::Text { text: "ok".to_owned() }],
+        content: vec![ContentPart::Text {
+            text: "ok".to_owned(),
+        }],
         agent: None,
     });
     messages2.push(user("And Sparta?"));
@@ -119,7 +130,10 @@ async fn second_turn_cached_input_tokens_reflects_prefix_reuse() {
     let usage2 = events2
         .iter()
         .find_map(|e| match e {
-            ModelEvent::Usage { cached_input_tokens, .. } => Some(*cached_input_tokens),
+            ModelEvent::Usage {
+                cached_input_tokens,
+                ..
+            } => Some(*cached_input_tokens),
             _ => None,
         })
         .unwrap();
@@ -131,7 +145,11 @@ async fn second_turn_cached_input_tokens_reflects_prefix_reuse() {
     for r in &received {
         let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
         let system_marker = body["system"][0]["cache_control"]["type"].as_str();
-        assert_eq!(system_marker, Some("ephemeral"), "system block carries cache marker");
+        assert_eq!(
+            system_marker,
+            Some("ephemeral"),
+            "system block carries cache marker"
+        );
         let tools_arr = body["tools"].as_array().unwrap();
         assert_eq!(
             tools_arr.last().unwrap()["cache_control"]["type"].as_str(),

@@ -35,8 +35,11 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
 
     let mut tools_array = tools::translate_tools(&req.tools);
 
-    let Synthesized { tool, tool_choice, synthesizing } =
-        synthesize_for_response_format(req.model_settings.response_format.as_ref());
+    let Synthesized {
+        tool,
+        tool_choice,
+        synthesizing,
+    } = synthesize_for_response_format(req.model_settings.response_format.as_ref());
     if let Some(extra) = tool {
         if let Some(arr) = tools_array.as_array_mut() {
             arr.push(extra);
@@ -44,8 +47,12 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
     }
 
     let mut messages = translated.messages;
-    let system =
-        cache::apply_cache_strategy(cfg.cache_strategy, translated.system, &mut tools_array, &mut messages);
+    let system = cache::apply_cache_strategy(
+        cfg.cache_strategy,
+        translated.system,
+        &mut tools_array,
+        &mut messages,
+    );
 
     let mut body = serde_json::Map::new();
     body.insert("model".into(), Value::String(cfg.model_id.clone()));
@@ -63,7 +70,11 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
     if let Some(s) = system {
         body.insert("system".into(), s);
     }
-    if tools_array.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+    if tools_array
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false)
+    {
         body.insert("tools".into(), tools_array);
     }
 
@@ -109,7 +120,10 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
         );
     }
 
-    Ok(PreparedRequest { body: Value::Object(body), synthesizing_output: synthesizing })
+    Ok(PreparedRequest {
+        body: Value::Object(body),
+        synthesizing_output: synthesizing,
+    })
 }
 
 fn translate_tool_choice(tc: &ToolChoice) -> Value {
@@ -126,9 +140,7 @@ fn translate_tool_choice(tc: &ToolChoice) -> Value {
 mod tests {
     use super::*;
     use crate::builder::AnthropicModelBuilder;
-    use paigasus_helikon_core::{
-        ContentPart, Item, ModelRequest, ResponseFormat, ToolDef,
-    };
+    use paigasus_helikon_core::{ContentPart, Item, ModelRequest, ResponseFormat, ToolDef};
 
     fn cfg() -> Config {
         AnthropicModelBuilder::new("claude-sonnet-4-6")
@@ -138,7 +150,9 @@ mod tests {
     }
 
     fn user_text(s: &str) -> Item {
-        Item::UserMessage { content: vec![ContentPart::Text { text: s.to_owned() }] }
+        Item::UserMessage {
+            content: vec![ContentPart::Text { text: s.to_owned() }],
+        }
     }
 
     #[test]
@@ -174,7 +188,10 @@ mod tests {
         req.model_settings.tool_choice = Some(ToolChoice::None);
         let p = build_body(&cfg(), &req).unwrap();
         assert_eq!(p.body["tool_choice"], serde_json::json!({"type": "none"}));
-        assert!(p.body["tools"].is_array(), "tools stay in body so prefix matches cached turns");
+        assert!(
+            p.body["tools"].is_array(),
+            "tools stay in body so prefix matches cached turns"
+        );
     }
 
     #[test]

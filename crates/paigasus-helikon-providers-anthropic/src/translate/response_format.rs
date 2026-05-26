@@ -76,7 +76,11 @@ pub(crate) fn synthesize_for_response_format(rf: Option<&ResponseFormat>) -> Syn
             tool_choice: Some(json!({"type": "tool", "name": SYNTHESIZED_TOOL_NAME})),
             synthesizing: true,
         },
-        _ => Synthesized { tool: None, tool_choice: None, synthesizing: false },
+        _ => Synthesized {
+            tool: None,
+            tool_choice: None,
+            synthesizing: false,
+        },
     }
 }
 
@@ -112,7 +116,9 @@ mod tests {
             schema: json!({}),
             strict: true,
         };
-        let tc = ToolChoice::Tool { name: "search".to_owned() };
+        let tc = ToolChoice::Tool {
+            name: "search".to_owned(),
+        };
         assert!(validate_conflict(Some(&rf), Some(&tc)).is_err());
     }
 

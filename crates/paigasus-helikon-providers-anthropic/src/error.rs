@@ -22,9 +22,9 @@ pub(crate) fn map_error_type(
     match (status, error_type) {
         (_, "overloaded_error") => ModelError::Unavailable,
         (_, "rate_limit_error") => ModelError::RateLimited { retry_after_ms },
-        (_, "authentication_error") | (_, "permission_error") => {
-            ModelError::Refused { reason: message.to_owned() }
-        }
+        (_, "authentication_error") | (_, "permission_error") => ModelError::Refused {
+            reason: message.to_owned(),
+        },
         (_, "invalid_request_error") if message.contains("prompt is too long") => {
             ModelError::ContextLengthExceeded
         }
@@ -84,7 +84,12 @@ mod tests {
     #[test]
     fn prompt_too_long_maps_to_context_length_exceeded() {
         assert!(matches!(
-            map_error_type(Some(400), "invalid_request_error", "prompt is too long: 200k", None),
+            map_error_type(
+                Some(400),
+                "invalid_request_error",
+                "prompt is too long: 200k",
+                None
+            ),
             ModelError::ContextLengthExceeded,
         ));
     }

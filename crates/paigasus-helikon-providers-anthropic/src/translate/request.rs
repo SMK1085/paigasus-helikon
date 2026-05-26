@@ -67,7 +67,11 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                     "content": assistant_blocks(content),
                 }));
             }
-            Item::ToolCall { call_id, name, args } => {
+            Item::ToolCall {
+                call_id,
+                name,
+                args,
+            } => {
                 let block = json!({
                     "type": "tool_use",
                     "id": call_id,
@@ -104,7 +108,10 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
     } else {
         Some(Value::String(system_text))
     };
-    TranslatedMessages { system, messages: Value::Array(messages) }
+    TranslatedMessages {
+        system,
+        messages: Value::Array(messages),
+    }
 }
 
 fn text_of(parts: &[ContentPart]) -> String {
@@ -203,9 +210,15 @@ mod tests {
     #[test]
     fn multiple_system_items_concatenate_in_order() {
         let items = vec![
-            Item::System { content: vec![text("first")] },
-            Item::UserMessage { content: vec![text("hi")] },
-            Item::System { content: vec![text("second")] },
+            Item::System {
+                content: vec![text("first")],
+            },
+            Item::UserMessage {
+                content: vec![text("hi")],
+            },
+            Item::System {
+                content: vec![text("second")],
+            },
         ];
         let out = translate_messages(&items);
         assert_eq!(
@@ -245,7 +258,9 @@ mod tests {
     fn assistant_reasoning_is_always_dropped() {
         let items = vec![Item::AssistantMessage {
             content: vec![
-                ContentPart::Reasoning { text: "scratch".to_owned() },
+                ContentPart::Reasoning {
+                    text: "scratch".to_owned(),
+                },
                 text("answer"),
             ],
             agent: None,
@@ -343,7 +358,9 @@ mod tests {
                 call_id: "tu_1".to_owned(),
                 content: vec![text("pong")],
             },
-            Item::UserMessage { content: vec![text("now what?")] },
+            Item::UserMessage {
+                content: vec![text("now what?")],
+            },
         ];
         let out = translate_messages(&items);
         let arr = out.messages.as_array().unwrap();
@@ -352,7 +369,10 @@ mod tests {
         assert_eq!(arr[1]["role"], "user");
         let blocks = arr[1]["content"].as_array().unwrap();
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0]["type"], "tool_result", "tool_result precedes text");
+        assert_eq!(
+            blocks[0]["type"], "tool_result",
+            "tool_result precedes text"
+        );
         assert_eq!(blocks[0]["tool_use_id"], "tu_1");
         assert_eq!(blocks[1]["type"], "text");
         assert_eq!(blocks[1]["text"], "now what?");
@@ -401,8 +421,14 @@ mod tests {
                 ],
                 agent: None,
             },
-            Item::ToolResult { call_id: "tu_a".to_owned(), content: vec![text("A!")] },
-            Item::ToolResult { call_id: "tu_b".to_owned(), content: vec![text("B!")] },
+            Item::ToolResult {
+                call_id: "tu_a".to_owned(),
+                content: vec![text("A!")],
+            },
+            Item::ToolResult {
+                call_id: "tu_b".to_owned(),
+                content: vec![text("B!")],
+            },
         ];
         let out = translate_messages(&items);
         let arr = out.messages.as_array().unwrap();

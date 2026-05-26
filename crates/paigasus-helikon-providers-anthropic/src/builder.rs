@@ -149,17 +149,15 @@ impl AnthropicModelBuilder {
     pub(crate) fn build_config(self) -> Result<Config, BuildError> {
         let auth_header = match &self.auth {
             AuthSource::Env => {
-                let key = std::env::var("ANTHROPIC_API_KEY")
-                    .map_err(|_| BuildError::MissingApiKey)?;
+                let key =
+                    std::env::var("ANTHROPIC_API_KEY").map_err(|_| BuildError::MissingApiKey)?;
                 AuthHeader::ApiKey(key)
             }
             AuthSource::ApiKey(k) => AuthHeader::ApiKey(k.clone()),
             AuthSource::Bearer(t) => AuthHeader::Bearer(t.clone()),
         };
 
-        let base_url = self
-            .base_url
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned());
+        let base_url = self.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_owned());
         if Url::parse(&base_url).is_err() {
             return Err(BuildError::InvalidBaseUrl(base_url));
         }

@@ -10,9 +10,7 @@ use serde_json::Value;
 #[serde(tag = "type")]
 pub(crate) enum AnthropicEvent {
     #[serde(rename = "message_start")]
-    MessageStart {
-        message: MessageStartPayload,
-    },
+    MessageStart { message: MessageStartPayload },
     #[serde(rename = "content_block_start")]
     ContentBlockStart {
         index: u32,
@@ -138,7 +136,10 @@ mod tests {
         });
         let e: AnthropicEvent = serde_json::from_value(v).unwrap();
         match e {
-            AnthropicEvent::ContentBlockDelta { index, delta: ContentBlockDelta::TextDelta { text } } => {
+            AnthropicEvent::ContentBlockDelta {
+                index,
+                delta: ContentBlockDelta::TextDelta { text },
+            } => {
                 assert_eq!(index, 0);
                 assert_eq!(text, "Hi");
             }

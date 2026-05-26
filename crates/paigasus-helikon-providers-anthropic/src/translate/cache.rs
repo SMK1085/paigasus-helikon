@@ -37,7 +37,10 @@ pub(crate) fn apply_cache_strategy(
         CacheStrategy::Tools | CacheStrategy::LastTurn => system,
     };
 
-    if matches!(strategy, CacheStrategy::Tools | CacheStrategy::SystemAndTools) {
+    if matches!(
+        strategy,
+        CacheStrategy::Tools | CacheStrategy::SystemAndTools
+    ) {
         if let Some(arr) = tools.as_array_mut() {
             if let Some(last) = arr.last_mut() {
                 if let Some(obj) = last.as_object_mut() {

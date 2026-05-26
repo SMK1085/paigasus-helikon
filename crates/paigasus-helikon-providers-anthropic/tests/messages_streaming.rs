@@ -5,15 +5,16 @@
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    CancellationToken, ContentPart, FinishReason, Item, Model, ModelError, ModelEvent,
-    ModelRequest,
+    CancellationToken, ContentPart, FinishReason, Item, Model, ModelError, ModelEvent, ModelRequest,
 };
 use paigasus_helikon_providers_anthropic::AnthropicModel;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
 fn user(s: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: s.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text { text: s.to_owned() }],
+    }
 }
 
 fn req_with(messages: Vec<Item>) -> ModelRequest {
@@ -22,7 +23,10 @@ fn req_with(messages: Vec<Item>) -> ModelRequest {
     r
 }
 
-async fn run_stream(server: &MockServer, fixture: &'static str) -> Vec<Result<ModelEvent, ModelError>> {
+async fn run_stream(
+    server: &MockServer,
+    fixture: &'static str,
+) -> Vec<Result<ModelEvent, ModelError>> {
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(
@@ -57,12 +61,25 @@ async fn text_only_stream_emits_usage_token_deltas_usage_finish() {
     let oks: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
 
     // First: Usage from message_start.
-    assert!(matches!(oks[0], ModelEvent::Usage { input_tokens: 12, output_tokens: 0, .. }));
+    assert!(matches!(
+        oks[0],
+        ModelEvent::Usage {
+            input_tokens: 12,
+            output_tokens: 0,
+            ..
+        }
+    ));
     // Then two TokenDelta events.
     assert!(matches!(&oks[1], ModelEvent::TokenDelta { text } if text == "Hello"));
     assert!(matches!(&oks[2], ModelEvent::TokenDelta { text } if text == " world"));
     // Final Usage from message_delta then Finish::Stop.
-    assert!(matches!(oks[3], ModelEvent::Usage { output_tokens: 5, .. }));
+    assert!(matches!(
+        oks[3],
+        ModelEvent::Usage {
+            output_tokens: 5,
+            ..
+        }
+    ));
     assert!(matches!(&oks[4], ModelEvent::Finish { reason } if *reason == FinishReason::Stop));
 }
 
@@ -95,7 +112,9 @@ async fn parallel_tool_use_stream_emits_two_tool_call_deltas() {
 
     assert!(matches!(
         oks.last().unwrap(),
-        ModelEvent::Finish { reason: FinishReason::ToolCalls },
+        ModelEvent::Finish {
+            reason: FinishReason::ToolCalls
+        },
     ));
 }
 
@@ -114,7 +133,10 @@ async fn thinking_stream_emits_reasoning_delta_before_text_delta() {
         .iter()
         .position(|e| matches!(e, ModelEvent::TokenDelta { .. }))
         .expect("text delta present");
-    assert!(first_reasoning < first_text, "reasoning must precede text in this fixture");
+    assert!(
+        first_reasoning < first_text,
+        "reasoning must precede text in this fixture"
+    );
 }
 
 #[tokio::test]
@@ -152,7 +174,10 @@ async fn multi_turn_tool_use_continuation() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(SwitchingResponder { counter: Default::default(), bodies })
+        .respond_with(SwitchingResponder {
+            counter: Default::default(),
+            bodies,
+        })
         .mount(&server)
         .await;
 
@@ -164,19 +189,24 @@ async fn multi_turn_tool_use_continuation() {
 
     // Turn 1: prompt → expect text + tool_use + Finish::ToolCalls.
     let mut s = model
-        .invoke(req_with(vec![user("weather in athens?")]), CancellationToken::new())
+        .invoke(
+            req_with(vec![user("weather in athens?")]),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     let mut events1: Vec<_> = Vec::new();
     while let Some(ev) = s.next().await {
         events1.push(ev.unwrap());
     }
-    assert!(events1
-        .iter()
-        .any(|e| matches!(e, ModelEvent::ToolCallDelta { call_id, .. } if call_id == "tu_weather")));
+    assert!(events1.iter().any(
+        |e| matches!(e, ModelEvent::ToolCallDelta { call_id, .. } if call_id == "tu_weather")
+    ));
     assert!(matches!(
         events1.last().unwrap(),
-        ModelEvent::Finish { reason: FinishReason::ToolCalls },
+        ModelEvent::Finish {
+            reason: FinishReason::ToolCalls
+        },
     ));
 
     // Turn 2: append tool_result and re-invoke.
@@ -192,7 +222,9 @@ async fn multi_turn_tool_use_continuation() {
         },
         Item::ToolResult {
             call_id: "tu_weather".to_owned(),
-            content: vec![ContentPart::Text { text: "28C, sunny".to_owned() }],
+            content: vec![ContentPart::Text {
+                text: "28C, sunny".to_owned(),
+            }],
         },
     ];
     let mut s = model
@@ -203,9 +235,13 @@ async fn multi_turn_tool_use_continuation() {
     while let Some(ev) = s.next().await {
         events2.push(ev.unwrap());
     }
-    assert!(events2.iter().any(|e| matches!(e, ModelEvent::TokenDelta { text } if text.contains("28C"))));
+    assert!(events2
+        .iter()
+        .any(|e| matches!(e, ModelEvent::TokenDelta { text } if text.contains("28C"))));
     assert!(matches!(
         events2.last().unwrap(),
-        ModelEvent::Finish { reason: FinishReason::Stop },
+        ModelEvent::Finish {
+            reason: FinishReason::Stop
+        },
     ));
 }

@@ -24,7 +24,9 @@ fn empty_stream_response() -> ResponseTemplate {
 }
 
 fn user(s: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: s.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text { text: s.to_owned() }],
+    }
 }
 
 fn req_with(messages: Vec<Item>) -> ModelRequest {
@@ -92,7 +94,8 @@ async fn http_429_with_retry_after_maps_to_rate_limited() {
 #[tokio::test]
 async fn http_529_overloaded_maps_to_unavailable() {
     let server = MockServer::start().await;
-    let body = serde_json::json!({"type":"error","error":{"type":"overloaded_error","message":"busy"}});
+    let body =
+        serde_json::json!({"type":"error","error":{"type":"overloaded_error","message":"busy"}});
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(ResponseTemplate::new(529).set_body_json(body))

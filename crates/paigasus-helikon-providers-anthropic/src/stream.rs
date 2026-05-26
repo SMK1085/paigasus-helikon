@@ -74,7 +74,10 @@ impl MessageTranslator {
                     reasoning_tokens: None,
                 }));
             }
-            AnthropicEvent::ContentBlockStart { index, content_block } => match content_block {
+            AnthropicEvent::ContentBlockStart {
+                index,
+                content_block,
+            } => match content_block {
                 ContentBlockHead::Text => {
                     self.blocks.insert(index, BlockState::Text);
                 }
@@ -89,7 +92,11 @@ impl MessageTranslator {
                     }
                     self.blocks.insert(
                         index,
-                        BlockState::ToolUse { call_id: id, name, name_emitted: false },
+                        BlockState::ToolUse {
+                            call_id: id,
+                            name,
+                            name_emitted: false,
+                        },
                     );
                 }
             },
@@ -161,17 +168,25 @@ impl MessageTranslator {
 
     fn finish_or_error(&self, reason: &str) -> Result<ModelEvent, ModelError> {
         match reason {
-            "end_turn" | "stop_sequence" => Ok(ModelEvent::Finish { reason: FinishReason::Stop }),
-            "max_tokens" => Ok(ModelEvent::Finish { reason: FinishReason::Length }),
+            "end_turn" | "stop_sequence" => Ok(ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            }),
+            "max_tokens" => Ok(ModelEvent::Finish {
+                reason: FinishReason::Length,
+            }),
             "tool_use" => {
                 if self.synthesizing_output && !self.other_tool_fired {
-                    Ok(ModelEvent::Finish { reason: FinishReason::Stop })
+                    Ok(ModelEvent::Finish {
+                        reason: FinishReason::Stop,
+                    })
                 } else if self.synthesizing_output && self.other_tool_fired {
                     Err(ModelError::Other(anyhow::anyhow!(
                         "structured output: model fired both a real tool and the synthesized output tool"
                     )))
                 } else {
-                    Ok(ModelEvent::Finish { reason: FinishReason::ToolCalls })
+                    Ok(ModelEvent::Finish {
+                        reason: FinishReason::ToolCalls,
+                    })
                 }
             }
             "refusal" => Err(ModelError::Refused {
@@ -209,7 +224,12 @@ mod tests {
         let out = t.consume(message_start(100, Some(80))).unwrap();
         assert_eq!(out.len(), 1);
         match out.into_iter().next().unwrap().unwrap() {
-            ModelEvent::Usage { input_tokens, cached_input_tokens, output_tokens, .. } => {
+            ModelEvent::Usage {
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                ..
+            } => {
                 assert_eq!(input_tokens, 100);
                 assert_eq!(cached_input_tokens, Some(80));
                 assert_eq!(output_tokens, 0);
@@ -229,7 +249,9 @@ mod tests {
         let out = t
             .consume(AnthropicEvent::ContentBlockDelta {
                 index: 0,
-                delta: ContentBlockDelta::TextDelta { text: "Hi".to_owned() },
+                delta: ContentBlockDelta::TextDelta {
+                    text: "Hi".to_owned(),
+                },
             })
             .unwrap();
         match out.into_iter().next().unwrap().unwrap() {
@@ -249,7 +271,9 @@ mod tests {
         let out = t
             .consume(AnthropicEvent::ContentBlockDelta {
                 index: 0,
-                delta: ContentBlockDelta::ThinkingDelta { thinking: "think".to_owned() },
+                delta: ContentBlockDelta::ThinkingDelta {
+                    thinking: "think".to_owned(),
+                },
             })
             .unwrap();
         match out.into_iter().next().unwrap().unwrap() {
@@ -273,11 +297,17 @@ mod tests {
         let first = t
             .consume(AnthropicEvent::ContentBlockDelta {
                 index: 1,
-                delta: ContentBlockDelta::InputJsonDelta { partial_json: "{".to_owned() },
+                delta: ContentBlockDelta::InputJsonDelta {
+                    partial_json: "{".to_owned(),
+                },
             })
             .unwrap();
         match first.into_iter().next().unwrap().unwrap() {
-            ModelEvent::ToolCallDelta { call_id, name, args_delta } => {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
                 assert_eq!(call_id, "tu_1");
                 assert_eq!(name.as_deref(), Some("search"));
                 assert_eq!(args_delta, "{");
@@ -288,7 +318,9 @@ mod tests {
         let second = t
             .consume(AnthropicEvent::ContentBlockDelta {
                 index: 1,
-                delta: ContentBlockDelta::InputJsonDelta { partial_json: "\"q\":1}".to_owned() },
+                delta: ContentBlockDelta::InputJsonDelta {
+                    partial_json: "\"q\":1}".to_owned(),
+                },
             })
             .unwrap();
         match second.into_iter().next().unwrap().unwrap() {
@@ -337,7 +369,12 @@ mod tests {
             .unwrap();
         assert_eq!(usage_out.len(), 1);
         match usage_out.into_iter().next().unwrap().unwrap() {
-            ModelEvent::Usage { input_tokens, output_tokens, cached_input_tokens, .. } => {
+            ModelEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cached_input_tokens,
+                ..
+            } => {
                 assert_eq!(input_tokens, 10);
                 assert_eq!(output_tokens, 5);
                 assert_eq!(cached_input_tokens, Some(2));
@@ -356,7 +393,9 @@ mod tests {
         let mut t = MessageTranslator::new(false);
         let _ = t.consume(message_start(10, None)).unwrap();
         let _ = t.consume(AnthropicEvent::MessageDelta {
-            delta: MessageDeltaPayload { stop_reason: Some("tool_use".to_owned()) },
+            delta: MessageDeltaPayload {
+                stop_reason: Some("tool_use".to_owned()),
+            },
             usage: None,
         });
         let out = t.consume(AnthropicEvent::MessageStop).unwrap();
@@ -379,7 +418,9 @@ mod tests {
             },
         });
         let _ = t.consume(AnthropicEvent::MessageDelta {
-            delta: MessageDeltaPayload { stop_reason: Some("tool_use".to_owned()) },
+            delta: MessageDeltaPayload {
+                stop_reason: Some("tool_use".to_owned()),
+            },
             usage: None,
         });
         let out = t.consume(AnthropicEvent::MessageStop).unwrap();
@@ -410,7 +451,9 @@ mod tests {
             },
         });
         let _ = t.consume(AnthropicEvent::MessageDelta {
-            delta: MessageDeltaPayload { stop_reason: Some("tool_use".to_owned()) },
+            delta: MessageDeltaPayload {
+                stop_reason: Some("tool_use".to_owned()),
+            },
             usage: None,
         });
         let out = t.consume(AnthropicEvent::MessageStop).unwrap();

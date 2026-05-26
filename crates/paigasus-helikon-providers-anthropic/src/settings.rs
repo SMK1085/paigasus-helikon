@@ -67,7 +67,9 @@ mod tests {
 
     #[test]
     fn extended_thinking_enabled_carries_budget() {
-        let t = ExtendedThinking::Enabled { budget_tokens: 8192 };
+        let t = ExtendedThinking::Enabled {
+            budget_tokens: 8192,
+        };
         match t {
             ExtendedThinking::Enabled { budget_tokens } => assert_eq!(budget_tokens, 8192),
             _ => panic!("expected Enabled"),

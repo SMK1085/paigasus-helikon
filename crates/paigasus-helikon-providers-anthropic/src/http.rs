@@ -17,7 +17,10 @@ pub(crate) fn build_headers(cfg: &Config) -> HeaderMap {
     h.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     match &cfg.auth_header {
         AuthHeader::ApiKey(k) => {
-            h.insert(X_API_KEY, HeaderValue::from_str(k).expect("API key has invalid header bytes"));
+            h.insert(
+                X_API_KEY,
+                HeaderValue::from_str(k).expect("API key has invalid header bytes"),
+            );
         }
         AuthHeader::Bearer(t) => {
             let v = format!("Bearer {t}");
@@ -78,7 +81,10 @@ mod tests {
         let cfg = b.build_config().unwrap();
         let h = build_headers(&cfg);
         assert!(h.get("x-api-key").is_none());
-        assert_eq!(h.get("authorization").unwrap().to_str().unwrap(), "Bearer ey...");
+        assert_eq!(
+            h.get("authorization").unwrap().to_str().unwrap(),
+            "Bearer ey..."
+        );
     }
 
     #[test]
@@ -100,6 +106,9 @@ mod tests {
             .api_key("sk-x")
             .base_url("https://proxy.example.com/anthropic/");
         let cfg = b.build_config().unwrap();
-        assert_eq!(messages_url(&cfg), "https://proxy.example.com/anthropic/v1/messages");
+        assert_eq!(
+            messages_url(&cfg),
+            "https://proxy.example.com/anthropic/v1/messages"
+        );
     }
 }

@@ -19,13 +19,12 @@ fn skip_if_no_key() -> bool {
 }
 
 fn user(s: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: s.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text { text: s.to_owned() }],
+    }
 }
 
-fn req_with(
-    messages: Vec<Item>,
-    mutate: impl FnOnce(&mut ModelRequest),
-) -> ModelRequest {
+fn req_with(messages: Vec<Item>, mutate: impl FnOnce(&mut ModelRequest)) -> ModelRequest {
     let mut r = ModelRequest::new();
     r.messages = messages;
     mutate(&mut r);
@@ -38,7 +37,9 @@ async fn messages_smoke() {
     if skip_if_no_key() {
         return;
     }
-    let model = AnthropicModel::messages("claude-haiku-4-5").build().unwrap();
+    let model = AnthropicModel::messages("claude-haiku-4-5")
+        .build()
+        .unwrap();
     let req = req_with(vec![user("Reply with exactly: hello")], |r| {
         r.model_settings.max_output_tokens = Some(64);
     });
@@ -58,7 +59,9 @@ async fn structured_output_smoke() {
     if skip_if_no_key() {
         return;
     }
-    let model = AnthropicModel::messages("claude-haiku-4-5").build().unwrap();
+    let model = AnthropicModel::messages("claude-haiku-4-5")
+        .build()
+        .unwrap();
     let req = req_with(vec![user("Give a Person named Ada.")], |r| {
         r.model_settings.response_format = Some(ResponseFormat::JsonSchema {
             name: "Person".to_owned(),
@@ -95,7 +98,11 @@ async fn cache_strategy_round_trip() {
         .build()
         .unwrap();
     let messages = vec![
-        Item::System { content: vec![ContentPart::Text { text: big_system.clone() }] },
+        Item::System {
+            content: vec![ContentPart::Text {
+                text: big_system.clone(),
+            }],
+        },
         user("Hello, ack only."),
     ];
     let req1 = req_with(messages.clone(), |r| {
@@ -106,7 +113,9 @@ async fn cache_strategy_round_trip() {
 
     let mut messages2 = messages;
     messages2.push(Item::AssistantMessage {
-        content: vec![ContentPart::Text { text: "ack".to_owned() }],
+        content: vec![ContentPart::Text {
+            text: "ack".to_owned(),
+        }],
         agent: None,
     });
     messages2.push(user("Again, ack."));
@@ -116,16 +125,18 @@ async fn cache_strategy_round_trip() {
     let mut s = model.invoke(req2, CancellationToken::new()).await.unwrap();
     let mut cached = 0u32;
     while let Some(ev) = s.next().await {
-        if let Ok(ModelEvent::Usage { cached_input_tokens, .. }) = ev {
+        if let Ok(ModelEvent::Usage {
+            cached_input_tokens,
+            ..
+        }) = ev
+        {
             if let Some(c) = cached_input_tokens {
                 cached = cached.max(c);
             }
         }
     }
     if cached == 0 {
-        tracing::info!(
-            "cache_prefix_too_small: live cache test ran below per-model write minimum",
-        );
+        tracing::info!("cache_prefix_too_small: live cache test ran below per-model write minimum",);
         // Pass — caching at <write-minimum is a documented no-op.
     } else {
         assert!(cached > 0);
