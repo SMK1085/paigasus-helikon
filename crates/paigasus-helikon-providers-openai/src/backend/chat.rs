@@ -199,9 +199,12 @@ fn translate_tool_choice(tc: &ToolChoice) -> ChatCompletionToolChoiceOption {
 /// `tool_calls[].id` arrives before `function.name` or `function.arguments`
 /// deltas for the same `index`. Both fields are buffered here and flushed
 /// into the first [`ModelEvent::ToolCallDelta`] once the id is observed.
+///
+/// Both `name` and `args` use `push_str` concatenation so that fragmented
+/// deltas (e.g. `"sea"` + `"rch"` → `"search"`) are assembled correctly.
 #[derive(Default)]
 struct PendingToolCall {
-    name: Option<String>,
+    name: String,
     args: String,
 }
 
@@ -319,31 +322,28 @@ impl ChatTranslator {
             // into the first ToolCallDelta once the id arrives.
             let entry = self.pending.entry(index).or_default();
             if let Some(fname) = tc.function.as_ref().and_then(|f| f.name.as_deref()) {
-                if entry.name.is_none() {
-                    entry.name = Some(fname.to_owned());
-                }
+                entry.name.push_str(fname);
             }
-            let delta = tc
-                .function
-                .as_ref()
-                .and_then(|f| f.arguments.as_deref())
-                .unwrap_or("");
-            if !delta.is_empty() {
-                entry.args.push_str(delta);
+            if let Some(adelta) = tc.function.as_ref().and_then(|f| f.arguments.as_deref()) {
+                entry.args.push_str(adelta);
             }
             return;
         };
 
         // Flush any name/args buffered before the call_id arrived.
-        let buffered = self.pending.remove(&index).unwrap_or_default();
+        let PendingToolCall {
+            name: buffered_name,
+            args: buffered_args,
+        } = self.pending.remove(&index).unwrap_or_default();
 
         // Emit name on the first delta that has it (and only once per index).
-        // Prefer a buffered name (arrived before id) over the current chunk's name.
+        // Prefer a buffered name (may be a concatenation of multiple pre-id
+        // fragments) over the current chunk's name.
         let name_to_emit = if self.name_emitted.contains(&index) {
             None
-        } else if let Some(bname) = buffered.name {
+        } else if !buffered_name.is_empty() {
             self.name_emitted.insert(index);
-            Some(bname)
+            Some(buffered_name)
         } else if let Some(fname) = tc.function.as_ref().and_then(|f| f.name.as_deref()) {
             self.name_emitted.insert(index);
             Some(fname.to_owned())
@@ -357,10 +357,10 @@ impl ChatTranslator {
             .as_ref()
             .and_then(|f| f.arguments.as_deref())
             .unwrap_or("");
-        let args_delta = if buffered.args.is_empty() {
+        let args_delta = if buffered_args.is_empty() {
             current_delta.to_owned()
         } else {
-            buffered.args + current_delta
+            buffered_args + current_delta
         };
 
         out.push(ModelEvent::ToolCallDelta {
@@ -431,6 +431,43 @@ mod tests {
         match &out2[0] {
             ModelEvent::ToolCallDelta { name, .. } => {
                 assert!(name.is_none(), "name must not be re-emitted");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+    }
+
+    /// Chunk 1: first name fragment ("sea"), no id.
+    /// Chunk 2: second name fragment ("rch"), still no id.
+    /// Chunk 3: id arrives; both name fragments must be concatenated ("search").
+    #[test]
+    fn orphan_name_fragments_concatenate_before_id() {
+        let mut t = ChatTranslator::new();
+        let mut out = Vec::new();
+
+        // Chunk 1: name fragment "sea", no id — buffer, no emission.
+        t.handle_tool_call_chunk(&make_chunk(0, None, Some("sea"), None), &mut out);
+        assert!(out.is_empty(), "no emission until id arrives");
+
+        // Chunk 2: name fragment "rch", still no id — append to buffer.
+        t.handle_tool_call_chunk(&make_chunk(0, None, Some("rch"), None), &mut out);
+        assert!(out.is_empty(), "no emission until id arrives");
+
+        // Chunk 3: id arrives with a first args fragment; flush buffer.
+        t.handle_tool_call_chunk(&make_chunk(0, Some("c1"), None, Some("{")), &mut out);
+        assert_eq!(out.len(), 1, "expected exactly one ToolCallDelta");
+        match &out[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "c1");
+                assert_eq!(
+                    name.as_deref(),
+                    Some("search"),
+                    "fragmented name must be concatenated"
+                );
+                assert_eq!(args_delta, "{");
             }
             other => panic!("expected ToolCallDelta, got {other:?}"),
         }
