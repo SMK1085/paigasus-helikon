@@ -193,6 +193,18 @@ fn translate_tool_choice(tc: &ToolChoice) -> ChatCompletionToolChoiceOption {
     }
 }
 
+/// Buffered name and args that arrived before the `tool_calls[].id` was known.
+///
+/// OpenAI's Chat Completions streaming spec does not strictly guarantee that
+/// `tool_calls[].id` arrives before `function.name` or `function.arguments`
+/// deltas for the same `index`. Both fields are buffered here and flushed
+/// into the first [`ModelEvent::ToolCallDelta`] once the id is observed.
+#[derive(Default)]
+struct PendingToolCall {
+    name: Option<String>,
+    args: String,
+}
+
 /// Accumulates Chat Completions SSE deltas and emits [`ModelEvent`]s.
 ///
 /// Maps upstream tool-call `index` values to their `call_id` once a first
@@ -203,13 +215,8 @@ pub(crate) struct ChatTranslator {
     tool_calls: HashMap<u32, String>,
     /// Indices for which `name` has already been emitted to the consumer.
     name_emitted: HashSet<u32>,
-    /// index → buffered args that arrived before the call_id was known.
-    ///
-    /// OpenAI's Chat Completions streaming spec does not strictly guarantee
-    /// that `tool_calls[].id` arrives before any `function.arguments` delta
-    /// for the same `index`. This buffer holds orphan deltas until the id
-    /// is observed, then prepends them to the first `ToolCallDelta` emitted.
-    pending_args: HashMap<u32, String>,
+    /// index → buffered (name, args) that arrived before the call_id was known.
+    pending: HashMap<u32, PendingToolCall>,
 }
 
 impl ChatTranslator {
@@ -218,7 +225,7 @@ impl ChatTranslator {
         Self {
             tool_calls: HashMap::new(),
             name_emitted: HashSet::new(),
-            pending_args: HashMap::new(),
+            pending: HashMap::new(),
         }
     }
 
@@ -307,23 +314,36 @@ impl ChatTranslator {
             self.tool_calls.insert(index, id.to_owned());
             id.to_owned()
         } else {
-            // No call_id known yet and none on this delta — buffer any args
-            // delta so it isn't silently dropped. It will be prepended when
-            // the id finally arrives.
+            // No call_id known yet and none on this delta — buffer both name
+            // and args so neither is silently dropped. They will be flushed
+            // into the first ToolCallDelta once the id arrives.
+            let entry = self.pending.entry(index).or_default();
+            if let Some(fname) = tc.function.as_ref().and_then(|f| f.name.as_deref()) {
+                if entry.name.is_none() {
+                    entry.name = Some(fname.to_owned());
+                }
+            }
             let delta = tc
                 .function
                 .as_ref()
                 .and_then(|f| f.arguments.as_deref())
                 .unwrap_or("");
             if !delta.is_empty() {
-                self.pending_args.entry(index).or_default().push_str(delta);
+                entry.args.push_str(delta);
             }
             return;
         };
 
+        // Flush any name/args buffered before the call_id arrived.
+        let buffered = self.pending.remove(&index).unwrap_or_default();
+
         // Emit name on the first delta that has it (and only once per index).
+        // Prefer a buffered name (arrived before id) over the current chunk's name.
         let name_to_emit = if self.name_emitted.contains(&index) {
             None
+        } else if let Some(bname) = buffered.name {
+            self.name_emitted.insert(index);
+            Some(bname)
         } else if let Some(fname) = tc.function.as_ref().and_then(|f| f.name.as_deref()) {
             self.name_emitted.insert(index);
             Some(fname.to_owned())
@@ -331,17 +351,16 @@ impl ChatTranslator {
             None
         };
 
-        // Prepend any buffered args that arrived before the call_id was known.
-        let buffered = self.pending_args.remove(&index).unwrap_or_default();
+        // Prepend any buffered args to the current chunk's args delta.
         let current_delta = tc
             .function
             .as_ref()
             .and_then(|f| f.arguments.as_deref())
             .unwrap_or("");
-        let args_delta = if buffered.is_empty() {
+        let args_delta = if buffered.args.is_empty() {
             current_delta.to_owned()
         } else {
-            buffered + current_delta
+            buffered.args + current_delta
         };
 
         out.push(ModelEvent::ToolCallDelta {
@@ -349,5 +368,100 @@ impl ChatTranslator {
             name: name_to_emit,
             args_delta,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_openai::types::chat::{ChatCompletionMessageToolCallChunk, FunctionCallStream};
+
+    fn make_chunk(
+        index: u32,
+        id: Option<&str>,
+        name: Option<&str>,
+        arguments: Option<&str>,
+    ) -> ChatCompletionMessageToolCallChunk {
+        ChatCompletionMessageToolCallChunk {
+            index,
+            id: id.map(|s| s.to_owned()),
+            r#type: None,
+            function: Some(FunctionCallStream {
+                name: name.map(|s| s.to_owned()),
+                arguments: arguments.map(|s| s.to_owned()),
+            }),
+        }
+    }
+
+    /// Chunk 1: name arrives without an id.
+    /// Chunk 2: id arrives; name should be recovered from the buffer.
+    #[test]
+    fn orphan_name_buffered_and_flushed_with_id() {
+        let mut t = ChatTranslator::new();
+        let mut out = Vec::new();
+
+        // Chunk 1: name="foo", no id — should be buffered, nothing emitted.
+        t.handle_tool_call_chunk(&make_chunk(0, None, Some("foo"), None), &mut out);
+        assert!(out.is_empty(), "no event expected before id arrives");
+
+        // Chunk 2: id="call_abc", name=None, args="{}" — id arrives, flush buffer.
+        t.handle_tool_call_chunk(&make_chunk(0, Some("call_abc"), None, Some("{}")), &mut out);
+        assert_eq!(out.len(), 1, "expected exactly one ToolCallDelta");
+        match &out[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "call_abc");
+                assert_eq!(
+                    name.as_deref(),
+                    Some("foo"),
+                    "buffered name must be emitted"
+                );
+                assert_eq!(args_delta, "{}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+
+        // Subsequent chunk: name should NOT be re-emitted.
+        let mut out2 = Vec::new();
+        t.handle_tool_call_chunk(&make_chunk(0, None, None, Some("extra")), &mut out2);
+        assert_eq!(out2.len(), 1);
+        match &out2[0] {
+            ModelEvent::ToolCallDelta { name, .. } => {
+                assert!(name.is_none(), "name must not be re-emitted");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+    }
+
+    /// Chunk 1: args arrive without an id.
+    /// Chunk 2: id arrives; args should be prepended.
+    #[test]
+    fn orphan_args_buffered_and_prepended_with_id() {
+        let mut t = ChatTranslator::new();
+        let mut out = Vec::new();
+
+        t.handle_tool_call_chunk(&make_chunk(0, None, None, Some("{\"a\":")), &mut out);
+        assert!(out.is_empty());
+
+        t.handle_tool_call_chunk(
+            &make_chunk(0, Some("call_xyz"), Some("bar"), Some("1}")),
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "call_xyz");
+                assert_eq!(name.as_deref(), Some("bar"));
+                assert_eq!(args_delta, "{\"a\":1}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
     }
 }
