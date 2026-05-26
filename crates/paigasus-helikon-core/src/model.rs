@@ -213,6 +213,34 @@ pub enum ToolChoice {
     },
 }
 
+/// Caller's preference for the assistant message's content shape.
+///
+/// Maps onto each provider's native `response_format` (OpenAI),
+/// `response_format`/`tool` (Anthropic), or structured-output equivalent.
+/// Providers that lack native support degrade to `Text`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ResponseFormat {
+    /// Default — assistant text is unconstrained.
+    Text,
+    /// Assistant message must be a valid JSON object (no schema).
+    JsonObject,
+    /// Assistant message must conform to the JSON Schema below.
+    ///
+    /// When `strict` is `true`, providers that support strict mode (OpenAI
+    /// Responses, OpenAI Chat with `response_format.json_schema.strict`)
+    /// enforce the schema server-side; providers without strict-mode
+    /// support best-effort it.
+    JsonSchema {
+        /// Schema identifier (echoed back by some providers in traces).
+        name: String,
+        /// The JSON Schema describing the response.
+        schema: serde_json::Value,
+        /// Whether to request strict-mode enforcement.
+        strict: bool,
+    },
+}
+
 /// Errors raised by [`Model::invoke`] or surfaced through the
 /// [`ModelEvent`] stream.
 ///
@@ -283,5 +311,34 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(ToolChoice::Auto, ToolChoice::Auto);
         assert_ne!(ToolChoice::Auto, ToolChoice::Required);
+    }
+
+    #[test]
+    fn response_format_variants_are_constructible() {
+        let _ = ResponseFormat::Text;
+        let _ = ResponseFormat::JsonObject;
+        let _ = ResponseFormat::JsonSchema {
+            name: "Person".to_owned(),
+            schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        };
+    }
+
+    #[test]
+    fn response_format_clones_and_debug_prints() {
+        let f = ResponseFormat::JsonSchema {
+            name: "X".to_owned(),
+            schema: serde_json::Value::Null,
+            strict: false,
+        };
+        let f2 = f.clone();
+        assert!(format!("{f2:?}").contains("X"));
+    }
+
+    #[test]
+    fn response_format_partial_eq_for_text_and_json_object() {
+        assert_eq!(ResponseFormat::Text, ResponseFormat::Text);
+        assert_eq!(ResponseFormat::JsonObject, ResponseFormat::JsonObject);
+        assert_ne!(ResponseFormat::Text, ResponseFormat::JsonObject);
     }
 }
