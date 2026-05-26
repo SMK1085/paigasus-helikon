@@ -21,36 +21,64 @@ pub(crate) struct TranslatedMessages {
 pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
     let mut system_text = String::new();
     let mut messages: Vec<Value> = Vec::new();
+    let mut pending_tool_use: Vec<Value> = Vec::new();
+
+    fn flush_pending(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
+        if !pending.is_empty() {
+            messages.push(json!({
+                "role": "assistant",
+                "content": std::mem::take(pending),
+            }));
+        }
+    }
 
     for item in items {
         match item {
             Item::System { content } => {
+                flush_pending(&mut messages, &mut pending_tool_use);
                 if !system_text.is_empty() {
                     system_text.push('\n');
                 }
                 system_text.push_str(&text_of(content));
             }
             Item::UserMessage { content } => {
+                flush_pending(&mut messages, &mut pending_tool_use);
                 messages.push(json!({
                     "role": "user",
                     "content": user_blocks(content),
                 }));
             }
             Item::AssistantMessage { content, agent: _ } => {
+                flush_pending(&mut messages, &mut pending_tool_use);
                 messages.push(json!({
                     "role": "assistant",
                     "content": assistant_blocks(content),
                 }));
             }
+            Item::ToolCall { call_id, name, args } => {
+                let block = json!({
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": args,
+                });
+                if let Some(last) = messages.last_mut().filter(|m| m["role"] == "assistant") {
+                    last["content"].as_array_mut().unwrap().push(block);
+                } else {
+                    pending_tool_use.push(block);
+                }
+            }
             _ => {
-                // Task 10 + 11 fill in ToolCall / ToolResult.
+                // Task 11 fills in ToolResult.
                 tracing::warn!(
                     target: "paigasus::anthropic::translate",
-                    "Item variant not yet implemented; skipping",
+                    "Item::ToolResult not yet implemented",
                 );
             }
         }
     }
+
+    flush_pending(&mut messages, &mut pending_tool_use);
 
     let system = if system_text.is_empty() {
         None
@@ -89,6 +117,12 @@ fn assistant_blocks(content: &[ContentPart]) -> Value {
         .iter()
         .filter_map(|p| match p {
             ContentPart::Text { text } => Some(json!({"type": "text", "text": text})),
+            ContentPart::ToolUse { call_id, name, args } => Some(json!({
+                "type": "tool_use",
+                "id": call_id,
+                "name": name,
+                "input": args,
+            })),
             ContentPart::Reasoning { .. } => {
                 tracing::warn!(
                     target: "paigasus::anthropic::translate",
@@ -175,5 +209,76 @@ mod tests {
         assert_eq!(content.as_array().unwrap().len(), 1);
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "answer");
+    }
+
+    #[test]
+    fn tool_call_folds_into_preceding_assistant() {
+        let items = vec![
+            Item::AssistantMessage {
+                content: vec![text("calling")],
+                agent: None,
+            },
+            Item::ToolCall {
+                call_id: "tu_1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({"host": "ex.com"}),
+            },
+        ];
+        let out = translate_messages(&items);
+        let msg = &out.messages[0];
+        assert_eq!(msg["role"], "assistant");
+        let blocks = msg["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0], json!({"type": "text", "text": "calling"}));
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["id"], "tu_1");
+        assert_eq!(blocks[1]["name"], "ping");
+        assert_eq!(blocks[1]["input"], json!({"host": "ex.com"}));
+    }
+
+    #[test]
+    fn standalone_tool_calls_synthesize_assistant_carrier() {
+        let items = vec![
+            Item::ToolCall {
+                call_id: "tu_a".to_owned(),
+                name: "a".to_owned(),
+                args: json!({}),
+            },
+            Item::ToolCall {
+                call_id: "tu_b".to_owned(),
+                name: "b".to_owned(),
+                args: json!({"x": 1}),
+            },
+        ];
+        let out = translate_messages(&items);
+        assert_eq!(out.messages.as_array().unwrap().len(), 1);
+        let msg = &out.messages[0];
+        assert_eq!(msg["role"], "assistant");
+        let blocks = msg["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["id"], "tu_a");
+        assert_eq!(blocks[1]["id"], "tu_b");
+    }
+
+    #[test]
+    fn assistant_with_nested_tool_use_emits_tool_use_block() {
+        let items = vec![Item::AssistantMessage {
+            content: vec![
+                text("ok"),
+                ContentPart::ToolUse {
+                    call_id: "tu_x".to_owned(),
+                    name: "search".to_owned(),
+                    args: json!({"q": "rust"}),
+                },
+            ],
+            agent: None,
+        }];
+        let out = translate_messages(&items);
+        let blocks = out.messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["id"], "tu_x");
+        assert_eq!(blocks[1]["input"], json!({"q": "rust"}));
     }
 }
