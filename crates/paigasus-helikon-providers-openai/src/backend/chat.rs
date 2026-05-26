@@ -203,6 +203,13 @@ pub(crate) struct ChatTranslator {
     tool_calls: HashMap<u32, String>,
     /// Indices for which `name` has already been emitted to the consumer.
     name_emitted: HashSet<u32>,
+    /// index → buffered args that arrived before the call_id was known.
+    ///
+    /// OpenAI's Chat Completions streaming spec does not strictly guarantee
+    /// that `tool_calls[].id` arrives before any `function.arguments` delta
+    /// for the same `index`. This buffer holds orphan deltas until the id
+    /// is observed, then prepends them to the first `ToolCallDelta` emitted.
+    pending_args: HashMap<u32, String>,
 }
 
 impl ChatTranslator {
@@ -211,6 +218,7 @@ impl ChatTranslator {
         Self {
             tool_calls: HashMap::new(),
             name_emitted: HashSet::new(),
+            pending_args: HashMap::new(),
         }
     }
 
@@ -299,7 +307,20 @@ impl ChatTranslator {
             self.tool_calls.insert(index, id.to_owned());
             id.to_owned()
         } else {
-            // No call_id known yet and none on this delta — skip.
+            // No call_id known yet and none on this delta — buffer any args
+            // delta so it isn't silently dropped. It will be prepended when
+            // the id finally arrives.
+            let delta = tc
+                .function
+                .as_ref()
+                .and_then(|f| f.arguments.as_deref())
+                .unwrap_or("");
+            if !delta.is_empty() {
+                self.pending_args
+                    .entry(index)
+                    .or_default()
+                    .push_str(delta);
+            }
             return;
         };
 
@@ -313,12 +334,18 @@ impl ChatTranslator {
             None
         };
 
-        let args_delta = tc
+        // Prepend any buffered args that arrived before the call_id was known.
+        let buffered = self.pending_args.remove(&index).unwrap_or_default();
+        let current_delta = tc
             .function
             .as_ref()
             .and_then(|f| f.arguments.as_deref())
-            .unwrap_or("")
-            .to_owned();
+            .unwrap_or("");
+        let args_delta = if buffered.is_empty() {
+            current_delta.to_owned()
+        } else {
+            buffered + current_delta
+        };
 
         out.push(ModelEvent::ToolCallDelta {
             call_id,
