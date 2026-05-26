@@ -46,7 +46,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_tools()
             .with_parallel_tool_calls()
             .with_structured_output()
-            .with_vision(),
+            .with_vision()
+            .with_prompt_caching(),
     ),
     (
         "gpt-4o-mini",
@@ -55,7 +56,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_tools()
             .with_parallel_tool_calls()
             .with_structured_output()
-            .with_vision(),
+            .with_vision()
+            .with_prompt_caching(),
     ),
     (
         "gpt-4.1",
@@ -64,7 +66,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_tools()
             .with_parallel_tool_calls()
             .with_structured_output()
-            .with_vision(),
+            .with_vision()
+            .with_prompt_caching(),
     ),
     (
         "gpt-4.1-mini",
@@ -73,7 +76,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_tools()
             .with_parallel_tool_calls()
             .with_structured_output()
-            .with_vision(),
+            .with_vision()
+            .with_prompt_caching(),
     ),
     (
         "gpt-3.5-turbo",
@@ -92,7 +96,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_tools()
             .with_structured_output()
             .with_server_managed_state()
-            .with_reasoning(),
+            .with_reasoning()
+            .with_prompt_caching(),
     ),
     (
         "o1-mini",
@@ -101,7 +106,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_tools()
             .with_structured_output()
             .with_server_managed_state()
-            .with_reasoning(),
+            .with_reasoning()
+            .with_prompt_caching(),
     ),
     (
         "o3",
@@ -111,7 +117,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_parallel_tool_calls()
             .with_structured_output()
             .with_server_managed_state()
-            .with_reasoning(),
+            .with_reasoning()
+            .with_prompt_caching(),
     ),
     (
         "o3-mini",
@@ -121,7 +128,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_parallel_tool_calls()
             .with_structured_output()
             .with_server_managed_state()
-            .with_reasoning(),
+            .with_reasoning()
+            .with_prompt_caching(),
     ),
     (
         "gpt-5",
@@ -132,7 +140,8 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
             .with_structured_output()
             .with_server_managed_state()
             .with_reasoning()
-            .with_vision(),
+            .with_vision()
+            .with_prompt_caching(),
     ),
 ];
 
@@ -226,5 +235,33 @@ mod tests {
         let len_before = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), len_before, "KNOWN_MODELS has duplicate ids");
+    }
+
+    #[test]
+    fn cache_eligible_models_advertise_prompt_caching() {
+        // OpenAI's automatic prompt-caching covers gpt-4o family, gpt-4.1 family,
+        // o1/o3 family, and gpt-5. Verify each table entry advertises the flag.
+        for id in [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "o1",
+            "o1-mini",
+            "o3",
+            "o3-mini",
+            "gpt-5",
+        ] {
+            let caps = lookup(id);
+            assert!(
+                caps.prompt_caching,
+                "model {id} must advertise prompt_caching=true",
+            );
+        }
+        // gpt-3.5-turbo predates automatic prefix caching — must remain false.
+        assert!(
+            !lookup("gpt-3.5-turbo").prompt_caching,
+            "gpt-3.5-turbo predates OpenAI prefix caching",
+        );
     }
 }
