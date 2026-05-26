@@ -4,9 +4,11 @@
 //! automatically). The SSE stream is translated by [`ResponsesTranslator`]
 //! into `ModelEvent`s.
 
+use std::collections::HashSet;
+
 use async_openai::traits::EventType as _;
 use async_openai::types::responses::{
-    CreateResponse, FunctionTool, InputItem, InputParam, ResponseFormatJsonSchema,
+    CreateResponse, FunctionTool, InputItem, InputParam, OutputItem, ResponseFormatJsonSchema,
     ResponseStreamEvent, ResponseTextParam, ResponseUsage, Status,
     TextResponseFormatConfiguration, Tool, ToolChoiceOptions, ToolChoiceParam,
 };
@@ -70,9 +72,15 @@ pub(crate) async fn invoke(
                     yield Err(map_openai_error(e));
                     return;
                 }
-                Some(Ok(event)) => {
-                    for ev in translator.consume(event) {
-                        yield Ok(ev);
+                Some(Ok(event)) => match translator.consume(event) {
+                    Ok(events) => {
+                        for ev in events {
+                            yield Ok(ev);
+                        }
+                    }
+                    Err(e) => {
+                        yield Err(e);
+                        return;
                     }
                 }
             }
@@ -190,103 +198,154 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 
 /// Accumulates Responses API SSE events and emits [`ModelEvent`]s.
 ///
-/// F2 will expand this to cover function-call argument deltas, refusal
-/// deltas, and incomplete events. For F1, the covered event types are:
+/// The covered event types are:
 ///
 /// - `response.output_text.delta` → `TokenDelta`
+/// - `response.refusal.delta` → `TokenDelta` (refusal is the model's text)
 /// - `response.reasoning_summary_text.delta` → `ReasoningDelta`
-/// - `response.completed` / `response.failed` / `response.incomplete` →
-///   `Usage` + `Finish`
+/// - `response.reasoning_text.delta` → `ReasoningDelta`
+/// - `response.output_item.added` (when item is a function call) →
+///   registers call_id + name for subsequent argument deltas
+/// - `response.function_call_arguments.delta` → `ToolCallDelta` with
+///   name-emission gating (name emitted once per call_id, then `None`)
+/// - `response.completed` → `Usage` + `Finish { Stop }`
+/// - `response.incomplete` → `Usage` + `Finish` per `incomplete_details.reason`
+///   - `"max_output_tokens"` → `Finish { Length }`
+///   - `"content_filter"` → `Finish { ContentFilter }`
+///   - other → `Finish { Other(reason) }`
+/// - `response.failed` → `Err(ModelError)` on the outer stream
+/// - `error` → `Err(ModelError)` on the outer stream
 ///
 /// All other events are dropped with a `tracing::debug!` log.
-pub(crate) struct ResponsesTranslator;
+pub(crate) struct ResponsesTranslator {
+    /// Tracks call_ids for which a name has already been emitted (name-emission
+    /// gating: name is `Some` on the first `ToolCallDelta` for a given call_id,
+    /// then `None` on subsequent deltas).
+    name_emitted: HashSet<String>,
+    /// Maps call_id → function name, populated by `response.output_item.added`
+    /// when the item is a `function_call`.
+    call_names: std::collections::HashMap<String, String>,
+}
 
 impl ResponsesTranslator {
     /// Create a fresh translator for a new streaming response.
     pub(crate) fn new() -> Self {
-        Self
+        Self {
+            name_emitted: HashSet::new(),
+            call_names: std::collections::HashMap::new(),
+        }
     }
 
-    /// Consume one upstream SSE event and produce zero or more [`ModelEvent`]s.
+    /// Consume one upstream SSE event and produce zero or more [`ModelEvent`]s,
+    /// or an error if the server emits a `response.failed` / `error` event.
     ///
     /// Event ordering follows the "Usage before Finish" contract stated in
     /// [`paigasus_helikon_core::Model::invoke`]:
-    /// 1. `TokenDelta` / `ReasoningDelta` (generation deltas)
+    /// 1. `TokenDelta` / `ReasoningDelta` / `ToolCallDelta` (generation deltas)
     /// 2. `Usage` (when the terminal response event carries `usage`)
     /// 3. `Finish` (terminal; always last)
-    pub(crate) fn consume(&mut self, event: ResponseStreamEvent) -> Vec<ModelEvent> {
+    pub(crate) fn consume(
+        &mut self,
+        event: ResponseStreamEvent,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
         match event {
             // Text token delta.
             ResponseStreamEvent::ResponseOutputTextDelta(e) => {
                 if e.delta.is_empty() {
-                    vec![]
+                    Ok(vec![])
                 } else {
-                    vec![ModelEvent::TokenDelta { text: e.delta }]
+                    Ok(vec![ModelEvent::TokenDelta { text: e.delta }])
+                }
+            }
+
+            // Refusal delta — the refusal IS the model's response text.
+            ResponseStreamEvent::ResponseRefusalDelta(e) => {
+                if e.delta.is_empty() {
+                    Ok(vec![])
+                } else {
+                    Ok(vec![ModelEvent::TokenDelta { text: e.delta }])
                 }
             }
 
             // Reasoning summary text delta.
             ResponseStreamEvent::ResponseReasoningSummaryTextDelta(e) => {
                 if e.delta.is_empty() {
-                    vec![]
+                    Ok(vec![])
                 } else {
-                    vec![ModelEvent::ReasoningDelta { text: e.delta }]
+                    Ok(vec![ModelEvent::ReasoningDelta { text: e.delta }])
                 }
             }
 
             // Reasoning text delta (inline reasoning, not summary).
             ResponseStreamEvent::ResponseReasoningTextDelta(e) => {
                 if e.delta.is_empty() {
-                    vec![]
+                    Ok(vec![])
                 } else {
-                    vec![ModelEvent::ReasoningDelta { text: e.delta }]
+                    Ok(vec![ModelEvent::ReasoningDelta { text: e.delta }])
                 }
+            }
+
+            // Output item added — register function call name for later deltas.
+            ResponseStreamEvent::ResponseOutputItemAdded(e) => {
+                if let OutputItem::FunctionCall(fc) = e.item {
+                    self.call_names.entry(fc.call_id).or_insert(fc.name);
+                }
+                Ok(vec![])
+            }
+
+            // Function-call argument delta with name-emission gating.
+            ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
+                let already_emitted = self.name_emitted.contains(&e.item_id);
+                let name = if already_emitted {
+                    None
+                } else {
+                    self.name_emitted.insert(e.item_id.clone());
+                    // Use the registered name if available; fall back to empty string
+                    // so downstream consumers at least see a delta.
+                    Some(
+                        self.call_names
+                            .get(&e.item_id)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                };
+                Ok(vec![ModelEvent::ToolCallDelta {
+                    call_id: e.item_id,
+                    name,
+                    args_delta: e.delta,
+                }])
             }
 
             // Terminal: response completed.
             ResponseStreamEvent::ResponseCompleted(e) => {
-                terminal_events(e.response.usage, e.response.status)
+                Ok(terminal_events(e.response.usage, e.response.status, None))
             }
 
-            // Terminal: response failed.
-            ResponseStreamEvent::ResponseFailed(e) => {
-                terminal_events(e.response.usage, e.response.status)
-            }
-
-            // Terminal: response incomplete.
+            // Terminal: response incomplete — map reason to FinishReason.
             ResponseStreamEvent::ResponseIncomplete(e) => {
-                terminal_events(e.response.usage, e.response.status)
+                let reason = e.response.incomplete_details.as_ref().map(|d| d.reason.as_str());
+                Ok(terminal_events(e.response.usage, e.response.status, reason))
+            }
+
+            // Terminal: response failed — emit error on the outer stream.
+            ResponseStreamEvent::ResponseFailed(e) => {
+                let msg = e
+                    .response
+                    .error
+                    .map(|err| err.message)
+                    .unwrap_or_else(|| "response.failed with no error details".to_owned());
+                Err(ModelError::Other(anyhow::anyhow!("{}", msg)))
             }
 
             // Error event from the server.
             ResponseStreamEvent::ResponseError(e) => {
-                // Log the error; the stream will end without a Finish event.
-                // A proper error propagation channel is added in a follow-up task.
                 tracing::warn!(
                     target: "paigasus::openai::responses",
                     code = e.code.as_deref().unwrap_or("unknown"),
                     message = %e.message,
                     "Responses API server error event"
                 );
-                vec![]
-            }
-
-            // Function-call argument deltas (skeleton; F2 expands).
-            ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(_) => {
-                tracing::debug!(
-                    target: "paigasus::openai::responses",
-                    "function_call_arguments.delta — skipped (F2 expands)"
-                );
-                vec![]
-            }
-
-            // Refusal delta (skeleton; F2 expands).
-            ResponseStreamEvent::ResponseRefusalDelta(_) => {
-                tracing::debug!(
-                    target: "paigasus::openai::responses",
-                    "refusal.delta — skipped (F2 expands)"
-                );
-                vec![]
+                Err(ModelError::Other(anyhow::anyhow!("{}", e.message)))
             }
 
             // All other events → drop with debug log.
@@ -296,15 +355,24 @@ impl ResponsesTranslator {
                     event_type = other.event_type(),
                     "unhandled Responses API event"
                 );
-                vec![]
+                Ok(vec![])
             }
         }
     }
 }
 
 /// Build the terminal `[Usage, Finish]` event pair from a response's
-/// usage snapshot and status.
-fn terminal_events(usage: Option<ResponseUsage>, status: Status) -> Vec<ModelEvent> {
+/// usage snapshot, status, and optional `incomplete_details.reason` string.
+///
+/// When `incomplete_reason` is `Some`, it overrides the status-based mapping:
+/// - `"max_output_tokens"` → `Finish { Length }`
+/// - `"content_filter"` → `Finish { ContentFilter }`
+/// - other string → `Finish { Other(reason) }`
+fn terminal_events(
+    usage: Option<ResponseUsage>,
+    status: Status,
+    incomplete_reason: Option<&str>,
+) -> Vec<ModelEvent> {
     let mut out = Vec::new();
 
     if let Some(u) = usage {
@@ -316,13 +384,21 @@ fn terminal_events(usage: Option<ResponseUsage>, status: Status) -> Vec<ModelEve
         });
     }
 
-    let reason = match status {
-        Status::Completed => FinishReason::Stop,
-        Status::Failed => FinishReason::Other("failed".to_owned()),
-        Status::Incomplete => FinishReason::Length,
-        Status::Cancelled => FinishReason::Other("cancelled".to_owned()),
-        Status::Queued => FinishReason::Other("queued".to_owned()),
-        Status::InProgress => FinishReason::Other("in_progress".to_owned()),
+    let reason = if let Some(r) = incomplete_reason {
+        match r {
+            "max_output_tokens" => FinishReason::Length,
+            "content_filter" => FinishReason::ContentFilter,
+            other => FinishReason::Other(other.to_owned()),
+        }
+    } else {
+        match status {
+            Status::Completed => FinishReason::Stop,
+            Status::Failed => FinishReason::Other("failed".to_owned()),
+            Status::Incomplete => FinishReason::Length,
+            Status::Cancelled => FinishReason::Other("cancelled".to_owned()),
+            Status::Queued => FinishReason::Other("queued".to_owned()),
+            Status::InProgress => FinishReason::Other("in_progress".to_owned()),
+        }
     };
 
     out.push(ModelEvent::Finish { reason });

@@ -1,0 +1,4 @@
+data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_04","object":"response","created_at":1,"model":"gpt-5","output":[],"status":"failed","error":{"code":"server_error","message":"upstream model unavailable"}}}
+
+data: [DONE]
+
