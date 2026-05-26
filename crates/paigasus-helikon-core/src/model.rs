@@ -191,6 +191,28 @@ pub struct ModelCapabilities {
     pub audio: bool,
 }
 
+/// Caller's preference for whether the model invokes a tool this turn.
+///
+/// Maps onto each provider's native `tool_choice` shape. Providers that
+/// do not accept a `tool_choice` (older Anthropic builds, some
+/// OpenAI-compatible proxies) treat any non-`None` setting as
+/// best-effort.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ToolChoice {
+    /// Default — the model decides whether to call a tool.
+    Auto,
+    /// The model **must** call at least one tool.
+    Required,
+    /// The model **must not** call a tool this turn.
+    None,
+    /// The model **must** call exactly the named tool.
+    Tool {
+        /// Tool name (matching [`crate::Tool::name`]).
+        name: String,
+    },
+}
+
 /// Errors raised by [`Model::invoke`] or surfaced through the
 /// [`ModelEvent`] stream.
 ///
@@ -231,4 +253,35 @@ pub enum ModelError {
     /// Escape hatch for arbitrary upstream failures. See ADR-10.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_choice_variants_are_constructible() {
+        let _ = ToolChoice::Auto;
+        let _ = ToolChoice::Required;
+        let _ = ToolChoice::None;
+        let _ = ToolChoice::Tool { name: "echo".to_owned() };
+    }
+
+    #[test]
+    fn tool_choice_clones_and_debug_prints() {
+        let c = ToolChoice::Tool { name: "echo".to_owned() };
+        let c2 = c.clone();
+        assert!(format!("{c2:?}").contains("echo"));
+    }
+
+    #[test]
+    fn tool_choice_equality_for_tool_variant() {
+        let a = ToolChoice::Tool { name: "echo".to_owned() };
+        let b = ToolChoice::Tool { name: "echo".to_owned() };
+        let c = ToolChoice::Tool { name: "other".to_owned() };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(ToolChoice::Auto, ToolChoice::Auto);
+        assert_ne!(ToolChoice::Auto, ToolChoice::Required);
+    }
 }
