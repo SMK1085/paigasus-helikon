@@ -19,6 +19,10 @@ pub use paigasus_helikon_macros::tools;
 #[cfg(feature = "openai")]
 pub use paigasus_helikon_providers_openai as openai;
 
+/// OpenAI provider — [`paigasus_helikon_providers_openai`]. Enabled via the `providers-openai` feature.
+#[cfg(feature = "providers-openai")]
+pub use paigasus_helikon_providers_openai as providers_openai;
+
 /// Anthropic provider. Enabled via the `anthropic` feature.
 #[cfg(feature = "anthropic")]
 pub use paigasus_helikon_providers_anthropic as anthropic;

@@ -28,6 +28,7 @@ paigasus-helikon-evals               = { workspace = true, optional = true }
 default            = []
 macros             = ["dep:paigasus-helikon-macros"]
 openai             = ["dep:paigasus-helikon-providers-openai"]
+providers-openai   = ["dep:paigasus-helikon-providers-openai"]
 anthropic          = ["dep:paigasus-helikon-providers-anthropic"]
 mcp                = ["dep:paigasus-helikon-mcp"]
 tools              = ["dep:paigasus-helikon-tools"]
