@@ -530,6 +530,13 @@ where
                                         args_delta,
                                     };
                                 }
+                                Ok(crate::ModelEvent::Usage { .. }) => {
+                                    // Usage events are consumed silently here; downstream
+                                    // usage accounting is wired through the TokenUsage stub
+                                    // a few lines below and accumulated by the runner into
+                                    // AgentEvent::RunCompleted. SMA-318 will replace the
+                                    // stub with real per-turn accumulation.
+                                }
                                 Ok(crate::ModelEvent::Finish { reason }) => {
                                     finish_reason = reason;
                                 }
@@ -548,7 +555,6 @@ where
                             }
                         };
                         conversation.extend(items.iter().cloned());
-                        // Usage stubbed until SMA-316/SMA-317 add ModelEvent::Usage.
                         let usage = crate::TokenUsage::default();
                         tx_input = crate::TransitionInput::ModelResponse {
                             items,

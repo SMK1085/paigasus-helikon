@@ -51,6 +51,17 @@ pub trait Model: Send + Sync {
     /// Invoke the model. Returns a stream of [`ModelEvent`]s on success or a
     /// [`ModelError`] if the request could not be sent. Individual events in
     /// the stream may themselves carry a [`ModelError`].
+    ///
+    /// **Event-ordering contract:**
+    /// - `TokenDelta`, `ReasoningDelta`, and `ToolCallDelta` may interleave
+    ///   freely while the model is generating.
+    /// - `Usage` MAY appear anywhere; most providers emit one immediately
+    ///   before `Finish` but Anthropic emits incremental updates.
+    /// - `Finish` is the terminal event; nothing follows it.
+    ///
+    /// Implementations that cannot honor cancellation MUST still terminate
+    /// the stream when the [`CancellationToken`] fires (drop the underlying
+    /// connection and end the stream without emitting `Finish`).
     async fn invoke(
         &self,
         request: ModelRequest,
@@ -132,7 +143,7 @@ impl ModelSettings {
     }
 }
 
-/// Streaming union — token, reasoning, tool-call delta, finish.
+/// Streaming union — token / reasoning / tool-call deltas, usage snapshots, finish.
 ///
 /// See ADR-1 (*Single Model trait with capabilities flags*).
 #[derive(Debug, Clone)]
@@ -159,6 +170,27 @@ pub enum ModelEvent {
         name: Option<String>,
         /// JSON-encoded argument fragment.
         args_delta: String,
+    },
+    /// Token-usage snapshot emitted by the provider.
+    ///
+    /// **Ordering contract** (per [`Model::invoke`] docs): a `Usage` MAY
+    /// appear anywhere in the stream. `Finish` is always terminal.
+    /// OpenAI emits one `Usage` immediately before `Finish`; Anthropic
+    /// emits incremental usage updates. Consumers tracking final
+    /// totals should retain the last `Usage` seen.
+    Usage {
+        /// Prompt / input tokens consumed.
+        input_tokens: u32,
+        /// Completion / output tokens generated.
+        output_tokens: u32,
+        /// Cached input tokens (OpenAI prompt-caching, Anthropic
+        /// ephemeral cache). `None` when the provider does not report
+        /// caching or none was hit.
+        cached_input_tokens: Option<u32>,
+        /// Reasoning tokens (OpenAI o1/o3/gpt-5; Anthropic extended
+        /// thinking). `None` when the provider does not separate
+        /// reasoning from output tokens.
+        reasoning_tokens: Option<u32>,
     },
     /// Terminal event for a single response.
     Finish {
@@ -384,5 +416,21 @@ mod tests {
         };
         assert_eq!(s.temperature, Some(0.7));
         assert_eq!(s.previous_response_id.as_deref(), Some("resp_abc"));
+    }
+
+    #[test]
+    fn model_event_usage_constructs() {
+        let _ = ModelEvent::Usage {
+            input_tokens: 100,
+            output_tokens: 42,
+            cached_input_tokens: Some(20),
+            reasoning_tokens: Some(8),
+        };
+        let _ = ModelEvent::Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+        };
     }
 }
