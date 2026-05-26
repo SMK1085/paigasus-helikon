@@ -56,7 +56,7 @@ async fn request_carries_required_headers() {
         .invoke(req_with(vec![user("hi")]), CancellationToken::new())
         .await
         .unwrap();
-    while let Some(_) = s.next().await {}
+    while s.next().await.is_some() {}
 }
 
 #[tokio::test]

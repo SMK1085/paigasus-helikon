@@ -109,7 +109,7 @@ async fn cache_strategy_round_trip() {
         r.model_settings.max_output_tokens = Some(32);
     });
     let mut s = model.invoke(req1, CancellationToken::new()).await.unwrap();
-    while let Some(_) = s.next().await {}
+    while s.next().await.is_some() {}
 
     let mut messages2 = messages;
     messages2.push(Item::AssistantMessage {
@@ -126,13 +126,11 @@ async fn cache_strategy_round_trip() {
     let mut cached = 0u32;
     while let Some(ev) = s.next().await {
         if let Ok(ModelEvent::Usage {
-            cached_input_tokens,
+            cached_input_tokens: Some(c),
             ..
         }) = ev
         {
-            if let Some(c) = cached_input_tokens {
-                cached = cached.max(c);
-            }
+            cached = cached.max(c);
         }
     }
     if cached == 0 {

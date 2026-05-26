@@ -28,7 +28,7 @@ pub(crate) fn map_error_type(
         (_, "invalid_request_error") if message.contains("prompt is too long") => {
             ModelError::ContextLengthExceeded
         }
-        (Some(s), _) if matches!(s, 500..=504 | 529) => ModelError::Unavailable,
+        (Some(500..=504 | 529), _) => ModelError::Unavailable,
         (Some(_), _) => ModelError::Other(anyhow::anyhow!("anthropic {error_type}: {message}")),
         (None, _) => ModelError::Transport(message.to_owned()),
     }

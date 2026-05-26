@@ -31,10 +31,11 @@ pub enum CacheStrategy {
 ///
 /// Anthropic requires `budget_tokens < max_tokens` for `Enabled` but
 /// documents no absolute minimum; this crate does not enforce one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtendedThinking {
     /// No `thinking` field in the request.
+    #[default]
     Disabled,
     /// `thinking: { type: "enabled", budget_tokens: N }`.
     Enabled {
@@ -43,12 +44,6 @@ pub enum ExtendedThinking {
     },
     /// `thinking: { type: "adaptive" }`. Model picks the budget.
     Adaptive,
-}
-
-impl Default for ExtendedThinking {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 #[cfg(test)]

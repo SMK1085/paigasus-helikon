@@ -22,7 +22,10 @@ pub(crate) enum AnthropicEvent {
         delta: ContentBlockDelta,
     },
     #[serde(rename = "content_block_stop")]
-    ContentBlockStop { index: u32 },
+    ContentBlockStop {
+        #[allow(dead_code)]
+        index: u32,
+    },
     #[serde(rename = "message_delta")]
     MessageDelta {
         delta: MessageDeltaPayload,
@@ -47,6 +50,7 @@ pub(crate) struct MessageStartUsage {
     #[serde(default)]
     pub(crate) cache_read_input_tokens: Option<u32>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(crate) cache_creation_input_tokens: Option<u32>,
 }
 
@@ -62,10 +66,12 @@ pub(crate) enum ContentBlockHead {
         id: String,
         name: String,
         #[serde(default)]
+        #[allow(dead_code)]
         input: Value,
     },
 }
 
+#[allow(clippy::enum_variant_names)] // Anthropic wire names all end in `_delta`; renaming would break serde
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub(crate) enum ContentBlockDelta {

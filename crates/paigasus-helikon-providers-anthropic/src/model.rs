@@ -75,17 +75,27 @@ impl Model for AnthropicModel {
                 let (ty, message) = parsed
                     .as_ref()
                     .ok()
-                    .and_then(|v| {
-                        let ty = v.get("error").and_then(|e| e.get("type"))
-                            .and_then(|t| t.as_str()).unwrap_or("").to_owned();
-                        let msg = v.get("error").and_then(|e| e.get("message"))
-                            .and_then(|m| m.as_str()).unwrap_or("").to_owned();
-                        Some((ty, msg))
+                    .map(|v| {
+                        let ty = v
+                            .get("error")
+                            .and_then(|e| e.get("type"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_owned();
+                        let msg = v
+                            .get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("")
+                            .to_owned();
+                        (ty, msg)
                     })
-                    .unwrap_or_else(|| (
-                        String::new(),
-                        String::from_utf8_lossy(&body_bytes).into_owned(),
-                    ));
+                    .unwrap_or_else(|| {
+                        (
+                            String::new(),
+                            String::from_utf8_lossy(&body_bytes).into_owned(),
+                        )
+                    });
                 yield Err(map_error_type(Some(status.as_u16()), &ty, &message, retry_after_ms));
                 return;
             }
