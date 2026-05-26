@@ -150,7 +150,10 @@ async fn cache_strategy_round_trip() {
             Err(e) => panic!("turn-2 stream error: {e:?}"),
         }
     }
-    assert!(saw_usage, "expected at least one Usage event in live response");
+    assert!(
+        saw_usage,
+        "expected at least one Usage event in live response"
+    );
     if cached == 0 {
         tracing::info!("cache_prefix_too_small: live cache test ran below per-model write minimum",);
         // Pass — caching at <write-minimum is a documented no-op.
