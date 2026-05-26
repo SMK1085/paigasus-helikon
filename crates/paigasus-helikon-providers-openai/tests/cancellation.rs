@@ -49,12 +49,13 @@ async fn cancellation_before_first_chunk_yields_no_events() {
     let mut req = ModelRequest::new();
     req.messages = vec![user("hi")];
 
+    // Start the timer before invoke() so a hang inside invoke() is also detected.
+    let start = std::time::Instant::now();
     let stream_result = model.invoke(req, cancel).await;
 
     // Either: invoke() returns an error (transport-style cancellation), OR the stream
     // ends quickly with no Finish. Both are acceptable per the Model trait's
     // cancellation contract. The point is: we don't hang for 5 seconds.
-    let start = std::time::Instant::now();
     match stream_result {
         Ok(mut s) => {
             let mut emitted = Vec::new();
