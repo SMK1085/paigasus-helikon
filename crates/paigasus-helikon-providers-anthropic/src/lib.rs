@@ -31,4 +31,4 @@ mod translate;
 
 // pub use builder::{AnthropicModelBuilder, BuildError};
 // pub use model::AnthropicModel;
-// pub use settings::{CacheStrategy, ExtendedThinking};
+pub use settings::{CacheStrategy, ExtendedThinking};
