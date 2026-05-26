@@ -18,7 +18,11 @@ fn key_set() -> bool {
 }
 
 fn user(text: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: text.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
+    }
 }
 
 #[tokio::test]
@@ -33,7 +37,9 @@ async fn chat_smoke() {
     let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
     let events: Vec<_> = stream.collect().await;
     assert!(!events.is_empty(), "live API returned empty stream");
-    assert!(events.iter().any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))));
+    assert!(events
+        .iter()
+        .any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))));
 }
 
 #[tokio::test]
@@ -47,7 +53,9 @@ async fn responses_smoke() {
     req.messages = vec![user("Reply with the single word HELLO.")];
     let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
     let events: Vec<_> = stream.collect().await;
-    assert!(events.iter().any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))));
+    assert!(events
+        .iter()
+        .any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))));
 }
 
 #[tokio::test]
@@ -66,8 +74,9 @@ async fn chat_tool_call_round_trip() {
     }];
     let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
     let events: Vec<_> = stream.collect().await;
-    let has_tool_call =
-        events.iter().any(|r| matches!(r, Ok(ModelEvent::ToolCallDelta { .. })));
+    let has_tool_call = events
+        .iter()
+        .any(|r| matches!(r, Ok(ModelEvent::ToolCallDelta { .. })));
     assert!(has_tool_call, "expected a tool-call delta, got {events:#?}");
 }
 
@@ -92,8 +101,12 @@ async fn chat_structured_output_round_trip() {
     });
     req.model_settings = settings;
     let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
-    let events: Vec<ModelEvent> =
-        stream.collect::<Vec<_>>().await.into_iter().filter_map(|r| r.ok()).collect();
+    let events: Vec<ModelEvent> = stream
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .collect();
 
     let text: String = events
         .iter()
@@ -102,8 +115,7 @@ async fn chat_structured_output_round_trip() {
             _ => None,
         })
         .collect();
-    let v: serde_json::Value =
-        serde_json::from_str(&text).expect("response was not valid JSON");
+    let v: serde_json::Value = serde_json::from_str(&text).expect("response was not valid JSON");
     assert!(v.get("answer").is_some(), "missing `answer` key in: {v}");
 }
 
@@ -127,6 +139,9 @@ async fn streaming_round_trip() {
             _ => {}
         }
     }
-    assert!(deltas > 1, "expected multiple TokenDelta events, got {deltas}");
+    assert!(
+        deltas > 1,
+        "expected multiple TokenDelta events, got {deltas}"
+    );
     assert_eq!(finishes, 1, "expected exactly one Finish event");
 }

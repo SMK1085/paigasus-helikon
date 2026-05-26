@@ -51,7 +51,11 @@ pub(crate) fn to_chat_messages(items: &[Item]) -> Value {
                 flush_pending(&mut out, &mut pending_tool_calls);
                 out.push(assistant_message(content));
             }
-            Item::ToolCall { call_id, name, args } => {
+            Item::ToolCall {
+                call_id,
+                name,
+                args,
+            } => {
                 if let Some(last) = out.last_mut().filter(|m| m["role"] == "assistant") {
                     if last["tool_calls"].is_array() {
                         last["tool_calls"]
@@ -143,8 +147,12 @@ fn user_message(parts: &[&ContentPart]) -> Value {
         .iter()
         .filter_map(|p| match p {
             ContentPart::Text { text } => Some(json!({"type": "text", "text": text})),
-            ContentPart::Image { source } => Some(json!({"type": "image_url", "image_url": {"url": media_url(source)}})),
-            ContentPart::Audio { source } => Some(json!({"type": "input_audio", "input_audio": {"data": media_url(source)}})),
+            ContentPart::Image { source } => {
+                Some(json!({"type": "image_url", "image_url": {"url": media_url(source)}}))
+            }
+            ContentPart::Audio { source } => {
+                Some(json!({"type": "input_audio", "input_audio": {"data": media_url(source)}}))
+            }
             _ => None,
         })
         .collect();
@@ -174,7 +182,11 @@ fn assistant_message(content: &[ContentPart]) -> Value {
                 }
                 text.push_str(t);
             }
-            ContentPart::ToolUse { call_id, name, args } => {
+            ContentPart::ToolUse {
+                call_id,
+                name,
+                args,
+            } => {
                 tool_calls.push(openai_tool_call(call_id, name, args));
             }
             ContentPart::Reasoning { .. } => { /* drop */ }
@@ -253,7 +265,9 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
                             text_parts.push(json!({"type": "input_text", "text": text}));
                         }
                         ContentPart::Image { source } => {
-                            text_parts.push(json!({"type": "input_image", "image_url": media_url(source)}));
+                            text_parts.push(
+                                json!({"type": "input_image", "image_url": media_url(source)}),
+                            );
                         }
                         ContentPart::ToolResult { call_id, content } => {
                             hoisted.push(json!({
@@ -271,16 +285,26 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
                 out.extend(hoisted);
             }
             Item::AssistantMessage { content, agent: _ } => {
-                let parts: Vec<Value> = content.iter().filter_map(|p| match p {
-                    ContentPart::Text { text } => Some(json!({"type": "output_text", "text": text})),
-                    _ => None,
-                }).collect();
+                let parts: Vec<Value> = content
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text { text } => {
+                            Some(json!({"type": "output_text", "text": text}))
+                        }
+                        _ => None,
+                    })
+                    .collect();
                 if !parts.is_empty() {
                     out.push(json!({"type": "message", "role": "assistant", "content": parts}));
                 }
                 // Hoist nested ToolUse blocks into top-level function_call items.
                 for p in content {
-                    if let ContentPart::ToolUse { call_id, name, args } = p {
+                    if let ContentPart::ToolUse {
+                        call_id,
+                        name,
+                        args,
+                    } = p
+                    {
                         out.push(json!({
                             "type": "function_call",
                             "call_id": call_id,
@@ -290,7 +314,11 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
                     }
                 }
             }
-            Item::ToolCall { call_id, name, args } => {
+            Item::ToolCall {
+                call_id,
+                name,
+                args,
+            } => {
                 out.push(json!({
                     "type": "function_call",
                     "call_id": call_id,
@@ -331,14 +359,18 @@ mod chat_tests {
 
     #[test]
     fn system_message_is_text_only() {
-        let items = vec![Item::System { content: vec![text("be helpful")] }];
+        let items = vec![Item::System {
+            content: vec![text("be helpful")],
+        }];
         let out = to_chat_messages(&items);
         assert_eq!(out, json!([{"role": "system", "content": "be helpful"}]));
     }
 
     #[test]
     fn user_message_text_only() {
-        let items = vec![Item::UserMessage { content: vec![text("hi")] }];
+        let items = vec![Item::UserMessage {
+            content: vec![text("hi")],
+        }];
         let out = to_chat_messages(&items);
         assert_eq!(out, json!([{"role": "user", "content": "hi"}]));
     }
@@ -537,13 +569,18 @@ mod responses_tests {
 
     #[test]
     fn user_message_text_emits_input_text_part() {
-        let items = vec![Item::UserMessage { content: vec![text("hi")] }];
+        let items = vec![Item::UserMessage {
+            content: vec![text("hi")],
+        }];
         let out = to_responses_input(&items);
         // Responses API input: list of {type, role, content: [parts]}
         assert_eq!(out[0]["type"], "message");
         assert_eq!(out[0]["role"], "user");
         let parts = out[0]["content"].as_array().unwrap();
-        assert_eq!(parts[0], serde_json::json!({"type": "input_text", "text": "hi"}));
+        assert_eq!(
+            parts[0],
+            serde_json::json!({"type": "input_text", "text": "hi"})
+        );
     }
 
     #[test]
@@ -555,7 +592,10 @@ mod responses_tests {
         let out = to_responses_input(&items);
         assert_eq!(out[0]["role"], "assistant");
         let parts = out[0]["content"].as_array().unwrap();
-        assert_eq!(parts[0], serde_json::json!({"type": "output_text", "text": "done"}));
+        assert_eq!(
+            parts[0],
+            serde_json::json!({"type": "output_text", "text": "done"})
+        );
     }
 
     #[test]

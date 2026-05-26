@@ -35,13 +35,9 @@ pub(crate) fn map_openai_error(e: OpenAIError) -> ModelError {
             ModelError::Other(anyhow::anyhow!("invalid argument: {s}"))
         }
         #[cfg(not(target_family = "wasm"))]
-        OpenAIError::FileSaveError(s) => {
-            ModelError::Other(anyhow::anyhow!("file io (save): {s}"))
-        }
+        OpenAIError::FileSaveError(s) => ModelError::Other(anyhow::anyhow!("file io (save): {s}")),
         #[cfg(not(target_family = "wasm"))]
-        OpenAIError::FileReadError(s) => {
-            ModelError::Other(anyhow::anyhow!("file io (read): {s}"))
-        }
+        OpenAIError::FileReadError(s) => ModelError::Other(anyhow::anyhow!("file io (read): {s}")),
     }
 }
 
@@ -63,7 +59,9 @@ fn map_api_error_response(resp: ApiErrorResponse) -> ModelError {
     // `ApiErrorResponse`; prefer it over message-string heuristics.
     match status.as_u16() {
         401 | 403 => ModelError::Refused { reason: msg },
-        429 => ModelError::RateLimited { retry_after_ms: None },
+        429 => ModelError::RateLimited {
+            retry_after_ms: None,
+        },
         502..=504 => ModelError::Unavailable,
         _ => ModelError::Other(anyhow::anyhow!("openai api error [{status}]: {msg}")),
     }
@@ -149,8 +147,7 @@ mod tests {
 
     #[test]
     fn maps_json_deserialize_to_other() {
-        let json_err: serde_json::Error =
-            serde_json::from_str::<u32>("not-a-number").unwrap_err();
+        let json_err: serde_json::Error = serde_json::from_str::<u32>("not-a-number").unwrap_err();
         let e = OpenAIError::JSONDeserialize(json_err, "not-a-number".to_owned());
         match map_openai_error(e) {
             ModelError::Other(err) => {
@@ -162,9 +159,9 @@ mod tests {
 
     #[test]
     fn maps_stream_error_to_transport() {
-        let e = OpenAIError::StreamError(Box::new(
-            async_openai::error::StreamError::EventStream("upstream eof".to_owned()),
-        ));
+        let e = OpenAIError::StreamError(Box::new(async_openai::error::StreamError::EventStream(
+            "upstream eof".to_owned(),
+        )));
         match map_openai_error(e) {
             ModelError::Transport(s) => assert!(s.contains("upstream eof")),
             other => panic!("expected Transport, got {other:?}"),

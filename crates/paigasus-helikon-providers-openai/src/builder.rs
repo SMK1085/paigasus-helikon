@@ -105,8 +105,9 @@ impl OpenAiModelBuilder {
     /// Resolve auth, validate base URL, look up capabilities, produce [`OpenAiModel`].
     pub fn build(self) -> Result<OpenAiModel, BuildError> {
         let api_key = match &self.auth {
-            AuthSource::Env => std::env::var("OPENAI_API_KEY")
-                .map_err(|_| BuildError::MissingApiKey)?,
+            AuthSource::Env => {
+                std::env::var("OPENAI_API_KEY").map_err(|_| BuildError::MissingApiKey)?
+            }
             AuthSource::ApiKey(k) => k.clone(),
             AuthSource::Bearer(t) => t.clone(),
         };
@@ -126,10 +127,7 @@ impl OpenAiModelBuilder {
         }
 
         let caps = self.capabilities_override.unwrap_or_else(|| {
-            capabilities::mask_for_backend(
-                capabilities::lookup(&self.model_id),
-                self.backend,
-            )
+            capabilities::mask_for_backend(capabilities::lookup(&self.model_id), self.backend)
         });
 
         let client = match self.http_client {
@@ -241,7 +239,9 @@ mod tests {
     fn responses_backend_preserves_reasoning_and_server_state_for_o3() {
         let _g = env_lock().lock().unwrap();
         let prev = save_and_set_env_key(Some("sk-x"));
-        let model = OpenAiModelBuilder::new("o3", Backend::Responses).build().unwrap();
+        let model = OpenAiModelBuilder::new("o3", Backend::Responses)
+            .build()
+            .unwrap();
         restore_env_key(prev);
         assert!(model.capabilities().reasoning);
         assert!(model.capabilities().server_managed_state);
@@ -251,7 +251,9 @@ mod tests {
     fn chat_backend_masks_reasoning_for_o3() {
         let _g = env_lock().lock().unwrap();
         let prev = save_and_set_env_key(Some("sk-x"));
-        let model = OpenAiModelBuilder::new("o3", Backend::Chat).build().unwrap();
+        let model = OpenAiModelBuilder::new("o3", Backend::Chat)
+            .build()
+            .unwrap();
         restore_env_key(prev);
         assert!(!model.capabilities().reasoning);
         assert!(!model.capabilities().server_managed_state);

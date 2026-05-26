@@ -17,7 +17,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn user_msg(text: &str) -> Item {
     Item::UserMessage {
-        content: vec![ContentPart::Text { text: text.to_owned() }],
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
     }
 }
 
@@ -40,10 +42,7 @@ async fn happy_path_text_completion() {
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(body.as_bytes(), "text/event-stream"),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.as_bytes(), "text/event-stream"))
         .mount(&server)
         .await;
 
@@ -56,10 +55,7 @@ async fn happy_path_text_completion() {
     let mut req = ModelRequest::new();
     req.messages = vec![user_msg("hi")];
 
-    let stream = model
-        .invoke(req, CancellationToken::new())
-        .await
-        .unwrap();
+    let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
 
     let events: Vec<ModelEvent> = stream
         .collect::<Vec<_>>()
@@ -77,9 +73,14 @@ async fn happy_path_text_completion() {
 
     // A Usage event must be present somewhere.
     assert!(
-        events.iter().any(
-            |e| matches!(e, ModelEvent::Usage { input_tokens: 3, output_tokens: 1, .. })
-        ),
+        events.iter().any(|e| matches!(
+            e,
+            ModelEvent::Usage {
+                input_tokens: 3,
+                output_tokens: 1,
+                ..
+            }
+        )),
         "expected a Usage {{ input_tokens: 3, output_tokens: 1 }} event, events = {events:?}"
     );
 
@@ -87,7 +88,9 @@ async fn happy_path_text_completion() {
     assert!(
         matches!(
             events.last().unwrap(),
-            ModelEvent::Finish { reason: FinishReason::Stop }
+            ModelEvent::Finish {
+                reason: FinishReason::Stop
+            }
         ),
         "expected Finish(Stop) as last event, got {:?}",
         events.last()
@@ -123,7 +126,10 @@ async fn rate_limited_response_maps_to_rate_limited_or_other() {
         Err(paigasus_helikon_core::ModelError::RateLimited { .. }) => {}
         Err(paigasus_helikon_core::ModelError::Other(_)) => {} // acceptable if mapping degrades
         Ok(mut s) => {
-            let first = s.next().await.expect("stream should yield at least one event");
+            let first = s
+                .next()
+                .await
+                .expect("stream should yield at least one event");
             assert!(
                 matches!(
                     first,

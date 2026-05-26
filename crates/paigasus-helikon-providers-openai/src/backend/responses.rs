@@ -9,8 +9,8 @@ use std::collections::HashSet;
 use async_openai::traits::EventType as _;
 use async_openai::types::responses::{
     CreateResponse, FunctionTool, InputItem, InputParam, OutputItem, ResponseFormatJsonSchema,
-    ResponseStreamEvent, ResponseTextParam, ResponseUsage, Status,
-    TextResponseFormatConfiguration, Tool, ToolChoiceOptions, ToolChoiceParam,
+    ResponseStreamEvent, ResponseTextParam, ResponseUsage, Status, TextResponseFormatConfiguration,
+    Tool, ToolChoiceOptions, ToolChoiceParam,
 };
 use async_stream::stream;
 use futures_core::stream::BoxStream;
@@ -148,8 +148,16 @@ fn build_request(
         let format = match rf {
             ResponseFormat::Text => None,
             ResponseFormat::JsonObject => Some(TextResponseFormatConfiguration::JsonObject),
-            ResponseFormat::JsonSchema { name, schema, strict } => {
-                let s = if *strict { to_strict_schema(schema) } else { schema.clone() };
+            ResponseFormat::JsonSchema {
+                name,
+                schema,
+                strict,
+            } => {
+                let s = if *strict {
+                    to_strict_schema(schema)
+                } else {
+                    schema.clone()
+                };
                 Some(TextResponseFormatConfiguration::JsonSchema(
                     ResponseFormatJsonSchema {
                         name: name.clone(),
@@ -302,12 +310,7 @@ impl ResponsesTranslator {
                     self.name_emitted.insert(e.item_id.clone());
                     // Use the registered name if available; fall back to empty string
                     // so downstream consumers at least see a delta.
-                    Some(
-                        self.call_names
-                            .get(&e.item_id)
-                            .cloned()
-                            .unwrap_or_default(),
-                    )
+                    Some(self.call_names.get(&e.item_id).cloned().unwrap_or_default())
                 };
                 Ok(vec![ModelEvent::ToolCallDelta {
                     call_id: e.item_id,
@@ -323,7 +326,11 @@ impl ResponsesTranslator {
 
             // Terminal: response incomplete — map reason to FinishReason.
             ResponseStreamEvent::ResponseIncomplete(e) => {
-                let reason = e.response.incomplete_details.as_ref().map(|d| d.reason.as_str());
+                let reason = e
+                    .response
+                    .incomplete_details
+                    .as_ref()
+                    .map(|d| d.reason.as_str());
                 Ok(terminal_events(e.response.usage, e.response.status, reason))
             }
 

@@ -43,7 +43,12 @@ impl OpenAiModel {
         client: Client<OpenAIConfig>,
         capabilities: ModelCapabilities,
     ) -> Self {
-        Self { model_id, backend, client, capabilities }
+        Self {
+            model_id,
+            backend,
+            client,
+            capabilities,
+        }
     }
 }
 

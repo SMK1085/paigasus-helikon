@@ -15,7 +15,11 @@ const PARALLEL_FIXTURE: &str = include_str!("fixtures/chat_parallel_tool_calls.t
 const FILTER_FIXTURE: &str = include_str!("fixtures/chat_content_filter.txt");
 
 fn user(text: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: text.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
+    }
 }
 
 async fn run(fixture: &str) -> Vec<ModelEvent> {
@@ -23,8 +27,7 @@ async fn run(fixture: &str) -> Vec<ModelEvent> {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(fixture.as_bytes(), "text/event-stream"),
+            ResponseTemplate::new(200).set_body_raw(fixture.as_bytes(), "text/event-stream"),
         )
         .mount(&server)
         .await;
@@ -38,10 +41,7 @@ async fn run(fixture: &str) -> Vec<ModelEvent> {
     let mut req = ModelRequest::new();
     req.messages = vec![user("hi")];
 
-    let stream = model
-        .invoke(req, CancellationToken::new())
-        .await
-        .unwrap();
+    let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
 
     stream
         .collect::<Vec<_>>()
@@ -59,14 +59,23 @@ async fn parallel_tool_calls_interleave_by_index() {
         .iter()
         .filter(|e| matches!(e, ModelEvent::ToolCallDelta { .. }))
         .collect();
-    assert!(tcs.len() >= 4, "expected at least 4 ToolCallDelta events, got {}", tcs.len());
+    assert!(
+        tcs.len() >= 4,
+        "expected at least 4 ToolCallDelta events, got {}",
+        tcs.len()
+    );
 
     let mut seen_c1_name = false;
     let mut seen_c2_name = false;
     let mut c1_args = String::new();
     let mut c2_args = String::new();
     for e in &events {
-        if let ModelEvent::ToolCallDelta { call_id, name, args_delta } = e {
+        if let ModelEvent::ToolCallDelta {
+            call_id,
+            name,
+            args_delta,
+        } = e
+        {
             match call_id.as_str() {
                 "c1" => {
                     if name.as_deref() == Some("a") {
@@ -84,13 +93,24 @@ async fn parallel_tool_calls_interleave_by_index() {
             }
         }
     }
-    assert!(seen_c1_name, "name 'a' should be emitted on c1's first delta");
-    assert!(seen_c2_name, "name 'b' should be emitted on c2's first delta");
+    assert!(
+        seen_c1_name,
+        "name 'a' should be emitted on c1's first delta"
+    );
+    assert!(
+        seen_c2_name,
+        "name 'b' should be emitted on c2's first delta"
+    );
     assert_eq!(c1_args, "{\"x\":1}");
     assert_eq!(c2_args, "{\"y\":2}");
 
     assert!(
-        matches!(events.last().unwrap(), ModelEvent::Finish { reason: FinishReason::ToolCalls }),
+        matches!(
+            events.last().unwrap(),
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            }
+        ),
         "expected Finish(ToolCalls) as last event, got {:?}",
         events.last()
     );
@@ -100,7 +120,12 @@ async fn parallel_tool_calls_interleave_by_index() {
 async fn content_filter_finish_reason_maps_correctly() {
     let events = run(FILTER_FIXTURE).await;
     assert!(
-        matches!(events.last().unwrap(), ModelEvent::Finish { reason: FinishReason::ContentFilter }),
+        matches!(
+            events.last().unwrap(),
+            ModelEvent::Finish {
+                reason: FinishReason::ContentFilter
+            }
+        ),
         "expected Finish(ContentFilter) as last event, got {:?}",
         events.last()
     );

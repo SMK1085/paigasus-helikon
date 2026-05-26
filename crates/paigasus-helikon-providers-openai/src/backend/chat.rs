@@ -24,8 +24,7 @@ use paigasus_helikon_core::{
 use crate::error::map_openai_error;
 use crate::model::OpenAiModel;
 use crate::translate::{
-    request::to_chat_messages, response_format::to_openai_response_format,
-    tools::to_strict_schema,
+    request::to_chat_messages, response_format::to_openai_response_format, tools::to_strict_schema,
 };
 
 /// Entry point for Chat Completions backend. Always streams.
@@ -104,9 +103,8 @@ fn build_request(
 ) -> Result<CreateChatCompletionRequest, ModelError> {
     // Translate Item messages → typed async-openai messages via JSON round-trip.
     let messages_value = to_chat_messages(&request.messages);
-    let messages: Vec<ChatCompletionRequestMessage> =
-        serde_json::from_value(messages_value)
-            .map_err(|e: serde_json::Error| ModelError::Other(anyhow::anyhow!(e)))?;
+    let messages: Vec<ChatCompletionRequestMessage> = serde_json::from_value(messages_value)
+        .map_err(|e: serde_json::Error| ModelError::Other(anyhow::anyhow!(e)))?;
 
     let mut builder = CreateChatCompletionRequestArgs::default();
     builder.model(model.model_id.clone()).messages(messages);
@@ -223,10 +221,7 @@ impl ChatTranslator {
     /// 1. `TokenDelta` / `ToolCallDelta` (generation deltas)
     /// 2. `Usage` (when `chunk.usage` is present — final chunk only)
     /// 3. `Finish` (terminal; always last)
-    pub(crate) fn consume(
-        &mut self,
-        chunk: CreateChatCompletionStreamResponse,
-    ) -> Vec<ModelEvent> {
+    pub(crate) fn consume(&mut self, chunk: CreateChatCompletionStreamResponse) -> Vec<ModelEvent> {
         let mut out: Vec<ModelEvent> = Vec::new();
         let mut finish_event: Option<ModelEvent> = None;
 
@@ -254,9 +249,7 @@ impl ChatTranslator {
                     OaFinishReason::Length => FinishReason::Length,
                     OaFinishReason::ToolCalls => FinishReason::ToolCalls,
                     OaFinishReason::ContentFilter => FinishReason::ContentFilter,
-                    OaFinishReason::FunctionCall => {
-                        FinishReason::Other("function_call".to_owned())
-                    }
+                    OaFinishReason::FunctionCall => FinishReason::Other("function_call".to_owned()),
                     // OaFinishReason has no #[non_exhaustive] in 0.40 but guard for robustness.
                     #[allow(unreachable_patterns)]
                     other => FinishReason::Other(format!("{other:?}")),

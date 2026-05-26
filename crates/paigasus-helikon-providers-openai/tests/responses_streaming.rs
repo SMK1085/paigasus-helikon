@@ -18,18 +18,19 @@ const FILTER: &str = include_str!("fixtures/responses_incomplete_filter.txt");
 const FAILED: &str = include_str!("fixtures/responses_failed.txt");
 
 fn user(text: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: text.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
+    }
 }
 
-async fn run(
-    fixture: &str,
-) -> Vec<Result<ModelEvent, paigasus_helikon_core::ModelError>> {
+async fn run(fixture: &str) -> Vec<Result<ModelEvent, paigasus_helikon_core::ModelError>> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/responses"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(fixture.as_bytes(), "text/event-stream"),
+            ResponseTemplate::new(200).set_body_raw(fixture.as_bytes(), "text/event-stream"),
         )
         .mount(&server)
         .await;
@@ -67,7 +68,10 @@ async fn reasoning_summary_emits_reasoning_delta_then_text() {
         .iter()
         .find(|e| matches!(e, ModelEvent::Usage { .. }))
         .expect("expected a Usage event");
-    if let ModelEvent::Usage { reasoning_tokens, .. } = usage {
+    if let ModelEvent::Usage {
+        reasoning_tokens, ..
+    } = usage
+    {
         assert_eq!(
             *reasoning_tokens,
             Some(2),
@@ -79,7 +83,12 @@ async fn reasoning_summary_emits_reasoning_delta_then_text() {
     }
 
     assert!(
-        matches!(unwrapped.last().unwrap(), ModelEvent::Finish { reason: FinishReason::Stop }),
+        matches!(
+            unwrapped.last().unwrap(),
+            ModelEvent::Finish {
+                reason: FinishReason::Stop
+            }
+        ),
         "expected Finish(Stop) as last event, got {:?}",
         unwrapped.last()
     );
@@ -93,7 +102,9 @@ async fn incomplete_max_output_tokens_maps_to_finish_length() {
     assert!(
         matches!(
             unwrapped.last().unwrap(),
-            ModelEvent::Finish { reason: FinishReason::Length }
+            ModelEvent::Finish {
+                reason: FinishReason::Length
+            }
         ),
         "expected Finish(Length) as last event, got {:?}",
         unwrapped.last()
@@ -114,7 +125,9 @@ async fn incomplete_content_filter_maps_to_finish_content_filter() {
     assert!(
         matches!(
             unwrapped.last().unwrap(),
-            ModelEvent::Finish { reason: FinishReason::ContentFilter }
+            ModelEvent::Finish {
+                reason: FinishReason::ContentFilter
+            }
         ),
         "expected Finish(ContentFilter) as last event, got {:?}",
         unwrapped.last()
@@ -131,5 +144,8 @@ async fn failed_event_terminates_stream_with_error() {
             Ok(ModelEvent::Finish { reason: FinishReason::Other(s) }) if s.contains("unavailable")
         ) || r.is_err()
     });
-    assert!(has_failure_signal, "expected a failure signal in: {events:#?}");
+    assert!(
+        has_failure_signal,
+        "expected a failure signal in: {events:#?}"
+    );
 }

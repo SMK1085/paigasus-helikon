@@ -111,7 +111,10 @@ mod tests {
             }
         });
         let out = to_strict_schema(&input);
-        assert_eq!(out["properties"]["user"]["additionalProperties"], json!(false));
+        assert_eq!(
+            out["properties"]["user"]["additionalProperties"],
+            json!(false)
+        );
         assert_eq!(
             out["properties"]["user"]["required"].as_array().unwrap(),
             &vec![json!("id")]
@@ -133,7 +136,10 @@ mod tests {
             }
         });
         let out = to_strict_schema(&input);
-        assert_eq!(out["properties"]["tags"]["items"]["additionalProperties"], json!(false));
+        assert_eq!(
+            out["properties"]["tags"]["items"]["additionalProperties"],
+            json!(false)
+        );
     }
 
     #[test]
@@ -160,9 +166,16 @@ mod tests {
             }
         });
         let out = to_strict_schema(&input);
-        assert_eq!(out["properties"]["since"]["type"], json!(["string", "null"]));
-        let mut req: Vec<String> = out["required"].as_array().unwrap().iter()
-            .map(|v| v.as_str().unwrap().to_owned()).collect();
+        assert_eq!(
+            out["properties"]["since"]["type"],
+            json!(["string", "null"])
+        );
+        let mut req: Vec<String> = out["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect();
         req.sort();
         assert_eq!(req, vec!["kind", "since"]);
     }

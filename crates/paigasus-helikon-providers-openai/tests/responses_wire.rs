@@ -17,7 +17,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn user(text: &str) -> Item {
     Item::UserMessage {
-        content: vec![ContentPart::Text { text: text.to_owned() }],
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
     }
 }
 
@@ -57,17 +59,11 @@ fn sse(events: &[String]) -> String {
 async fn happy_path_text_completion() {
     let server = MockServer::start().await;
 
-    let body = sse(&[
-        text_delta_event(1, "hi"),
-        completed_event(2, 5, 1),
-    ]);
+    let body = sse(&[text_delta_event(1, "hi"), completed_event(2, 5, 1)]);
 
     Mock::given(method("POST"))
         .and(path("/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(body.as_bytes(), "text/event-stream"),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.as_bytes(), "text/event-stream"))
         .mount(&server)
         .await;
 
@@ -98,9 +94,14 @@ async fn happy_path_text_completion() {
 
     // A Usage event must be present.
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ModelEvent::Usage { input_tokens: 5, output_tokens: 1, .. })),
+        events.iter().any(|e| matches!(
+            e,
+            ModelEvent::Usage {
+                input_tokens: 5,
+                output_tokens: 1,
+                ..
+            }
+        )),
         "expected a Usage {{ input_tokens: 5, output_tokens: 1 }} event, events = {events:?}"
     );
 
@@ -108,7 +109,9 @@ async fn happy_path_text_completion() {
     assert!(
         matches!(
             events.last().unwrap(),
-            ModelEvent::Finish { reason: FinishReason::Stop }
+            ModelEvent::Finish {
+                reason: FinishReason::Stop
+            }
         ),
         "expected Finish(Stop) as last event, got {:?}",
         events.last()
@@ -124,10 +127,7 @@ async fn previous_response_id_passes_through_to_request_body() {
     Mock::given(method("POST"))
         .and(path("/responses"))
         .and(body_string_contains(r#""previous_response_id":"resp_abc""#))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(body.as_bytes(), "text/event-stream"),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.as_bytes(), "text/event-stream"))
         .expect(1)
         .mount(&server)
         .await;

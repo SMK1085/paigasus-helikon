@@ -1,4 +1,4 @@
-error[E0277]: the trait bound `A: JsonSchema` is not satisfied
+error[E0277]: the trait bound `A: schemars::JsonSchema` is not satisfied
   --> tests/ui/bad_args_not_jsonschema.rs:17:45
    |
 16 | #[tool]
@@ -6,12 +6,12 @@ error[E0277]: the trait bound `A: JsonSchema` is not satisfied
 17 | async fn nope(_ctx: &ToolContext<C>, _args: A) -> Result<O, ToolError> {
    |                                             ^ unsatisfied trait bound
    |
-help: the trait `JsonSchema` is not implemented for `A`
+help: the trait `schemars::JsonSchema` is not implemented for `A`
   --> tests/ui/bad_args_not_jsonschema.rs:10:1
    |
 10 | struct A {}
    | ^^^^^^^^
-   = help: the following other types implement trait `JsonSchema`:
+   = help: the following other types implement trait `schemars::JsonSchema`:
              &'a T
              &'a mut T
              ()

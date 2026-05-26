@@ -14,7 +14,11 @@ pub(crate) fn to_openai_response_format(format: &ResponseFormat) -> Option<Value
     match format {
         ResponseFormat::Text => None,
         ResponseFormat::JsonObject => Some(json!({"type": "json_object"})),
-        ResponseFormat::JsonSchema { name, schema, strict } => {
+        ResponseFormat::JsonSchema {
+            name,
+            schema,
+            strict,
+        } => {
             let schema = if *strict {
                 to_strict_schema(schema)
             } else {

@@ -30,9 +30,7 @@ pub(crate) enum Backend {
 /// one that expects single-call.
 #[allow(dead_code)] // used by lookup(); lookup() used by D2
 pub(crate) const fn conservative_defaults() -> ModelCapabilities {
-    ModelCapabilities::empty()
-        .with_streaming()
-        .with_tools()
+    ModelCapabilities::empty().with_streaming().with_tools()
     // parallel_tool_calls intentionally not set — see doc comment
 }
 
@@ -44,39 +42,101 @@ pub(crate) const fn conservative_defaults() -> ModelCapabilities {
 #[allow(dead_code)] // used by lookup(); lookup() used by D2
 pub(crate) const KNOWN_MODELS: &[(&str, ModelCapabilities)] = &[
     // Chat Completions family
-    ("gpt-4o", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()
-        .with_structured_output().with_vision()),
-    ("gpt-4o-mini", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()
-        .with_structured_output().with_vision()),
-    ("gpt-4.1", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()
-        .with_structured_output().with_vision()),
-    ("gpt-4.1-mini", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()
-        .with_structured_output().with_vision()),
-    ("gpt-3.5-turbo", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()),
-
+    (
+        "gpt-4o",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls()
+            .with_structured_output()
+            .with_vision(),
+    ),
+    (
+        "gpt-4o-mini",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls()
+            .with_structured_output()
+            .with_vision(),
+    ),
+    (
+        "gpt-4.1",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls()
+            .with_structured_output()
+            .with_vision(),
+    ),
+    (
+        "gpt-4.1-mini",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls()
+            .with_structured_output()
+            .with_vision(),
+    ),
+    (
+        "gpt-3.5-turbo",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls(),
+    ),
     // Responses-family reasoning models. server_managed_state /
     // reasoning are masked off when paired with Backend::Chat in
     // `mask_for_backend`.
-    ("o1", ModelCapabilities::empty()
-        .with_streaming().with_tools()
-        .with_structured_output().with_server_managed_state().with_reasoning()),
-    ("o1-mini", ModelCapabilities::empty()
-        .with_streaming().with_tools()
-        .with_structured_output().with_server_managed_state().with_reasoning()),
-    ("o3", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()
-        .with_structured_output().with_server_managed_state().with_reasoning()),
-    ("o3-mini", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()
-        .with_structured_output().with_server_managed_state().with_reasoning()),
-    ("gpt-5", ModelCapabilities::empty()
-        .with_streaming().with_tools().with_parallel_tool_calls()
-        .with_structured_output().with_server_managed_state().with_reasoning().with_vision()),
+    (
+        "o1",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_structured_output()
+            .with_server_managed_state()
+            .with_reasoning(),
+    ),
+    (
+        "o1-mini",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_structured_output()
+            .with_server_managed_state()
+            .with_reasoning(),
+    ),
+    (
+        "o3",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls()
+            .with_structured_output()
+            .with_server_managed_state()
+            .with_reasoning(),
+    ),
+    (
+        "o3-mini",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls()
+            .with_structured_output()
+            .with_server_managed_state()
+            .with_reasoning(),
+    ),
+    (
+        "gpt-5",
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_parallel_tool_calls()
+            .with_structured_output()
+            .with_server_managed_state()
+            .with_reasoning()
+            .with_vision(),
+    ),
 ];
 
 /// Look up the capability snapshot for a model id.
@@ -101,10 +161,7 @@ pub(crate) fn lookup(model_id: &str) -> ModelCapabilities {
 /// add new masking rules here when future capabilities turn out to be
 /// backend-specific.
 #[allow(dead_code)] // used by D2 (OpenAiModel backend dispatch)
-pub(crate) fn mask_for_backend(
-    mut caps: ModelCapabilities,
-    backend: Backend,
-) -> ModelCapabilities {
+pub(crate) fn mask_for_backend(mut caps: ModelCapabilities, backend: Backend) -> ModelCapabilities {
     match backend {
         Backend::Chat => {
             caps.server_managed_state = false;
@@ -134,7 +191,10 @@ mod tests {
         let caps = lookup("some-mystery-model-9000");
         assert!(caps.streaming);
         assert!(caps.tools);
-        assert!(!caps.parallel_tool_calls, "conservative default must be false");
+        assert!(
+            !caps.parallel_tool_calls,
+            "conservative default must be false"
+        );
         assert!(!caps.structured_output);
         assert!(!caps.server_managed_state);
         assert!(!caps.reasoning);

@@ -11,7 +11,11 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn user(text: &str) -> Item {
-    Item::UserMessage { content: vec![ContentPart::Text { text: text.to_owned() }] }
+    Item::UserMessage {
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
+    }
 }
 
 #[tokio::test]
@@ -61,12 +65,17 @@ async fn cancellation_before_first_chunk_yields_no_events() {
             }
             // No Finish should have been emitted before cancellation.
             assert!(
-                !emitted.iter().any(|e| matches!(e, ModelEvent::Finish { .. })),
+                !emitted
+                    .iter()
+                    .any(|e| matches!(e, ModelEvent::Finish { .. })),
                 "stream emitted Finish after cancellation: {emitted:#?}"
             );
         }
         Err(_) => { /* acceptable */ }
     }
     let elapsed = start.elapsed();
-    assert!(elapsed < Duration::from_secs(4), "cancellation took too long: {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(4),
+        "cancellation took too long: {elapsed:?}"
+    );
 }

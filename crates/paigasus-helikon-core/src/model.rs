@@ -262,21 +262,45 @@ impl ModelCapabilities {
     }
 
     /// Mark `streaming` as supported.
-    pub const fn with_streaming(mut self) -> Self { self.streaming = true; self }
+    pub const fn with_streaming(mut self) -> Self {
+        self.streaming = true;
+        self
+    }
     /// Mark `tools` (function calling) as supported.
-    pub const fn with_tools(mut self) -> Self { self.tools = true; self }
+    pub const fn with_tools(mut self) -> Self {
+        self.tools = true;
+        self
+    }
     /// Mark `parallel_tool_calls` as supported.
-    pub const fn with_parallel_tool_calls(mut self) -> Self { self.parallel_tool_calls = true; self }
+    pub const fn with_parallel_tool_calls(mut self) -> Self {
+        self.parallel_tool_calls = true;
+        self
+    }
     /// Mark `structured_output` as supported.
-    pub const fn with_structured_output(mut self) -> Self { self.structured_output = true; self }
+    pub const fn with_structured_output(mut self) -> Self {
+        self.structured_output = true;
+        self
+    }
     /// Mark `server_managed_state` as supported.
-    pub const fn with_server_managed_state(mut self) -> Self { self.server_managed_state = true; self }
+    pub const fn with_server_managed_state(mut self) -> Self {
+        self.server_managed_state = true;
+        self
+    }
     /// Mark `reasoning` token emission as supported.
-    pub const fn with_reasoning(mut self) -> Self { self.reasoning = true; self }
+    pub const fn with_reasoning(mut self) -> Self {
+        self.reasoning = true;
+        self
+    }
     /// Mark `vision` (image input) as supported.
-    pub const fn with_vision(mut self) -> Self { self.vision = true; self }
+    pub const fn with_vision(mut self) -> Self {
+        self.vision = true;
+        self
+    }
     /// Mark `audio` (input) as supported.
-    pub const fn with_audio(mut self) -> Self { self.audio = true; self }
+    pub const fn with_audio(mut self) -> Self {
+        self.audio = true;
+        self
+    }
 }
 
 /// Caller's preference for whether the model invokes a tool this turn.
@@ -380,21 +404,31 @@ mod tests {
         let _ = ToolChoice::Auto;
         let _ = ToolChoice::Required;
         let _ = ToolChoice::None;
-        let _ = ToolChoice::Tool { name: "echo".to_owned() };
+        let _ = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
     }
 
     #[test]
     fn tool_choice_clones_and_debug_prints() {
-        let c = ToolChoice::Tool { name: "echo".to_owned() };
+        let c = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
         let c2 = c.clone();
         assert!(format!("{c2:?}").contains("echo"));
     }
 
     #[test]
     fn tool_choice_equality_for_tool_variant() {
-        let a = ToolChoice::Tool { name: "echo".to_owned() };
-        let b = ToolChoice::Tool { name: "echo".to_owned() };
-        let c = ToolChoice::Tool { name: "other".to_owned() };
+        let a = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
+        let b = ToolChoice::Tool {
+            name: "echo".to_owned(),
+        };
+        let c = ToolChoice::Tool {
+            name: "other".to_owned(),
+        };
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(ToolChoice::Auto, ToolChoice::Auto);
