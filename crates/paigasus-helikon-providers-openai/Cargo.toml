@@ -13,7 +13,7 @@ categories.workspace   = true
 
 [dependencies]
 paigasus-helikon-core = { workspace = true }
-async-openai          = { workspace = true }
+async-openai          = { workspace = true, features = ["chat-completion", "responses"] }
 async-trait           = { workspace = true }
 async-stream          = { workspace = true }
 futures-core          = { workspace = true }
@@ -30,6 +30,7 @@ tracing               = { workspace = true }
 wiremock = { workspace = true }
 insta    = { workspace = true, features = ["json", "yaml"] }
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+reqwest  = { workspace = true }
 
 [lints]
 workspace = true
