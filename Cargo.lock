@@ -1107,6 +1107,24 @@ version = "0.0.0"
 [[package]]
 name = "paigasus-helikon-providers-anthropic"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "eventsource-stream",
+ "futures-core",
+ "futures-util",
+ "insta",
+ "paigasus-helikon-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "wiremock",
+]
 
 [[package]]
 name = "paigasus-helikon-providers-openai"
