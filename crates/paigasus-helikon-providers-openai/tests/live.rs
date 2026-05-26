@@ -14,7 +14,9 @@ use paigasus_helikon_core::{
 use paigasus_helikon_providers_openai::OpenAiModel;
 
 fn key_set() -> bool {
-    std::env::var("OPENAI_API_KEY").is_ok()
+    std::env::var("OPENAI_API_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn user(text: &str) -> Item {
@@ -105,7 +107,7 @@ async fn chat_structured_output_round_trip() {
         .collect::<Vec<_>>()
         .await
         .into_iter()
-        .filter_map(|r| r.ok())
+        .map(|r| r.expect("live stream emitted Err"))
         .collect();
 
     let text: String = events
