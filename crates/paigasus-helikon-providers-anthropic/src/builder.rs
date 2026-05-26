@@ -20,6 +20,10 @@ pub enum BuildError {
     /// `base_url` failed to parse as a URL.
     #[error("invalid base URL: {0}")]
     InvalidBaseUrl(String),
+    /// Explicit auth credential (api_key / bearer / `ANTHROPIC_API_KEY`)
+    /// resolved to an empty (or whitespace-only) string.
+    #[error("auth credential cannot be empty")]
+    EmptyAuthCredential,
 }
 
 #[derive(Debug, Clone)]
@@ -151,10 +155,23 @@ impl AnthropicModelBuilder {
             AuthSource::Env => {
                 let key =
                     std::env::var("ANTHROPIC_API_KEY").map_err(|_| BuildError::MissingApiKey)?;
+                if key.trim().is_empty() {
+                    return Err(BuildError::EmptyAuthCredential);
+                }
                 AuthHeader::ApiKey(key)
             }
-            AuthSource::ApiKey(k) => AuthHeader::ApiKey(k.clone()),
-            AuthSource::Bearer(t) => AuthHeader::Bearer(t.clone()),
+            AuthSource::ApiKey(k) => {
+                if k.trim().is_empty() {
+                    return Err(BuildError::EmptyAuthCredential);
+                }
+                AuthHeader::ApiKey(k.clone())
+            }
+            AuthSource::Bearer(t) => {
+                if t.trim().is_empty() {
+                    return Err(BuildError::EmptyAuthCredential);
+                }
+                AuthHeader::Bearer(t.clone())
+            }
         };
 
         let base_url = self.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_owned());
@@ -322,5 +339,36 @@ mod tests {
             .unwrap();
         restore_env(prev);
         assert_eq!(c.max_output_default, 4096);
+    }
+
+    #[test]
+    fn empty_explicit_api_key_errors_empty_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("")
+            .build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::EmptyAuthCredential)));
+    }
+
+    #[test]
+    fn whitespace_only_bearer_errors_empty_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(None);
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .bearer("   \t  ")
+            .build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::EmptyAuthCredential)));
+    }
+
+    #[test]
+    fn empty_env_api_key_errors_empty_auth_credential() {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(Some(""));
+        let r = AnthropicModelBuilder::new("claude-sonnet-4-6").build_config();
+        restore_env(prev);
+        assert!(matches!(r, Err(BuildError::EmptyAuthCredential)));
     }
 }

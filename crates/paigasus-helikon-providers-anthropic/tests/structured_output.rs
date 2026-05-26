@@ -141,7 +141,14 @@ async fn json_schema_plus_caller_tool_choice_tool_returns_synchronous_other() {
             schema: serde_json::json!({}),
         }],
         |r| {
-            r.model_settings.response_format = Some(ResponseFormat::JsonObject);
+            r.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+                name: "Person".to_owned(),
+                schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}}
+                }),
+                strict: true,
+            });
             r.model_settings.tool_choice = Some(ToolChoice::Tool {
                 name: "search".to_owned(),
             });

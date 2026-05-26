@@ -46,8 +46,10 @@ async fn messages_smoke() {
     let mut s = model.invoke(req, CancellationToken::new()).await.unwrap();
     let mut text = String::new();
     while let Some(ev) = s.next().await {
-        if let Ok(ModelEvent::TokenDelta { text: t }) = ev {
-            text.push_str(&t);
+        match ev {
+            Ok(ModelEvent::TokenDelta { text: t }) => text.push_str(&t),
+            Ok(_) => {}
+            Err(e) => panic!("stream error: {e:?}"),
         }
     }
     assert!(text.to_lowercase().contains("hello"));
@@ -77,8 +79,10 @@ async fn structured_output_smoke() {
     let mut s = model.invoke(req, CancellationToken::new()).await.unwrap();
     let mut text = String::new();
     while let Some(ev) = s.next().await {
-        if let Ok(ModelEvent::TokenDelta { text: t }) = ev {
-            text.push_str(&t);
+        match ev {
+            Ok(ModelEvent::TokenDelta { text: t }) => text.push_str(&t),
+            Ok(_) => {}
+            Err(e) => panic!("stream error: {e:?}"),
         }
     }
     let parsed: serde_json::Value = serde_json::from_str(&text).expect("response is JSON");
@@ -109,7 +113,12 @@ async fn cache_strategy_round_trip() {
         r.model_settings.max_output_tokens = Some(32);
     });
     let mut s = model.invoke(req1, CancellationToken::new()).await.unwrap();
-    while s.next().await.is_some() {}
+    while let Some(ev) = s.next().await {
+        match ev {
+            Ok(_) => {}
+            Err(e) => panic!("turn-1 stream error: {e:?}"),
+        }
+    }
 
     let mut messages2 = messages;
     messages2.push(Item::AssistantMessage {
@@ -124,19 +133,26 @@ async fn cache_strategy_round_trip() {
     });
     let mut s = model.invoke(req2, CancellationToken::new()).await.unwrap();
     let mut cached = 0u32;
+    let mut saw_usage = false;
     while let Some(ev) = s.next().await {
-        if let Ok(ModelEvent::Usage {
-            cached_input_tokens: Some(c),
-            ..
-        }) = ev
-        {
-            cached = cached.max(c);
+        match ev {
+            Ok(ModelEvent::Usage {
+                cached_input_tokens: Some(c),
+                ..
+            }) => {
+                saw_usage = true;
+                cached = cached.max(c);
+            }
+            Ok(ModelEvent::Usage { .. }) => {
+                saw_usage = true;
+            }
+            Ok(_) => {}
+            Err(e) => panic!("turn-2 stream error: {e:?}"),
         }
     }
+    assert!(saw_usage, "expected at least one Usage event in live response");
     if cached == 0 {
         tracing::info!("cache_prefix_too_small: live cache test ran below per-model write minimum",);
         // Pass — caching at <write-minimum is a documented no-op.
-    } else {
-        assert!(cached > 0);
     }
 }
