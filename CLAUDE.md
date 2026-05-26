@@ -32,7 +32,9 @@ The full list lives in `CONTRIBUTING.md` (single source of truth for contributor
 
 ## Workspace layout
 
-13 crates under `crates/`. The facade `paigasus-helikon` re-exports `paigasus-helikon-core` unconditionally and the other 10 sibling crates behind Cargo features. Stub crates print docstrings only — real implementations land in subsequent SMA-* tickets.
+13 crates under `crates/`. The facade `paigasus-helikon` re-exports `paigasus-helikon-core` unconditionally and the other 10 sibling crates behind Cargo features.
+
+**Implementation status** (as of 2026-05-26): `paigasus-helikon-core`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, and `paigasus-helikon-providers-anthropic` carry real implementations (SMA-312/313/314/315/316/317). The remaining crates (`-mcp`, `-tools`, `-evals`, `-runtime-{tokio,axum,temporal,agentcore}`, `-cli`) are stubs that print docstrings only — real implementations land in subsequent SMA-* tickets.
 
 Workspace inheritance is **mandatory**: per-crate `Cargo.toml`s only set `name`, `description`, and any crate-specific bits. Everything else (`edition`, `rust-version`, `authors`, `license`, `repository`, `homepage`, `keywords`, `categories`) inherits from `[workspace.package]` in the root `Cargo.toml`. Don't hardcode these per-crate. **Exception**: `version` is per-crate — each `crates/*/Cargo.toml` sets `version = "0.0.0"` explicitly so release-plz can bump crates independently (see SMA-307). The `workspace.package.version = "0.0.0"` default in the root `Cargo.toml` stays as a safety net for new crates that forget to declare their own.
 
@@ -56,7 +58,10 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
 - Branch per Linear issue: `feature/<sma-####>-<kebab-title>`. The branch name is pre-computed in each Linear ticket's `gitBranchName` field.
 - Design artifacts per ticket (`docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`, `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`) land on the feature branch alongside the implementation — not pre-merged to `main`.
 - Commit prefix: `<type>(<scope>): SMA-### <message>` (e.g. `feat(facade): SMA-304 ...`).
-- **PR titles must use sentence case after the `SMA-###` prefix.** The `pr-title.yml` workflow enforces `subjectPattern: ^([A-Z]{2,4}-\d+ )?[^A-Z].+$` on the squashed-merge title — the next character after the optional `SMA-###` prefix must be non-uppercase. Lead the subject with a lowercase verb (`add`, `wire`, `pin`, `promote`, `implement`, `fix`). `feat(core): SMA-314 add LlmAgent + ...` passes; `feat(core): SMA-314 LlmAgent + ...` fails because `L` trips the regex. Per-commit Conventional Commit titles on the feature branch don't trip this — only the PR title (which becomes the squashed `main` commit) is gated.
+- **PR titles must satisfy two independent rules from `pr-title.yml`** (`amannn/action-semantic-pull-request`):
+  1. **Full Conventional Commits format.** The action enforces a valid `type(scope):` prefix from the action's configured `types` list — independent of the subject regex. `SMA-317 add anthropic provider` (no prefix) fails; `feat(providers-anthropic): SMA-317 add anthropic provider` passes.
+  2. **Subject must start lowercase after the `SMA-###` prefix.** The `subjectPattern: ^([A-Z]{2,4}-\d+ )?[^A-Z].+$` rejects `feat(core): SMA-314 LlmAgent + ...` because `L` is uppercase; lead the subject with a lowercase verb (`add`, `wire`, `pin`, `promote`, `implement`, `fix`).
+  Per-commit Conventional Commit titles on the feature branch don't trip either rule — only the PR title (which becomes the squashed `main` commit) is gated.
 - Linear auto-closes the linked SMA-* issue when its PR merges; no manual status move needed.
 - **Always implement GitHub Actions against the latest stable major.** Before adding or updating any `uses:` line in `.github/workflows/`, resolve the latest release of the action and pin to its commit SHA (never a moving `@vN` tag). Use:
   ```bash
@@ -84,6 +89,18 @@ The SBOM workflow invokes `cargo cyclonedx --manifest-path crates/paigasus-helik
 `deny.toml` declares `version = 2` under both `[advisories]` and `[licenses]` — v1 fields (`vulnerability`, `unmaintained`, `unsound`, `copyleft`, etc.) are removed in modern cargo-deny and adding them will fail with a schema error. The license allowlist includes `Unicode-3.0` in addition to the ticket-prescribed `Unicode-DFS-2016` because `unicode-ident ≥ 1.0.13` (pulled transitively by `serde_derive`) relicensed in 2024. cargo-deny's advisory DB lives at `~/.cargo/advisory-dbs` (plural) per `deny.toml`'s `db-path`; cargo-audit's DB is at `~/.cargo/advisory-db` (singular) — each tool caches its own, and the CI cache directories are scoped per-workflow.
 
 Dependabot is configured for `cargo` + `github-actions` ecosystems, weekly Monday 06:00 UTC (aligned with the daily audit cron), with patch + minor updates grouped into one PR per ecosystem.
+
+## Local hooks
+
+Hooks are managed via `cargo-husky` (user-hooks mode) and live in `.cargo-husky/hooks/`. They're installed into `.git/hooks/` on the next dev-dep realization of `paigasus-helikon` (e.g. `cargo test -p paigasus-helikon --no-run`). To force re-install after editing a hook: `rm -rf target/debug/build/cargo-husky-* && cargo test -p paigasus-helikon --no-run`.
+
+- **`commit-msg`** — runs `convco check --from-stdin` (enforces the `.versionrc` allowlist).
+- **`pre-commit`** — intentional no-op (`exit 0`). The file exists to claim the slot so future cargo-husky upgrades don't fill it in with surprise behavior.
+- **`pre-push`** — runs `cargo fmt --all -- --check`, `cargo clippy --workspace --all-features --all-targets -- -D warnings`, and `convco check <upstream>..HEAD`. Catches the three fastest CI gates pre-push; deliberately omits `cargo test` and `cargo doc` (too slow for every push). Bypass for WIP branches: `git push --no-verify`.
+
+## Fixture line endings
+
+`.gitattributes` pins `crates/paigasus-helikon-providers-anthropic/tests/fixtures/*.txt` to `text eol=lf`. The streaming tests `include_str!` the SSE fixtures and split them on literal `\n` delimiters; without this, Windows checkouts produce CRLF bytes and the literal-string splits return one part instead of two. When adding wire-format fixtures elsewhere that the test code parses byte-level, extend the rule.
 
 ## Cargo.lock
 
