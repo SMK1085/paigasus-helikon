@@ -1,0 +1,59 @@
+#!/usr/bin/env sh
+# .cargo-husky-managed pre-push hook for paigasus-helikon.
+# Runs the three fastest CI gates before push so simple slips don't burn a
+# CI round-trip:
+#   - cargo fmt --all -- --check
+#   - cargo clippy --workspace --all-features --all-targets -- -D warnings
+#   - convco check <upstream>..HEAD  (Conventional Commits scope allowlist)
+#
+# Deliberately omits:
+#   - cargo test --workspace --all-features  (too slow per-push; CI catches)
+#   - cargo doc / doc-coverage                (slow; CI catches)
+#
+# Bypass for WIP branches you want CI to evaluate verbatim:
+#   git push --no-verify
+
+set -e
+
+remote="$1"
+url="$2"
+
+# Read each ref being pushed; bail on delete-only pushes.
+any_real_push=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue  # delete; skip
+  fi
+  any_real_push=1
+
+  # Pick an upstream baseline for convco. Prefer the remote's existing ref;
+  # otherwise fall back to origin/main.
+  if [ "$remote_sha" != "0000000000000000000000000000000000000000" ]; then
+    base="$remote_sha"
+  else
+    base=$(git rev-parse --verify --quiet origin/main || true)
+  fi
+
+  if [ -n "$base" ] && command -v convco >/dev/null 2>&1; then
+    if ! convco check "$base..$local_sha" >/dev/null 2>&1; then
+      echo "pre-push: convco rejected commits in $base..$local_sha" >&2
+      echo "  run: convco check $base..$local_sha" >&2
+      exit 1
+    fi
+  fi
+done
+
+if [ "$any_real_push" -eq 0 ]; then
+  exit 0
+fi
+
+# Format + clippy gates. These do not need per-ref iteration.
+if ! cargo fmt --all -- --check; then
+  echo "pre-push: rustfmt would reformat files. Run: cargo fmt --all" >&2
+  exit 1
+fi
+
+if ! cargo clippy --workspace --all-features --all-targets -- -D warnings; then
+  echo "pre-push: clippy found warnings. Fix them or run: git push --no-verify" >&2
+  exit 1
+fi
