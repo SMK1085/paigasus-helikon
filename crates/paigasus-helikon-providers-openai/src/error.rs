@@ -5,7 +5,8 @@
 //! retries on `ModelError`; the application configures retries via
 //! `RunConfig::retry_policy`. Auth failures (401/403) map to
 //! `Refused` (non-retryable, the correct semantic for bad credentials).
-//! Generic 5xx maps to `Unavailable`.
+//! 429 maps to `RateLimited`. 502/503/504 map to `Unavailable`.
+//! Other 5xx (500, 501, 505+) fall through to `Other`.
 
 use async_openai::error::{ApiErrorResponse, OpenAIError};
 use paigasus_helikon_core::ModelError;
