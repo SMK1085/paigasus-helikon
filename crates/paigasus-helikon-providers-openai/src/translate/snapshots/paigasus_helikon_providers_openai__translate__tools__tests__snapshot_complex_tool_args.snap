@@ -1,0 +1,53 @@
+---
+source: crates/paigasus-helikon-providers-openai/src/translate/tools.rs
+assertion_line: 193
+expression: out
+---
+{
+  "additionalProperties": false,
+  "properties": {
+    "filters": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "type": "integer"
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "limit",
+        "since"
+      ],
+      "type": "object"
+    },
+    "query": {
+      "type": "string"
+    },
+    "tags": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "filters",
+    "query",
+    "tags"
+  ],
+  "type": "object"
+}
