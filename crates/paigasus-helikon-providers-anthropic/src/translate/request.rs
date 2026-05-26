@@ -121,6 +121,7 @@ fn text_of(parts: &[ContentPart]) -> String {
 }
 
 fn user_blocks(content: &[ContentPart]) -> Value {
+    use paigasus_helikon_core::MediaSource;
     let blocks: Vec<Value> = content
         .iter()
         .filter_map(|p| match p {
@@ -130,6 +131,27 @@ fn user_blocks(content: &[ContentPart]) -> Value {
                 "tool_use_id": call_id,
                 "content": text_of(content),
             })),
+            ContentPart::Image { source } => match source {
+                MediaSource::Url { url } => Some(json!({
+                    "type": "image",
+                    "source": {"type": "url", "url": url},
+                })),
+                MediaSource::Base64 { mime_type, data } => Some(json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime_type,
+                        "data": data,
+                    },
+                })),
+                _ => {
+                    tracing::warn!(
+                        target: "paigasus::anthropic::translate",
+                        "unsupported MediaSource variant; skipping image",
+                    );
+                    None
+                }
+            },
             _ => None,
         })
         .collect();
@@ -405,5 +427,46 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["type"], "tool_result");
         assert_eq!(blocks[0]["tool_use_id"], "tu_z");
+    }
+
+    #[test]
+    fn user_message_with_url_image_emits_url_source() {
+        use paigasus_helikon_core::MediaSource;
+        let items = vec![Item::UserMessage {
+            content: vec![
+                text("look:"),
+                ContentPart::Image {
+                    source: MediaSource::Url {
+                        url: "https://example.com/cat.png".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let out = translate_messages(&items);
+        let blocks = out.messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0], json!({"type": "text", "text": "look:"}));
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "url");
+        assert_eq!(blocks[1]["source"]["url"], "https://example.com/cat.png");
+    }
+
+    #[test]
+    fn user_message_with_base64_image_emits_base64_source() {
+        use paigasus_helikon_core::MediaSource;
+        let items = vec![Item::UserMessage {
+            content: vec![ContentPart::Image {
+                source: MediaSource::Base64 {
+                    mime_type: "image/png".to_owned(),
+                    data: "AAAA".to_owned(),
+                },
+            }],
+        }];
+        let out = translate_messages(&items);
+        let block = &out.messages[0]["content"][0];
+        assert_eq!(block["type"], "image");
+        assert_eq!(block["source"]["type"], "base64");
+        assert_eq!(block["source"]["media_type"], "image/png");
+        assert_eq!(block["source"]["data"], "AAAA");
     }
 }
