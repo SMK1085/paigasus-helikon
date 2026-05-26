@@ -213,9 +213,12 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 /// - `response.reasoning_summary_text.delta` → `ReasoningDelta`
 /// - `response.reasoning_text.delta` → `ReasoningDelta`
 /// - `response.output_item.added` (when item is a function call) →
-///   registers `item.id` → `(item.call_id, item.name)` for subsequent argument deltas
+///   registers `item.id` → `(item.call_id, item.name)` for subsequent argument deltas;
+///   also flushes any argument deltas that arrived before this event (out-of-order case).
 /// - `response.function_call_arguments.delta` → `ToolCallDelta` with
-///   name-emission gating (name emitted once per call_id, then `None`)
+///   name-emission gating (name emitted once per call_id, then `None`). If
+///   `output_item.added` has not yet registered the item_id, the delta is buffered
+///   in `pending_args` and flushed when the registration eventually arrives.
 /// - `response.completed` → `Usage` + `Finish { Stop }`
 /// - `response.incomplete` → `Usage` + `Finish` per `incomplete_details.reason`
 ///   - `"max_output_tokens"` → `Finish { Length }`
@@ -247,6 +250,12 @@ pub(crate) struct ResponsesTranslator {
     /// Keyed by `item.id` (the correlator used in `function_call_arguments.delta`),
     /// not by `item.call_id` (the stable downstream identifier).
     item_to_call: HashMap<String, (String, String)>,
+    /// Buffered argument deltas that arrived (via `function_call_arguments.delta`)
+    /// before `output_item.added` registered the corresponding `item_id` mapping.
+    ///
+    /// Keyed by `item_id`. Flushed as a single `ToolCallDelta` (with the real
+    /// `call_id` and `name`) the moment `output_item.added` registers the item.
+    pending_args: HashMap<String, String>,
 }
 
 impl ResponsesTranslator {
@@ -255,6 +264,7 @@ impl ResponsesTranslator {
         Self {
             name_emitted: HashSet::new(),
             item_to_call: HashMap::new(),
+            pending_args: HashMap::new(),
         }
     }
 
@@ -312,12 +322,32 @@ impl ResponsesTranslator {
             // `fc.id` is the internal item identifier that matches
             // `function_call_arguments.delta.item_id` (the correlator).
             // `fc.call_id` is the stable identifier for downstream tool execution.
+            //
+            // After registering, flush any argument deltas that arrived before this
+            // event (out-of-order case: delta before `output_item.added`).
             ResponseStreamEvent::ResponseOutputItemAdded(e) => {
                 if let OutputItem::FunctionCall(fc) = e.item {
                     if let Some(item_id) = fc.id {
+                        let name = fc.name.clone();
+                        let call_id = fc.call_id.clone();
                         self.item_to_call
-                            .entry(item_id)
-                            .or_insert_with(|| (fc.call_id, fc.name));
+                            .entry(item_id.clone())
+                            .or_insert_with(|| (call_id.clone(), name.clone()));
+
+                        // Flush buffered args that arrived before this event.
+                        if let Some(buffered) = self.pending_args.remove(&item_id) {
+                            if !buffered.is_empty() {
+                                // First (and only) ToolCallDelta for these buffered args:
+                                // emit name here since this is the first time we know the
+                                // call_id; mark name_emitted so it won't repeat.
+                                self.name_emitted.insert(item_id.clone());
+                                return Ok(vec![ModelEvent::ToolCallDelta {
+                                    call_id,
+                                    name: Some(name),
+                                    args_delta: buffered,
+                                }]);
+                            }
+                        }
                     }
                 }
                 Ok(vec![])
@@ -329,37 +359,34 @@ impl ResponsesTranslator {
             // `call_id` and `name` from the map built by `OutputItemAdded`.
             ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
                 let already_emitted = self.name_emitted.contains(&e.item_id);
-                let (call_id, name) =
-                    if let Some((call_id, fn_name)) = self.item_to_call.get(&e.item_id) {
-                        let name = if already_emitted {
-                            None
-                        } else {
-                            self.name_emitted.insert(e.item_id.clone());
-                            Some(fn_name.clone())
-                        };
-                        (call_id.clone(), name)
+                if let Some((call_id, fn_name)) = self.item_to_call.get(&e.item_id) {
+                    let name = if already_emitted {
+                        None
                     } else {
-                        // item_id not yet registered — emit with item_id as a
-                        // best-effort call_id so downstream at least sees a delta.
-                        tracing::warn!(
-                            target: "paigasus::openai::responses",
-                            item_id = %e.item_id,
-                            "function_call_arguments.delta arrived before output_item.added; \
-                             using item_id as call_id"
-                        );
-                        let name = if already_emitted {
-                            None
-                        } else {
-                            self.name_emitted.insert(e.item_id.clone());
-                            Some(String::new())
-                        };
-                        (e.item_id.clone(), name)
+                        self.name_emitted.insert(e.item_id.clone());
+                        Some(fn_name.clone())
                     };
-                Ok(vec![ModelEvent::ToolCallDelta {
-                    call_id,
-                    name,
-                    args_delta: e.delta,
-                }])
+                    Ok(vec![ModelEvent::ToolCallDelta {
+                        call_id: call_id.clone(),
+                        name,
+                        args_delta: e.delta,
+                    }])
+                } else {
+                    // item_id not yet registered — buffer the delta until
+                    // `output_item.added` arrives with the real call_id and name.
+                    // Do NOT emit a synthetic ToolCallDelta (that would leak the
+                    // wrong id downstream and permanently suppress the real name).
+                    tracing::debug!(
+                        target: "paigasus::openai::responses",
+                        item_id = %e.item_id,
+                        "function_call_arguments.delta arrived before output_item.added; buffering"
+                    );
+                    self.pending_args
+                        .entry(e.item_id)
+                        .or_default()
+                        .push_str(&e.delta);
+                    Ok(vec![])
+                }
             }
 
             // Terminal: response completed.
@@ -453,4 +480,135 @@ fn terminal_events(
 
     out.push(ModelEvent::Finish { reason });
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use async_openai::types::responses::{
+        FunctionToolCall, OutputItem, ResponseFunctionCallArgumentsDeltaEvent,
+        ResponseOutputItemAddedEvent, ResponseStreamEvent,
+    };
+
+    use super::*;
+
+    fn delta_event(item_id: &str, delta: &str) -> ResponseStreamEvent {
+        ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(
+            ResponseFunctionCallArgumentsDeltaEvent {
+                sequence_number: 0,
+                item_id: item_id.to_owned(),
+                output_index: 0,
+                delta: delta.to_owned(),
+            },
+        )
+    }
+
+    fn added_event(item_id: &str, call_id: &str, name: &str) -> ResponseStreamEvent {
+        ResponseStreamEvent::ResponseOutputItemAdded(ResponseOutputItemAddedEvent {
+            sequence_number: 1,
+            output_index: 0,
+            item: OutputItem::FunctionCall(FunctionToolCall {
+                arguments: String::new(),
+                call_id: call_id.to_owned(),
+                namespace: None,
+                name: name.to_owned(),
+                id: Some(item_id.to_owned()),
+                status: None,
+            }),
+        })
+    }
+
+    /// Baseline: `output_item.added` arrives before any deltas (happy path).
+    /// The first delta should carry name=Some("search") and the real call_id.
+    #[test]
+    fn ordered_added_before_delta() {
+        let mut t = ResponsesTranslator::new();
+
+        let evs = t.consume(added_event("x", "c1", "search")).unwrap();
+        assert!(
+            evs.is_empty(),
+            "added event alone should yield no ModelEvents"
+        );
+
+        let evs = t.consume(delta_event("x", "{\"q\":1}")).unwrap();
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "c1");
+                assert_eq!(name.as_deref(), Some("search"));
+                assert_eq!(args_delta, "{\"q\":1}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+
+        // Second delta must NOT re-emit name.
+        let evs2 = t.consume(delta_event("x", "more")).unwrap();
+        assert_eq!(evs2.len(), 1);
+        if let ModelEvent::ToolCallDelta { name, .. } = &evs2[0] {
+            assert!(name.is_none(), "name must not be re-emitted");
+        }
+    }
+
+    /// Out-of-order: delta arrives before `output_item.added`.
+    /// The delta must be buffered; when `output_item.added` arrives, a single
+    /// `ToolCallDelta` with the correct call_id and name must be flushed.
+    #[test]
+    fn out_of_order_delta_before_added() {
+        let mut t = ResponsesTranslator::new();
+
+        // Delta arrives first — should be silently buffered.
+        let evs = t.consume(delta_event("x", "{\"q\":")).unwrap();
+        assert!(
+            evs.is_empty(),
+            "delta before added should be buffered, not emitted; got {evs:?}"
+        );
+
+        // `output_item.added` arrives — should flush the buffered delta as one event.
+        let evs = t.consume(added_event("x", "c1", "search")).unwrap();
+        assert_eq!(
+            evs.len(),
+            1,
+            "expected flushed ToolCallDelta on added; got {evs:?}"
+        );
+        match &evs[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(
+                    call_id, "c1",
+                    "call_id must be the stable one from output_item.added"
+                );
+                assert_eq!(
+                    name.as_deref(),
+                    Some("search"),
+                    "name must be emitted with flushed delta"
+                );
+                assert_eq!(args_delta, "{\"q\":", "buffered args must be flushed");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+    }
+
+    /// Multiple out-of-order deltas for the same item_id are all buffered and
+    /// flushed together as a single `ToolCallDelta`.
+    #[test]
+    fn multiple_orphan_deltas_concatenated() {
+        let mut t = ResponsesTranslator::new();
+
+        assert!(t.consume(delta_event("x", "part1")).unwrap().is_empty());
+        assert!(t.consume(delta_event("x", "part2")).unwrap().is_empty());
+
+        let evs = t.consume(added_event("x", "c2", "fn")).unwrap();
+        assert_eq!(evs.len(), 1);
+        if let ModelEvent::ToolCallDelta { args_delta, .. } = &evs[0] {
+            assert_eq!(args_delta, "part1part2");
+        } else {
+            panic!("expected ToolCallDelta, got {evs:?}");
+        }
+    }
 }
