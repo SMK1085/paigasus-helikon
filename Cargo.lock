@@ -1106,7 +1106,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-providers-anthropic"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
