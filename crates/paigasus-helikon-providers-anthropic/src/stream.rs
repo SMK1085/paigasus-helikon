@@ -134,6 +134,15 @@ impl MessageTranslator {
                             name: emit_name,
                             args_delta: partial_json,
                         }));
+                    } else {
+                        // Protocol violation: input_json_delta only ever
+                        // applies to a tool_use content block. Surface it
+                        // rather than silently dropping (which would mask
+                        // a malformed upstream stream).
+                        return Err(ModelError::Transport(format!(
+                            "anthropic stream: input_json_delta at index {index} \
+                             has no preceding tool_use content_block_start"
+                        )));
                     }
                 }
             },

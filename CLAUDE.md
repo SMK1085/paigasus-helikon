@@ -36,7 +36,14 @@ The full list lives in `CONTRIBUTING.md` (single source of truth for contributor
 
 **Implementation status** (as of 2026-05-26): `paigasus-helikon-core`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, and `paigasus-helikon-providers-anthropic` carry real implementations (SMA-312/313/314/315/316/317). The remaining crates (`-mcp`, `-tools`, `-evals`, `-runtime-{tokio,axum,temporal,agentcore}`, `-cli`) are stubs that print docstrings only — real implementations land in subsequent SMA-* tickets.
 
-Workspace inheritance is **mandatory**: per-crate `Cargo.toml`s only set `name`, `description`, and any crate-specific bits. Everything else (`edition`, `rust-version`, `authors`, `license`, `repository`, `homepage`, `keywords`, `categories`) inherits from `[workspace.package]` in the root `Cargo.toml`. Don't hardcode these per-crate. **Exception**: `version` is per-crate — each `crates/*/Cargo.toml` sets `version = "0.0.0"` explicitly so release-plz can bump crates independently (see SMA-307). The `workspace.package.version = "0.0.0"` default in the root `Cargo.toml` stays as a safety net for new crates that forget to declare their own.
+Workspace inheritance is **mandatory**: per-crate `Cargo.toml`s only set `name`, `description`, and any crate-specific bits. Everything else (`edition`, `rust-version`, `authors`, `license`, `repository`, `homepage`, `keywords`, `categories`) inherits from `[workspace.package]` in the root `Cargo.toml`. Don't hardcode these per-crate.
+
+**Per-crate version is the one exception**, with a two-state lifecycle:
+
+1. **Stub state — `version = "0.0.0"`** (the default; root `[workspace.package].version` is `"0.0.0"` as a safety net). New stub crates start here so release-plz won't compute a bump until real public API ships.
+2. **Released state — `version = "0.1.0"`** after the first real public-API ticket lands. The bump is its own commit, type `chore(release):`, message pattern `chore(release): SMA-XXX [bump <crate> to 0.1.0 |] escape release-plz 0.0.0 trap [for <crate>]`. **Why explicitly:** release-plz's first run created `v0.0.0` git tags for every crate (PR #6). With the tag in place, a starting version of `0.0.0` reads as "already published, nothing to do" and release-plz refuses to propose a bump no matter how many feat commits land. The manual 0.0.0 → 0.1.0 nudge in a follow-up `chore(release)` commit escapes that. SMA-347 (core + facade), SMA-350 (macros), SMA-372 (providers-openai), and SMA-317 (providers-anthropic, bundled with the impl PR) all followed this pattern. CR may flag this as "violating the `0.0.0` rule" — point them here.
+
+Crates currently at `0.1.0`: `paigasus-helikon-core`, `paigasus-helikon`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, `paigasus-helikon-providers-anthropic`. Everything else stays at `0.0.0` until it ships real API.
 
 Third-party version pins live in `[workspace.dependencies]` (root). Members reference them via `dep.workspace = true`. Internal crate paths are also in `[workspace.dependencies]` so the facade can use `workspace = true` consistently.
 

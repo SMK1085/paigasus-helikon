@@ -116,13 +116,21 @@ impl Model for AnthropicModel {
                         return;
                     }
                     Some(Ok(event)) => {
-                        let parsed: Result<AnthropicEvent, _> = serde_json::from_str(&event.data);
-                        let Ok(parsed) = parsed else {
-                            tracing::warn!(
-                                target: "paigasus::anthropic::sse",
-                                "unparseable SSE event: {}", event.data,
-                            );
-                            continue;
+                        let parsed: AnthropicEvent = match serde_json::from_str(&event.data) {
+                            Ok(p) => p,
+                            Err(parse_err) => {
+                                // Log structured metadata only — the raw payload
+                                // may contain user/model/tool content and must
+                                // not be written to logs.
+                                tracing::warn!(
+                                    target: "paigasus::anthropic::sse",
+                                    %parse_err,
+                                    event_len = event.data.len(),
+                                    event_name = %event.event,
+                                    "unparseable SSE event payload",
+                                );
+                                continue;
+                            }
                         };
                         match translator.consume(parsed) {
                             Err(e) => {
