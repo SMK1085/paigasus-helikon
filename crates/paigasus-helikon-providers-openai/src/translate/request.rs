@@ -224,6 +224,103 @@ fn openai_tool_call(call_id: &str, name: &str, args: &Value) -> Value {
 #[allow(dead_code)]
 const _SILENCE_DEAD_CODE: fn(&[Item]) -> Value = to_chat_messages;
 
+/// Translate a conversation `Vec<Item>` into OpenAI Responses-API
+/// `input: [...]` form.
+///
+/// Items become `{type: "message", role, content: [parts]}` blocks for
+/// system/user/assistant; `Item::ToolCall` becomes a
+/// `function_call` item; `Item::ToolResult` becomes a
+/// `function_call_output` item. The same standalone-`ToolCall` rule
+/// applies — there is no special carrier needed because the Responses
+/// API treats function_call items as top-level.
+pub(crate) fn to_responses_input(items: &[Item]) -> Value {
+    let mut out: Vec<Value> = Vec::new();
+    for item in items {
+        match item {
+            Item::System { content } => {
+                out.push(json!({
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": text_of(content)}],
+                }));
+            }
+            Item::UserMessage { content } => {
+                let mut text_parts: Vec<Value> = Vec::new();
+                let mut hoisted: Vec<Value> = Vec::new();
+                for p in content {
+                    match p {
+                        ContentPart::Text { text } => {
+                            text_parts.push(json!({"type": "input_text", "text": text}));
+                        }
+                        ContentPart::Image { source } => {
+                            text_parts.push(json!({"type": "input_image", "image_url": media_url(source)}));
+                        }
+                        ContentPart::ToolResult { call_id, content } => {
+                            hoisted.push(json!({
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": text_of(content),
+                            }));
+                        }
+                        _ => { /* drop reasoning/audio/future variants */ }
+                    }
+                }
+                if !text_parts.is_empty() {
+                    out.push(json!({"type": "message", "role": "user", "content": text_parts}));
+                }
+                out.extend(hoisted);
+            }
+            Item::AssistantMessage { content, agent: _ } => {
+                let parts: Vec<Value> = content.iter().filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(json!({"type": "output_text", "text": text})),
+                    _ => None,
+                }).collect();
+                if !parts.is_empty() {
+                    out.push(json!({"type": "message", "role": "assistant", "content": parts}));
+                }
+                // Hoist nested ToolUse blocks into top-level function_call items.
+                for p in content {
+                    if let ContentPart::ToolUse { call_id, name, args } = p {
+                        out.push(json!({
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": args.to_string(),
+                        }));
+                    }
+                }
+            }
+            Item::ToolCall { call_id, name, args } => {
+                out.push(json!({
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": args.to_string(),
+                }));
+            }
+            Item::ToolResult { call_id, content } => {
+                out.push(json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": text_of(content),
+                }));
+            }
+            _ => {
+                // Future Item variants — skip.
+                tracing::warn!(
+                    target = "paigasus::openai::translate",
+                    "unknown Item variant; skipping in to_responses_input"
+                );
+            }
+        }
+    }
+    Value::Array(out)
+}
+
+// Suppress dead-code warning until backend/responses.rs consumes this.
+#[allow(dead_code)]
+const _SILENCE_DEAD_CODE_RESPONSES: fn(&[Item]) -> Value = to_responses_input;
+
 #[cfg(test)]
 mod chat_tests {
     use super::*;
@@ -427,5 +524,65 @@ mod chat_tests {
         }];
         let out = to_chat_messages(&items);
         assert_eq!(out[0]["content"], "answer");
+    }
+}
+
+#[cfg(test)]
+mod responses_tests {
+    use super::*;
+
+    fn text(t: &str) -> ContentPart {
+        ContentPart::Text { text: t.to_owned() }
+    }
+
+    #[test]
+    fn user_message_text_emits_input_text_part() {
+        let items = vec![Item::UserMessage { content: vec![text("hi")] }];
+        let out = to_responses_input(&items);
+        // Responses API input: list of {type, role, content: [parts]}
+        assert_eq!(out[0]["type"], "message");
+        assert_eq!(out[0]["role"], "user");
+        let parts = out[0]["content"].as_array().unwrap();
+        assert_eq!(parts[0], serde_json::json!({"type": "input_text", "text": "hi"}));
+    }
+
+    #[test]
+    fn assistant_text_emits_output_text_part() {
+        let items = vec![Item::AssistantMessage {
+            content: vec![text("done")],
+            agent: None,
+        }];
+        let out = to_responses_input(&items);
+        assert_eq!(out[0]["role"], "assistant");
+        let parts = out[0]["content"].as_array().unwrap();
+        assert_eq!(parts[0], serde_json::json!({"type": "output_text", "text": "done"}));
+    }
+
+    #[test]
+    fn tool_call_emits_function_call_item() {
+        let items = vec![Item::ToolCall {
+            call_id: "c1".to_owned(),
+            name: "ping".to_owned(),
+            args: serde_json::json!({"x": 1}),
+        }];
+        let out = to_responses_input(&items);
+        assert_eq!(out[0]["type"], "function_call");
+        assert_eq!(out[0]["call_id"], "c1");
+        assert_eq!(out[0]["name"], "ping");
+        let args_str = out[0]["arguments"].as_str().unwrap();
+        let args: Value = serde_json::from_str(args_str).unwrap();
+        assert_eq!(args, serde_json::json!({"x": 1}));
+    }
+
+    #[test]
+    fn tool_result_emits_function_call_output_item() {
+        let items = vec![Item::ToolResult {
+            call_id: "c1".to_owned(),
+            content: vec![text("42")],
+        }];
+        let out = to_responses_input(&items);
+        assert_eq!(out[0]["type"], "function_call_output");
+        assert_eq!(out[0]["call_id"], "c1");
+        assert_eq!(out[0]["output"], "42");
     }
 }
