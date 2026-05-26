@@ -148,10 +148,12 @@ fn user_message(parts: &[&ContentPart]) -> Value {
         .filter_map(|p| match p {
             ContentPart::Text { text } => Some(json!({"type": "text", "text": text})),
             ContentPart::Image { source } => {
-                Some(json!({"type": "image_url", "image_url": {"url": media_url(source)}}))
+                media_url(source)
+                    .map(|url| json!({"type": "image_url", "image_url": {"url": url}}))
             }
             ContentPart::Audio { source } => {
-                Some(json!({"type": "input_audio", "input_audio": {"data": media_url(source)}}))
+                media_url(source)
+                    .map(|data| json!({"type": "input_audio", "input_audio": {"data": data}}))
             }
             _ => None,
         })
@@ -159,11 +161,24 @@ fn user_message(parts: &[&ContentPart]) -> Value {
     json!({"role": "user", "content": arr})
 }
 
-fn media_url(src: &MediaSource) -> String {
+/// Translate a [`MediaSource`] into a URL/data string suitable for OpenAI's
+/// `image_url.url` or `input_audio.data` fields.
+///
+/// Returns `None` for unknown future variants so callers can skip the part
+/// entirely rather than emitting an empty string into a required field.
+fn media_url(src: &MediaSource) -> Option<String> {
     match src {
-        MediaSource::Url { url } => url.clone(),
-        MediaSource::Base64 { mime_type, data } => format!("data:{mime_type};base64,{data}"),
-        _ => String::new(),
+        MediaSource::Url { url } => Some(url.clone()),
+        MediaSource::Base64 { mime_type, data } => {
+            Some(format!("data:{mime_type};base64,{data}"))
+        }
+        _ => {
+            tracing::warn!(
+                target: "paigasus::openai::translate",
+                "unsupported MediaSource variant; skipping multimodal part"
+            );
+            None
+        }
     }
 }
 
@@ -261,9 +276,11 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
                             text_parts.push(json!({"type": "input_text", "text": text}));
                         }
                         ContentPart::Image { source } => {
-                            text_parts.push(
-                                json!({"type": "input_image", "image_url": media_url(source)}),
-                            );
+                            if let Some(url) = media_url(source) {
+                                text_parts.push(
+                                    json!({"type": "input_image", "image_url": url}),
+                                );
+                            }
                         }
                         ContentPart::ToolResult { call_id, content } => {
                             hoisted.push(json!({
