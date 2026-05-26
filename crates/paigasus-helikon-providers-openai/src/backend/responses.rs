@@ -4,7 +4,7 @@
 //! automatically). The SSE stream is translated by [`ResponsesTranslator`]
 //! into `ModelEvent`s.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_openai::traits::EventType as _;
 use async_openai::types::responses::{
@@ -213,7 +213,7 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 /// - `response.reasoning_summary_text.delta` → `ReasoningDelta`
 /// - `response.reasoning_text.delta` → `ReasoningDelta`
 /// - `response.output_item.added` (when item is a function call) →
-///   registers call_id + name for subsequent argument deltas
+///   registers `item.id` → `(item.call_id, item.name)` for subsequent argument deltas
 /// - `response.function_call_arguments.delta` → `ToolCallDelta` with
 ///   name-emission gating (name emitted once per call_id, then `None`)
 /// - `response.completed` → `Usage` + `Finish { Stop }`
@@ -225,14 +225,28 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 /// - `error` → `Err(ModelError)` on the outer stream
 ///
 /// All other events are dropped with a `tracing::debug!` log.
+///
+/// ## id vs call_id
+///
+/// The Responses API distinguishes two identifiers on function-call items:
+/// - `item.id` — internal item identifier; matches `function_call_arguments.delta.item_id`
+///   and is used as the correlator between `OutputItemAdded` and subsequent delta events.
+/// - `item.call_id` — stable identifier for tool submission; this is what downstream
+///   consumers (tool runners, conversation history) must use when referencing the call.
+///
+/// `item_to_call` maps the internal `item_id` → `(call_id, name)` so that
+/// `ToolCallDelta.call_id` always carries the stable call_id.
 pub(crate) struct ResponsesTranslator {
-    /// Tracks call_ids for which a name has already been emitted (name-emission
-    /// gating: name is `Some` on the first `ToolCallDelta` for a given call_id,
-    /// then `None` on subsequent deltas).
+    /// Tracks item_ids (internal correlator) for which a name has already been
+    /// emitted (name-emission gating: name is `Some` on the first `ToolCallDelta`
+    /// for a given item_id, then `None` on subsequent deltas).
     name_emitted: HashSet<String>,
-    /// Maps call_id → function name, populated by `response.output_item.added`
-    /// when the item is a `function_call`.
-    call_names: std::collections::HashMap<String, String>,
+    /// Maps internal `item_id` → `(stable call_id, function name)`.
+    ///
+    /// Populated by `response.output_item.added` when the item is a function call.
+    /// Keyed by `item.id` (the correlator used in `function_call_arguments.delta`),
+    /// not by `item.call_id` (the stable downstream identifier).
+    item_to_call: HashMap<String, (String, String)>,
 }
 
 impl ResponsesTranslator {
@@ -240,7 +254,7 @@ impl ResponsesTranslator {
     pub(crate) fn new() -> Self {
         Self {
             name_emitted: HashSet::new(),
-            call_names: std::collections::HashMap::new(),
+            item_to_call: HashMap::new(),
         }
     }
 
@@ -293,27 +307,57 @@ impl ResponsesTranslator {
                 }
             }
 
-            // Output item added — register function call name for later deltas.
+            // Output item added — register item_id → (call_id, name) for later deltas.
+            //
+            // `fc.id` is the internal item identifier that matches
+            // `function_call_arguments.delta.item_id` (the correlator).
+            // `fc.call_id` is the stable identifier for downstream tool execution.
             ResponseStreamEvent::ResponseOutputItemAdded(e) => {
                 if let OutputItem::FunctionCall(fc) = e.item {
-                    self.call_names.entry(fc.call_id).or_insert(fc.name);
+                    if let Some(item_id) = fc.id {
+                        self.item_to_call
+                            .entry(item_id)
+                            .or_insert_with(|| (fc.call_id, fc.name));
+                    }
                 }
                 Ok(vec![])
             }
 
             // Function-call argument delta with name-emission gating.
+            //
+            // `e.item_id` is the internal correlator; look up the stable
+            // `call_id` and `name` from the map built by `OutputItemAdded`.
             ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
                 let already_emitted = self.name_emitted.contains(&e.item_id);
-                let name = if already_emitted {
-                    None
+                let (call_id, name) = if let Some((call_id, fn_name)) =
+                    self.item_to_call.get(&e.item_id)
+                {
+                    let name = if already_emitted {
+                        None
+                    } else {
+                        self.name_emitted.insert(e.item_id.clone());
+                        Some(fn_name.clone())
+                    };
+                    (call_id.clone(), name)
                 } else {
-                    self.name_emitted.insert(e.item_id.clone());
-                    // Use the registered name if available; fall back to empty string
-                    // so downstream consumers at least see a delta.
-                    Some(self.call_names.get(&e.item_id).cloned().unwrap_or_default())
+                    // item_id not yet registered — emit with item_id as a
+                    // best-effort call_id so downstream at least sees a delta.
+                    tracing::warn!(
+                        target: "paigasus::openai::responses",
+                        item_id = %e.item_id,
+                        "function_call_arguments.delta arrived before output_item.added; \
+                         using item_id as call_id"
+                    );
+                    let name = if already_emitted {
+                        None
+                    } else {
+                        self.name_emitted.insert(e.item_id.clone());
+                        Some(String::new())
+                    };
+                    (e.item_id.clone(), name)
                 };
                 Ok(vec![ModelEvent::ToolCallDelta {
-                    call_id: e.item_id,
+                    call_id,
                     name,
                     args_delta: e.delta,
                 }])
