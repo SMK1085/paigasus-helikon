@@ -18,6 +18,7 @@ anyhow                = "1"
 async-openai          = "0.40"
 async-stream          = "0.3"
 async-trait           = "0.1"
+eventsource-stream    = "0.2"
 futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
 insta                 = "1"
