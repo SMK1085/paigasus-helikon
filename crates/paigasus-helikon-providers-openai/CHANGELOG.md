@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-providers-openai-v0.1.0) - 2026-05-26
+
+### Added
+
+- *(providers-openai)* SMA-316 add OpenAiModel for Chat Completions + Responses ([#30](https://github.com/SMK1085/paigasus-helikon/pull/30))
+- *(providers)* SMA-304 add openai and anthropic provider stubs
+
+### Other
+
+- *(release)* SMA-372 escape release-plz 0.0.0 trap for providers-openai ([#31](https://github.com/SMK1085/paigasus-helikon/pull/31))
+- release v0.0.0 ([#6](https://github.com/SMK1085/paigasus-helikon/pull/6))
+- SMA-307 automated versioning with release-plz ([#5](https://github.com/SMK1085/paigasus-helikon/pull/5))
+- SMA-305 build, test, clippy, fmt + doc-coverage matrix ([#2](https://github.com/SMK1085/paigasus-helikon/pull/2))
+
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-providers-openai-v0.0.0) - 2026-05-17
 
 ### Added
