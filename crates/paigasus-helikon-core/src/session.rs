@@ -203,7 +203,7 @@ impl SessionEvent {
     }
 }
 
-/// In-memory [`Session`] backend backed by an [`std::sync::Mutex<Vec<_>>`].
+/// In-memory [`Session`] backend backed by a `std::sync::Mutex<Vec<_>>`.
 ///
 /// Suitable for tests and ephemeral runs. One instance is one session by
 /// construction — there is no `session_id`. For persistent or multi-session
@@ -211,6 +211,14 @@ impl SessionEvent {
 ///
 /// Lock poisoning panics (`expect`): if a panic occurred inside a critical
 /// section, an invariant is already broken. Fail loud.
+///
+/// **Platform assumption:** [`MemorySession::events`] panics on 32-bit
+/// targets if a single session accumulates more than `u32::MAX` events
+/// (the `SequenceId` → `usize` conversion via [`usize::try_from`] then
+/// fails). Sessions of that size are unreachable in practice; the panic
+/// is intentional rather than a typed `SessionError` so the failure
+/// surfaces immediately rather than being silently treated as a backend
+/// error.
 #[derive(Debug, Default)]
 pub struct MemorySession {
     inner: std::sync::Mutex<Vec<SessionEvent>>,
@@ -313,17 +321,17 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
                 original_count,
                 ..
             } => {
-                let n = *original_count as usize;
+                let n = usize::try_from(*original_count).unwrap_or(usize::MAX);
                 if n == 0 {
                     tracing::warn!(
-                        "Compacted event with original_count = 0; emitting summary without dropping any messages (likely producer bug)"
+                        "Compacted event with original_count = 0; emitting summary as a system message without compacting any history (likely producer bug — use SessionEvent::compacted with a positive count)"
                     );
                 }
                 if n > contributions.len() {
                     tracing::warn!(
                         original_count = n,
                         events_seen = contributions.len(),
-                        "Compacted event references more events than have been seen; clamping to 0 (likely corrupt log)"
+                        "Compacted event references more events than have been seen; treating as 'compact everything observed so far' (likely corrupt log)"
                     );
                 }
                 let drop_from_idx = contributions.len().saturating_sub(n);

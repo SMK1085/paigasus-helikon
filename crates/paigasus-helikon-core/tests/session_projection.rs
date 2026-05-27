@@ -112,7 +112,7 @@ fn handoff_produces_no_message() {
 
 #[test]
 fn compaction_replaces_window_with_single_system_message() {
-    // 7 events: 4 keep, 3 get compacted into one System message, then more after.
+    // 6 events: first 3 are compacted into 1 System message; 2 more (a2, u3) follow.
     let events = vec![
         user("u1"),
         assistant("a1", "x"),
