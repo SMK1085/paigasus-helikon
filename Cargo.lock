@@ -1425,6 +1425,7 @@ dependencies = [
  "paigasus-helikon-runtime-axum",
  "paigasus-helikon-runtime-temporal",
  "paigasus-helikon-runtime-tokio",
+ "paigasus-helikon-sessions-sqlite",
  "paigasus-helikon-tools",
 ]
 

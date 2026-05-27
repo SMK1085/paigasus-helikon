@@ -54,3 +54,7 @@ pub use paigasus_helikon_runtime_temporal as runtime_temporal;
 /// AWS Bedrock AgentCore runtime. Enabled via the `runtime-agentcore` feature.
 #[cfg(feature = "runtime-agentcore")]
 pub use paigasus_helikon_runtime_agentcore as runtime_agentcore;
+
+/// SQLite-backed `Session` backend. Enabled via the `sessions-sqlite` feature.
+#[cfg(feature = "sessions-sqlite")]
+pub use paigasus_helikon_sessions_sqlite as sessions_sqlite;
