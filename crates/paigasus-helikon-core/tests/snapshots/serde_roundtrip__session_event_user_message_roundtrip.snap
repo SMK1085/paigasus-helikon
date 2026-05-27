@@ -1,6 +1,6 @@
 ---
 source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
-assertion_line: 315
+assertion_line: 335
 expression: roundtrip(&ev)
 ---
 {
@@ -10,5 +10,6 @@ expression: roundtrip(&ev)
       "type": "text",
       "text": "hello"
     }
-  ]
+  ],
+  "ts": "1970-01-01T00:00:00Z"
 }
