@@ -25,7 +25,14 @@ version = 2
 db-path = "~/.cargo/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-ignore = []
+ignore = [
+  # rsa 0.9.10 is pulled into the lockfile by sqlx-mysql but never compiled —
+  # paigasus-helikon-sessions-sqlite sets default-features = false on sqlx
+  # and enables only the sqlite feature. The Marvin Attack is exploitable
+  # only against running decryption code, which we do not build. No upstream
+  # fix advisory exists. Mirrored in .cargo/audit.toml for cargo-audit.
+  "RUSTSEC-2023-0071",
+]
 
 # ---------------------------------------------------------------------------
 # Licenses — ticket allowlist plus Unicode-3.0 (the rebrand of
@@ -40,9 +47,10 @@ allow = [
   "BSD-2-Clause",
   "BSD-3-Clause",
   "ISC",
+  "MPL-2.0",
   "Unicode-DFS-2016",
   "Unicode-3.0",
-  "MPL-2.0",
+  "Zlib",            # foldhash (via sqlx-core → hashbrown → hashlink); permissive OSI/FSF-approved license
 ]
 exceptions = []
 
