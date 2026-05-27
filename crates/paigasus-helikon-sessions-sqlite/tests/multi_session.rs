@@ -23,8 +23,8 @@ async fn distinct_session_ids_are_isolated() {
         .expect("pool");
     SqliteSession::migrate(&pool).await.expect("migrate");
 
-    let a = SqliteSession::open_unchecked(pool.clone(), "session-a");
-    let b = SqliteSession::open_unchecked(pool, "session-b");
+    let a = SqliteSession::open_without_migrate(pool.clone(), "session-a");
+    let b = SqliteSession::open_without_migrate(pool, "session-b");
 
     a.append(&[msg("a1"), msg("a2"), msg("a3"), msg("a4"), msg("a5")])
         .await

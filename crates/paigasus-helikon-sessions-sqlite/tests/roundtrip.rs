@@ -128,4 +128,23 @@ async fn snapshot_projects_through_project_function() {
 
     let snap = session.snapshot().await.expect("snapshot");
     assert_eq!(snap.messages.len(), 2);
+
+    use paigasus_helikon_core::Item;
+    match &snap.messages[0] {
+        Item::UserMessage { content } => match &content[0] {
+            ContentPart::Text { text } => assert_eq!(text, "hello"),
+            other => panic!("expected Text, got {other:?}"),
+        },
+        other => panic!("expected UserMessage, got {other:?}"),
+    }
+    match &snap.messages[1] {
+        Item::AssistantMessage { content, agent } => {
+            assert_eq!(agent.as_deref(), Some("triage"));
+            match &content[0] {
+                ContentPart::Text { text } => assert_eq!(text, "hi"),
+                other => panic!("expected Text, got {other:?}"),
+            }
+        }
+        other => panic!("expected AssistantMessage, got {other:?}"),
+    }
 }

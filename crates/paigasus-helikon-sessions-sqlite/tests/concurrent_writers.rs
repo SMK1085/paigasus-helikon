@@ -37,7 +37,7 @@ async fn concurrent_appends_produce_contiguous_sequence() {
         .expect("pool");
     SqliteSession::migrate(&pool).await.expect("migrate");
 
-    let session = Arc::new(SqliteSession::open_unchecked(pool, "shared"));
+    let session = Arc::new(SqliteSession::open_without_migrate(pool, "shared"));
 
     let handles = (0..N_TASKS)
         .map(|task_idx| {

@@ -17,10 +17,15 @@
 //!     .filename("sessions.db")
 //!     .create_if_missing(true)
 //!     .journal_mode(SqliteJournalMode::Wal)
-//!     .busy_timeout(Duration::from_secs(5));
+//!     .busy_timeout(Duration::from_secs(30));
 //! SqlitePoolOptions::new().connect_with(opts).await
 //! # }
 //! ```
+//!
+//! `busy_timeout` is a write-contention parameter; 30 seconds is the value
+//! exercised by this crate's `concurrent_writers` test against a real WAL
+//! pool on CI. Tune downward if you know your workload is single-writer or
+//! upward if you expect heavy multi-writer contention.
 //!
 //! ## Provider-translator caveat
 //!
@@ -55,8 +60,12 @@ impl SqliteSession {
     ///
     /// Optional: [`SqliteSession::open`] runs migrations internally. Call
     /// this directly if you manage many sessions and want to migrate once at
-    /// process start, then use [`SqliteSession::open_unchecked`] on the hot
-    /// path to skip the per-`open` round-trip to `_sqlx_migrations`.
+    /// process start, then use [`SqliteSession::open_without_migrate`] on the
+    /// hot path to skip the per-`open` round-trip to `_sqlx_migrations`.
+    ///
+    /// **Editing a migration file after first deploy will fail** with a
+    /// checksum mismatch against the `_sqlx_migrations` table. Add a new
+    /// numbered file (e.g., `0002_…`) instead of mutating an existing one.
     pub async fn migrate(pool: &SqlitePool) -> Result<(), SessionError> {
         MIGRATOR.run(pool).await.map_err(SessionError::backend)?;
         Ok(())
@@ -65,20 +74,20 @@ impl SqliteSession {
     /// Open (or implicitly create) a session within `pool`. Runs migrations
     /// as a side effect (one round-trip to `_sqlx_migrations`). For repeated
     /// session-opens against an already-migrated pool, prefer
-    /// [`SqliteSession::open_unchecked`].
+    /// [`SqliteSession::open_without_migrate`].
     pub async fn open(
         pool: SqlitePool,
         session_id: impl Into<String>,
     ) -> Result<Self, SessionError> {
         Self::migrate(&pool).await?;
-        Ok(Self::open_unchecked(pool, session_id))
+        Ok(Self::open_without_migrate(pool, session_id))
     }
 
     /// Open a session without running migrations. The caller must have
     /// already invoked [`SqliteSession::migrate`] on this pool; otherwise
     /// the first [`Session::append`] fails with `SessionError::Backend`
     /// wrapping a `no such table` error.
-    pub fn open_unchecked(pool: SqlitePool, session_id: impl Into<String>) -> Self {
+    pub fn open_without_migrate(pool: SqlitePool, session_id: impl Into<String>) -> Self {
         Self {
             pool,
             session_id: session_id.into(),
@@ -149,7 +158,10 @@ impl Session for SqliteSession {
         // `since` is exclusive ("those after"). Default to -1 so the
         // `sequence > ?` filter is a no-op when None.
         let watermark: i64 = match since {
-            Some(s) => i64::try_from(s.0).map_err(SessionError::backend)?,
+            // `s.0` is u64; `> i64::MAX` is unreachable in practice but means "after
+            // every possible sequence." Saturating to i64::MAX makes the filter
+            // return empty rather than erroring — semantically correct.
+            Some(s) => i64::try_from(s.0).unwrap_or(i64::MAX),
             None => -1,
         };
 
@@ -199,9 +211,8 @@ fn event_metadata(ev: &SessionEvent) -> (&'static str, i64) {
         SessionEvent::HandoffOccurred { ts, .. } => ("handoff_occurred", *ts),
         SessionEvent::Compacted { ts, .. } => ("compacted", *ts),
         _ => panic!(
-            "SqliteSession: unhandled SessionEvent variant — \
-             extend `event_metadata` in paigasus-helikon-sessions-sqlite \
-             when adding a new variant to `SessionEvent`"
+            "SqliteSession: unhandled SessionEvent variant {ev:?} — \
+             extend `event_metadata` when adding a new variant"
         ),
     };
     let nanos_i128 = ts.as_nanosecond();
