@@ -128,9 +128,10 @@ impl Session for SqliteSession {
         .fetch_one(&mut *tx)
         .await
         .map_err(SessionError::backend)?;
-        let mut next: i64 = row.0;
+        let start: i64 = row.0;
 
-        for ev in events {
+        for (offset, ev) in events.iter().enumerate() {
+            let next = start + offset as i64;
             let (kind, ts_nanos) = event_metadata(ev);
             let payload = serde_json::to_string(ev).map_err(SessionError::backend)?;
 
@@ -146,8 +147,6 @@ impl Session for SqliteSession {
             .execute(&mut *tx)
             .await
             .map_err(SessionError::backend)?;
-
-            next += 1;
         }
 
         tx.commit().await.map_err(SessionError::backend)?;
