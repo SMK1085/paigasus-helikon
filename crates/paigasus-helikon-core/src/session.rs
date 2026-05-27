@@ -379,7 +379,7 @@ pub enum SessionError {
 
     /// A backend-specific error, type-erased so core stays free of any
     /// particular backend dependency. The `'static` bound is required for
-    /// [`std::error::Error::downcast_ref`] to work; callers who care about
+    /// `<dyn Error>::downcast_ref` to work; callers who care about
     /// the underlying type can do `err.downcast_ref::<sqlx::Error>()`.
     #[error(transparent)]
     Backend(Box<dyn std::error::Error + Send + Sync + 'static>),
