@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-sessions-sqlite-v0.1.0) - 2026-05-27
+
+### Added
+
+- *(core)* SMA-318 add MemorySession and SqliteSession backends ([#35](https://github.com/SMK1085/paigasus-helikon/pull/35))
+
+### Other
+
+- *(release)* SMA-382 escape release-plz 0.0.0 trap for sessions-sqlite ([#37](https://github.com/SMK1085/paigasus-helikon/pull/37))
+- release ([#36](https://github.com/SMK1085/paigasus-helikon/pull/36))
+
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-sessions-sqlite-v0.0.0) - 2026-05-27
 
 ### Added
