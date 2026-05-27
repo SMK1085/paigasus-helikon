@@ -243,9 +243,15 @@ impl Session for MemorySession {
         let guard = self.inner.lock().expect("MemorySession mutex poisoned");
         // `since` is *exclusive* — matches the existing trait doc ("those
         // after `since`"). `try_from` ensures 32-bit targets fail loudly
-        // instead of wrapping past `u32::MAX`. Unreachable in practice.
+        // instead of wrapping past `u32::MAX`; `saturating_add` then guards
+        // the +1 against the SequenceId(u64::MAX) edge case on 64-bit where
+        // usize::MAX + 1 would overflow. Both branches are unreachable in
+        // practice; the saturated result clamps `start` so the slice below
+        // returns an empty Vec rather than wrapping.
         let start = match since {
-            Some(s) => usize::try_from(s.0).expect("SequenceId exceeds platform usize") + 1,
+            Some(s) => usize::try_from(s.0)
+                .expect("SequenceId exceeds platform usize")
+                .saturating_add(1),
             None => 0,
         };
         Ok(guard.get(start..).unwrap_or(&[]).to_vec())
