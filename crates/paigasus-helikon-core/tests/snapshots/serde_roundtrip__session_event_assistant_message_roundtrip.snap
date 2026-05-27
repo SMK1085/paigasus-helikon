@@ -1,6 +1,6 @@
 ---
 source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
-assertion_line: 324
+assertion_line: 347
 expression: roundtrip(&ev)
 ---
 {
@@ -11,5 +11,6 @@ expression: roundtrip(&ev)
       "text": "hi back"
     }
   ],
-  "agent": "triage"
+  "agent": "triage",
+  "ts": "1970-01-01T00:00:00Z"
 }

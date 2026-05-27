@@ -22,6 +22,7 @@ eventsource-stream    = "0.2"
 futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
 insta                 = "1"
+jiff                  = { version = "0.2", features = ["serde"] }
 opentelemetry         = "0.27"
 proc-macro-crate      = "3"
 proc-macro2           = "1"
@@ -32,6 +33,7 @@ rustversion           = "1"
 schemars              = "1"
 serde                 = { version = "1", features = ["derive"] }
 serde_json            = "1"
+sqlx                  = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 syn                   = { version = "2", features = ["full"] }
 thiserror             = "2"
 tokio                 = { version = "1", features = ["full"] }
@@ -53,6 +55,7 @@ paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime
 paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.0.0" }
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
+paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite",     version = "0.0.0" }
 
 [workspace.lints.rust]
 missing_docs = "warn"

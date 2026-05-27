@@ -1,0 +1,16 @@
+# .cargo/audit.toml — cargo-audit policy for the Helikon workspace.
+# Reference: https://docs.rs/cargo-audit/latest/cargo_audit/config/index.html
+#
+# Kept in sync with the [advisories].ignore list in /deny.toml — both tools
+# run as required CI gates (see .github/workflows/audit.yml and the deny job
+# in ci.yml) and must agree on what is policy-allowed.
+
+[advisories]
+ignore = [
+    # rsa 0.9.10 is pulled into the lockfile by sqlx-mysql but never compiled —
+    # paigasus-helikon-sessions-sqlite sets default-features = false on sqlx
+    # and enables only the sqlite feature. The Marvin Attack is exploitable
+    # only against running decryption code, which we do not build. No upstream
+    # fix advisory exists.
+    "RUSTSEC-2023-0071",
+]

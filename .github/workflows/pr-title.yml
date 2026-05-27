@@ -56,6 +56,8 @@ jobs:
             runtime-axum
             runtime-temporal
             runtime-agentcore
+            sessions
+            sessions-sqlite
             workspace
             workflows
             ci

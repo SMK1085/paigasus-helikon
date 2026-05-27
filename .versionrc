@@ -15,7 +15,7 @@ types:
 - {type: perf,     increment: None,   section: Other,          hidden: true}
 - {type: test,     increment: None,   section: Other,          hidden: true}
 - {type: revert,   increment: None,   section: Other,          hidden: true}
-scopeRegex: '^(core|cli|facade|macros|mcp|tools|evals|providers|providers-openai|providers-anthropic|runtime|runtime-tokio|runtime-axum|runtime-temporal|runtime-agentcore|workspace|workflows|ci|deps|release|repo|docs|contributing|readme|claude|spec|specs|plan|lints)$'
+scopeRegex: '^(core|cli|facade|macros|mcp|tools|evals|providers|providers-openai|providers-anthropic|runtime|runtime-tokio|runtime-axum|runtime-temporal|runtime-agentcore|sessions|sessions-sqlite|workspace|workflows|ci|deps|release|repo|docs|contributing|readme|claude|spec|specs|plan|lints)$'
 description:
   length:
     min: 1

@@ -10,10 +10,10 @@ use async_trait::async_trait;
 use futures_core::stream::{BoxStream, Stream};
 use paigasus_helikon_core::{
     Agent, AgentError, AgentEvent, AgentInput, CancellationToken, ConversationSnapshot, Guardrail,
-    GuardrailError, GuardrailInput, GuardrailVerdict, Hook, HookDecision, HookEvent, Model,
-    ModelCapabilities, ModelError, ModelEvent, ModelRequest, RunConfig, RunContext, RunError,
-    RunResult, RunResultStreaming, Runner, SequenceId, Session, SessionError, SessionEvent, Tool,
-    ToolContext, ToolError, ToolOutput,
+    GuardrailError, GuardrailInput, GuardrailVerdict, Hook, HookDecision, HookEvent, MemorySession,
+    Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, RunConfig, RunContext,
+    RunError, RunResult, RunResultStreaming, Runner, SequenceId, Session, SessionError,
+    SessionEvent, Tool, ToolContext, ToolError, ToolOutput,
 };
 use serde_json::{json, Value};
 
@@ -161,6 +161,8 @@ fn trait_objects_construct() {
     })];
 
     let _: Box<dyn Session> = Box::new(NoopSession);
+    // Concrete `MemorySession` also satisfies the `Session` trait object.
+    let _: Box<dyn Session> = Box::new(MemorySession::new());
     let _: Box<dyn Guardrail<()>> = Box::new(NoopGuardrail);
     let _: Box<dyn Hook<()>> = Box::new(NoopHook);
     let _: Box<dyn Agent<()>> = Box::new(NoopAgent);

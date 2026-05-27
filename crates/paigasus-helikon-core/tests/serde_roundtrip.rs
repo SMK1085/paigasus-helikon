@@ -5,7 +5,13 @@
 //! equality. The snapshot diff is the visual regression check; the
 //! `assert_eq!` covers semantic equivalence.
 
+use jiff::Timestamp;
 use paigasus_helikon_core::*;
+
+fn pinned_ts() -> Timestamp {
+    // Fixed instant so insta snapshots are deterministic.
+    Timestamp::from_second(0).expect("0 is a valid timestamp")
+}
 
 fn roundtrip<T>(value: &T) -> String
 where
@@ -324,6 +330,7 @@ fn session_event_user_message_roundtrip() {
         content: vec![ContentPart::Text {
             text: "hello".into(),
         }],
+        ts: pinned_ts(),
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }
@@ -335,6 +342,7 @@ fn session_event_assistant_message_roundtrip() {
             text: "hi back".into(),
         }],
         agent: "triage".into(),
+        ts: pinned_ts(),
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }
@@ -345,6 +353,7 @@ fn session_event_tool_called_roundtrip() {
         call_id: "call_1".into(),
         name: "calc".into(),
         args: serde_json::json!({ "expr": "1+1" }),
+        ts: pinned_ts(),
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }
@@ -354,6 +363,7 @@ fn session_event_tool_returned_roundtrip() {
     let ev = SessionEvent::ToolReturned {
         call_id: "call_1".into(),
         content: vec![ContentPart::Text { text: "2".into() }],
+        ts: pinned_ts(),
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }
@@ -363,6 +373,7 @@ fn session_event_handoff_occurred_roundtrip() {
     let ev = SessionEvent::HandoffOccurred {
         from: "triage".into(),
         to: "billing".into(),
+        ts: pinned_ts(),
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }
@@ -372,6 +383,7 @@ fn session_event_compacted_roundtrip() {
     let ev = SessionEvent::Compacted {
         summary: "user asked for a refund; assistant agreed".into(),
         original_count: 12,
+        ts: pinned_ts(),
     };
     insta::assert_snapshot!(roundtrip(&ev));
 }

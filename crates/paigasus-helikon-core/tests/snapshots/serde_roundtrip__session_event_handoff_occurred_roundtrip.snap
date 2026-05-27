@@ -1,10 +1,11 @@
 ---
 source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
-assertion_line: 349
+assertion_line: 378
 expression: roundtrip(&ev)
 ---
 {
   "type": "handoff_occurred",
   "from": "triage",
-  "to": "billing"
+  "to": "billing",
+  "ts": "1970-01-01T00:00:00Z"
 }
