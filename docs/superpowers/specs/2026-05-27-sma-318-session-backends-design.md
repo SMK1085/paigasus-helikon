@@ -67,9 +67,7 @@ impl SessionEvent {
 
 **Why `#[non_exhaustive]` stays:** adding a struct-variant field is breaking *without* `non_exhaustive`. With it, downstream pattern matchers using `..` keep compiling.
 
-**`#[non_exhaustive]` placement note:** the attribute sits at the *enum* level only — not on each variant. Enum-level `non_exhaustive` blocks exhaustive matching but still permits downstream code (including this crate's tests and `paigasus-helikon-sessions-sqlite`'s tests) to construct variants by struct-init for fixtures with pinned timestamps. Per-variant `non_exhaustive` would forbid that. Rustdoc for the enum should explicitly call this pattern out so a well-meaning contributor doesn't tighten it later.
-
-**Caveat for `Compacted`:** the variant docstring must warn that `Compacted` projects to `Item::System` (see §"ConversationSnapshot projection") and therefore loses positional semantics on Anthropic (hoisted to top-level `system`) and OpenAI (concatenated into one system block). Compaction still works — the model sees the summary text — but the "replaces turns 1..N at this position" semantic is observation-only in the event log; it doesn't survive provider translation.
+**`#[non_exhaustive]` placement note:** the attribute sits at the *enum* level only — not on each variant. Enum-level `non_exhaustive` blocks exhaustive matching but still permits downstream code (including this crate's tests and `paigasus-helikon-sessions-sqlite`'s tests) to construct variants by struct-init for fixtures with pinned timestamps. Per-variant `non_exhaustive` would forbid that. Rustdoc for the enum should call this pattern out so a future contributor doesn't tighten it.
 
 **Serde shape:** `jiff::Timestamp` with the `serde` feature serializes as an RFC 3339 string (`"2026-05-27T04:50:12.268000000Z"`). Human-readable in JSON; sorts correctly as text.
 
@@ -396,23 +394,3 @@ All new tests run under `cargo test --workspace --all-features` on `{ubuntu, mac
 - `PostgresSession`, `RedisSession`.
 - Snapshot caching / incremental projection if profiling shows it's hot.
 - Retention / `delete_session` API.
-
-## Review feedback applied
-
-Items addressed from [`2026-05-27-sma-318-session-backends-review.md`](./2026-05-27-sma-318-session-backends-review.md):
-
-| # | Item | Resolution |
-|---|---|---|
-| 1 | `Backend(Box<dyn Error + Send + Sync>)` not downcastable | Added `+ 'static` bound. |
-| 2 | `sqlite::memory:` multi-connection footgun | Pin test pool to `max_connections = 1` + rustdoc warning in `roundtrip.rs`. |
-| 3 | `Compacted` → `Item::System` lost positional meaning | Accepted reviewer recommendation: keep `Item::System`, document the provider-translator interaction prominently on `Compacted` variant, on `project`, and in crate-level rustdoc. |
-| 4 | `SessionError::Backend` boxing verbosity | Added `SessionError::backend<E>(e)` constructor. Call sites become `.map_err(SessionError::backend)`. |
-| 5 | `SqliteSession::open` silently fragile without `migrate` | `open` is now `async fn open(...) -> Result<Self, SessionError>` that auto-migrates; `open_unchecked` is the explicit perf-conscious escape hatch. `migrate` stays public for "migrate once at startup" callers. |
-| 6 | `busy_timeout(5s)` flake risk in concurrent-writers test | Bumped to 30 s in `concurrent_writers.rs`. |
-| 7 | `u64 → usize` cast in `MemorySession::events` | Switched to `usize::try_from` with a clear panic message. |
-| 8 | Silent `Compacted` edge cases | Added `tracing::warn!` for `original_count = 0` and `original_count > events_seen`. `tracing` is already a workspace dep; core gains a dep on it. |
-| 9 (small) | Missing `(session_id, ts_nanos)` index | Added `CREATE INDEX idx_session_events_session_ts`. |
-| 10 (small) | Missing `delete_session` non-goal | Added to §"Non-goals". |
-| 11 (small) | Per-commit scoping for release-plz | Added explicit guidance in §"Crate layout" listing the required commit-scope split. |
-| 12 (small) | Facade `pub use` line not shown | Spelled out in §"Crate layout". |
-| 13 (small) | `#[non_exhaustive]` placement note | Added a one-liner in §"`SessionEvent` timestamp migration". |
