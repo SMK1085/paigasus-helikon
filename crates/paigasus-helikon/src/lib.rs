@@ -58,3 +58,10 @@ pub use paigasus_helikon_runtime_agentcore as runtime_agentcore;
 /// SQLite-backed `Session` backend. Enabled via the `sessions-sqlite` feature.
 #[cfg(feature = "sessions-sqlite")]
 pub use paigasus_helikon_sessions_sqlite as sessions_sqlite;
+
+/// JSON Schema helpers.
+pub mod schema {
+    /// OpenAI/JSON-Schema strict-mode normalizer — see
+    /// [`paigasus_helikon_core::schema::strict`].
+    pub use paigasus_helikon_core::schema::strict;
+}

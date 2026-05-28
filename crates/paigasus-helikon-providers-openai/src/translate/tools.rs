@@ -1,64 +1,18 @@
 //! JSON Schema → OpenAI strict tool schema.
 //!
-//! OpenAI strict mode requires:
-//! 1. `additionalProperties: false` on every object.
-//! 2. Every property in `required` (no truly-optional fields — `Option<T>`
-//!    must use `"type": ["T", "null"]` + present in `required`).
-//!
-//! `to_strict_schema` does (1) and (2). schemars 1.x emits `Option<T>` as
-//! `"type": ["T", "null"]` natively (verified) so the proc-macro path
-//! round-trips cleanly. Hand-authored `oneOf: [_, {type: "null"}]`
-//! patterns are NOT collapsed — they pass through and may produce an
-//! OpenAI strict-mode rejection (`ModelError::Other`). Deferred per YAGNI.
+//! Schema normalization is delegated to
+//! [`paigasus_helikon_core::schema::strict`]; see that module for the full
+//! algorithm description.
 
 use serde_json::Value;
 
 /// Rewrite a JSON Schema for OpenAI strict-mode tool calls.
 ///
-/// Recursively:
-/// 1. Sets `additionalProperties: false` on every object.
-/// 2. Promotes every key in each object's `properties` into `required`.
-/// 3. Recurses into object `properties` and array `items`.
-///
-/// Schemas that produce strict-mode rejections (hand-authored
-/// `oneOf: [_, {type: "null"}]`, unsupported `pattern`, etc.) are passed
-/// through unmodified — OpenAI surfaces the rejection at request time as
-/// `ModelError::Other`.
+/// Delegates to [`paigasus_helikon_core::schema::strict`], the canonical
+/// normalizer. Kept as a crate-private alias so existing call sites and
+/// tests are unaffected.
 pub(crate) fn to_strict_schema(value: &Value) -> Value {
-    let mut out = value.clone();
-    rewrite_in_place(&mut out);
-    out
-}
-
-fn rewrite_in_place(v: &mut Value) {
-    if let Some(obj) = v.as_object_mut() {
-        let is_object_schema = obj
-            .get("type")
-            .and_then(|t| t.as_str())
-            .map(|s| s == "object")
-            .unwrap_or(false);
-
-        if is_object_schema {
-            obj.insert("additionalProperties".to_owned(), Value::Bool(false));
-
-            if let Some(props) = obj.get("properties").and_then(|p| p.as_object()) {
-                let keys: Vec<String> = props.keys().cloned().collect();
-                let required = Value::Array(keys.into_iter().map(Value::String).collect());
-                obj.insert("required".to_owned(), required);
-            }
-        }
-
-        // Recurse into `properties` children.
-        if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-            for (_, child) in props.iter_mut() {
-                rewrite_in_place(child);
-            }
-        }
-        // Recurse into array `items`.
-        if let Some(items) = obj.get_mut("items") {
-            rewrite_in_place(items);
-        }
-    }
+    paigasus_helikon_core::schema::strict(value)
 }
 
 #[cfg(test)]
