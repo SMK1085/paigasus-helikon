@@ -63,6 +63,7 @@ async fn two_tool_calls_execute_concurrently() {
         hooks: Vec::new(),
         model_settings: ModelSettings::new(),
         config: RunConfig::default(),
+        _output: std::marker::PhantomData,
     };
 
     let stream = agent

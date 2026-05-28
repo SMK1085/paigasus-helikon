@@ -15,6 +15,7 @@
 //! [project documentation site]: https://smk1085.github.io/paigasus-helikon/
 
 pub mod agent;
+pub mod agent_builder;
 pub mod context;
 pub mod guardrail;
 pub mod hook;
@@ -29,6 +30,7 @@ pub mod tool;
 pub mod __private;
 
 pub use agent::*;
+pub use agent_builder::*;
 pub use context::*;
 pub use guardrail::*;
 pub use hook::*;

@@ -1,0 +1,13 @@
+error[E0599]: no method named `build` found for struct `LlmAgentBuilder<(), (), String, HasName, NoModel>` in the current scope
+ --> tests/ui/builder_missing_model.rs:9:10
+  |
+7 |       let _ = LlmAgent::builder::<()>()
+  |  _____________-
+8 | |         .name("triage")
+9 | |         .build();
+  | |         -^^^^^ method not found in `LlmAgentBuilder<(), (), String, HasName, NoModel>`
+  | |_________|
+  |
+  |
+  = note: the method was found for
+          - `LlmAgentBuilder<Ctx, M, T, HasName, HasModel>`

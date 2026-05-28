@@ -1,0 +1,13 @@
+error[E0599]: no method named `model` found for struct `LlmAgentBuilder<(), MockModel, String, NoName, HasModel>` in the current scope
+  --> tests/ui/builder_model_twice.rs:30:10
+   |
+28 |       let _ = LlmAgent::builder::<()>()
+   |               -------------------------
+   |               |
+   |  _____________method `model` is available on `LlmAgentBuilder<(), (), String, NoName, NoModel>`
+   | |
+29 | |         .model(MockModel)
+30 | |         .model(MockModel);
+   | |         -^^^^^ private field, not a method
+   | |_________|
+   |

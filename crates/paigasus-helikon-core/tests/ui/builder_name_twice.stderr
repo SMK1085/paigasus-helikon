@@ -1,0 +1,13 @@
+error[E0599]: no method named `name` found for struct `LlmAgentBuilder<(), (), String, HasName, NoModel>` in the current scope
+ --> tests/ui/builder_name_twice.rs:9:10
+  |
+7 |       let _ = LlmAgent::builder::<()>()
+  |               -------------------------
+  |               |
+  |  _____________method `name` is available on `LlmAgentBuilder<(), (), String, NoName, NoModel>`
+  | |
+8 | |         .name("first")
+9 | |         .name("second");
+  | |         -^^^^ private field, not a method
+  | |_________|
+  |
