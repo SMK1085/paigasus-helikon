@@ -31,6 +31,7 @@ where
         hooks: Vec::new(),
         model_settings: ModelSettings::new(),
         config: RunConfig::default(),
+        _output: std::marker::PhantomData,
     }
 }
 

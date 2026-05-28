@@ -176,13 +176,13 @@ where
 /// The concrete LLM-driven agent. Implements [`crate::Agent`].
 ///
 /// Constructed via direct field assignment in SMA-314; the ergonomic
-/// typestate builder lands in SMA-319. **Not** `#[non_exhaustive]` —
-/// the typestate builder needs struct-literal construction from
-/// outside the crate.
-pub struct LlmAgent<Ctx, M>
+/// typestate builder lands via `LlmAgent::builder()`; struct-literal
+/// construction stays available as an escape hatch. **Not**
+/// `#[non_exhaustive]` — the typestate builder needs struct-literal
+/// construction from outside the crate.
+pub struct LlmAgent<Ctx, M, T = String>
 where
     Ctx: Send + Sync + 'static,
-    M: crate::Model + 'static,
 {
     /// Agent identifier (used in events and trace spans).
     pub name: String,
@@ -210,6 +210,36 @@ where
     pub model_settings: crate::ModelSettings,
     /// Per-run config. At SMA-314 only `max_turns` is meaningful.
     pub config: crate::RunConfig,
+    /// SMA-319: marker for the structured-output type. Doesn't appear
+    /// in any field's value — only exists so the builder can flow
+    /// `T` across `.output_type::<T>()` transitions.
+    pub _output: std::marker::PhantomData<fn() -> T>,
+}
+
+impl LlmAgent<(), (), String> {
+    /// Construct a new [`crate::LlmAgentBuilder`] in its initial state.
+    ///
+    /// `Ctx` is the per-run context type carried by [`RunContext`] —
+    /// pass it as a turbofish if no setter call pins it implicitly
+    /// (e.g. `.instructions(|ctx: &RunContext<MyCtx>| …)`).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use paigasus_helikon_core::{LlmAgent, Model};
+    ///
+    /// # fn make_model() -> impl Model + 'static { unimplemented!() }
+    /// let agent = LlmAgent::builder::<()>()
+    ///     .name("triage")
+    ///     .model(make_model())
+    ///     .build();
+    /// ```
+    pub fn builder<Ctx>() -> crate::LlmAgentBuilder<Ctx, (), String, crate::NoName, crate::NoModel>
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        crate::LlmAgentBuilder::__new()
+    }
 }
 
 /// The unified event stream emitted by an [`Agent`].
@@ -422,10 +452,11 @@ where
 // ── Agent impl for LlmAgent ──────────────────────────────────────────────────
 
 #[async_trait::async_trait]
-impl<Ctx, M> crate::Agent<Ctx> for LlmAgent<Ctx, M>
+impl<Ctx, M, T> crate::Agent<Ctx> for LlmAgent<Ctx, M, T>
 where
     Ctx: Send + Sync + 'static,
     M: crate::Model + 'static,
+    T: Send + Sync + 'static,
 {
     fn name(&self) -> &str {
         &self.name
