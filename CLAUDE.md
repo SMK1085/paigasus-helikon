@@ -34,16 +34,22 @@ The full list lives in `CONTRIBUTING.md` (single source of truth for contributor
 
 13 crates under `crates/`. The facade `paigasus-helikon` re-exports `paigasus-helikon-core` unconditionally and the other 10 sibling crates behind Cargo features.
 
-**Implementation status** (as of 2026-05-26): `paigasus-helikon-core`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, and `paigasus-helikon-providers-anthropic` carry real implementations (SMA-312/313/314/315/316/317). The remaining crates (`-mcp`, `-tools`, `-evals`, `-runtime-{tokio,axum,temporal,agentcore}`, `-cli`) are stubs that print docstrings only — real implementations land in subsequent SMA-* tickets.
+**Implementation status** (as of 2026-05-28): `paigasus-helikon-core`, `paigasus-helikon`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, `paigasus-helikon-providers-anthropic`, and `paigasus-helikon-sessions-sqlite` carry real implementations (SMA-312/313/314/315/316/317/318/319) and are published to crates.io at `0.1.0` (SMA-385). The seven `-mcp`, `-tools`, `-evals`, `-runtime-{tokio,axum,temporal,agentcore}` crates are docstring-only stubs pre-published at `0.0.0` as name-claim placeholders with `publish = false` + `release = false` — real implementations land in subsequent SMA-* tickets via the 4-step ascend recipe below. `paigasus-helikon-cli` is binary-only and never published as a library.
 
 Workspace inheritance is **mandatory**: per-crate `Cargo.toml`s only set `name`, `description`, and any crate-specific bits. Everything else (`edition`, `rust-version`, `authors`, `license`, `repository`, `homepage`, `keywords`, `categories`) inherits from `[workspace.package]` in the root `Cargo.toml`. Don't hardcode these per-crate.
 
 **Per-crate version is the one exception**, with a two-state lifecycle:
 
-1. **Stub state — `version = "0.0.0"`** (the default; root `[workspace.package].version` is `"0.0.0"` as a safety net). New stub crates start here so release-plz won't compute a bump until real public API ships.
-2. **Released state — `version = "0.1.0"`** after the first real public-API ticket lands. The bump is its own commit, type `chore(release):`, message pattern `chore(release): SMA-XXX [bump <crate> to 0.1.0 |] escape release-plz 0.0.0 trap [for <crate>]`. **Why explicitly:** release-plz's first run created `v0.0.0` git tags for every crate (PR #6). With the tag in place, a starting version of `0.0.0` reads as "already published, nothing to do" and release-plz refuses to propose a bump no matter how many feat commits land. The manual 0.0.0 → 0.1.0 nudge in a follow-up `chore(release)` commit escapes that. SMA-347 (core + facade), SMA-350 (macros), SMA-372 (providers-openai), and SMA-317 (providers-anthropic, bundled with the impl PR) all followed this pattern. CR may flag this as "violating the `0.0.0` rule" — point them here.
+1. **Stub state — `version = "0.0.0"` + `publish = false` in Cargo.toml + `release = false` block in `release-plz.toml`.** Every stub was pre-published once to crates.io at `0.0.0` during SMA-385 to claim the name and satisfy the facade's optional-dep resolver. After that pre-publish, cargo refuses to republish (the per-crate `publish = false`); release-plz ignores them entirely (the `release = false`).
+2. **Released state — bumped to a real version (≥ `0.1.0`)** after the first real public-API ticket lands. The 4-step ascend recipe:
+   - Bump `version = "0.0.0"` → `"0.1.0"` in the crate's `Cargo.toml`.
+   - Remove `publish = false` from that `Cargo.toml`.
+   - Remove the crate's `[[package]] … release = false` block from `release-plz.toml`.
+   - Land as one `chore(release): SMA-### lift stage-1 gates for <crate>` commit on the feature branch alongside the implementation. release-plz handles the first crates.io publish on CI.
 
-Crates currently at `0.1.0`: `paigasus-helikon-core`, `paigasus-helikon`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, `paigasus-helikon-providers-anthropic`. Everything else stays at `0.0.0` until it ships real API.
+   The 4-step recipe applies to **stubs ascending from `0.0.0`**. The six already-released crates (`-core`, facade, `-macros`, `-providers-openai`, `-providers-anthropic`, `-sessions-sqlite`) ship through release-plz's normal flow — no manual ritual needed for their future bumps. The historical chain of `chore(release): … escape release-plz 0.0.0 trap …` commits in the git log (SMA-317/347/350/372/382) is pre-Stage-1 archaeology and won't recur.
+
+Crates currently at `0.1.0` on crates.io: `paigasus-helikon-core`, `paigasus-helikon`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, `paigasus-helikon-providers-anthropic`, `paigasus-helikon-sessions-sqlite`. Stubs at `0.0.0` on crates.io: `paigasus-helikon-mcp`, `paigasus-helikon-tools`, `paigasus-helikon-evals`, `paigasus-helikon-runtime-tokio`, `paigasus-helikon-runtime-axum`, `paigasus-helikon-runtime-temporal`, `paigasus-helikon-runtime-agentcore`. `paigasus-helikon-cli` is binary-only and never published.
 
 Third-party version pins live in `[workspace.dependencies]` (root). Members reference them via `dep.workspace = true`. Internal crate paths are also in `[workspace.dependencies]` so the facade can use `workspace = true` consistently.
 
