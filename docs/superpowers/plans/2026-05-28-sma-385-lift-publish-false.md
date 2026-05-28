@@ -179,9 +179,12 @@ Replace it with:
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 # Trybuild for the facade_only_consumer UI test (SMA-385 §5.5 — moved
 # here from paigasus-helikon-macros to break the publish-time dep cycle).
+# serde_json is required because the #[tool] macro expansion emits
+# `::serde_json::…` paths directly (see -macros/src/expand.rs).
 trybuild    = { workspace = true }
 schemars    = { workspace = true }
 serde       = { workspace = true }
+serde_json  = { workspace = true }
 ```
 
 - [ ] **Step 1.4: Verify the moved test compiles and passes in the facade**
