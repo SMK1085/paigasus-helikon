@@ -9,5 +9,4 @@ error[E0599]: no method named `build` found for struct `LlmAgentBuilder<(), Mock
    | |_________|
    |
    |
-   = note: the method was found for
-           - `LlmAgentBuilder<Ctx, M, T, HasName, HasModel>`
+   = note: the method was found for `LlmAgentBuilder<Ctx, M, T, HasName, HasModel>`
