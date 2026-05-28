@@ -70,9 +70,9 @@ where
 
 **Why `PhantomData<fn() -> T>`:** `T` is never owned by the struct (no field of type `T`), but we still need it in the type signature so the builder can carry it across `.output_type::<T>()` transitions. `fn() -> T` keeps `T` invariant — defensive (covariance/contravariance distinctions don't matter when `T` doesn't appear in a real field, but the `fn() -> _` form is the idiom and avoids accidental subtyping surprises if `T` ever does enter the field set).
 
-**Why drop the `M: Model + 'static` bound from the struct (changed from SMA-314):** keeping it on the struct would force the inherent-impl head `impl LlmAgent<(), (), String>` (used to attach the `builder` associated function) to require `(): Model`, which fails. Verified with a 10-line `rustc` proof-of-concept during spec review. Narrowing the bound to only the impls that actually call into `M` (the `Agent<Ctx>` impl and the inherent impl docking point) lets the `LlmAgent::builder()` call shape stay intact. The struct field `model: Arc<M>` is well-formed for any sized `M` — `M: Model` only matters where we invoke `model.invoke()`.
+**Why drop the `M: Model + 'static` bound from the struct:** the inherent-impl head `impl LlmAgent<(), (), String>` (used to attach the `builder` associated function) would otherwise require `(): Model`, which fails. The bound now lives only on the impls that actually call into `M` (the `Agent<Ctx>` impl and the inherent impl docking point). The struct field `model: Arc<M>` is well-formed for any sized `M`.
 
-**Why on `LlmAgent` and not just on the builder:** AC #2 of SMA-319 calls for `T` to flow into `RunResult<T>`. The runner side of that wiring is SMA-320 (see the "Acceptance criteria" mapping below for the partial-satisfaction note), but adding `T` to the agent now means SMA-320 only adds runtime behavior, not signatures. Putting it only on the builder would discard the parameter at `.build()` and force SMA-320 to re-add it, breaking signatures twice.
+**Why on `LlmAgent` and not just on the builder:** AC #2 (see mapping above) calls for `T` to flow into `RunResult<T>`. Putting `T` only on the builder would discard it at `.build()` and force SMA-320 to re-add it, breaking signatures twice. Adding `T` here means SMA-320 only adds runtime behavior, not signatures.
 
 The existing `pub fn builder()` slot becomes:
 
@@ -104,7 +104,7 @@ impl LlmAgent<(), (), String> {
 }
 ```
 
-**Why a fixed `impl LlmAgent<(), (), String>` head:** Rust requires inherent-impl heads to be concrete. The associated function is a true constructor — it doesn't use `Self` — so the head is just a docking point. `()` for both `Ctx` and `M` is the obvious sentinel choice. Users still call `LlmAgent::builder::<MyCtx>()` (or rely on Ctx inference from later field calls; the turbofish is only needed when no `Ctx`-typed value flows through any builder method). This compiles because we dropped the `M: Model + 'static` bound from the struct definition (see the prior note); the bound now lives only on impls that need it.
+**Why a fixed `impl LlmAgent<(), (), String>` head:** Rust requires inherent-impl heads to be concrete. The associated function doesn't use `Self`, so the head is just a docking point — `()` for both `Ctx` and `M` is the obvious sentinel. Users call `LlmAgent::builder::<MyCtx>()` (or rely on `Ctx` inference from later setter calls).
 
 ## `agent_builder.rs` — typestate markers and builder
 
@@ -227,13 +227,13 @@ where
 
 **Singular vs plural vs shared:** every collection field has three entry points, mirroring `.model` / `.shared_model`:
 
-- `.tool(impl Tool<Ctx> + 'static)` — owned-value append, wraps in `Arc` internally. The ergonomic default. Lets the Notion design example `.tool(fetch_flow_panel).tool(fetch_karyotype)` work without Arc-noise.
-- `.shared_tool(Arc<dyn Tool<Ctx>>)` — append a pre-wrapped trait object. Explicit path for tools shared across multiple agents.
-- `.tools(impl IntoIterator<Item = Arc<dyn Tool<Ctx>>>)` — replace the whole vec. Takes `IntoIterator` rather than `Vec` so both `vec![…]` and the SMA-315 `tools![…]` macro work (the macro produces a known-iterable).
+- `.tool(impl Tool<Ctx> + 'static)` — owned-value append, wraps in `Arc` internally. Ergonomic default.
+- `.shared_tool(Arc<dyn Tool<Ctx>>)` — append a pre-wrapped trait object, for tools shared across multiple agents.
+- `.tools(impl IntoIterator<Item = Arc<dyn Tool<Ctx>>>)` — replace the whole vec. Takes `IntoIterator` so both `vec![…]` and the SMA-315 `tools![…]` macro work.
 
-Same triplet shape for `.handoff` / `.hook` / `.input_guardrail` / `.output_guardrail`. The bodies are mechanical; only `.tool` is spelled out above. `.instructions` has the owned + shared pair only (no plural — it's single-valued).
+Same triplet for `.handoff` / `.hook` / `.input_guardrail` / `.output_guardrail`. `.instructions` has the owned + shared pair only (single-valued, no plural).
 
-**Note on Notion example `.tools([t1, t2])`:** the Notion design page's array-literal form does not compile because each `#[tool]`-generated tool is a distinct unit type and `[T; N]` requires homogeneous element types. The canonical call shapes are `.tool(a).tool(b)` (singular chain) or `.tools(tools![a, b])` (SMA-315 macro). The Notion page is out-of-scope for this spec but worth fixing as a doc follow-up so the public reference matches reality.
+The canonical call shapes are `.tool(a).tool(b)` (singular chain) or `.tools(tools![a, b])` (SMA-315 macro). The Notion page's `.tools([a, b])` example does not compile (heterogeneous unit types fail `[T; N]`'s homogeneity requirement); fix as a doc follow-up.
 
 ### Required transitions
 
@@ -331,11 +331,11 @@ where
 }
 ```
 
-**Why not one-shot:** unlike `.name` / `.model`, `.output_type::<T>()` is callable on any state and can be called more than once (the last call wins). Each call is its own typestate transition, switching the `T` parameter. Cost is one struct rebuild per call — acceptable; users won't call this in a hot loop.
+**Why not one-shot:** unlike `.name` / `.model`, `.output_type::<T>()` is callable on any state and any number of times (last call wins). Each call is its own typestate transition.
 
-**Why `Send + Sync + 'static` here AND on `.build()`:** the bound is redundant from a soundness perspective — `.build()` enforces it anyway — but adding it at `.output_type` localizes the diagnostic to the call site that picked the wrong `T`. Without it, `.output_type::<Rc<u32>>()` compiles fine (`Rc` is `DeserializeOwned + JsonSchema`) and the error fires several lines later at `.build()` pointing at the typestate constraint.
+**Why `Send + Sync + 'static` here AND on `.build()`:** redundant for soundness but localizes the diagnostic. Without it, `.output_type::<Rc<u32>>()` compiles fine and the error fires later at `.build()`.
 
-**`.output_type::<String>()` is degenerate but legal:** selecting `T = String` is functionally equivalent to never calling `.output_type` (modulo the `output_type` field being `Some(schema_for_string)`). Document in the method's rustdoc so users don't conclude it's a useful no-op.
+**`.output_type::<String>()` is degenerate but legal:** equivalent to never calling `.output_type` (modulo the `output_type` field being `Some(schema_for_string)`). Document in the method's rustdoc.
 
 ### `.build()` — only on the final state
 
@@ -368,9 +368,9 @@ where
 }
 ```
 
-**Why `.expect(…)`:** the typestate guarantees `Some` at compile time, but Rust still wants an `unwrap`. Using `.expect` with a typestate-referencing message makes the (statically unreachable) panic message diagnostic if it ever fired.
+**Why `.expect(…)`:** the typestate guarantees `Some`, but Rust still requires an `unwrap`. Messages reference the typestate so a hypothetical panic is diagnostic.
 
-**Why `T: Send + Sync + 'static`:** the `Agent<Ctx>` impl on `LlmAgent<Ctx, M, T>` needs to be sendable across the runner's await points. `String` (the default) satisfies this trivially; any user-chosen `T` is required to also satisfy. This bound is stricter than `OutputType::from_schema::<T>()` requires (which only needs `JsonSchema`), but matches the eventual SMA-320 requirement for `T` to flow through `RunResult<T>` and the async runner.
+**Why `T: Send + Sync + 'static`:** the `Agent<Ctx>` impl needs `T` sendable across the runner's await points. Matches what SMA-320 will need to flow `T` through `RunResult<T>`.
 
 ### Defaults & invariants
 
@@ -461,21 +461,20 @@ fn trybuild_ui() {
 }
 ```
 
-**CI gating:** the existing workflow uses `--skip trybuild_ui` (cargo `--skip` is a substring match on test names). The macros crate's harness is named `trybuild_ui`; this new core harness is also `trybuild_ui`. The names don't collide — they're in different crates — and the existing `--skip trybuild_ui` filter catches both. No workflow change needed.
+**CI gating:** the existing `--skip trybuild_ui` filter (substring match) catches both the macros harness and this new one. No workflow change needed.
 
-**Test fixtures need a mock Model:** the UI tests need a concrete `M` to pass to `.model(…)`. Add a tiny `MockModel` inside each fixture (~10 lines: implements `Model` with a stub `invoke` returning `Err(ModelError::Unavailable)`). Each fixture is self-contained — trybuild doesn't share state between files.
+**Mock model in fixtures:** each fixture needs a concrete `M` to pass to `.model(…)`. Inline a tiny `MockModel` per fixture (~10 lines: `impl Model` with a stub `invoke` returning `Err(ModelError::Unavailable)`). Self-contained — trybuild doesn't share state between files.
 
 ## Migration / blast radius
 
-1. **`LlmAgent<Ctx, M>` → `LlmAgent<Ctx, M, T = String>`**: the default-generic parameter syntax makes every existing *type* reference compile unchanged. No call-site renames.
-2. **New `_output: PhantomData<fn() -> T>` field**: source-incompatible for *struct-literal* construction of `LlmAgent`. Internal touch sites (`crates/paigasus-helikon-core/tests/loop_happy_path.rs`, `loop_parallel_tools.rs`) need one-line additions each (`_output: std::marker::PhantomData,`); the implementation plan will enumerate them via `rg -n "LlmAgent\s*\{" crates/`. **External soft-break**: the workspace is pre-1.0 and no downstream consumer yet exists, but any hypothetical downstream code that did struct-literal-construct `LlmAgent` (the existing escape hatch documented in the SMA-314 docstring) breaks. The builder is the supported path; struct-literal stays available but its shape changes.
-3. **Dropped `M: Model + 'static` bound from `LlmAgent` struct definition**: source-incompatible only for code that depended on the bound being present on the struct itself (e.g. `where LlmAgent<C, M>: 'static` patterns that relied on the bound transitively). The bound moves to the `Agent<Ctx>` impl and the inherent impl(s) that actually touch `M::invoke`. No internal touch sites today; documented as a deliberate narrowing.
-4. **`Agent<Ctx>` impl head changes**: adds `T` and the `T: Send + Sync + 'static` bound. No call-site impact — the trait surface (`fn name`, `fn description`, `async fn run`) is unchanged.
-5. **`paigasus-helikon-providers-openai` / `-anthropic`**: don't reference `LlmAgent` directly (they implement `Model`, not `Agent`). Zero impact.
-6. **`paigasus-helikon-macros`**: doesn't reference `LlmAgent`. Zero impact.
-7. **Doc coverage**: every new `pub` item (markers, builder struct, methods — roughly 18 new items counting all the singular/shared/plural triplets) needs `///` doc comments. Workspace `missing_docs = "warn"` plus `-D warnings` in the `docs` CI job fails the build otherwise. Doc-coverage CI gate (80% threshold) stays healthy because each method is one or two lines and trivially documentable; budget the chore in the implementation plan.
-8. **PR title**: `feat(core): SMA-319 add typestate builder for LlmAgent` (lowercase verb after `SMA-319`, full `type(scope):` prefix — both `pr-title.yml` rules satisfied).
-9. **No release-plz dance**: `paigasus-helikon-core` is already at `0.1.0`. One `feat(core): SMA-319 …` commit drives the normal minor-version bump via release-plz. release-plz will read the change as a feat (new public API + soft-break on struct-literal) and propose 0.1.0 → 0.2.0, which is the right outcome.
+1. **`LlmAgent<Ctx, M>` → `LlmAgent<Ctx, M, T = String>`**: the default-generic parameter makes every existing *type* reference compile unchanged.
+2. **New `_output: PhantomData<fn() -> T>` field**: soft-break for *struct-literal* construction of `LlmAgent`. Internal touch sites (`tests/loop_happy_path.rs`, `loop_parallel_tools.rs`) need one-line additions; the implementation plan enumerates them via `rg -n "LlmAgent\s*\{" crates/`. No downstream consumers exist yet (pre-1.0 workspace), so external blast radius is theoretical.
+3. **Dropped `M: Model + 'static` bound from the struct definition**: bound moves to the `Agent<Ctx>` impl and the inherent impl that calls into `M::invoke`. No internal touch sites; deliberate narrowing.
+4. **`Agent<Ctx>` impl head gains `T` and `T: Send + Sync + 'static`**: no call-site impact — trait surface unchanged.
+5. **`paigasus-helikon-providers-openai` / `-anthropic` / `-macros`**: don't reference `LlmAgent`. Zero impact.
+6. **Doc coverage**: ~18 new `pub` items (markers + builder struct + triplet methods). Each is trivially documentable; budget the chore in the plan to stay under the 80% gate.
+7. **PR title**: `feat(core): SMA-319 add typestate builder for LlmAgent` (satisfies both `pr-title.yml` rules — lowercase verb after `SMA-319`, full `type(scope):` prefix).
+8. **release-plz**: `paigasus-helikon-core` already at `0.1.0`. One `feat(core): SMA-319 …` commit drives the normal 0.1.0 → 0.2.0 minor bump.
 
 ## Open questions deferred to implementation
 
