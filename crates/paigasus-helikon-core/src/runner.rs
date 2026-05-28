@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Agent, AgentError, AgentEvent, AgentInput, RunContext};
+use crate::{Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext};
 
 /// Pluggable execution backend.
 ///
@@ -196,6 +196,75 @@ impl RunResultStreaming {
             events.push(ev);
         }
 
+        Ok(RunResult {
+            final_output,
+            events,
+            usage,
+        })
+    }
+
+    /// Drain the stream and deserialize the terminal assistant text into `T`.
+    ///
+    /// The terminal output is the concatenated text of the last
+    /// [`AgentEvent::MessageOutput`]. On a correctly configured structured run
+    /// the agent loop has already validated that text against `T`, so the parse
+    /// here is expected to succeed; if it fails (e.g. `collect_typed` is called
+    /// on a plain-text run), the parse error surfaces as [`AgentError::Other`].
+    /// A failed run surfaces the underlying [`AgentError`]:
+    /// structured-validation failures (carried by
+    /// [`AgentEvent::StructuredOutputFailed`]) become
+    /// [`AgentError::InvalidStructuredOutput`]; any other terminal
+    /// [`AgentEvent::RunFailed`] becomes [`AgentError::Other`].
+    pub async fn collect_typed<T>(mut self) -> Result<RunResult<T>, AgentError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        use futures_util::stream::StreamExt;
+        let mut events = Vec::new();
+        let mut final_text = String::new();
+        let mut usage = crate::TokenUsage::default();
+        let mut structured_err: Option<(Vec<String>, String)> = None;
+
+        while let Some(ev) = self.events.next().await {
+            match &ev {
+                AgentEvent::MessageOutput {
+                    item: Item::AssistantMessage { content, .. },
+                } => {
+                    final_text.clear();
+                    for part in content {
+                        if let ContentPart::Text { text } = part {
+                            final_text.push_str(text);
+                        }
+                    }
+                }
+                AgentEvent::RunCompleted { usage: u } => usage = *u,
+                AgentEvent::StructuredOutputFailed {
+                    schema_errors,
+                    final_text: ft,
+                } => {
+                    structured_err = Some((schema_errors.clone(), ft.clone()));
+                }
+                AgentEvent::RunFailed { error } => {
+                    let error = error.clone();
+                    events.push(ev);
+                    if let Some((schema_errors, final_text)) = structured_err {
+                        return Err(AgentError::InvalidStructuredOutput {
+                            schema_errors,
+                            final_text,
+                        });
+                    }
+                    return Err(AgentError::Other(anyhow::anyhow!(error)));
+                }
+                _ => {}
+            }
+            events.push(ev);
+        }
+
+        let final_output = serde_json::from_str::<T>(final_text.trim()).map_err(|e| {
+            AgentError::Other(anyhow::anyhow!(
+                "collect_typed: failed to deserialize final output: {e}"
+            ))
+        })?;
         Ok(RunResult {
             final_output,
             events,
