@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.1.0...paigasus-helikon-core-v0.1.1) - 2026-05-28
+
+### Other
+
+- *(core)* SMA-386 re-bless trybuild stderr for rustc 1.96.0 ([#41](https://github.com/SMK1085/paigasus-helikon/pull/41))
+
 ## [0.1.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-core-v0.1.0) - 2026-05-22
 
 ### Added
