@@ -1427,6 +1427,10 @@ dependencies = [
  "paigasus-helikon-runtime-tokio",
  "paigasus-helikon-sessions-sqlite",
  "paigasus-helikon-tools",
+ "schemars",
+ "serde",
+ "serde_json",
+ "trybuild",
 ]
 
 [[package]]
@@ -1465,7 +1469,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "insta",
- "paigasus-helikon",
  "paigasus-helikon-core",
  "proc-macro-crate",
  "proc-macro2",

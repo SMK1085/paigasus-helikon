@@ -3,7 +3,7 @@ name: sbom
 on:
   push:
     tags:
-      - "v*"
+      - "paigasus-helikon-v*"
 
 concurrency:
   group: sbom-${{ github.workflow }}-${{ github.ref }}
