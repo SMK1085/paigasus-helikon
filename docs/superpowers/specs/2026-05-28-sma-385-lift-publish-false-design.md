@@ -60,7 +60,7 @@ These two checks live outside the diff but block the PR from being merged.
 
 `.github/workflows/release-plz.yml` already wires `CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}` into the `release` step (since SMA-307). The secret has never been set because `publish = false` made it unused. Sven needs to:
 
-1. Create a crates.io API token at <https://crates.io/settings/tokens> with scopes: `publish-new`, `publish-update`, `yank`. (`yank` is defensive — we should never yank, but if we publish 0.1.0 with a critical bug we'll want the option.)
+1. Create a crates.io API token at <https://crates.io/settings/tokens> with scopes: `publish-new`, `publish-update`. (Least privilege — release-plz never needs to yank or change ownership. If we ever need to yank, do it from a separate short-lived token or the web UI as a deliberate human action.)
 2. Add it to the repo as `CARGO_REGISTRY_TOKEN` (Repository secrets, not Environment secrets).
 
 The token is bound to Sven's crates.io account; first publishes will create him as the owner of each crate. He can later `cargo owner --add github:paigasus:publishers` (or whatever org/team structure we end up with) if we want shared ownership.
