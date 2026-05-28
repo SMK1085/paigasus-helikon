@@ -285,8 +285,9 @@ pub fn transition(
                 conversation_appends: Vec::new(),
             }
         }
-        // Model produced a response with no tool calls → terminate.
-        (LoopState::CallingModel { .. }, TransitionInput::ModelResponse { items, usage, .. })
+        // Model produced a response with no tool calls → either issue a
+        // constrained finalizing turn (output set) or terminate (no output).
+        (LoopState::CallingModel { turn }, TransitionInput::ModelResponse { items, usage, .. })
             if !items.iter().any(|i| matches!(i, Item::ToolCall { .. })) =>
         {
             let mut events: Vec<AgentEvent> = items
@@ -295,21 +296,42 @@ pub fn transition(
                 .cloned()
                 .map(|item| AgentEvent::MessageOutput { item })
                 .collect();
-            // Extract terminal content from the last AssistantMessage.
-            let content = items
-                .iter()
-                .rev()
-                .find_map(|i| match i {
-                    Item::AssistantMessage { content, .. } => Some(content.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            events.push(AgentEvent::RunCompleted { usage });
-            TransitionOutcome {
-                next_state: LoopState::Done(FinalOutput { content, usage }),
-                events,
-                next_action: NextAction::Terminate,
-                conversation_appends: Vec::new(),
+
+            match ctx.output {
+                Some(out) => {
+                    // Phase 2: issue one constrained finalizing turn (real tools
+                    // withdrawn; the prior unconstrained answer stays in context).
+                    // The finalizing call is a distinct model invocation, so it
+                    // gets its own turn number (the unconstrained turn already
+                    // emitted `TurnStarted { turn }`).
+                    let finalizing_turn = *turn + 1;
+                    let request = ModelRequest {
+                        messages: ctx.conversation.to_vec(),
+                        tools: Vec::new(),
+                        model_settings: constrained_settings(ctx.model_settings, out),
+                    };
+                    events.push(AgentEvent::TurnStarted {
+                        turn: finalizing_turn,
+                    });
+                    TransitionOutcome {
+                        next_state: LoopState::Finalizing {
+                            turn: finalizing_turn,
+                        },
+                        events,
+                        next_action: NextAction::CallModel { request },
+                        conversation_appends: Vec::new(),
+                    }
+                }
+                None => {
+                    let content = last_assistant_content(&items);
+                    events.push(AgentEvent::RunCompleted { usage });
+                    TransitionOutcome {
+                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        events,
+                        next_action: NextAction::Terminate,
+                        conversation_appends: Vec::new(),
+                    }
+                }
             }
         }
         // Tool results complete → bump turn and ask the model again.
