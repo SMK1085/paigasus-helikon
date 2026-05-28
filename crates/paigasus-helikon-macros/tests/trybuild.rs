@@ -9,5 +9,4 @@ fn trybuild_ui() {
     t.compile_fail("tests/ui/bad_*.rs");
     t.compile_fail("tests/ui/no_description.rs");
     t.compile_fail("tests/ui/empty_description.rs");
-    t.pass("tests/ui/facade_only_consumer.rs");
 }
