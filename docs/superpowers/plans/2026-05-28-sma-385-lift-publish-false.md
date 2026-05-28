@@ -864,7 +864,7 @@ If the facade now fails on a stub (`no matching package named 'paigasus-helikon-
 git log --oneline origin/main..HEAD
 ```
 
-Expected output (in this order):
+Expected output (newest first; 9 commits total):
 
 ```
 <sha> docs(claude): SMA-385 document Stage 1 and the 4-step ascend recipe
@@ -872,12 +872,13 @@ Expected output (in this order):
 <sha> chore(release): SMA-385 lift workspace publish=false; add stub overrides
 <sha> chore(workspace): SMA-385 lock stubs and CLI from accidental cargo publish
 <sha> refactor(workspace): SMA-385 move facade_only_consumer trybuild test to facade
+<sha> docs(plan): SMA-385 add implementation plan for lifting publish=false
 <sha> docs(spec): SMA-385 tighten CI token scopes to least-privilege
 <sha> docs(spec): SMA-385 incorporate review feedback + dry-run findings
 <sha> docs(spec): SMA-385 add design for lifting publish=false
 ```
 
-(Three docs(spec) commits are the design doc + revisions from brainstorming; five code/config commits implement Tasks 1, 3, 4, 5, 6.)
+(Four `docs(spec|plan):` commits are the design doc, revisions, and the plan from brainstorming; five code/config commits implement Tasks 1, 3, 4, 5, 6.)
 
 - [ ] **Step 7.4: Push the branch**
 
