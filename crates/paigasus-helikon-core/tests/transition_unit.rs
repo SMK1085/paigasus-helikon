@@ -29,6 +29,7 @@ fn ctx_with<'a>(
         model_settings: settings,
         max_turns,
         conversation,
+        output: None,
     }
 }
 

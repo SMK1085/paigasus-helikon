@@ -549,6 +549,7 @@ where
         let model_settings = self.model_settings.clone();
         let agent_name = self.name.clone();
         let instructions_text = self.instructions.render(&ctx);
+        let output_type = self.output_type.clone();
         let tool_defs: Vec<crate::ToolDef> = tools
             .iter()
             .map(|t| crate::ToolDef {
@@ -579,11 +580,13 @@ where
                     model_settings: &model_settings,
                     max_turns,
                     conversation: &conversation,
+                    output: output_type.as_ref(),
                 };
                 let outcome = crate::transition(&loop_state, tx_input, &tx_ctx);
-                let crate::TransitionOutcome { next_state, events, next_action } = outcome;
+                let crate::TransitionOutcome { next_state, events, next_action, conversation_appends } = outcome;
                 for ev in events { yield ev; }
                 loop_state = next_state;
+                conversation.extend(conversation_appends);
 
                 match next_action {
                     crate::NextAction::CallModel { request } => {

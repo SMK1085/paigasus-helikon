@@ -54,6 +54,17 @@ pub enum LoopState {
         /// The tool calls awaiting approval.
         pending: Vec<ToolCallRequest>,
     },
+    /// Constrained finalizing turn: the model is asked to emit the
+    /// structured output for the configured `output_type`.
+    Finalizing {
+        /// The turn index that produced this finalizing request.
+        turn: u32,
+    },
+    /// The one allowed repair turn after a failed finalizing validation.
+    RepairingOutput {
+        /// The turn index of the finalizing turn being repaired.
+        turn: u32,
+    },
     /// Terminal: run completed successfully.
     Done(FinalOutput),
     /// Terminal: run failed.
@@ -164,6 +175,9 @@ pub struct TransitionCtx<'a> {
     /// appends incoming items before calling [`transition`] and passes
     /// the slice in — [`transition`] reads but never mutates.
     pub conversation: &'a [Item],
+    /// Structured-output type, when the agent configured one. Drives the
+    /// constrained finalizing turn and output validation.
+    pub output: Option<&'a crate::OutputType>,
 }
 
 /// One transition step's result. Not `Clone` (carries `LoopState`).
@@ -175,6 +189,9 @@ pub struct TransitionOutcome {
     pub events: Vec<AgentEvent>,
     /// Side effect the driver must run before the next step.
     pub next_action: NextAction,
+    /// Items the driver must append to its owned conversation before the
+    /// next step (e.g. a synthesized repair message). Empty in most arms.
+    pub conversation_appends: Vec<Item>,
 }
 
 /// Pure state-machine step. **No async, no tokio, no IO.**
@@ -197,6 +214,7 @@ pub fn transition(
                 error: format!("max turns ({}) exceeded", ctx.max_turns),
             }],
             next_action: NextAction::Terminate,
+            conversation_appends: Vec::new(),
         },
         // Start seeds the loop: emit TurnStarted, request CallModel.
         (LoopState::CallingModel { turn }, TransitionInput::Start { .. })
@@ -211,6 +229,7 @@ pub fn transition(
                 next_state: LoopState::CallingModel { turn: *turn },
                 events: vec![AgentEvent::TurnStarted { turn: *turn }],
                 next_action: NextAction::CallModel { request },
+                conversation_appends: Vec::new(),
             }
         }
         // Model produced tool calls → fan out to ExecutingTools.
@@ -246,6 +265,7 @@ pub fn transition(
                 },
                 events,
                 next_action: NextAction::ExecuteTools { calls },
+                conversation_appends: Vec::new(),
             }
         }
         // Model produced a response with no tool calls → terminate.
@@ -272,6 +292,7 @@ pub fn transition(
                 next_state: LoopState::Done(FinalOutput { content, usage }),
                 events,
                 next_action: NextAction::Terminate,
+                conversation_appends: Vec::new(),
             }
         }
         // Tool results complete → bump turn and ask the model again.
@@ -296,6 +317,7 @@ pub fn transition(
                     next_state: LoopState::Failed(AgentError::MaxTurnsExceeded(ctx.max_turns)),
                     events,
                     next_action: NextAction::Terminate,
+                    conversation_appends: Vec::new(),
                 };
             }
             events.push(AgentEvent::TurnStarted { turn: next_turn });
@@ -308,6 +330,7 @@ pub fn transition(
                 next_state: LoopState::CallingModel { turn: next_turn },
                 events,
                 next_action: NextAction::CallModel { request },
+                conversation_appends: Vec::new(),
             }
         }
         // Unreachable-in-SMA-314 variants surface NotImplemented and Terminate.
@@ -323,6 +346,7 @@ pub fn transition(
                 error: format!("invalid transition: {s:?} ← {i:?}"),
             }],
             next_action: NextAction::Terminate,
+            conversation_appends: Vec::new(),
         },
     }
 }
@@ -335,5 +359,6 @@ fn not_implemented(feature: &'static str) -> TransitionOutcome {
             error: format!("not yet implemented: {feature}"),
         }],
         next_action: NextAction::Terminate,
+        conversation_appends: Vec::new(),
     }
 }
