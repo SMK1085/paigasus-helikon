@@ -191,8 +191,8 @@ impl LlmAgent<(), (), String> {
 
 Notes:
 - The head `LlmAgent<(), (), String>` is a pure docking point — `()` for both `Ctx` and `M` works because we dropped the `M: Model` bound from the struct. The `String` for `T` is the default.
-- `LlmAgentBuilder::__new()` is a private associated function that Phase B introduces (an explicit `pub(crate)` constructor is cleaner than inlining the 14-field initializer here, and lets the `agent_builder` module own its own defaults). The double underscore signals "internal, do not call from outside the crate."
-- The example uses ` ```ignore ``` ` because the make_model placeholder isn't a real type at doctest time.
+- `LlmAgentBuilder::__new()` is an associated function Phase B introduces with `pub` visibility plus `#[doc(hidden)]` — `pub` is required because the wildcard re-export `pub use agent_builder::*;` in `lib.rs` won't pick up `pub(crate)` items, and the docking point in `agent.rs` reaches it via the re-export path. The double-underscore name + `#[doc(hidden)]` signals "internal, do not call from outside the crate" at the API-surface level.
+- The example uses ` ```no_run ``` ` so rustdoc compiles it (catching future API drift) without trying to execute `unimplemented!()`.
 
 - [ ] **Step 2: Verify the lib still type-checks (the `LlmAgentBuilder` reference will fail until Phase B)**
 

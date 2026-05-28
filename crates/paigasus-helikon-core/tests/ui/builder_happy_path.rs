@@ -96,17 +96,32 @@ where
 }
 
 fn main() {
+    use paigasus_helikon_core::Instructions;
     let shared_tool: Arc<dyn Tool<()>> = Arc::new(MockTool);
+    let shared_handoff: Arc<dyn Agent<()>> = Arc::new(MockHandoff);
+    let shared_hook: Arc<dyn Hook<()>> = Arc::new(MockHook);
+    let shared_input_guard: Arc<dyn Guardrail<()>> = Arc::new(MockGuardrail);
+    let shared_output_guard: Arc<dyn Guardrail<()>> = Arc::new(MockGuardrail);
+    let shared_instr: Arc<dyn Instructions<()>> = Arc::new(String::from("shared"));
     let _ = LlmAgent::builder::<()>()
         .description("comprehensive coverage")
         .instructions("you are helpful")
+        .shared_instructions(shared_instr)
         .tool(MockTool)
         .tools(vec![Arc::new(MockTool) as Arc<dyn Tool<()>>])
         .shared_tool(shared_tool)
         .handoff(MockHandoff)
+        .shared_handoff(shared_handoff)
+        .handoffs(vec![Arc::new(MockHandoff) as Arc<dyn Agent<()>>])
         .hook(MockHook)
+        .shared_hook(shared_hook)
+        .hooks(vec![Arc::new(MockHook) as Arc<dyn Hook<()>>])
         .input_guardrail(MockGuardrail)
+        .shared_input_guardrail(shared_input_guard)
+        .input_guardrails(vec![Arc::new(MockGuardrail) as Arc<dyn Guardrail<()>>])
         .output_guardrail(MockGuardrail)
+        .shared_output_guardrail(shared_output_guard)
+        .output_guardrails(vec![Arc::new(MockGuardrail) as Arc<dyn Guardrail<()>>])
         .model_settings(ModelSettings::default())
         .max_turns(8)
         .name("triage")

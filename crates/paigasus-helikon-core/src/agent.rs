@@ -225,13 +225,24 @@ impl LlmAgent<(), (), String> {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use paigasus_helikon_core::{LlmAgent, Model};
-    ///
-    /// # fn make_model() -> impl Model + 'static { unimplemented!() }
+    /// ```no_run
+    /// # use async_trait::async_trait;
+    /// # use futures_core::stream::BoxStream;
+    /// # use paigasus_helikon_core::{
+    /// #     CancellationToken, LlmAgent, Model, ModelCapabilities, ModelError,
+    /// #     ModelEvent, ModelRequest,
+    /// # };
+    /// # struct MyModel;
+    /// # #[async_trait]
+    /// # impl Model for MyModel {
+    /// #     async fn invoke(&self, _r: ModelRequest, _c: CancellationToken)
+    /// #         -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError>
+    /// #     { Err(ModelError::Unavailable) }
+    /// #     fn capabilities(&self) -> ModelCapabilities { ModelCapabilities::default() }
+    /// # }
     /// let agent = LlmAgent::builder::<()>()
     ///     .name("triage")
-    ///     .model(make_model())
+    ///     .model(MyModel)
     ///     .build();
     /// ```
     pub fn builder<Ctx>() -> crate::LlmAgentBuilder<Ctx, (), String, crate::NoName, crate::NoModel>

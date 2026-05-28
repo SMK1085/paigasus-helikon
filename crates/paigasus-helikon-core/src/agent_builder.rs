@@ -4,21 +4,17 @@
 //! [SMA-319 design]: https://github.com/SMK1085/paigasus-helikon/blob/main/docs/superpowers/specs/2026-05-28-sma-319-typestate-builder-design.md
 
 /// Typestate marker: `.name(…)` has not been called yet.
-#[derive(Debug)]
 pub struct NoName;
 
 /// Typestate marker: `.name(…)` has been called; `.build()` is now reachable
 /// once `HasModel` is also satisfied.
-#[derive(Debug)]
 pub struct HasName;
 
 /// Typestate marker: `.model(…)` / `.shared_model(…)` has not been called yet.
-#[derive(Debug)]
 pub struct NoModel;
 
 /// Typestate marker: `.model(…)` / `.shared_model(…)` has been called; `.build()`
 /// is now reachable once `HasName` is also satisfied.
-#[derive(Debug)]
 pub struct HasModel;
 
 /// Typestate-driven builder for [`crate::LlmAgent`].
@@ -48,6 +44,8 @@ where
     hooks: Vec<std::sync::Arc<dyn crate::Hook<Ctx>>>,
     model_settings: crate::ModelSettings,
     config: crate::RunConfig,
+    // `fn() -> _` (not `(N, Mo, T)`) so the builder is `Send + Sync` regardless
+    // of N/Mo/T's auto-traits, and to keep typestate markers out of drop-check.
     #[allow(clippy::type_complexity)]
     _state: std::marker::PhantomData<fn() -> (N, Mo, T)>,
 }
@@ -373,6 +371,13 @@ where
     /// `output_type` field becomes `Some(schema_for_string)`, which the
     /// runner treats the same as the default); pass any other `T2` to
     /// configure structured output. The runtime wiring lands in SMA-320.
+    ///
+    /// `DeserializeOwned` is required by SMA-320's runtime path
+    /// (deserializing the model's response into `T2`); pinned here so
+    /// the bound doesn't tighten under callers when SMA-320 lands.
+    /// `Send + Sync + 'static` is needed by `Agent::run`'s async boundary
+    /// (and also enforced at `.build()` — duplicating it here surfaces
+    /// the error at the call site that picked the wrong `T`).
     pub fn output_type<T2>(self) -> LlmAgentBuilder<Ctx, M, T2, N, Mo>
     where
         T2: Send + Sync + 'static + serde::de::DeserializeOwned + schemars::JsonSchema,
