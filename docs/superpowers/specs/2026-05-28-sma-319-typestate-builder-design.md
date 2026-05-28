@@ -17,11 +17,19 @@ Ship the ergonomic typestate builder for `LlmAgent` plus the structural change t
 
 ## Non-goals
 
-- Wiring the `T` parameter through the runner / `RunResult` machinery — that's SMA-320's job. SMA-319 only shapes the storage and the builder API; runner behaviour for typed output (`response_format`, retry/repair, typed `RunResult`) stays unchanged.
-- A `.description(…)` builder method. Description remains a public field; callers who need to set it mutate the field post-build. (Discussed and consciously skipped during brainstorming.)
+- Wiring the `T` parameter through the runner / `RunResult` machinery — that's SMA-320's job. SMA-319 only shapes the storage and the builder API; runner behaviour for typed output (`response_format`, retry/repair, typed `RunResult`) stays unchanged. See the "Acceptance criteria mapping" section below for how SMA-319's AC #2 splits across the two tickets.
 - A `.config(RunConfig)` setter. `.max_turns(u32)` covers everything `RunConfig` exposes today; SMA-321 will add `.config(…)` (or further sub-knob setters) when it adds the other `RunConfig` fields, without a breaking change.
 - Builder-side validation beyond the typestate (e.g. "must have at least one tool if output_type is set"). The builder enforces structure, not policy.
 - A `Default` impl for `LlmAgentBuilder` in its initial state. `LlmAgent::builder()` is the entry point.
+
+## Acceptance criteria mapping
+
+| AC (from Linear) | Coverage in SMA-319 | Evidence |
+|---|---|---|
+| `cargo build` fails when `.name` or `.model` is missing (verified via `trybuild` compile-fail tests). | **Full.** | `tests/ui/builder_missing_*.rs` fixtures (see Tests section). |
+| `RunResult<T>` carries `final_output: T` after `.output_type::<T>()` was set. | **Partial.** `T` flows from `.output_type::<T>()` into `LlmAgent<Ctx, M, T>`. The runner-side wiring that converts that `T` into a real `RunResult<T>` lands in SMA-320 (`response_format` plumbing, deserialization, one-shot retry on validation failure). | `tests/ui/builder_output_type_typed.rs` proves `T` reaches the agent type. The full chain to `RunResult<T>` is owned by SMA-320. |
+
+This split is the reason for the SMA-319 / SMA-320 boundary: SMA-319 freezes the public API surface (including the `T` parameter); SMA-320 fills in runtime behavior without further signature churn.
 
 ## Crate layout
 
@@ -41,7 +49,6 @@ Ship the ergonomic typestate builder for `LlmAgent` plus the structural change t
 pub struct LlmAgent<Ctx, M, T = String>
 where
     Ctx: Send + Sync + 'static,
-    M: crate::Model + 'static,
 {
     pub name: String,
     pub description: String,
@@ -63,7 +70,9 @@ where
 
 **Why `PhantomData<fn() -> T>`:** `T` is never owned by the struct (no field of type `T`), but we still need it in the type signature so the builder can carry it across `.output_type::<T>()` transitions. `fn() -> T` keeps `T` invariant — defensive (covariance/contravariance distinctions don't matter when `T` doesn't appear in a real field, but the `fn() -> _` form is the idiom and avoids accidental subtyping surprises if `T` ever does enter the field set).
 
-**Why on `LlmAgent` and not just on the builder:** AC #2 of SMA-319 — "`RunResult<T>` carries `final_output: T` after `.output_type::<T>()` was set" — depends on the type parameter flowing all the way to the agent. Putting it only on the builder discards it at `.build()` and forces SMA-320 to re-add it. Doing it once here keeps the public surface stable.
+**Why drop the `M: Model + 'static` bound from the struct (changed from SMA-314):** keeping it on the struct would force the inherent-impl head `impl LlmAgent<(), (), String>` (used to attach the `builder` associated function) to require `(): Model`, which fails. Verified with a 10-line `rustc` proof-of-concept during spec review. Narrowing the bound to only the impls that actually call into `M` (the `Agent<Ctx>` impl and the inherent impl docking point) lets the `LlmAgent::builder()` call shape stay intact. The struct field `model: Arc<M>` is well-formed for any sized `M` — `M: Model` only matters where we invoke `model.invoke()`.
+
+**Why on `LlmAgent` and not just on the builder:** AC #2 of SMA-319 calls for `T` to flow into `RunResult<T>`. The runner side of that wiring is SMA-320 (see the "Acceptance criteria" mapping below for the partial-satisfaction note), but adding `T` to the agent now means SMA-320 only adds runtime behavior, not signatures. Putting it only on the builder would discard the parameter at `.build()` and force SMA-320 to re-add it, breaking signatures twice.
 
 The existing `pub fn builder()` slot becomes:
 
@@ -95,9 +104,7 @@ impl LlmAgent<(), (), String> {
 }
 ```
 
-**Why a fixed `impl LlmAgent<(), (), String>` head:** Rust requires inherent-impl heads to be concrete. The associated function is a true constructor — it doesn't use `Self` — so the head is just a docking point. `()` for both `Ctx` and `M` is the obvious sentinel choice. Users still call `LlmAgent::builder::<MyCtx>()` (or rely on Ctx inference from later field calls; the turbofish is only needed when no `Ctx`-typed value flows through any builder method).
-
-**Constraint on the `M = ()` head:** `()` does not implement `Model`. This is fine because `LlmAgent<(), (), String>` is never instantiated — only the `builder` associated function is reached through it. The struct's `where M: Model` bound applies to value-level construction, not to associated-function dispatch. Verify in implementation that this compiles cleanly; if not, fall back to a free function `pub fn llm_agent_builder<Ctx>() -> …` re-exported from `agent_builder.rs`.
+**Why a fixed `impl LlmAgent<(), (), String>` head:** Rust requires inherent-impl heads to be concrete. The associated function is a true constructor — it doesn't use `Self` — so the head is just a docking point. `()` for both `Ctx` and `M` is the obvious sentinel choice. Users still call `LlmAgent::builder::<MyCtx>()` (or rely on Ctx inference from later field calls; the turbofish is only needed when no `Ctx`-typed value flows through any builder method). This compiles because we dropped the `M: Model + 'static` bound from the struct definition (see the prior note); the bound now lives only on impls that need it.
 
 ## `agent_builder.rs` — typestate markers and builder
 
@@ -152,38 +159,59 @@ impl<Ctx, M, T, N, Mo> LlmAgentBuilder<Ctx, M, T, N, Mo>
 where
     Ctx: Send + Sync + 'static,
 {
+    pub fn description(mut self, d: impl Into<String>) -> Self {
+        self.description = Some(d.into());
+        self
+    }
+
     pub fn instructions(mut self, i: impl Instructions<Ctx> + 'static) -> Self {
         self.instructions = Some(std::sync::Arc::new(i));
         self
     }
 
-    pub fn tools(mut self, t: Vec<std::sync::Arc<dyn crate::Tool<Ctx>>>) -> Self {
-        self.tools = t;
+    pub fn shared_instructions(mut self, i: std::sync::Arc<dyn Instructions<Ctx>>) -> Self {
+        self.instructions = Some(i);
         self
     }
 
-    pub fn tool(mut self, t: std::sync::Arc<dyn crate::Tool<Ctx>>) -> Self {
+    // Singular adders: take an owned trait impl and wrap in Arc internally.
+    pub fn tool(mut self, t: impl crate::Tool<Ctx> + 'static) -> Self {
+        self.tools.push(std::sync::Arc::new(t) as std::sync::Arc<dyn crate::Tool<Ctx>>);
+        self
+    }
+
+    pub fn shared_tool(mut self, t: std::sync::Arc<dyn crate::Tool<Ctx>>) -> Self {
         self.tools.push(t);
         self
     }
 
-    pub fn handoffs(mut self, h: Vec<std::sync::Arc<dyn crate::Agent<Ctx>>>) -> Self {
-        self.handoffs = h;
+    // Plural setters: accept any iterable of pre-wrapped trait objects.
+    pub fn tools<I>(mut self, t: I) -> Self
+    where I: IntoIterator<Item = std::sync::Arc<dyn crate::Tool<Ctx>>>,
+    {
+        self.tools = t.into_iter().collect();
         self
     }
 
-    pub fn handoff(mut self, h: std::sync::Arc<dyn crate::Agent<Ctx>>) -> Self {
-        self.handoffs.push(h);
-        self
-    }
+    pub fn handoff(mut self, h: impl crate::Agent<Ctx> + 'static) -> Self { … }
+    pub fn shared_handoff(mut self, h: std::sync::Arc<dyn crate::Agent<Ctx>>) -> Self { … }
+    pub fn handoffs<I>(mut self, h: I) -> Self
+    where I: IntoIterator<Item = std::sync::Arc<dyn crate::Agent<Ctx>>> { … }
 
-    pub fn hooks(mut self, h: Vec<std::sync::Arc<dyn crate::Hook<Ctx>>>) -> Self { … }
-    pub fn hook(mut self, h: std::sync::Arc<dyn crate::Hook<Ctx>>) -> Self { … }
+    pub fn hook(mut self, h: impl crate::Hook<Ctx> + 'static) -> Self { … }
+    pub fn shared_hook(mut self, h: std::sync::Arc<dyn crate::Hook<Ctx>>) -> Self { … }
+    pub fn hooks<I>(mut self, h: I) -> Self
+    where I: IntoIterator<Item = std::sync::Arc<dyn crate::Hook<Ctx>>> { … }
 
-    pub fn input_guardrails(mut self, g: Vec<std::sync::Arc<dyn crate::Guardrail<Ctx>>>) -> Self { … }
-    pub fn input_guardrail(mut self, g: std::sync::Arc<dyn crate::Guardrail<Ctx>>) -> Self { … }
-    pub fn output_guardrails(mut self, g: Vec<std::sync::Arc<dyn crate::Guardrail<Ctx>>>) -> Self { … }
-    pub fn output_guardrail(mut self, g: std::sync::Arc<dyn crate::Guardrail<Ctx>>) -> Self { … }
+    pub fn input_guardrail(mut self, g: impl crate::Guardrail<Ctx> + 'static) -> Self { … }
+    pub fn shared_input_guardrail(mut self, g: std::sync::Arc<dyn crate::Guardrail<Ctx>>) -> Self { … }
+    pub fn input_guardrails<I>(mut self, g: I) -> Self
+    where I: IntoIterator<Item = std::sync::Arc<dyn crate::Guardrail<Ctx>>> { … }
+
+    pub fn output_guardrail(mut self, g: impl crate::Guardrail<Ctx> + 'static) -> Self { … }
+    pub fn shared_output_guardrail(mut self, g: std::sync::Arc<dyn crate::Guardrail<Ctx>>) -> Self { … }
+    pub fn output_guardrails<I>(mut self, g: I) -> Self
+    where I: IntoIterator<Item = std::sync::Arc<dyn crate::Guardrail<Ctx>>> { … }
 
     pub fn model_settings(mut self, s: crate::ModelSettings) -> Self {
         self.model_settings = s;
@@ -197,7 +225,15 @@ where
 }
 ```
 
-**Plural vs singular:** plurals replace, singulars append. Both are present for every Vec field; the issue lists only plurals but singulars are the ergonomic default (chained `.tool(a).tool(b)` reads better than constructing a temporary `vec![]`).
+**Singular vs plural vs shared:** every collection field has three entry points, mirroring `.model` / `.shared_model`:
+
+- `.tool(impl Tool<Ctx> + 'static)` — owned-value append, wraps in `Arc` internally. The ergonomic default. Lets the Notion design example `.tool(fetch_flow_panel).tool(fetch_karyotype)` work without Arc-noise.
+- `.shared_tool(Arc<dyn Tool<Ctx>>)` — append a pre-wrapped trait object. Explicit path for tools shared across multiple agents.
+- `.tools(impl IntoIterator<Item = Arc<dyn Tool<Ctx>>>)` — replace the whole vec. Takes `IntoIterator` rather than `Vec` so both `vec![…]` and the SMA-315 `tools![…]` macro work (the macro produces a known-iterable).
+
+Same triplet shape for `.handoff` / `.hook` / `.input_guardrail` / `.output_guardrail`. The bodies are mechanical; only `.tool` is spelled out above. `.instructions` has the owned + shared pair only (no plural — it's single-valued).
+
+**Note on Notion example `.tools([t1, t2])`:** the Notion design page's array-literal form does not compile because each `#[tool]`-generated tool is a distinct unit type and `[T; N]` requires homogeneous element types. The canonical call shapes are `.tool(a).tool(b)` (singular chain) or `.tools(tools![a, b])` (SMA-315 macro). The Notion page is out-of-scope for this spec but worth fixing as a doc follow-up so the public reference matches reality.
 
 ### Required transitions
 
@@ -274,7 +310,7 @@ where
 {
     pub fn output_type<T2>(self) -> LlmAgentBuilder<Ctx, M, T2, N, Mo>
     where
-        T2: serde::de::DeserializeOwned + schemars::JsonSchema,
+        T2: Send + Sync + 'static + serde::de::DeserializeOwned + schemars::JsonSchema,
     {
         LlmAgentBuilder {
             name: self.name,
@@ -296,6 +332,10 @@ where
 ```
 
 **Why not one-shot:** unlike `.name` / `.model`, `.output_type::<T>()` is callable on any state and can be called more than once (the last call wins). Each call is its own typestate transition, switching the `T` parameter. Cost is one struct rebuild per call — acceptable; users won't call this in a hot loop.
+
+**Why `Send + Sync + 'static` here AND on `.build()`:** the bound is redundant from a soundness perspective — `.build()` enforces it anyway — but adding it at `.output_type` localizes the diagnostic to the call site that picked the wrong `T`. Without it, `.output_type::<Rc<u32>>()` compiles fine (`Rc` is `DeserializeOwned + JsonSchema`) and the error fires several lines later at `.build()` pointing at the typestate constraint.
+
+**`.output_type::<String>()` is degenerate but legal:** selecting `T = String` is functionally equivalent to never calling `.output_type` (modulo the `output_type` field being `Some(schema_for_string)`). Document in the method's rustdoc so users don't conclude it's a useful no-op.
 
 ### `.build()` — only on the final state
 
@@ -334,7 +374,7 @@ where
 
 ### Defaults & invariants
 
-- `description`: defaults to `""`. No `.description()` setter — callers who need it mutate `agent.description` post-build.
+- `description`: defaults to `""` when `.description(…)` is not called. Setting matters in multi-agent setups — handoff targets render their description into the dispatching agent's prompt, so unset descriptions silently degrade routing quality.
 - `instructions`: defaults to `Arc::new(String::new())`. An empty `String` renders as `""`, which `LlmAgent::run` already treats as "no system prompt" (it skips the `Item::System` push).
 - All `Vec` fields default to empty.
 - `model_settings`: `ModelSettings::default()`.
@@ -344,8 +384,9 @@ where
   - `.name(…)`: one-shot (compile error if called twice).
   - `.model(…)` / `.shared_model(…)`: one-shot (compile error if called twice, regardless of which variant).
   - `.output_type::<T>()`: repeatable; last call wins.
-  - Plural setters (`.tools`, …): replace.
-  - Singular adders (`.tool`, …): append.
+  - `.description(…)` / `.instructions(…)` / `.shared_instructions(…)` / `.model_settings(…)` / `.max_turns(…)`: repeatable; last call wins.
+  - Plural setters (`.tools`, `.handoffs`, …): replace.
+  - Singular adders (`.tool`, `.handoff`, …) and shared-adders (`.shared_tool`, `.shared_handoff`, …): append.
 
 ### `Agent` impl update
 
@@ -376,12 +417,15 @@ Inline `#[cfg(test)] mod tests { … }` block. Each test runs on every CI matrix
 | Test | What it locks |
 |---|---|
 | `build_with_required_only` | Builder with only `.name`/`.model` produces an `LlmAgent` whose `description`, instructions render, `tools`, `output_type`, etc. are at default values. |
+| `description_set_via_builder` | `.description("d")` produces `agent.description == "d"`; absent the call, `agent.description == ""`. |
 | `singular_adders_append` | `.tool(a).tool(b)` → `tools.len() == 2` and order is preserved. Repeat for `.handoff`, `.hook`, `.input_guardrail`, `.output_guardrail`. |
-| `plural_setters_replace` | `.tool(a).tools(vec![b])` → `tools == vec![b]`. Mirror across the other Vec fields. |
+| `shared_adders_append` | `.shared_tool(arc_a).shared_tool(arc_b)` → `tools.len() == 2`; uses `Arc::ptr_eq` to confirm the supplied Arcs are stored, not re-wrapped. |
+| `plural_setters_replace` | `.tool(a).tools(vec![b])` → `tools == vec![b]`. Mirror across the other Vec fields. Both `Vec<…>` and `tools![…]`-style iterators accepted. |
 | `max_turns_overrides_default` | `.max_turns(99)` → `config.max_turns == 99`; without it, `config.max_turns == 16`. |
 | `output_type_populates_schema` | After `.output_type::<MyStruct>()`, `output_type.is_some()` and the schema's root matches `schemars::schema_for!(MyStruct)`. |
 | `output_type_last_call_wins` | `.output_type::<A>().output_type::<B>()` → schema matches `B`. |
 | `shared_model_avoids_double_arc` | `.shared_model(arc_clone)` does not wrap the Arc again — compared by `Arc::ptr_eq` against the input. |
+| `shared_instructions_avoids_double_arc` | `.shared_instructions(arc_clone)` likewise stores the input Arc unchanged. |
 
 These exercise the `Self`-returning path; the typestate-transition correctness is locked by trybuild.
 
@@ -396,7 +440,7 @@ New directory `crates/paigasus-helikon-core/tests/ui/`:
 | `builder_missing_both.rs` | compile-fail | `.build()` on the initial state — `.build` not found on `LlmAgentBuilder<…, NoName, NoModel>`. |
 | `builder_name_twice.rs` | compile-fail | `.name("a").name("b")` — second `.name` not found on `<…, HasName, _>`. |
 | `builder_model_twice.rs` | compile-fail | `.model(m1).model(m2)` — second `.model` not found on `<…, _, HasModel>`. |
-| `builder_happy_path.rs` | pass | Full chain with both required + a sampling of optionals (instructions, tool, hook, max_turns). |
+| `builder_happy_path.rs` | pass | Full chain exercising every any-state setter at least once: `.name`, `.description`, `.instructions`, `.tool` (singular), `.tools` (plural via `vec![…]`), `.shared_tool`, `.handoff`, `.hook`, `.input_guardrail`, `.output_guardrail`, `.model_settings`, `.max_turns`, then `.model` and `.build`. Lock the full any-state surface in one fixture so future signature drift on any optional fails here. |
 | `builder_output_type_typed.rs` | pass | `.output_type::<Answer>()` produces a `let _: LlmAgent<MyCtx, MockModel, Answer> = …` — binding to the explicit type proves `T` flows through. |
 
 New harness `crates/paigasus-helikon-core/tests/trybuild_ui.rs`:
@@ -423,17 +467,16 @@ fn trybuild_ui() {
 
 ## Migration / blast radius
 
-1. **`LlmAgent<Ctx, M>` → `LlmAgent<Ctx, M, T = String>`**: the default-generic parameter syntax makes every existing reference compile unchanged. No call-site renames.
-2. **New `_output: PhantomData<fn() -> T>` field**: affects struct-literal construction of `LlmAgent`. Grep with `rg -n "LlmAgent\s*\{" crates/` will find them; SMA-314's tests at `crates/paigasus-helikon-core/tests/loop_happy_path.rs` and `loop_parallel_tools.rs` use struct-literal construction and need a one-line addition each (`_output: std::marker::PhantomData,`). The implementation plan will enumerate the touch sites.
-3. **`Agent<Ctx>` impl head changes**: adds `T` and the `T: Send + Sync + 'static` bound. No call-site impact — the trait surface (`fn name`, `fn description`, `async fn run`) is unchanged.
-4. **`paigasus-helikon-providers-openai` / `-anthropic`**: don't reference `LlmAgent` directly (they implement `Model`, not `Agent`). Zero impact.
-5. **`paigasus-helikon-macros`**: doesn't reference `LlmAgent`. Zero impact.
-6. **Doc coverage**: every new `pub` item (markers, builder struct, methods) needs `///` doc comments — the workspace `missing_docs = "warn"` lint plus `-D warnings` in the `docs` CI job fails the build otherwise. Doc-coverage CI gate (80% threshold) is healthier with these additions, not worse, because each method is one or two lines and trivially documentable.
-7. **PR title**: `feat(core): SMA-319 add typestate builder for LlmAgent` (lowercase verb after `SMA-319`, full `type(scope):` prefix — both `pr-title.yml` rules satisfied).
-8. **No release-plz dance**: `paigasus-helikon-core` is already at `0.1.0`. One `feat(core): SMA-319 …` commit drives the normal minor-version bump via release-plz.
+1. **`LlmAgent<Ctx, M>` → `LlmAgent<Ctx, M, T = String>`**: the default-generic parameter syntax makes every existing *type* reference compile unchanged. No call-site renames.
+2. **New `_output: PhantomData<fn() -> T>` field**: source-incompatible for *struct-literal* construction of `LlmAgent`. Internal touch sites (`crates/paigasus-helikon-core/tests/loop_happy_path.rs`, `loop_parallel_tools.rs`) need one-line additions each (`_output: std::marker::PhantomData,`); the implementation plan will enumerate them via `rg -n "LlmAgent\s*\{" crates/`. **External soft-break**: the workspace is pre-1.0 and no downstream consumer yet exists, but any hypothetical downstream code that did struct-literal-construct `LlmAgent` (the existing escape hatch documented in the SMA-314 docstring) breaks. The builder is the supported path; struct-literal stays available but its shape changes.
+3. **Dropped `M: Model + 'static` bound from `LlmAgent` struct definition**: source-incompatible only for code that depended on the bound being present on the struct itself (e.g. `where LlmAgent<C, M>: 'static` patterns that relied on the bound transitively). The bound moves to the `Agent<Ctx>` impl and the inherent impl(s) that actually touch `M::invoke`. No internal touch sites today; documented as a deliberate narrowing.
+4. **`Agent<Ctx>` impl head changes**: adds `T` and the `T: Send + Sync + 'static` bound. No call-site impact — the trait surface (`fn name`, `fn description`, `async fn run`) is unchanged.
+5. **`paigasus-helikon-providers-openai` / `-anthropic`**: don't reference `LlmAgent` directly (they implement `Model`, not `Agent`). Zero impact.
+6. **`paigasus-helikon-macros`**: doesn't reference `LlmAgent`. Zero impact.
+7. **Doc coverage**: every new `pub` item (markers, builder struct, methods — roughly 18 new items counting all the singular/shared/plural triplets) needs `///` doc comments. Workspace `missing_docs = "warn"` plus `-D warnings` in the `docs` CI job fails the build otherwise. Doc-coverage CI gate (80% threshold) stays healthy because each method is one or two lines and trivially documentable; budget the chore in the implementation plan.
+8. **PR title**: `feat(core): SMA-319 add typestate builder for LlmAgent` (lowercase verb after `SMA-319`, full `type(scope):` prefix — both `pr-title.yml` rules satisfied).
+9. **No release-plz dance**: `paigasus-helikon-core` is already at `0.1.0`. One `feat(core): SMA-319 …` commit drives the normal minor-version bump via release-plz. release-plz will read the change as a feat (new public API + soft-break on struct-literal) and propose 0.1.0 → 0.2.0, which is the right outcome.
 
 ## Open questions deferred to implementation
-
-- **`impl LlmAgent<(), (), String>` viability**: the spec assumes Rust permits an inherent impl on `LlmAgent<(), (), String>` even though `()` does not satisfy the `M: Model` bound on the struct definition (because the bound applies at value construction, not at associated-function dispatch). If that compiles, ship it. If not, fall back to a free function `pub fn llm_agent_builder<Ctx: Send + Sync + 'static>() -> LlmAgentBuilder<Ctx, (), String, NoName, NoModel>` re-exported from `agent_builder.rs`, and document it as the entry point. Either way, the call site is one symbol; the user-visible difference is `LlmAgent::builder::<Ctx>()` vs `llm_agent_builder::<Ctx>()`.
 
 - **Inference of `Ctx`**: if the user calls only `.name(…).model(m).build()` with no Ctx-bearing values flowing through, the compiler can't infer `Ctx`. Document in the rustdoc that the first call to any Ctx-carrying setter (`.instructions`, `.tool`, etc.) pins `Ctx`; in their absence, the user must turbofish at `builder::<MyCtx>()` or annotate the `let` binding. This is an unavoidable property of the typestate design, not a defect.
