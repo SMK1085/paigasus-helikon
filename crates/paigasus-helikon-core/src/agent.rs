@@ -396,6 +396,21 @@ pub enum AgentEvent {
         /// JSON arguments the model proposed to call the tool with.
         args: serde_json::Value,
     },
+    /// A structured-output repair turn has begun: validation of the prior
+    /// constrained output failed and the loop is re-prompting once.
+    RepairStarted {
+        /// 1-based repair attempt index. Only ever `1` under the one-shot budget.
+        attempt: u32,
+    },
+    /// Structured-output validation failed terminally (after the one repair
+    /// attempt). Emitted immediately before the terminal [`AgentEvent::RunFailed`]
+    /// so consumers can recover the structured detail.
+    StructuredOutputFailed {
+        /// Human-readable schema/validation errors.
+        schema_errors: Vec<String>,
+        /// The raw terminal assistant text that failed validation.
+        final_text: String,
+    },
 
     // --- Terminal ---
     /// The run finished normally.
@@ -711,8 +726,13 @@ pub enum AgentError {
     /// The model produced output that could not be coerced into the
     /// requested structured type, even after the one-shot repair attempt
     /// allowed by ADR-10.
-    #[error("invalid structured output after one repair attempt")]
-    InvalidStructuredOutput,
+    #[error("invalid structured output after one repair attempt: {schema_errors:?}")]
+    InvalidStructuredOutput {
+        /// Human-readable schema/validation errors.
+        schema_errors: Vec<String>,
+        /// The raw terminal assistant text that failed validation.
+        final_text: String,
+    },
 
     /// New in SMA-314: `max_turns` budget exhausted.
     #[error("max turns ({0}) exceeded")]
