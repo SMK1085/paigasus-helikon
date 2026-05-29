@@ -53,6 +53,13 @@ trybuild    = { workspace = true }
 schemars    = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
+# Required by the leukemia_classifier example (SMA-320).
+tokio       = { workspace = true, features = ["macros", "rt-multi-thread"] }
+anyhow      = { workspace = true }
+
+[[example]]
+name              = "leukemia_classifier"
+required-features = ["anthropic"]
 
 [lints]
 workspace = true

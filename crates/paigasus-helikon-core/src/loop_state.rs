@@ -9,7 +9,7 @@
 
 use crate::{
     AgentError, AgentEvent, ContentPart, FinishReason, Item, ModelRequest, ModelSettings,
-    TokenUsage, ToolDef,
+    ResponseFormat, TokenUsage, ToolDef,
 };
 
 /// The explicit, observable state of the agent loop.
@@ -53,6 +53,17 @@ pub enum LoopState {
     NeedsApproval {
         /// The tool calls awaiting approval.
         pending: Vec<ToolCallRequest>,
+    },
+    /// Constrained finalizing turn: the model is asked to emit the
+    /// structured output for the configured `output_type`.
+    Finalizing {
+        /// The turn index that produced this finalizing request.
+        turn: u32,
+    },
+    /// The one allowed repair turn after a failed finalizing validation.
+    RepairingOutput {
+        /// The turn index of the finalizing turn being repaired.
+        turn: u32,
     },
     /// Terminal: run completed successfully.
     Done(FinalOutput),
@@ -164,6 +175,9 @@ pub struct TransitionCtx<'a> {
     /// appends incoming items before calling [`transition`] and passes
     /// the slice in — [`transition`] reads but never mutates.
     pub conversation: &'a [Item],
+    /// Structured-output type, when the agent configured one. Drives the
+    /// constrained finalizing turn and output validation.
+    pub output: Option<&'a crate::OutputType>,
 }
 
 /// One transition step's result. Not `Clone` (carries `LoopState`).
@@ -175,6 +189,9 @@ pub struct TransitionOutcome {
     pub events: Vec<AgentEvent>,
     /// Side effect the driver must run before the next step.
     pub next_action: NextAction,
+    /// Items the driver must append to its owned conversation before the
+    /// next step (e.g. a synthesized repair message). Empty in most arms.
+    pub conversation_appends: Vec<Item>,
 }
 
 /// Pure state-machine step. **No async, no tokio, no IO.**
@@ -197,20 +214,39 @@ pub fn transition(
                 error: format!("max turns ({}) exceeded", ctx.max_turns),
             }],
             next_action: NextAction::Terminate,
+            conversation_appends: Vec::new(),
         },
         // Start seeds the loop: emit TurnStarted, request CallModel.
         (LoopState::CallingModel { turn }, TransitionInput::Start { .. })
             if *turn < ctx.max_turns =>
         {
-            let request = ModelRequest {
-                messages: ctx.conversation.to_vec(),
-                tools: ctx.tools.to_vec(),
-                model_settings: ctx.model_settings.clone(),
-            };
-            TransitionOutcome {
-                next_state: LoopState::CallingModel { turn: *turn },
-                events: vec![AgentEvent::TurnStarted { turn: *turn }],
-                next_action: NextAction::CallModel { request },
+            match ctx.output {
+                Some(out) if ctx.tools.is_empty() => {
+                    let request = ModelRequest {
+                        messages: ctx.conversation.to_vec(),
+                        tools: Vec::new(),
+                        model_settings: constrained_settings(ctx.model_settings, out),
+                    };
+                    TransitionOutcome {
+                        next_state: LoopState::Finalizing { turn: *turn },
+                        events: vec![AgentEvent::TurnStarted { turn: *turn }],
+                        next_action: NextAction::CallModel { request },
+                        conversation_appends: Vec::new(),
+                    }
+                }
+                _ => {
+                    let request = ModelRequest {
+                        messages: ctx.conversation.to_vec(),
+                        tools: ctx.tools.to_vec(),
+                        model_settings: ctx.model_settings.clone(),
+                    };
+                    TransitionOutcome {
+                        next_state: LoopState::CallingModel { turn: *turn },
+                        events: vec![AgentEvent::TurnStarted { turn: *turn }],
+                        next_action: NextAction::CallModel { request },
+                        conversation_appends: Vec::new(),
+                    }
+                }
             }
         }
         // Model produced tool calls → fan out to ExecutingTools.
@@ -246,10 +282,12 @@ pub fn transition(
                 },
                 events,
                 next_action: NextAction::ExecuteTools { calls },
+                conversation_appends: Vec::new(),
             }
         }
-        // Model produced a response with no tool calls → terminate.
-        (LoopState::CallingModel { .. }, TransitionInput::ModelResponse { items, usage, .. })
+        // Model produced a response with no tool calls → either issue a
+        // constrained finalizing turn (output set) or terminate (no output).
+        (LoopState::CallingModel { turn }, TransitionInput::ModelResponse { items, usage, .. })
             if !items.iter().any(|i| matches!(i, Item::ToolCall { .. })) =>
         {
             let mut events: Vec<AgentEvent> = items
@@ -258,20 +296,42 @@ pub fn transition(
                 .cloned()
                 .map(|item| AgentEvent::MessageOutput { item })
                 .collect();
-            // Extract terminal content from the last AssistantMessage.
-            let content = items
-                .iter()
-                .rev()
-                .find_map(|i| match i {
-                    Item::AssistantMessage { content, .. } => Some(content.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            events.push(AgentEvent::RunCompleted { usage });
-            TransitionOutcome {
-                next_state: LoopState::Done(FinalOutput { content, usage }),
-                events,
-                next_action: NextAction::Terminate,
+
+            match ctx.output {
+                Some(out) => {
+                    // Phase 2: issue one constrained finalizing turn (real tools
+                    // withdrawn; the prior unconstrained answer stays in context).
+                    // The finalizing call is a distinct model invocation, so it
+                    // gets its own turn number (the unconstrained turn already
+                    // emitted `TurnStarted { turn }`).
+                    let finalizing_turn = *turn + 1;
+                    let request = ModelRequest {
+                        messages: ctx.conversation.to_vec(),
+                        tools: Vec::new(),
+                        model_settings: constrained_settings(ctx.model_settings, out),
+                    };
+                    events.push(AgentEvent::TurnStarted {
+                        turn: finalizing_turn,
+                    });
+                    TransitionOutcome {
+                        next_state: LoopState::Finalizing {
+                            turn: finalizing_turn,
+                        },
+                        events,
+                        next_action: NextAction::CallModel { request },
+                        conversation_appends: Vec::new(),
+                    }
+                }
+                None => {
+                    let content = last_assistant_content(&items);
+                    events.push(AgentEvent::RunCompleted { usage });
+                    TransitionOutcome {
+                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        events,
+                        next_action: NextAction::Terminate,
+                        conversation_appends: Vec::new(),
+                    }
+                }
             }
         }
         // Tool results complete → bump turn and ask the model again.
@@ -296,6 +356,7 @@ pub fn transition(
                     next_state: LoopState::Failed(AgentError::MaxTurnsExceeded(ctx.max_turns)),
                     events,
                     next_action: NextAction::Terminate,
+                    conversation_appends: Vec::new(),
                 };
             }
             events.push(AgentEvent::TurnStarted { turn: next_turn });
@@ -308,6 +369,130 @@ pub fn transition(
                 next_state: LoopState::CallingModel { turn: next_turn },
                 events,
                 next_action: NextAction::CallModel { request },
+                conversation_appends: Vec::new(),
+            }
+        }
+        // Finalizing: validate the model's structured output.
+        (LoopState::Finalizing { turn }, TransitionInput::ModelResponse { items, usage, .. }) => {
+            let Some(out) = ctx.output else {
+                return TransitionOutcome {
+                    next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(
+                        "Finalizing state without output type"
+                    ))),
+                    events: vec![AgentEvent::RunFailed {
+                        error: "internal: Finalizing without output type".to_owned(),
+                    }],
+                    next_action: NextAction::Terminate,
+                    conversation_appends: Vec::new(),
+                };
+            };
+            let mut events: Vec<AgentEvent> = items
+                .iter()
+                .filter(|i| matches!(i, Item::AssistantMessage { .. }))
+                .cloned()
+                .map(|item| AgentEvent::MessageOutput { item })
+                .collect();
+            let content = last_assistant_content(&items);
+            let has_tool_call = items.iter().any(|i| matches!(i, Item::ToolCall { .. }));
+
+            let validation = if has_tool_call {
+                Err(vec![
+                    "model called a tool on the constrained finalizing turn".to_owned(),
+                ])
+            } else {
+                validate_terminal(out, &content)
+            };
+
+            match validation {
+                Ok(()) => {
+                    events.push(AgentEvent::RunCompleted { usage });
+                    TransitionOutcome {
+                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        events,
+                        next_action: NextAction::Terminate,
+                        conversation_appends: Vec::new(),
+                    }
+                }
+                Err(schema_errors) => {
+                    let msg = repair_message(&out.name, &schema_errors);
+                    let mut messages = ctx.conversation.to_vec();
+                    messages.push(msg.clone());
+                    let request = ModelRequest {
+                        messages,
+                        tools: Vec::new(),
+                        model_settings: constrained_settings(ctx.model_settings, out),
+                    };
+                    events.push(AgentEvent::RepairStarted { attempt: 1 });
+                    TransitionOutcome {
+                        next_state: LoopState::RepairingOutput { turn: *turn },
+                        events,
+                        next_action: NextAction::CallModel { request },
+                        conversation_appends: vec![msg],
+                    }
+                }
+            }
+        }
+        // RepairingOutput: one allowed repair turn — success → Done, failure → Failed.
+        (
+            LoopState::RepairingOutput { .. },
+            TransitionInput::ModelResponse { items, usage, .. },
+        ) => {
+            let Some(out) = ctx.output else {
+                return TransitionOutcome {
+                    next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(
+                        "RepairingOutput state without output type"
+                    ))),
+                    events: vec![AgentEvent::RunFailed {
+                        error: "internal: RepairingOutput without output type".to_owned(),
+                    }],
+                    next_action: NextAction::Terminate,
+                    conversation_appends: Vec::new(),
+                };
+            };
+            let mut events: Vec<AgentEvent> = items
+                .iter()
+                .filter(|i| matches!(i, Item::AssistantMessage { .. }))
+                .cloned()
+                .map(|item| AgentEvent::MessageOutput { item })
+                .collect();
+            let content = last_assistant_content(&items);
+            let has_tool_call = items.iter().any(|i| matches!(i, Item::ToolCall { .. }));
+
+            let validation = if has_tool_call {
+                Err(vec!["model called a tool on the repair turn".to_owned()])
+            } else {
+                validate_terminal(out, &content)
+            };
+
+            match validation {
+                Ok(()) => {
+                    events.push(AgentEvent::RunCompleted { usage });
+                    TransitionOutcome {
+                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        events,
+                        next_action: NextAction::Terminate,
+                        conversation_appends: Vec::new(),
+                    }
+                }
+                Err(schema_errors) => {
+                    let final_text = flatten_text(&content);
+                    events.push(AgentEvent::StructuredOutputFailed {
+                        schema_errors: schema_errors.clone(),
+                        final_text: final_text.clone(),
+                    });
+                    events.push(AgentEvent::RunFailed {
+                        error: "invalid structured output after one repair attempt".to_owned(),
+                    });
+                    TransitionOutcome {
+                        next_state: LoopState::Failed(AgentError::InvalidStructuredOutput {
+                            schema_errors,
+                            final_text,
+                        }),
+                        events,
+                        next_action: NextAction::Terminate,
+                        conversation_appends: Vec::new(),
+                    }
+                }
             }
         }
         // Unreachable-in-SMA-314 variants surface NotImplemented and Terminate.
@@ -323,6 +508,7 @@ pub fn transition(
                 error: format!("invalid transition: {s:?} ← {i:?}"),
             }],
             next_action: NextAction::Terminate,
+            conversation_appends: Vec::new(),
         },
     }
 }
@@ -335,5 +521,72 @@ fn not_implemented(feature: &'static str) -> TransitionOutcome {
             error: format!("not yet implemented: {feature}"),
         }],
         next_action: NextAction::Terminate,
+        conversation_appends: Vec::new(),
     }
+}
+
+/// Build constrained model settings for a finalizing/repair turn: inject the
+/// `output_type`-derived `response_format` (raw schema, strict mode) and clear
+/// any caller tool_choice (Anthropic forces its own synthesized tool).
+fn constrained_settings(base: &ModelSettings, output: &crate::OutputType) -> ModelSettings {
+    let mut s = base.clone();
+    s.response_format = Some(ResponseFormat::JsonSchema {
+        name: output.name.clone(),
+        schema: output.schema.as_value().clone(),
+        strict: true,
+    });
+    s.tool_choice = None;
+    s
+}
+
+/// Concatenate `ContentPart::Text` parts (the structured output arrives as text
+/// on both providers).
+fn flatten_text(content: &[ContentPart]) -> String {
+    content
+        .iter()
+        .filter_map(|p| match p {
+            ContentPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Parse + validate terminal text against the output type.
+/// `Ok(())` on success; `Err(schema_errors)` otherwise (non-JSON included).
+fn validate_terminal(
+    output: &crate::OutputType,
+    content: &[ContentPart],
+) -> Result<(), Vec<String>> {
+    let text = flatten_text(content);
+    let value: serde_json::Value = match serde_json::from_str(text.trim()) {
+        Ok(v) => v,
+        Err(e) => return Err(vec![format!("response was not valid JSON: {e}")]),
+    };
+    output.validate(&value)
+}
+
+/// Synthesize the one repair instruction sent back to the model.
+fn repair_message(name: &str, errors: &[String]) -> Item {
+    let text = format!(
+        "Your previous response did not match the required `{name}` schema. \
+         Errors: {}. Reply with ONLY a JSON value matching the schema — \
+         no prose, no code fences.",
+        errors.join("; ")
+    );
+    Item::UserMessage {
+        content: vec![ContentPart::Text { text }],
+    }
+}
+
+/// The last `AssistantMessage` content in a list of items.
+fn last_assistant_content(items: &[Item]) -> Vec<ContentPart> {
+    items
+        .iter()
+        .rev()
+        .find_map(|i| match i {
+            Item::AssistantMessage { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }

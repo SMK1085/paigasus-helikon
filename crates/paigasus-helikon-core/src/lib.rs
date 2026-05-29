@@ -23,6 +23,7 @@ pub mod item;
 pub mod loop_state;
 pub mod model;
 pub mod runner;
+pub mod schema;
 pub mod session;
 pub mod tool;
 

@@ -103,24 +103,67 @@ impl AgentInput {
     }
 }
 
-/// Structured-output type marker — the JSON Schema the model is asked
-/// to produce.
+/// Structured-output type marker: the JSON Schema the model is asked to
+/// produce, the schema's name, and a validator that proves text
+/// deserializes into the original `T`.
 ///
-/// SMA-320 promotes the typed-output path (`output_type::<T>()`
-/// honesty); SMA-314 only defines the field type so `LlmAgent` has a
-/// place to store it.
-#[derive(Debug, Clone)]
+/// The validator is a function pointer captured at [`OutputType::from_schema`]
+/// time (where `T: DeserializeOwned` is in scope). It is the authoritative
+/// gate the agent loop uses to decide success vs. repair; the typed value
+/// itself is materialized later by `RunResultStreaming::collect_typed`.
+#[derive(Clone)]
 pub struct OutputType {
-    /// The JSON Schema the model should produce.
+    /// The schema name (the `T` identifier / schema title). Echoed into the
+    /// provider `response_format` name and into the repair instruction.
+    pub name: String,
+    /// The JSON Schema the model should produce (raw schemars output).
     pub schema: schemars::Schema,
+    /// Authoritative validator: `Ok(())` iff the value deserializes into the
+    /// original `T`; `Err` carries one or more human-readable error strings.
+    validate: fn(&serde_json::Value) -> Result<(), Vec<String>>,
+}
+
+impl std::fmt::Debug for OutputType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutputType")
+            .field("name", &self.name)
+            .field("schema", &self.schema)
+            .finish_non_exhaustive()
+    }
 }
 
 impl OutputType {
-    /// Construct from a type that derives [`schemars::JsonSchema`].
-    pub fn from_schema<T: schemars::JsonSchema>() -> Self {
+    /// Construct from a type that derives [`schemars::JsonSchema`] and
+    /// [`serde::de::DeserializeOwned`].
+    ///
+    /// Captures a validator that attempts `serde_json::from_value::<T>` and
+    /// derives `name` from the schema's `title` (falling back to
+    /// `"StructuredOutput"` if absent).
+    pub fn from_schema<T>() -> Self
+    where
+        T: schemars::JsonSchema + serde::de::DeserializeOwned,
+    {
+        let schema = schemars::schema_for!(T);
+        let name = schema
+            .as_value()
+            .get("title")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "StructuredOutput".to_owned());
         Self {
-            schema: schemars::schema_for!(T),
+            schema,
+            name,
+            validate: |v| {
+                serde_json::from_value::<T>(v.clone())
+                    .map(|_| ())
+                    .map_err(|e| vec![e.to_string()])
+            },
         }
+    }
+
+    /// Run the captured validator against `value`.
+    pub fn validate(&self, value: &serde_json::Value) -> Result<(), Vec<String>> {
+        (self.validate)(value)
     }
 }
 
@@ -353,6 +396,21 @@ pub enum AgentEvent {
         /// JSON arguments the model proposed to call the tool with.
         args: serde_json::Value,
     },
+    /// A structured-output repair turn has begun: validation of the prior
+    /// constrained output failed and the loop is re-prompting once.
+    RepairStarted {
+        /// 1-based repair attempt index. Only ever `1` under the one-shot budget.
+        attempt: u32,
+    },
+    /// Structured-output validation failed terminally (after the one repair
+    /// attempt). Emitted immediately before the terminal [`AgentEvent::RunFailed`]
+    /// so consumers can recover the structured detail.
+    StructuredOutputFailed {
+        /// Human-readable schema/validation errors.
+        schema_errors: Vec<String>,
+        /// The raw terminal assistant text that failed validation.
+        final_text: String,
+    },
 
     // --- Terminal ---
     /// The run finished normally.
@@ -491,6 +549,7 @@ where
         let model_settings = self.model_settings.clone();
         let agent_name = self.name.clone();
         let instructions_text = self.instructions.render(&ctx);
+        let output_type = self.output_type.clone();
         let tool_defs: Vec<crate::ToolDef> = tools
             .iter()
             .map(|t| crate::ToolDef {
@@ -521,11 +580,13 @@ where
                     model_settings: &model_settings,
                     max_turns,
                     conversation: &conversation,
+                    output: output_type.as_ref(),
                 };
                 let outcome = crate::transition(&loop_state, tx_input, &tx_ctx);
-                let crate::TransitionOutcome { next_state, events, next_action } = outcome;
+                let crate::TransitionOutcome { next_state, events, next_action, conversation_appends } = outcome;
                 for ev in events { yield ev; }
                 loop_state = next_state;
+                conversation.extend(conversation_appends);
 
                 match next_action {
                     crate::NextAction::CallModel { request } => {
@@ -668,8 +729,13 @@ pub enum AgentError {
     /// The model produced output that could not be coerced into the
     /// requested structured type, even after the one-shot repair attempt
     /// allowed by ADR-10.
-    #[error("invalid structured output after one repair attempt")]
-    InvalidStructuredOutput,
+    #[error("invalid structured output after one repair attempt: {schema_errors:?}")]
+    InvalidStructuredOutput {
+        /// Human-readable schema/validation errors.
+        schema_errors: Vec<String>,
+        /// The raw terminal assistant text that failed validation.
+        final_text: String,
+    },
 
     /// New in SMA-314: `max_turns` budget exhausted.
     #[error("max turns ({0}) exceeded")]
@@ -686,4 +752,33 @@ pub enum AgentError {
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod output_type_tests {
+    use super::OutputType;
+    use serde_json::json;
+
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Answer {
+        value: u32,
+    }
+
+    #[test]
+    fn from_schema_populates_name_and_schema() {
+        let ot = OutputType::from_schema::<Answer>();
+        assert_eq!(ot.name, "Answer");
+        // schema is the schemars schema for Answer
+        let v = serde_json::to_value(&ot.schema).unwrap();
+        assert_eq!(v["properties"]["value"]["type"], json!("integer"));
+    }
+
+    #[test]
+    fn validate_accepts_conformant_and_rejects_nonconformant() {
+        let ot = OutputType::from_schema::<Answer>();
+        assert!(ot.validate(&json!({"value": 7})).is_ok());
+        let err = ot.validate(&json!({"value": "not a number"})).unwrap_err();
+        assert!(!err.is_empty(), "expected at least one error string");
+    }
 }
