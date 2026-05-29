@@ -61,7 +61,8 @@ to the same slot.
 
 ### 1. New type: `FailureSlot` (core)
 
-Lives in `agent.rs` next to `AgentError`; re-exported from `lib.rs`.
+Lives in `agent.rs` next to `AgentError`; re-exported automatically by the
+existing `pub use agent::*;` in `lib.rs` (no `lib.rs` edit required).
 
 ```rust
 /// Out-of-band carrier for a run's terminal structured AgentError.
@@ -293,7 +294,8 @@ detail.
 - `crates/paigasus-helikon-core/src/context.rs` — `failure` field + `failure_handle()` accessor.
 - `crates/paigasus-helikon-core/src/runner.rs` — `RunResultStreaming::failure` +
   `with_failure()`; slot-preferring mapping in `collect()` and `collect_typed()`.
-- `crates/paigasus-helikon-core/src/lib.rs` — export `FailureSlot`.
+- (`crates/paigasus-helikon-core/src/lib.rs` — no edit: the existing `pub use agent::*;`
+    re-exports `FailureSlot` automatically.)
 - `crates/paigasus-helikon-runtime-tokio/src/lib.rs` — clone handle pre-move; `with_failure`
   wiring in `run()` and `run_streamed()`.
 - Tests in both crates; CHANGELOGs; core version bump + workspace pin (see release sequencing).
