@@ -487,6 +487,7 @@ async fn run_tools_concurrent<Ctx>(
     tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
     calls: &[crate::ToolCallRequest],
     tool_ctx: &crate::ToolContext<Ctx>,
+    limit: Option<std::num::NonZeroUsize>,
 ) -> Vec<crate::ToolCallOutcome>
 where
     Ctx: Send + Sync + 'static,
@@ -515,7 +516,21 @@ where
             }
         }
     });
-    futures_util::future::join_all(futures).await
+    match limit {
+        None => futures_util::future::join_all(futures).await,
+        Some(n) => {
+            use futures_util::stream::StreamExt as _;
+            // Collect to a Vec first: passing the `Map` iterator directly to
+            // `stream::iter` trips an HRTB lifetime bound that `join_all` (above)
+            // doesn't impose. `buffered` (not `buffer_unordered`) preserves call
+            // order in the outcomes. Don't "simplify" this back to a chained call.
+            let collected: Vec<_> = futures.collect();
+            futures_util::stream::iter(collected)
+                .buffered(n.get())
+                .collect()
+                .await
+        }
+    }
 }
 
 // ── Agent impl for LlmAgent ──────────────────────────────────────────────────
@@ -545,7 +560,12 @@ where
         // Snapshot everything the stream needs — it outlives `&self`.
         let model = std::sync::Arc::clone(&self.model);
         let tools = self.tools.clone();
-        let max_turns = self.config.max_turns;
+        let effective_config = ctx
+            .run_config()
+            .cloned()
+            .unwrap_or_else(|| self.config.clone());
+        let max_turns = effective_config.max_turns;
+        let parallel_tool_call_limit = effective_config.parallel_tool_call_limit;
         let model_settings = self.model_settings.clone();
         let agent_name = self.name.clone();
         let instructions_text = self.instructions.render(&ctx);
@@ -680,8 +700,13 @@ where
                     }
                     crate::NextAction::ExecuteTools { calls } => {
                         let tool_ctx = ctx.to_tool_context();
-                        let outcomes =
-                            run_tools_concurrent(&tools, &calls, &tool_ctx).await;
+                        let outcomes = run_tools_concurrent(
+                            &tools,
+                            &calls,
+                            &tool_ctx,
+                            parallel_tool_call_limit,
+                        )
+                        .await;
                         for o in &outcomes {
                             conversation.push(crate::Item::ToolResult {
                                 call_id: o.call_id.clone(),

@@ -188,3 +188,58 @@ where
         CancellationToken::new(),
     )
 }
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// A [`Tool`] that tracks how many instances run concurrently. Each
+/// invocation bumps `current`, records the running peak into `max`, yields
+/// several times (so the scheduler can interleave peers), then decrements.
+pub struct ConcurrencyProbe {
+    name: String,
+    description: String,
+    schema: serde_json::Value,
+    current: Arc<AtomicUsize>,
+    max: Arc<AtomicUsize>,
+}
+
+impl ConcurrencyProbe {
+    pub fn new(name: &str, current: Arc<AtomicUsize>, max: Arc<AtomicUsize>) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.into(),
+            description: format!("concurrency probe {name}"),
+            schema: serde_json::json!({"type": "object"}),
+            current,
+            max,
+        })
+    }
+}
+
+#[async_trait]
+impl<Ctx> Tool<Ctx> for ConcurrencyProbe
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+
+    async fn invoke(
+        &self,
+        _ctx: &ToolContext<Ctx>,
+        _args: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max.fetch_max(now, Ordering::SeqCst);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        self.current.fetch_sub(1, Ordering::SeqCst);
+        Ok(ToolOutput::new(serde_json::json!({"ok": true})))
+    }
+}
