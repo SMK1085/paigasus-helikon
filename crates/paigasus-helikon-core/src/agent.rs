@@ -4,6 +4,8 @@
 //! (`SequentialAgent`, `ParallelAgent`, `LoopAgent`, `SwarmAgent`,
 //! `GraphAgent`) — see ADR-11.
 
+use std::sync::{Arc, Mutex};
+
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 
@@ -580,6 +582,13 @@ where
             .collect();
 
         let stream = async_stream::stream! {
+            // SMA-346: structured failures are recorded here and read by the
+            // boundary after the stream drains (see RunResultStreaming::collect).
+            // Invariant: every terminal-failure path must `failure.set(...)`
+            // before it `return`s (direct sites), or rely on the `Terminate`
+            // arm (state-machine sites via LoopState::Failed).
+            let failure = ctx.failure_handle();
+
             // Seed conversation: optional system message + user input.
             let mut conversation: Vec<crate::Item> = Vec::new();
             if !instructions_text.is_empty() {
@@ -614,7 +623,9 @@ where
                         let mut model_stream = match model.invoke(request, cancel).await {
                             Ok(s) => s,
                             Err(e) => {
-                                yield crate::AgentEvent::RunFailed { error: e.to_string() };
+                                let msg = e.to_string();
+                                failure.set(crate::AgentError::Model(e));
+                                yield crate::AgentEvent::RunFailed { error: msg };
                                 return;
                             }
                         };
@@ -677,7 +688,9 @@ where
                                     finish_reason = reason;
                                 }
                                 Err(e) => {
-                                    yield crate::AgentEvent::RunFailed { error: e.to_string() };
+                                    let msg = e.to_string();
+                                    failure.set(crate::AgentError::Model(e));
+                                    yield crate::AgentEvent::RunFailed { error: msg };
                                     return;
                                 }
                             }
@@ -686,6 +699,7 @@ where
                         let items = match build_items(&agent_name, text, reasoning, tool_accum) {
                             Ok(items) => items,
                             Err(e) => {
+                                failure.set(crate::AgentError::Other(anyhow::anyhow!(e.clone())));
                                 yield crate::AgentEvent::RunFailed { error: e };
                                 return;
                             }
@@ -717,7 +731,18 @@ where
                         }
                         tx_input = crate::TransitionInput::ToolResults { outcomes };
                     }
-                    crate::NextAction::Terminate => return,
+                    crate::NextAction::Terminate => {
+                        // On a terminal failure the driver left the structured
+                        // error in loop_state; hand it to the slot. (Every
+                        // LoopState::Failed branch in loop_state.rs Terminates,
+                        // so this is the single capture point for all of them.)
+                        // This runs AFTER the RunFailed event was yielded, which
+                        // is why the boundary must drain-then-read.
+                        if let crate::LoopState::Failed(err) = loop_state {
+                            failure.set(err);
+                        }
+                        return;
+                    }
                 }
             }
         };
@@ -777,6 +802,85 @@ pub enum AgentError {
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// Out-of-band carrier for a run's terminal structured [`AgentError`].
+///
+/// The [`crate::AgentEvent`] stream stays string-based
+/// ([`crate::AgentEvent::RunFailed`]` { error: String }`) so it remains `Clone`
+/// and snapshot-stable; the structured error rides this side-channel instead.
+/// One slot lives on each [`RunContext`]; the agent records into it at the
+/// moment of failure and a [`crate::Runner`] (or
+/// [`crate::RunResultStreaming::collect`]) reads it **after the event stream is
+/// fully drained** — see [`crate::RunResultStreaming::collect`] for why the
+/// read must come after draining.
+#[derive(Clone, Default)]
+pub struct FailureSlot(Arc<Mutex<Option<AgentError>>>);
+
+impl FailureSlot {
+    /// Create an empty slot.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the terminal structured error. Called once per run, at any point
+    /// before the stream terminates; last write wins.
+    pub fn set(&self, err: AgentError) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
+    }
+
+    /// Take the recorded error, if any. Read once at the boundary, after the
+    /// event stream has been fully drained.
+    pub fn take(&self) -> Option<AgentError> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
+
+// A non-`Send`/`Sync` payload added to `AgentError` would silently break the
+// agent's `BoxStream<'static, AgentEvent>: Send` bound far downstream. Fail here
+// instead, with a clear pointer to the cause.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<FailureSlot>();
+};
+
+#[cfg(test)]
+mod failure_slot_tests {
+    use super::{AgentError, FailureSlot};
+
+    #[test]
+    fn set_then_take_returns_the_error() {
+        let slot = FailureSlot::new();
+        assert!(slot.take().is_none(), "empty slot yields None");
+        slot.set(AgentError::MaxTurnsExceeded(3));
+        match slot.take() {
+            Some(AgentError::MaxTurnsExceeded(n)) => assert_eq!(n, 3),
+            other => panic!("expected MaxTurnsExceeded(3), got {other:?}"),
+        }
+        assert!(slot.take().is_none(), "take() drains the slot");
+    }
+
+    #[test]
+    fn clone_shares_the_same_slot() {
+        let a = FailureSlot::new();
+        let b = a.clone();
+        b.set(AgentError::NotImplemented { feature: "handoff" });
+        assert!(
+            matches!(
+                a.take(),
+                Some(AgentError::NotImplemented { feature: "handoff" })
+            ),
+            "a clone observes a write through the original handle"
+        );
+    }
+
+    #[test]
+    fn set_overwrites_previous() {
+        let slot = FailureSlot::new();
+        slot.set(AgentError::MaxTurnsExceeded(1));
+        slot.set(AgentError::MaxTurnsExceeded(2));
+        assert!(matches!(slot.take(), Some(AgentError::MaxTurnsExceeded(2))));
+    }
 }
 
 #[cfg(test)]

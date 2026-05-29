@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::{Hook, RunConfig, Session, ToolContext};
+use crate::{FailureSlot, Hook, RunConfig, Session, ToolContext};
 
 /// Carries the per-run state shared across the agent loop, tools,
 /// guardrails, and hooks.
@@ -58,6 +58,11 @@ where
     /// [`RunContext::to_tool_context`]. `None` when an agent is run directly
     /// without a runner.
     run_config: Option<RunConfig>,
+    /// Out-of-band carrier for the run's terminal structured [`crate::AgentError`].
+    /// Written by [`crate::Agent::run`] at the moment of failure; read at the
+    /// boundary by a [`crate::Runner`] / [`crate::RunResultStreaming`]. Like
+    /// `run_config`, it is **not** projected into [`ToolContext`].
+    failure: FailureSlot,
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -79,6 +84,7 @@ where
             tracer,
             cancel,
             run_config: None,
+            failure: FailureSlot::new(),
         }
     }
 
@@ -106,6 +112,15 @@ where
     /// Borrow the per-invocation [`RunConfig`], if a runner installed one.
     pub fn run_config(&self) -> Option<&RunConfig> {
         self.run_config.as_ref()
+    }
+
+    /// Clone the handle to this run's [`FailureSlot`].
+    ///
+    /// A [`crate::Runner`] clones this **before** moving the context into
+    /// [`crate::Agent::run`] (the same way it clones `cancel` / `session`), then
+    /// reads the structured error after the run's event stream drains.
+    pub fn failure_handle(&self) -> FailureSlot {
+        self.failure.clone()
     }
 
     /// Install the per-invocation [`RunConfig`] (consuming builder). A
@@ -139,6 +154,25 @@ mod runcontext_tests {
     use super::*;
     use crate::{MemorySession, RunConfig};
     use std::sync::Arc;
+
+    #[test]
+    fn failure_handle_shares_the_context_slot() {
+        use crate::AgentError;
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            crate::HookRegistry::new(),
+            crate::TracerHandle::default(),
+            crate::CancellationToken::new(),
+        );
+        let handle = ctx.failure_handle();
+        handle.set(AgentError::MaxTurnsExceeded(2));
+        // A second handle from the same ctx observes the write.
+        assert!(matches!(
+            ctx.failure_handle().take(),
+            Some(AgentError::MaxTurnsExceeded(2))
+        ));
+    }
 
     #[test]
     fn with_run_config_round_trips_and_defaults_none() {

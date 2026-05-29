@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::{Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext};
+use crate::{
+    Agent, AgentError, AgentEvent, AgentInput, ContentPart, FailureSlot, Item, RunContext,
+};
 
 /// Pluggable execution backend.
 ///
@@ -178,12 +180,36 @@ impl RunResult<String> {
 pub struct RunResultStreaming {
     /// The event stream produced by the agent's run.
     pub events: futures_core::stream::BoxStream<'static, crate::AgentEvent>,
+    /// Side-channel carrying the run's terminal structured [`AgentError`], when
+    /// a runner wired one in via [`RunResultStreaming::with_failure`]. Read only
+    /// after the stream is fully drained. `None` for a bare
+    /// [`RunResultStreaming::new`], in which case `collect` falls back to the
+    /// string error from [`AgentEvent::RunFailed`].
+    failure: Option<FailureSlot>,
 }
 
 impl RunResultStreaming {
-    /// Wrap an event stream.
+    /// Wrap an event stream with no structured-error side-channel. `collect`
+    /// then surfaces failures as the opaque string from `RunFailed`.
     pub fn new(events: futures_core::stream::BoxStream<'static, crate::AgentEvent>) -> Self {
-        Self { events }
+        Self {
+            events,
+            failure: None,
+        }
+    }
+
+    /// Wrap an event stream together with the [`FailureSlot`] the agent records
+    /// its terminal structured [`AgentError`] into, so `collect` /
+    /// `collect_typed` surface `RunError::Agent` / the real `AgentError` instead
+    /// of the opaque string.
+    pub fn with_failure(
+        events: futures_core::stream::BoxStream<'static, crate::AgentEvent>,
+        failure: FailureSlot,
+    ) -> Self {
+        Self {
+            events,
+            failure: Some(failure),
+        }
     }
 
     /// Drain the stream and aggregate into a `RunResult<String>`.
@@ -199,6 +225,10 @@ impl RunResultStreaming {
         let mut events = Vec::new();
         let mut final_output = String::new();
         let mut usage = crate::TokenUsage::default();
+        // Capture the RunFailed string but keep draining: state-machine failures
+        // record their structured error AFTER yielding RunFailed, so the slot is
+        // only guaranteed populated once the stream ends.
+        let mut failed: Option<String> = None;
 
         while let Some(ev) = self.events.next().await {
             match &ev {
@@ -214,13 +244,18 @@ impl RunResultStreaming {
                 }
                 crate::AgentEvent::RunCompleted { usage: u } => usage = *u,
                 crate::AgentEvent::RunFailed { error } => {
-                    let err_msg = error.clone();
-                    events.push(ev);
-                    return Err(RunError::Other(anyhow::anyhow!(err_msg)));
+                    failed = Some(error.clone());
                 }
                 _ => {}
             }
             events.push(ev);
+        }
+
+        if let Some(err_msg) = failed {
+            if let Some(err) = self.failure.as_ref().and_then(FailureSlot::take) {
+                return Err(RunError::Agent(err));
+            }
+            return Err(RunError::Other(anyhow::anyhow!(err_msg)));
         }
 
         Ok(RunResult {
@@ -251,6 +286,7 @@ impl RunResultStreaming {
         let mut final_text = String::new();
         let mut usage = crate::TokenUsage::default();
         let mut structured_err: Option<(Vec<String>, String)> = None;
+        let mut failed: Option<String> = None;
 
         while let Some(ev) = self.events.next().await {
             match &ev {
@@ -272,19 +308,27 @@ impl RunResultStreaming {
                     structured_err = Some((schema_errors.clone(), ft.clone()));
                 }
                 AgentEvent::RunFailed { error } => {
-                    let error = error.clone();
-                    events.push(ev);
-                    if let Some((schema_errors, final_text)) = structured_err {
-                        return Err(AgentError::InvalidStructuredOutput {
-                            schema_errors,
-                            final_text,
-                        });
-                    }
-                    return Err(AgentError::Other(anyhow::anyhow!(error)));
+                    failed = Some(error.clone());
                 }
                 _ => {}
             }
             events.push(ev);
+        }
+
+        if let Some(err_msg) = failed {
+            // Primary: the structured side-channel (populated post-drain).
+            if let Some(err) = self.failure.as_ref().and_then(FailureSlot::take) {
+                return Err(err);
+            }
+            // Fallback 1: reconstruct InvalidStructuredOutput from its event.
+            if let Some((schema_errors, final_text)) = structured_err {
+                return Err(AgentError::InvalidStructuredOutput {
+                    schema_errors,
+                    final_text,
+                });
+            }
+            // Fallback 2: the opaque string.
+            return Err(AgentError::Other(anyhow::anyhow!(err_msg)));
         }
 
         let final_output = serde_json::from_str::<T>(final_text.trim()).map_err(|e| {
