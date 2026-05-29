@@ -1545,7 +1545,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-runtime-tokio"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
