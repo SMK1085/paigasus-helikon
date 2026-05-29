@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, `tokio` (runtime-tokio only — core stays tokio-runtime-free), `futures-util`, `async-stream`, `async-trait`.
 
-**Spec:** `docs/superpowers/specs/2026-05-29-tokiorunner-design.md` (rev-2). **Review:** `…-design-review.md`.
+**Spec:** `docs/superpowers/specs/2026-05-29-tokiorunner-design.md`.
 
 **Conventions:** Branch `feature/sma-321-tokiorunner-cancellation-timeouts-parallel-tool-calls` (already created). Commit prefix `<type>(<scope>): SMA-### <lowercase subject>`. Before every commit run `cargo fmt --all` and the relevant `cargo clippy … -- -D warnings` (pre-push hook enforces these; failing to run them locally is the #1 CI surprise).
 
@@ -271,7 +271,7 @@ Add two methods inside `impl RunContext` (e.g. after the `cancel` accessor):
     }
 ```
 
-> Do **not** touch `to_tool_context` — it must keep passing only `user_ctx`, `tracer`, and the child cancel token, so `run_config` never leaks into `ToolContext` (review M3).
+> Do **not** touch `to_tool_context` — it must keep passing only `user_ctx`, `tracer`, and the child cancel token, so `run_config` never leaks into `ToolContext`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
