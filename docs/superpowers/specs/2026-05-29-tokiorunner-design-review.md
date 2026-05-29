@@ -2,8 +2,53 @@
 
 **Reviews:** [`2026-05-29-tokiorunner-design.md`](./2026-05-29-tokiorunner-design.md)
 **Reviewer perspective:** staff engineering — fitness against the planned design and downstream blast radius
-**Date:** 2026-05-29
-**Verdict:** **Approve with changes.** Unlike the SMA-320 spec, this one is *faithful to the as-built code* — I verified every load-bearing claim and they hold (object-safe `Runner`, agent-owned driver, `join_all` fan-out, tokio-free core). The headline risks are not "spec vs code" but (a) the **planned design in Notion/Linear is now stale** and contradicts reality, (b) the **driver extraction is premature and mis-justified**, and (c) two seams (`finalize`, `retry_policy`) ship asymmetric or inert. Resolve **D1 scope, H1, and H2** before the plan; reconcile the Notion/Linear items so "the plan" stops being self-contradictory.
+**Date:** 2026-05-29 (rev-1 review) · 2026-05-29 (rev-2 re-review, below)
+**Verdict (rev 2 — current):** **Ready to proceed to plan.** The revised spec resolves every blocking and medium finding; the two reconciliation claims were re-verified against live Notion/Linear and the code. Only minor, plan-level notes remain. See the re-review section directly below; the original rev-1 findings are retained beneath it as the audit trail.
+
+---
+
+## Re-review — revised spec (rev 2, 2026-05-29)
+
+Re-verified the revised spec against the code and the *live* Notion/Linear (not the spec's own assertions). Verdict upgraded from "approve with changes" to **ready to proceed to plan.**
+
+Two reconciliation claims the spec makes — checked, both true:
+
+- **ADR-13 exists.** Notion page *"Runner is object-safe; the Agent owns the loop driver"* was created 2026-05-29; the **Agent Loop & State Machine** page now carries a *"See ADR-13"* reference (updated 2026-05-29); and the **SMA-321 Linear ticket** now has a 2026-05-29 design note superseding the old *"owns the LoopState driver"*, `cancellation`/`retry_policy` fields, and *"select! at every await point"* bullets. C1 is genuinely closed across all four surfaces (spec §1.1, ADR-13, Agent Loop page, Linear).
+- **Correction to my own rev-1 N1.** `noop_run_context` **does** exist — `crates/paigasus-helikon-core/tests/common/mod.rs:179`, used by `loop_happy_path`, `loop_parallel_tools`, and `structured_output`. My rev-1 "doesn't exist" was a faulty sub-agent grep on my side; the spec's §4.2 was right and I was wrong. No action needed; flagging it so the record is honest.
+
+Disposition of the rev-1 findings:
+
+| Item | Rev-1 finding | Status in rev 2 |
+|---|---|---|
+| C1 | Stale Notion/Linear (generic `Runner`, runner-owns-driver) | ✅ Resolved — ADR-13 + Agent Loop page + Linear note (verified live) |
+| C2 | Drop `RunConfig::cancellation`; trim ticket | ✅ Resolved — no field; ticket trimmed |
+| H1 | Driver extraction premature / mis-justified | ✅ Resolved — D1 = "no extraction"; in-place edits; extraction demoted to optional follow-up #3, reframed around `transition` |
+| H2 | `finalize` only on `run_streamed` | ✅ Resolved — seam in both methods; test asserts once-per-path (see residual #1) |
+| H3 | Fragmented config enforcement + dual-source | ✅ Resolved — `[driver-scoped]`/`[runner-scoped]` doc tags; dual-source acknowledged with rationale |
+| H4 | Inert public `retry_policy` on 0.1.0 | ✅ Resolved — D5 omits it; follow-up #2 ships field + mechanism together |
+| M1 | Unbiased `select!` race | ✅ Resolved — `biased`, stream-branch-first, final non-blocking drain; same-poll test added |
+| M2 | Duplicated `collect` accumulation | ✅ Resolved — single `controlled(...)` helper; reuses `RunResultStreaming::collect` |
+| M3 | `RunContext` layering / leak to `ToolContext` | ✅ Resolved — `to_tool_context()` must not copy `run_config`; doc comment |
+| M4 | Typed `RunResult<T>` undelivered | ✅ Resolved as disclosure — §5.5 states it plainly, cross-refs SMA-320/346 |
+| N1 | "nonexistent" `noop_run_context` | ✅ N/A — helper exists; my rev-1 finding was wrong |
+| N2 | 10-arg `drive()` | ✅ Resolved — no extraction ⇒ no `drive()` |
+| N3 | Ascend recipe | ✅ Kept; workspace-dep bump now marked "verified" |
+| N4 | Cooperative-cancel caveat | ✅ Resolved — new §5.4 states it |
+
+### Residual minor items (plan-level, non-blocking)
+
+1. **`finalize` on the agent-failure exit.** §5.2 enumerates finalize on "normal, cancel, timeout" but not the genuine agent-failure path — a `RunFailed` event makes the reused `RunResultStreaming::collect` return `Err(RunError::Other)`, which could short-circuit before `finalize`. Make finalize run on *all four* exits (normal / failure / cancel / timeout), in both methods, or the H2 asymmetry re-appears on the failure path. Cheapest fix: state "finalize runs on every exit, including error," and add a `RunFailed`-scripted variant to the finalize test.
+2. **`OutcomeHandle` read-after-drain ordering.** `controlled(...)` returns `(stream, OutcomeHandle)` and the caller reads the handle *after* draining. The wrapper must commit the outcome reason before the stream yields its terminating `None`, or `run` can read a stale/default outcome. Pin the mechanism in the plan (e.g. set the shared outcome in the same poll that returns `None`).
+3. **Error-fidelity gap between entry points.** `run` returns typed `RunError::Cancelled`/`Timeout`, but `run_streamed(...).collect()` sees the injected `RunFailed { error: String }` and flattens to `RunError::Other`. Consistent with SMA-313/346 keeping the stream string-based — just add a one-line doc note that the aggregate `run` is the path preserving the typed cancel/timeout reason (fully closed by SMA-346).
+4. *(Trivia)* §5.5 references `collect_typed` beside `parse_final` — confirm that's a real SMA-320 deliverable; if not, drop it and keep `parse_final::<T>()`.
+
+None of these block the plan.
+
+---
+
+## Original review (rev 1) — retained for the record; all items dispositioned in the table above
+
+**Verdict (rev 1):** **Approve with changes.** Unlike the SMA-320 spec, this one is *faithful to the as-built code* — I verified every load-bearing claim and they hold (object-safe `Runner`, agent-owned driver, `join_all` fan-out, tokio-free core). The headline risks are not "spec vs code" but (a) the **planned design in Notion/Linear is now stale** and contradicts reality, (b) the **driver extraction is premature and mis-justified**, and (c) two seams (`finalize`, `retry_policy`) ship asymmetric or inert. Resolve **D1 scope, H1, and H2** before the plan; reconcile the Notion/Linear items so "the plan" stops being self-contradictory.
 
 ## What this was checked against
 

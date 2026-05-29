@@ -206,22 +206,33 @@ fn controlled(
   already-ready terminal event before deciding.
 - On cancel/deadline the wrapper records the reason in `OutcomeHandle`
   (`Completed | Cancelled | TimedOut`) and ends; dropping the inner `stream` cancels
-  nested in-flight awaits (model HTTP stream, tool futures) within one poll (D4).
+  nested in-flight awaits (model HTTP stream, tool futures) within one poll (D4). When
+  the inner stream ends on its own, the wrapper commits `Completed`.
+- **Ordering invariant (review #2):** the wrapper must commit the `OutcomeHandle` value
+  **in the same poll that it yields the terminating `None`** (before the consumer sees
+  end-of-stream), so a caller reading the handle *after* draining never observes a stale
+  or default outcome. The plan pins this (e.g. set the shared cell, then return `None`).
 
 ### 5.2 `run` — aggregate to `RunResult`
 
 `run` wraps the stream with `controlled(...)`, accumulates via the existing
 `RunResultStreaming::collect` logic (one definition of "stream → `RunResult`"; review
-M2), then maps the `OutcomeHandle`:
+M2), captures the `Result` **without `?`-short-circuiting**, runs `finalize`, *then*
+maps the `OutcomeHandle` + collect result:
 
-- `Completed` → `Ok(RunResult)`.
-- `Cancelled` → `Err(RunError::Cancelled)`; `TimedOut` → `Err(RunError::Timeout)`.
+- handle `Cancelled` → `Err(RunError::Cancelled)`; `TimedOut` → `Err(RunError::Timeout)`.
   (The wrapper ends the stream cleanly on these, so `collect` returns the partial
   accumulation; the typed error comes from the handle, not from a stringified
   `RunFailed` — which would otherwise flatten to `RunError::Other`.)
+- handle `Completed` → return `collect`'s own `Result`: `Ok(RunResult)` on success, or
+  `Err(RunError::Other)` on a genuine **agent failure** (a `RunFailed` event in the
+  stream; structured form deferred to SMA-346).
 
-Then call `finalize(&session).await` (no-op now) on **every** exit path — normal,
-cancel, and timeout (review H2).
+**`finalize(&session).await` (no-op now) runs on all four exits — normal, agent
+failure, cancel, timeout — in both methods (review H2 + residual #1).** The agent-failure
+path is the trap: because `run` reuses `collect` (which returns `Err` on `RunFailed`),
+`finalize` must be sequenced *before* the error is propagated, never after a `?`. Do not
+write `let r = collect().await?; finalize().await;`.
 
 ### 5.3 `run_streamed` — pass-through with control + finalize seam
 
@@ -232,10 +243,18 @@ Return a `RunResultStreaming` wrapping an `async_stream!` that pumps the
 - On `Cancelled` / `TimedOut`, yield a terminal `AgentEvent::RunFailed { error }`
   (`"run cancelled"` / `"run timed out"`) for streaming consumers. *(String-based per
   SMA-313; SMA-346 will carry the structured error.)*
-- After the inner stream completes (any path), call `finalize(&session).await`
-  (**no-op in SMA-321**), then end the outer stream. This is what makes the outer stream
-  "not done until finalization finishes" and is the documented seam for session
-  persistence + compaction.
+- After the inner stream ends on **any** path — normal, agent failure (`RunFailed`
+  passes through), cancel, timeout — call `finalize(&session).await` (**no-op in
+  SMA-321**), then end the outer stream. This is what makes the outer stream "not done
+  until finalization finishes" and is the documented seam for session persistence +
+  compaction.
+
+**Error-fidelity note across entry points (review #3).** `run` is the path that
+preserves the typed cancel/timeout reason (`RunError::Cancelled` / `Timeout`).
+`run_streamed(...).collect()` instead sees the injected `RunFailed { error: String }`
+and flattens it to `RunError::Other` — consistent with SMA-313/346 keeping the event
+stream string-based. This gap is fully closed by SMA-346 (structured `AgentError` at the
+boundary).
 
 ### 5.4 Cancellation caveat (review N4)
 
@@ -266,7 +285,7 @@ All tests use scripted mocks. `runtime-tokio` gets its own `tests/common/mod.rs`
 | #2 concurrency | 5 barrier-synced tools through `TokioRunner` | all run concurrently (barrier releases; outer `timeout` guard catches a serial deadlock) |
 | #2 bound | `parallel_tool_call_limit = 2` with 4 barrier tools in two waves | concurrency capped at 2 |
 | #3 ordering | happy-path run through `TokioRunner` | events ordered lifecycle → semantic → terminal |
-| finalize | counting `NoopSession`; run normal / cancel / timeout | `finalize` invoked exactly once on every path, in both `run` and `run_streamed` (H2) |
+| finalize | counting `NoopSession`; run normal / **agent-failure (`RunFailed`-scripted)** / cancel / timeout | `finalize` invoked exactly once on every one of the four paths, in both `run` and `run_streamed` (H2 + residual #1) |
 | core | `buffered` order-preservation unit test | outcome order == call order under a limit |
 | regression | existing `core` loop tests (`loop_happy_path`, `loop_parallel_tools`, `structured_output`, …) | stay green after the in-place edits |
 
