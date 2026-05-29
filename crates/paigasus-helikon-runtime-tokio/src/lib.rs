@@ -134,8 +134,25 @@ where
         input: AgentInput,
         config: RunConfig,
     ) -> Result<RunResultStreaming, RunError> {
+        let timeout = config.timeout;
         let ctx = ctx.with_run_config(config);
+        let cancel = ctx.cancel().clone();
+        let session = ctx.session().clone();
+
         let stream = agent.run(ctx, input).await?;
-        Ok(RunResultStreaming::new(stream))
+        let (mut controlled_stream, outcome) = controlled(stream, cancel, timeout);
+
+        let out = async_stream::stream! {
+            while let Some(ev) = controlled_stream.next().await {
+                yield ev;
+            }
+            match outcome.get() {
+                Outcome::Cancelled => yield AgentEvent::RunFailed { error: "run cancelled".to_owned() },
+                Outcome::TimedOut => yield AgentEvent::RunFailed { error: "run timed out".to_owned() },
+                Outcome::Completed => {}
+            }
+            finalize(&session).await;
+        };
+        Ok(RunResultStreaming::new(Box::pin(out)))
     }
 }
