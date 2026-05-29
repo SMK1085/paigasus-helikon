@@ -5,6 +5,9 @@
 //! (`paigasus-helikon-runtime-temporal`), and AWS AgentCore
 //! (`paigasus-helikon-runtime-agentcore`).
 
+use std::num::NonZeroUsize;
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use crate::{Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext};
@@ -81,20 +84,32 @@ where
 
 /// Per-run configuration.
 ///
-/// SMA-314 ships only `max_turns`. SMA-321 (TokioRunner) adds
-/// `timeout`, `parallel_tool_call_limit`, `retry_policy`, and
-/// `cancellation`.
+/// SMA-314 shipped `max_turns`; SMA-321 added `timeout` and
+/// `parallel_tool_call_limit`. Cancellation is intentionally *not* a field
+/// here — the canonical token lives on [`crate::RunContext`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RunConfig {
-    /// Maximum number of model turns before the loop fails with
-    /// [`crate::AgentError::MaxTurnsExceeded`]. Default `16`.
+    /// `[driver-scoped]` Maximum number of model turns before the loop fails
+    /// with [`crate::AgentError::MaxTurnsExceeded`]. Honored by the core loop
+    /// driver, including on a bare `agent.run()` with no runner. Default `16`.
     pub max_turns: u32,
+    /// `[runner-scoped]` Wall-clock deadline for the whole run. Honored ONLY by
+    /// a runtime backend (e.g. `TokioRunner`); a bare `agent.run()` cannot time
+    /// out (core has no timer). `None` = no deadline.
+    pub timeout: Option<Duration>,
+    /// `[driver-scoped]` Cap on concurrently-executing tool calls. Honored by
+    /// the core loop driver. `None` = unbounded (today's behavior).
+    pub parallel_tool_call_limit: Option<NonZeroUsize>,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
-        Self { max_turns: 16 }
+        Self {
+            max_turns: 16,
+            timeout: None,
+            parallel_tool_call_limit: None,
+        }
     }
 }
 
@@ -102,6 +117,18 @@ impl RunConfig {
     /// Construct a default config (`max_turns = 16`).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the wall-clock run deadline. Honored by a runtime backend (e.g. `TokioRunner`).
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Cap the number of tool calls executed concurrently. Honored by the core loop driver.
+    pub fn with_parallel_tool_call_limit(mut self, limit: NonZeroUsize) -> Self {
+        self.parallel_tool_call_limit = Some(limit);
+        self
     }
 }
 
@@ -328,4 +355,23 @@ pub enum RunError {
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod runconfig_tests {
+    use super::*;
+
+    #[test]
+    fn run_config_defaults_and_builders() {
+        let c = RunConfig::default();
+        assert_eq!(c.max_turns, 16);
+        assert!(c.timeout.is_none());
+        assert!(c.parallel_tool_call_limit.is_none());
+
+        let c = RunConfig::new()
+            .with_timeout(std::time::Duration::from_secs(5))
+            .with_parallel_tool_call_limit(std::num::NonZeroUsize::new(3).unwrap());
+        assert_eq!(c.timeout, Some(std::time::Duration::from_secs(5)));
+        assert_eq!(c.parallel_tool_call_limit, std::num::NonZeroUsize::new(3));
+    }
 }
