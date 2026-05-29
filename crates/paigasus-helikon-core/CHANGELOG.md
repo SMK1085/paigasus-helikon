@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.0...paigasus-helikon-core-v0.2.1) - 2026-05-29
+
+### Added
+
+- *(core)* SMA-321 add `RunConfig::timeout` and `parallel_tool_call_limit` (+ builders), `RunError::Timeout`, `RunContext::{with_run_config, run_config}`, and bounded tool-call concurrency. Publishes the API that `paigasus-helikon-runtime-tokio` 0.1.0 depends on (the runtime crate's first publish failed against the stale core 0.2.0).
+
 ## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.1.1...paigasus-helikon-core-v0.2.0) - 2026-05-29
 
 ### Added
