@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.1.1...paigasus-helikon-providers-openai-v0.2.0) - 2026-05-29
+
+### Added
+
+- *(core)* [**breaking**] SMA-320 honor output_type<T> with structured validation and one-shot repair ([#43](https://github.com/SMK1085/paigasus-helikon/pull/43))
+
 ## [0.1.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.1.0...paigasus-helikon-providers-openai-v0.1.1) - 2026-05-28
 
 ### Other
