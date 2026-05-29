@@ -582,6 +582,13 @@ where
             .collect();
 
         let stream = async_stream::stream! {
+            // SMA-346: structured failures are recorded here and read by the
+            // boundary after the stream drains (see RunResultStreaming::collect).
+            // Invariant: every terminal-failure path must `failure.set(...)`
+            // before it `return`s (direct sites), or rely on the `Terminate`
+            // arm (state-machine sites via LoopState::Failed).
+            let failure = ctx.failure_handle();
+
             // Seed conversation: optional system message + user input.
             let mut conversation: Vec<crate::Item> = Vec::new();
             if !instructions_text.is_empty() {
@@ -616,7 +623,9 @@ where
                         let mut model_stream = match model.invoke(request, cancel).await {
                             Ok(s) => s,
                             Err(e) => {
-                                yield crate::AgentEvent::RunFailed { error: e.to_string() };
+                                let msg = e.to_string();
+                                failure.set(crate::AgentError::Model(e));
+                                yield crate::AgentEvent::RunFailed { error: msg };
                                 return;
                             }
                         };
@@ -679,7 +688,9 @@ where
                                     finish_reason = reason;
                                 }
                                 Err(e) => {
-                                    yield crate::AgentEvent::RunFailed { error: e.to_string() };
+                                    let msg = e.to_string();
+                                    failure.set(crate::AgentError::Model(e));
+                                    yield crate::AgentEvent::RunFailed { error: msg };
                                     return;
                                 }
                             }
@@ -688,6 +699,7 @@ where
                         let items = match build_items(&agent_name, text, reasoning, tool_accum) {
                             Ok(items) => items,
                             Err(e) => {
+                                failure.set(crate::AgentError::Other(anyhow::anyhow!(e.clone())));
                                 yield crate::AgentEvent::RunFailed { error: e };
                                 return;
                             }
@@ -719,7 +731,18 @@ where
                         }
                         tx_input = crate::TransitionInput::ToolResults { outcomes };
                     }
-                    crate::NextAction::Terminate => return,
+                    crate::NextAction::Terminate => {
+                        // On a terminal failure the driver left the structured
+                        // error in loop_state; hand it to the slot. (Every
+                        // LoopState::Failed branch in loop_state.rs Terminates,
+                        // so this is the single capture point for all of them.)
+                        // This runs AFTER the RunFailed event was yielded, which
+                        // is why the boundary must drain-then-read.
+                        if let crate::LoopState::Failed(err) = loop_state {
+                            failure.set(err);
+                        }
+                        return;
+                    }
                 }
             }
         };
