@@ -144,14 +144,34 @@ where
 
         let out = async_stream::stream! {
             while let Some(ev) = controlled_stream.next().await {
+                // Finalize BEFORE exposing a terminal event: a consumer may stop
+                // polling (and drop the stream) the moment it sees the terminal,
+                // so anything after the `yield` could never run.
+                if matches!(
+                    ev,
+                    AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
+                ) {
+                    finalize(&session).await;
+                }
                 yield ev;
             }
+            // Cancel/timeout: the inner stream ended without a terminal event, so
+            // synthesize one — again after finalize, for the same reason.
             match outcome.get() {
-                Outcome::Cancelled => yield AgentEvent::RunFailed { error: "run cancelled".to_owned() },
-                Outcome::TimedOut => yield AgentEvent::RunFailed { error: "run timed out".to_owned() },
+                Outcome::Cancelled => {
+                    finalize(&session).await;
+                    yield AgentEvent::RunFailed {
+                        error: "run cancelled".to_owned(),
+                    };
+                }
+                Outcome::TimedOut => {
+                    finalize(&session).await;
+                    yield AgentEvent::RunFailed {
+                        error: "run timed out".to_owned(),
+                    };
+                }
                 Outcome::Completed => {}
             }
-            finalize(&session).await;
         };
         Ok(RunResultStreaming::new(Box::pin(out)))
     }

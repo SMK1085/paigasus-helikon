@@ -215,3 +215,38 @@ async fn finalize_runs_on_streamed_exits() {
         "finalize on cancelled streamed exit"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn finalize_runs_even_if_consumer_stops_at_terminal() {
+    // A consumer that drops the stream the moment it sees the terminal event
+    // must still have triggered finalize — it runs before the terminal is
+    // exposed, not on a later poll the consumer never makes.
+    let session = CountingSession::new();
+    let agent = text_agent(MockModel::quick_hi(), Vec::new());
+    let rs = TokioRunner
+        .run_streamed(
+            &agent,
+            run_context_with_session(session.clone() as Arc<dyn Session>),
+            AgentInput::from_user_text("go"),
+            RunConfig::default(),
+        )
+        .await
+        .expect("starts");
+
+    let mut s = rs.events;
+    while let Some(ev) = s.next().await {
+        if matches!(
+            ev,
+            AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
+        ) {
+            break; // stop at the terminal and drop the stream below
+        }
+    }
+    drop(s);
+
+    assert_eq!(
+        session.append_count(),
+        1,
+        "finalize must run before the terminal event is exposed"
+    );
+}

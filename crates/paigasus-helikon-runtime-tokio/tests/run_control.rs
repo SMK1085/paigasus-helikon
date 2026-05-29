@@ -120,7 +120,7 @@ async fn finalize_runs_on_every_run_exit() {
         cancel.clone(),
     );
     let agent = text_agent(std::sync::Arc::new(PendingModel), Vec::new());
-    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+    let cancel_res = tokio::time::timeout(Duration::from_secs(5), async {
         let run_fut = TokioRunner.run(
             &agent,
             ctx,
@@ -136,12 +136,16 @@ async fn finalize_runs_on_every_run_exit() {
     })
     .await
     .expect("cancel within 5s");
+    assert!(
+        matches!(cancel_res, Err(RunError::Cancelled)),
+        "expected cancel path, got {cancel_res:?}"
+    );
     assert_eq!(session.append_count(), 1, "finalize on cancel exit");
 
     // 4. timeout
     let session = CountingSession::new();
     let agent = text_agent(std::sync::Arc::new(PendingModel), Vec::new());
-    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+    let timeout_res = tokio::time::timeout(Duration::from_secs(5), async {
         TokioRunner
             .run(
                 &agent,
@@ -153,5 +157,9 @@ async fn finalize_runs_on_every_run_exit() {
     })
     .await
     .expect("timeout within 5s");
+    assert!(
+        matches!(timeout_res, Err(RunError::Timeout)),
+        "expected timeout path, got {timeout_res:?}"
+    );
     assert_eq!(session.append_count(), 1, "finalize on timeout exit");
 }
