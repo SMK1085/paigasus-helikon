@@ -3,8 +3,16 @@
 
 use paigasus_helikon_core::{
     transition, AgentEvent, ContentPart, FinishReason, Item, LoopState, ModelSettings, NextAction,
-    TokenUsage, ToolCallOutcome, ToolCallRequest, TransitionCtx, TransitionInput,
+    OutputType, ResponseFormat, TokenUsage, ToolCallOutcome, ToolCallRequest, TransitionCtx,
+    TransitionInput,
 };
+
+/// Minimal schema struct for structured-output tests.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct Answer {
+    #[allow(dead_code)]
+    value: u32,
+}
 
 macro_rules! assert_matches {
     ($expr:expr, $pat:pat $(,)?) => {
@@ -318,4 +326,90 @@ fn tool_results_at_max_turns_preserves_outputs_before_failing() {
     assert_matches!(&outcome.events[0], AgentEvent::ToolOutputItem { .. });
     assert_matches!(&outcome.events[1], AgentEvent::ToolOutputItem { .. });
     assert_matches!(&outcome.events[2], AgentEvent::RunFailed { .. });
+}
+
+// --- SMA-320 structured-output finalizing request shape tests ---
+
+/// AC#1: when `output` is `Some` and `tools` is empty, the Start arm emits a
+/// `Finalizing` next-state whose `CallModel` request carries `response_format:
+/// JsonSchema { strict: true, name: "Answer", .. }` and an empty tools list.
+#[test]
+fn finalizing_request_carries_response_format_and_no_tools() {
+    let output_type = OutputType::from_schema::<Answer>();
+    let settings = ModelSettings::new();
+    let conversation: Vec<Item> = vec![];
+    let ctx = TransitionCtx {
+        tools: &[],
+        model_settings: &settings,
+        max_turns: 16,
+        conversation: &conversation,
+        output: Some(&output_type),
+    };
+
+    let state = LoopState::CallingModel { turn: 0 };
+    let input = TransitionInput::Start { messages: vec![] };
+    let outcome = transition(&state, input, &ctx);
+
+    // State must become Finalizing.
+    assert_matches!(outcome.next_state, LoopState::Finalizing { .. });
+
+    // Action must be CallModel with an empty tools list and JsonSchema response_format.
+    match outcome.next_action {
+        NextAction::CallModel { request } => {
+            assert!(
+                request.tools.is_empty(),
+                "finalizing request must have no tools, got {:?}",
+                request.tools
+            );
+            match request.model_settings.response_format {
+                Some(ResponseFormat::JsonSchema { name, strict, .. }) => {
+                    assert_eq!(name, "Answer");
+                    assert!(strict, "strict must be true on the finalizing request");
+                }
+                other => panic!("expected ResponseFormat::JsonSchema, got {:?}", other),
+            }
+        }
+        other => panic!("expected NextAction::CallModel, got {:?}", other),
+    }
+}
+
+/// D6 precedence: when the caller pre-sets `model_settings.response_format`
+/// to `Text`, the finalizing request must still carry `JsonSchema` derived
+/// from `output_type` — the output_type wins.
+#[test]
+fn output_type_overrides_caller_response_format_on_finalizing_turn() {
+    let output_type = OutputType::from_schema::<Answer>();
+    // Caller explicitly sets Text — should be overridden.
+    let mut settings = ModelSettings::new();
+    settings.response_format = Some(ResponseFormat::Text);
+    let conversation: Vec<Item> = vec![];
+    let ctx = TransitionCtx {
+        tools: &[],
+        model_settings: &settings,
+        max_turns: 16,
+        conversation: &conversation,
+        output: Some(&output_type),
+    };
+
+    let state = LoopState::CallingModel { turn: 0 };
+    let input = TransitionInput::Start { messages: vec![] };
+    let outcome = transition(&state, input, &ctx);
+
+    assert_matches!(outcome.next_state, LoopState::Finalizing { .. });
+
+    match outcome.next_action {
+        NextAction::CallModel { request } => {
+            match request.model_settings.response_format {
+                Some(ResponseFormat::JsonSchema { name, strict, .. }) => {
+                    assert_eq!(name, "Answer", "output_type name must prevail over caller Text");
+                    assert!(strict);
+                }
+                other => panic!(
+                    "expected ResponseFormat::JsonSchema (output_type must win over caller Text), got {:?}",
+                    other
+                ),
+            }
+        }
+        other => panic!("expected NextAction::CallModel, got {:?}", other),
+    }
 }
