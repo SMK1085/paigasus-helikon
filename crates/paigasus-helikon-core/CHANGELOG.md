@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.1...paigasus-helikon-core-v0.2.2) - 2026-05-29
+
+### Added
+
+- *(core)* SMA-346 surface the structured `AgentError` at the runner boundary: add `FailureSlot`, `RunContext::failure_handle`, and `RunResultStreaming::with_failure`. `Runner::run` and `collect`/`collect_typed` now return `RunError::Agent(AgentError::…)` for agent failures instead of an opaque string; `AgentEvent::RunFailed { error: String }` is unchanged. Publishes the API that `paigasus-helikon-runtime-tokio` depends on in the same change.
+
 ## [0.2.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.0...paigasus-helikon-core-v0.2.1) - 2026-05-29
 
 ### Added
