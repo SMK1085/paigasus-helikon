@@ -45,7 +45,7 @@ direct (non-`Runner`) path:
 |---|----------|--------|
 | D1 | Where validate-and-repair lives | **Pure `transition()` state machine** — replayable for future durable runners. |
 | D2 | `OutputType` payload | **Validator-only closure** `fn(&Value) -> Result<(), Vec<String>>`. Deviates from the Linear-listed `fn(Value)->Result<Box<dyn Any>,_>` trampoline: the `AgentEvent` stream erases `T`, so a boxed `Any` cannot ride it out; the typed value is materialized by `collect_typed::<T>()`, which re-parses the validated text. A `Box<dyn Any>` would be dead weight. |
-| D3 | Validation engine | **Two-tier:** serde `from_value::<T>` is authoritative; `jsonschema` enriches the error list (best-effort). |
+| D3 | Validation engine | **serde-only.** `schema_errors` come from `serde_json::from_value::<T>` error strings. The two-tier design (serde authoritative + `jsonschema` enrichment) was considered, but `jsonschema`'s MSRV (1.83, verified at implementation time) exceeds the workspace MSRV (1.75), so per the graceful-degradation clause below `jsonschema` is **not** added — serde is the sole error source. |
 | D4 | `strict()` layering | **Core owns one shared helper `core::schema::strict()` that providers *call*; core does NOT pre-apply it.** Core passes the **raw** schemars schema with `strict: true`; each provider normalizes for itself. |
 | D5 | Repair budget | **Separate one-shot counter**, not charged to `max_turns`. Observable via a new `AgentEvent::RepairStarted` (not by counting `TurnStarted`). |
 | D6 | `response_format` precedence | On the **finalizing/repair turn only**, `output_type` overrides any caller-set `response_format`. Tool-phase turns are unconstrained. |
@@ -88,7 +88,7 @@ impl RunResultStreaming {
 ```rust
 pub struct OutputType {
     pub name: String,                 // schema title / T ident; → ResponseFormat.name + repair text
-    pub schema: schemars::Schema,     // raw schemars schema; → response_format + jsonschema enrichment
+    pub schema: schemars::Schema,     // raw schemars schema; → response_format
     validate: fn(&serde_json::Value) -> Result<(), Vec<String>>, // body: serde_json::from_value::<T>
 }
 ```
@@ -175,10 +175,10 @@ not held across `.await`.)
 2. On unconstrained-fallback formats only (`JsonObject`, no-strict providers), apply lenient
    extraction first — strip ```` ```json ```` fences / take the first JSON value — before
    declaring failure. On the two implemented providers output is clean by construction.
-3. Run `output.validate(&value)` (serde, authoritative):
+3. Run `output.validate(&value)` (serde):
    - `Ok` → `Done(FinalOutput { content, usage })`.
-   - `Err(serde_errs)` → build `schema_errors` via `jsonschema` against `output.schema`
-     (fall back to `serde_errs` if jsonschema reports nothing), then:
+   - `Err(schema_errors)` → `schema_errors` are the `serde_json::from_value::<T>` error
+     strings (non-JSON yields a "response was not valid JSON" message), then:
      - from `Finalizing` (repair available): → `RepairingOutput`, emit
        `AgentEvent::RepairStarted { attempt: 1 }`, issue a constrained CallModel carrying a
        repair `Item::UserMessage`.
@@ -220,11 +220,11 @@ protect an existing variant's shape.
 
 ### Dependencies
 
-- Add `jsonschema` to `[workspace.dependencies]` + core (`workspace = true`).
-- **MSRV risk:** if `jsonschema`'s MSRV exceeds the workspace's `1.75`, **degrade
-  gracefully** — drop the dep and emit `schema_errors` from the serde error string alone.
-  serde is the authoritative gate (D3), so jsonschema is non-critical (error richness only).
-  Do **not** bump MSRV for error-message cosmetics; `cargo msrv … verify` stays green.
+- **No new dependency.** Adding `jsonschema` (for richer `schema_errors`) was considered,
+  but its MSRV is `1.83` (verified at implementation time) — above the workspace MSRV of
+  `1.75`. Per the graceful-degradation stance (D3), `jsonschema` is **not** added: `schema_errors`
+  come from serde error strings alone. We do **not** bump MSRV for error-message cosmetics;
+  `cargo msrv … verify` stays green.
 
 ## Tests & acceptance criteria
 
@@ -253,8 +253,8 @@ protect an existing variant's shape.
 - `OutputType::from_schema::<T>()` populates `name`+`schema`; `validate` Ok/Err; title fallback non-empty.
 - `response_format` precedence: finalizing request reflects the `output_type` schema even when
   the caller set `model_settings.response_format`.
-- jsonschema enrichment: a nested-type (`$defs`) schema produces sensible messages; the
-  serde-only fallback path is exercised.
+- serde `schema_errors`: a schema-mismatch (missing/wrong-typed field) and a non-JSON
+  response each produce a non-empty `schema_errors` list.
 
 **CI gates** (all must pass): fmt, clippy `--all-features --all-targets -D warnings`,
 `test --all-features`, `RUSTDOCFLAGS=-D warnings doc`, doc-coverage ≥ 80%, `convco`, deny,
@@ -271,12 +271,11 @@ audit. All new `pub` items need `///` docs.
 
 ## Risks
 
-1. **`jsonschema` MSRV vs 1.75** — mitigated by graceful degradation to serde-only errors.
+1. **`schema_errors` quality** — serde error strings are single-error and terminate at the
+   first mismatch (no full multi-error schema report). Accepted: richer reporting would need
+   `jsonschema`, whose MSRV (1.83) exceeds the workspace's 1.75 (D3 / Dependencies).
 2. **Real-provider repair coverage ≈ nil** — constrained output is schema-valid by
    construction on both implemented providers, so the repair path is exercised only by
    `MockModel`; the feature-gated example is out of CI. The mock tests are the mitigation;
    bugs in repair will hide on real providers. Accepted, documented.
 3. **Replay determinism** — replay binary must define the same `T`/schema.
-4. **jsonschema enrichment vs enforced schema** — error text is built from the raw schema,
-   which may differ from the per-provider strict-normalized schema actually enforced;
-   best-effort only, serde covers correctness.
