@@ -1414,6 +1414,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 name = "paigasus-helikon"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "cargo-husky",
  "paigasus-helikon-core",
  "paigasus-helikon-evals",
@@ -1430,6 +1431,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tokio",
  "trybuild",
 ]
 
