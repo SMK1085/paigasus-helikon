@@ -1545,7 +1545,18 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-runtime-tokio"
-version = "0.0.0"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "futures-core",
+ "futures-util",
+ "paigasus-helikon-core",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "paigasus-helikon-sessions-sqlite"

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::{Hook, Session, ToolContext};
+use crate::{Hook, RunConfig, Session, ToolContext};
 
 /// Carries the per-run state shared across the agent loop, tools,
 /// guardrails, and hooks.
@@ -52,6 +52,12 @@ where
     hooks: HookRegistry<Ctx>,
     tracer: TracerHandle,
     cancel: CancellationToken,
+    /// Per-invocation execution policy, injected by a `Runner` (e.g.
+    /// `TokioRunner`). This is the runner-injection channel, **not** general
+    /// context state: it is deliberately NOT surfaced into [`ToolContext`] by
+    /// [`RunContext::to_tool_context`]. `None` when an agent is run directly
+    /// without a runner.
+    run_config: Option<RunConfig>,
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -72,6 +78,7 @@ where
             hooks,
             tracer,
             cancel,
+            run_config: None,
         }
     }
 
@@ -96,6 +103,18 @@ where
         &self.cancel
     }
 
+    /// Borrow the per-invocation [`RunConfig`], if a runner installed one.
+    pub fn run_config(&self) -> Option<&RunConfig> {
+        self.run_config.as_ref()
+    }
+
+    /// Install the per-invocation [`RunConfig`] (consuming builder). A
+    /// [`crate::Runner`] calls this before [`crate::Agent::run`].
+    pub fn with_run_config(mut self, config: RunConfig) -> Self {
+        self.run_config = Some(config);
+        self
+    }
+
     /// Project the narrower [`ToolContext`] from this [`RunContext`].
     ///
     /// Tools receive `user_ctx`, `tracer`, and a **child** cancellation
@@ -112,6 +131,32 @@ where
             self.tracer.clone(),
             self.cancel.child_token(),
         )
+    }
+}
+
+#[cfg(test)]
+mod runcontext_tests {
+    use super::*;
+    use crate::{MemorySession, RunConfig};
+    use std::sync::Arc;
+
+    #[test]
+    fn with_run_config_round_trips_and_defaults_none() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        );
+        assert!(ctx.run_config().is_none());
+
+        let ctx =
+            ctx.with_run_config(RunConfig::new().with_timeout(std::time::Duration::from_secs(1)));
+        assert_eq!(
+            ctx.run_config().unwrap().timeout,
+            Some(std::time::Duration::from_secs(1))
+        );
     }
 }
 

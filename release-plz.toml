@@ -43,11 +43,6 @@ publish = false
 release = false
 
 [[package]]
-name = "paigasus-helikon-runtime-tokio"
-publish = false
-release = false
-
-[[package]]
 name = "paigasus-helikon-runtime-axum"
 publish = false
 release = false
