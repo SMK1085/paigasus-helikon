@@ -352,6 +352,10 @@ pub enum RunError {
     #[error("cancelled")]
     Cancelled,
 
+    /// The run exceeded its configured [`RunConfig::timeout`].
+    #[error("run timed out")]
+    Timeout,
+
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -360,6 +364,11 @@ pub enum RunError {
 #[cfg(test)]
 mod runconfig_tests {
     use super::*;
+
+    #[test]
+    fn run_error_timeout_displays() {
+        assert_eq!(RunError::Timeout.to_string(), "run timed out");
+    }
 
     #[test]
     fn run_config_defaults_and_builders() {
