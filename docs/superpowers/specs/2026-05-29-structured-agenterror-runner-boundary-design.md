@@ -49,7 +49,8 @@ A slot lives on `RunContext` (decided over changing the `Agent::run` signature).
 lowest blast radius, reuses the established `Arc<Mutex<…>>` idiom, and keeps the `Agent` trait —
 the SDK's most important public contract — stable. `RunContext` already initializes
 `run_config: None` internally with no caller-supplied parameter, so a slot field added the same
-way needs **no changes to any of the 7 construction sites**.
+way needs **no changes to any existing `RunContext::new` call site** (all ~9 are in
+test/example helpers and call the public 5-arg constructor; the new field is defaulted inside it).
 
 `RunContext` is not `Clone`, but that is fine: the slot is an `Arc`-backed handle that is
 independently cloneable (exactly like `cancel` / `session`). The runner clones the handle
@@ -71,16 +72,41 @@ pub struct FailureSlot(Arc<Mutex<Option<AgentError>>>);
 
 impl FailureSlot {
     pub fn new() -> Self { Self::default() }
-    /// Record the structured error (called once, immediately before the terminal RunFailed event).
-    pub fn set(&self, err: AgentError) { *self.0.lock().unwrap() = Some(err); }
-    /// Take the recorded error at the boundary (read once after draining).
-    pub fn take(&self) -> Option<AgentError> { self.0.lock().unwrap().take() }
+    /// Record the structured error. Recorded once at any point before the
+    /// stream terminates (see the read contract in §4); last write wins.
+    pub fn set(&self, err: AgentError) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
+    }
+    /// Take the recorded error at the boundary, after the stream is fully drained.
+    pub fn take(&self) -> Option<AgentError> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
 }
+
+// Guard: a future non-Send/Sync payload added to AgentError must fail HERE,
+// loudly, rather than as a confusing downstream `BoxStream<…>: !Send` error.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<FailureSlot>();
+};
 ```
 
 `Clone` is the Arc-handle clone (same underlying slot), which is what lets the runner read what
-the stream wrote. A manual `Debug` impl (via `Mutex`'s `try_lock`-based `Debug`) may be added for
-ergonomics; not required.
+the stream wrote (M2).
+
+- **`Send + Sync` (M2):** `FailureSlot` must stay `Send + Sync` so `RunContext` stays
+  `Send + Sync` and the agent's `BoxStream<'static, AgentEvent>` stays `Send`. That requires
+  `AgentError: Send + Sync` — true today (all payloads: `ModelError`, `ToolError`,
+  `SessionError`, `GuardrailKind`, `anyhow::Error` are `Send + Sync`). The `const _` assertion
+  above pins this invariant.
+- **Poison hardening (M3):** `lock().unwrap_or_else(|e| e.into_inner())` rather than bare
+  `unwrap()`. The critical sections can't panic while holding the lock, so the value is always
+  consistent; recovering the guard avoids a confusing double-panic at the boundary if some
+  unrelated code ever poisons it.
+- **`Debug` is optional — and *why* (N2):** `RunContext` derives **neither `Debug` nor `Clone`**,
+  so adding a non-`Debug` field forces no derive. (The usual reason a field must be `Debug` —
+  `#[derive(Debug)]` on the container — does not apply here.) A manual `Debug` may still be added
+  for ergonomics; not required.
 
 ### 2. `RunContext` gains the slot (core, `context.rs`)
 
@@ -116,6 +142,11 @@ string event is byte-for-byte unchanged**:
   Success terminals are not `LoopState::Failed`, so the guard skips them. Event ordering is
   unchanged (events are still yielded before this point).
 
+  This `set` runs *after* the `RunFailed` yield, which is **only** correct because §4's read
+  contract drains the stream to `None` before reading the slot — by which point the generator has
+  resumed and executed this arm. (The three direct sites above `set` *before* their yield and so
+  would work under either read discipline; the `Terminate`-arm sites depend on drain-then-read.)
+
 This captures **all six** failure pathways with full fidelity.
 
 > Note: `AgentError::Tool` has **no** terminal construction site today — tool errors become
@@ -125,10 +156,57 @@ This captures **all six** failure pathways with full fidelity.
 
 - Add private field `failure: Option<FailureSlot>`. `new()` sets `None` (backward-compatible).
   Add `with_failure(events, slot)` constructor.
-- `collect()`: on `RunFailed`, **prefer the slot** → `Err(RunError::Agent(err))`; fall back to
-  today's `RunError::Other(anyhow::anyhow!(string))` when the slot is absent or empty.
-- `collect_typed()`: prefer the slot → return the real `AgentError` directly; keep the existing
-  `StructuredOutputFailed`-event reconstruction as the no-slot fallback.
+
+**Read contract — drain *then* read (the H1 fix).** This is the load-bearing correction. The
+slot is recorded at different points depending on the failure site: the three direct
+stream-block sites `set` *before* yielding `RunFailed`, but the three state-machine sites
+(`MaxTurnsExceeded`, `NotImplemented`, `InvalidStructuredOutput`) `set` in the driver's
+`Terminate` arm, which runs *after* `RunFailed` is yielded (§3). If `collect()` early-returns the
+instant it sees `RunFailed` (today's behavior), the `async_stream` generator never resumes, the
+`Terminate`-arm `set` never runs, and the slot is empty for exactly the state-machine taxonomy
+the ticket targets.
+
+Therefore `collect()` / `collect_typed()` must **not** early-return on `RunFailed`. They capture
+the `RunFailed` string, **keep polling until the stream ends (`None`)**, and only *then* read the
+slot. The stream terminates immediately after `RunFailed` in all six cases (`return` after the
+yield; `controlled()` forwards then breaks on inner `None`), so this costs exactly one extra poll
+on the failure path and cannot hang. This makes the read genuinely "after draining" — matching
+`FailureSlot`'s doc and the `controlled()` precedent — and decouples read timing from recording
+placement, so future failure sites can't reintroduce the H1 ordering bug.
+
+```rust
+// collect() sketch — drain fully, read slot last:
+let mut failed: Option<String> = None;
+while let Some(ev) = self.events.next().await {
+    match &ev {
+        MessageOutput { .. }  => { /* reset + accumulate final_output */ }
+        RunCompleted { usage } => { /* record usage */ }
+        RunFailed { error }    => { failed = Some(error.clone()); } // capture, do NOT return
+        _ => {}
+    }
+    events.push(ev);
+}
+match failed {
+    Some(msg) => Err(self
+        .failure.as_ref()
+        .and_then(FailureSlot::take)      // slot populated by now (generator resumed to None)
+        .map(RunError::Agent)             // structured: preferred
+        .unwrap_or_else(|| RunError::Other(anyhow::anyhow!(msg)))), // string: fallback
+    None => Ok(RunResult { final_output, events, usage }),
+}
+```
+
+- `collect_typed()` applies the same drain-then-read shape and returns `AgentError` directly:
+  slot first, then the existing `StructuredOutputFailed`-event reconstruction, then
+  `Other(string)`.
+
+**`InvalidStructuredOutput` precedence (M1).** With the drain-then-read fix the slot now *does*
+populate for `InvalidStructuredOutput`, so in `collect_typed()` the slot becomes the **primary**
+carrier and the pre-existing `StructuredOutputFailed`-event reconstruction becomes the no-slot
+fallback. These cannot disagree: in `loop_state.rs` the `StructuredOutputFailed` event and the
+`LoopState::Failed(InvalidStructuredOutput { .. })` value are built from the **same**
+`schema_errors` + `final_text` in the same branch. The plan will assert slot-derived ==
+event-derived in a test to pin that invariant.
 
 **Mapping rule:** structured *agent* failures → `RunError::Agent(AgentError::…)` (preserves the
 full taxonomy, including `MaxTurnsExceeded`). Runner-level cancel/timeout stay
@@ -167,9 +245,15 @@ today (the slot is empty in those cases — behavior unchanged).
 - **Core unit/integration:**
   - Drive `LlmAgent::run` with a failing mock `Model` → assert the `ctx` slot holds
     `AgentError::Model`; a small `max_turns` → `AgentError::MaxTurnsExceeded(n)`.
+  - **H1 regression test (must-have):** end-to-end `collect()` over a `max_turns`-exhausting run
+    via `with_failure` → asserts `Err(RunError::Agent(AgentError::MaxTurnsExceeded(n)))`. This is
+    the state-machine path that the original (early-return) design produced `RunError::Other` for;
+    it fails unless drain-then-read is implemented. Pair with a `NotImplemented` case (handoff).
   - `collect()` / `collect_typed()` via `with_failure` with a preset slot → structured
     `RunError::Agent` / `AgentError`; via `new()` (no slot) → unchanged fallback (keeps the
     existing `collect_typed` tests green).
+  - **M1 invariant:** for an `InvalidStructuredOutput` run, assert the slot-derived error equals
+    the `StructuredOutputFailed`-event-derived error (same `schema_errors` + `final_text`).
 - **runtime-tokio integration:** failing model → `RunError::Agent(AgentError::Model(..))`;
   max-turns → `RunError::Agent(AgentError::MaxTurnsExceeded(..))`; cancel/timeout → still
   `RunError::Cancelled` / `RunError::Timeout`.
@@ -192,6 +276,14 @@ runtime-tokio verifies against the fresh core (dependency-ordered publish).
 **Alternative considered:** split into a core-first PR then a runtime-tokio PR — sidesteps the
 caveat entirely, but the ticket is a single SMA. The single-PR-with-core-bump path is preferred
 since it matches the documented recipe in `CLAUDE.md`.
+
+**`feat`-vs-`patch` consistency (N3):** the core change adds public items
+(`FailureSlot`, `failure_handle`, `with_failure`), which is conventionally a `feat` →
+release-plz would compute a *minor* bump, conflicting with the manually pinned *patch*.
+`CLAUDE.md` explicitly sanctions "patch for additive" here; the plan must commit the core version
+bump so release-plz's commit-type classification and the manual `0.2.2` pin agree (don't let a
+`feat(core)` commit drive a competing minor bump). The exact commit choreography is a plan-level
+detail.
 
 ## Files touched
 
