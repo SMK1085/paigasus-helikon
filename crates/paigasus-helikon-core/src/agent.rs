@@ -850,6 +850,14 @@ mod failure_slot_tests {
             "a clone observes a write through the original handle"
         );
     }
+
+    #[test]
+    fn set_overwrites_previous() {
+        let slot = FailureSlot::new();
+        slot.set(AgentError::MaxTurnsExceeded(1));
+        slot.set(AgentError::MaxTurnsExceeded(2));
+        assert!(matches!(slot.take(), Some(AgentError::MaxTurnsExceeded(2))));
+    }
 }
 
 #[cfg(test)]
