@@ -131,3 +131,139 @@ async fn no_tools_structured_output_returns_struct() {
         }
     );
 }
+
+#[tokio::test]
+async fn invalid_output_repairs_once_then_errors() {
+    use paigasus_helikon_core::{AgentError, AgentEvent};
+
+    let model = MockModel::with_scripts(vec![
+        // finalizing turn: invalid (missing `confidence`)
+        vec![
+            ModelEvent::TokenDelta {
+                text: "{\"subtype\":\"AML\"}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+        // repair turn: still invalid (not even JSON)
+        vec![
+            ModelEvent::TokenDelta {
+                text: "sorry, I cannot".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ]);
+    let agent = agent_with_output(model);
+    let stream = agent
+        .run(
+            noop_run_context::<()>(),
+            AgentInput::from_user_text("sample"),
+        )
+        .await
+        .expect("run starts");
+
+    // Collect raw events first to assert the repair count.
+    let events: Vec<AgentEvent> = {
+        use futures_util::stream::StreamExt;
+        stream.collect::<Vec<_>>().await
+    };
+    let repair_count = events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::RepairStarted { .. }))
+        .count();
+    assert_eq!(repair_count, 1, "exactly one repair turn");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::StructuredOutputFailed { .. })),
+        "a StructuredOutputFailed event must be emitted"
+    );
+
+    // Re-run to assert the typed error surface (fresh scripts).
+    let model2 = MockModel::with_scripts(vec![
+        vec![
+            ModelEvent::TokenDelta {
+                text: "{\"subtype\":\"AML\"}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+        vec![
+            ModelEvent::TokenDelta {
+                text: "still wrong".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ]);
+    let agent2 = agent_with_output(model2);
+    let stream2 = agent2
+        .run(
+            noop_run_context::<()>(),
+            AgentInput::from_user_text("sample"),
+        )
+        .await
+        .expect("run starts");
+    let err = RunResultStreaming::new(stream2)
+        .collect_typed::<LeukemiaSubtypeAnalysis>()
+        .await
+        .expect_err("must error");
+    match err {
+        AgentError::InvalidStructuredOutput {
+            schema_errors,
+            final_text,
+        } => {
+            assert!(!schema_errors.is_empty());
+            assert_eq!(final_text, "still wrong");
+        }
+        other => panic!("expected InvalidStructuredOutput, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tool_call_on_finalizing_turn_is_a_violation() {
+    use paigasus_helikon_core::AgentError;
+
+    // No tools on the agent, so turn 0 is the finalizing turn. The model
+    // (mis)behaves by emitting a tool call on both the finalizing and repair turns.
+    let model = MockModel::with_scripts(vec![
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "x".into(),
+                name: Some("nope".into()),
+                args_delta: "{}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "y".into(),
+                name: Some("nope".into()),
+                args_delta: "{}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+    ]);
+    let agent = agent_with_output(model);
+    let stream = agent
+        .run(
+            noop_run_context::<()>(),
+            AgentInput::from_user_text("sample"),
+        )
+        .await
+        .expect("run starts");
+    let err = RunResultStreaming::new(stream)
+        .collect_typed::<LeukemiaSubtypeAnalysis>()
+        .await
+        .expect_err("must error");
+    assert!(matches!(err, AgentError::InvalidStructuredOutput { .. }));
+}

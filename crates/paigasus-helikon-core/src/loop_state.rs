@@ -414,16 +414,75 @@ pub fn transition(
                     }
                 }
                 Err(schema_errors) => {
-                    // Task 8 replaces this branch with the one-shot repair transition.
+                    let msg = repair_message(&out.name, &schema_errors);
+                    let mut messages = ctx.conversation.to_vec();
+                    messages.push(msg.clone());
+                    let request = ModelRequest {
+                        messages,
+                        tools: Vec::new(),
+                        model_settings: constrained_settings(ctx.model_settings, out),
+                    };
+                    events.push(AgentEvent::RepairStarted { attempt: 1 });
+                    TransitionOutcome {
+                        next_state: LoopState::RepairingOutput { turn: *turn },
+                        events,
+                        next_action: NextAction::CallModel { request },
+                        conversation_appends: vec![msg],
+                    }
+                }
+            }
+        }
+        // RepairingOutput: one allowed repair turn — success → Done, failure → Failed.
+        (
+            LoopState::RepairingOutput { .. },
+            TransitionInput::ModelResponse { items, usage, .. },
+        ) => {
+            let Some(out) = ctx.output else {
+                return TransitionOutcome {
+                    next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(
+                        "RepairingOutput state without output type"
+                    ))),
+                    events: vec![AgentEvent::RunFailed {
+                        error: "internal: RepairingOutput without output type".to_owned(),
+                    }],
+                    next_action: NextAction::Terminate,
+                    conversation_appends: Vec::new(),
+                };
+            };
+            let mut events: Vec<AgentEvent> = items
+                .iter()
+                .filter(|i| matches!(i, Item::AssistantMessage { .. }))
+                .cloned()
+                .map(|item| AgentEvent::MessageOutput { item })
+                .collect();
+            let content = last_assistant_content(&items);
+            let has_tool_call = items.iter().any(|i| matches!(i, Item::ToolCall { .. }));
+
+            let validation = if has_tool_call {
+                Err(vec!["model called a tool on the repair turn".to_owned()])
+            } else {
+                validate_terminal(out, &content)
+            };
+
+            match validation {
+                Ok(()) => {
+                    events.push(AgentEvent::RunCompleted { usage });
+                    TransitionOutcome {
+                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        events,
+                        next_action: NextAction::Terminate,
+                        conversation_appends: Vec::new(),
+                    }
+                }
+                Err(schema_errors) => {
                     let final_text = flatten_text(&content);
                     events.push(AgentEvent::StructuredOutputFailed {
                         schema_errors: schema_errors.clone(),
                         final_text: final_text.clone(),
                     });
                     events.push(AgentEvent::RunFailed {
-                        error: "invalid structured output".to_owned(),
+                        error: "invalid structured output after one repair attempt".to_owned(),
                     });
-                    let _ = turn;
                     TransitionOutcome {
                         next_state: LoopState::Failed(AgentError::InvalidStructuredOutput {
                             schema_errors,
@@ -505,6 +564,19 @@ fn validate_terminal(
         Err(e) => return Err(vec![format!("response was not valid JSON: {e}")]),
     };
     output.validate(&value)
+}
+
+/// Synthesize the one repair instruction sent back to the model.
+fn repair_message(name: &str, errors: &[String]) -> Item {
+    let text = format!(
+        "Your previous response did not match the required `{name}` schema. \
+         Errors: {}. Reply with ONLY a JSON value matching the schema — \
+         no prose, no code fences.",
+        errors.join("; ")
+    );
+    Item::UserMessage {
+        content: vec![ContentPart::Text { text }],
+    }
 }
 
 /// The last `AssistantMessage` content in a list of items.
