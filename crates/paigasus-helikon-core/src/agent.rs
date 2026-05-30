@@ -699,7 +699,7 @@ where
                         let items = match build_items(&agent_name, text, reasoning, tool_accum) {
                             Ok(items) => items,
                             Err(e) => {
-                                failure.set(crate::AgentError::Other(anyhow::anyhow!(e.clone())));
+                                failure.set(crate::AgentError::Other(anyhow::anyhow!("{e}")));
                                 yield crate::AgentEvent::RunFailed { error: e };
                                 return;
                             }
@@ -814,7 +814,7 @@ pub enum AgentError {
 /// [`crate::RunResultStreaming::collect`]) reads it **after the event stream is
 /// fully drained** — see [`crate::RunResultStreaming::collect`] for why the
 /// read must come after draining.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct FailureSlot(Arc<Mutex<Option<AgentError>>>);
 
 impl FailureSlot {
