@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.0...paigasus-helikon-runtime-tokio-v0.1.1) - 2026-05-30
+
+### Added
+
+- *(runtime-tokio)* SMA-346 surface the structured `AgentError` at the runner boundary. `TokioRunner::run` now returns `RunError::Agent(AgentError::…)` (e.g. `MaxTurnsExceeded`, `Model`) for agent failures instead of an opaque `RunError::Other(String)`, by wiring the `RunContext` failure slot through `RunResultStreaming::with_failure`. `run_streamed` carries the slot too. Cancellation/timeout remain `RunError::Cancelled`/`Timeout` (runner-level, not slot-backed).
+
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-runtime-tokio-v0.0.0) - 2026-05-17
 
 ### Added

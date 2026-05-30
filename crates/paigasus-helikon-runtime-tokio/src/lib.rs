@@ -109,12 +109,17 @@ where
         let ctx = ctx.with_run_config(config);
         let cancel = ctx.cancel().clone();
         let session = ctx.session().clone();
+        // Clone the failure handle before moving ctx into agent.run, mirroring
+        // cancel/session above. collect() reads it after the stream drains.
+        let failure = ctx.failure_handle();
 
         let stream = agent.run(ctx, input).await?;
         let (controlled_stream, outcome) = controlled(stream, cancel, timeout);
         // Do NOT `?`-short-circuit before finalize: agent failures surface as
         // collect()=Err, and finalize must still run.
-        let collected = RunResultStreaming::new(controlled_stream).collect().await;
+        let collected = RunResultStreaming::with_failure(controlled_stream, failure)
+            .collect()
+            .await;
         finalize(&session).await;
 
         // A cancel/timeout outcome wins even if `collected` is Ok (the run may
@@ -138,6 +143,7 @@ where
         let ctx = ctx.with_run_config(config);
         let cancel = ctx.cancel().clone();
         let session = ctx.session().clone();
+        let failure = ctx.failure_handle();
 
         let stream = agent.run(ctx, input).await?;
         let (mut controlled_stream, outcome) = controlled(stream, cancel, timeout);
@@ -173,6 +179,12 @@ where
                 Outcome::Completed => {}
             }
         };
-        Ok(RunResultStreaming::new(Box::pin(out)))
+        // A later `.collect()` on this streamed handle surfaces structured
+        // *agent* failures via the slot (e.g. `RunError::Agent(MaxTurnsExceeded)`).
+        // Cancel/timeout are NOT in the slot: they are runner-level outcomes with
+        // no `AgentError` equivalent, so they surface only as the synthesized
+        // terminal `RunFailed` string events above and a `.collect()` maps them
+        // to `RunError::Other`. For structured `Cancelled`/`Timeout`, use `run()`.
+        Ok(RunResultStreaming::with_failure(Box::pin(out), failure))
     }
 }

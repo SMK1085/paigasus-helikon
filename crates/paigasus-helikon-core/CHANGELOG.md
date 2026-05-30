@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.2...paigasus-helikon-core-v0.2.3) - 2026-05-30
+
+### Other
+
+- *(core)* SMA-346 derive `Debug` on `FailureSlot` (public type) and drop a redundant `String` clone at the `build_items` failure site. Published alongside `paigasus-helikon-runtime-tokio` 0.1.1, which wires the runner boundary to this API.
+
 ## [0.2.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.1...paigasus-helikon-core-v0.2.2) - 2026-05-29
 
 ### Added
