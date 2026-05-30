@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.2.0...paigasus-helikon-v0.2.1) - 2026-05-30
+
+### Other
+
+- Re-release to refresh feature-gated dependency requirements. The facade now requires `paigasus-helikon-core` `^0.2.3` and `paigasus-helikon-runtime-tokio` `^0.1.1`, so the SMA-346 structured-`AgentError`-at-the-runner-boundary surface is reachable through the facade's `runtime-tokio` feature. No facade source changes; the prior 0.2.0 publish predated the runtime-tokio `0.0.0`→`0.1.x` ascent and still requested the `^0.0.0` stub.
+
 ## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.1.1...paigasus-helikon-v0.2.0) - 2026-05-29
 
 ### Added
