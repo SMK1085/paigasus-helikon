@@ -154,6 +154,14 @@ impl Model for AnthropicModel {
     fn capabilities(&self) -> ModelCapabilities {
         self.cfg.capabilities
     }
+
+    fn provider(&self) -> &str {
+        "anthropic"
+    }
+
+    fn model(&self) -> &str {
+        &self.cfg.model_id
+    }
 }
 
 impl AnthropicModelBuilder {
@@ -177,5 +185,15 @@ mod tests {
         assert!(c.streaming);
         assert!(c.tools);
         assert!(c.prompt_caching);
+    }
+
+    #[test]
+    fn provider_and_model_getters() {
+        let m = AnthropicModel::messages("claude-sonnet-4-6")
+            .api_key("sk-test")
+            .build()
+            .unwrap();
+        assert_eq!(m.provider(), "anthropic");
+        assert_eq!(m.model(), "claude-sonnet-4-6");
     }
 }
