@@ -43,7 +43,10 @@ fn ctx_with<'a>(
 
 #[test]
 fn start_seeds_turn_zero_and_emits_call_model() {
-    let state = LoopState::CallingModel { turn: 0 };
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
     let user_msg = Item::UserMessage {
         content: vec![ContentPart::Text { text: "hi".into() }],
     };
@@ -55,7 +58,7 @@ fn start_seeds_turn_zero_and_emits_call_model() {
 
     let outcome = transition(&state, input, &ctx_with(16, &conversation, &settings));
 
-    assert_matches!(outcome.next_state, LoopState::CallingModel { turn: 0 });
+    assert_matches!(outcome.next_state, LoopState::CallingModel { turn: 0, .. });
     assert_matches!(outcome.next_action, NextAction::CallModel { .. });
     assert_eq!(outcome.events.len(), 1);
     assert_matches!(&outcome.events[0], AgentEvent::TurnStarted { turn: 0 });
@@ -63,7 +66,10 @@ fn start_seeds_turn_zero_and_emits_call_model() {
 
 #[test]
 fn model_response_without_tool_calls_terminates() {
-    let state = LoopState::CallingModel { turn: 0 };
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
     let assistant = Item::AssistantMessage {
         content: vec![ContentPart::Text {
             text: "hello".into(),
@@ -90,7 +96,10 @@ fn model_response_without_tool_calls_terminates() {
 
 #[test]
 fn model_response_with_tool_calls_fans_out() {
-    let state = LoopState::CallingModel { turn: 0 };
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
     let assistant = Item::AssistantMessage {
         content: vec![ContentPart::Text {
             text: "calling tools".into(),
@@ -118,7 +127,9 @@ fn model_response_with_tool_calls_fans_out() {
     let outcome = transition(&state, input, &ctx_with(16, &conversation, &settings));
 
     match outcome.next_state {
-        LoopState::ExecutingTools { ref calls, turn } => {
+        LoopState::ExecutingTools {
+            ref calls, turn, ..
+        } => {
             assert_eq!(calls.len(), 2);
             assert_eq!(turn, 0);
         }
@@ -152,6 +163,7 @@ fn tool_results_advance_to_next_call_model() {
     let state = LoopState::ExecutingTools {
         calls: calls.clone(),
         turn: 0,
+        usage: TokenUsage::default(),
     };
     let outcomes = vec![
         ToolCallOutcome {
@@ -173,7 +185,7 @@ fn tool_results_advance_to_next_call_model() {
 
     let outcome = transition(&state, input, &ctx_with(16, &conversation, &settings));
 
-    assert_matches!(outcome.next_state, LoopState::CallingModel { turn: 1 });
+    assert_matches!(outcome.next_state, LoopState::CallingModel { turn: 1, .. });
     assert_matches!(outcome.next_action, NextAction::CallModel { .. });
     // Expected: ToolOutputItem × 2 + TurnStarted { turn: 1 }
     assert_eq!(outcome.events.len(), 3);
@@ -185,7 +197,10 @@ fn tool_results_advance_to_next_call_model() {
 #[test]
 fn calling_model_at_max_turns_fails() {
     let max_turns = 4;
-    let state = LoopState::CallingModel { turn: max_turns };
+    let state = LoopState::CallingModel {
+        turn: max_turns,
+        usage: TokenUsage::default(),
+    };
     let conversation = vec![];
     let settings = ModelSettings::new();
     let input = TransitionInput::Start { messages: vec![] };
@@ -289,6 +304,7 @@ fn tool_results_at_max_turns_preserves_outputs_before_failing() {
     let state = LoopState::ExecutingTools {
         calls: calls.clone(),
         turn: max_turns - 1,
+        usage: TokenUsage::default(),
     };
     let outcomes = vec![
         ToolCallOutcome {
@@ -346,7 +362,10 @@ fn finalizing_request_carries_response_format_and_no_tools() {
         output: Some(&output_type),
     };
 
-    let state = LoopState::CallingModel { turn: 0 };
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
     let input = TransitionInput::Start { messages: vec![] };
     let outcome = transition(&state, input, &ctx);
 
@@ -391,7 +410,10 @@ fn output_type_overrides_caller_response_format_on_finalizing_turn() {
         output: Some(&output_type),
     };
 
-    let state = LoopState::CallingModel { turn: 0 };
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
     let input = TransitionInput::Start { messages: vec![] };
     let outcome = transition(&state, input, &ctx);
 

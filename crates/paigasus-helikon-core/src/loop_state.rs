@@ -25,6 +25,10 @@ pub enum LoopState {
     CallingModel {
         /// Zero-indexed turn counter.
         turn: u32,
+        /// Cumulative token usage of all model turns completed before turn
+        /// `turn` (SMA-402); `default()` at turn 0. Folded forward on every
+        /// transition; the terminal `Done` / `RunCompleted` carry the grand total.
+        usage: TokenUsage,
     },
     /// The model produced tool calls; about to execute them. `turn` is
     /// the turn that produced the calls — the next [`LoopState::CallingModel`]
@@ -34,6 +38,10 @@ pub enum LoopState {
         calls: Vec<ToolCallRequest>,
         /// The turn that produced these calls.
         turn: u32,
+        /// Cumulative token usage of all model turns completed so far —
+        /// including the turn that produced these calls (SMA-402). Carried
+        /// forward unchanged across tool execution (tools add no tokens).
+        usage: TokenUsage,
     },
     /// Handing off to another agent.
     ///
@@ -59,11 +67,17 @@ pub enum LoopState {
     Finalizing {
         /// The turn index that produced this finalizing request.
         turn: u32,
+        /// Cumulative token usage of all model turns completed so far,
+        /// including the turn that triggered finalizing (SMA-402).
+        usage: TokenUsage,
     },
     /// The one allowed repair turn after a failed finalizing validation.
     RepairingOutput {
         /// The turn index of the finalizing turn being repaired.
         turn: u32,
+        /// Cumulative token usage of all model turns completed so far,
+        /// including the failed finalizing turn (SMA-402).
+        usage: TokenUsage,
     },
     /// Terminal: run completed successfully.
     Done(FinalOutput),
@@ -208,7 +222,7 @@ pub fn transition(
 ) -> TransitionOutcome {
     match (state, input) {
         // Max turns reached at the CallingModel boundary → fail fast.
-        (LoopState::CallingModel { turn }, _) if *turn >= ctx.max_turns => TransitionOutcome {
+        (LoopState::CallingModel { turn, .. }, _) if *turn >= ctx.max_turns => TransitionOutcome {
             next_state: LoopState::Failed(AgentError::MaxTurnsExceeded(ctx.max_turns)),
             events: vec![AgentEvent::RunFailed {
                 error: format!("max turns ({}) exceeded", ctx.max_turns),
@@ -217,7 +231,7 @@ pub fn transition(
             conversation_appends: Vec::new(),
         },
         // Start seeds the loop: emit TurnStarted, request CallModel.
-        (LoopState::CallingModel { turn }, TransitionInput::Start { .. })
+        (LoopState::CallingModel { turn, usage: prior }, TransitionInput::Start { .. })
             if *turn < ctx.max_turns =>
         {
             match ctx.output {
@@ -228,7 +242,10 @@ pub fn transition(
                         model_settings: constrained_settings(ctx.model_settings, out),
                     };
                     TransitionOutcome {
-                        next_state: LoopState::Finalizing { turn: *turn },
+                        next_state: LoopState::Finalizing {
+                            turn: *turn,
+                            usage: *prior,
+                        },
                         events: vec![AgentEvent::TurnStarted { turn: *turn }],
                         next_action: NextAction::CallModel { request },
                         conversation_appends: Vec::new(),
@@ -241,7 +258,10 @@ pub fn transition(
                         model_settings: ctx.model_settings.clone(),
                     };
                     TransitionOutcome {
-                        next_state: LoopState::CallingModel { turn: *turn },
+                        next_state: LoopState::CallingModel {
+                            turn: *turn,
+                            usage: *prior,
+                        },
                         events: vec![AgentEvent::TurnStarted { turn: *turn }],
                         next_action: NextAction::CallModel { request },
                         conversation_appends: Vec::new(),
@@ -250,9 +270,10 @@ pub fn transition(
             }
         }
         // Model produced tool calls → fan out to ExecutingTools.
-        (LoopState::CallingModel { turn }, TransitionInput::ModelResponse { items, .. })
-            if items.iter().any(|i| matches!(i, Item::ToolCall { .. })) =>
-        {
+        (
+            LoopState::CallingModel { turn, usage: prior },
+            TransitionInput::ModelResponse { items, usage, .. },
+        ) if items.iter().any(|i| matches!(i, Item::ToolCall { .. })) => {
             let mut events: Vec<AgentEvent> = Vec::new();
             let mut calls: Vec<ToolCallRequest> = Vec::new();
             for item in &items {
@@ -279,6 +300,7 @@ pub fn transition(
                 next_state: LoopState::ExecutingTools {
                     calls: calls.clone(),
                     turn: *turn,
+                    usage: accumulate(*prior, usage),
                 },
                 events,
                 next_action: NextAction::ExecuteTools { calls },
@@ -287,9 +309,11 @@ pub fn transition(
         }
         // Model produced a response with no tool calls → either issue a
         // constrained finalizing turn (output set) or terminate (no output).
-        (LoopState::CallingModel { turn }, TransitionInput::ModelResponse { items, usage, .. })
-            if !items.iter().any(|i| matches!(i, Item::ToolCall { .. })) =>
-        {
+        (
+            LoopState::CallingModel { turn, usage: prior },
+            TransitionInput::ModelResponse { items, usage, .. },
+        ) if !items.iter().any(|i| matches!(i, Item::ToolCall { .. })) => {
+            let total = accumulate(*prior, usage);
             let mut events: Vec<AgentEvent> = items
                 .iter()
                 .filter(|i| matches!(i, Item::AssistantMessage { .. }))
@@ -316,6 +340,7 @@ pub fn transition(
                     TransitionOutcome {
                         next_state: LoopState::Finalizing {
                             turn: finalizing_turn,
+                            usage: total,
                         },
                         events,
                         next_action: NextAction::CallModel { request },
@@ -324,9 +349,12 @@ pub fn transition(
                 }
                 None => {
                     let content = last_assistant_content(&items);
-                    events.push(AgentEvent::RunCompleted { usage });
+                    events.push(AgentEvent::RunCompleted { usage: total });
                     TransitionOutcome {
-                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        next_state: LoopState::Done(FinalOutput {
+                            content,
+                            usage: total,
+                        }),
                         events,
                         next_action: NextAction::Terminate,
                         conversation_appends: Vec::new(),
@@ -335,7 +363,12 @@ pub fn transition(
             }
         }
         // Tool results complete → bump turn and ask the model again.
-        (LoopState::ExecutingTools { turn, .. }, TransitionInput::ToolResults { outcomes }) => {
+        (
+            LoopState::ExecutingTools {
+                turn, usage: prior, ..
+            },
+            TransitionInput::ToolResults { outcomes },
+        ) => {
             let next_turn = turn + 1;
             let mut events: Vec<AgentEvent> = outcomes
                 .into_iter()
@@ -366,14 +399,20 @@ pub fn transition(
                 model_settings: ctx.model_settings.clone(),
             };
             TransitionOutcome {
-                next_state: LoopState::CallingModel { turn: next_turn },
+                next_state: LoopState::CallingModel {
+                    turn: next_turn,
+                    usage: *prior,
+                },
                 events,
                 next_action: NextAction::CallModel { request },
                 conversation_appends: Vec::new(),
             }
         }
         // Finalizing: validate the model's structured output.
-        (LoopState::Finalizing { turn }, TransitionInput::ModelResponse { items, usage, .. }) => {
+        (
+            LoopState::Finalizing { turn, usage: prior },
+            TransitionInput::ModelResponse { items, usage, .. },
+        ) => {
             let Some(out) = ctx.output else {
                 return TransitionOutcome {
                     next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(
@@ -386,6 +425,7 @@ pub fn transition(
                     conversation_appends: Vec::new(),
                 };
             };
+            let total = accumulate(*prior, usage);
             let mut events: Vec<AgentEvent> = items
                 .iter()
                 .filter(|i| matches!(i, Item::AssistantMessage { .. }))
@@ -405,9 +445,12 @@ pub fn transition(
 
             match validation {
                 Ok(()) => {
-                    events.push(AgentEvent::RunCompleted { usage });
+                    events.push(AgentEvent::RunCompleted { usage: total });
                     TransitionOutcome {
-                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        next_state: LoopState::Done(FinalOutput {
+                            content,
+                            usage: total,
+                        }),
                         events,
                         next_action: NextAction::Terminate,
                         conversation_appends: Vec::new(),
@@ -424,7 +467,10 @@ pub fn transition(
                     };
                     events.push(AgentEvent::RepairStarted { attempt: 1 });
                     TransitionOutcome {
-                        next_state: LoopState::RepairingOutput { turn: *turn },
+                        next_state: LoopState::RepairingOutput {
+                            turn: *turn,
+                            usage: total,
+                        },
                         events,
                         next_action: NextAction::CallModel { request },
                         conversation_appends: vec![msg],
@@ -434,7 +480,7 @@ pub fn transition(
         }
         // RepairingOutput: one allowed repair turn — success → Done, failure → Failed.
         (
-            LoopState::RepairingOutput { .. },
+            LoopState::RepairingOutput { usage: prior, .. },
             TransitionInput::ModelResponse { items, usage, .. },
         ) => {
             let Some(out) = ctx.output else {
@@ -449,6 +495,7 @@ pub fn transition(
                     conversation_appends: Vec::new(),
                 };
             };
+            let total = accumulate(*prior, usage);
             let mut events: Vec<AgentEvent> = items
                 .iter()
                 .filter(|i| matches!(i, Item::AssistantMessage { .. }))
@@ -466,9 +513,12 @@ pub fn transition(
 
             match validation {
                 Ok(()) => {
-                    events.push(AgentEvent::RunCompleted { usage });
+                    events.push(AgentEvent::RunCompleted { usage: total });
                     TransitionOutcome {
-                        next_state: LoopState::Done(FinalOutput { content, usage }),
+                        next_state: LoopState::Done(FinalOutput {
+                            content,
+                            usage: total,
+                        }),
                         events,
                         next_action: NextAction::Terminate,
                         conversation_appends: Vec::new(),
@@ -523,6 +573,14 @@ fn not_implemented(feature: &'static str) -> TransitionOutcome {
         next_action: NextAction::Terminate,
         conversation_appends: Vec::new(),
     }
+}
+
+/// Fold one turn's final usage into the running cross-turn total (SMA-402).
+/// `TokenUsage` is `Copy`; returns the new cumulative total.
+fn accumulate(prior: TokenUsage, this_turn: TokenUsage) -> TokenUsage {
+    let mut total = prior;
+    total.add(this_turn);
+    total
 }
 
 /// Build constrained model settings for a finalizing/repair turn: inject the
