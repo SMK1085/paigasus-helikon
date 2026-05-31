@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.3...paigasus-helikon-core-v0.2.4) - 2026-05-31
+
+### Added
+
+- *(core)* SMA-322 emit opentelemetry genai-semconv spans ([#51](https://github.com/SMK1085/paigasus-helikon/pull/51))
+
 ## [0.2.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.2...paigasus-helikon-core-v0.2.3) - 2026-05-30
 
 ### Other
