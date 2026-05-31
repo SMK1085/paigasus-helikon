@@ -72,13 +72,15 @@ pub trait Model: Send + Sync {
     fn capabilities(&self) -> ModelCapabilities;
 
     /// GenAI `gen_ai.provider.name` — the provider identifier (e.g.
-    /// `"openai"`, `"anthropic"`). Default `"unknown"` is elided from spans.
+    /// `"openai"`, `"anthropic"`). Providers override this; the `"unknown"`
+    /// default is only recorded for a `Model` that does not.
     fn provider(&self) -> &str {
         "unknown"
     }
 
     /// GenAI `gen_ai.request.model` — the configured model id (e.g.
-    /// `"gpt-4o"`). Default `""` is elided from spans.
+    /// `"gpt-4o"`). Providers override this; the empty default is only
+    /// recorded for a `Model` that does not.
     fn model(&self) -> &str {
         ""
     }
