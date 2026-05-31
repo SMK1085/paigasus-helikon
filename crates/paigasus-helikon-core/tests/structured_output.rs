@@ -267,3 +267,90 @@ async fn tool_call_on_finalizing_turn_is_a_violation() {
         .expect_err("must error");
     assert!(matches!(err, AgentError::InvalidStructuredOutput { .. }));
 }
+
+/// SMA-402: a structured run spans the unconstrained turn(s) + the constrained
+/// finalizing turn; usage must sum across all of them, including the finalizing
+/// turn. (Three turns here: tool call → unconstrained text → finalizing JSON.)
+#[tokio::test]
+async fn structured_run_usage_is_cumulative() {
+    use common::MockTool;
+
+    let tool = MockTool::new("fetch_panel", serde_json::json!({"blasts": 80}));
+    let model = MockModel::with_scripts(vec![
+        // turn 0: call the tool (usage)
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "c1".into(),
+                name: Some("fetch_panel".into()),
+                args_delta: "{}".into(),
+            },
+            ModelEvent::Usage {
+                input_tokens: 50,
+                output_tokens: 10,
+                cached_input_tokens: Some(5),
+                reasoning_tokens: Some(2),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        // turn 1: unconstrained free-text answer (usage)
+        vec![
+            ModelEvent::TokenDelta {
+                text: "Based on the panel, AML.".into(),
+            },
+            ModelEvent::Usage {
+                input_tokens: 60,
+                output_tokens: 12,
+                cached_input_tokens: Some(0),
+                reasoning_tokens: Some(4),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+        // turn 2: constrained finalizing turn → structured JSON (usage)
+        vec![
+            ModelEvent::TokenDelta {
+                text: "{\"subtype\":\"AML\",\"confidence\":88}".into(),
+            },
+            ModelEvent::Usage {
+                input_tokens: 70,
+                output_tokens: 6,
+                cached_input_tokens: Some(0),
+                reasoning_tokens: Some(0),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ]);
+
+    let agent = LlmAgent::builder::<()>()
+        .name("classifier")
+        .shared_model(model)
+        .instructions("Classify the sample.")
+        .shared_tool(tool.clone())
+        .output_type::<LeukemiaSubtypeAnalysis>()
+        .build();
+
+    let stream = agent
+        .run(
+            noop_run_context::<()>(),
+            AgentInput::from_user_text("sample"),
+        )
+        .await
+        .expect("run starts");
+    let result = RunResultStreaming::new(stream)
+        .collect_typed::<LeukemiaSubtypeAnalysis>()
+        .await
+        .expect("collect_typed succeeds");
+
+    // Sums: input 50+60+70=180, output 10+12+6=28, cached 5+0+0=5,
+    // reasoning 2+4+0=6, total 60+72+76=208.
+    assert_eq!(result.usage.input_tokens, 180);
+    assert_eq!(result.usage.output_tokens, 28);
+    assert_eq!(result.usage.cached_input_tokens, 5);
+    assert_eq!(result.usage.reasoning_tokens, 6);
+    assert_eq!(result.usage.total_tokens, 208);
+}
