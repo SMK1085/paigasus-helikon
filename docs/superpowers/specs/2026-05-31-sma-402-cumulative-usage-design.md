@@ -40,8 +40,10 @@ summing.
 
 * Carry a running `usage: TokenUsage` total in the four driveable, non-terminal
   `LoopState` variants and thread it through `transition`.
-* Mark those four variants `#[non_exhaustive]` so this field addition is the **last**
-  non-additive change to them and all future state fields are additive (§3.5, M1).
+* The field addition is source-breaking for external exhaustive matches → a deliberate
+  `0.3.0` minor bump (§3.5, §5). The variants are **not** marked `#[non_exhaustive]`: the
+  pure `transition` suite constructs them from an external test crate, where that attr
+  forbids construction (verified — `E0639` / `E0638`).
 * Make `RunCompleted.usage` and `FinalOutput.usage` carry the cumulative total at every
   terminal arm.
 * Delete the driver's parallel `run_input_tokens` / `run_output_tokens` i64 counters;
@@ -68,15 +70,15 @@ summing.
 
 ### 3.1 `loop_state.rs` — running total carried in state
 
-Add `usage: TokenUsage` to the four driveable, non-terminal variants, and mark each of
-those variants `#[non_exhaustive]` (see §3.5). Semantics: the **cumulative total of all
+Add `usage: TokenUsage` to the four driveable, non-terminal variants (see §3.5 on why
+they are **not** marked `#[non_exhaustive]`). Semantics: the **cumulative total of all
 turns completed before entering this state**.
 
 ```
-#[non_exhaustive] LoopState::CallingModel    { turn, usage }
-#[non_exhaustive] LoopState::ExecutingTools  { calls, turn, usage }
-#[non_exhaustive] LoopState::Finalizing      { turn, usage }
-#[non_exhaustive] LoopState::RepairingOutput { turn, usage }
+LoopState::CallingModel    { turn, usage }
+LoopState::ExecutingTools  { calls, turn, usage }
+LoopState::Finalizing      { turn, usage }
+LoopState::RepairingOutput { turn, usage }
 ```
 
 `Done(FinalOutput)` already holds `usage` → it becomes the grand total. `Failed` and the
@@ -147,17 +149,22 @@ implementor preserves the invariant. (Doc-only here; no behavior change.)
 ### 3.5 Forward-compatibility & API stability
 
 `LoopState` is public (`pub use loop_state::*`). The enum is `#[non_exhaustive]`, but its
-**struct variants are not** — so external code may match a variant's fields exhaustively
-(`LoopState::CallingModel { turn } => …`), and adding `usage` to such a variant is a
-**source-breaking** change (M1). External *construction* is already impossible
-(enum-level `#[non_exhaustive]`), so only the match side breaks; realistic blast radius
-is near-zero (the only consumers are in-crate, and the durable-runner crates that would
+**struct variants are not** — so external code may both construct a variant and match its
+fields exhaustively (`LoopState::CallingModel { turn } => …`). Adding `usage` to a variant
+therefore breaks external exhaustive matches → this is a **source-breaking** change (M1),
+classified as breaking and shipped as a minor bump (§5). Realistic blast radius is
+near-zero (the only consumers are in-crate, and the durable-runner crates that would
 re-drive `transition` are `0.0.0` stubs with no code).
 
-Mitigation: mark the four driveable variants `#[non_exhaustive]` in this change. That
-forces external matchers onto `..`, making **this** the last non-additive change to them
-and every future state field additive. The change is therefore classified as breaking
-(§5).
+**Why the variants are *not* marked `#[non_exhaustive]`** (M1 resolution): doing so would
+forbid external crates from *constructing* the variants, and the pure `transition` suite
+lives in `tests/transition_unit.rs` — an external test crate that constructs
+`CallingModel` / `ExecutingTools` / etc. to drive the state machine. Marking the variants
+`#[non_exhaustive]` fails that suite to compile (verified: `E0639` "cannot create
+non-exhaustive variant using struct expression" + `E0638` "`..` required"). The chosen
+trade-off is to take the one-time field-addition break now and leave the variants plain;
+future state fields (handoff/compaction) will likewise be breaking and ride their own
+breaking feature tickets.
 
 **Forward-compat seam (L1):** the not-yet-driveable variants (`ApplyingHandoff`,
 `Compacting`, `NeedsApproval`) deliberately get **no** `usage` field today because they
@@ -193,10 +200,10 @@ pays" question)? Flagged here as a known seam; not resolved in SMA-402.
 ## 5. Release mechanics
 
 This is a **breaking** change to `paigasus-helikon-core`'s public API (§3.5): adding the
-`usage` field and marking the four variants `#[non_exhaustive]` both break external
-exhaustive matches. On a `0.x` crate, `^0.2` consumers auto-accept `0.2.(x+1)`, so a
-breaking change must **not** ship as a patch — it must bump the **minor**
-(`0.2.4 → 0.3.0`), which is how `release-plz` maps a breaking change on `0.x`.
+`usage` field breaks external exhaustive matches on the four `LoopState` variants. On a
+`0.x` crate, `^0.2` consumers auto-accept `0.2.(x+1)`, so a breaking change must **not**
+ship as a patch — it must bump the **minor** (`0.2.4 → 0.3.0`), which is how `release-plz`
+maps a breaking change on `0.x`.
 
 Signal it deliberately: flag the change as breaking in the squashed-PR commit, i.e. a
 breaking-marked Conventional Commit — **`fix(core)!: SMA-402 …`** (or a `BREAKING CHANGE:`
