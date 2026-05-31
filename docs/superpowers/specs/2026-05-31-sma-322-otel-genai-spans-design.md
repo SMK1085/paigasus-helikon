@@ -1,11 +1,10 @@
 # SMA-322 — OpenTelemetry spans with GenAI semantic conventions
 
-**Status:** Design (approved, revised after review)
+**Status:** Design (approved)
 **Issue:** [SMA-322](https://linear.app/smaschek/issue/SMA-322)
 **Branch:** `feature/sma-322-opentelemetry-spans-with-genai-semantic-conventions`
 **Date:** 2026-05-31
 **Milestone:** MVP · **Labels:** `area:observability`, `stage:1`
-**Review:** [`2026-05-31-sma-322-otel-genai-spans-design-review.md`](./2026-05-31-sma-322-otel-genai-spans-design-review.md) — "approve with changes"; this revision applies H1, H2, M1, M3 and the N-series notes.
 **References:** Notion *Observability & Evaluation* (`355830e8fbaa81869381f202ca03fee7`); ADR *OpenTelemetry-native observability with GenAI semantic conventions*.
 
 ## 1. Summary
@@ -38,8 +37,8 @@ semconv and supersedes the stale names — the same stale-docs reconciliation do
 SMA-321/ADR-13. Rationale: the headline AC is *backends recognize the telemetry out of
 the box*, which only holds with current names; and because span names + attribute keys
 become part of users' saved queries/dashboards, fixing them post-ship is a breaking
-change, so greenfield-now is far cheaper. The Linear ticket is updated to record this;
-the Notion ADR/page needs the same edit (flagged, drafted separately before editing).
+change, so greenfield-now is far cheaper. The Linear ticket and the Notion ADR/page are
+reconciled in step with this design.
 
 ## 2. Scope
 
@@ -78,11 +77,11 @@ invoke_agent {agent}     (INTERNAL)   run span — gen_ai.operation.name = invok
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| 1 | **Exporter wiring lives in an example app only** (dev-deps), not a library helper or new crate. | No new *production* deps. **Caveat (H2):** the OTLP dev-deps DO enter the `cargo deny` / `cargo audit` graph — both scan dev-deps and `deny.toml` has no dev-exclusion. §8.1 adds a gate to run them and resolve license findings (notably the reqwest→rustls→`ring` TLS chain) before merge. SBOM uses `cargo-cyclonedx --all-features` on the facade (published graph), so it is expected unaffected — confirmed in §8.1. |
+| 1 | **Exporter wiring lives in an example app only** (dev-deps), not a library helper or new crate. | No new *production* deps. **Caveat:** the OTLP dev-deps DO enter the `cargo deny` / `cargo audit` graph — both scan dev-deps and `deny.toml` has no dev-exclusion. §8.1 adds a gate to run them and resolve license findings (notably the reqwest→rustls→`ring` TLS chain) before merge. SBOM uses `cargo-cyclonedx --all-features` on the facade (published graph), so it is expected unaffected — confirmed in §8.1. |
 | 2 | **Instrument only the four live paths**; leave handoff/approval/guardrail as documented seams. | Everything emitted is end-to-end verifiable now; nothing instruments code that returns `NotImplemented`. |
-| 3 | **Trace-level metadata is handle-stamped, pure-`tracing`.** `TracerHandle` carries `session_id` / `user_id` / `tags`; the run span stamps the `langfuse.*` attributes and `agent.turn` re-stamps them. | Langfuse propagates trace-level attributes from the root to child observations, so stamping the run span (+ turn) is sufficient in-process — no OTel Baggage plumbing in `core`. (Corrected per M3: the attributes are stamped on the run + turn spans, **not** literally every span; Langfuse handles child propagation.) Cross-service Baggage is a follow-up. |
+| 3 | **Trace-level metadata is handle-stamped, pure-`tracing`.** `TracerHandle` carries `session_id` / `user_id` / `tags`; the run span stamps the `langfuse.*` attributes and `agent.turn` re-stamps them. | Langfuse propagates trace-level attributes from the root to child observations, so stamping the run span (+ turn) is sufficient in-process — no OTel Baggage plumbing in `core`. The attributes are stamped on the run + turn spans, **not** literally every span; Langfuse handles child propagation. Cross-service Baggage is a follow-up. |
 | 4 | **`gen_ai.provider.name` / `gen_ai.request.model` via two `Model` trait getters** (`provider()` / `model()`) with default impls. | `core` cannot otherwise learn these — the model id is configured inside each provider and never crosses into `ModelRequest`. Default impls keep external `Model` implementors compiling; `ModelCapabilities` is `Copy`/flags-only and a poor carrier for a runtime `String`. |
-| 5 | **`langfuse.trace.tags`: `core` records a JSON-array string field; the example's span processor rewrites it to a native `string[]` before export.** | Langfuse requires tags as a native `string[]` (a JSON-string silently fails to register — M1). Doing the array conversion in the example keeps `core` `tracing`-only (no `tracing-opentelemetry` dep in `core`) while making tags actually work. `langfuse.session.id` / `langfuse.user.id` are scalar strings — recorded directly. |
+| 5 | **`langfuse.trace.tags`: `core` records a JSON-array string field; the example's span processor rewrites it to a native `string[]` before export.** | Langfuse requires tags as a native `string[]` (a JSON-string silently fails to register). Doing the array conversion in the example keeps `core` `tracing`-only (no `tracing-opentelemetry` dep in `core`) while making tags actually work. `langfuse.session.id` / `langfuse.user.id` are scalar strings — recorded directly. |
 | 6 | **Adopt the current GenAI semconv names**, superseding the ticket's stale draft names (§1.1, §5). | The AC requires backends to recognize the telemetry; only current names achieve that. Greenfield, so no breakage. |
 
 ## 4. Architecture & seams
@@ -99,7 +98,7 @@ All three seams already exist in `core`:
 * **`run_tools_concurrent`** — `core/src/agent.rs:488`, where per-call tool spans wrap
   each `tool.invoke`.
 
-### 4.1 Span-guard mechanics (verified correct in review)
+### 4.1 Span-guard mechanics
 
 An `Entered` guard from `Span::enter()` is `!Send` and must **never** be held across
 an `.await` or `yield` — both pervasive in the `async_stream`. The design therefore
@@ -151,7 +150,7 @@ span name (§4.2); the `tracing` macro name is the stable token in parentheses.
 | turn index (span field) | loop turn counter | open |
 | `langfuse.session.id` / `user.id` / `trace.tags` | re-stamped from `TracerHandle` (Langfuse child propagation) | open |
 
-No `gen_ai.operation.name` (corrected per H1 — `"turn"` is not a defined operation value).
+No `gen_ai.operation.name` — `"turn"` is not a defined operation value.
 
 ### Model-call span — `tracing` name `gen_ai.chat`, `otel.name = "chat {model}"`, `otel.kind = client` (one per `NextAction::CallModel`)
 | Attribute | Value / source | When |
@@ -205,8 +204,8 @@ pub struct TracerHandleBuilder { /* … */ }
 `TracerHandle::default()` still yields an empty handle, so **every existing
 `TracerHandle::default()` call site keeps compiling** (`context.rs`, `tool.rs`,
 `core/tests/*`, `runtime-tokio/tests/*`, the macros end-to-end test, and the
-`leukemia_classifier` example). The `_private: ()` field is removed (verified
-non-breaking — external code can't name it; review N3).
+`leukemia_classifier` example). The `_private: ()` field is removed — non-breaking,
+since external code can't name it.
 
 ### 6.2 `Model` trait (`core/src/model.rs`) — additive via default impls
 
@@ -237,7 +236,7 @@ elided from the span so an un-overriding `Model` simply omits the attribute.
    from `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST`.
 2. Install a small **tags span processor** that, on span end, converts the
    `langfuse.trace.tags` JSON-string attribute into a native `string[]` OTel attribute
-   (so `core` stays `tracing`-only — Decision 5 / M1).
+   (so `core` stays `tracing`-only — Decision 5).
 3. Install `tracing_subscriber::registry().with(tracing_opentelemetry::layer()…)`.
 4. Build an `LlmAgent`, construct a `RunContext` with a populated `TracerHandle`
    (`session_id` / `user_id` / `tags`), run via `TokioRunner`.
@@ -254,9 +253,9 @@ version-locked to the existing `opentelemetry = "0.27"`):
 | `tracing-subscriber` | `0.3` | `env-filter`, `fmt` |
 
 `opentelemetry` (0.27) is already declared in `[workspace.dependencies]` and unused; it
-becomes used by the example. No *published* crate gains any of these. (N1: 0.27 is
-aging by 2026 but is the existing pin and dev-only; a one-line follow-up can bump the
-whole pinned set together.)
+becomes used by the example. No *published* crate gains any of these. (0.27 is aging by
+2026 but is the existing pin and dev-only; a one-line follow-up can bump the whole
+pinned set together.)
 
 ## 8. Verification
 
@@ -277,7 +276,7 @@ whole pinned set together.)
 New public items (`TracerHandle` API, `Model::provider/model`) carry `///` docs to
 satisfy `missing_docs` and the 80% doc-coverage gate.
 
-### 8.1 Supply-chain gate (H2 — blocking)
+### 8.1 Supply-chain gate (blocking)
 
 Before merge, with the new dev-deps actually added:
 
@@ -291,22 +290,21 @@ Before merge, with the new dev-deps actually added:
 3. Confirm `cargo cyclonedx --all-features` on the facade is unaffected (it targets the
    published graph, which excludes dev-deps).
 
-Decision 1's earlier "deny/audit/sbom surface unchanged" claim was wrong and has been
-corrected; this gate is the proof obligation.
+This gate is the proof obligation for Decision 1 — the OTLP dev-deps do enter the
+`deny`/`audit` graph and must be verified to pass.
 
 ## 9. Risks & open questions
 
-* **Langfuse attribute keys — resolved.** Verified against Langfuse's current OTel
-  mapping: `langfuse.session.id` and `langfuse.user.id` are correct (scalar strings);
-  tags use **`langfuse.trace.tags`** typed `string[]` (the ticket's `langfuse.tags`
-  was stale, now corrected). Tags require a native array (Decision 5 / §7).
-* **Version lock — resolved.** `tracing-opentelemetry 0.28` targets `opentelemetry
-  0.27`, matching `opentelemetry_sdk`/`-otlp 0.27`. Pin exact minors.
+* **Langfuse attribute keys.** Verified against Langfuse's current OTel mapping:
+  `langfuse.session.id` and `langfuse.user.id` are correct (scalar strings); tags use
+  **`langfuse.trace.tags`** typed `string[]` (the ticket's `langfuse.tags` was stale,
+  now corrected). Tags require a native array (Decision 5 / §7).
+* **Version lock.** `tracing-opentelemetry 0.28` targets `opentelemetry 0.27`, matching
+  `opentelemetry_sdk`/`-otlp 0.27`. Pin exact minors.
 * **Supply-chain (deny/audit) — open until §8.1 runs.** The TLS-backend license is the
   live unknown; resolve empirically.
-* **Doc reconciliation — in progress.** Linear ticket updated this pass; Notion ADR/page
-  needs the same semconv + Baggage/handoff reconciliation (drafted separately, confirm
-  before editing Notion).
+* **Doc reconciliation.** Linear ticket updated; the Notion ADR/page reconciliation is
+  drafted from this design.
 * **Release ordering.** The facade example uses new `core` API. release-plz must
   publish `core` (feat → minor, **`0.2.3 → 0.3.0`** — version confirmed in
   `[workspace.dependencies]`) before the facade verifies — normal dependency-ordered
