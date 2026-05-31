@@ -245,3 +245,91 @@ async fn emits_genai_semconv_span_tree() {
         "names were {names:?}"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_span_usage_is_last_seen_not_summed_within_a_turn() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = TracerProvider::builder()
+        .with_span_processor(SimpleSpanProcessor::new(Box::new(exporter.clone())))
+        .build();
+    let tracer = provider.tracer("otel_spans_incremental_usage");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        // One turn; the model emits TWO incremental Usage events (Anthropic-style).
+        // Per the Model contract, consumers retain the LAST Usage seen, not the sum.
+        let model = ScriptedModel::new(vec![vec![
+            ModelEvent::TokenDelta { text: "hi".into() },
+            ModelEvent::Usage {
+                input_tokens: 5,
+                output_tokens: 5,
+                cached_input_tokens: None,
+                reasoning_tokens: None,
+            },
+            ModelEvent::Usage {
+                input_tokens: 11,
+                output_tokens: 22,
+                cached_input_tokens: None,
+                reasoning_tokens: None,
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ]]);
+        let agent: LlmAgent<(), ScriptedModel> = LlmAgent {
+            name: "assistant".into(),
+            description: "test".into(),
+            instructions: Arc::new("") as Arc<dyn Instructions<()>>,
+            model,
+            tools: Vec::new(),
+            handoffs: Vec::new(),
+            output_type: None,
+            input_guardrails: Vec::new(),
+            output_guardrails: Vec::new(),
+            hooks: Vec::new(),
+            model_settings: ModelSettings::new(),
+            config: RunConfig::default(),
+            _output: std::marker::PhantomData,
+        };
+        let ctx = RunContext::new(
+            Arc::new(()),
+            Arc::new(NoopSession) as Arc<dyn Session>,
+            HookRegistry::<()>::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        );
+        let stream = agent
+            .run(ctx, AgentInput::from_user_text("hi"))
+            .await
+            .unwrap();
+        let _ = RunResultStreaming::new(stream).collect().await.unwrap();
+    }
+    provider.force_flush();
+    let spans = exporter.get_finished_spans().unwrap();
+    let run = spans
+        .iter()
+        .find(|s| s.name.starts_with("invoke_agent"))
+        .expect("run span");
+    // Must be the LAST snapshot 11/22, NOT the sum 16/27.
+    assert_eq!(
+        attr(run, "gen_ai.usage.input_tokens"),
+        Some(&Value::from(11_i64))
+    );
+    assert_eq!(
+        attr(run, "gen_ai.usage.output_tokens"),
+        Some(&Value::from(22_i64))
+    );
+    let chat = spans
+        .iter()
+        .find(|s| s.name.starts_with("chat "))
+        .expect("chat span");
+    assert_eq!(
+        attr(chat, "gen_ai.usage.input_tokens"),
+        Some(&Value::from(11_i64))
+    );
+    assert_eq!(
+        attr(chat, "gen_ai.usage.output_tokens"),
+        Some(&Value::from(22_i64))
+    );
+}
