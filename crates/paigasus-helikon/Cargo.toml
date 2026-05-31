@@ -66,10 +66,15 @@ tracing-opentelemetry = { workspace = true }
 opentelemetry         = { workspace = true }
 opentelemetry_sdk     = { workspace = true }
 opentelemetry-otlp    = { workspace = true }
+base64                = { workspace = true }
 
 [[example]]
 name              = "leukemia_classifier"
 required-features = ["anthropic"]
+
+[[example]]
+name              = "langfuse_tracing"
+required-features = ["runtime-tokio"]
 
 [lints]
 workspace = true

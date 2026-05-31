@@ -16,6 +16,7 @@ categories    = ["api-bindings", "asynchronous"]
 [workspace.dependencies]
 anyhow                = "1"
 async-openai          = "0.40"
+base64                = "0.22"
 async-stream          = "0.3"
 async-trait           = "0.1"
 eventsource-stream    = "0.2"
