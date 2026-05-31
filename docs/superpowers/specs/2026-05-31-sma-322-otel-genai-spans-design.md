@@ -320,7 +320,7 @@ This gate is the proof obligation for Decision 1 — the OTLP dev-deps do enter 
 | `crates/paigasus-helikon-core/src/agent.rs` | Open/close the run / turn / model-call spans with semconv `otel.name`/`otel.kind`/`gen_ai.*` fields; thread the turn span into `run_tools_concurrent`; open per-call tool spans via `.instrument`. |
 | `crates/paigasus-helikon-providers-openai/src/model.rs` | Override `provider()` → `"openai"`, `model()` → configured id. |
 | `crates/paigasus-helikon-providers-anthropic/src/model.rs` | Override `provider()` → `"anthropic"`, `model()` → configured id. |
-| `crates/paigasus-helikon-core/tests/` | Add the `tracing::Layer`-capture span-tree integration test (semconv names + token counts). |
+| `crates/paigasus-helikon/tests/otel_spans.rs` | Add the `tracing::Layer`-capture span-tree integration test (semconv names + token counts). Lives in the facade crate because the OTel exporter is a facade dev-dependency. |
 | `crates/paigasus-helikon/examples/langfuse_tracing.rs` | New example: tags span processor + OTLP→Langfuse wiring + run. |
 | `crates/paigasus-helikon/Cargo.toml` | Add the four export-stack crates as `[dev-dependencies]`. |
 | `Cargo.toml` (root) | Add `tracing-opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`, `tracing-subscriber` to `[workspace.dependencies]`. |
