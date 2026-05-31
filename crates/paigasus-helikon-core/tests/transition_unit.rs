@@ -392,6 +392,112 @@ fn finalizing_request_carries_response_format_and_no_tools() {
     }
 }
 
+/// SMA-402: the running usage total is carried forward and summed across
+/// turns by `transition`, surfacing the cumulative total on `Done` /
+/// `RunCompleted` — not the last turn only.
+#[test]
+fn usage_accumulates_across_turns() {
+    // TokenUsage is #[non_exhaustive]: build via default + field assignment.
+    let mut u0 = TokenUsage::default();
+    u0.input_tokens = 100;
+    u0.output_tokens = 20;
+    u0.total_tokens = 120;
+
+    let mut u1 = TokenUsage::default();
+    u1.input_tokens = 200;
+    u1.output_tokens = 8;
+    u1.total_tokens = 208;
+
+    let settings = ModelSettings::new();
+    let conversation: Vec<Item> = vec![];
+
+    // Turn 0: model emits a tool call (usage u0) → ExecutingTools carries u0.
+    let assistant = Item::AssistantMessage {
+        content: vec![ContentPart::Text {
+            text: "calling".into(),
+        }],
+        agent: Some("test".into()),
+    };
+    let call = Item::ToolCall {
+        call_id: "1".into(),
+        name: "a".into(),
+        args: serde_json::json!({}),
+    };
+    let state0 = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
+    let out0 = transition(
+        &state0,
+        TransitionInput::ModelResponse {
+            items: vec![assistant, call],
+            usage: u0,
+            finish_reason: FinishReason::ToolCalls,
+        },
+        &ctx_with(16, &conversation, &settings),
+    );
+    let exec_usage = match &out0.next_state {
+        LoopState::ExecutingTools { usage, .. } => *usage,
+        other => panic!("expected ExecutingTools, got {other:?}"),
+    };
+    assert_eq!(exec_usage.input_tokens, 100);
+    assert_eq!(exec_usage.total_tokens, 120);
+
+    // Tool results → CallingModel { turn: 1 } carries u0 forward unchanged.
+    let out1 = transition(
+        &out0.next_state,
+        TransitionInput::ToolResults {
+            outcomes: vec![ToolCallOutcome {
+                call_id: "1".into(),
+                result: Ok(vec![ContentPart::Text { text: "ok".into() }]),
+            }],
+        },
+        &ctx_with(16, &conversation, &settings),
+    );
+    let call1_usage = match &out1.next_state {
+        LoopState::CallingModel { turn: 1, usage } => *usage,
+        other => panic!("expected CallingModel turn 1, got {other:?}"),
+    };
+    assert_eq!(call1_usage.input_tokens, 100, "tools add no tokens");
+
+    // Turn 1: final text (usage u1) → Done with cumulative u0 + u1.
+    let final_assistant = Item::AssistantMessage {
+        content: vec![ContentPart::Text {
+            text: "done".into(),
+        }],
+        agent: Some("test".into()),
+    };
+    let out2 = transition(
+        &out1.next_state,
+        TransitionInput::ModelResponse {
+            items: vec![final_assistant],
+            usage: u1,
+            finish_reason: FinishReason::Stop,
+        },
+        &ctx_with(16, &conversation, &settings),
+    );
+    let final_usage = match &out2.next_state {
+        LoopState::Done(fo) => fo.usage,
+        other => panic!("expected Done, got {other:?}"),
+    };
+    assert_eq!(final_usage.input_tokens, 300);
+    assert_eq!(final_usage.output_tokens, 28);
+    assert_eq!(final_usage.total_tokens, 328);
+
+    // The RunCompleted event carries the same cumulative total.
+    match out2
+        .events
+        .iter()
+        .find(|e| matches!(e, AgentEvent::RunCompleted { .. }))
+    {
+        Some(AgentEvent::RunCompleted { usage }) => {
+            assert_eq!(usage.input_tokens, 300);
+            assert_eq!(usage.total_tokens, 328);
+        }
+        _ => panic!("expected a RunCompleted event"),
+    }
+}
+
 /// D6 precedence: when the caller pre-sets `model_settings.response_format`
 /// to `Text`, the finalizing request must still carry `JsonSchema` derived
 /// from `output_type` — the output_type wins.
