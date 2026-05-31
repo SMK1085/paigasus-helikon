@@ -70,6 +70,20 @@ pub trait Model: Send + Sync {
 
     /// Provider capabilities. Stable across calls.
     fn capabilities(&self) -> ModelCapabilities;
+
+    /// GenAI `gen_ai.provider.name` — the provider identifier (e.g.
+    /// `"openai"`, `"anthropic"`). Providers override this; the `"unknown"`
+    /// default is only recorded for a `Model` that does not.
+    fn provider(&self) -> &str {
+        "unknown"
+    }
+
+    /// GenAI `gen_ai.request.model` — the configured model id (e.g.
+    /// `"gpt-4o"`). Providers override this; the empty default is only
+    /// recorded for a `Model` that does not.
+    fn model(&self) -> &str {
+        ""
+    }
 }
 
 /// The request envelope crossing the model boundary.
@@ -521,5 +535,32 @@ mod tests {
         assert!(c.prompt_caching, "with_prompt_caching must set the flag");
         let d = ModelCapabilities::default();
         assert!(!d.prompt_caching, "default must be false");
+    }
+
+    #[test]
+    fn model_descriptor_getters_default_to_unknown() {
+        struct Bare;
+        #[async_trait::async_trait]
+        impl crate::Model for Bare {
+            async fn invoke(
+                &self,
+                _req: crate::ModelRequest,
+                _cancel: crate::CancellationToken,
+            ) -> Result<
+                futures_core::stream::BoxStream<
+                    'static,
+                    Result<crate::ModelEvent, crate::ModelError>,
+                >,
+                crate::ModelError,
+            > {
+                Ok(Box::pin(futures_util::stream::empty()))
+            }
+            fn capabilities(&self) -> crate::ModelCapabilities {
+                crate::ModelCapabilities::default()
+            }
+        }
+        let m = Bare;
+        assert_eq!(m.provider(), "unknown");
+        assert_eq!(m.model(), "");
     }
 }

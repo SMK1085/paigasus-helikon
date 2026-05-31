@@ -56,10 +56,25 @@ serde_json  = { workspace = true }
 # Required by the leukemia_classifier example (SMA-320).
 tokio       = { workspace = true, features = ["macros", "rt-multi-thread"] }
 anyhow      = { workspace = true }
+# SMA-322 — OTel export stack for the langfuse_tracing example + otel_spans test.
+async-trait           = { workspace = true }
+futures-core          = { workspace = true }
+futures-util          = { workspace = true }
+tracing               = { workspace = true }
+tracing-subscriber    = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+opentelemetry         = { workspace = true }
+opentelemetry_sdk     = { workspace = true }
+opentelemetry-otlp    = { workspace = true }
+base64                = { workspace = true }
 
 [[example]]
 name              = "leukemia_classifier"
 required-features = ["anthropic"]
+
+[[example]]
+name              = "langfuse_tracing"
+required-features = ["runtime-tokio"]
 
 [lints]
 workspace = true

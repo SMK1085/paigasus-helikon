@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
+use tracing::Instrument as _;
 
 use crate::{GuardrailKind, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError};
 
@@ -490,6 +491,7 @@ async fn run_tools_concurrent<Ctx>(
     calls: &[crate::ToolCallRequest],
     tool_ctx: &crate::ToolContext<Ctx>,
     limit: Option<std::num::NonZeroUsize>,
+    parent: &tracing::Span,
 ) -> Vec<crate::ToolCallOutcome>
 where
     Ctx: Send + Sync + 'static,
@@ -499,6 +501,16 @@ where
         let call_id = call.call_id.clone();
         let args = call.args.clone();
         let name = call.name.clone();
+        let span = tracing::info_span!(
+            parent: parent,
+            "tool.execute",
+            otel.name = tracing::field::Empty,
+            otel.kind = "internal",
+            gen_ai.operation.name = "execute_tool",
+            gen_ai.tool.name = %name,
+            otel.status_code = tracing::field::Empty,
+        );
+        span.record("otel.name", format!("execute_tool {name}").as_str());
         async move {
             match tool {
                 Some(t) => match t.invoke(tool_ctx, args).await {
@@ -506,17 +518,24 @@ where
                         call_id,
                         result: Ok(tool_output_to_content_parts(&output)),
                     },
-                    Err(e) => crate::ToolCallOutcome {
+                    Err(e) => {
+                        tracing::Span::current().record("otel.status_code", "ERROR");
+                        crate::ToolCallOutcome {
+                            call_id,
+                            result: Err(e.to_string()),
+                        }
+                    }
+                },
+                None => {
+                    tracing::Span::current().record("otel.status_code", "ERROR");
+                    crate::ToolCallOutcome {
                         call_id,
-                        result: Err(e.to_string()),
-                    },
-                },
-                None => crate::ToolCallOutcome {
-                    call_id,
-                    result: Err(format!("unknown tool: {name}")),
-                },
+                        result: Err(format!("unknown tool: {name}")),
+                    }
+                }
             }
         }
+        .instrument(span)
     });
     match limit {
         None => futures_util::future::join_all(futures).await,
@@ -601,6 +620,35 @@ where
             let mut loop_state = crate::LoopState::CallingModel { turn: 0 };
             let mut tx_input = crate::TransitionInput::Start { messages: input.messages };
 
+            let run_span = tracing::info_span!(
+                "agent.run",
+                otel.name = tracing::field::Empty,
+                otel.kind = "internal",
+                gen_ai.operation.name = "invoke_agent",
+                gen_ai.agent.name = %agent_name,
+                langfuse.session.id = tracing::field::Empty,
+                langfuse.user.id = tracing::field::Empty,
+                langfuse.trace.tags = tracing::field::Empty,
+                gen_ai.usage.input_tokens = tracing::field::Empty,
+                gen_ai.usage.output_tokens = tracing::field::Empty,
+                otel.status_code = tracing::field::Empty,
+            );
+            run_span.record("otel.name", format!("invoke_agent {agent_name}").as_str());
+            if let Some(v) = ctx.tracer().session_id() {
+                run_span.record("langfuse.session.id", v);
+            }
+            if let Some(v) = ctx.tracer().user_id() {
+                run_span.record("langfuse.user.id", v);
+            }
+            if !ctx.tracer().tags().is_empty() {
+                if let Ok(json) = serde_json::to_string(ctx.tracer().tags()) {
+                    run_span.record("langfuse.trace.tags", json.as_str());
+                }
+            }
+            let mut turn_span: Option<tracing::Span> = None;
+            let mut run_input_tokens: i64 = 0;
+            let mut run_output_tokens: i64 = 0;
+
             yield crate::AgentEvent::RunStarted { agent: agent_name.clone() };
 
             loop {
@@ -613,17 +661,68 @@ where
                 };
                 let outcome = crate::transition(&loop_state, tx_input, &tx_ctx);
                 let crate::TransitionOutcome { next_state, events, next_action, conversation_appends } = outcome;
-                for ev in events { yield ev; }
+                for ev in events {
+                    match &ev {
+                        crate::AgentEvent::TurnStarted { turn } => {
+                            let s = tracing::info_span!(
+                                parent: &run_span,
+                                "agent.turn",
+                                otel.kind = "internal",
+                                turn = *turn,
+                                langfuse.session.id = tracing::field::Empty,
+                                langfuse.user.id = tracing::field::Empty,
+                                langfuse.trace.tags = tracing::field::Empty,
+                            );
+                            if let Some(v) = ctx.tracer().session_id() {
+                                s.record("langfuse.session.id", v);
+                            }
+                            if let Some(v) = ctx.tracer().user_id() {
+                                s.record("langfuse.user.id", v);
+                            }
+                            if !ctx.tracer().tags().is_empty() {
+                                if let Ok(json) = serde_json::to_string(ctx.tracer().tags()) {
+                                    s.record("langfuse.trace.tags", json.as_str());
+                                }
+                            }
+                            turn_span = Some(s);
+                        }
+                        crate::AgentEvent::RunCompleted { .. } => {
+                            run_span.record("gen_ai.usage.input_tokens", run_input_tokens);
+                            run_span.record("gen_ai.usage.output_tokens", run_output_tokens);
+                        }
+                        crate::AgentEvent::RunFailed { .. } => {
+                            run_span.record("otel.status_code", "ERROR");
+                        }
+                        _ => {}
+                    }
+                    yield ev;
+                }
                 loop_state = next_state;
                 conversation.extend(conversation_appends);
 
                 match next_action {
                     crate::NextAction::CallModel { request } => {
+                        let chat_parent = turn_span.as_ref().unwrap_or(&run_span);
+                        let chat_span = tracing::info_span!(
+                            parent: chat_parent,
+                            "gen_ai.chat",
+                            otel.name = tracing::field::Empty,
+                            otel.kind = "client",
+                            gen_ai.operation.name = "chat",
+                            gen_ai.provider.name = %model.provider(),
+                            gen_ai.request.model = %model.model(),
+                            gen_ai.usage.input_tokens = tracing::field::Empty,
+                            gen_ai.usage.output_tokens = tracing::field::Empty,
+                            otel.status_code = tracing::field::Empty,
+                        );
+                        chat_span.record("otel.name", format!("chat {}", model.model()).as_str());
                         let cancel = ctx.cancel().clone();
                         let mut model_stream = match model.invoke(request, cancel).await {
                             Ok(s) => s,
                             Err(e) => {
                                 let msg = e.to_string();
+                                chat_span.record("otel.status_code", "ERROR");
+                                run_span.record("otel.status_code", "ERROR");
                                 failure.set(crate::AgentError::Model(e));
                                 yield crate::AgentEvent::RunFailed { error: msg };
                                 return;
@@ -689,6 +788,8 @@ where
                                 }
                                 Err(e) => {
                                     let msg = e.to_string();
+                                    chat_span.record("otel.status_code", "ERROR");
+                                    run_span.record("otel.status_code", "ERROR");
                                     failure.set(crate::AgentError::Model(e));
                                     yield crate::AgentEvent::RunFailed { error: msg };
                                     return;
@@ -699,6 +800,8 @@ where
                         let items = match build_items(&agent_name, text, reasoning, tool_accum) {
                             Ok(items) => items,
                             Err(e) => {
+                                chat_span.record("otel.status_code", "ERROR");
+                                run_span.record("otel.status_code", "ERROR");
                                 failure.set(crate::AgentError::Other(anyhow::anyhow!("{e}")));
                                 yield crate::AgentEvent::RunFailed { error: e };
                                 return;
@@ -706,6 +809,14 @@ where
                         };
                         conversation.extend(items.iter().cloned());
                         let usage = latest_usage.unwrap_or_default();
+                        // Record per-turn usage from the FINAL retained Usage snapshot.
+                        // Providers such as Anthropic emit incremental Usage updates; the
+                        // Model contract says retain the LAST, not sum within a turn.
+                        // Run totals then accumulate each turn's final usage across turns.
+                        chat_span.record("gen_ai.usage.input_tokens", usage.input_tokens as i64);
+                        chat_span.record("gen_ai.usage.output_tokens", usage.output_tokens as i64);
+                        run_input_tokens += usage.input_tokens as i64;
+                        run_output_tokens += usage.output_tokens as i64;
                         tx_input = crate::TransitionInput::ModelResponse {
                             items,
                             usage,
@@ -714,11 +825,13 @@ where
                     }
                     crate::NextAction::ExecuteTools { calls } => {
                         let tool_ctx = ctx.to_tool_context();
+                        let tool_parent = turn_span.as_ref().unwrap_or(&run_span);
                         let outcomes = run_tools_concurrent(
                             &tools,
                             &calls,
                             &tool_ctx,
                             parallel_tool_call_limit,
+                            tool_parent,
                         )
                         .await;
                         for o in &outcomes {

@@ -175,6 +175,24 @@ mod runcontext_tests {
     }
 
     #[test]
+    fn tracer_handle_builder_roundtrips_and_default_is_empty() {
+        let empty = TracerHandle::default();
+        assert!(empty.session_id().is_none());
+        assert!(empty.user_id().is_none());
+        assert!(empty.tags().is_empty());
+
+        let h = TracerHandle::builder()
+            .with_session_id("sess-1")
+            .with_user_id("user-1")
+            .with_tag("prod")
+            .with_tag("beta")
+            .build();
+        assert_eq!(h.session_id(), Some("sess-1"));
+        assert_eq!(h.user_id(), Some("user-1"));
+        assert_eq!(h.tags(), &["prod", "beta"]);
+    }
+
+    #[test]
     fn with_run_config_round_trips_and_defaults_none() {
         let ctx: RunContext<()> = RunContext::new(
             Arc::new(()),
@@ -244,12 +262,72 @@ where
     }
 }
 
-/// Opaque handle to the per-run tracer.
-///
-/// Field shape lands with the observability ticket; today this is a
-/// unit struct so signatures referring to `TracerHandle` resolve.
-// SMA-3xx — gains real fields with the observability ticket.
+/// Carrier for per-run trace-level attributes (Langfuse `session.id` /
+/// `user.id` / `tags`) that the agent loop stamps onto the run and turn
+/// spans. Construct an empty handle with [`TracerHandle::default`] or a
+/// populated one via [`TracerHandle::builder`].
 #[derive(Debug, Clone, Default)]
 pub struct TracerHandle {
-    _private: (),
+    session_id: Option<String>,
+    user_id: Option<String>,
+    tags: Vec<String>,
+}
+
+impl TracerHandle {
+    /// Start building a populated handle.
+    pub fn builder() -> TracerHandleBuilder {
+        TracerHandleBuilder::default()
+    }
+
+    /// Langfuse session id, if set.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Langfuse user id, if set.
+    pub fn user_id(&self) -> Option<&str> {
+        self.user_id.as_deref()
+    }
+
+    /// Langfuse trace tags (possibly empty).
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+}
+
+/// Consuming builder for [`TracerHandle`].
+#[derive(Debug, Default)]
+pub struct TracerHandleBuilder {
+    session_id: Option<String>,
+    user_id: Option<String>,
+    tags: Vec<String>,
+}
+
+impl TracerHandleBuilder {
+    /// Set the Langfuse session id.
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
+        self
+    }
+
+    /// Set the Langfuse user id.
+    pub fn with_user_id(mut self, id: impl Into<String>) -> Self {
+        self.user_id = Some(id.into());
+        self
+    }
+
+    /// Append one Langfuse trace tag.
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    /// Finish building the [`TracerHandle`].
+    pub fn build(self) -> TracerHandle {
+        TracerHandle {
+            session_id: self.session_id,
+            user_id: self.user_id,
+            tags: self.tags,
+        }
+    }
 }

@@ -66,4 +66,27 @@ impl Model for OpenAiModel {
     fn capabilities(&self) -> ModelCapabilities {
         self.capabilities
     }
+
+    fn provider(&self) -> &str {
+        "openai"
+    }
+
+    fn model(&self) -> &str {
+        &self.model_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_and_model_getters() {
+        let m = OpenAiModel::chat("gpt-4o")
+            .api_key("sk-test")
+            .build()
+            .unwrap();
+        assert_eq!(m.provider(), "openai");
+        assert_eq!(m.model(), "gpt-4o");
+    }
 }
