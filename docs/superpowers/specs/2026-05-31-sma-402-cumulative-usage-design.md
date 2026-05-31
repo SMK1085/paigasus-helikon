@@ -40,6 +40,8 @@ summing.
 
 * Carry a running `usage: TokenUsage` total in the four driveable, non-terminal
   `LoopState` variants and thread it through `transition`.
+* Mark those four variants `#[non_exhaustive]` so this field addition is the **last**
+  non-additive change to them and all future state fields are additive (§3.5, M1).
 * Make `RunCompleted.usage` and `FinalOutput.usage` carry the cumulative total at every
   terminal arm.
 * Delete the driver's parallel `run_input_tokens` / `run_output_tokens` i64 counters;
@@ -48,9 +50,11 @@ summing.
   total) via the existing `TokenUsage::add`.
 * Tests: a pure multi-step `transition` accumulation test, an end-to-end multi-turn
   regression test, and structured-output coverage (a structured run is inherently ≥ 2
-  turns).
-* Doc comments: document the new state fields; the existing "aggregated across the run"
-  docs become true rather than aspirational.
+  turns). The multi-turn test scripts **non-zero** `cached_input_tokens` /
+  `reasoning_tokens` so the "all five fields" assertion is not vacuous (§4, N1).
+* Docs: document the new state fields; codify the **last-wins per-invocation** `Usage`
+  contract on `Model` / `ModelEvent::Usage` that cross-turn summing relies on (§3.4, L2);
+  the existing "aggregated across the run" docs become true rather than aspirational.
 
 ### Out of scope (YAGNI)
 
@@ -64,19 +68,20 @@ summing.
 
 ### 3.1 `loop_state.rs` — running total carried in state
 
-Add `usage: TokenUsage` to the four driveable, non-terminal variants. Semantics: the
-**cumulative total of all turns completed before entering this state**.
+Add `usage: TokenUsage` to the four driveable, non-terminal variants, and mark each of
+those variants `#[non_exhaustive]` (see §3.5). Semantics: the **cumulative total of all
+turns completed before entering this state**.
 
 ```
-LoopState::CallingModel    { turn, usage }
-LoopState::ExecutingTools  { calls, turn, usage }
-LoopState::Finalizing      { turn, usage }
-LoopState::RepairingOutput { turn, usage }
+#[non_exhaustive] LoopState::CallingModel    { turn, usage }
+#[non_exhaustive] LoopState::ExecutingTools  { calls, turn, usage }
+#[non_exhaustive] LoopState::Finalizing      { turn, usage }
+#[non_exhaustive] LoopState::RepairingOutput { turn, usage }
 ```
 
 `Done(FinalOutput)` already holds `usage` → it becomes the grand total. `Failed` and the
 not-driveable variants (`ApplyingHandoff`, `Compacting`, `NeedsApproval`) get **no**
-field.
+field (see the forward-compat seam in §3.5).
 
 `transition` threads it. Let `prior = state.usage` and `total = prior + resp.usage`
 (via `TokenUsage::add`):
@@ -130,6 +135,39 @@ already correct. Only a doc clarification may be added.
 short "last-retained per turn, summed across turns" clarifier where it aids the reader,
 and document the four new state fields.
 
+Additionally, **codify the implicit `Model` contract** the cross-turn sum depends on
+(L2). The accumulation is only correct if each turn's retained `Usage` is that turn's
+*complete* usage — i.e. providers emit `ModelEvent::Usage` as **last-wins per invocation
+(cumulative within a turn, not incremental per chunk)**. This holds for Anthropic
+(`message_delta` usage is cumulative-within-message) and OpenAI (emitted once) today,
+and the driver already relies on it (the `latest_usage` overwrite). State it as a
+contract in the `Model` trait / `ModelEvent::Usage` doc comments so the next provider
+implementor preserves the invariant. (Doc-only here; no behavior change.)
+
+### 3.5 Forward-compatibility & API stability
+
+`LoopState` is public (`pub use loop_state::*`). The enum is `#[non_exhaustive]`, but its
+**struct variants are not** — so external code may match a variant's fields exhaustively
+(`LoopState::CallingModel { turn } => …`), and adding `usage` to such a variant is a
+**source-breaking** change (M1). External *construction* is already impossible
+(enum-level `#[non_exhaustive]`), so only the match side breaks; realistic blast radius
+is near-zero (the only consumers are in-crate, and the durable-runner crates that would
+re-drive `transition` are `0.0.0` stubs with no code).
+
+Mitigation: mark the four driveable variants `#[non_exhaustive]` in this change. That
+forces external matchers onto `..`, making **this** the last non-additive change to them
+and every future state field additive. The change is therefore classified as breaking
+(§5).
+
+**Forward-compat seam (L1):** the not-yet-driveable variants (`ApplyingHandoff`,
+`Compacting`, `NeedsApproval`) deliberately get **no** `usage` field today because they
+return `NotImplemented`. When they are implemented, a transition *into* them (e.g.
+`CallingModel { usage: U } → ApplyingHandoff`) has nowhere to carry `U` and would drop
+the running total unless those variants also gain a `usage` field and thread it. Handoff
+additionally poses a semantic question the future ticket must answer: does cumulative
+usage **reset per agent** or **accumulate across the whole handoff chain** (the "who
+pays" question)? Flagged here as a known seam; not resolved in SMA-402.
+
 ## 4. Testing
 
 * **`transition_unit.rs` (pure):** add `usage: TokenUsage::default()` to existing
@@ -138,10 +176,14 @@ and document the four new state fields.
   `CallingModel{0}` →(tool call, `U1`)→ `ExecutingTools{U1}` →(results)→
   `CallingModel{1, U1}` →(text, `U2`)→ and asserting the terminal `Done` /
   `RunCompleted.usage == U1 + U2`.
-* **`loop_happy_path.rs` (end-to-end, the ticket's regression):** extend
-  `multi_turn_with_tool_call` (or add a sibling) to script `ModelEvent::Usage` in both
-  turns and assert `result.usage == U1 + U2` across **all five fields**. Uses the
-  existing `MockModel` scripted-events harness.
+* **`loop_happy_path.rs` (end-to-end, the ticket's regression):** add a clearly-named
+  standalone test (sibling to `multi_turn_with_tool_call`) that scripts `ModelEvent::Usage`
+  in both turns and asserts `result.usage == U1 + U2` across **all five fields**. At least
+  one turn must carry **non-zero `cached_input_tokens` and `reasoning_tokens`** so those
+  fields' accumulation is actually exercised rather than vacuously summing `0 + 0` (N1) —
+  note the driver derives per-turn `total_tokens = input + output`, while cached/reasoning
+  ride through `ModelEvent::Usage` independently. Uses the existing `MockModel`
+  scripted-events harness.
 * **`structured_output.rs`:** assert the cumulative covers the unconstrained +
   finalizing turns (the tool-free multi-turn path).
 * **`otel_spans.rs` (facade):** the existing multi-turn run-span tests must remain green
@@ -150,15 +192,22 @@ and document the four new state fields.
 
 ## 5. Release mechanics
 
-A pure `fix(core):` change. Adding fields to `LoopState` struct variants is
-source-breaking only for an external **exhaustive** match/constructor; the only
-consumers are in-crate (the `agent.rs` driver and the `core` test suite). The
-durable-runner crates that would reuse `transition` are docstring-only stubs at `0.0.0`.
+This is a **breaking** change to `paigasus-helikon-core`'s public API (§3.5): adding the
+`usage` field and marking the four variants `#[non_exhaustive]` both break external
+exhaustive matches. On a `0.x` crate, `^0.2` consumers auto-accept `0.2.(x+1)`, so a
+breaking change must **not** ship as a patch — it must bump the **minor**
+(`0.2.4 → 0.3.0`), which is how `release-plz` maps a breaking change on `0.x`.
 
-`release-plz` patch-bumps `paigasus-helikon-core` through its **normal** flow, and its
-`dependencies_update` cascade bumps the facade. The manual core-bump / facade-bump
-ritual in `CLAUDE.md` applies only when an ascending stub uses same-PR core API — this
-is not that case — so **no manual ritual is required**. To be confirmed during planning.
+Signal it deliberately: flag the change as breaking in the squashed-PR commit, i.e. a
+breaking-marked Conventional Commit — **`fix(core)!: SMA-402 …`** (or a `BREAKING CHANGE:`
+footer) — rather than letting a bare `fix:` imply a non-breaking patch (N2). Do **not**
+hand-bump the version: `core` is an already-released crate, so `release-plz` proposes the
+`0.3.0` bump and its `dependencies_update` cascade bumps the facade through the **normal**
+flow (the manual core-bump / facade-bump ritual in `CLAUDE.md` applies only to an
+ascending stub using same-PR core API — not this case). During implementation, confirm
+release-plz's release PR proposes `core 0.3.0` + the facade cascade; the `fix(core)!:`
+title must still satisfy `pr-title.yml` (lowercase subject after `SMA-402 `) and
+`convco check`.
 
 ## 6. Risks & mitigations
 
@@ -170,3 +219,6 @@ is not that case — so **no manual ritual is required**. To be confirmed during
   run-span values must be unchanged after re-sourcing from `RunCompleted.usage`.
 * **Test churn from the new field.** Bounded to the `core` crate; mechanical
   (`usage: TokenUsage::default()` in constructions, `..` in non-asserting patterns).
+* **Breaking public-API change shipped at the wrong level.** Mitigated by classifying it
+  as breaking → minor bump (`0.3.0`) via a `fix(core)!:` PR title (§5), and by the
+  near-zero real blast radius (only in-crate consumers; durable-runner stubs are empty).
