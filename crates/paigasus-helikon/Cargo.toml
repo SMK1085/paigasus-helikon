@@ -73,6 +73,10 @@ name              = "structured_output"
 required-features = ["anthropic"]
 
 [[example]]
+name              = "budget_assistant_openai"
+required-features = ["openai", "macros"]
+
+[[example]]
 name              = "langfuse_tracing"
 required-features = ["runtime-tokio"]
 
