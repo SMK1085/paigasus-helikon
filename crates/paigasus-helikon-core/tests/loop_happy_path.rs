@@ -136,3 +136,65 @@ async fn multi_turn_with_tool_call() {
     let kinds: Vec<&'static str> = result.events.iter().map(event_kind).collect();
     insta::assert_yaml_snapshot!(kinds);
 }
+
+#[tokio::test]
+async fn multi_turn_usage_is_cumulative() {
+    use common::MockTool;
+
+    // Turn 0: tool call carrying usage U0; turn 1: final text carrying usage U1.
+    // Each turn's TokenUsage = { input, output, cached, reasoning, total=input+output }.
+    let model = MockModel::with_scripts(vec![
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "1".into(),
+                name: Some("echo".into()),
+                args_delta: "{\"msg\":\"hi\"}".into(),
+            },
+            ModelEvent::Usage {
+                input_tokens: 100,
+                output_tokens: 20,
+                cached_input_tokens: Some(10),
+                reasoning_tokens: Some(5),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        vec![
+            ModelEvent::TokenDelta {
+                text: "done".into(),
+            },
+            ModelEvent::Usage {
+                input_tokens: 200,
+                output_tokens: 8,
+                cached_input_tokens: Some(0),
+                reasoning_tokens: Some(3),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ]);
+    let tool = MockTool::new("echo", serde_json::json!("ok"));
+    let mut agent = build_agent(model);
+    agent.tools = vec![tool.clone() as std::sync::Arc<dyn paigasus_helikon_core::Tool<()>>];
+
+    let stream = agent
+        .run(noop_run_context::<()>(), AgentInput::from_user_text("go"))
+        .await
+        .expect("agent.run should succeed");
+    let result = RunResultStreaming::new(stream)
+        .collect()
+        .await
+        .expect("collect");
+
+    // Cumulative across both turns (NOT the last turn only).
+    assert_eq!(result.usage.input_tokens, 300, "input must sum 100 + 200");
+    assert_eq!(result.usage.output_tokens, 28, "output must sum 20 + 8");
+    assert_eq!(
+        result.usage.cached_input_tokens, 10,
+        "cached must sum 10 + 0"
+    );
+    assert_eq!(result.usage.reasoning_tokens, 8, "reasoning must sum 5 + 3");
+    assert_eq!(result.usage.total_tokens, 328, "total must sum 120 + 208");
+}

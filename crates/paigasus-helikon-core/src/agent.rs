@@ -617,7 +617,7 @@ where
             }
             conversation.extend(input.messages.iter().cloned());
 
-            let mut loop_state = crate::LoopState::CallingModel { turn: 0 };
+            let mut loop_state = crate::LoopState::CallingModel { turn: 0, usage: crate::TokenUsage::default() };
             let mut tx_input = crate::TransitionInput::Start { messages: input.messages };
 
             let run_span = tracing::info_span!(
@@ -646,8 +646,6 @@ where
                 }
             }
             let mut turn_span: Option<tracing::Span> = None;
-            let mut run_input_tokens: i64 = 0;
-            let mut run_output_tokens: i64 = 0;
 
             yield crate::AgentEvent::RunStarted { agent: agent_name.clone() };
 
@@ -686,9 +684,9 @@ where
                             }
                             turn_span = Some(s);
                         }
-                        crate::AgentEvent::RunCompleted { .. } => {
-                            run_span.record("gen_ai.usage.input_tokens", run_input_tokens);
-                            run_span.record("gen_ai.usage.output_tokens", run_output_tokens);
+                        crate::AgentEvent::RunCompleted { usage } => {
+                            run_span.record("gen_ai.usage.input_tokens", usage.input_tokens as i64);
+                            run_span.record("gen_ai.usage.output_tokens", usage.output_tokens as i64);
                         }
                         crate::AgentEvent::RunFailed { .. } => {
                             run_span.record("otel.status_code", "ERROR");
@@ -809,14 +807,12 @@ where
                         };
                         conversation.extend(items.iter().cloned());
                         let usage = latest_usage.unwrap_or_default();
-                        // Record per-turn usage from the FINAL retained Usage snapshot.
-                        // Providers such as Anthropic emit incremental Usage updates; the
-                        // Model contract says retain the LAST, not sum within a turn.
-                        // Run totals then accumulate each turn's final usage across turns.
+                        // Per-turn chat span records the FINAL retained Usage snapshot
+                        // (Anthropic emits incremental updates; retain the LAST, never sum
+                        // within a turn). Cross-turn run totals now accumulate inside the
+                        // state machine (SMA-402) and arrive on RunCompleted.usage.
                         chat_span.record("gen_ai.usage.input_tokens", usage.input_tokens as i64);
                         chat_span.record("gen_ai.usage.output_tokens", usage.output_tokens as i64);
-                        run_input_tokens += usage.input_tokens as i64;
-                        run_output_tokens += usage.output_tokens as i64;
                         tx_input = crate::TransitionInput::ModelResponse {
                             items,
                             usage,

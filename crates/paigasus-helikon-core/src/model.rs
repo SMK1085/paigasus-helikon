@@ -56,7 +56,10 @@ pub trait Model: Send + Sync {
     /// - `TokenDelta`, `ReasoningDelta`, and `ToolCallDelta` may interleave
     ///   freely while the model is generating.
     /// - `Usage` MAY appear anywhere; most providers emit one immediately
-    ///   before `Finish` but Anthropic emits incremental updates.
+    ///   before `Finish`, while Anthropic emits cumulative-within-response
+    ///   updates. Each `Usage` is a complete snapshot (last-wins): consumers
+    ///   retain the last seen and never sum `Usage` events within a turn.
+    ///   See [`ModelEvent::Usage`].
     /// - `Finish` is the terminal event; nothing follows it.
     ///
     /// Implementations that cannot honor cancellation MUST still terminate
@@ -189,9 +192,16 @@ pub enum ModelEvent {
     ///
     /// **Ordering contract** (per [`Model::invoke`] docs): a `Usage` MAY
     /// appear anywhere in the stream. `Finish` is always terminal.
-    /// OpenAI emits one `Usage` immediately before `Finish`; Anthropic
-    /// emits incremental usage updates. Consumers tracking final
-    /// totals should retain the last `Usage` seen.
+    /// OpenAI emits one `Usage` immediately before `Finish`; Anthropic emits
+    /// updates that are **cumulative within the response** (each carries the
+    /// running total, not a per-chunk delta).
+    ///
+    /// **Last-wins contract:** each `Usage` is a complete snapshot, so a
+    /// consumer tracking a turn's total retains the **last** `Usage` seen and
+    /// never sums `Usage` events *within* a turn. The agent loop then sums these
+    /// per-turn finals **across** turns for the run total (SMA-402); a provider
+    /// emitting true per-chunk deltas would violate this and under-count, so
+    /// implementations MUST emit cumulative-within-turn usage.
     Usage {
         /// Prompt / input tokens consumed.
         input_tokens: u32,
