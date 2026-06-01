@@ -2,8 +2,9 @@
 //! look up the user's spending and budget, then advises in plain text.
 //!
 //! Exercises the tool-calling loop end-to-end. Its sibling
-//! `budget_assistant_anthropic.rs` is identical except the model line — that
-//! one-line diff is the provider-switching proof.
+//! `budget_assistant_anthropic.rs` is the same agent on Anthropic; the only
+//! logic-relevant difference is the model-construction line — the
+//! provider-switching proof.
 //!
 //! ```text
 //! OPENAI_API_KEY=sk-… cargo run -p paigasus-helikon \
@@ -47,9 +48,18 @@ async fn lookup_spending(
     // Read `month` so the field is not flagged unused; the canned ledger ignores it.
     let _ = args.month;
     let out = match args.category.to_lowercase().as_str() {
-        "dining" => LookupSpendingOut { total: 312.40, count: 18 },
-        "groceries" => LookupSpendingOut { total: 540.10, count: 9 },
-        _ => LookupSpendingOut { total: 0.0, count: 0 },
+        "dining" => LookupSpendingOut {
+            total: 312.40,
+            count: 18,
+        },
+        "groceries" => LookupSpendingOut {
+            total: 540.10,
+            count: 9,
+        },
+        _ => LookupSpendingOut {
+            total: 0.0,
+            count: 0,
+        },
     };
     Ok(out)
 }
@@ -77,16 +87,28 @@ async fn budget_status(
     args: BudgetStatusArgs,
 ) -> Result<BudgetStatusOut, ToolError> {
     let out = match args.category.to_lowercase().as_str() {
-        "dining" => BudgetStatusOut { budget: 250.0, spent: 312.40, remaining: -62.40 },
-        "groceries" => BudgetStatusOut { budget: 600.0, spent: 540.10, remaining: 59.90 },
-        _ => BudgetStatusOut { budget: 0.0, spent: 0.0, remaining: 0.0 },
+        "dining" => BudgetStatusOut {
+            budget: 250.0,
+            spent: 312.40,
+            remaining: -62.40,
+        },
+        "groceries" => BudgetStatusOut {
+            budget: 600.0,
+            spent: 540.10,
+            remaining: 59.90,
+        },
+        _ => BudgetStatusOut {
+            budget: 0.0,
+            spent: 0.0,
+            remaining: 0.0,
+        },
     };
     Ok(out)
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let model = OpenAiModel::chat("gpt-5-mini").build()?; // ⇐ only line that differs vs budget_assistant_anthropic.rs
+    let model = OpenAiModel::chat("gpt-5-mini").build()?; // ← provider-specific line
 
     let agent = LlmAgent::builder::<()>()
         .name("budget-assistant")
