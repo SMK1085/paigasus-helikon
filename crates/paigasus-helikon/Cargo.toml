@@ -81,6 +81,10 @@ name              = "budget_assistant_anthropic"
 required-features = ["anthropic", "macros"]
 
 [[example]]
+name              = "streaming_console"
+required-features = ["openai"]
+
+[[example]]
 name              = "langfuse_tracing"
 required-features = ["runtime-tokio"]
 
