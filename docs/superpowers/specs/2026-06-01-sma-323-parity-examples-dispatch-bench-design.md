@@ -167,7 +167,7 @@ Required-features: `["openai"]`.
 - **Setup built once, outside the measured closure:** the `ToolContext`
   (`ToolContext::new(Arc::new(()), TracerHandle::default(), CancellationToken::new())`),
   the pre-cloned `args` value, and a tokio runtime.
-- **Measurement (resolves review H2):** use Criterion's async support —
+- **Measurement:** use Criterion's async support —
   `b.to_async(&rt).iter(|| tool.invoke(&ctx, args.clone()))` — **not** a per-iteration
   `rt.block_on(...)`. `block_on` re-enters the runtime every iteration and would dominate a
   trivial tool body, measuring executor entry rather than dispatch; `to_async` amortizes
@@ -246,8 +246,6 @@ Required-features: `["openai"]`.
   for the ±20% LOC gap. Filed as **[SMA-403](https://linear.app/smaschek/issue/SMA-403)**
   (`area:core`, `stage:2`); the SMA-323 examples ship with the verbose `RunContext::new` form
   and migrate once SMA-403 lands.
-- **Bench methodology** (review H2): **resolved in this spec** — Deliverable 5 uses Criterion
-  `to_async` to isolate dispatch rather than `block_on`. No follow-up needed.
 
 ## Risks / open questions
 
