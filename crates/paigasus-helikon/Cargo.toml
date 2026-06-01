@@ -77,6 +77,10 @@ name              = "budget_assistant_openai"
 required-features = ["openai", "macros"]
 
 [[example]]
+name              = "budget_assistant_anthropic"
+required-features = ["anthropic", "macros"]
+
+[[example]]
 name              = "langfuse_tracing"
 required-features = ["runtime-tokio"]
 
