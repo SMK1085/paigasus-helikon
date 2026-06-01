@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.4...paigasus-helikon-core-v0.3.0) - 2026-06-01
+
+### Fixed
+
+- *(core)* [**breaking**] SMA-402 report cumulative token usage across all turns ([#53](https://github.com/SMK1085/paigasus-helikon/pull/53))
+
 ## [0.2.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.2.3...paigasus-helikon-core-v0.2.4) - 2026-05-31
 
 ### Added
