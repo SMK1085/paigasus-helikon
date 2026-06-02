@@ -53,7 +53,7 @@ trybuild    = { workspace = true }
 schemars    = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
-# Required by the leukemia_classifier example (SMA-320).
+# Required by the structured_output example (SMA-323).
 tokio       = { workspace = true, features = ["macros", "rt-multi-thread"] }
 anyhow      = { workspace = true }
 # SMA-322 — OTel export stack for the langfuse_tracing example + otel_spans test.
@@ -69,12 +69,31 @@ opentelemetry-otlp    = { workspace = true }
 base64                = { workspace = true }
 
 [[example]]
-name              = "leukemia_classifier"
+name              = "structured_output"
 required-features = ["anthropic"]
+
+[[example]]
+name              = "budget_assistant_openai"
+required-features = ["openai", "macros"]
+
+[[example]]
+name              = "budget_assistant_anthropic"
+required-features = ["anthropic", "macros"]
+
+[[example]]
+name              = "streaming_console"
+required-features = ["openai"]
 
 [[example]]
 name              = "langfuse_tracing"
 required-features = ["runtime-tokio"]
+
+[[bench]]
+name    = "tool_dispatch"
+harness = false
+# A benchmark, not a test: `test = false` keeps `cargo test` from building and
+# running the timing loop, and keeps it out of the `test (…, 1.75)` CI job.
+test    = false
 
 [lints]
 workspace = true
