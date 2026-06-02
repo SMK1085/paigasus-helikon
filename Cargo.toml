@@ -48,7 +48,7 @@ trybuild              = "1"
 wiremock              = "0.6"
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.2.3" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.2.4" }
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.3.0" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.1.4" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.2" }
