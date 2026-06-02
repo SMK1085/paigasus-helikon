@@ -199,7 +199,7 @@ use std::sync::Arc;
 
 use paigasus_helikon::core::{
     Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession, RunContext,
-    RunResultStreaming, ToolContext, ToolError,
+    RunResultStreaming, ToolContext, ToolError, TracerHandle,
 };
 use paigasus_helikon::openai::OpenAiModel;
 use paigasus_helikon::{tool, tools};
@@ -366,7 +366,7 @@ use std::sync::Arc;
 use paigasus_helikon::anthropic::AnthropicModel;
 use paigasus_helikon::core::{
     Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession, RunContext,
-    RunResultStreaming, ToolContext, ToolError,
+    RunResultStreaming, ToolContext, ToolError, TracerHandle,
 };
 use paigasus_helikon::{tool, tools};
 
@@ -566,9 +566,16 @@ async fn main() -> anyhow::Result<()> {
     let mut stream = agent.run(ctx, input).await?;
     let mut stdout = std::io::stdout();
     while let Some(event) = stream.next().await {
-        if let AgentEvent::TokenDelta { text } = event {
-            print!("{text}");
-            stdout.flush()?;
+        match event {
+            AgentEvent::TokenDelta { text } => {
+                print!("{text}");
+                stdout.flush()?;
+            }
+            // Surface an in-run failure (bad key, rejected model, …) instead of
+            // exiting silently; fatal errors arrive as a stream event, not the
+            // outer Result.
+            AgentEvent::RunFailed { error } => anyhow::bail!("run failed: {error}"),
+            _ => {}
         }
     }
     println!();

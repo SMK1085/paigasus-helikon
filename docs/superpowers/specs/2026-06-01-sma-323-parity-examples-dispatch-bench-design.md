@@ -256,13 +256,17 @@ Required-features: `["openai"]`.
   for the ±20% LOC gap. Filed as **[SMA-403](https://linear.app/smaschek/issue/SMA-403)**
   (`area:core`, `stage:2`); the SMA-323 examples ship with the verbose `RunContext::new` form
   and migrate once SMA-403 lands.
-- **Pre-existing Rust 1.75 MSRV break via `home 0.5.12` (edition2024).** Discovered while
-  validating the bench: `sqlx-postgres → etcetera → home 0.5.12` is already in `main`'s
-  `Cargo.lock` and declares `edition = "2024"`, which Cargo 1.75 cannot parse — so
-  `cargo +1.75 test --workspace --all-features` already fails on `main`, independent of
-  SMA-323. Out of scope here (this ticket only avoids *adding* a second such break by
-  rejecting Criterion). Candidate follow-up: pin `home`/`etcetera` down, or track until
-  the `sqlx` chain drops the edition2024 dep.
+- **Latent `home 0.5.12` (edition2024) in the lockfile (NOT a CI break).** Discovered while
+  validating the bench: `home 0.5.12` (declares `edition = "2024"`) sits in `Cargo.lock` via
+  sqlx's *optional* `postgres` feature (`sqlx-postgres → etcetera → home`). `sessions-sqlite`
+  uses the sqlite path, so `home` is **not in the active build graph** — the CI
+  `test (*, 1.75)` jobs (`cargo test --workspace --all-features`) all **pass** (verified on
+  PR #57). It only breaks full-graph tooling (`cargo +1.75 metadata`) or a 1.75 build that
+  enables sqlx's `postgres` feature. (My initial "already fails on `main`" read was wrong —
+  it came from `cargo +1.75 metadata`, which enumerates the full lock, not CI's `cargo
+  test`.) Filed as **[SMA-404](https://linear.app/smaschek/issue/SMA-404)** (Low); independent
+  of SMA-323, which only avoided *adding* an actively-built edition2024 break by rejecting
+  Criterion.
 
 ## Risks / open questions
 
