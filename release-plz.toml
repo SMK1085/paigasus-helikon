@@ -9,6 +9,15 @@
 # facade itself gets a patch bump.
 dependencies_update = true
 
+# Force the scopeless release-PR title + commit (`chore: release`). release-plz's
+# default SINGLE-crate template is `chore({package}): release {version}`, which uses
+# the full package name (e.g. `paigasus-helikon`) as the Conventional-Commits scope —
+# not in the convco/.versionrc + pr-title.yml allowlist (which uses short scopes like
+# `facade`), so both the `commits` and `pr-title` gates reject it. The scopeless form
+# matches the historical multi-crate release PRs and passes both. (Diagnosed on PR #58,
+# the first facade-only release.)
+pr_name = "chore: release"
+
 # Stage 1 (SMA-385) is live: the six real crates (-core, facade, -macros,
 # -providers-openai, -providers-anthropic, -sessions-sqlite) publish to
 # crates.io. The seven stubs were pre-published once at 0.0.0 as name-claim
