@@ -615,6 +615,17 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 5: `benches/tool_dispatch.rs` — Criterion dispatch microbench
 
+> **⚠️ SUPERSEDED during implementation — the bench is dependency-free, NOT Criterion.**
+> Criterion transitively pulls `clap_lex 1.1.0` (`edition = "2024"`), which Cargo 1.75
+> cannot parse, breaking the workspace's Rust 1.75 MSRV at resolution time (a failure
+> `[[bench]] test = false` cannot avoid). The shipped bench is a hand-rolled `fn main()`
+> timing loop with **no new dependencies**: a single `rt.block_on` wraps warmup + measured
+> loops (amortizing runtime entry, the same property `to_async` would give), timed with
+> `std::time::Instant`, `assert!`ing `< 50 µs`. The Criterion-specific steps below
+> (workspace dep, `async_tokio`, `to_async`, the MSRV-1.86/`test = false` rationale) do NOT
+> apply. See the **updated spec, Deliverable 5** for the authoritative design. The
+> remaining steps' *shape* (SumTool, registry lookup, build/clippy/fmt/commit) still holds.
+
 **Files:**
 - Modify: `Cargo.toml` (root — add `criterion` to `[workspace.dependencies]`)
 - Modify: `crates/paigasus-helikon/Cargo.toml` (add `criterion` dev-dep + `[[bench]]`)

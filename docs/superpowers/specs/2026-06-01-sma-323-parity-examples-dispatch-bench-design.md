@@ -156,23 +156,32 @@ Simple agent (no tools). `agent.run(ctx, input).await?` → iterate the
 subscriptions."` The header comment notes the example is provider-agnostic.
 Required-features: `["openai"]`.
 
-### 5. `benches/tool_dispatch.rs` — Criterion microbench
+### 5. `benches/tool_dispatch.rs` — dependency-free microbench
 
-- `harness = false`; `[[bench]] name = "tool_dispatch"`.
-- Hand-rolled trivial `Tool<()>` (e.g. `SumAmounts` returning `{ total: a + b }` over
-  `{ a: f64, b: f64 }`), held as `Arc<dyn Tool<()>>` inside a `Vec<Arc<dyn Tool<()>>>` so
-  the bench measures the realistic registry path.
+- `harness = false`; `[[bench]] name = "tool_dispatch", test = false`. The bench is a plain
+  `fn main()` binary — **no Criterion, no new dependencies** (uses only `tokio`,
+  `async-trait`, `serde_json`, already dev-deps).
+- **Why not Criterion (decided during implementation):** Criterion transitively pulls
+  `clap_lex 1.1.0`, whose manifest declares `edition = "2024"`. Cargo 1.75 cannot *parse*
+  that during resolution, so adding Criterion would break the workspace's Rust 1.75 MSRV
+  for the whole `cargo test --workspace` (a resolution-time failure that `[[bench]]
+  test = false` cannot avoid). A hand-rolled timing loop sidesteps it entirely. (`test =
+  false` is kept on its own merit: a benchmark is not a test, so it stays out of `cargo
+  test` / the 1.75 job.)
+- Trivial `SumTool` implementing `Tool<()>` (returns `{ total: a + b }`), held as
+  `Arc<dyn Tool<()>>` in a `Vec<Arc<dyn Tool<()>>>` so the bench measures the realistic
+  registry path.
 - **Measured hot path:** name-lookup in the registry `Vec` + `invoke` through the
   `dyn Tool` vtable + reading the returned JSON `ToolOutput.content`.
-- **Setup built once, outside the measured closure:** the `ToolContext`
-  (`ToolContext::new(Arc::new(()), TracerHandle::default(), CancellationToken::new())`),
-  the pre-cloned `args` value, and a tokio runtime.
-- **Measurement:** use Criterion's async support —
-  `b.to_async(&rt).iter(|| tool.invoke(&ctx, args.clone()))` — **not** a per-iteration
-  `rt.block_on(...)`. `block_on` re-enters the runtime every iteration and would dominate a
-  trivial tool body, measuring executor entry rather than dispatch; `to_async` amortizes
-  runtime entry so the number reflects the `dyn Tool` vtable call + future poll + JSON read.
-  Requires `criterion`'s `async_tokio` feature.
+- **Setup built once, before timing:** the `ToolContext`, the registry, and a
+  current-thread tokio runtime.
+- **Measurement:** a **single** `rt.block_on(async { … })` wraps a warmup loop *and* the
+  measured loop, so tokio runtime entry is amortized across all iterations rather than
+  charged per call (the same property `Criterion::to_async` would give, without the
+  dependency). The measured loop is timed with `std::time::Instant` over a fixed iteration
+  count; per-call = elapsed / iters. `std::hint::black_box` on the output prevents the
+  optimizer eliding the work. The bench `println!`s the per-call time and `assert!`s it is
+  `< 50 µs`.
 - **Target:** `< 50 µs`. A deliberately loose "dispatch is not pathologically slow" guard:
   the registry lookup + vtable call + JSON read should cost on the order of sub-µs, so 50 µs
   is ~50× headroom — only a pathological regression trips it. It is **not** a tight SLO and
@@ -190,7 +199,7 @@ Required-features: `["openai"]`.
 
 ### 7. `.github/workflows/bench.yml` (one-off, reusable)
 
-- Trigger: `workflow_dispatch` only (Criterion in CI is noisy; not a required gate).
+- Trigger: `workflow_dispatch` only (benchmarks in CI are noisy; not a required gate).
 - `runs-on: ubuntu-latest` (Linux x86_64).
 - Steps: checkout → rust toolchain → `cargo bench -p paigasus-helikon --bench tool_dispatch`
   → surface the number in the job log.
@@ -205,15 +214,16 @@ Required-features: `["openai"]`.
   - `budget_assistant_openai` — `required-features = ["openai", "macros"]`
   - `budget_assistant_anthropic` — `required-features = ["anthropic", "macros"]`
   - `streaming_console` — `required-features = ["openai"]`
-- Add `[[bench]] name = "tool_dispatch", harness = false`.
-- Add `criterion = { workspace = true, features = ["async_tokio"] }` to
-  `[dev-dependencies]`. The `async_tokio` feature is required by the bench (Deliverable 5).
+- Add `[[bench]] name = "tool_dispatch", harness = false, test = false`.
+- **No new dependencies** — the dependency-free bench uses `tokio`, `async-trait`, and
+  `serde_json`, all already dev-deps (see Deliverable 5 for why Criterion was rejected).
 - `serde`, `serde_json`, `schemars` are already present (needed by the `#[tool]`
   arg/output derives).
 
 ## Root `Cargo.toml`
 
-- Add `criterion` to `[workspace.dependencies]`, pinned to the current stable major.
+- No change. The dependency-free bench adds nothing to `[workspace.dependencies]` (Criterion
+  was rejected — see Deliverable 5).
 
 ## Acceptance criteria (restated)
 
@@ -246,6 +256,13 @@ Required-features: `["openai"]`.
   for the ±20% LOC gap. Filed as **[SMA-403](https://linear.app/smaschek/issue/SMA-403)**
   (`area:core`, `stage:2`); the SMA-323 examples ship with the verbose `RunContext::new` form
   and migrate once SMA-403 lands.
+- **Pre-existing Rust 1.75 MSRV break via `home 0.5.12` (edition2024).** Discovered while
+  validating the bench: `sqlx-postgres → etcetera → home 0.5.12` is already in `main`'s
+  `Cargo.lock` and declares `edition = "2024"`, which Cargo 1.75 cannot parse — so
+  `cargo +1.75 test --workspace --all-features` already fails on `main`, independent of
+  SMA-323. Out of scope here (this ticket only avoids *adding* a second such break by
+  rejecting Criterion). Candidate follow-up: pin `home`/`etcetera` down, or track until
+  the `sqlx` chain drops the edition2024 dep.
 
 ## Risks / open questions
 
