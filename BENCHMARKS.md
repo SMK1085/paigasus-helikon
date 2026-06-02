@@ -41,4 +41,4 @@ indicative only (~0.1 µs on an Apple-silicon dev box).
 
 | Date | Platform | Runner | `tool_dispatch` | Target |
 |---|---|---|---|---|
-| _pending_ | Linux x86_64 | GitHub `ubuntu-latest` | _fill from bench.yml run_ | < 50 µs |
+| 2026-06-02 | Linux x86_64 | GitHub `ubuntu-latest` | **178 ns/call** (200k iters) | < 50 µs |
