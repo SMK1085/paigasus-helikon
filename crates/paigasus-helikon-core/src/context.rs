@@ -63,6 +63,10 @@ where
     /// boundary by a [`crate::Runner`] / [`crate::RunResultStreaming`]. Like
     /// `run_config`, it is **not** projected into [`ToolContext`].
     failure: FailureSlot,
+    /// Agent-nesting depth: 0 for a top-level run, incremented by
+    /// [`RunContext::handoff_child`] and by `AgentAsTool` for each nested
+    /// agent run. Bounded by [`crate::RunConfig::max_agent_depth`].
+    agent_depth: u32,
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -85,6 +89,7 @@ where
             cancel,
             run_config: None,
             failure: FailureSlot::new(),
+            agent_depth: 0,
         }
     }
 
@@ -121,6 +126,39 @@ where
     /// reads the structured error after the run's event stream drains.
     pub fn failure_handle(&self) -> FailureSlot {
         self.failure.clone()
+    }
+
+    /// Nesting depth that produced this context (0 at top level).
+    pub fn agent_depth(&self) -> u32 {
+        self.agent_depth
+    }
+
+    /// Stamp an explicit nesting depth. Used by `AgentAsTool` when it builds
+    /// the isolated sub-context for its wrapped agent.
+    pub fn with_agent_depth(mut self, depth: u32) -> Self {
+        self.agent_depth = depth;
+        self
+    }
+
+    /// A context for a handed-off sub-run. A handoff *continues the same
+    /// logical run*, so the child **shares** session, hooks, cancel token,
+    /// failure slot, and run config (including per-invocation limits like
+    /// `max_turns` / `timeout`) — with `agent_depth` incremented by one.
+    /// (Distinct from `AgentAsTool`, which builds an isolated context.)
+    ///
+    /// The increment saturates: depth is bounded far below `u32::MAX` by the
+    /// driver's `max_agent_depth` guard, so saturating is purely defensive.
+    pub fn handoff_child(&self) -> Self {
+        Self {
+            user_ctx: Arc::clone(&self.user_ctx),
+            session: Arc::clone(&self.session),
+            hooks: self.hooks.clone(),
+            tracer: self.tracer.clone(),
+            cancel: self.cancel.clone(),
+            run_config: self.run_config.clone(),
+            failure: self.failure.clone(),
+            agent_depth: self.agent_depth.saturating_add(1),
+        }
     }
 
     /// Install the per-invocation [`RunConfig`] (consuming builder). A
@@ -210,6 +248,44 @@ mod runcontext_tests {
             Some(std::time::Duration::from_secs(1))
         );
     }
+
+    #[test]
+    fn handoff_child_increments_depth_and_shares_failure_slot() {
+        use crate::AgentError;
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        );
+        assert_eq!(ctx.agent_depth(), 0);
+
+        let child = ctx.handoff_child();
+        assert_eq!(child.agent_depth(), 1);
+        assert_eq!(child.handoff_child().agent_depth(), 2);
+
+        // The child shares the parent's failure slot (so a failing target
+        // reaches the parent's boundary).
+        child.failure_handle().set(AgentError::MaxTurnsExceeded(2));
+        assert!(matches!(
+            ctx.failure_handle().take(),
+            Some(AgentError::MaxTurnsExceeded(2))
+        ));
+    }
+
+    #[test]
+    fn with_agent_depth_sets_depth() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_agent_depth(5);
+        assert_eq!(ctx.agent_depth(), 5);
+    }
 }
 
 /// Re-export of [`tokio_util::sync::CancellationToken`] so downstream
@@ -259,6 +335,17 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<Ctx> Clone for HookRegistry<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            hooks: self.hooks.clone(),
+        }
     }
 }
 
