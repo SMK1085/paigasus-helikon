@@ -132,6 +132,24 @@ mod tests {
     }
 
     #[test]
+    fn slug_collapses_all_non_ascii_to_empty() {
+        // An all-non-ASCII name slugs to the empty string, so the synthetic
+        // transfer-tool name degenerates to `transfer_to_`. The driver's
+        // collision guard still rejects two such names rather than silently
+        // mis-routing (see `agent.rs`). ASCII alphanumerics survive; the rest
+        // collapses and trims.
+        assert_eq!(slug("投资专家"), "");
+        assert_eq!(slug("café ☕"), "caf");
+        let def = Handoff::to(NamedAgent {
+            name: "投资专家".to_owned(),
+            description: "Investing, in Chinese.".to_owned(),
+        })
+        .to_def();
+        assert_eq!(def.tool_name, "transfer_to_");
+        assert_eq!(def.target, "投资专家");
+    }
+
+    #[test]
     fn to_def_derives_tool_name_target_and_description() {
         let h = Handoff::to(NamedAgent {
             name: "Investing specialist".to_owned(),

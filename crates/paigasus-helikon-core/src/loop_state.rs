@@ -281,14 +281,11 @@ pub fn transition(
         ) if items.iter().any(|i| matches!(i, Item::ToolCall { .. })) => {
             // Handoff takes precedence over regular tool calls (first wins).
             if let Some(target) = items.iter().find_map(|i| match i {
-                Item::ToolCall { name, .. }
-                    if ctx.handoffs.iter().any(|h| &h.tool_name == name) =>
-                {
-                    ctx.handoffs
-                        .iter()
-                        .find(|h| &h.tool_name == name)
-                        .map(|h| h.target.clone())
-                }
+                Item::ToolCall { name, .. } => ctx
+                    .handoffs
+                    .iter()
+                    .find(|h| &h.tool_name == name)
+                    .map(|h| h.target.clone()),
                 _ => None,
             }) {
                 let total = accumulate(*prior, usage);
