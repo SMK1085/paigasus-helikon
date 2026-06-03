@@ -62,6 +62,8 @@ fn main() {
         Arc::new(()),
         TracerHandle::default(),
         CancellationToken::new(),
+        0,
+        paigasus_helikon::core::RunConfig::default().max_agent_depth,
     );
     let args = json!({ "a": 19.99, "b": 4.50 });
 

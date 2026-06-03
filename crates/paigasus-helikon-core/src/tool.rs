@@ -81,6 +81,8 @@ where
     user_ctx: Arc<Ctx>,
     tracer: TracerHandle,
     cancel: CancellationToken,
+    agent_depth: u32,
+    max_agent_depth: u32,
 }
 
 impl<Ctx> ToolContext<Ctx>
@@ -88,11 +90,19 @@ where
     Ctx: Send + Sync + 'static,
 {
     /// Construct a new [`ToolContext`].
-    pub fn new(user_ctx: Arc<Ctx>, tracer: TracerHandle, cancel: CancellationToken) -> Self {
+    pub fn new(
+        user_ctx: Arc<Ctx>,
+        tracer: TracerHandle,
+        cancel: CancellationToken,
+        agent_depth: u32,
+        max_agent_depth: u32,
+    ) -> Self {
         Self {
             user_ctx,
             tracer,
             cancel,
+            agent_depth,
+            max_agent_depth,
         }
     }
 
@@ -107,6 +117,16 @@ where
     /// Borrow the cancellation token.
     pub fn cancel(&self) -> &CancellationToken {
         &self.cancel
+    }
+    /// Current agent-nesting depth (handoff + agent-as-tool). `AgentAsTool`
+    /// reads this to bound recursion.
+    pub fn agent_depth(&self) -> u32 {
+        self.agent_depth
+    }
+    /// The configured maximum agent-nesting depth (from `RunConfig`, or the
+    /// default when no runner installed a config).
+    pub fn max_agent_depth(&self) -> u32 {
+        self.max_agent_depth
     }
 }
 

@@ -179,10 +179,17 @@ where
     /// or the hook registry (hooks fire around tool invocations, not
     /// from inside).
     pub fn to_tool_context(&self) -> ToolContext<Ctx> {
+        let max_agent_depth = self
+            .run_config
+            .as_ref()
+            .map(|c| c.max_agent_depth)
+            .unwrap_or_else(|| RunConfig::default().max_agent_depth);
         ToolContext::new(
             Arc::clone(&self.user_ctx),
             self.tracer.clone(),
             self.cancel.child_token(),
+            self.agent_depth,
+            max_agent_depth,
         )
     }
 }
@@ -285,6 +292,23 @@ mod runcontext_tests {
         )
         .with_agent_depth(5);
         assert_eq!(ctx.agent_depth(), 5);
+    }
+
+    #[test]
+    fn to_tool_context_projects_depth_and_max() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_agent_depth(2)
+        .with_run_config(RunConfig::new().with_max_agent_depth(5));
+
+        let tc = ctx.to_tool_context();
+        assert_eq!(tc.agent_depth(), 2);
+        assert_eq!(tc.max_agent_depth(), 5);
     }
 }
 
