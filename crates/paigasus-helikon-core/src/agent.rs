@@ -908,6 +908,16 @@ pub enum AgentError {
         feature: &'static str,
     },
 
+    /// A handoff chain or `AgentAsTool` nesting exceeded
+    /// [`crate::RunConfig::max_agent_depth`].
+    #[error("agent nesting depth ({depth}) exceeded max ({max})")]
+    MaxAgentDepthExceeded {
+        /// The depth that would have been entered.
+        depth: u32,
+        /// The configured maximum.
+        max: u32,
+    },
+
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
