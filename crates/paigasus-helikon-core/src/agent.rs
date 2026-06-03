@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use tracing::Instrument as _;
 
-use crate::{GuardrailKind, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError};
+use crate::{GuardrailKind, Handoff, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError};
 
 /// One trait for both LLM-driven and workflow agents.
 ///
@@ -241,9 +241,9 @@ where
     /// Tools the model may call. Each invocation snapshots these into
     /// `ModelRequest.tools` via [`crate::ToolDef`].
     pub tools: Vec<std::sync::Arc<dyn crate::Tool<Ctx>>>,
-    /// Candidate agents this one may hand off to. Stored but not
-    /// driven in SMA-314.
-    pub handoffs: Vec<std::sync::Arc<dyn crate::Agent<Ctx>>>,
+    /// Candidate agents this one may hand off to, with the conversation
+    /// transferred. Driven by the agent loop (SMA-324).
+    pub handoffs: Vec<Handoff<Ctx>>,
     /// Structured-output type marker. SMA-320 makes this honest.
     pub output_type: Option<OutputType>,
     /// Pre-input guardrails. Stored but not driven in SMA-314.
