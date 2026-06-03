@@ -5,8 +5,7 @@
 **Branch:** `feature/sma-324-multi-agent-handoff-agentastool`
 **Date:** 2026-06-03
 **References:** [Multi-Agent Patterns](https://www.notion.so/355830e8fbaa81ff9b43d6e466d5fc14) (Notion). Resolves the handoff-usage seam flagged in [SMA-402](https://linear.app/smaschek/issue/SMA-402) §3.5.
-**Domain:** personal finance, per the 2026-06-01 SMA-323 pivot off hematopathology. ⚠️ Two upstream docs are still in the old leukemia domain and need reconciling (out-of-band, with the user's go-ahead): the Linear SMA-324 AC ("MRD/AML cytogenetics") and the Notion Multi-Agent Patterns handoff snippet (`mrd_agent`/`aml_agent` + the fictional `openai::gpt_5_mini()` — the real builder is `OpenAiModel::chat("gpt-5-mini").build()?`).
-**Review:** incorporates [`…-design-review.md`](./2026-06-03-sma-324-multi-agent-handoff-agentastool-design-review.md) (H1, H2.2, M1–M3, L1–L2 applied; H2.1 verified a non-issue).
+**Domain:** personal finance, per the 2026-06-01 SMA-323 pivot off hematopathology. The Linear SMA-324 AC and the Notion "Multi-Agent Patterns" snippet were realigned to finance (budgeting / investing specialists) and the real `OpenAiModel::chat("gpt-5-mini").build()?` builder on 2026-06-03.
 
 ## 1. Summary
 
@@ -48,7 +47,7 @@ small bounded-recursion guard.
   builder updated (`.handoff`, `.shared_handoff`, `.handoffs`).
 - Bounded agent-nesting recursion spanning **both** handoff chains and `AgentAsTool`
   nesting: a unified `RunContext.agent_depth` + `ToolContext.{agent_depth, max_agent_depth}`
-  + `RunConfig.max_agent_depth` (default 8) + `AgentError::MaxAgentDepthExceeded` (M1).
+  + `RunConfig.max_agent_depth` (default 8) + `AgentError::MaxAgentDepthExceeded`.
 - Resolve the SMA-402 usage seam: cumulative usage **accumulates across the handoff
   chain** — `ApplyingHandoff` gains a `usage` field; the forwarded `RunCompleted` carries
   parent-pre-handoff + sub-run usage (§3.4).
@@ -119,7 +118,7 @@ where `slug` lowercases and replaces every run of non-`[a-z0-9_]` with a single 
 
 - two handoff targets mapping to the same `transfer_to_*` `tool_name`; **or**
 - a `transfer_to_*` `tool_name` that collides with a **real tool / `AgentAsTool`** name on
-  the same agent (M2) — otherwise that tool would both pollute the model's schema and be
+  the same agent — otherwise that tool would both pollute the model's schema and be
   **mis-routed as a handoff** by the routing branch (§3.3), which matches purely on name.
 
 The `target` carried in events and used for lookup is always the **real** `agent.name()`,
@@ -168,22 +167,22 @@ re-entered by `transition`. `Compacting` / `NeedsApproval` keep their `not_imple
 arms.
 
 **Handoff routing sits ahead of the structured-output finalizing path**, and composes
-cleanly with `output_type` on a constrained provider (resolves review H2):
+cleanly with `output_type` on a constrained provider:
 
 - *Routing precedence.* A transfer is a tool call, so it routes here and never reaches the
   no-tool-calls finalizing branch. An `LlmAgent` with **both** `output_type` and `handoffs`
   (the finance triage) finalizes its own structured output only when it does *not* hand
   off; when it hands off, the run's terminal output is the **target's**.
-- *Constrained-provider note (H2.1 — verified against source).* The output constraint is
+- *Constrained-provider note (verified against source).* The output constraint is
   applied **only on the finalizing/repair turns** (`constrained_settings` in
   `loop_state.rs`), and on the `Start` arm only when `tools.is_empty()`. The Anthropic
   provider's synthesized forced-tool path keys **entirely off `model_settings.response_format`**
   (`translate/response_format.rs::synthesize_for_response_format`), which the loop leaves
   `None` on every turn that carries tools. So on the triage's normal turns the
   `transfer_to_*` tools are present and callable on **both** OpenAI and Anthropic — the
-  SMA-320 H1 "constraint blocks tools" hazard does **not** occur here. Not a blocking
+  structured-output constraint does **not** block the transfer tools here. Not a blocking
   dependency.
-- *Dynamic post-handoff output type (H2.2).* Because the terminal agent may differ from the
+- *Dynamic post-handoff output type.* Because the terminal agent may differ from the
   parent, a run's `final_output` **type is dynamic**: `collect_typed::<T>()` is sound only
   if *every* reachable terminal agent produces `T`. A triage that routes to a free-text
   specialist would make `collect_typed::<TriageDecision>()` fail to deserialize.
@@ -200,7 +199,7 @@ collision check) before the stream starts.
 **Transcript threading** (built wholly in `transition` from `ctx.conversation`, then stored
 in `ApplyingHandoff.transcript` — the driver only forwards it). The target injects its
 *own* instructions and exposes only its *own* tools, so the threaded transcript must carry
-**no tool references the target doesn't define** (M3). Rule:
+**no tool references the target doesn't define**. Rule:
 
 - strip the parent's **leading `System`** item (avoids a double system prompt);
 - strip **all `Item::ToolCall` / `Item::ToolResult`** items — both the `transfer_to_*` call
@@ -277,7 +276,7 @@ impl<Ctx: Send + Sync + 'static> AgentAsTool<Ctx> {
   1. Parse `args["input"]` as the user text → `AgentInput::from_user_text(text)`. A missing
      / non-string `input` → `ToolError::InvalidArgs { schema_errors }` (the one recoverable
      `ToolError` per ADR-10 — the parent model gets one repair shot).
-  2. **Depth guard (M1).** If `ctx.agent_depth() + 1 > ctx.max_agent_depth()` →
+  2. **Depth guard.** If `ctx.agent_depth() + 1 > ctx.max_agent_depth()` →
      `ToolError::Other(AgentError::MaxAgentDepthExceeded { .. }.into())`. Bounds cyclic /
      deeply nested agent-as-tool graphs (A wraps B, B wraps A) with the **same** counter the
      handoff path uses (§3.6) — without this, the fresh sub-context would reset depth to 0
@@ -293,8 +292,8 @@ impl<Ctx: Send + Sync + 'static> AgentAsTool<Ctx> {
        cancellation propagates in; tool-local cancellation stays local).
      The sub-agent uses its **own** `RunConfig` (`RunContext::new` sets `run_config = None`),
      so the parent's `timeout`/`max_turns` do **not** cross this boundary — only the shared
-     `agent_depth` bound does. (Documented limitation, M1.)
-  4. Run the agent and **reuse the canonical drain** (L1): capture
+     `agent_depth` bound does. (Documented limitation.)
+  4. Run the agent and **reuse the canonical drain**: capture
      `let fh = sub_ctx.failure_handle();` *before* moving `sub_ctx` into `run`, then
      `RunResultStreaming::with_failure(agent.run(sub_ctx, input).await?, fh).collect().await`
      — one definition of "stream → result", inheriting the post-drain `FailureSlot` read.
@@ -317,8 +316,7 @@ in. The sub-agent uses its **own** `RunConfig` (its `LlmAgent.config`), since
 `max_turns` bounds calls *per agent run* but cannot bound **nesting depth** across runs:
 each nested `run` (a handoff target, or an `AgentAsTool` sub-run) resets the per-agent turn
 counter. An A↔B handoff ping-pong, or a cyclic agent-as-tool graph (A wraps B, B wraps A),
-recurses unbounded. A **single** nesting counter shared by both mechanisms closes both holes
-(M1).
+recurses unbounded. A **single** nesting counter shared by both mechanisms closes both holes.
 
 ```rust
 impl<Ctx> RunContext<Ctx> {
@@ -401,11 +399,11 @@ re-drive `transition` are empty `0.0.0` stubs.
 
 ## 6. Resolved judgment calls
 
-- **D1 — Bounded recursion (included, unified — M1).** One `agent_depth` + `max_agent_depth`
+- **D1 — Bounded recursion (included, unified).** One `agent_depth` + `max_agent_depth`
   (default 8) bounds **both** handoff chains and `AgentAsTool` nesting (§3.6) — symmetric
   across the two nesting mechanisms. Cheap insurance against infinite transfer cycles /
   cyclic agent-as-tool graphs that `max_turns` cannot catch.
-- **D5 — Handoff transcript is tool-stripped (M3).** v1 threads user + assistant-text + a
+- **D5 — Handoff transcript is tool-stripped.** v1 threads user + assistant-text + a
   synthesized transfer note, dropping all tool `Item`s, so no `tool_use`/`tool_result` for a
   tool the target doesn't define ever reaches a provider. Full/configurable history threading
   is the deferred input-filter feature.
@@ -429,7 +427,7 @@ Domain: **personal finance**, per the 2026-06-01 pivot (SMA-323 + the Notion Sid
   `next_action == Handoff`, and the threaded transcript **drops the leading `System` and all
   tool `Item`s** and ends with the synthesized `"Transferred from <parent>."` `UserMessage`.
 - Precedence: a response with both a handoff call and a regular tool call → routes to
-  `ApplyingHandoff` (handoff wins), regular call ignored (L2 — documented drop).
+  `ApplyingHandoff` (handoff wins), regular call ignored (documented drop).
 - Existing exhaustive `assert_matches!`/constructions updated for the new
   `ApplyingHandoff.usage` and `TransitionCtx.handoffs` fields.
 
@@ -440,8 +438,8 @@ exactly one `RunStarted`; `HandoffItem { from: "triage", to: "budgeting speciali
 `AgentUpdated { agent: "budgeting specialist" }`; `final_output` is the budgeting agent's;
 `RunCompleted.usage == triage + budgeting` (chain sum); routing went to budgeting, **not**
 investing.
-- Slug-vs-handoff collision (two targets → same slug) → terminal `RunFailed` (M2).
-- Slug-vs-real-tool collision (a tool named `transfer_to_*`) → terminal `RunFailed` (M2).
+- Slug-vs-handoff collision (two targets → same slug) → terminal `RunFailed`.
+- Slug-vs-real-tool collision (a tool named `transfer_to_*`) → terminal `RunFailed`.
 - Depth guard: A↔B mutual handoff → terminal `MaxAgentDepthExceeded`.
 
 **Core integration — `AgentAsTool` round-trip (`tests/agent_as_tool.rs`):** a parent
@@ -450,13 +448,13 @@ call to the wrapped tool, then a final message. Assert the sub-agent's `final_ou
 arrives as the `ToolResult` content the parent sees, the parent resumes and completes, and
 the parent session contains no sub-agent turns (isolation). Add a sub-agent failure case →
 parent observes a `ToolError`. Add an agent-as-tool **depth** case (A wraps B, B wraps A) →
-the inner `invoke` returns `MaxAgentDepthExceeded` (M1).
+the inner `invoke` returns `MaxAgentDepthExceeded`.
 
 **Facade example (`crates/paigasus-helikon/examples/multi_agent_triage.rs`,
 `required-features = ["openai"]`):** a finance triage `LlmAgent` with
 `.handoffs([Handoff::to(budgeting), Handoff::to(investing)])` over `openai`, built with the
 **real** API `OpenAiModel::chat("gpt-5-mini").build()?` (not the Notion snippet's fictional
-`openai::gpt_5_mini()`) and consumed with `collect()` (string — per the H2.2 contract).
+`openai::gpt_5_mini()`) and consumed with `collect()` (string — per the §3.3 post-handoff output contract).
 Compile-gated in CI; runnable with an API key.
 
 Plus the standard gates: `cargo fmt --all`, `clippy --all-features --all-targets -D
@@ -468,22 +466,22 @@ doc-coverage threshold — every new public item carries a `///`.
 - **Double `RunStarted` / lost usage on the forwarded sub-stream.** Mitigated by explicitly
   suppressing the sub-run `RunStarted` and rewriting its `RunCompleted.usage` to the chain
   sum (§3.4), asserted in `tests/handoff.rs`.
-- **Tool blocks for tools the target doesn't define break the next provider request**
-  (M3). Mitigated by **stripping all tool `Item`s** from the threaded transcript (§3.4) —
+- **Tool blocks for tools the target doesn't define break the next provider request.**
+  Mitigated by **stripping all tool `Item`s** from the threaded transcript (§3.4) —
   removes the hazard by construction (no per-provider verification needed); asserted by the
   transcript unit test. Trade-off: v1 handoff loses parent tool-history; the deferred
   input-filter is the configurable fix.
-- **Unbounded nesting — transfer cycles *or* cyclic agent-as-tool graphs** (M1). Mitigated
+- **Unbounded nesting — transfer cycles *or* cyclic agent-as-tool graphs**. Mitigated
   by the unified `agent_depth`/`max_agent_depth` guard spanning both mechanisms (§3.6),
   asserted by the A↔B handoff test and the A-wraps-B-wraps-A agent-as-tool test.
 - **`AgentAsTool` leaking sub-agent chatter into the parent session.** Mitigated by the
   fresh `MemorySession` (§3.5), asserted by the isolation check.
-- **`output_type` + `handoffs` blocking transfer tools on Anthropic** (H2.1). Verified a
+- **`output_type` + `handoffs` blocking transfer tools on Anthropic**. Verified a
   non-issue: the constraint is finalizing-turn-only and the provider keys off
   `response_format` (§3.3) — documented as a provider note; no code mitigation needed.
-- **Caller `collect_typed::<T>()` on a handed-off run deserialize-fails** (H2.2). Mitigated
+- **Caller `collect_typed::<T>()` on a handed-off run deserialize-fails**. Mitigated
   by the documented dynamic-output contract (§3.3): prefer `collect()` with handoffs.
 - **Breaking API shipped at the wrong level.** Mitigated by the `feat(core)!:` title →
   minor bump via release-plz (§5); near-zero real blast radius.
 - **Slug collision silently mis-routing** (incl. handoff-vs-real-tool). Mitigated by the
-  fail-fast collision check at run start (§3.1, M2), asserted in `tests/handoff.rs`.
+  fail-fast collision check at run start (§3.1), asserted in `tests/handoff.rs`.
