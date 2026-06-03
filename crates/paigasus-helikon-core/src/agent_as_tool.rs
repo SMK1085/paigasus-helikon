@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::{
-    Agent, AgentInput, HookRegistry, MemorySession, RunContext, RunError, RunResultStreaming,
-    Tool, ToolContext, ToolError, ToolOutput,
+    Agent, AgentInput, HookRegistry, MemorySession, RunContext, RunError, RunResultStreaming, Tool,
+    ToolContext, ToolError, ToolOutput,
 };
 
 /// Adapter exposing an [`Agent`] as a [`Tool`].
@@ -92,12 +92,12 @@ where
     }
 
     async fn invoke(&self, ctx: &ToolContext<Ctx>, args: Value) -> Result<ToolOutput, ToolError> {
-        let input_text = args
-            .get("input")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidArgs {
-                schema_errors: vec!["expected a string field `input`".to_owned()],
-            })?;
+        let input_text =
+            args.get("input")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::InvalidArgs {
+                    schema_errors: vec!["expected a string field `input`".to_owned()],
+                })?;
 
         // Bound nesting with the same counter the handoff path uses.
         let depth = ctx.agent_depth();

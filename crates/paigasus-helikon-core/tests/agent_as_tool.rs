@@ -68,7 +68,10 @@ async fn agent_as_tool_isolates_session() {
         .expect("invoke ok");
 
     let events = parent_session.events(None).await.expect("events");
-    assert!(events.is_empty(), "sub-agent turns must not touch parent session");
+    assert!(
+        events.is_empty(),
+        "sub-agent turns must not touch parent session"
+    );
 }
 
 #[tokio::test]

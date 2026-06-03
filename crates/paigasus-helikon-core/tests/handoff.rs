@@ -8,7 +8,7 @@ use std::sync::Arc;
 use common::MockModel;
 use paigasus_helikon_core::{
     Agent, AgentEvent, AgentInput, CancellationToken, FinishReason, HookRegistry, LlmAgent,
-    MemorySession, ModelEvent, RunContext, RunConfig, RunResultStreaming, Session, TracerHandle,
+    MemorySession, ModelEvent, RunConfig, RunContext, RunResultStreaming, Session, TracerHandle,
 };
 
 fn ctx() -> RunContext<()> {
@@ -50,7 +50,9 @@ async fn triage_routes_to_budgeting_not_investing() {
     let budgeting = LlmAgent::builder::<()>()
         .name("budgeting specialist")
         .description("Handles budgeting questions.")
-        .shared_model(MockModel::with_scripts(vec![text_turn("Cut dining by $60.")]))
+        .shared_model(MockModel::with_scripts(vec![text_turn(
+            "Cut dining by $60.",
+        )]))
         .build();
     let investing = LlmAgent::builder::<()>()
         .name("investing specialist")
@@ -130,18 +132,24 @@ async fn handoff_cycle_hits_depth_guard() {
     // the model's transfer call always resolves. Bounded by max_agent_depth = 1.
     let a_for_b = LlmAgent::builder::<()>()
         .name("a")
-        .shared_model(MockModel::with_scripts(vec![transfer_turn("transfer_to_b")]))
+        .shared_model(MockModel::with_scripts(vec![transfer_turn(
+            "transfer_to_b",
+        )]))
         .build();
     let b = LlmAgent::builder::<()>()
         .name("b")
         .description("b")
-        .shared_model(MockModel::with_scripts(vec![transfer_turn("transfer_to_a")]))
+        .shared_model(MockModel::with_scripts(vec![transfer_turn(
+            "transfer_to_a",
+        )]))
         .handoff(a_for_b)
         .build();
     let a = LlmAgent::builder::<()>()
         .name("a")
         .description("a")
-        .shared_model(MockModel::with_scripts(vec![transfer_turn("transfer_to_b")]))
+        .shared_model(MockModel::with_scripts(vec![transfer_turn(
+            "transfer_to_b",
+        )]))
         .handoff(b)
         .build();
 
@@ -229,8 +237,14 @@ async fn handoff_usage_sums_across_chain() {
         .await
         .expect("run completes");
 
-    assert_eq!(result.usage.input_tokens, 30, "input_tokens should be 10+20");
-    assert_eq!(result.usage.output_tokens, 12, "output_tokens should be 5+7");
+    assert_eq!(
+        result.usage.input_tokens, 30,
+        "input_tokens should be 10+20"
+    );
+    assert_eq!(
+        result.usage.output_tokens, 12,
+        "output_tokens should be 5+7"
+    );
 }
 
 #[tokio::test]
@@ -258,5 +272,8 @@ async fn handoff_target_failure_propagates() {
         .collect()
         .await
         .expect_err("target failure should propagate as run error");
-    assert!(!err.to_string().is_empty(), "error message should be non-empty, got: {err}");
+    assert!(
+        !err.to_string().is_empty(),
+        "error message should be non-empty, got: {err}"
+    );
 }

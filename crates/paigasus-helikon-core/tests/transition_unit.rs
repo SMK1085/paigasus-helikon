@@ -223,7 +223,6 @@ fn calling_model_at_max_turns_fails() {
     assert_matches!(&outcome.events[0], AgentEvent::RunFailed { .. });
 }
 
-
 #[test]
 fn compacting_surfaces_not_implemented() {
     let state = LoopState::Compacting;
@@ -537,7 +536,9 @@ fn model_response_with_transfer_call_routes_to_applying_handoff() {
     }];
     let conversation = vec![
         Item::System {
-            content: vec![ContentPart::Text { text: "sys".to_owned() }],
+            content: vec![ContentPart::Text {
+                text: "sys".to_owned(),
+            }],
         },
         Item::UserMessage {
             content: vec![ContentPart::Text {

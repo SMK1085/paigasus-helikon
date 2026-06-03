@@ -595,7 +595,10 @@ mod tests {
 
     #[test]
     fn handoff_setters_wrap_agents() {
-        let sub = LlmAgent::builder::<()>().name("sub").model(StubModel).build();
+        let sub = LlmAgent::builder::<()>()
+            .name("sub")
+            .model(StubModel)
+            .build();
         let agent = LlmAgent::builder::<()>()
             .name("parent")
             .model(StubModel)

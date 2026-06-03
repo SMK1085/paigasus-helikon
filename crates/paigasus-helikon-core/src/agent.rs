@@ -10,7 +10,9 @@ use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use tracing::Instrument as _;
 
-use crate::{GuardrailKind, Handoff, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError};
+use crate::{
+    GuardrailKind, Handoff, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError,
+};
 
 /// One trait for both LLM-driven and workflow agents.
 ///
