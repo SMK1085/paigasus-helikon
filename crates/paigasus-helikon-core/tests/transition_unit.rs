@@ -38,6 +38,7 @@ fn ctx_with<'a>(
         max_turns,
         conversation,
         output: None,
+        handoffs: &[],
     }
 }
 
@@ -222,28 +223,6 @@ fn calling_model_at_max_turns_fails() {
     assert_matches!(&outcome.events[0], AgentEvent::RunFailed { .. });
 }
 
-#[test]
-fn applying_handoff_surfaces_not_implemented() {
-    let state = LoopState::ApplyingHandoff {
-        target: "other".into(),
-        transcript: vec![],
-    };
-    let conversation = vec![];
-    let settings = ModelSettings::new();
-    let outcome = transition(
-        &state,
-        TransitionInput::Start { messages: vec![] },
-        &ctx_with(16, &conversation, &settings),
-    );
-
-    match outcome.next_state {
-        LoopState::Failed(paigasus_helikon_core::AgentError::NotImplemented { feature }) => {
-            assert_eq!(feature, "handoff");
-        }
-        other => panic!("expected Failed(NotImplemented), got {other:?}"),
-    }
-    assert_matches!(outcome.next_action, NextAction::Terminate);
-}
 
 #[test]
 fn compacting_surfaces_not_implemented() {
@@ -360,6 +339,7 @@ fn finalizing_request_carries_response_format_and_no_tools() {
         max_turns: 16,
         conversation: &conversation,
         output: Some(&output_type),
+        handoffs: &[],
     };
 
     let state = LoopState::CallingModel {
@@ -514,6 +494,7 @@ fn output_type_overrides_caller_response_format_on_finalizing_turn() {
         max_turns: 16,
         conversation: &conversation,
         output: Some(&output_type),
+        handoffs: &[],
     };
 
     let state = LoopState::CallingModel {
@@ -540,4 +521,97 @@ fn output_type_overrides_caller_response_format_on_finalizing_turn() {
         }
         other => panic!("expected NextAction::CallModel, got {:?}", other),
     }
+}
+
+#[test]
+fn model_response_with_transfer_call_routes_to_applying_handoff() {
+    use paigasus_helikon_core::{
+        transition, AgentEvent, ContentPart, HandoffDef, Item, LoopState, ModelSettings,
+        NextAction, TokenUsage, TransitionCtx, TransitionInput,
+    };
+
+    let defs = vec![HandoffDef {
+        tool_name: "transfer_to_budgeting_specialist".to_owned(),
+        target: "budgeting specialist".to_owned(),
+        description: "Handles budgeting.".to_owned(),
+    }];
+    let conversation = vec![
+        Item::System {
+            content: vec![ContentPart::Text { text: "sys".to_owned() }],
+        },
+        Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "help me budget".to_owned(),
+            }],
+        },
+        Item::AssistantMessage {
+            content: vec![ContentPart::Text {
+                text: "routing".to_owned(),
+            }],
+            agent: Some("triage".to_owned()),
+        },
+        Item::ToolCall {
+            call_id: "c1".to_owned(),
+            name: "transfer_to_budgeting_specialist".to_owned(),
+            args: serde_json::json!({}),
+        },
+    ];
+    let settings = ModelSettings::default();
+    let ctx = TransitionCtx {
+        tools: &[],
+        model_settings: &settings,
+        max_turns: 16,
+        conversation: &conversation,
+        output: None,
+        handoffs: &defs,
+    };
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
+    let input = TransitionInput::ModelResponse {
+        items: vec![
+            Item::AssistantMessage {
+                content: vec![ContentPart::Text {
+                    text: "routing".to_owned(),
+                }],
+                agent: Some("triage".to_owned()),
+            },
+            Item::ToolCall {
+                call_id: "c1".to_owned(),
+                name: "transfer_to_budgeting_specialist".to_owned(),
+                args: serde_json::json!({}),
+            },
+        ],
+        usage: TokenUsage::default(),
+        finish_reason: paigasus_helikon_core::FinishReason::ToolCalls,
+    };
+
+    let outcome = transition(&state, input, &ctx);
+    assert!(matches!(outcome.next_action, NextAction::Handoff));
+    match outcome.next_state {
+        LoopState::ApplyingHandoff {
+            target, transcript, ..
+        } => {
+            assert_eq!(target, "budgeting specialist");
+            assert!(!transcript
+                .iter()
+                .any(|i| matches!(i, Item::System { .. } | Item::ToolCall { .. })));
+            match transcript.last() {
+                Some(Item::UserMessage { content }) => {
+                    let text = match &content[0] {
+                        ContentPart::Text { text } => text.as_str(),
+                        _ => "",
+                    };
+                    assert!(text.to_lowercase().contains("transferred"));
+                }
+                other => panic!("expected trailing transfer note, got {other:?}"),
+            }
+        }
+        other => panic!("expected ApplyingHandoff, got {other:?}"),
+    }
+    assert!(outcome
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::ToolCallItem { .. })));
 }

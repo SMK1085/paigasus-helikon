@@ -112,7 +112,7 @@ fn main() {
         .shared_tool(shared_tool)
         .handoff(MockHandoff)
         .shared_handoff(shared_handoff)
-        .handoffs(vec![Arc::new(MockHandoff) as Arc<dyn Agent<()>>])
+        .handoffs(vec![paigasus_helikon_core::Handoff::shared(Arc::new(MockHandoff) as Arc<dyn Agent<()>>)])
         .hook(MockHook)
         .shared_hook(shared_hook)
         .hooks(vec![Arc::new(MockHook) as Arc<dyn Hook<()>>])
