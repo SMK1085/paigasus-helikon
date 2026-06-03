@@ -209,9 +209,11 @@ in `ApplyingHandoff.transcript` — the driver only forwards it). The target inj
   undefined tools). Stripping removes the hazard **by construction** — no per-provider
   verification needed;
 - keep `UserMessage` and text `AssistantMessage` items;
-- append a synthesized `Item::UserMessage` note (`"Transferred from <parent>."`) so the
-  target has routing context (and the transcript is never empty when the parent's only
-  output that turn was the transfer call).
+- append a synthesized `Item::UserMessage` note (a neutral *"You are now handling a
+  transferred conversation. Continue assisting the user."* — the parent name is not
+  threaded, keeping `TransitionCtx`'s only new field `handoffs`) so the target has routing
+  context (and the transcript is never empty when the parent's only output that turn was
+  the transfer call).
 
 These become the target's `AgentInput { messages }`. This v1 rule is deliberately lossy on
 tool history (the triage→specialist AC routes on the user's question, so it is unaffected);
@@ -425,7 +427,8 @@ Domain: **personal finance**, per the 2026-06-01 pivot (SMA-323 + the Notion Sid
   `transfer_to_budgeting_specialist` tool call (with that `HandoffDef` in `TransitionCtx`)
   → `next_state == ApplyingHandoff { target: "budgeting specialist", usage: total, .. }`,
   `next_action == Handoff`, and the threaded transcript **drops the leading `System` and all
-  tool `Item`s** and ends with the synthesized `"Transferred from <parent>."` `UserMessage`.
+  tool `Item`s** and ends with the synthesized transfer-note `UserMessage` (asserted via a
+  case-insensitive `"transferred"` substring check).
 - Precedence: a response with both a handoff call and a regular tool call → routes to
   `ApplyingHandoff` (handoff wins), regular call ignored (documented drop).
 - Existing exhaustive `assert_matches!`/constructions updated for the new
