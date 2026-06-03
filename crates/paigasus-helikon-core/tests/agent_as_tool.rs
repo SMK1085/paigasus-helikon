@@ -7,9 +7,20 @@ use std::sync::Arc;
 
 use common::MockModel;
 use paigasus_helikon_core::{
-    AgentAsTool, CancellationToken, FinishReason, HookRegistry, LlmAgent, MemorySession,
-    ModelEvent, RunContext, Session, Tool, ToolContext, TracerHandle,
+    Agent, AgentAsTool, AgentEvent, AgentInput, CancellationToken, FinishReason, HookRegistry,
+    Item, LlmAgent, MemorySession, ModelEvent, RunContext, RunResultStreaming, Session, Tool,
+    ToolContext, TracerHandle,
 };
+
+fn ctx() -> RunContext<()> {
+    RunContext::new(
+        Arc::new(()),
+        Arc::new(MemorySession::new()) as Arc<dyn Session>,
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    )
+}
 
 fn text_turn(text: &str) -> Vec<ModelEvent> {
     vec![
@@ -121,5 +132,77 @@ async fn agent_as_tool_sub_failure_becomes_tool_error() {
     assert!(
         !err.to_string().contains("nesting depth"),
         "should be a sub-run failure, not the depth guard: {err}"
+    );
+}
+
+#[tokio::test]
+async fn agent_as_tool_round_trips_through_parent_loop() {
+    // Sub-agent: responds with "42" as its final output.
+    let sub = LlmAgent::builder::<()>()
+        .name("calculator")
+        .description("Answers arithmetic.")
+        .shared_model(MockModel::with_scripts(vec![text_turn("42")]))
+        .build();
+
+    // Parent: turn 1 calls the "calculator" tool; turn 2 emits the final answer.
+    let parent_scripts = vec![
+        // Turn 1: emit a tool call to "calculator".
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "c1".to_owned(),
+                name: Some("calculator".to_owned()),
+                args_delta: "{\"input\":\"6*7\"}".to_owned(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        // Turn 2: emit the final answer text.
+        vec![
+            ModelEvent::TokenDelta {
+                text: "The answer is 42.".to_owned(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ];
+
+    let parent = LlmAgent::builder::<()>()
+        .name("parent")
+        .shared_model(MockModel::with_scripts(parent_scripts))
+        .shared_tool(Arc::new(AgentAsTool::new(sub)) as Arc<dyn Tool<()>>)
+        .build();
+
+    let stream = parent
+        .run(ctx(), AgentInput::from_user_text("compute"))
+        .await
+        .expect("run starts");
+    let result = RunResultStreaming::new(stream)
+        .collect()
+        .await
+        .expect("run completes");
+
+    // The parent's final output is the turn-2 text, proving the loop resumed after
+    // the sub-agent's tool result was injected.
+    assert_eq!(
+        result.final_output, "The answer is 42.",
+        "parent final output must be the turn-2 text"
+    );
+
+    // At least one ToolOutputItem in the event stream must carry "42", confirming
+    // the sub-agent's final_output flowed back as the tool result.
+    let tool_result_carries_42 = result.events.iter().any(|ev| match ev {
+        AgentEvent::ToolOutputItem {
+            item: Item::ToolResult { content, .. },
+        } => content.iter().any(|p| match p {
+            paigasus_helikon_core::ContentPart::Text { text } => text.contains("42"),
+            _ => false,
+        }),
+        _ => false,
+    });
+    assert!(
+        tool_result_carries_42,
+        "a ToolOutputItem must carry the sub-agent's '42' output"
     );
 }

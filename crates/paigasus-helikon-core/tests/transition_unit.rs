@@ -616,3 +616,84 @@ fn model_response_with_transfer_call_routes_to_applying_handoff() {
         .iter()
         .any(|e| matches!(e, AgentEvent::ToolCallItem { .. })));
 }
+
+#[test]
+fn model_response_prefers_handoff_over_regular_tool_call() {
+    use paigasus_helikon_core::{
+        transition, ContentPart, HandoffDef, Item, LoopState, ModelSettings, NextAction,
+        TokenUsage, TransitionCtx, TransitionInput,
+    };
+
+    let defs = vec![HandoffDef {
+        tool_name: "transfer_to_budgeting_specialist".to_owned(),
+        target: "budgeting specialist".to_owned(),
+        description: "Handles budgeting.".to_owned(),
+    }];
+    let conversation = vec![
+        Item::System {
+            content: vec![ContentPart::Text {
+                text: "sys".to_owned(),
+            }],
+        },
+        Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "help me budget".to_owned(),
+            }],
+        },
+    ];
+    let settings = ModelSettings::default();
+    let ctx = TransitionCtx {
+        tools: &[],
+        model_settings: &settings,
+        max_turns: 16,
+        conversation: &conversation,
+        output: None,
+        handoffs: &defs,
+    };
+    let state = LoopState::CallingModel {
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
+    // Response contains BOTH a regular tool call AND a handoff tool call.
+    // The handoff must win; the regular call is dropped.
+    let input = TransitionInput::ModelResponse {
+        items: vec![
+            Item::AssistantMessage {
+                content: vec![ContentPart::Text {
+                    text: "let me look that up and route you".to_owned(),
+                }],
+                agent: Some("triage".to_owned()),
+            },
+            Item::ToolCall {
+                call_id: "c0".to_owned(),
+                name: "lookup_spending".to_owned(),
+                args: serde_json::json!({"period": "last_month"}),
+            },
+            Item::ToolCall {
+                call_id: "c1".to_owned(),
+                name: "transfer_to_budgeting_specialist".to_owned(),
+                args: serde_json::json!({}),
+            },
+        ],
+        usage: TokenUsage::default(),
+        finish_reason: paigasus_helikon_core::FinishReason::ToolCalls,
+    };
+
+    let outcome = transition(&state, input, &ctx);
+
+    // Handoff must win: action is Handoff, not ExecuteTools.
+    assert!(
+        matches!(outcome.next_action, NextAction::Handoff),
+        "expected Handoff, got {:?}",
+        outcome.next_action
+    );
+    match outcome.next_state {
+        LoopState::ApplyingHandoff { target, .. } => {
+            assert_eq!(
+                target, "budgeting specialist",
+                "handoff target must be the budgeting specialist"
+            );
+        }
+        other => panic!("expected ApplyingHandoff, got {other:?}"),
+    }
+}

@@ -5,7 +5,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::MockModel;
+use common::{MockModel, MockTool};
 use paigasus_helikon_core::{
     Agent, AgentEvent, AgentInput, CancellationToken, FinishReason, HookRegistry, LlmAgent,
     MemorySession, ModelEvent, RunConfig, RunContext, RunResultStreaming, Session, TracerHandle,
@@ -275,5 +275,42 @@ async fn handoff_target_failure_propagates() {
     assert!(
         !err.to_string().is_empty(),
         "error message should be non-empty, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn transfer_tool_name_collides_with_real_tool_fails_fast() {
+    // A real tool whose name is identical to the synthetic handoff tool name
+    // "transfer_to_budgeting_specialist" triggers the collision guard.
+    let colliding_tool = MockTool::new(
+        "transfer_to_budgeting_specialist",
+        serde_json::json!({"result": "ok"}),
+    );
+
+    let budgeting = LlmAgent::builder::<()>()
+        .name("budgeting specialist")
+        .description("Handles budgeting questions.")
+        .shared_model(MockModel::with_scripts(vec![]))
+        .build();
+
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(MockModel::with_scripts(vec![text_turn("hi")]))
+        // Real tool whose name collides with the handoff slug.
+        .shared_tool(colliding_tool as std::sync::Arc<dyn paigasus_helikon_core::Tool<()>>)
+        .handoff(budgeting)
+        .build();
+
+    let stream = triage
+        .run(ctx(), AgentInput::from_user_text("x"))
+        .await
+        .expect("run starts");
+    let err = RunResultStreaming::new(stream)
+        .collect()
+        .await
+        .expect_err("collision fails the run");
+    assert!(
+        err.to_string().contains("collision"),
+        "expected a collision error, got: {err}"
     );
 }
