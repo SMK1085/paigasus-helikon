@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::{FailureSlot, Hook, RunConfig, Session, ToolContext};
+use crate::{ActionsHandle, FailureSlot, Hook, RunConfig, Session, SessionState, ToolContext};
 
 /// Carries the per-run state shared across the agent loop, tools,
 /// guardrails, and hooks.
@@ -67,6 +67,12 @@ where
     /// [`RunContext::handoff_child`] and by `AgentAsTool` for each nested
     /// agent run. Bounded by [`crate::RunConfig::max_agent_depth`].
     agent_depth: u32,
+    /// Run-scoped coordination KV shared across sub-agents (SMA-325). Shared by
+    /// `subagent_child` / `handoff_child`; **not** projected as isolated.
+    state: SessionState,
+    /// Control side-channel a tool writes (e.g. `escalate`). A **fresh** handle
+    /// per `subagent_child`, so a `LoopAgent` reads only the current sub-run's signal.
+    actions: ActionsHandle,
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -90,6 +96,8 @@ where
             run_config: None,
             failure: FailureSlot::new(),
             agent_depth: 0,
+            state: SessionState::new(),
+            actions: ActionsHandle::new(),
         }
     }
 
@@ -112,6 +120,15 @@ where
     /// Borrow the cancellation token.
     pub fn cancel(&self) -> &CancellationToken {
         &self.cancel
+    }
+
+    /// Borrow the run-scoped [`SessionState`] shared across sub-agents.
+    pub fn state(&self) -> &SessionState {
+        &self.state
+    }
+    /// Borrow the [`ActionsHandle`] for this (sub-)run.
+    pub fn actions(&self) -> &ActionsHandle {
+        &self.actions
     }
 
     /// Borrow the per-invocation [`RunConfig`], if a runner installed one.
@@ -158,6 +175,28 @@ where
             run_config: self.run_config.clone(),
             failure: self.failure.clone(),
             agent_depth: self.agent_depth.saturating_add(1),
+            state: self.state.clone(),
+            actions: self.actions.clone(),
+        }
+    }
+
+    /// A context for one sub-agent of a workflow agent (`SequentialAgent`,
+    /// `ParallelAgent`, `LoopAgent`). **Shares** the run-scoped `state`, session,
+    /// cancel token, tracer, user context, and run config; gets a **fresh**
+    /// `FailureSlot` and a **fresh** `ActionsHandle` (so the workflow agent reads
+    /// only this sub-run's failure / escalate); `agent_depth` incremented by one.
+    pub fn subagent_child(&self) -> Self {
+        Self {
+            user_ctx: Arc::clone(&self.user_ctx),
+            session: Arc::clone(&self.session),
+            hooks: self.hooks.clone(),
+            tracer: self.tracer.clone(),
+            cancel: self.cancel.clone(),
+            run_config: self.run_config.clone(),
+            failure: FailureSlot::new(),
+            agent_depth: self.agent_depth.saturating_add(1),
+            state: self.state.clone(),
+            actions: ActionsHandle::new(),
         }
     }
 
@@ -191,6 +230,8 @@ where
             self.agent_depth,
             max_agent_depth,
         )
+        .with_state(self.state.clone())
+        .with_actions(self.actions.clone())
     }
 }
 
@@ -309,6 +350,52 @@ mod runcontext_tests {
         let tc = ctx.to_tool_context();
         assert_eq!(tc.agent_depth(), 2);
         assert_eq!(tc.max_agent_depth(), 5);
+    }
+
+    #[test]
+    fn to_tool_context_projects_state_and_actions() {
+        use serde_json::json;
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        );
+        ctx.state().set("k", "v");
+        let tc = ctx.to_tool_context();
+        assert_eq!(tc.state().get("k"), Some(json!("v")));
+        tc.actions().escalate();
+        assert!(
+            ctx.actions().is_escalated(),
+            "tool escalate reaches the run"
+        );
+    }
+
+    #[test]
+    fn subagent_child_shares_state_fresh_actions_increments_depth() {
+        use serde_json::json;
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        );
+        ctx.state().set("k", "v");
+        ctx.actions().escalate();
+
+        let child = ctx.subagent_child();
+        assert_eq!(child.agent_depth(), 1);
+        assert_eq!(child.state().get("k"), Some(json!("v")), "state is shared");
+        assert!(!child.actions().is_escalated(), "actions slot is fresh");
+
+        child.state().set("k2", "v2");
+        assert_eq!(ctx.state().get("k2"), Some(json!("v2")), "shared store");
+
+        use crate::AgentError;
+        child.failure_handle().set(AgentError::MaxTurnsExceeded(1));
+        assert!(ctx.failure_handle().take().is_none(), "fresh failure slot");
     }
 }
 

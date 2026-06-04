@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{CancellationToken, TracerHandle};
+use crate::{ActionsHandle, CancellationToken, SessionState, TracerHandle};
 
 /// A tool an agent can call.
 ///
@@ -83,6 +83,8 @@ where
     cancel: CancellationToken,
     agent_depth: u32,
     max_agent_depth: u32,
+    state: SessionState,
+    actions: ActionsHandle,
 }
 
 impl<Ctx> ToolContext<Ctx>
@@ -103,6 +105,8 @@ where
             cancel,
             agent_depth,
             max_agent_depth,
+            state: SessionState::new(),
+            actions: ActionsHandle::new(),
         }
     }
 
@@ -127,6 +131,27 @@ where
     /// default when no runner installed a config).
     pub fn max_agent_depth(&self) -> u32 {
         self.max_agent_depth
+    }
+    /// Borrow the run-scoped [`SessionState`] shared across sub-agents.
+    pub fn state(&self) -> &SessionState {
+        &self.state
+    }
+    /// Borrow the [`ActionsHandle`]. A tool calls `ctx.actions().escalate()`
+    /// to stop an enclosing [`crate::LoopAgent`].
+    pub fn actions(&self) -> &ActionsHandle {
+        &self.actions
+    }
+    /// Install the shared [`SessionState`] (used by
+    /// [`crate::RunContext::to_tool_context`]).
+    pub fn with_state(mut self, state: SessionState) -> Self {
+        self.state = state;
+        self
+    }
+    /// Install the [`ActionsHandle`] (used by
+    /// [`crate::RunContext::to_tool_context`]).
+    pub fn with_actions(mut self, actions: ActionsHandle) -> Self {
+        self.actions = actions;
+        self
     }
 }
 
@@ -171,4 +196,48 @@ pub enum ToolError {
     /// Escape hatch for arbitrary tool failures. See ADR-10.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod tool_context_tests {
+    use super::ToolContext;
+    use crate::{ActionsHandle, CancellationToken, SessionState, TracerHandle};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    #[test]
+    fn state_and_actions_default_empty() {
+        let tc: ToolContext<()> = ToolContext::new(
+            Arc::new(()),
+            TracerHandle::default(),
+            CancellationToken::new(),
+            0,
+            8,
+        );
+        assert!(tc.state().get("x").is_none());
+        assert!(!tc.actions().is_escalated());
+    }
+
+    #[test]
+    fn with_state_and_with_actions_project_handles() {
+        let state = SessionState::new();
+        state.set("k", "v");
+        let actions = ActionsHandle::new();
+        let tc: ToolContext<()> = ToolContext::new(
+            Arc::new(()),
+            TracerHandle::default(),
+            CancellationToken::new(),
+            0,
+            8,
+        )
+        .with_state(state.clone())
+        .with_actions(actions.clone());
+
+        assert_eq!(tc.state().get("k"), Some(json!("v")));
+        tc.actions().escalate();
+        assert!(
+            actions.is_escalated(),
+            "escalate flows to the shared handle"
+        );
+    }
 }
