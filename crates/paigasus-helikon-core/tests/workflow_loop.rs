@@ -96,11 +96,17 @@ async fn escalate_from_real_tool_stops_the_loop() {
                     name: Some("done".to_owned()),
                     args_delta: "{}".to_owned(),
                 },
-                ModelEvent::Finish { reason: FinishReason::ToolCalls },
+                ModelEvent::Finish {
+                    reason: FinishReason::ToolCalls,
+                },
             ],
             vec![
-                ModelEvent::TokenDelta { text: "finished".to_owned() },
-                ModelEvent::Finish { reason: FinishReason::Stop },
+                ModelEvent::TokenDelta {
+                    text: "finished".to_owned(),
+                },
+                ModelEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
             ],
         ]))
         .shared_tool(EscalatingTool::new("done") as Arc<dyn Tool<()>>)
@@ -108,17 +114,30 @@ async fn escalate_from_real_tool_stops_the_loop() {
 
     let la = LoopAgent::new("refine", "loop until the tool escalates", 5).then(worker);
 
-    let result = RunResultStreaming::new(la.run(ctx(), AgentInput::from_user_text("go")).await.unwrap())
-        .collect()
-        .await
-        .unwrap();
+    let result = RunResultStreaming::new(
+        la.run(ctx(), AgentInput::from_user_text("go"))
+            .await
+            .unwrap(),
+    )
+    .collect()
+    .await
+    .unwrap();
 
     let worker_runs = result
         .events
         .iter()
         .filter(|e| matches!(e, AgentEvent::AgentUpdated { agent } if agent == "worker"))
         .count();
-    assert_eq!(worker_runs, 1, "tool escalate stops after the first iteration");
-    assert!(result.events.iter().any(|e| matches!(e, AgentEvent::RunCompleted { .. })));
-    assert!(!result.events.iter().any(|e| matches!(e, AgentEvent::RunFailed { .. })));
+    assert_eq!(
+        worker_runs, 1,
+        "tool escalate stops after the first iteration"
+    );
+    assert!(result
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::RunCompleted { .. })));
+    assert!(!result
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::RunFailed { .. })));
 }
