@@ -335,3 +335,154 @@ where
         Ok(Box::pin(stream))
     }
 }
+
+/// Repeats sub-agents (in order) up to `max_iterations`. After each sub-agent
+/// completes, its final text is written to `state[key]` and its
+/// [`crate::ActionsHandle`] is checked: if a tool escalated, the loop emits
+/// `RunCompleted` and stops (success). Exhausting `max_iterations` without an
+/// escalate emits `RunFailed` with [`AgentError::MaxIterationsExceeded`].
+///
+/// Escalate is **iteration-level** — it means "no more iterations," not "stop the
+/// current sub-agent now"; the active sub-agent finishes its run first.
+pub struct LoopAgent<Ctx> {
+    name: String,
+    description: String,
+    agents: Vec<(String, Arc<dyn Agent<Ctx>>)>,
+    max_iterations: u32,
+}
+
+impl<Ctx> LoopAgent<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    /// Construct an empty loop with the given iteration budget.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        max_iterations: u32,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            agents: Vec::new(),
+            max_iterations,
+        }
+    }
+
+    /// Append a sub-agent keyed by its own name.
+    pub fn then(mut self, agent: impl Agent<Ctx> + 'static) -> Self {
+        let key = agent.name().to_owned();
+        self.agents.push((key, Arc::new(agent)));
+        self
+    }
+
+    /// Append a sub-agent with an explicit state key.
+    pub fn then_keyed(mut self, key: impl Into<String>, agent: impl Agent<Ctx> + 'static) -> Self {
+        self.agents.push((key.into(), Arc::new(agent)));
+        self
+    }
+
+    /// Append a pre-wrapped sub-agent keyed by its name.
+    pub fn then_shared(mut self, agent: Arc<dyn Agent<Ctx>>) -> Self {
+        let key = agent.name().to_owned();
+        self.agents.push((key, agent));
+        self
+    }
+}
+
+#[async_trait]
+impl<Ctx> Agent<Ctx> for LoopAgent<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    async fn run(
+        &self,
+        ctx: RunContext<Ctx>,
+        input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        let name = self.name.clone();
+        let agents = self.agents.clone();
+        let max_iterations = self.max_iterations;
+
+        let stream = async_stream::stream! {
+            let parent_failure = ctx.failure_handle();
+            yield AgentEvent::RunStarted { agent: name.clone() };
+
+            let max = max_depth(ctx.run_config());
+            if ctx.agent_depth() + 1 > max {
+                let err = AgentError::MaxAgentDepthExceeded { depth: ctx.agent_depth() + 1, max };
+                let msg = err.to_string();
+                parent_failure.set(err);
+                yield AgentEvent::RunFailed { error: msg };
+                return;
+            }
+
+            let mut total = TokenUsage::default();
+            for _iteration in 0..max_iterations {
+                for (key, agent) in &agents {
+                    let child = ctx.subagent_child();
+                    let actions = child.actions().clone();
+                    let failure = child.failure_handle();
+                    yield AgentEvent::AgentUpdated { agent: agent.name().to_owned() };
+
+                    let mut sub = match agent.run(child, input.clone()).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let msg = e.to_string();
+                            parent_failure.set(e);
+                            yield AgentEvent::RunFailed { error: msg };
+                            return;
+                        }
+                    };
+
+                    let mut last_text = String::new();
+                    let mut failed = false;
+                    while let Some(ev) = sub.next().await {
+                        match ev {
+                            AgentEvent::RunStarted { .. } => {}
+                            AgentEvent::RunCompleted { usage } => total.add(usage),
+                            AgentEvent::RunFailed { error } => {
+                                failed = true;
+                                yield AgentEvent::RunFailed { error };
+                            }
+                            AgentEvent::MessageOutput { item } => {
+                                if let Some(t) = assistant_text(&item) {
+                                    last_text = t;
+                                }
+                                yield AgentEvent::MessageOutput { item };
+                            }
+                            other => yield other,
+                        }
+                    }
+
+                    if failed {
+                        if let Some(e) = failure.take() {
+                            parent_failure.set(e);
+                        }
+                        return;
+                    }
+                    ctx.state().set(key.clone(), last_text);
+
+                    if actions.is_escalated() {
+                        yield AgentEvent::RunCompleted { usage: total };
+                        return;
+                    }
+                }
+            }
+
+            let err = AgentError::MaxIterationsExceeded { max: max_iterations };
+            let msg = err.to_string();
+            parent_failure.set(err);
+            yield AgentEvent::RunFailed { error: msg };
+        };
+
+        Ok(Box::pin(stream))
+    }
+}

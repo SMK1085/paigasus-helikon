@@ -2,7 +2,7 @@
 //! per test binary via `#[path = "common/mod.rs"] mod common;` at the
 //! top of each integration test file.
 
-#![allow(dead_code)]
+#![allow(dead_code, clippy::type_complexity)]
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -13,10 +13,10 @@ use futures_core::stream::BoxStream;
 use futures_util::stream;
 
 use paigasus_helikon_core::{
-    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, ContentPart, ConversationSnapshot,
-    HookRegistry, Item, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, RunContext,
-    SequenceId, Session, SessionError, SessionEvent, TokenUsage, Tool, ToolContext, ToolError,
-    ToolOutput, TracerHandle,
+    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, ContentPart,
+    ConversationSnapshot, HookRegistry, Item, Model, ModelCapabilities, ModelError, ModelEvent,
+    ModelRequest, RunContext, SequenceId, Session, SessionError, SessionEvent, TokenUsage, Tool,
+    ToolContext, ToolError, ToolOutput, TracerHandle,
 };
 
 /// A scripted [`Model`] that emits a pre-recorded sequence of
@@ -259,7 +259,9 @@ pub fn usage_total(total: u64) -> TokenUsage {
 pub fn assistant_msg(agent: &str, text: &str) -> AgentEvent {
     AgentEvent::MessageOutput {
         item: Item::AssistantMessage {
-            content: vec![ContentPart::Text { text: text.to_owned() }],
+            content: vec![ContentPart::Text {
+                text: text.to_owned(),
+            }],
             agent: Some(agent.to_owned()),
         },
     }
@@ -269,16 +271,23 @@ pub fn assistant_msg(agent: &str, text: &str) -> AgentEvent {
 /// `MessageOutput` with `text`, then `RunCompleted` carrying `usage_total(total)`.
 pub fn msg_and_complete(agent: &str, text: &str, total: u64) -> Vec<AgentEvent> {
     vec![
-        AgentEvent::RunStarted { agent: agent.to_owned() },
+        AgentEvent::RunStarted {
+            agent: agent.to_owned(),
+        },
         assistant_msg(agent, text),
-        AgentEvent::RunCompleted { usage: usage_total(total) },
+        AgentEvent::RunCompleted {
+            usage: usage_total(total),
+        },
     ]
 }
 
 /// A scripted [`Agent`]: its `run` evaluates `behavior(&ctx)` once (which may read
 /// `ctx.state()`, call `ctx.actions().escalate()`, or set `ctx.failure_handle()`),
 /// then streams the returned events. No model required.
-pub struct MockAgent<Ctx> {
+pub struct MockAgent<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
     name: String,
     description: String,
     behavior: Arc<dyn Fn(&RunContext<Ctx>) -> Vec<AgentEvent> + Send + Sync>,
