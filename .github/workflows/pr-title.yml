@@ -73,6 +73,15 @@ jobs:
             plan
             lints
           requireScope: false
+          # Dependabot's auto-generated titles ("chore(deps): Bump …") start the
+          # subject with a capital `B` and Dependabot offers no way to lowercase
+          # it, so they always trip `subjectPattern`. Exempt its PRs — labeled
+          # `area:deps` per .github/dependabot.yml — from validation. With an
+          # ignore label the action *passes* (green check), unlike skipping the
+          # job, which would leave the required `pr-title` context unreported and
+          # block the PR. Human PRs are unaffected.
+          ignoreLabels: |
+            area:deps
           subjectPattern: '^([A-Z]{2,4}-\d+ )?[^A-Z].+$'
           subjectPatternError: |
             PR title subject must not start with an uppercase letter.
