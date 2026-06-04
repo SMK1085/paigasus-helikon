@@ -14,9 +14,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt as _;
+use tracing::Instrument as _;
 
 use crate::{
-    Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunConfig, RunContext, TokenUsage,
+    Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunConfig, RunContext,
+    TokenUsage, TracerHandle,
 };
 
 /// Concatenate the `ContentPart::Text` of an `Item::AssistantMessage`.
@@ -41,6 +43,37 @@ fn max_depth(run_config: Option<&RunConfig>) -> u32 {
     run_config
         .map(|c| c.max_agent_depth)
         .unwrap_or_else(|| RunConfig::default().max_agent_depth)
+}
+
+/// Build the `invoke_agent` tracing span for a workflow agent's run, mirroring
+/// the `LlmAgent` run span (operation, agent name, Langfuse trace attributes).
+fn workflow_run_span(agent_name: &str, tracer: &TracerHandle) -> tracing::Span {
+    let span = tracing::info_span!(
+        "agent.run",
+        otel.name = tracing::field::Empty,
+        otel.kind = "internal",
+        gen_ai.operation.name = "invoke_agent",
+        gen_ai.agent.name = %agent_name,
+        langfuse.session.id = tracing::field::Empty,
+        langfuse.user.id = tracing::field::Empty,
+        langfuse.trace.tags = tracing::field::Empty,
+        gen_ai.usage.input_tokens = tracing::field::Empty,
+        gen_ai.usage.output_tokens = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+    );
+    span.record("otel.name", format!("invoke_agent {agent_name}").as_str());
+    if let Some(v) = tracer.session_id() {
+        span.record("langfuse.session.id", v);
+    }
+    if let Some(v) = tracer.user_id() {
+        span.record("langfuse.user.id", v);
+    }
+    if !tracer.tags().is_empty() {
+        if let Ok(json) = serde_json::to_string(tracer.tags()) {
+            span.record("langfuse.trace.tags", json.as_str());
+        }
+    }
+    span
 }
 
 /// Runs sub-agents in order, threading the shared [`crate::SessionState`].
@@ -111,6 +144,7 @@ where
 
         let stream = async_stream::stream! {
             let parent_failure = ctx.failure_handle();
+            let span = workflow_run_span(&name, ctx.tracer());
             yield AgentEvent::RunStarted { agent: name.clone() };
 
             let max = max_depth(ctx.run_config());
@@ -118,6 +152,7 @@ where
                 let err = AgentError::MaxAgentDepthExceeded { depth: ctx.agent_depth() + 1, max };
                 let msg = err.to_string();
                 parent_failure.set(err);
+                span.record("otel.status_code", "ERROR");
                 yield AgentEvent::RunFailed { error: msg };
                 return;
             }
@@ -128,11 +163,12 @@ where
                 let failure = child.failure_handle();
                 yield AgentEvent::AgentUpdated { agent: agent.name().to_owned() };
 
-                let mut sub = match agent.run(child, input.clone()).await {
+                let mut sub = match agent.run(child, input.clone()).instrument(span.clone()).await {
                     Ok(s) => s,
                     Err(e) => {
                         let msg = e.to_string();
                         parent_failure.set(e);
+                        span.record("otel.status_code", "ERROR");
                         yield AgentEvent::RunFailed { error: msg };
                         return;
                     }
@@ -140,12 +176,13 @@ where
 
                 let mut last_text = String::new();
                 let mut failed = false;
-                while let Some(ev) = sub.next().await {
+                while let Some(ev) = sub.next().instrument(span.clone()).await {
                     match ev {
                         AgentEvent::RunStarted { .. } => {}
                         AgentEvent::RunCompleted { usage } => total.add(usage),
                         AgentEvent::RunFailed { error } => {
                             failed = true;
+                            span.record("otel.status_code", "ERROR");
                             yield AgentEvent::RunFailed { error };
                         }
                         AgentEvent::MessageOutput { item } => {
@@ -167,6 +204,8 @@ where
                 ctx.state().set(key.clone(), last_text);
             }
 
+            span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
+            span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
             yield AgentEvent::RunCompleted { usage: total };
         };
 
@@ -249,6 +288,7 @@ where
 
         let stream = async_stream::stream! {
             let parent_failure = ctx.failure_handle();
+            let span = workflow_run_span(&name, ctx.tracer());
             yield AgentEvent::RunStarted { agent: name.clone() };
 
             let max = max_depth(ctx.run_config());
@@ -256,6 +296,7 @@ where
                 let err = AgentError::MaxAgentDepthExceeded { depth: ctx.agent_depth() + 1, max };
                 let msg = err.to_string();
                 parent_failure.set(err);
+                span.record("otel.status_code", "ERROR");
                 yield AgentEvent::RunFailed { error: msg };
                 return;
             }
@@ -267,11 +308,12 @@ where
                 let child = ctx.subagent_child();
                 failures.push(child.failure_handle());
                 yield AgentEvent::AgentUpdated { agent: agent.name().to_owned() };
-                match agent.run(child, input.clone()).await {
+                match agent.run(child, input.clone()).instrument(span.clone()).await {
                     Ok(s) => tagged.push(Box::pin(s.map(move |ev| (i, ev)))),
                     Err(e) => {
                         let msg = e.to_string();
                         parent_failure.set(e);
+                        span.record("otel.status_code", "ERROR");
                         yield AgentEvent::RunFailed { error: msg };
                         return;
                     }
@@ -285,7 +327,7 @@ where
                 std::collections::BTreeMap::new();
             let mut saw_failure = false;
 
-            while let Some((i, ev)) = merged.next().await {
+            while let Some((i, ev)) = merged.next().instrument(span.clone()).await {
                 match ev {
                     AgentEvent::RunStarted { .. } => {}
                     AgentEvent::RunCompleted { usage } => {
@@ -318,6 +360,7 @@ where
                     .unwrap_or_else(|| AgentError::Other(anyhow::anyhow!("a parallel branch failed")));
                 let msg = err.to_string();
                 parent_failure.set(err);
+                span.record("otel.status_code", "ERROR");
                 yield AgentEvent::RunFailed { error: msg };
                 return;
             }
@@ -329,6 +372,8 @@ where
                     agent: Some(name.clone()),
                 },
             };
+            span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
+            span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
             yield AgentEvent::RunCompleted { usage: total };
         };
 
@@ -415,6 +460,7 @@ where
 
         let stream = async_stream::stream! {
             let parent_failure = ctx.failure_handle();
+            let span = workflow_run_span(&name, ctx.tracer());
             yield AgentEvent::RunStarted { agent: name.clone() };
 
             let max = max_depth(ctx.run_config());
@@ -422,6 +468,7 @@ where
                 let err = AgentError::MaxAgentDepthExceeded { depth: ctx.agent_depth() + 1, max };
                 let msg = err.to_string();
                 parent_failure.set(err);
+                span.record("otel.status_code", "ERROR");
                 yield AgentEvent::RunFailed { error: msg };
                 return;
             }
@@ -434,11 +481,12 @@ where
                     let failure = child.failure_handle();
                     yield AgentEvent::AgentUpdated { agent: agent.name().to_owned() };
 
-                    let mut sub = match agent.run(child, input.clone()).await {
+                    let mut sub = match agent.run(child, input.clone()).instrument(span.clone()).await {
                         Ok(s) => s,
                         Err(e) => {
                             let msg = e.to_string();
                             parent_failure.set(e);
+                            span.record("otel.status_code", "ERROR");
                             yield AgentEvent::RunFailed { error: msg };
                             return;
                         }
@@ -446,12 +494,13 @@ where
 
                     let mut last_text = String::new();
                     let mut failed = false;
-                    while let Some(ev) = sub.next().await {
+                    while let Some(ev) = sub.next().instrument(span.clone()).await {
                         match ev {
                             AgentEvent::RunStarted { .. } => {}
                             AgentEvent::RunCompleted { usage } => total.add(usage),
                             AgentEvent::RunFailed { error } => {
                                 failed = true;
+                                span.record("otel.status_code", "ERROR");
                                 yield AgentEvent::RunFailed { error };
                             }
                             AgentEvent::MessageOutput { item } => {
@@ -473,6 +522,8 @@ where
                     ctx.state().set(key.clone(), last_text);
 
                     if actions.is_escalated() {
+                        span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
+                        span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
                         yield AgentEvent::RunCompleted { usage: total };
                         return;
                     }
@@ -482,6 +533,7 @@ where
             let err = AgentError::MaxIterationsExceeded { max: max_iterations };
             let msg = err.to_string();
             parent_failure.set(err);
+            span.record("otel.status_code", "ERROR");
             yield AgentEvent::RunFailed { error: msg };
         };
 
