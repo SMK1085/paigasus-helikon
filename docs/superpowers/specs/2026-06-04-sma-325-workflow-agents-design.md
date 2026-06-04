@@ -208,10 +208,9 @@ one is synthesized.
 > siblings (progress only at `.await` points). This is *cooperative concurrency, not OS-thread
 > parallelism*; true parallelism needs `tokio::spawn`, which `core` cannot depend on. The honest
 > caveat lives on the type doc. A genuinely-parallel variant could live in `runtime-tokio` as a
-> follow-up if a CPU-bound use case appears. **Deviation from the planned design:** the Notion
-> *Multi-Agent Patterns* page and the Linear ticket both say `ParallelAgent` "`tokio::spawn`s
-> sub-agents" — that wording should be reconciled to "cooperative concurrency (IO-bound)" (see
-> §11).
+> follow-up if a CPU-bound use case appears. The earlier `tokio::spawn` wording in the Linear
+> ticket and the Notion *Multi-Agent Patterns* page has been reconciled to this cooperative-concurrency
+> description.
 
 ### 4.3 `LoopAgent<Ctx>`
 
@@ -370,22 +369,3 @@ Plus unit tests for `SessionState` (get/set/keys/disjoint concurrent writes) and
 - `escalate` short-circuiting an `LlmAgent`'s own turn loop mid-run.
 - Fail-fast sibling **cancellation** in `ParallelAgent` (collect-all this ticket).
 - `SwarmAgent` / `GraphAgent` (named in the `agent.rs` module doc; separate tickets).
-
-## 11. Review resolutions (2026-06-04)
-
-Dispositions of the staff-engineering review (`…-design-review.md`):
-
-| # | Finding | Disposition |
-| --- | --- | --- |
-| **H1** | `SequentialAgent`/`LoopAgent` never write step outputs to state → A→B threading absent for plain `LlmAgent` steps | **Accepted.** All three workflow agents now auto-write each child's final-output text to `state[key]` (§2, §4, §4.1, §4.3). Symmetric with `ParallelAgent`; `LlmAgent` untouched. Explicit keys added for name-collision control (§5). |
-| **H2** | "additive ⇒ patch" mis-classified; `feat` should be a minor bump (`0.5.0`) | **Rejected with evidence.** On `0.x`, release-plz maps *non-breaking* `feat` → **patch**; **minor** is reserved for breaking changes. Repo history: SMA-321/322/**346** (`feat(core)`, non-breaking) bumped patch; SMA-320/402/324 (`[**breaking**]`) bumped minor. Bump stays `0.4.0 → 0.4.1`; evidence added to §9. The cited SMA-402 precedent was itself a *breaking* change, so it doesn't support `feat → minor`. |
-| **M1** | `ParallelAgent` run-level `final_output` nondeterministic | **Accepted.** A synthesized terminal `MessageOutput` (sorted-key JSON of `{key: branch_output}`) makes `final_output` deterministic; per-branch results addressed by `state[key]` (§4.2). |
-| **M2** | Cooperative-concurrency deviation from planned `tokio::spawn`; bound the limitation | **Accepted.** CPU-bound starvation caveat stated; Notion/ticket reconciliation noted (§4.2). Pending action: post a reconciliation note on the Linear ticket / Notion (owner decision — outward-facing edit, not made unilaterally). |
-| **M3** | §4.3 pseudocode use-after-move (`ctx` moves into `run`) | **Accepted.** Clone-before-move made explicit for `actions` + `failure` handles (§4, §4.3), matching `TokioRunner`'s `cancel`/`session` pattern. |
-| **L1** | Per-branch attribution ambiguous in the flat event stream | **Accepted (documented).** Attribution is via nested OTel spans, not events; future correlation-id field noted (§4). |
-| **L2** | Merge-convention fail-fast vs `ParallelAgent` collect-all conflict | **Accepted.** Stated once; `ParallelAgent` swallows child `RunFailed` and emits one aggregate (§4, §4.2). |
-| **L3** | `escalate` is iteration-level, not turn-level | **Accepted (documented).** Expectation made explicit in §4.3. |
-
-> **Open follow-up for the owner (M2):** whether to amend the Linear ticket / Notion *Multi-Agent
-> Patterns* wording from "`tokio::spawn`s sub-agents" to "cooperative concurrency (IO-bound)." Not
-> done here because editing those is an outward-facing change.
