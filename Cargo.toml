@@ -48,7 +48,7 @@ trybuild              = "1"
 wiremock              = "0.6"
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.3.0" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.3.1" }
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.4.0" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.0" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.3" }
@@ -60,7 +60,7 @@ paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime
 paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.0.0" }
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
-paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.5" }
+paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.6" }
 
 [workspace.lints.rust]
 missing_docs = "warn"
