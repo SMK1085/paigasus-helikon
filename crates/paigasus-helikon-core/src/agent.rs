@@ -10,7 +10,9 @@ use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use tracing::Instrument as _;
 
-use crate::{GuardrailKind, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError};
+use crate::{
+    GuardrailKind, Handoff, Item, ModelError, RunContext, SessionError, TokenUsage, ToolError,
+};
 
 /// One trait for both LLM-driven and workflow agents.
 ///
@@ -241,9 +243,9 @@ where
     /// Tools the model may call. Each invocation snapshots these into
     /// `ModelRequest.tools` via [`crate::ToolDef`].
     pub tools: Vec<std::sync::Arc<dyn crate::Tool<Ctx>>>,
-    /// Candidate agents this one may hand off to. Stored but not
-    /// driven in SMA-314.
-    pub handoffs: Vec<std::sync::Arc<dyn crate::Agent<Ctx>>>,
+    /// Candidate agents this one may hand off to, with the conversation
+    /// transferred. Driven by the agent loop (SMA-324).
+    pub handoffs: Vec<Handoff<Ctx>>,
     /// Structured-output type marker. SMA-320 makes this honest.
     pub output_type: Option<OutputType>,
     /// Pre-input guardrails. Stored but not driven in SMA-314.
@@ -599,6 +601,8 @@ where
                 schema: t.schema().clone(),
             })
             .collect();
+        let handoffs = self.handoffs.clone();
+        let max_agent_depth = effective_config.max_agent_depth;
 
         let stream = async_stream::stream! {
             // SMA-346: structured failures are recorded here and read by the
@@ -649,6 +653,28 @@ where
 
             yield crate::AgentEvent::RunStarted { agent: agent_name.clone() };
 
+            // SMA-324: synthetic transfer tools; fail fast on name collisions.
+            let handoff_defs: Vec<crate::HandoffDef> =
+                handoffs.iter().map(|h| h.to_def()).collect();
+            {
+                let real: std::collections::HashSet<&str> =
+                    tool_defs.iter().map(|t| t.name.as_str()).collect();
+                let mut seen = std::collections::HashSet::new();
+                for d in &handoff_defs {
+                    if !seen.insert(d.tool_name.as_str()) || real.contains(d.tool_name.as_str())
+                    {
+                        let err = crate::AgentError::Other(anyhow::anyhow!(
+                            "handoff transfer-tool name collision: '{}'",
+                            d.tool_name
+                        ));
+                        let msg = err.to_string();
+                        failure.set(err);
+                        yield crate::AgentEvent::RunFailed { error: msg };
+                        return;
+                    }
+                }
+            }
+
             loop {
                 let tx_ctx = crate::TransitionCtx {
                     tools: &tool_defs,
@@ -656,6 +682,7 @@ where
                     max_turns,
                     conversation: &conversation,
                     output: output_type.as_ref(),
+                    handoffs: &handoff_defs,
                 };
                 let outcome = crate::transition(&loop_state, tx_input, &tx_ctx);
                 let crate::TransitionOutcome { next_state, events, next_action, conversation_appends } = outcome;
@@ -852,6 +879,78 @@ where
                         }
                         return;
                     }
+                    crate::NextAction::Handoff => {
+                        let (target, transcript, parent_usage) = match loop_state {
+                            crate::LoopState::ApplyingHandoff {
+                                target,
+                                transcript,
+                                usage,
+                            } => (target, transcript, usage),
+                            _ => return,
+                        };
+
+                        let child = ctx.handoff_child();
+                        if child.agent_depth() > max_agent_depth {
+                            let err = crate::AgentError::MaxAgentDepthExceeded {
+                                depth: child.agent_depth(),
+                                max: max_agent_depth,
+                            };
+                            let msg = err.to_string();
+                            run_span.record("otel.status_code", "ERROR");
+                            failure.set(err);
+                            yield crate::AgentEvent::RunFailed { error: msg };
+                            return;
+                        }
+
+                        let Some(target_agent) = handoffs
+                            .iter()
+                            .find(|h| h.agent().name() == target)
+                            .map(|h| std::sync::Arc::clone(h.agent()))
+                        else {
+                            let err = crate::AgentError::Other(anyhow::anyhow!(
+                                "unknown handoff target: {target}"
+                            ));
+                            let msg = err.to_string();
+                            run_span.record("otel.status_code", "ERROR");
+                            failure.set(err);
+                            yield crate::AgentEvent::RunFailed { error: msg };
+                            return;
+                        };
+
+                        yield crate::AgentEvent::HandoffItem {
+                            from: agent_name.clone(),
+                            to: target.clone(),
+                        };
+                        yield crate::AgentEvent::AgentUpdated {
+                            agent: target.clone(),
+                        };
+
+                        let input = crate::AgentInput { messages: transcript };
+                        let mut sub = match target_agent.run(child, input).await {
+                            Ok(s) => s,
+                            Err(e) => {
+                                let msg = e.to_string();
+                                run_span.record("otel.status_code", "ERROR");
+                                failure.set(e);
+                                yield crate::AgentEvent::RunFailed { error: msg };
+                                return;
+                            }
+                        };
+                        while let Some(ev) = sub.next().await {
+                            match ev {
+                                crate::AgentEvent::RunStarted { .. } => {}
+                                crate::AgentEvent::RunCompleted { usage } => {
+                                    let mut total = parent_usage;
+                                    total.add(usage);
+                                    run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
+                                    run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
+                                    yield crate::AgentEvent::RunCompleted { usage: total };
+                                }
+                                other => yield other,
+                            }
+                        }
+                        return;
+                    }
                 }
             }
         };
@@ -906,6 +1005,16 @@ pub enum AgentError {
     NotImplemented {
         /// The unimplemented loop feature.
         feature: &'static str,
+    },
+
+    /// A handoff chain or `AgentAsTool` nesting exceeded
+    /// [`crate::RunConfig::max_agent_depth`].
+    #[error("agent nesting depth ({depth}) exceeded max ({max})")]
+    MaxAgentDepthExceeded {
+        /// The depth that would have been entered.
+        depth: u32,
+        /// The configured maximum.
+        max: u32,
     },
 
     /// Escape hatch.

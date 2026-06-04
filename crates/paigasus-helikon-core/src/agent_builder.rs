@@ -37,7 +37,7 @@ where
     instructions: Option<std::sync::Arc<dyn crate::Instructions<Ctx>>>,
     model: Option<std::sync::Arc<M>>,
     tools: Vec<std::sync::Arc<dyn crate::Tool<Ctx>>>,
-    handoffs: Vec<std::sync::Arc<dyn crate::Agent<Ctx>>>,
+    handoffs: Vec<crate::Handoff<Ctx>>,
     output_type: Option<crate::OutputType>,
     input_guardrails: Vec<std::sync::Arc<dyn crate::Guardrail<Ctx>>>,
     output_guardrails: Vec<std::sync::Arc<dyn crate::Guardrail<Ctx>>>,
@@ -144,23 +144,22 @@ where
         self
     }
 
-    /// Append a handoff candidate.
+    /// Append a handoff candidate (owned agent — wrapped in `Handoff::to`).
     pub fn handoff(mut self, h: impl crate::Agent<Ctx> + 'static) -> Self {
-        self.handoffs
-            .push(std::sync::Arc::new(h) as std::sync::Arc<dyn crate::Agent<Ctx>>);
+        self.handoffs.push(crate::Handoff::to(h));
         self
     }
 
     /// Append a pre-wrapped handoff candidate.
     pub fn shared_handoff(mut self, h: std::sync::Arc<dyn crate::Agent<Ctx>>) -> Self {
-        self.handoffs.push(h);
+        self.handoffs.push(crate::Handoff::shared(h));
         self
     }
 
-    /// Replace the handoff candidate list.
+    /// Replace the handoff candidate list with `Handoff` values.
     pub fn handoffs<I>(mut self, h: I) -> Self
     where
-        I: IntoIterator<Item = std::sync::Arc<dyn crate::Agent<Ctx>>>,
+        I: IntoIterator<Item = crate::Handoff<Ctx>>,
     {
         self.handoffs = h.into_iter().collect();
         self
@@ -592,5 +591,20 @@ mod tests {
             .max_turns(99)
             .build();
         assert_eq!(agent.config.max_turns, 99);
+    }
+
+    #[test]
+    fn handoff_setters_wrap_agents() {
+        let sub = LlmAgent::builder::<()>()
+            .name("sub")
+            .model(StubModel)
+            .build();
+        let agent = LlmAgent::builder::<()>()
+            .name("parent")
+            .model(StubModel)
+            .handoff(sub)
+            .build();
+        assert_eq!(agent.handoffs.len(), 1);
+        assert_eq!(agent.handoffs[0].agent().name(), "sub");
     }
 }

@@ -103,6 +103,11 @@ pub struct RunConfig {
     /// `[driver-scoped]` Cap on concurrently-executing tool calls. Honored by
     /// the core loop driver. `None` = unbounded (today's behavior).
     pub parallel_tool_call_limit: Option<NonZeroUsize>,
+    /// `[driver-scoped]` Maximum agent-nesting depth across **both** handoff
+    /// chains and `AgentAsTool` sub-runs. Each nested agent run increments the
+    /// depth; exceeding this fails with
+    /// [`crate::AgentError::MaxAgentDepthExceeded`]. Default `8`.
+    pub max_agent_depth: u32,
 }
 
 impl Default for RunConfig {
@@ -111,6 +116,7 @@ impl Default for RunConfig {
             max_turns: 16,
             timeout: None,
             parallel_tool_call_limit: None,
+            max_agent_depth: 8,
         }
     }
 }
@@ -130,6 +136,12 @@ impl RunConfig {
     /// Cap the number of tool calls executed concurrently. Honored by the core loop driver.
     pub fn with_parallel_tool_call_limit(mut self, limit: NonZeroUsize) -> Self {
         self.parallel_tool_call_limit = Some(limit);
+        self
+    }
+
+    /// Set the maximum agent-nesting depth (handoff + agent-as-tool). Honored by the core loop driver.
+    pub fn with_max_agent_depth(mut self, depth: u32) -> Self {
+        self.max_agent_depth = depth;
         self
     }
 }
@@ -420,11 +432,15 @@ mod runconfig_tests {
         assert_eq!(c.max_turns, 16);
         assert!(c.timeout.is_none());
         assert!(c.parallel_tool_call_limit.is_none());
+        assert_eq!(c.max_agent_depth, 8);
 
         let c = RunConfig::new()
             .with_timeout(std::time::Duration::from_secs(5))
             .with_parallel_tool_call_limit(std::num::NonZeroUsize::new(3).unwrap());
         assert_eq!(c.timeout, Some(std::time::Duration::from_secs(5)));
         assert_eq!(c.parallel_tool_call_limit, std::num::NonZeroUsize::new(3));
+
+        let c = RunConfig::new().with_max_agent_depth(3);
+        assert_eq!(c.max_agent_depth, 3);
     }
 }

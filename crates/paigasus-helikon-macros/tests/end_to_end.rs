@@ -26,6 +26,8 @@ fn make_ctx() -> ToolContext<MyCtx> {
         Arc::new(MyCtx),
         TracerHandle::default(),
         CancellationToken::new(),
+        0,
+        paigasus_helikon_core::RunConfig::default().max_agent_depth,
     )
 }
 

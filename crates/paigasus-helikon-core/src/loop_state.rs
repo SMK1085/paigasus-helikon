@@ -43,16 +43,15 @@ pub enum LoopState {
         /// forward unchanged across tool execution (tools add no tokens).
         usage: TokenUsage,
     },
-    /// Handing off to another agent.
-    ///
-    /// **Not driveable in SMA-314.** Reaching this variant via
-    /// [`transition`] returns
-    /// [`LoopState::Failed`]`(`[`AgentError::NotImplemented`]` { feature: "handoff" })`.
+    /// Handing off to another agent; carries the threaded transcript and the
+    /// cumulative usage of all turns completed before the handoff (SMA-324).
     ApplyingHandoff {
         /// Name of the target agent.
         target: String,
         /// Conversation transcript to hand off.
         transcript: Vec<Item>,
+        /// Cumulative usage of turns completed before the handoff.
+        usage: TokenUsage,
     },
     /// Compacting session history. **Not driveable in SMA-314.**
     Compacting,
@@ -174,6 +173,9 @@ pub enum NextAction {
     },
     /// The current state is terminal; stop driving.
     Terminate,
+    /// Delegate to a handoff target. The driver reads the target, transcript,
+    /// and pre-handoff usage from the [`LoopState::ApplyingHandoff`] state.
+    Handoff,
 }
 
 /// What [`transition`] needs to know about the agent and config for
@@ -192,6 +194,9 @@ pub struct TransitionCtx<'a> {
     /// Structured-output type, when the agent configured one. Drives the
     /// constrained finalizing turn and output validation.
     pub output: Option<&'a crate::OutputType>,
+    /// Synthetic transfer-tool descriptors, one per handoff candidate. Empty
+    /// when the agent has no handoffs.
+    pub handoffs: &'a [crate::HandoffDef],
 }
 
 /// One transition step's result. Not `Clone` (carries `LoopState`).
@@ -254,7 +259,7 @@ pub fn transition(
                 _ => {
                     let request = ModelRequest {
                         messages: ctx.conversation.to_vec(),
-                        tools: ctx.tools.to_vec(),
+                        tools: turn_tools(ctx),
                         model_settings: ctx.model_settings.clone(),
                     };
                     TransitionOutcome {
@@ -274,6 +279,42 @@ pub fn transition(
             LoopState::CallingModel { turn, usage: prior },
             TransitionInput::ModelResponse { items, usage, .. },
         ) if items.iter().any(|i| matches!(i, Item::ToolCall { .. })) => {
+            // Handoff takes precedence over regular tool calls (first wins).
+            if let Some(target) = items.iter().find_map(|i| match i {
+                Item::ToolCall { name, .. } => ctx
+                    .handoffs
+                    .iter()
+                    .find(|h| &h.tool_name == name)
+                    .map(|h| h.target.clone()),
+                _ => None,
+            }) {
+                let total = accumulate(*prior, usage);
+                let mut events: Vec<AgentEvent> = Vec::new();
+                for item in &items {
+                    match item {
+                        Item::AssistantMessage { .. } => {
+                            events.push(AgentEvent::MessageOutput { item: item.clone() });
+                        }
+                        Item::ToolCall { name, .. }
+                            if ctx.handoffs.iter().any(|h| &h.tool_name == name) =>
+                        {
+                            events.push(AgentEvent::ToolCallItem { item: item.clone() });
+                        }
+                        _ => {}
+                    }
+                }
+                return TransitionOutcome {
+                    next_state: LoopState::ApplyingHandoff {
+                        target,
+                        transcript: thread_handoff_transcript(ctx.conversation),
+                        usage: total,
+                    },
+                    events,
+                    next_action: NextAction::Handoff,
+                    conversation_appends: Vec::new(),
+                };
+            }
+            // (existing ExecutingTools logic continues unchanged below)
             let mut events: Vec<AgentEvent> = Vec::new();
             let mut calls: Vec<ToolCallRequest> = Vec::new();
             for item in &items {
@@ -395,7 +436,7 @@ pub fn transition(
             events.push(AgentEvent::TurnStarted { turn: next_turn });
             let request = ModelRequest {
                 messages: ctx.conversation.to_vec(),
-                tools: ctx.tools.to_vec(),
+                tools: turn_tools(ctx),
                 model_settings: ctx.model_settings.clone(),
             };
             TransitionOutcome {
@@ -546,7 +587,6 @@ pub fn transition(
             }
         }
         // Unreachable-in-SMA-314 variants surface NotImplemented and Terminate.
-        (LoopState::ApplyingHandoff { .. }, _) => not_implemented("handoff"),
         (LoopState::Compacting, _) => not_implemented("compaction"),
         (LoopState::NeedsApproval { .. }, _) => not_implemented("approval"),
         // Other cases land in subsequent tasks.
@@ -647,4 +687,50 @@ fn last_assistant_content(items: &[Item]) -> Vec<ContentPart> {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+/// The synthetic `ToolDef` the model sees for one handoff (no arguments — the
+/// conversation is the payload).
+fn handoff_tool_def(def: &crate::HandoffDef) -> ToolDef {
+    ToolDef {
+        name: def.tool_name.clone(),
+        description: def.description.clone(),
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }),
+    }
+}
+
+/// Real tools + synthetic transfer tools, for an unconstrained model turn.
+fn turn_tools(ctx: &TransitionCtx<'_>) -> Vec<ToolDef> {
+    let mut tools = ctx.tools.to_vec();
+    tools.extend(ctx.handoffs.iter().map(handoff_tool_def));
+    tools
+}
+
+/// Thread the parent transcript for a handoff target: drop the leading
+/// `System` and **all** tool calls/results (they reference tools the target
+/// does not define), keep user + assistant-text items, and append a transfer
+/// note so the target has routing context and the transcript is never empty.
+fn thread_handoff_transcript(conversation: &[Item]) -> Vec<Item> {
+    let mut out: Vec<Item> = conversation
+        .iter()
+        .filter(|i| {
+            !matches!(
+                i,
+                Item::System { .. } | Item::ToolCall { .. } | Item::ToolResult { .. }
+            )
+        })
+        .cloned()
+        .collect();
+    out.push(Item::UserMessage {
+        content: vec![ContentPart::Text {
+            text: "You are now handling a transferred conversation. \
+                   Continue assisting the user."
+                .to_owned(),
+        }],
+    });
+    out
 }

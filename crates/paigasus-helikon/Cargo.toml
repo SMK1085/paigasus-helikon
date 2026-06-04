@@ -88,6 +88,10 @@ required-features = ["openai"]
 name              = "langfuse_tracing"
 required-features = ["runtime-tokio"]
 
+[[example]]
+name              = "multi_agent_triage"
+required-features = ["openai"]
+
 [[bench]]
 name    = "tool_dispatch"
 harness = false
