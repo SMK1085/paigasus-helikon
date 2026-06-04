@@ -1734,7 +1734,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1773,7 +1773,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1798,7 +1798,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-macros"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1821,7 +1821,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-providers-anthropic"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1843,7 +1843,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-openai"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -1877,7 +1877,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-runtime-tokio"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1892,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-sqlite"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "jiff",
@@ -4124,9 +4124,9 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "yoke"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abe8c5fda708d9ca3df187cae8bfb9ceda00dd96231bed36e445a1a48e66f9ca"
+checksum = "709fe23a0424b6a435d82152b1bd3fdfb0833487d5fa90d05d42762a9891fef5"
 dependencies = [
  "stable_deref_trait",
  "yoke-derive",
