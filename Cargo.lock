@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1546,7 +1546,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1572,7 +1572,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-macros"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1595,7 +1595,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-providers-anthropic"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-openai"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -1651,7 +1651,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-runtime-tokio"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1666,7 +1666,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-sqlite"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-trait",
  "jiff",
