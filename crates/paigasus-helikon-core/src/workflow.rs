@@ -342,8 +342,10 @@ where
 /// `RunCompleted` and stops (success). Exhausting `max_iterations` without an
 /// escalate emits `RunFailed` with [`AgentError::MaxIterationsExceeded`].
 ///
-/// Escalate is **iteration-level** — it means "no more iterations," not "stop the
-/// current sub-agent now"; the active sub-agent finishes its run first.
+/// Escalate means "no more iterations," not "stop the current sub-agent now" —
+/// the active sub-agent always finishes its run first. The signal is checked
+/// after **each** sub-agent, so in a multi-sub-agent loop a mid-pass escalate
+/// stops before the remaining sub-agents of that pass run.
 pub struct LoopAgent<Ctx> {
     name: String,
     description: String,
