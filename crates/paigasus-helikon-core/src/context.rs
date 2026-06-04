@@ -366,7 +366,10 @@ mod runcontext_tests {
         let tc = ctx.to_tool_context();
         assert_eq!(tc.state().get("k"), Some(json!("v")));
         tc.actions().escalate();
-        assert!(ctx.actions().is_escalated(), "tool escalate reaches the run");
+        assert!(
+            ctx.actions().is_escalated(),
+            "tool escalate reaches the run"
+        );
     }
 
     #[test]

@@ -235,6 +235,9 @@ mod tool_context_tests {
 
         assert_eq!(tc.state().get("k"), Some(json!("v")));
         tc.actions().escalate();
-        assert!(actions.is_escalated(), "escalate flows to the shared handle");
+        assert!(
+            actions.is_escalated(),
+            "escalate flows to the shared handle"
+        );
     }
 }
