@@ -34,9 +34,15 @@ was resolved during brainstorming:
 Two further design decisions taken during brainstorming:
 
 - **Output threading is via `SessionState`**, not message rewriting. Each sub-agent receives the
-  parent's *original* `AgentInput`; sub-agents coordinate through shared `state`. Downstream
-  agents read upstream results in a dynamic `Instructions<Ctx>` closure (which already receives
-  `&RunContext<Ctx>`).
+  parent's *original* `AgentInput`; sub-agents coordinate through shared `state`. The threading has
+  two symmetric halves across **all three** workflow agents:
+  - **Write half:** every workflow agent auto-writes each child's final-output text to a state key
+    (the key defaults to the child agent's name; an explicit key can be supplied at construction).
+    This is what makes `Sequential([A, B])` thread out of the box — `A`'s output lands in
+    `state["A"]` with no per-agent boilerplate.
+  - **Read half:** a downstream agent reads upstream results in a dynamic `Instructions<Ctx>`
+    closure, which already receives `&RunContext<Ctx>` (rendered at each step's own run-start,
+    after prior steps completed — verified `agent.rs:594`).
 - **`ParallelAgent` emits events live-interleaved** (`select_all`), not deterministically
   buffered. Lower latency / live multi-agent UX; intra-parallel event order is **not** byte-stable
   across runs, so parallel snapshot assertions normalize order. Cross-stage order (Parallel
@@ -122,14 +128,39 @@ All `impl Agent<Ctx>`; all follow the **handoff-driver merge convention** alread
 - While draining a child stream: **swallow** the child's `RunStarted`; **intercept**
   `RunCompleted { usage }` to fold into a running total (do **not** re-emit it); **pass through**
   every other event (`TokenDelta`, `MessageOutput`, `ToolCallItem`, …).
-- On a child `RunFailed { error }`: set the parent `FailureSlot` to the structured `AgentError`
-  and stop (fail-fast), then emit one outer `RunFailed`.
+- **Failure handling — `SequentialAgent`/`LoopAgent` fail-fast; `ParallelAgent` collect-all.** For
+  the sequential/loop agents, the first child `RunFailed` sets the parent `FailureSlot` to the
+  structured `AgentError` and stops, then one outer `RunFailed` is emitted. `ParallelAgent`
+  overrides this (§4.2): it **swallows** child `RunFailed` events, lets siblings finish, and emits
+  a **single aggregate** outer `RunFailed` (so `RunResultStreaming::collect`'s first-wins
+  early-return can't mask later branches).
+- **Auto-write the child's output to `state`.** While draining a child stream, accumulate the text
+  of its last `MessageOutput` assistant message; once the child completes successfully, write that
+  text to `state[key]` (key = explicit key or child name). This is the write half of §2's
+  threading, uniform across all three agents.
 - On success, emit the agent's own outer `RunCompleted { usage: <summed total> }`.
-- Each child runs under `ctx.subagent_child()` and receives the parent's **original
-  `AgentInput`** (cloned). Depth is checked against `RunConfig::max_agent_depth` before each child
-  (as `AgentAsTool` does); exceeding it fails with `AgentError::MaxAgentDepthExceeded`.
+- **Clone Arc-backed handles before the move.** `Agent::run(self, ctx, …)` takes `ctx` **by
+  value** (verified), so any handle the driver must read *after* the child runs is cloned first —
+  exactly the pattern `TokioRunner` uses for `cancel`/`session`:
+  ```rust
+  let child   = ctx.subagent_child();
+  let actions = child.actions().clone();      // Arc-backed, shares the slot (LoopAgent only)
+  let failure = child.failure_handle();       // Arc-backed, shares the slot
+  let mut sub = agent.run(child, input.clone()).await?;   // child is moved here
+  // … drain `sub`, forwarding events per the merge convention …
+  if let Some(e) = failure.take() { parent_failure.set(e); /* fail-fast / aggregate */ }
+  // LoopAgent: if actions.is_escalated() { … }
+  ```
+- Each child receives the parent's **original `AgentInput`** (cloned). Depth is checked against
+  `RunConfig::max_agent_depth` before each child (as `AgentAsTool` does); exceeding it fails with
+  `AgentError::MaxAgentDepthExceeded`.
 - Each `run` is wrapped in an `invoke_agent`-style tracing span
   (`gen_ai.agent.name = self.name`), matching `LlmAgent`.
+- **Per-branch attribution caveat (`ParallelAgent`):** with no new `AgentEvent` variants, an
+  interleaved `TokenDelta`/`MessageOutput` from two concurrent branches carries no per-branch
+  correlation id in the **event stream** — branch attribution is available through the nested OTel
+  spans (SMA-322), not the flat events. A future `branch`/correlation field on the relevant events
+  is the path to unambiguous live parallel UIs; out of scope here.
 
 The stream is built with `async_stream::stream!`, snapshotting `self`'s sub-agents
 (`Vec<Arc<dyn Agent<Ctx>>>` — cheap `Arc` clones) and moving `ctx` in, so the returned
@@ -137,9 +168,12 @@ The stream is built with `async_stream::stream!`, snapshotting `self`'s sub-agen
 
 ### 4.1 `SequentialAgent<Ctx>`
 
-Runs sub-agents in registration order. Each sub-agent sees whatever prior sub-agents wrote to the
-shared `state`. Fail-fast: the first child `RunFailed` aborts the remaining steps. Final
-`RunCompleted` carries usage summed across all steps.
+Runs sub-agents in registration order. After each step completes, its final-output text is
+auto-written to `state[step_key]` (per the §4 write half), so a later step's `Instructions` closure
+reads it — `Sequential([A, B])` of two plain `LlmAgent`s threads `A`→`B` with no boilerplate. Step
+keys default to the agent name; supply an explicit key when a sequence repeats an agent name (else
+the later write overwrites the earlier). Fail-fast: the first child `RunFailed` aborts the
+remaining steps. Final `RunCompleted` carries usage summed across all steps.
 
 ### 4.2 `ParallelAgent<Ctx>`
 
@@ -154,13 +188,30 @@ All branches:
 As each branch completes, `ParallelAgent` writes that branch's final-output text (the concatenated
 text of its last `MessageOutput` assistant message) to `state[key]`. This realizes the ticket's
 "each writes to a unique session-state key; results merged." Error semantics are **collect-all**:
-siblings are allowed to finish; if any branch failed, one aggregate `RunFailed` is emitted and the
-parent `FailureSlot` is set to the first branch error. (Fail-fast sibling cancellation via a child
-`CancellationToken` is a noted follow-up, not in scope.)
+child `RunFailed` events are swallowed, siblings are allowed to finish, and if any branch failed
+**one** aggregate `RunFailed` is emitted with the parent `FailureSlot` set to the first branch
+error. (Fail-fast sibling cancellation via a child `CancellationToken` is a noted follow-up, not in
+scope.)
+
+**Deterministic `final_output`.** Because branch `MessageOutput`s interleave live,
+`RunResultStreaming::collect`'s "last `MessageOutput` wins" rule would otherwise make a parallel
+run's `final_output` nondeterministic (whichever branch emitted last). So immediately before the
+outer `RunCompleted`, `ParallelAgent` emits **one synthesized terminal `MessageOutput`** whose text
+is a canonical JSON object `{ "<key>": "<branch_output>", … }` with keys sorted. That becomes the
+deterministic `final_output` (and `collect_typed` target), and is what a parent `SequentialAgent`
+auto-writes to `state`. Per-branch results remain addressable individually via their `state[key]`
+entries. Branch `MessageOutput`s are still forwarded live for streaming UIs; only the *terminal*
+one is synthesized.
 
 > Concurrency note: `select_all` drives branches cooperatively on one task — sufficient for
-> IO-bound model calls (each `model.invoke` await yields). True OS-thread parallelism would need
-> `tokio::spawn`, which `core` cannot depend on; this is documented on the type.
+> IO-bound model calls (each `model.invoke` await yields), but a **CPU-bound** branch starves its
+> siblings (progress only at `.await` points). This is *cooperative concurrency, not OS-thread
+> parallelism*; true parallelism needs `tokio::spawn`, which `core` cannot depend on. The honest
+> caveat lives on the type doc. A genuinely-parallel variant could live in `runtime-tokio` as a
+> follow-up if a CPU-bound use case appears. **Deviation from the planned design:** the Notion
+> *Multi-Agent Patterns* page and the Linear ticket both say `ParallelAgent` "`tokio::spawn`s
+> sub-agents" — that wording should be reconciled to "cooperative concurrency (IO-bound)" (see
+> §11).
 
 ### 4.3 `LoopAgent<Ctx>`
 
@@ -168,30 +219,38 @@ Holds sub-agents (run in order each iteration) and `max_iterations: u32`.
 
 ```text
 for iteration in 0..max_iterations {
-    for agent in &self.agents {
-        let child = ctx.subagent_child();        // fresh ActionsHandle + FailureSlot, shared state
+    for (key, agent) in &self.agents {
+        let child   = ctx.subagent_child();      // fresh ActionsHandle + FailureSlot, shared state
+        let actions = child.actions().clone();   // CLONE before the move (Arc, shares the slot)
+        let failure = child.failure_handle();    // CLONE before the move
         emit AgentUpdated { agent: agent.name() }
-        drive child stream (merge convention above; fold usage; fail-fast on RunFailed)
-        if child.actions().is_escalated() {
-            emit RunCompleted { usage: total };  // success exit
+        let sub = agent.run(child, input.clone()).await?;     // child moved here
+        drive `sub` (merge convention; fold usage; capture last MessageOutput text)
+        if let Some(e) = failure.take() {         // fail-fast: a sub-agent failed
+            parent_failure.set(e); emit RunFailed; return;
+        }
+        state.set(key, last_output_text);         // auto-write this step's output
+        if actions.is_escalated() {
+            emit RunCompleted { usage: total };   // success exit — no more iterations
             return;
         }
     }
 }
 // max_iterations exhausted without escalate:
-set FailureSlot = AgentError::MaxIterationsExceeded { max }
+parent_failure.set(AgentError::MaxIterationsExceeded { max });
 emit RunFailed
 ```
 
 Escalate reaches the loop through the existing tool path: a tool inside a looped `LlmAgent` calls
 `ctx.actions().escalate()`; `ctx` is the `ToolContext` projected from the child `RunContext` the
-sub-agent runs under; after that sub-agent's stream drains, `LoopAgent` reads
-`child.actions().is_escalated()`. The full chain works **without touching the `LlmAgent`
-transition state machine**.
+sub-agent runs under; after that sub-agent's stream drains, `LoopAgent` reads the **cloned**
+`actions` handle (which shares the slot). The full chain works **without touching the `LlmAgent`
+transition state machine**. Escalate is **iteration-level**: it means "no more iterations," not
+"stop the current sub-agent now" — the current sub-agent finishes its run, then the loop exits. The
+type doc and examples set this expectation explicitly.
 
 > Out of scope: making `escalate` *also* short-circuit an `LlmAgent`'s own turn loop mid-run
-> (that would require the `transition` function to inspect `actions`). Here escalate is observed by
-> `LoopAgent` after the sub-agent completes its run — sufficient for the acceptance criteria.
+> (that would require the `transition` function to inspect `actions`).
 
 ### 4.4 Acceptance criterion 1 walk-through
 
@@ -225,10 +284,15 @@ let refine = LoopAgent::new("refine", "Draft then critique until good", 5)
     .then(critic);                     // critic's tool escalates when the draft passes
 ```
 
-- `SequentialAgent::new(name, description) -> Self`; `.then(impl Agent<Ctx> + 'static) -> Self`.
-- `ParallelAgent::new(name, description) -> Self`; `.branch(key, agent) -> Self`;
-  `.add(agent) -> Self` (key = `agent.name()`).
-- `LoopAgent::new(name, description, max_iterations) -> Self`; `.then(agent) -> Self`.
+Every step/branch has a **state key** (the auto-write target, §4). All three expose a
+default-keyed method (key = `agent.name()`) and an explicit-keyed method (for name collisions):
+
+- `SequentialAgent::new(name, description) -> Self`; `.then(impl Agent<Ctx> + 'static) -> Self`
+  (key = name); `.then_keyed(key, agent) -> Self`.
+- `ParallelAgent::new(name, description) -> Self`; `.add(agent) -> Self` (key = name);
+  `.branch(key, agent) -> Self`.
+- `LoopAgent::new(name, description, max_iterations) -> Self`; `.then(agent) -> Self` (key = name);
+  `.then_keyed(key, agent) -> Self`.
 - All three also accept a pre-wrapped `Arc<dyn Agent<Ctx>>` via `*_shared` variants for trait-object reuse.
 
 ## 6. Errors
@@ -281,8 +345,15 @@ Plus unit tests for `SessionState` (get/set/keys/disjoint concurrent writes) and
 ## 9. Release
 
 - `paigasus-helikon-core` `0.4.0` → `0.4.1` — additive surface ⇒ **patch** bump on a `0.x` crate.
-  release-plz performs the bump and **cascades** the facade pin/version (no same-PR manual core
-  bump, because no *other* crate in this PR consumes the new API).
+  This is **not** a `feat → minor` case. On `0.x`, release-plz maps a *non-breaking* `feat` to a
+  **patch** bump and reserves **minor** for breaking changes. The repo's own history proves it:
+  non-breaking `feat(core)` commits bumped patch — SMA-321 `0.2.0 → 0.2.1`, SMA-322
+  `0.2.3 → 0.2.4`, **SMA-346 `0.2.1 → 0.2.2`** (a literal `feat(core):` commit) — while every
+  **minor** bump was an explicitly `[**breaking**]` change (SMA-320 `→0.2.0`, SMA-402 `→0.3.0`,
+  SMA-324 `→0.4.0`). So `feat(core): SMA-325 …` → `0.4.0 → 0.4.1` is correct and consistent with
+  the title; there is no contradiction. release-plz performs the bump and **cascades** the facade
+  pin/version (no same-PR manual core bump, because no *other* crate in this PR consumes the new
+  API). Confirm the live `core` version at implementation time before bumping.
 - CHANGELOG: `Added — *(core)* SMA-325 add workflow agents (SequentialAgent / ParallelAgent /
   LoopAgent) + run-scoped SessionState and escalate actions`.
 - Branch: `feature/sma-325-workflow-agents-sequentialagent-parallelagent-loopagent`. Design + plan
@@ -293,8 +364,28 @@ Plus unit tests for `SessionState` (get/set/keys/disjoint concurrent writes) and
 ## 10. Explicitly out of scope (future tickets)
 
 - Persisting `SessionState` through the `Session` event log (durable-runner replay of state).
-- `output_key` on `LlmAgent` (auto-write final output to a state key) — `ParallelAgent` owns
-  key-writing this ticket, so `LlmAgent` stays untouched.
+- `output_key` on `LlmAgent` (an agent self-reporting its output to a state key) — **all three**
+  workflow agents own key-writing this ticket (auto-write by name/key), so `LlmAgent` stays
+  untouched. `output_key` remains a clean future opt-in for agents run *outside* a workflow agent.
 - `escalate` short-circuiting an `LlmAgent`'s own turn loop mid-run.
 - Fail-fast sibling **cancellation** in `ParallelAgent` (collect-all this ticket).
 - `SwarmAgent` / `GraphAgent` (named in the `agent.rs` module doc; separate tickets).
+
+## 11. Review resolutions (2026-06-04)
+
+Dispositions of the staff-engineering review (`…-design-review.md`):
+
+| # | Finding | Disposition |
+| --- | --- | --- |
+| **H1** | `SequentialAgent`/`LoopAgent` never write step outputs to state → A→B threading absent for plain `LlmAgent` steps | **Accepted.** All three workflow agents now auto-write each child's final-output text to `state[key]` (§2, §4, §4.1, §4.3). Symmetric with `ParallelAgent`; `LlmAgent` untouched. Explicit keys added for name-collision control (§5). |
+| **H2** | "additive ⇒ patch" mis-classified; `feat` should be a minor bump (`0.5.0`) | **Rejected with evidence.** On `0.x`, release-plz maps *non-breaking* `feat` → **patch**; **minor** is reserved for breaking changes. Repo history: SMA-321/322/**346** (`feat(core)`, non-breaking) bumped patch; SMA-320/402/324 (`[**breaking**]`) bumped minor. Bump stays `0.4.0 → 0.4.1`; evidence added to §9. The cited SMA-402 precedent was itself a *breaking* change, so it doesn't support `feat → minor`. |
+| **M1** | `ParallelAgent` run-level `final_output` nondeterministic | **Accepted.** A synthesized terminal `MessageOutput` (sorted-key JSON of `{key: branch_output}`) makes `final_output` deterministic; per-branch results addressed by `state[key]` (§4.2). |
+| **M2** | Cooperative-concurrency deviation from planned `tokio::spawn`; bound the limitation | **Accepted.** CPU-bound starvation caveat stated; Notion/ticket reconciliation noted (§4.2). Pending action: post a reconciliation note on the Linear ticket / Notion (owner decision — outward-facing edit, not made unilaterally). |
+| **M3** | §4.3 pseudocode use-after-move (`ctx` moves into `run`) | **Accepted.** Clone-before-move made explicit for `actions` + `failure` handles (§4, §4.3), matching `TokioRunner`'s `cancel`/`session` pattern. |
+| **L1** | Per-branch attribution ambiguous in the flat event stream | **Accepted (documented).** Attribution is via nested OTel spans, not events; future correlation-id field noted (§4). |
+| **L2** | Merge-convention fail-fast vs `ParallelAgent` collect-all conflict | **Accepted.** Stated once; `ParallelAgent` swallows child `RunFailed` and emits one aggregate (§4, §4.2). |
+| **L3** | `escalate` is iteration-level, not turn-level | **Accepted (documented).** Expectation made explicit in §4.3. |
+
+> **Open follow-up for the owner (M2):** whether to amend the Linear ticket / Notion *Multi-Agent
+> Patterns* wording from "`tokio::spawn`s sub-agents" to "cooperative concurrency (IO-bound)." Not
+> done here because editing those is an outward-facing change.
