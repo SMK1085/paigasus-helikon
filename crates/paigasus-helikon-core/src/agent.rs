@@ -999,6 +999,14 @@ pub enum AgentError {
     #[error("max turns ({0}) exceeded")]
     MaxTurnsExceeded(u32),
 
+    /// New in SMA-325: a [`crate::LoopAgent`] ran `max_iterations` without a
+    /// sub-agent escalating.
+    #[error("max iterations ({max}) exceeded")]
+    MaxIterationsExceeded {
+        /// The configured iteration budget.
+        max: u32,
+    },
+
     /// New in SMA-314: reached a `LoopState` variant SMA-314 does not
     /// yet drive (handoff, compaction, approval).
     #[error("not yet implemented: {feature}")]
@@ -1098,6 +1106,14 @@ mod failure_slot_tests {
         slot.set(AgentError::MaxTurnsExceeded(1));
         slot.set(AgentError::MaxTurnsExceeded(2));
         assert!(matches!(slot.take(), Some(AgentError::MaxTurnsExceeded(2))));
+    }
+
+    #[test]
+    fn max_iterations_exceeded_displays() {
+        assert_eq!(
+            AgentError::MaxIterationsExceeded { max: 3 }.to_string(),
+            "max iterations (3) exceeded"
+        );
     }
 }
 
