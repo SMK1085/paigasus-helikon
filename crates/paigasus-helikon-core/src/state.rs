@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 /// Cloning shares the underlying store (it is an `Arc` handle). `ParallelAgent`
 /// branches write **disjoint** keys, so the brief per-write lock never contends
 /// meaningfully. **Not** persisted to the `Session` event log.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct SessionState(Arc<Mutex<HashMap<String, serde_json::Value>>>);
 
 impl SessionState {
@@ -77,7 +77,7 @@ pub struct EventActions {
 /// `LoopAgent` reads [`ActionsHandle::is_escalated`] after a sub-agent run
 /// drains — the same write-inside / read-after-drain discipline as
 /// [`crate::FailureSlot`].
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct ActionsHandle(Arc<Mutex<EventActions>>);
 
 impl ActionsHandle {
