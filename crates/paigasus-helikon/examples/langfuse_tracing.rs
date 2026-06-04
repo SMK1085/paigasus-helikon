@@ -14,12 +14,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::Engine as _;
 use futures_core::stream::BoxStream;
-use futures_util::future::BoxFuture;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{Array, Value};
 use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::export::trace::{ExportResult, SpanData, SpanExporter};
-use opentelemetry_sdk::trace::{BatchSpanProcessor, TracerProvider};
+use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider, SpanData, SpanExporter};
 use tracing_subscriber::prelude::*;
 
 use paigasus_helikon::core::{
@@ -35,7 +34,10 @@ use paigasus_helikon::runtime_tokio::TokioRunner;
 struct TagsArrayExporter<E: SpanExporter>(E);
 
 impl<E: SpanExporter> SpanExporter for TagsArrayExporter<E> {
-    fn export(&mut self, mut batch: Vec<SpanData>) -> BoxFuture<'static, ExportResult> {
+    fn export(
+        &self,
+        mut batch: Vec<SpanData>,
+    ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
         for span in &mut batch {
             if let Some(kv) = span
                 .attributes
@@ -54,8 +56,12 @@ impl<E: SpanExporter> SpanExporter for TagsArrayExporter<E> {
         self.0.export(batch)
     }
 
-    fn shutdown(&mut self) {
-        self.0.shutdown();
+    fn shutdown(&self) -> OTelSdkResult {
+        self.0.shutdown()
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.0.force_flush()
     }
 
     fn set_resource(&mut self, resource: &opentelemetry_sdk::Resource) {
@@ -137,11 +143,8 @@ async fn main() -> anyhow::Result<()> {
         )]))
         .build()?;
 
-    let provider = TracerProvider::builder()
-        .with_span_processor(
-            BatchSpanProcessor::builder(TagsArrayExporter(otlp), opentelemetry_sdk::runtime::Tokio)
-                .build(),
-        )
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(BatchSpanProcessor::builder(TagsArrayExporter(otlp)).build())
         .build();
     let tracer = provider.tracer("paigasus-helikon");
     tracing_subscriber::registry()
@@ -187,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     println!("final output: {}", result.final_output);
 
-    provider.force_flush();
+    let _ = provider.force_flush();
     let _ = provider.shutdown();
     Ok(())
 }

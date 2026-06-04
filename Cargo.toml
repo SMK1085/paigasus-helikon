@@ -24,7 +24,7 @@ futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
 insta                 = "1"
 jiff                  = { version = "0.2", features = ["serde"] }
-opentelemetry         = "0.27"
+opentelemetry         = "0.32"
 proc-macro-crate      = "3"
 proc-macro2           = "1"
 quote                 = "1"
@@ -41,9 +41,9 @@ tokio                 = { version = "1", features = ["full"] }
 tokio-util            = { version = "0.7", default-features = false, features = ["rt"] }
 tracing               = "0.1"
 tracing-subscriber    = { version = "0.3", features = ["env-filter", "fmt"] }
-tracing-opentelemetry = "0.28"
-opentelemetry_sdk     = { version = "0.27", features = ["rt-tokio", "testing"] }
-opentelemetry-otlp    = { version = "0.27", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
+tracing-opentelemetry = "0.33"
+opentelemetry_sdk     = { version = "0.32", features = ["rt-tokio", "testing"] }
+opentelemetry-otlp    = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 trybuild              = "1"
 wiremock              = "0.6"
 

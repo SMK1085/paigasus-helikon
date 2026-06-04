@@ -7,8 +7,7 @@ use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::Value;
-use opentelemetry_sdk::testing::trace::InMemorySpanExporter;
-use opentelemetry_sdk::trace::{SimpleSpanProcessor, TracerProvider};
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SimpleSpanProcessor};
 use tracing_subscriber::prelude::*;
 
 use paigasus_helikon::core::{
@@ -85,7 +84,7 @@ impl Session for NoopSession {
     }
 }
 
-fn attr<'a>(span: &'a opentelemetry_sdk::export::trace::SpanData, key: &str) -> Option<&'a Value> {
+fn attr<'a>(span: &'a opentelemetry_sdk::trace::SpanData, key: &str) -> Option<&'a Value> {
     span.attributes
         .iter()
         .find(|kv| kv.key.as_str() == key)
@@ -95,8 +94,8 @@ fn attr<'a>(span: &'a opentelemetry_sdk::export::trace::SpanData, key: &str) -> 
 #[tokio::test(flavor = "current_thread")]
 async fn emits_genai_semconv_span_tree() {
     let exporter = InMemorySpanExporter::default();
-    let provider = TracerProvider::builder()
-        .with_span_processor(SimpleSpanProcessor::new(Box::new(exporter.clone())))
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(SimpleSpanProcessor::new(exporter.clone()))
         .build();
     let tracer = provider.tracer("otel_spans_test");
     let subscriber =
@@ -173,7 +172,7 @@ async fn emits_genai_semconv_span_tree() {
         let _ = RunResultStreaming::new(stream).collect().await.unwrap();
     }
 
-    provider.force_flush();
+    let _ = provider.force_flush();
     let spans = exporter.get_finished_spans().unwrap();
     let names: Vec<&str> = spans.iter().map(|s| s.name.as_ref()).collect();
 
@@ -249,8 +248,8 @@ async fn emits_genai_semconv_span_tree() {
 #[tokio::test(flavor = "current_thread")]
 async fn run_span_usage_is_last_seen_not_summed_within_a_turn() {
     let exporter = InMemorySpanExporter::default();
-    let provider = TracerProvider::builder()
-        .with_span_processor(SimpleSpanProcessor::new(Box::new(exporter.clone())))
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(SimpleSpanProcessor::new(exporter.clone()))
         .build();
     let tracer = provider.tracer("otel_spans_incremental_usage");
     let subscriber =
@@ -305,7 +304,7 @@ async fn run_span_usage_is_last_seen_not_summed_within_a_turn() {
             .unwrap();
         let _ = RunResultStreaming::new(stream).collect().await.unwrap();
     }
-    provider.force_flush();
+    let _ = provider.force_flush();
     let spans = exporter.get_finished_spans().unwrap();
     let run = spans
         .iter()
