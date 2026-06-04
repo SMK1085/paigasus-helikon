@@ -3,3 +3,9 @@
 crates/**/*.cdx.json
 # Local scratch binary occasionally emitted by `cargo run` without -p
 /rust_out
+# Local secrets (never committed)
+.env
+# Claude Code local state — only the machine-local files, not the whole .claude/
+# (shared config under .claude/ stays trackable)
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
