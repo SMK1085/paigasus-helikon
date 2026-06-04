@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.3.1...paigasus-helikon-v0.3.2) - 2026-06-04
+
+### Other
+
+- *(deps)* bump opentelemetry 0.27->0.32 and migrate to the 0.32 SDK API ([#65](https://github.com/SMK1085/paigasus-helikon/pull/65))
+
 ## [0.3.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.3.0...paigasus-helikon-v0.3.1) - 2026-06-04
 
 ### Other
