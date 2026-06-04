@@ -60,6 +60,48 @@ impl SessionState {
     }
 }
 
+/// Control signals a tool can raise to the enclosing driver.
+///
+/// The faithful port of ADK's `EventActions`. Today it carries one signal,
+/// `escalate`; `#[non_exhaustive]` so it can grow (`skip_summarization`,
+/// `transfer_to_agent`, …) without a breaking change.
+#[non_exhaustive]
+#[derive(Debug, Default, Clone)]
+pub struct EventActions {
+    /// Request that the enclosing `LoopAgent` stop iterating.
+    pub escalate: bool,
+}
+
+/// Cloneable handle a tool uses to raise [`EventActions`] signals.
+///
+/// `LoopAgent` reads [`ActionsHandle::is_escalated`] after a sub-agent run
+/// drains — the same write-inside / read-after-drain discipline as
+/// [`crate::FailureSlot`].
+#[derive(Clone, Default)]
+pub struct ActionsHandle(Arc<Mutex<EventActions>>);
+
+impl ActionsHandle {
+    /// Construct a handle with no signals raised.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Raise the `escalate` signal.
+    pub fn escalate(&self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).escalate = true;
+    }
+
+    /// `true` once any holder of this handle has called [`ActionsHandle::escalate`].
+    pub fn is_escalated(&self) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).escalate
+    }
+
+    /// Clone the current [`EventActions`] out for inspection.
+    pub fn snapshot(&self) -> EventActions {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::SessionState;
@@ -90,5 +132,30 @@ mod tests {
         let mut k = s.keys();
         k.sort();
         assert_eq!(k, vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    use super::ActionsHandle;
+
+    #[test]
+    fn escalate_sets_flag() {
+        let a = ActionsHandle::new();
+        assert!(!a.is_escalated());
+        a.escalate();
+        assert!(a.is_escalated());
+    }
+
+    #[test]
+    fn actions_clone_shares_slot() {
+        let a = ActionsHandle::new();
+        let b = a.clone();
+        b.escalate();
+        assert!(a.is_escalated(), "a clone observes the escalate");
+    }
+
+    #[test]
+    fn snapshot_reflects_escalate() {
+        let a = ActionsHandle::new();
+        a.escalate();
+        assert!(a.snapshot().escalate);
     }
 }
