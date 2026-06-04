@@ -173,3 +173,165 @@ where
         Ok(Box::pin(stream))
     }
 }
+
+/// Runs sub-agents concurrently (cooperative `futures::stream::select_all` — core
+/// has no tokio runtime), interleaving their events live. Each branch is keyed;
+/// on completion its final text is written to `state[key]` (disjoint keys → safe).
+///
+/// `final_output` is deterministic: a synthesized terminal `MessageOutput` carrying
+/// a sorted-key JSON object `{key: branch_output}` is emitted before the outer
+/// `RunCompleted`. Per-branch results are addressed individually via `state[key]`.
+/// Failure is **collect-all**: child `RunFailed` events are swallowed, siblings
+/// finish, and one aggregate `RunFailed` is emitted.
+///
+/// Cooperative concurrency suits IO-bound `model.invoke`; a CPU-bound branch would
+/// starve siblings between `.await` points. This is not OS-thread parallelism.
+pub struct ParallelAgent<Ctx> {
+    name: String,
+    description: String,
+    branches: Vec<(String, Arc<dyn Agent<Ctx>>)>,
+}
+
+impl<Ctx> ParallelAgent<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    /// Construct an empty parallel block.
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            branches: Vec::new(),
+        }
+    }
+
+    /// Add a branch keyed by the agent's own name.
+    #[allow(clippy::should_implement_trait)]
+    pub fn add(mut self, agent: impl Agent<Ctx> + 'static) -> Self {
+        let key = agent.name().to_owned();
+        self.branches.push((key, Arc::new(agent)));
+        self
+    }
+
+    /// Add a branch with an explicit state key.
+    pub fn branch(mut self, key: impl Into<String>, agent: impl Agent<Ctx> + 'static) -> Self {
+        self.branches.push((key.into(), Arc::new(agent)));
+        self
+    }
+
+    /// Add a pre-wrapped branch keyed by the agent's name.
+    pub fn add_shared(mut self, agent: Arc<dyn Agent<Ctx>>) -> Self {
+        let key = agent.name().to_owned();
+        self.branches.push((key, agent));
+        self
+    }
+}
+
+#[async_trait]
+impl<Ctx> Agent<Ctx> for ParallelAgent<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    async fn run(
+        &self,
+        ctx: RunContext<Ctx>,
+        input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        let name = self.name.clone();
+        let branches = self.branches.clone();
+
+        let stream = async_stream::stream! {
+            let parent_failure = ctx.failure_handle();
+            yield AgentEvent::RunStarted { agent: name.clone() };
+
+            let max = max_depth(ctx.run_config());
+            if ctx.agent_depth() + 1 > max {
+                let err = AgentError::MaxAgentDepthExceeded { depth: ctx.agent_depth() + 1, max };
+                let msg = err.to_string();
+                parent_failure.set(err);
+                yield AgentEvent::RunFailed { error: msg };
+                return;
+            }
+
+            // Start every branch; tag its stream with the branch index.
+            let mut tagged: Vec<BoxStream<'static, (usize, AgentEvent)>> = Vec::new();
+            let mut failures: Vec<crate::FailureSlot> = Vec::new();
+            for (i, (_key, agent)) in branches.iter().enumerate() {
+                let child = ctx.subagent_child();
+                failures.push(child.failure_handle());
+                yield AgentEvent::AgentUpdated { agent: agent.name().to_owned() };
+                match agent.run(child, input.clone()).await {
+                    Ok(s) => tagged.push(Box::pin(s.map(move |ev| (i, ev)))),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        parent_failure.set(e);
+                        yield AgentEvent::RunFailed { error: msg };
+                        return;
+                    }
+                }
+            }
+
+            let mut merged = futures_util::stream::select_all(tagged);
+            let mut total = TokenUsage::default();
+            let mut finals: Vec<String> = vec![String::new(); branches.len()];
+            let mut completed: std::collections::BTreeMap<String, String> =
+                std::collections::BTreeMap::new();
+            let mut saw_failure = false;
+
+            while let Some((i, ev)) = merged.next().await {
+                match ev {
+                    AgentEvent::RunStarted { .. } => {}
+                    AgentEvent::RunCompleted { usage } => {
+                        total.add(usage);
+                        let key = branches[i].0.clone();
+                        ctx.state().set(key.clone(), finals[i].clone());
+                        completed.insert(key, finals[i].clone());
+                    }
+                    AgentEvent::RunFailed { .. } => saw_failure = true,
+                    AgentEvent::MessageOutput { item } => {
+                        if let Some(t) = assistant_text(&item) {
+                            finals[i] = t;
+                        }
+                        yield AgentEvent::MessageOutput { item };
+                    }
+                    other => yield other,
+                }
+            }
+
+            let mut first_err: Option<AgentError> = None;
+            for fh in &failures {
+                if let Some(e) = fh.take() {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+            }
+            if saw_failure || first_err.is_some() {
+                let err = first_err
+                    .unwrap_or_else(|| AgentError::Other(anyhow::anyhow!("a parallel branch failed")));
+                let msg = err.to_string();
+                parent_failure.set(err);
+                yield AgentEvent::RunFailed { error: msg };
+                return;
+            }
+
+            let json = serde_json::to_string(&completed).unwrap_or_else(|_| "{}".to_owned());
+            yield AgentEvent::MessageOutput {
+                item: Item::AssistantMessage {
+                    content: vec![ContentPart::Text { text: json }],
+                    agent: Some(name.clone()),
+                },
+            };
+            yield AgentEvent::RunCompleted { usage: total };
+        };
+
+        Ok(Box::pin(stream))
+    }
+}
