@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.1.4...paigasus-helikon-macros-v0.2.0) - 2026-06-04
+
+### Added
+
+- *(core)* [**breaking**] SMA-324 add multi-agent handoff + AgentAsTool ([#61](https://github.com/SMK1085/paigasus-helikon/pull/61))
+
 ## [0.1.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.1.3...paigasus-helikon-macros-v0.1.4) - 2026-06-01
 
 ### Other
