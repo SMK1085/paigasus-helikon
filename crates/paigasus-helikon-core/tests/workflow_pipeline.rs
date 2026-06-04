@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use common::{msg_and_complete, MockAgent};
 use paigasus_helikon_core::{
-    Agent, AgentInput, CancellationToken, HookRegistry, MemorySession, ParallelAgent, RunConfig,
-    RunContext, RunResultStreaming, SequentialAgent, Session, TracerHandle,
+    Agent, AgentError, AgentInput, CancellationToken, HookRegistry, MemorySession, ParallelAgent,
+    RunConfig, RunContext, RunError, RunResultStreaming, SequentialAgent, Session, TracerHandle,
 };
 use serde_json::json;
 
@@ -77,14 +77,22 @@ async fn nested_workflow_agents_respect_max_agent_depth() {
 
     // max_agent_depth = 1: outer(0)->inner(1) ok; inner(1)->leaf(2) exceeds.
     let ctx = ctx().with_run_config(RunConfig::new().with_max_agent_depth(1));
-    let err = RunResultStreaming::new(
+    let failure = ctx.failure_handle();
+    let err = RunResultStreaming::with_failure(
         outer
             .run(ctx, AgentInput::from_user_text("go"))
             .await
             .unwrap(),
+        failure,
     )
     .collect()
     .await
     .expect_err("depth exceeded");
-    assert!(err.to_string().contains("nesting depth"), "got: {err}");
+    match err {
+        RunError::Agent(AgentError::MaxAgentDepthExceeded { depth, max }) => {
+            assert_eq!(depth, 2);
+            assert_eq!(max, 1);
+        }
+        other => panic!("expected MaxAgentDepthExceeded, got: {other:?}"),
+    }
 }

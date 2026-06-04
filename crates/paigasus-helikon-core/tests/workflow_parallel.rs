@@ -117,3 +117,32 @@ async fn one_branch_fails_emits_single_aggregate_run_failed() {
         "got {err:?}"
     );
 }
+
+#[tokio::test]
+async fn duplicate_branch_keys_fail_fast() {
+    // Two branches keyed "dup" would write the same state key by completion order
+    // (nondeterministic) — the agent must reject this before starting any branch.
+    let pa = ParallelAgent::new("p", "")
+        .branch(
+            "dup",
+            MockAgent::new("a", |_| msg_and_complete("a", "A", 0)),
+        )
+        .branch(
+            "dup",
+            MockAgent::new("b", |_| msg_and_complete("b", "B", 0)),
+        );
+
+    let ctx = ctx();
+    let failure = ctx.failure_handle();
+    let err = RunResultStreaming::with_failure(
+        pa.run(ctx, AgentInput::from_user_text("go")).await.unwrap(),
+        failure,
+    )
+    .collect()
+    .await
+    .expect_err("duplicate branch keys rejected");
+    assert!(
+        matches!(err, RunError::Agent(AgentError::Other(_))),
+        "got {err:?}"
+    );
+}

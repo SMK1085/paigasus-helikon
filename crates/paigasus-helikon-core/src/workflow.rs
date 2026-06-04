@@ -304,7 +304,22 @@ where
             // Start every branch; tag its stream with the branch index.
             let mut tagged: Vec<BoxStream<'static, (usize, AgentEvent)>> = Vec::new();
             let mut failures: Vec<crate::FailureSlot> = Vec::new();
-            for (i, (_key, agent)) in branches.iter().enumerate() {
+            // Branch keys must be unique: parallel branches write concurrently, so
+            // a duplicate key would be clobbered by completion order (nondeterministic).
+            // Fail fast before starting any branch, mirroring the handoff tool-name
+            // collision guard in the LlmAgent driver.
+            let mut seen_keys = std::collections::HashSet::new();
+            for (i, (key, agent)) in branches.iter().enumerate() {
+                if !seen_keys.insert(key.clone()) {
+                    let err = AgentError::Other(anyhow::anyhow!(
+                        "duplicate parallel branch key: {key}"
+                    ));
+                    let msg = err.to_string();
+                    parent_failure.set(err);
+                    span.record("otel.status_code", "ERROR");
+                    yield AgentEvent::RunFailed { error: msg };
+                    return;
+                }
                 let child = ctx.subagent_child();
                 failures.push(child.failure_handle());
                 yield AgentEvent::AgentUpdated { agent: agent.name().to_owned() };

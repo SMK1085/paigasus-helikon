@@ -137,15 +137,23 @@ where
     capture.spans()
 }
 
-/// Find the single `agent.run` span whose `gen_ai.agent.name` equals `name`.
+/// Find the single `agent.run` span whose `gen_ai.agent.name` equals `name`,
+/// asserting there is exactly one (so a duplicate-span regression fails the test
+/// rather than silently selecting the first match).
 fn agent_run_span<'a>(spans: &'a [CapturedSpan], name: &str) -> &'a CapturedSpan {
-    spans
+    let matches: Vec<&CapturedSpan> = spans
         .iter()
-        .find(|s| {
+        .filter(|s| {
             s.name == "agent.run"
                 && s.fields.get("gen_ai.agent.name").map(String::as_str) == Some(name)
         })
-        .unwrap_or_else(|| panic!("no agent.run span for {name:?}; captured: {spans:?}"))
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one agent.run span for {name:?}; captured: {spans:?}",
+    );
+    matches[0]
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
