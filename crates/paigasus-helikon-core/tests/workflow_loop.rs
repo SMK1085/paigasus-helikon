@@ -6,10 +6,11 @@ mod common;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use common::{msg_and_complete, MockAgent};
+use common::{msg_and_complete, EscalatingTool, MockAgent, MockModel};
 use paigasus_helikon_core::{
-    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, HookRegistry, LoopAgent,
-    MemorySession, RunContext, RunError, RunResultStreaming, Session, TracerHandle,
+    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, FinishReason, HookRegistry,
+    LlmAgent, LoopAgent, MemorySession, ModelEvent, RunContext, RunError, RunResultStreaming,
+    Session, Tool, TracerHandle,
 };
 
 fn ctx() -> RunContext<()> {
@@ -79,4 +80,45 @@ async fn exhausting_max_iterations_fails() {
         RunError::Agent(AgentError::MaxIterationsExceeded { max }) => assert_eq!(max, 3),
         other => panic!("expected MaxIterationsExceeded, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn escalate_from_real_tool_stops_the_loop() {
+    // The looped agent: turn 1 calls the "done" tool (which escalates); turn 2
+    // emits final text.
+    let worker = LlmAgent::builder::<()>()
+        .name("worker")
+        .description("does one unit of work")
+        .shared_model(MockModel::with_scripts(vec![
+            vec![
+                ModelEvent::ToolCallDelta {
+                    call_id: "c1".to_owned(),
+                    name: Some("done".to_owned()),
+                    args_delta: "{}".to_owned(),
+                },
+                ModelEvent::Finish { reason: FinishReason::ToolCalls },
+            ],
+            vec![
+                ModelEvent::TokenDelta { text: "finished".to_owned() },
+                ModelEvent::Finish { reason: FinishReason::Stop },
+            ],
+        ]))
+        .shared_tool(EscalatingTool::new("done") as Arc<dyn Tool<()>>)
+        .build();
+
+    let la = LoopAgent::new("refine", "loop until the tool escalates", 5).then(worker);
+
+    let result = RunResultStreaming::new(la.run(ctx(), AgentInput::from_user_text("go")).await.unwrap())
+        .collect()
+        .await
+        .unwrap();
+
+    let worker_runs = result
+        .events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::AgentUpdated { agent } if agent == "worker"))
+        .count();
+    assert_eq!(worker_runs, 1, "tool escalate stops after the first iteration");
+    assert!(result.events.iter().any(|e| matches!(e, AgentEvent::RunCompleted { .. })));
+    assert!(!result.events.iter().any(|e| matches!(e, AgentEvent::RunFailed { .. })));
 }
