@@ -13,9 +13,10 @@ use futures_core::stream::BoxStream;
 use futures_util::stream;
 
 use paigasus_helikon_core::{
-    CancellationToken, ConversationSnapshot, HookRegistry, Model, ModelCapabilities, ModelError,
-    ModelEvent, ModelRequest, RunContext, SequenceId, Session, SessionError, SessionEvent, Tool,
-    ToolContext, ToolError, ToolOutput, TracerHandle,
+    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, ContentPart, ConversationSnapshot,
+    HookRegistry, Item, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, RunContext,
+    SequenceId, Session, SessionError, SessionEvent, TokenUsage, Tool, ToolContext, ToolError,
+    ToolOutput, TracerHandle,
 };
 
 /// A scripted [`Model`] that emits a pre-recorded sequence of
@@ -241,5 +242,120 @@ where
         }
         self.current.fetch_sub(1, Ordering::SeqCst);
         Ok(ToolOutput::new(serde_json::json!({"ok": true})))
+    }
+}
+
+/// Build a `TokenUsage` with `input_tokens == total_tokens == total` (the other
+/// fields zero). Constructed via `default()` + field assignment because
+/// `TokenUsage` is `#[non_exhaustive]` (no struct-literal construction off-crate).
+pub fn usage_total(total: u64) -> TokenUsage {
+    let mut u = TokenUsage::default();
+    u.input_tokens = total;
+    u.total_tokens = total;
+    u
+}
+
+/// An `AgentEvent::MessageOutput` carrying an assistant text message.
+pub fn assistant_msg(agent: &str, text: &str) -> AgentEvent {
+    AgentEvent::MessageOutput {
+        item: Item::AssistantMessage {
+            content: vec![ContentPart::Text { text: text.to_owned() }],
+            agent: Some(agent.to_owned()),
+        },
+    }
+}
+
+/// The canonical "ran and finished" event sequence: `RunStarted`, one
+/// `MessageOutput` with `text`, then `RunCompleted` carrying `usage_total(total)`.
+pub fn msg_and_complete(agent: &str, text: &str, total: u64) -> Vec<AgentEvent> {
+    vec![
+        AgentEvent::RunStarted { agent: agent.to_owned() },
+        assistant_msg(agent, text),
+        AgentEvent::RunCompleted { usage: usage_total(total) },
+    ]
+}
+
+/// A scripted [`Agent`]: its `run` evaluates `behavior(&ctx)` once (which may read
+/// `ctx.state()`, call `ctx.actions().escalate()`, or set `ctx.failure_handle()`),
+/// then streams the returned events. No model required.
+pub struct MockAgent<Ctx> {
+    name: String,
+    description: String,
+    behavior: Arc<dyn Fn(&RunContext<Ctx>) -> Vec<AgentEvent> + Send + Sync>,
+}
+
+impl<Ctx> MockAgent<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    pub fn new(
+        name: &str,
+        behavior: impl Fn(&RunContext<Ctx>) -> Vec<AgentEvent> + Send + Sync + 'static,
+    ) -> MockAgent<Ctx> {
+        MockAgent {
+            name: name.to_owned(),
+            description: format!("mock agent {name}"),
+            behavior: Arc::new(behavior),
+        }
+    }
+}
+
+#[async_trait]
+impl<Ctx> Agent<Ctx> for MockAgent<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    async fn run(
+        &self,
+        ctx: RunContext<Ctx>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        let events = (self.behavior)(&ctx);
+        Ok(Box::pin(stream::iter(events)))
+    }
+}
+
+/// A [`Tool`] that calls `ctx.actions().escalate()` and returns `{"escalated": true}`.
+pub struct EscalatingTool {
+    name: String,
+    schema: serde_json::Value,
+}
+
+impl EscalatingTool {
+    pub fn new(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_owned(),
+            schema: serde_json::json!({"type": "object"}),
+        })
+    }
+}
+
+#[async_trait]
+impl<Ctx> Tool<Ctx> for EscalatingTool
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        "Signals the enclosing loop to stop."
+    }
+    fn schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+    async fn invoke(
+        &self,
+        ctx: &ToolContext<Ctx>,
+        _args: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        ctx.actions().escalate();
+        Ok(ToolOutput::new(serde_json::json!({"escalated": true})))
     }
 }
