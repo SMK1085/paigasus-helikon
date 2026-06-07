@@ -401,6 +401,15 @@ pub enum AgentEvent {
         /// JSON arguments the model proposed to call the tool with.
         args: serde_json::Value,
     },
+    /// A tool call was denied by the permission layer. The model separately
+    /// receives the denial as a synthetic tool result; this event is for
+    /// observability.
+    PermissionDenied {
+        /// Tool name.
+        tool: String,
+        /// Human-readable denial reason.
+        reason: String,
+    },
     /// A structured-output repair turn has begun: validation of the prior
     /// constrained output failed and the loop is re-prompting once.
     RepairStarted {
@@ -984,6 +993,15 @@ pub enum AgentError {
         kind: GuardrailKind,
     },
 
+    /// A hook denied a lifecycle event, aborting the run.
+    #[error("hook denied {event}: {reason}")]
+    HookDenied {
+        /// The lifecycle event that was denied (e.g. `"OnRunStart"`).
+        event: String,
+        /// Reason surfaced by the hook.
+        reason: String,
+    },
+
     /// The model produced output that could not be coerced into the
     /// requested structured type, even after the one-shot repair attempt
     /// allowed by ADR-10.
@@ -1114,6 +1132,20 @@ mod failure_slot_tests {
             AgentError::MaxIterationsExceeded { max: 3 }.to_string(),
             "max iterations (3) exceeded"
         );
+    }
+}
+
+#[cfg(test)]
+mod error_display_tests {
+    use crate::AgentError;
+
+    #[test]
+    fn hook_denied_displays() {
+        let e = AgentError::HookDenied {
+            event: "OnRunStart".into(),
+            reason: "blocked".into(),
+        };
+        assert_eq!(e.to_string(), "hook denied OnRunStart: blocked");
     }
 }
 

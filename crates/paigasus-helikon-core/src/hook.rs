@@ -78,6 +78,12 @@ pub enum HookEvent {
     },
     /// Fired once at the end of a run.
     OnRunComplete,
+    /// Fired when a subagent sub-run completes — a handoff target, an
+    /// agent-as-tool sub-run, or a workflow sub-agent (Sequential/Parallel/Loop).
+    OnSubagentStop {
+        /// Name of the subagent that completed.
+        agent: String,
+    },
 }
 
 /// A [`Hook`]'s reply to a [`HookEvent`].
