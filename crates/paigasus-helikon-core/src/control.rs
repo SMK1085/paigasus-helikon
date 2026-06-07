@@ -5,10 +5,6 @@
 //! driver calls its async methods at the loop's control seams. Pure of the
 //! state machine — all async control lives here, not in `transition()`.
 
-// Bridge: control.rs is fully consumed by the driver across SMA-326 Tasks 9–11.
-// Until then some Interceptors methods have no non-test caller. Removed in Task 11.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use crate::{

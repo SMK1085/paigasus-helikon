@@ -829,6 +829,30 @@ where
                 };
                 let outcome = crate::transition(&loop_state, tx_input, &tx_ctx);
                 let crate::TransitionOutcome { next_state, events, next_action, conversation_appends } = outcome;
+
+                // Output-guardrail gate: a tripwire on the terminal output
+                // suppresses RunCompleted and fails the run instead.
+                let output_trip = if let crate::LoopState::Done(out) = &next_state {
+                    interceptors.run_output_guardrails(&out.as_text()).await
+                } else {
+                    None
+                };
+                let (events, next_action, next_state) = if let Some((kind, info)) = output_trip {
+                    run_span.record("otel.status_code", "ERROR");
+                    failure.set(crate::AgentError::Guardrail { kind: kind.clone() });
+                    (
+                        vec![
+                            crate::AgentEvent::GuardrailTriggered { kind, info },
+                            crate::AgentEvent::RunFailed {
+                                error: "output guardrail tripwire".to_owned(),
+                            },
+                        ],
+                        crate::NextAction::Terminate,
+                        next_state,
+                    )
+                } else {
+                    (events, next_action, next_state)
+                };
                 for ev in events {
                     match &ev {
                         crate::AgentEvent::TurnStarted { turn } => {
@@ -1036,6 +1060,7 @@ where
                         tx_input = crate::TransitionInput::ToolResults { outcomes };
                     }
                     crate::NextAction::Terminate => {
+                        let _ = interceptors.fire(&crate::HookEvent::OnRunComplete).await;
                         // On a terminal failure the driver left the structured
                         // error in loop_state; hand it to the slot. (Every
                         // LoopState::Failed branch in loop_state.rs Terminates,
@@ -1093,6 +1118,24 @@ where
                             agent: target.clone(),
                         };
 
+                        let on_handoff = interceptors
+                            .fire(&crate::HookEvent::OnHandoff {
+                                from: agent_name.clone(),
+                                to: target.clone(),
+                            })
+                            .await;
+                        if let Some(reason) = on_handoff.denied {
+                            let err = crate::AgentError::HookDenied {
+                                event: "OnHandoff".to_owned(),
+                                reason,
+                            };
+                            let msg = err.to_string();
+                            run_span.record("otel.status_code", "ERROR");
+                            failure.set(err);
+                            yield crate::AgentEvent::RunFailed { error: msg };
+                            return;
+                        }
+
                         let input = crate::AgentInput { messages: transcript };
                         let mut sub = match target_agent.run(child, input).await {
                             Ok(s) => s,
@@ -1117,6 +1160,9 @@ where
                                 other => yield other,
                             }
                         }
+                        let _ = interceptors
+                            .fire(&crate::HookEvent::OnSubagentStop { agent: target.clone() })
+                            .await;
                         return;
                     }
                 }
