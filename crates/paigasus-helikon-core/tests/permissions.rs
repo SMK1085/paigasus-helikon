@@ -72,3 +72,56 @@ async fn plan_mode_denies_side_effecting_tool() {
         .iter()
         .any(|e| matches!(e, AgentEvent::PermissionDenied { tool, .. } if tool == "writer")));
 }
+
+#[tokio::test]
+async fn macro_read_only_tool_allowed_under_plan() {
+    use paigasus_helikon_core::{Tool, ToolContext, ToolEffect, ToolError};
+    use paigasus_helikon_macros::tool;
+    use schemars::JsonSchema;
+    use serde::Deserialize;
+
+    #[derive(Deserialize, JsonSchema)]
+    struct Empty {}
+
+    /// A read-only tool.
+    #[tool(effect = read_only)]
+    async fn reader(_ctx: &ToolContext<()>, _args: Empty) -> Result<String, ToolError> {
+        Ok("ok".into())
+    }
+
+    assert_eq!(reader.effect(), ToolEffect::ReadOnly);
+
+    let model = MockModel::with_scripts(vec![
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "1".into(),
+                name: Some("reader".into()),
+                args_delta: "{}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        vec![
+            ModelEvent::TokenDelta {
+                text: "done".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ]);
+    let agent = agent(model, vec![Arc::new(reader) as Arc<dyn Tool<()>>]);
+    let ctx = noop_run_context::<()>().with_permission_mode(PermissionMode::Plan);
+    let stream = agent
+        .run(ctx, AgentInput::from_user_text("go"))
+        .await
+        .unwrap();
+    let result = RunResultStreaming::new(stream).collect().await.unwrap();
+
+    // Plan ALLOWS a ReadOnly macro tool — no PermissionDenied event.
+    assert!(!result
+        .events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::PermissionDenied { .. })));
+}
