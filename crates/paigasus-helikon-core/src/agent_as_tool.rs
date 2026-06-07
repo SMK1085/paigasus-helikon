@@ -148,6 +148,27 @@ where
                 other => ToolError::Other(anyhow::Error::from(other)),
             })?;
 
+        // Fire OnSubagentStop against the parent's run-level hooks. The sub-run
+        // used an isolated (empty) registry; this fires the PARENT's hooks so a
+        // run-level OnSubagentStop consumer sees the agent-as-tool sub-run stop.
+        let fire_ctx = RunContext::new(
+            Arc::clone(ctx.user_ctx()),
+            Arc::new(MemorySession::new()),
+            HookRegistry::new(),
+            ctx.tracer().clone(),
+            ctx.cancel().clone(),
+        );
+        for hook in ctx.hooks.iter() {
+            let _ = hook
+                .on_event(
+                    &fire_ctx,
+                    &crate::HookEvent::OnSubagentStop {
+                        agent: self.agent.name().to_owned(),
+                    },
+                )
+                .await;
+        }
+
         Ok(ToolOutput::new(Value::String(result.final_output)))
     }
 }

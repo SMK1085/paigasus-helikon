@@ -286,9 +286,10 @@ where
     /// `cancel()` calls only cancel the tool's subtree — they do not
     /// propagate back to the run.
     ///
-    /// Tools do not see the session handle (the runner owns persistence)
-    /// or the hook registry (hooks fire around tool invocations, not
-    /// from inside).
+    /// Tools do not see the session handle (the runner owns persistence). The
+    /// run-level hook registry is projected as a `pub(crate)` carrier (for
+    /// `agent_as_tool` to fire `OnSubagentStop`), but is not exposed to `Tool`
+    /// impls — hooks fire around tool invocations, not from inside.
     pub fn to_tool_context(&self) -> ToolContext<Ctx> {
         let max_agent_depth = self
             .run_config
@@ -304,6 +305,7 @@ where
         )
         .with_state(self.state.clone())
         .with_actions(self.actions.clone())
+        .with_hooks(self.hooks.clone())
         .with_permissions(
             self.permission_mode,
             self.permission_policy.clone(),

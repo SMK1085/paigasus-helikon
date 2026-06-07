@@ -148,3 +148,38 @@ async fn sequential_agent_fires_on_subagent_stop_per_child() {
         "OnSubagentStop must fire for child `b`; saw {names:?}"
     );
 }
+
+/// Test C — `AgentAsTool::invoke` fires `OnSubagentStop` against the *parent*
+/// run's hook registry after the sub-run completes. The sub-run is isolated
+/// (empty hooks), but the carrier projected via `to_tool_context` must deliver
+/// the stop event to the parent's `StopRecorder` with the wrapped agent's name.
+#[tokio::test]
+async fn agent_as_tool_fires_on_subagent_stop() {
+    use paigasus_helikon_core::{
+        AgentAsTool, CancellationToken, HookRegistry, MemorySession, RunContext, Session, Tool,
+        TracerHandle,
+    };
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut reg = HookRegistry::<()>::new();
+    reg.push(std::sync::Arc::new(StopRecorder(seen.clone())));
+    let parent = RunContext::new(
+        std::sync::Arc::new(()),
+        std::sync::Arc::new(MemorySession::new()) as std::sync::Arc<dyn Session>,
+        reg,
+        TracerHandle::default(),
+        CancellationToken::new(),
+    );
+
+    let inner = common::MockAgent::new("inner", |_| Vec::new());
+    let wrapper = AgentAsTool::new(inner).with_name("inner_tool");
+    let tc = parent.to_tool_context();
+    let _ = wrapper
+        .invoke(&tc, serde_json::json!({"input": "go"}))
+        .await
+        .unwrap();
+
+    assert!(
+        seen.lock().unwrap().iter().any(|n| n == "inner"),
+        "agent-as-tool sub-run fires OnSubagentStop with the inner agent's name"
+    );
+}
