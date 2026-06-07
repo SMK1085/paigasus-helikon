@@ -783,6 +783,7 @@ where
                 }
             }
 
+            let mut pending_injections: Vec<String> = Vec::new();
             let interceptors = crate::control::Interceptors {
                 ctx: &ctx,
                 input_guardrails: &input_guardrails,
@@ -803,11 +804,7 @@ where
                 yield crate::AgentEvent::RunFailed { error: msg };
                 return;
             }
-            for text in on_start.injections {
-                conversation.push(crate::Item::System {
-                    content: vec![crate::ContentPart::Text { text }],
-                });
-            }
+            pending_injections.extend(on_start.injections);
 
             // Input guardrails — blocking gate (AC1: zero model calls on a tripwire).
             let seed_text = user_text_of(&conversation);
@@ -855,6 +852,21 @@ where
                                     s.record("langfuse.trace.tags", json.as_str());
                                 }
                             }
+                            let on_turn = interceptors
+                                .fire(&crate::HookEvent::OnTurnStart { turn: *turn })
+                                .await;
+                            if let Some(reason) = on_turn.denied {
+                                let err = crate::AgentError::HookDenied {
+                                    event: "OnTurnStart".to_owned(),
+                                    reason,
+                                };
+                                let msg = err.to_string();
+                                run_span.record("otel.status_code", "ERROR");
+                                failure.set(err);
+                                yield crate::AgentEvent::RunFailed { error: msg };
+                                return;
+                            }
+                            pending_injections.extend(on_turn.injections);
                             turn_span = Some(s);
                         }
                         crate::AgentEvent::RunCompleted { usage } => {
@@ -873,6 +885,12 @@ where
 
                 match next_action {
                     crate::NextAction::CallModel { request } => {
+                        let mut request = request;
+                        for text in pending_injections.drain(..) {
+                            request.messages.push(crate::Item::System {
+                                content: vec![crate::ContentPart::Text { text }],
+                            });
+                        }
                         let chat_parent = turn_span.as_ref().unwrap_or(&run_span);
                         let chat_span = tracing::info_span!(
                             parent: chat_parent,
