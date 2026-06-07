@@ -67,6 +67,51 @@ where
         out
     }
 
+    /// Run input guardrails as a blocking gate. Returns `Some((kind, info))`
+    /// on the first tripwire, else `None`. A guardrail's own error is treated
+    /// as a tripwire with [`crate::GuardrailKind::Other`].
+    pub(crate) async fn run_input_guardrails(
+        &self,
+        text: &str,
+    ) -> Option<(crate::GuardrailKind, serde_json::Value)> {
+        self.run_guardrails(self.input_guardrails, crate::GuardrailInput::UserText(text))
+            .await
+    }
+
+    /// Run output guardrails as a blocking gate on the final text.
+    pub(crate) async fn run_output_guardrails(
+        &self,
+        text: &str,
+    ) -> Option<(crate::GuardrailKind, serde_json::Value)> {
+        self.run_guardrails(
+            self.output_guardrails,
+            crate::GuardrailInput::ModelOutput(text),
+        )
+        .await
+    }
+
+    async fn run_guardrails(
+        &self,
+        guardrails: &[Arc<dyn Guardrail<Ctx>>],
+        input: crate::GuardrailInput<'_>,
+    ) -> Option<(crate::GuardrailKind, serde_json::Value)> {
+        for g in guardrails {
+            match g.check(self.ctx, input.clone()).await {
+                Ok(crate::GuardrailVerdict::Pass) => {}
+                Ok(crate::GuardrailVerdict::Tripwire { kind, info }) => return Some((kind, info)),
+                Err(e) => {
+                    return Some((
+                        crate::GuardrailKind::Other {
+                            reason: e.to_string(),
+                        },
+                        serde_json::Value::Null,
+                    ))
+                }
+            }
+        }
+        None
+    }
+
     /// Authorize one tool call on its effective args: `deny rules › mode ›
     /// policy › AskUser`. Returns the resolved decision (never `AskUser` — that
     /// is resolved here via the approval handler, default Deny).
@@ -113,6 +158,67 @@ where
             },
             other => other,
         }
+    }
+}
+
+#[cfg(test)]
+mod guardrail_tests {
+    use super::*;
+    use crate::{
+        CancellationToken, GuardrailError, GuardrailInput, GuardrailKind, GuardrailVerdict,
+        HookRegistry, MemorySession, RunContext, Session, TracerHandle,
+    };
+    use async_trait::async_trait;
+
+    struct TripOnInput;
+    #[async_trait]
+    impl Guardrail<()> for TripOnInput {
+        async fn check(
+            &self,
+            _: &RunContext<()>,
+            _: GuardrailInput<'_>,
+        ) -> Result<GuardrailVerdict, GuardrailError> {
+            Ok(GuardrailVerdict::Tripwire {
+                kind: GuardrailKind::InputPolicy,
+                info: serde_json::Value::Null,
+            })
+        }
+    }
+
+    fn ctx() -> RunContext<()> {
+        RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn input_guardrail_passes_when_empty() {
+        let c = ctx();
+        let i = Interceptors {
+            ctx: &c,
+            input_guardrails: &[],
+            output_guardrails: &[],
+            agent_hooks: &[],
+        };
+        assert!(i.run_input_guardrails("hello").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn input_guardrail_trips() {
+        let gs: Vec<Arc<dyn Guardrail<()>>> = vec![Arc::new(TripOnInput)];
+        let c = ctx();
+        let i = Interceptors {
+            ctx: &c,
+            input_guardrails: &gs,
+            output_guardrails: &[],
+            agent_hooks: &[],
+        };
+        let trip = i.run_input_guardrails("hello").await;
+        assert!(matches!(trip, Some((GuardrailKind::InputPolicy, _))));
     }
 }
 
