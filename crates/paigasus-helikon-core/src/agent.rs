@@ -513,21 +513,42 @@ fn tool_output_to_content_parts(output: &crate::ToolOutput) -> Vec<crate::Conten
     vec![crate::ContentPart::Text { text }]
 }
 
+/// Render content parts back to a JSON value for `PostToolUse` hooks. Text
+/// parts concatenate; the common single-text case round-trips cleanly.
+fn content_parts_to_json(parts: &[crate::ContentPart]) -> serde_json::Value {
+    let text: String = parts
+        .iter()
+        .filter_map(|p| match p {
+            crate::ContentPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    serde_json::Value::String(text)
+}
+
 async fn run_tools_concurrent<Ctx>(
     tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
     calls: &[crate::ToolCallRequest],
+    interceptors: &crate::control::Interceptors<'_, Ctx>,
     tool_ctx: &crate::ToolContext<Ctx>,
     limit: Option<std::num::NonZeroUsize>,
     parent: &tracing::Span,
-) -> Vec<crate::ToolCallOutcome>
+) -> (Vec<crate::ToolCallOutcome>, Vec<crate::AgentEvent>)
 where
     Ctx: Send + Sync + 'static,
 {
+    let denied_events: std::sync::Mutex<Vec<crate::AgentEvent>> = std::sync::Mutex::new(Vec::new());
+
     let futures = calls.iter().map(|call| {
         let tool = tools.iter().find(|t| t.name() == call.name).cloned();
+        let effect = tool
+            .as_ref()
+            .map(|t| t.effect())
+            .unwrap_or(crate::ToolEffect::SideEffect);
         let call_id = call.call_id.clone();
-        let args = call.args.clone();
         let name = call.name.clone();
+        let orig_args = call.args.clone();
+        let denied_events = &denied_events;
         let span = tracing::info_span!(
             parent: parent,
             "tool.execute",
@@ -539,46 +560,105 @@ where
         );
         span.record("otel.name", format!("execute_tool {name}").as_str());
         async move {
-            match tool {
-                Some(t) => match t.invoke(tool_ctx, args).await {
-                    Ok(output) => crate::ToolCallOutcome {
+            // PreToolUse hook.
+            let pre = interceptors
+                .fire(&crate::HookEvent::PreToolUse {
+                    tool: name.clone(),
+                    args: orig_args.clone(),
+                })
+                .await;
+            if let Some(reason) = pre.denied {
+                return crate::ToolCallOutcome {
+                    call_id,
+                    result: Err(format!("blocked by PreToolUse hook: {reason}")),
+                };
+            }
+            let mut args = pre.replacement.unwrap_or(orig_args);
+
+            // Permission authorize on the effective args.
+            match interceptors.authorize(&name, effect, &args).await {
+                crate::PermissionDecision::Allow => {}
+                crate::PermissionDecision::Replace { args: sanitized } => {
+                    args = sanitized;
+                }
+                crate::PermissionDecision::Deny { reason }
+                | crate::PermissionDecision::AskUser { prompt: reason } => {
+                    denied_events
+                        .lock()
+                        .unwrap()
+                        .push(crate::AgentEvent::PermissionDenied {
+                            tool: name.clone(),
+                            reason: reason.clone(),
+                        });
+                    return crate::ToolCallOutcome {
                         call_id,
-                        result: Ok(tool_output_to_content_parts(&output)),
-                    },
+                        result: Err(format!("permission denied: {reason}")),
+                    };
+                }
+            }
+
+            // Invoke.
+            let outcome = match tool {
+                Some(t) => match t.invoke(tool_ctx, args).await {
+                    Ok(output) => Ok(tool_output_to_content_parts(&output)),
                     Err(e) => {
                         tracing::Span::current().record("otel.status_code", "ERROR");
-                        crate::ToolCallOutcome {
-                            call_id,
-                            result: Err(e.to_string()),
-                        }
+                        Err(e.to_string())
                     }
                 },
                 None => {
                     tracing::Span::current().record("otel.status_code", "ERROR");
-                    crate::ToolCallOutcome {
-                        call_id,
-                        result: Err(format!("unknown tool: {name}")),
+                    Err(format!("unknown tool: {name}"))
+                }
+            };
+
+            // PostToolUse hook (ReplaceOutput / Deny→denial).
+            let outcome = match outcome {
+                Ok(content) => {
+                    let output_json = content_parts_to_json(&content);
+                    let post = interceptors
+                        .fire(&crate::HookEvent::PostToolUse {
+                            tool: name.clone(),
+                            output: output_json,
+                        })
+                        .await;
+                    if let Some(reason) = post.denied {
+                        Err(format!("blocked by PostToolUse hook: {reason}"))
+                    } else if let Some(value) = post.replacement {
+                        // Unwrap a JSON string to its contents (matching
+                        // tool_output_to_content_parts); stringify anything else.
+                        let text = match value {
+                            serde_json::Value::String(s) => s,
+                            v => v.to_string(),
+                        };
+                        Ok(vec![crate::ContentPart::Text { text }])
+                    } else {
+                        Ok(content)
                     }
                 }
+                Err(e) => Err(e),
+            };
+
+            crate::ToolCallOutcome {
+                call_id,
+                result: outcome,
             }
         }
         .instrument(span)
     });
-    match limit {
+
+    let outcomes = match limit {
         None => futures_util::future::join_all(futures).await,
         Some(n) => {
             use futures_util::stream::StreamExt as _;
-            // Collect to a Vec first: passing the `Map` iterator directly to
-            // `stream::iter` trips an HRTB lifetime bound that `join_all` (above)
-            // doesn't impose. `buffered` (not `buffer_unordered`) preserves call
-            // order in the outcomes. Don't "simplify" this back to a chained call.
             let collected: Vec<_> = futures.collect();
             futures_util::stream::iter(collected)
                 .buffered(n.get())
                 .collect()
                 .await
         }
-    }
+    };
+    (outcomes, denied_events.into_inner().unwrap())
 }
 
 // ── Agent impl for LlmAgent ──────────────────────────────────────────────────
@@ -915,14 +995,18 @@ where
                     crate::NextAction::ExecuteTools { calls } => {
                         let tool_ctx = ctx.to_tool_context();
                         let tool_parent = turn_span.as_ref().unwrap_or(&run_span);
-                        let outcomes = run_tools_concurrent(
+                        let (outcomes, denied) = run_tools_concurrent(
                             &tools,
                             &calls,
+                            &interceptors,
                             &tool_ctx,
                             parallel_tool_call_limit,
                             tool_parent,
                         )
                         .await;
+                        for ev in denied {
+                            yield ev;
+                        }
                         for o in &outcomes {
                             conversation.push(crate::Item::ToolResult {
                                 call_id: o.call_id.clone(),
