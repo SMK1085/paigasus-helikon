@@ -9,6 +9,20 @@ use async_trait::async_trait;
 
 use crate::{ActionsHandle, CancellationToken, SessionState, TracerHandle};
 
+/// A tool's side-effect profile. Drives [`crate::PermissionMode`] decisions:
+/// `Plan` allows only `ReadOnly`; `AcceptEdits` auto-approves `Write`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ToolEffect {
+    /// No side effects; safe to run under `Plan` mode.
+    ReadOnly,
+    /// Mutates local/filesystem state; auto-approved by `AcceptEdits`.
+    Write,
+    /// Any other side effect (network, external). Safe-by-default.
+    #[default]
+    SideEffect,
+}
+
 /// A tool an agent can call.
 ///
 /// Object-safe by design — applications hold heterogeneous registries as
@@ -58,6 +72,13 @@ where
     /// Optional JSON Schema for the return payload. Default is `None`.
     fn output_schema(&self) -> Option<&serde_json::Value> {
         None
+    }
+
+    /// This tool's side-effect profile. Default [`ToolEffect::SideEffect`]
+    /// (safe-by-default): an undeclared tool is treated as side-effecting, so
+    /// `Plan` mode blocks it.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::SideEffect
     }
 
     /// Execute the tool with `args` (a JSON value matching [`Tool::schema`]).
@@ -196,6 +217,16 @@ pub enum ToolError {
     /// Escape hatch for arbitrary tool failures. See ADR-10.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use crate::ToolEffect;
+
+    #[test]
+    fn tool_effect_default_is_side_effect() {
+        assert_eq!(ToolEffect::default(), ToolEffect::SideEffect);
+    }
 }
 
 #[cfg(test)]
