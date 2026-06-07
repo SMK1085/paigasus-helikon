@@ -304,6 +304,12 @@ where
         )
         .with_state(self.state.clone())
         .with_actions(self.actions.clone())
+        .with_permissions(
+            self.permission_mode,
+            self.permission_policy.clone(),
+            self.deny_rules.clone(),
+            self.approval_handler.clone(),
+        )
     }
 }
 
@@ -488,6 +494,22 @@ mod runcontext_tests {
         );
         assert_eq!(
             ctx.subagent_child().permission_mode(),
+            crate::PermissionMode::Bypass
+        );
+    }
+
+    #[test]
+    fn to_tool_context_projects_permission_mode() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_permission_mode(crate::PermissionMode::Bypass);
+        assert_eq!(
+            ctx.to_tool_context().permission_mode(),
             crate::PermissionMode::Bypass
         );
     }

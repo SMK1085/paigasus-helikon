@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{ActionsHandle, CancellationToken, SessionState, TracerHandle};
+use crate::{
+    ActionsHandle, ApprovalHandler, CancellationToken, DenyRule, PermissionMode, PermissionPolicy,
+    SessionState, TracerHandle,
+};
 
 /// A tool's side-effect profile. Drives [`crate::PermissionMode`] decisions:
 /// `Plan` allows only `ReadOnly`; `AcceptEdits` auto-approves `Write`.
@@ -106,6 +109,13 @@ where
     max_agent_depth: u32,
     state: SessionState,
     actions: ActionsHandle,
+    permission_mode: PermissionMode,
+    // read by agent_as_tool in a later task
+    pub(crate) permission_policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
+    // read by agent_as_tool in a later task
+    pub(crate) deny_rules: Vec<DenyRule>,
+    // read by agent_as_tool in a later task
+    pub(crate) approval_handler: Option<Arc<dyn ApprovalHandler>>,
 }
 
 impl<Ctx> ToolContext<Ctx>
@@ -128,6 +138,10 @@ where
             max_agent_depth,
             state: SessionState::new(),
             actions: ActionsHandle::new(),
+            permission_mode: PermissionMode::Default,
+            permission_policy: None,
+            deny_rules: Vec::new(),
+            approval_handler: None,
         }
     }
 
@@ -172,6 +186,28 @@ where
     /// [`crate::RunContext::to_tool_context`]).
     pub fn with_actions(mut self, actions: ActionsHandle) -> Self {
         self.actions = actions;
+        self
+    }
+
+    /// The run's permission mode. A tool may legitimately branch on this.
+    pub fn permission_mode(&self) -> PermissionMode {
+        self.permission_mode
+    }
+
+    /// Install the permission config (used by [`crate::RunContext::to_tool_context`]).
+    /// `policy`/`deny_rules`/`handler` are `pub(crate)` carriers read only by
+    /// the `agent_as_tool` rebuild path — not exposed to tools.
+    pub(crate) fn with_permissions(
+        mut self,
+        mode: PermissionMode,
+        policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
+        deny_rules: Vec<DenyRule>,
+        handler: Option<Arc<dyn ApprovalHandler>>,
+    ) -> Self {
+        self.permission_mode = mode;
+        self.permission_policy = policy;
+        self.deny_rules = deny_rules;
+        self.approval_handler = handler;
         self
     }
 }
