@@ -5,15 +5,18 @@
 //! driver calls its async methods at the loop's control seams. Pure of the
 //! state machine — all async control lives here, not in `transition()`.
 
+// Bridge: control.rs is fully consumed by the driver across SMA-326 Tasks 9–11.
+// Until then some Interceptors methods have no non-test caller. Removed in Task 11.
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use crate::{
-    ApprovalOutcome, Guardrail, Hook, PermissionDecision, PermissionMode, RunContext, ToolEffect,
+    ApprovalOutcome, Guardrail, Hook, HookDecision, HookEvent, HookRegistry, PermissionDecision,
+    PermissionMode, RunContext, ToolEffect,
 };
 
 /// Borrows everything the control seams need for one run.
-// Tasks 7–8 construct this outside `#[cfg(test)]`; suppress until then.
-#[allow(dead_code)]
 pub(crate) struct Interceptors<'a, Ctx>
 where
     Ctx: Send + Sync + 'static,
@@ -24,15 +27,49 @@ where
     pub(crate) agent_hooks: &'a [Arc<dyn Hook<Ctx>>],
 }
 
+/// The folded outcome of firing all hooks for one event.
+#[derive(Debug, Default)]
+pub(crate) struct ResolvedHookDecision {
+    /// `Some(reason)` if any hook denied (first wins).
+    pub(crate) denied: Option<String>,
+    /// The last `ReplaceInput`/`ReplaceOutput` value, if any.
+    pub(crate) replacement: Option<serde_json::Value>,
+    /// All injected system messages, in fire order.
+    pub(crate) injections: Vec<String>,
+}
+
 impl<'a, Ctx> Interceptors<'a, Ctx>
 where
     Ctx: Send + Sync + 'static,
 {
+    /// Fire `event` to agent-level hooks first, then the run-level
+    /// [`HookRegistry`]. Folds outcomes: first `Deny` short-circuits;
+    /// `Replace*` last-writer-wins; `InjectSystemMessage` accumulates.
+    pub(crate) async fn fire(&self, event: &HookEvent) -> ResolvedHookDecision {
+        let mut out = ResolvedHookDecision::default();
+        let registry: &HookRegistry<Ctx> = self.ctx.hooks();
+        let all = self.agent_hooks.iter().chain(registry.iter());
+        for hook in all {
+            match hook.on_event(self.ctx, event).await {
+                HookDecision::Allow => {}
+                HookDecision::Deny { reason } => {
+                    out.denied = Some(reason);
+                    return out; // short-circuit
+                }
+                HookDecision::ReplaceInput { value } | HookDecision::ReplaceOutput { value } => {
+                    out.replacement = Some(value);
+                }
+                HookDecision::InjectSystemMessage { text } => {
+                    out.injections.push(text);
+                }
+            }
+        }
+        out
+    }
+
     /// Authorize one tool call on its effective args: `deny rules › mode ›
     /// policy › AskUser`. Returns the resolved decision (never `AskUser` — that
     /// is resolved here via the approval handler, default Deny).
-    // Tasks 7–8 call this outside `#[cfg(test)]`; suppress until then.
-    #[allow(dead_code)]
     pub(crate) async fn authorize(
         &self,
         tool: &str,
@@ -76,6 +113,95 @@ where
             },
             other => other,
         }
+    }
+}
+
+#[cfg(test)]
+mod fire_tests {
+    use super::*;
+    use crate::{
+        CancellationToken, HookDecision, HookEvent, HookRegistry, MemorySession, RunContext,
+        Session, TracerHandle,
+    };
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    struct FixedHook(HookDecision);
+    #[async_trait]
+    impl Hook<()> for FixedHook {
+        async fn on_event(&self, _: &RunContext<()>, _: &HookEvent) -> HookDecision {
+            self.0.clone()
+        }
+    }
+
+    fn ctx() -> RunContext<()> {
+        RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+    }
+
+    fn with_hooks<'a>(
+        ctx: &'a RunContext<()>,
+        hooks: &'a [Arc<dyn Hook<()>>],
+    ) -> Interceptors<'a, ()> {
+        Interceptors {
+            ctx,
+            input_guardrails: &[],
+            output_guardrails: &[],
+            agent_hooks: hooks,
+        }
+    }
+
+    #[tokio::test]
+    async fn first_deny_short_circuits() {
+        let hooks: Vec<Arc<dyn Hook<()>>> = vec![
+            Arc::new(FixedHook(HookDecision::Deny {
+                reason: "no".into(),
+            })),
+            Arc::new(FixedHook(HookDecision::ReplaceInput { value: json!(1) })),
+        ];
+        let c = ctx();
+        let i = with_hooks(&c, &hooks);
+        let r = i
+            .fire(&HookEvent::PreToolUse {
+                tool: "t".into(),
+                args: json!({}),
+            })
+            .await;
+        assert_eq!(r.denied.as_deref(), Some("no"));
+        assert!(
+            r.replacement.is_none(),
+            "replace hook after deny must not run"
+        );
+    }
+
+    #[tokio::test]
+    async fn last_replace_wins_and_injects_accumulate() {
+        let hooks: Vec<Arc<dyn Hook<()>>> = vec![
+            Arc::new(FixedHook(HookDecision::ReplaceInput { value: json!(1) })),
+            Arc::new(FixedHook(HookDecision::InjectSystemMessage {
+                text: "a".into(),
+            })),
+            Arc::new(FixedHook(HookDecision::ReplaceInput { value: json!(2) })),
+            Arc::new(FixedHook(HookDecision::InjectSystemMessage {
+                text: "b".into(),
+            })),
+        ];
+        let c = ctx();
+        let i = with_hooks(&c, &hooks);
+        let r = i
+            .fire(&HookEvent::PreToolUse {
+                tool: "t".into(),
+                args: json!({}),
+            })
+            .await;
+        assert!(r.denied.is_none());
+        assert_eq!(r.replacement, Some(json!(2)));
+        assert_eq!(r.injections, vec!["a".to_owned(), "b".to_owned()]);
     }
 }
 
