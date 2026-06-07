@@ -485,6 +485,22 @@ fn build_items(
     Ok(items)
 }
 
+/// Concatenate the text of all `Item::UserMessage` parts in the seed
+/// conversation — the text input guardrails inspect.
+fn user_text_of(conversation: &[crate::Item]) -> String {
+    let mut s = String::new();
+    for item in conversation {
+        if let crate::Item::UserMessage { content } = item {
+            for part in content {
+                if let crate::ContentPart::Text { text } = part {
+                    s.push_str(text);
+                }
+            }
+        }
+    }
+    s
+}
+
 /// Conversion convention: `ToolOutput.content` (SMA-313's
 /// `serde_json::Value`) becomes one `ContentPart::Text`.
 /// `Value::String(s) -> ContentPart::Text { text: s }`; other JSON
@@ -611,6 +627,9 @@ where
             })
             .collect();
         let handoffs = self.handoffs.clone();
+        let input_guardrails = self.input_guardrails.clone();
+        let output_guardrails = self.output_guardrails.clone();
+        let agent_hooks = self.hooks.clone();
         let max_agent_depth = effective_config.max_agent_depth;
 
         let stream = async_stream::stream! {
@@ -682,6 +701,44 @@ where
                         return;
                     }
                 }
+            }
+
+            let interceptors = crate::control::Interceptors {
+                ctx: &ctx,
+                input_guardrails: &input_guardrails,
+                output_guardrails: &output_guardrails,
+                agent_hooks: &agent_hooks,
+            };
+
+            // OnRunStart hook: Deny aborts; injected system messages seed the conversation.
+            let on_start = interceptors.fire(&crate::HookEvent::OnRunStart).await;
+            if let Some(reason) = on_start.denied {
+                let err = crate::AgentError::HookDenied {
+                    event: "OnRunStart".to_owned(),
+                    reason,
+                };
+                let msg = err.to_string();
+                run_span.record("otel.status_code", "ERROR");
+                failure.set(err);
+                yield crate::AgentEvent::RunFailed { error: msg };
+                return;
+            }
+            for text in on_start.injections {
+                conversation.push(crate::Item::System {
+                    content: vec![crate::ContentPart::Text { text }],
+                });
+            }
+
+            // Input guardrails — blocking gate (AC1: zero model calls on a tripwire).
+            let seed_text = user_text_of(&conversation);
+            if let Some((kind, info)) = interceptors.run_input_guardrails(&seed_text).await {
+                run_span.record("otel.status_code", "ERROR");
+                yield crate::AgentEvent::GuardrailTriggered { kind: kind.clone(), info };
+                failure.set(crate::AgentError::Guardrail { kind });
+                yield crate::AgentEvent::RunFailed {
+                    error: "input guardrail tripwire".to_owned(),
+                };
+                return;
             }
 
             loop {
