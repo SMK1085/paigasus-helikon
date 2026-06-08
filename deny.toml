@@ -69,6 +69,10 @@ exceptions = []
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Internal dev-dependencies are declared path-only (no version) to break the
+# core<->macros publish cycle, which cargo treats as a wildcard requirement.
+# Allow wildcards for PATH deps only; registry wildcards stay denied.
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"

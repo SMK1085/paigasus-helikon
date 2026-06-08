@@ -21,7 +21,9 @@ quote            = { workspace = true }
 syn              = { workspace = true }
 
 [dev-dependencies]
-paigasus-helikon-core = { workspace = true }
+# Path-only (no version) so cargo omits this dev-dep from the published
+# manifest — required to break the core<->macros dev-dependency publish cycle.
+paigasus-helikon-core = { path = "../paigasus-helikon-core" }
 async-trait  = { workspace = true }
 schemars     = { workspace = true }
 serde        = { workspace = true }
