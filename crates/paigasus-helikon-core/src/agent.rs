@@ -513,19 +513,6 @@ fn tool_output_to_content_parts(output: &crate::ToolOutput) -> Vec<crate::Conten
     vec![crate::ContentPart::Text { text }]
 }
 
-/// Render content parts back to a JSON value for `PostToolUse` hooks. Text
-/// parts concatenate; the common single-text case round-trips cleanly.
-fn content_parts_to_json(parts: &[crate::ContentPart]) -> serde_json::Value {
-    let text: String = parts
-        .iter()
-        .filter_map(|p| match p {
-            crate::ContentPart::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    serde_json::Value::String(text)
-}
-
 async fn run_tools_concurrent<Ctx>(
     tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
     calls: &[crate::ToolCallRequest],
@@ -597,10 +584,11 @@ where
                 }
             }
 
-            // Invoke.
+            // Invoke. Keep the tool's raw JSON output so the PostToolUse hook
+            // sees the structured value, not a stringified form.
             let outcome = match tool {
                 Some(t) => match t.invoke(tool_ctx, args).await {
-                    Ok(output) => Ok(tool_output_to_content_parts(&output)),
+                    Ok(output) => Ok(output.content),
                     Err(e) => {
                         tracing::Span::current().record("otel.status_code", "ERROR");
                         Err(e.to_string())
@@ -612,28 +600,24 @@ where
                 }
             };
 
-            // PostToolUse hook (ReplaceOutput / Deny→denial).
+            // PostToolUse hook (ReplaceOutput / Deny→denial). The hook receives
+            // the raw `serde_json::Value`; a `ReplaceOutput` value (or the
+            // original) is rendered to content parts only at the end.
             let outcome = match outcome {
-                Ok(content) => {
-                    let output_json = content_parts_to_json(&content);
+                Ok(output_json) => {
                     let post = interceptors
                         .fire(&crate::HookEvent::PostToolUse {
                             tool: name.clone(),
-                            output: output_json,
+                            output: output_json.clone(),
                         })
                         .await;
                     if let Some(reason) = post.denied {
                         Err(format!("blocked by PostToolUse hook: {reason}"))
-                    } else if let Some(value) = post.replacement {
-                        // Unwrap a JSON string to its contents (matching
-                        // tool_output_to_content_parts); stringify anything else.
-                        let text = match value {
-                            serde_json::Value::String(s) => s,
-                            v => v.to_string(),
-                        };
-                        Ok(vec![crate::ContentPart::Text { text }])
                     } else {
-                        Ok(content)
+                        let final_json = post.replacement.unwrap_or(output_json);
+                        Ok(tool_output_to_content_parts(&crate::ToolOutput::new(
+                            final_json,
+                        )))
                     }
                 }
                 Err(e) => Err(e),
@@ -1110,14 +1094,9 @@ where
                             return;
                         };
 
-                        yield crate::AgentEvent::HandoffItem {
-                            from: agent_name.clone(),
-                            to: target.clone(),
-                        };
-                        yield crate::AgentEvent::AgentUpdated {
-                            agent: target.clone(),
-                        };
-
+                        // Fire OnHandoff BEFORE emitting the transition events, so a
+                        // Deny vetoes the handoff without consumers observing a
+                        // completed agent switch.
                         let on_handoff = interceptors
                             .fire(&crate::HookEvent::OnHandoff {
                                 from: agent_name.clone(),
@@ -1135,6 +1114,14 @@ where
                             yield crate::AgentEvent::RunFailed { error: msg };
                             return;
                         }
+
+                        yield crate::AgentEvent::HandoffItem {
+                            from: agent_name.clone(),
+                            to: target.clone(),
+                        };
+                        yield crate::AgentEvent::AgentUpdated {
+                            agent: target.clone(),
+                        };
 
                         let input = crate::AgentInput { messages: transcript };
                         let mut sub = match target_agent.run(child, input).await {

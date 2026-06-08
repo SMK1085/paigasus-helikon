@@ -140,24 +140,28 @@ where
             .await
             .map_err(|e| ToolError::Other(anyhow::Error::from(e)))?;
 
+        // Collect without `?` so OnSubagentStop fires whether the sub-run
+        // succeeded or failed (matching the workflow / handoff paths).
         let result = RunResultStreaming::with_failure(stream, failure)
             .collect()
-            .await
-            .map_err(|e| match e {
-                RunError::Agent(a) => ToolError::Other(anyhow::Error::from(a)),
-                other => ToolError::Other(anyhow::Error::from(other)),
-            })?;
+            .await;
 
         // Fire OnSubagentStop against the parent's run-level hooks. The sub-run
         // used an isolated (empty) registry; this fires the PARENT's hooks so a
         // run-level OnSubagentStop consumer sees the agent-as-tool sub-run stop.
+        // `Hook::on_event` needs a `&RunContext`, which a tool doesn't have (only
+        // a `ToolContext`), so we build a fire-only context. It shares the
+        // parent's run-scoped `state` (plus user_ctx/tracer/cancel) so
+        // state-reading hooks see the real run; `session`/`run_config` stay
+        // defaults — the full parent `RunContext` doesn't cross the tool boundary.
         let fire_ctx = RunContext::new(
             Arc::clone(ctx.user_ctx()),
             Arc::new(MemorySession::new()),
             HookRegistry::new(),
             ctx.tracer().clone(),
             ctx.cancel().clone(),
-        );
+        )
+        .with_state(ctx.state().clone());
         for hook in ctx.hooks.iter() {
             let _ = hook
                 .on_event(
@@ -168,6 +172,11 @@ where
                 )
                 .await;
         }
+
+        let result = result.map_err(|e| match e {
+            RunError::Agent(a) => ToolError::Other(anyhow::Error::from(a)),
+            other => ToolError::Other(anyhow::Error::from(other)),
+        })?;
 
         Ok(ToolOutput::new(Value::String(result.final_output)))
     }

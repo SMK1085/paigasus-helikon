@@ -173,6 +173,14 @@ where
         self
     }
 
+    /// Install the run-scoped [`SessionState`]. Used by `AgentAsTool` to build
+    /// the fire-only context for `OnSubagentStop` so hooks observe the parent's
+    /// shared `state` rather than a fresh one.
+    pub(crate) fn with_state(mut self, state: SessionState) -> Self {
+        self.state = state;
+        self
+    }
+
     /// A context for a handed-off sub-run. A handoff *continues the same
     /// logical run*, so the child **shares** session, hooks, cancel token,
     /// failure slot, and run config (including per-invocation limits like

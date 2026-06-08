@@ -183,3 +183,41 @@ async fn agent_as_tool_fires_on_subagent_stop() {
         "agent-as-tool sub-run fires OnSubagentStop with the inner agent's name"
     );
 }
+
+/// A *failed* agent-as-tool sub-run still fires `OnSubagentStop`, matching the
+/// handoff and workflow paths (which report failed sub-runs as stopped).
+#[tokio::test]
+async fn agent_as_tool_fires_on_subagent_stop_on_failure() {
+    use paigasus_helikon_core::{
+        AgentAsTool, CancellationToken, HookRegistry, MemorySession, RunContext, Session, Tool,
+        TracerHandle,
+    };
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut reg = HookRegistry::<()>::new();
+    reg.push(std::sync::Arc::new(StopRecorder(seen.clone())));
+    let parent = RunContext::new(
+        std::sync::Arc::new(()),
+        std::sync::Arc::new(MemorySession::new()) as std::sync::Arc<dyn Session>,
+        reg,
+        TracerHandle::default(),
+        CancellationToken::new(),
+    );
+
+    // The inner agent fails: its stream yields RunFailed, so collect() errors.
+    let inner = common::MockAgent::new("inner", |_| {
+        vec![AgentEvent::RunFailed {
+            error: "boom".to_owned(),
+        }]
+    });
+    let wrapper = AgentAsTool::new(inner).with_name("inner_tool");
+    let tc = parent.to_tool_context();
+    let res = wrapper
+        .invoke(&tc, serde_json::json!({"input": "go"}))
+        .await;
+
+    assert!(res.is_err(), "a failed sub-run surfaces as a tool error");
+    assert!(
+        seen.lock().unwrap().iter().any(|n| n == "inner"),
+        "OnSubagentStop fires even when the agent-as-tool sub-run fails"
+    );
+}
