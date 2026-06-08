@@ -23,6 +23,19 @@ pub(crate) fn tool(args: TokenStream, item: TokenStream) -> Result<TokenStream, 
     let tool_name = resolve_tool_name(&attr_args, &item_fn)?;
     let core = resolve_core_path(attr_args.crate_path.as_ref(), item_fn.sig.fn_token.span)?;
 
+    let effect_method = match attr_args.effect {
+        None => quote!(),
+        Some(crate::attr::ToolEffectArg::ReadOnly) => quote! {
+            fn effect(&self) -> #core::ToolEffect { #core::ToolEffect::ReadOnly }
+        },
+        Some(crate::attr::ToolEffectArg::Write) => quote! {
+            fn effect(&self) -> #core::ToolEffect { #core::ToolEffect::Write }
+        },
+        Some(crate::attr::ToolEffectArg::SideEffect) => quote! {
+            fn effect(&self) -> #core::ToolEffect { #core::ToolEffect::SideEffect }
+        },
+    };
+
     let vis = &item_fn.vis;
     let fn_ident = &item_fn.sig.ident;
 
@@ -69,7 +82,7 @@ pub(crate) fn tool(args: TokenStream, item: TokenStream) -> Result<TokenStream, 
             impl #core::Tool<#ctx_ty> for #fn_ident {
                 fn name(&self) -> &str { #tool_name }
                 fn description(&self) -> &str { #description }
-
+                #effect_method
                 fn schema(&self) -> &::serde_json::Value {
                     __HELIKON_INPUT_SCHEMA.get_or_init(|| {
                         ::serde_json::to_value(::schemars::schema_for!(#args_ty))

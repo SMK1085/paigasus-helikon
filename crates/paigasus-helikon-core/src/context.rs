@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
-use crate::{ActionsHandle, FailureSlot, Hook, RunConfig, Session, SessionState, ToolContext};
+use crate::{
+    ActionsHandle, ApprovalHandler, DenyRule, FailureSlot, Hook, PermissionMode, PermissionPolicy,
+    RunConfig, Session, SessionState, ToolContext,
+};
 
 /// Carries the per-run state shared across the agent loop, tools,
 /// guardrails, and hooks.
@@ -73,6 +76,15 @@ where
     /// Control side-channel a tool writes (e.g. `escalate`). A **fresh** handle
     /// per `subagent_child`, so a `LoopAgent` reads only the current sub-run's signal.
     actions: ActionsHandle,
+    /// How the permission layer governs tool calls for this run.
+    /// Monotonic on `Bypass`: once set, it cannot be downgraded.
+    permission_mode: PermissionMode,
+    /// Optional `canUseTool` policy, evaluated after deny rules and mode.
+    permission_policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
+    /// Deny rules evaluated before mode (override even `Bypass`).
+    deny_rules: Vec<DenyRule>,
+    /// Resolves `AskUser` decisions; `None` → deny by default.
+    approval_handler: Option<Arc<dyn ApprovalHandler>>,
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -98,6 +110,10 @@ where
             agent_depth: 0,
             state: SessionState::new(),
             actions: ActionsHandle::new(),
+            permission_mode: PermissionMode::Default,
+            permission_policy: None,
+            deny_rules: Vec::new(),
+            approval_handler: None,
         }
     }
 
@@ -157,6 +173,14 @@ where
         self
     }
 
+    /// Install the run-scoped [`SessionState`]. Used by `AgentAsTool` to build
+    /// the fire-only context for `OnSubagentStop` so hooks observe the parent's
+    /// shared `state` rather than a fresh one.
+    pub(crate) fn with_state(mut self, state: SessionState) -> Self {
+        self.state = state;
+        self
+    }
+
     /// A context for a handed-off sub-run. A handoff *continues the same
     /// logical run*, so the child **shares** session, hooks, cancel token,
     /// failure slot, and run config (including per-invocation limits like
@@ -177,6 +201,10 @@ where
             agent_depth: self.agent_depth.saturating_add(1),
             state: self.state.clone(),
             actions: self.actions.clone(),
+            permission_mode: self.permission_mode,
+            permission_policy: self.permission_policy.clone(),
+            deny_rules: self.deny_rules.clone(),
+            approval_handler: self.approval_handler.clone(),
         }
     }
 
@@ -197,6 +225,10 @@ where
             agent_depth: self.agent_depth.saturating_add(1),
             state: self.state.clone(),
             actions: ActionsHandle::new(),
+            permission_mode: self.permission_mode,
+            permission_policy: self.permission_policy.clone(),
+            deny_rules: self.deny_rules.clone(),
+            approval_handler: self.approval_handler.clone(),
         }
     }
 
@@ -207,6 +239,54 @@ where
         self
     }
 
+    /// Set the permission mode. **Monotonic on `Bypass`:** once the mode is
+    /// `Bypass`, this is a no-op — `Bypass` cannot be downgraded (the safety
+    /// invariant). All other transitions apply.
+    pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
+        if self.permission_mode != PermissionMode::Bypass {
+            self.permission_mode = mode;
+        }
+        self
+    }
+
+    /// Install the run's permission policy (`canUseTool`).
+    pub fn with_permission_policy(mut self, policy: Arc<dyn PermissionPolicy<Ctx>>) -> Self {
+        self.permission_policy = Some(policy);
+        self
+    }
+
+    /// Install deny rules, evaluated before mode (override even `Bypass`).
+    pub fn with_deny_rules(mut self, rules: Vec<DenyRule>) -> Self {
+        self.deny_rules = rules;
+        self
+    }
+
+    /// Install the approval handler that resolves `AskUser` decisions.
+    pub fn with_approval_handler(mut self, handler: Arc<dyn ApprovalHandler>) -> Self {
+        self.approval_handler = Some(handler);
+        self
+    }
+
+    /// The current permission mode.
+    pub fn permission_mode(&self) -> PermissionMode {
+        self.permission_mode
+    }
+
+    /// The run's permission policy, if installed.
+    pub fn permission_policy(&self) -> Option<&Arc<dyn PermissionPolicy<Ctx>>> {
+        self.permission_policy.as_ref()
+    }
+
+    /// The run's deny rules.
+    pub fn deny_rules(&self) -> &[DenyRule] {
+        &self.deny_rules
+    }
+
+    /// The run's approval handler, if installed.
+    pub fn approval_handler(&self) -> Option<&Arc<dyn ApprovalHandler>> {
+        self.approval_handler.as_ref()
+    }
+
     /// Project the narrower [`ToolContext`] from this [`RunContext`].
     ///
     /// Tools receive `user_ctx`, `tracer`, and a **child** cancellation
@@ -214,9 +294,10 @@ where
     /// `cancel()` calls only cancel the tool's subtree — they do not
     /// propagate back to the run.
     ///
-    /// Tools do not see the session handle (the runner owns persistence)
-    /// or the hook registry (hooks fire around tool invocations, not
-    /// from inside).
+    /// Tools do not see the session handle (the runner owns persistence). The
+    /// run-level hook registry is projected as a `pub(crate)` carrier (for
+    /// `agent_as_tool` to fire `OnSubagentStop`), but is not exposed to `Tool`
+    /// impls — hooks fire around tool invocations, not from inside.
     pub fn to_tool_context(&self) -> ToolContext<Ctx> {
         let max_agent_depth = self
             .run_config
@@ -232,6 +313,13 @@ where
         )
         .with_state(self.state.clone())
         .with_actions(self.actions.clone())
+        .with_hooks(self.hooks.clone())
+        .with_permissions(
+            self.permission_mode,
+            self.permission_policy.clone(),
+            self.deny_rules.clone(),
+            self.approval_handler.clone(),
+        )
     }
 }
 
@@ -369,6 +457,70 @@ mod runcontext_tests {
         assert!(
             ctx.actions().is_escalated(),
             "tool escalate reaches the run"
+        );
+    }
+
+    #[test]
+    fn permission_mode_defaults_to_default_and_setter_round_trips() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        );
+        assert_eq!(ctx.permission_mode(), crate::PermissionMode::Default);
+        let ctx = ctx.with_permission_mode(crate::PermissionMode::Plan);
+        assert_eq!(ctx.permission_mode(), crate::PermissionMode::Plan);
+    }
+
+    #[test]
+    fn bypass_cannot_be_downgraded() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_permission_mode(crate::PermissionMode::Bypass)
+        .with_permission_mode(crate::PermissionMode::Plan); // no-op
+        assert_eq!(ctx.permission_mode(), crate::PermissionMode::Bypass);
+    }
+
+    #[test]
+    fn handoff_child_inherits_mode_and_keeps_bypass_sticky() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_permission_mode(crate::PermissionMode::Bypass);
+        assert_eq!(
+            ctx.handoff_child().permission_mode(),
+            crate::PermissionMode::Bypass
+        );
+        assert_eq!(
+            ctx.subagent_child().permission_mode(),
+            crate::PermissionMode::Bypass
+        );
+    }
+
+    #[test]
+    fn to_tool_context_projects_permission_mode() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_permission_mode(crate::PermissionMode::Bypass);
+        assert_eq!(
+            ctx.to_tool_context().permission_mode(),
+            crate::PermissionMode::Bypass
         );
     }
 

@@ -7,7 +7,24 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{ActionsHandle, CancellationToken, SessionState, TracerHandle};
+use crate::{
+    ActionsHandle, ApprovalHandler, CancellationToken, DenyRule, HookRegistry, PermissionMode,
+    PermissionPolicy, SessionState, TracerHandle,
+};
+
+/// A tool's side-effect profile. Drives [`crate::PermissionMode`] decisions:
+/// `Plan` allows only `ReadOnly`; `AcceptEdits` auto-approves `Write`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ToolEffect {
+    /// No side effects; safe to run under `Plan` mode.
+    ReadOnly,
+    /// Mutates local/filesystem state; auto-approved by `AcceptEdits`.
+    Write,
+    /// Any other side effect (network, external). Safe-by-default.
+    #[default]
+    SideEffect,
+}
 
 /// A tool an agent can call.
 ///
@@ -60,6 +77,13 @@ where
         None
     }
 
+    /// This tool's side-effect profile. Default [`ToolEffect::SideEffect`]
+    /// (safe-by-default): an undeclared tool is treated as side-effecting, so
+    /// `Plan` mode blocks it.
+    fn effect(&self) -> ToolEffect {
+        ToolEffect::SideEffect
+    }
+
     /// Execute the tool with `args` (a JSON value matching [`Tool::schema`]).
     async fn invoke(
         &self,
@@ -70,10 +94,11 @@ where
 
 /// Narrower view of [`crate::RunContext`] passed to [`Tool::invoke`].
 ///
-/// Deliberately excludes the session handle and hook registry: tools
-/// must not bypass the runner's persistence by writing directly to the
-/// session log, and hooks fire *around* tool invocations, not from
-/// inside them.
+/// Deliberately excludes the session handle: tools must not bypass the
+/// runner's persistence by writing directly to the session log. The run-level
+/// hook registry rides along as a `pub(crate)` carrier (used only by
+/// `agent_as_tool` to fire `OnSubagentStop`); it is **not** exposed to `Tool`
+/// impls — hooks fire *around* tool invocations, not from inside them.
 pub struct ToolContext<Ctx>
 where
     Ctx: Send + Sync + 'static,
@@ -85,6 +110,17 @@ where
     max_agent_depth: u32,
     state: SessionState,
     actions: ActionsHandle,
+    /// Carrier for the parent run's [`HookRegistry`], projected by
+    /// [`crate::RunContext::to_tool_context`]. `pub(crate)` — read only by the
+    /// `agent_as_tool` path to fire `OnSubagentStop`; not exposed to tools.
+    pub(crate) hooks: HookRegistry<Ctx>,
+    permission_mode: PermissionMode,
+    // read by agent_as_tool in a later task
+    pub(crate) permission_policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
+    // read by agent_as_tool in a later task
+    pub(crate) deny_rules: Vec<DenyRule>,
+    // read by agent_as_tool in a later task
+    pub(crate) approval_handler: Option<Arc<dyn ApprovalHandler>>,
 }
 
 impl<Ctx> ToolContext<Ctx>
@@ -107,6 +143,11 @@ where
             max_agent_depth,
             state: SessionState::new(),
             actions: ActionsHandle::new(),
+            hooks: HookRegistry::new(),
+            permission_mode: PermissionMode::Default,
+            permission_policy: None,
+            deny_rules: Vec::new(),
+            approval_handler: None,
         }
     }
 
@@ -153,6 +194,36 @@ where
         self.actions = actions;
         self
     }
+
+    /// Install the run-level hook registry (used by
+    /// [`crate::RunContext::to_tool_context`]). `pub(crate)` — read only by the
+    /// `agent_as_tool` path to fire `OnSubagentStop`; not exposed to tools.
+    pub(crate) fn with_hooks(mut self, hooks: HookRegistry<Ctx>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// The run's permission mode. A tool may legitimately branch on this.
+    pub fn permission_mode(&self) -> PermissionMode {
+        self.permission_mode
+    }
+
+    /// Install the permission config (used by [`crate::RunContext::to_tool_context`]).
+    /// `policy`/`deny_rules`/`handler` are `pub(crate)` carriers read only by
+    /// the `agent_as_tool` rebuild path — not exposed to tools.
+    pub(crate) fn with_permissions(
+        mut self,
+        mode: PermissionMode,
+        policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
+        deny_rules: Vec<DenyRule>,
+        handler: Option<Arc<dyn ApprovalHandler>>,
+    ) -> Self {
+        self.permission_mode = mode;
+        self.permission_policy = policy;
+        self.deny_rules = deny_rules;
+        self.approval_handler = handler;
+        self
+    }
 }
 
 /// The result of a successful [`Tool::invoke`] call.
@@ -196,6 +267,16 @@ pub enum ToolError {
     /// Escape hatch for arbitrary tool failures. See ADR-10.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use crate::ToolEffect;
+
+    #[test]
+    fn tool_effect_default_is_side_effect() {
+        assert_eq!(ToolEffect::default(), ToolEffect::SideEffect);
+    }
 }
 
 #[cfg(test)]

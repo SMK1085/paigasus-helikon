@@ -1555,6 +1555,7 @@ dependencies = [
  "futures-util",
  "insta",
  "jiff",
+ "paigasus-helikon-macros",
  "schemars",
  "serde",
  "serde_json",

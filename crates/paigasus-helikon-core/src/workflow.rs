@@ -195,6 +195,15 @@ where
                     }
                 }
 
+                // Fire OnSubagentStop after this child's stream fully drains.
+                for hook in ctx.hooks().iter() {
+                    let _ = hook
+                        .on_event(&ctx, &crate::HookEvent::OnSubagentStop {
+                            agent: agent.name().to_owned(),
+                        })
+                        .await;
+                }
+
                 if failed {
                     if let Some(e) = failure.take() {
                         parent_failure.set(e);
@@ -350,8 +359,27 @@ where
                         let key = branches[i].0.clone();
                         ctx.state().set(key.clone(), finals[i].clone());
                         completed.insert(key, finals[i].clone());
+                        // Each branch emits exactly one RunCompleted; fire
+                        // OnSubagentStop for that branch's sub-agent here.
+                        for hook in ctx.hooks().iter() {
+                            let _ = hook
+                                .on_event(&ctx, &crate::HookEvent::OnSubagentStop {
+                                    agent: branches[i].1.name().to_owned(),
+                                })
+                                .await;
+                        }
                     }
-                    AgentEvent::RunFailed { .. } => saw_failure = true,
+                    AgentEvent::RunFailed { .. } => {
+                        saw_failure = true;
+                        // A failed branch's sub-run is still complete; report it.
+                        for hook in ctx.hooks().iter() {
+                            let _ = hook
+                                .on_event(&ctx, &crate::HookEvent::OnSubagentStop {
+                                    agent: branches[i].1.name().to_owned(),
+                                })
+                                .await;
+                        }
+                    }
                     AgentEvent::MessageOutput { item } => {
                         if let Some(t) = assistant_text(&item) {
                             finals[i] = t;
@@ -526,6 +554,15 @@ where
                             }
                             other => yield other,
                         }
+                    }
+
+                    // Fire OnSubagentStop after this child's stream fully drains.
+                    for hook in ctx.hooks().iter() {
+                        let _ = hook
+                            .on_event(&ctx, &crate::HookEvent::OnSubagentStop {
+                                agent: agent.name().to_owned(),
+                            })
+                            .await;
                     }
 
                     if failed {

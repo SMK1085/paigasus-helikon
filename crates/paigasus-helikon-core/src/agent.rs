@@ -401,6 +401,15 @@ pub enum AgentEvent {
         /// JSON arguments the model proposed to call the tool with.
         args: serde_json::Value,
     },
+    /// A tool call was denied by the permission layer. The model separately
+    /// receives the denial as a synthetic tool result; this event is for
+    /// observability.
+    PermissionDenied {
+        /// Tool name.
+        tool: String,
+        /// Human-readable denial reason.
+        reason: String,
+    },
     /// A structured-output repair turn has begun: validation of the prior
     /// constrained output failed and the loop is re-prompting once.
     RepairStarted {
@@ -476,6 +485,22 @@ fn build_items(
     Ok(items)
 }
 
+/// Concatenate the text of all `Item::UserMessage` parts in the seed
+/// conversation — the text input guardrails inspect.
+fn user_text_of(conversation: &[crate::Item]) -> String {
+    let mut s = String::new();
+    for item in conversation {
+        if let crate::Item::UserMessage { content } = item {
+            for part in content {
+                if let crate::ContentPart::Text { text } = part {
+                    s.push_str(text);
+                }
+            }
+        }
+    }
+    s
+}
+
 /// Conversion convention: `ToolOutput.content` (SMA-313's
 /// `serde_json::Value`) becomes one `ContentPart::Text`.
 /// `Value::String(s) -> ContentPart::Text { text: s }`; other JSON
@@ -491,18 +516,26 @@ fn tool_output_to_content_parts(output: &crate::ToolOutput) -> Vec<crate::Conten
 async fn run_tools_concurrent<Ctx>(
     tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
     calls: &[crate::ToolCallRequest],
+    interceptors: &crate::control::Interceptors<'_, Ctx>,
     tool_ctx: &crate::ToolContext<Ctx>,
     limit: Option<std::num::NonZeroUsize>,
     parent: &tracing::Span,
-) -> Vec<crate::ToolCallOutcome>
+) -> (Vec<crate::ToolCallOutcome>, Vec<crate::AgentEvent>)
 where
     Ctx: Send + Sync + 'static,
 {
+    let denied_events: std::sync::Mutex<Vec<crate::AgentEvent>> = std::sync::Mutex::new(Vec::new());
+
     let futures = calls.iter().map(|call| {
         let tool = tools.iter().find(|t| t.name() == call.name).cloned();
+        let effect = tool
+            .as_ref()
+            .map(|t| t.effect())
+            .unwrap_or(crate::ToolEffect::SideEffect);
         let call_id = call.call_id.clone();
-        let args = call.args.clone();
         let name = call.name.clone();
+        let orig_args = call.args.clone();
+        let denied_events = &denied_events;
         let span = tracing::info_span!(
             parent: parent,
             "tool.execute",
@@ -514,46 +547,102 @@ where
         );
         span.record("otel.name", format!("execute_tool {name}").as_str());
         async move {
-            match tool {
-                Some(t) => match t.invoke(tool_ctx, args).await {
-                    Ok(output) => crate::ToolCallOutcome {
+            // PreToolUse hook.
+            let pre = interceptors
+                .fire(&crate::HookEvent::PreToolUse {
+                    tool: name.clone(),
+                    args: orig_args.clone(),
+                })
+                .await;
+            if let Some(reason) = pre.denied {
+                return crate::ToolCallOutcome {
+                    call_id,
+                    result: Err(format!("blocked by PreToolUse hook: {reason}")),
+                };
+            }
+            let mut args = pre.replacement.unwrap_or(orig_args);
+
+            // Permission authorize on the effective args.
+            match interceptors.authorize(&name, effect, &args).await {
+                crate::PermissionDecision::Allow => {}
+                crate::PermissionDecision::Replace { args: sanitized } => {
+                    args = sanitized;
+                }
+                crate::PermissionDecision::Deny { reason }
+                | crate::PermissionDecision::AskUser { prompt: reason } => {
+                    denied_events
+                        .lock()
+                        .unwrap()
+                        .push(crate::AgentEvent::PermissionDenied {
+                            tool: name.clone(),
+                            reason: reason.clone(),
+                        });
+                    return crate::ToolCallOutcome {
                         call_id,
-                        result: Ok(tool_output_to_content_parts(&output)),
-                    },
+                        result: Err(format!("permission denied: {reason}")),
+                    };
+                }
+            }
+
+            // Invoke. Keep the tool's raw JSON output so the PostToolUse hook
+            // sees the structured value, not a stringified form.
+            let outcome = match tool {
+                Some(t) => match t.invoke(tool_ctx, args).await {
+                    Ok(output) => Ok(output.content),
                     Err(e) => {
                         tracing::Span::current().record("otel.status_code", "ERROR");
-                        crate::ToolCallOutcome {
-                            call_id,
-                            result: Err(e.to_string()),
-                        }
+                        Err(e.to_string())
                     }
                 },
                 None => {
                     tracing::Span::current().record("otel.status_code", "ERROR");
-                    crate::ToolCallOutcome {
-                        call_id,
-                        result: Err(format!("unknown tool: {name}")),
+                    Err(format!("unknown tool: {name}"))
+                }
+            };
+
+            // PostToolUse hook (ReplaceOutput / Deny→denial). The hook receives
+            // the raw `serde_json::Value`; a `ReplaceOutput` value (or the
+            // original) is rendered to content parts only at the end.
+            let outcome = match outcome {
+                Ok(output_json) => {
+                    let post = interceptors
+                        .fire(&crate::HookEvent::PostToolUse {
+                            tool: name.clone(),
+                            output: output_json.clone(),
+                        })
+                        .await;
+                    if let Some(reason) = post.denied {
+                        Err(format!("blocked by PostToolUse hook: {reason}"))
+                    } else {
+                        let final_json = post.replacement.unwrap_or(output_json);
+                        Ok(tool_output_to_content_parts(&crate::ToolOutput::new(
+                            final_json,
+                        )))
                     }
                 }
+                Err(e) => Err(e),
+            };
+
+            crate::ToolCallOutcome {
+                call_id,
+                result: outcome,
             }
         }
         .instrument(span)
     });
-    match limit {
+
+    let outcomes = match limit {
         None => futures_util::future::join_all(futures).await,
         Some(n) => {
             use futures_util::stream::StreamExt as _;
-            // Collect to a Vec first: passing the `Map` iterator directly to
-            // `stream::iter` trips an HRTB lifetime bound that `join_all` (above)
-            // doesn't impose. `buffered` (not `buffer_unordered`) preserves call
-            // order in the outcomes. Don't "simplify" this back to a chained call.
             let collected: Vec<_> = futures.collect();
             futures_util::stream::iter(collected)
                 .buffered(n.get())
                 .collect()
                 .await
         }
-    }
+    };
+    (outcomes, denied_events.into_inner().unwrap())
 }
 
 // ── Agent impl for LlmAgent ──────────────────────────────────────────────────
@@ -602,6 +691,9 @@ where
             })
             .collect();
         let handoffs = self.handoffs.clone();
+        let input_guardrails = self.input_guardrails.clone();
+        let output_guardrails = self.output_guardrails.clone();
+        let agent_hooks = self.hooks.clone();
         let max_agent_depth = effective_config.max_agent_depth;
 
         let stream = async_stream::stream! {
@@ -675,6 +767,41 @@ where
                 }
             }
 
+            let mut pending_injections: Vec<String> = Vec::new();
+            let interceptors = crate::control::Interceptors {
+                ctx: &ctx,
+                input_guardrails: &input_guardrails,
+                output_guardrails: &output_guardrails,
+                agent_hooks: &agent_hooks,
+            };
+
+            // OnRunStart hook: Deny aborts; injected system messages seed the conversation.
+            let on_start = interceptors.fire(&crate::HookEvent::OnRunStart).await;
+            if let Some(reason) = on_start.denied {
+                let err = crate::AgentError::HookDenied {
+                    event: "OnRunStart".to_owned(),
+                    reason,
+                };
+                let msg = err.to_string();
+                run_span.record("otel.status_code", "ERROR");
+                failure.set(err);
+                yield crate::AgentEvent::RunFailed { error: msg };
+                return;
+            }
+            pending_injections.extend(on_start.injections);
+
+            // Input guardrails — blocking gate (AC1: zero model calls on a tripwire).
+            let seed_text = user_text_of(&conversation);
+            if let Some((kind, info)) = interceptors.run_input_guardrails(&seed_text).await {
+                run_span.record("otel.status_code", "ERROR");
+                yield crate::AgentEvent::GuardrailTriggered { kind: kind.clone(), info };
+                failure.set(crate::AgentError::Guardrail { kind });
+                yield crate::AgentEvent::RunFailed {
+                    error: "input guardrail tripwire".to_owned(),
+                };
+                return;
+            }
+
             loop {
                 let tx_ctx = crate::TransitionCtx {
                     tools: &tool_defs,
@@ -686,6 +813,30 @@ where
                 };
                 let outcome = crate::transition(&loop_state, tx_input, &tx_ctx);
                 let crate::TransitionOutcome { next_state, events, next_action, conversation_appends } = outcome;
+
+                // Output-guardrail gate: a tripwire on the terminal output
+                // suppresses RunCompleted and fails the run instead.
+                let output_trip = if let crate::LoopState::Done(out) = &next_state {
+                    interceptors.run_output_guardrails(&out.as_text()).await
+                } else {
+                    None
+                };
+                let (events, next_action, next_state) = if let Some((kind, info)) = output_trip {
+                    run_span.record("otel.status_code", "ERROR");
+                    failure.set(crate::AgentError::Guardrail { kind: kind.clone() });
+                    (
+                        vec![
+                            crate::AgentEvent::GuardrailTriggered { kind, info },
+                            crate::AgentEvent::RunFailed {
+                                error: "output guardrail tripwire".to_owned(),
+                            },
+                        ],
+                        crate::NextAction::Terminate,
+                        next_state,
+                    )
+                } else {
+                    (events, next_action, next_state)
+                };
                 for ev in events {
                     match &ev {
                         crate::AgentEvent::TurnStarted { turn } => {
@@ -709,6 +860,21 @@ where
                                     s.record("langfuse.trace.tags", json.as_str());
                                 }
                             }
+                            let on_turn = interceptors
+                                .fire(&crate::HookEvent::OnTurnStart { turn: *turn })
+                                .await;
+                            if let Some(reason) = on_turn.denied {
+                                let err = crate::AgentError::HookDenied {
+                                    event: "OnTurnStart".to_owned(),
+                                    reason,
+                                };
+                                let msg = err.to_string();
+                                run_span.record("otel.status_code", "ERROR");
+                                failure.set(err);
+                                yield crate::AgentEvent::RunFailed { error: msg };
+                                return;
+                            }
+                            pending_injections.extend(on_turn.injections);
                             turn_span = Some(s);
                         }
                         crate::AgentEvent::RunCompleted { usage } => {
@@ -727,6 +893,12 @@ where
 
                 match next_action {
                     crate::NextAction::CallModel { request } => {
+                        let mut request = request;
+                        for text in pending_injections.drain(..) {
+                            request.messages.push(crate::Item::System {
+                                content: vec![crate::ContentPart::Text { text }],
+                            });
+                        }
                         let chat_parent = turn_span.as_ref().unwrap_or(&run_span);
                         let chat_span = tracing::info_span!(
                             parent: chat_parent,
@@ -849,14 +1021,18 @@ where
                     crate::NextAction::ExecuteTools { calls } => {
                         let tool_ctx = ctx.to_tool_context();
                         let tool_parent = turn_span.as_ref().unwrap_or(&run_span);
-                        let outcomes = run_tools_concurrent(
+                        let (outcomes, denied) = run_tools_concurrent(
                             &tools,
                             &calls,
+                            &interceptors,
                             &tool_ctx,
                             parallel_tool_call_limit,
                             tool_parent,
                         )
                         .await;
+                        for ev in denied {
+                            yield ev;
+                        }
                         for o in &outcomes {
                             conversation.push(crate::Item::ToolResult {
                                 call_id: o.call_id.clone(),
@@ -868,6 +1044,7 @@ where
                         tx_input = crate::TransitionInput::ToolResults { outcomes };
                     }
                     crate::NextAction::Terminate => {
+                        let _ = interceptors.fire(&crate::HookEvent::OnRunComplete).await;
                         // On a terminal failure the driver left the structured
                         // error in loop_state; hand it to the slot. (Every
                         // LoopState::Failed branch in loop_state.rs Terminates,
@@ -917,6 +1094,27 @@ where
                             return;
                         };
 
+                        // Fire OnHandoff BEFORE emitting the transition events, so a
+                        // Deny vetoes the handoff without consumers observing a
+                        // completed agent switch.
+                        let on_handoff = interceptors
+                            .fire(&crate::HookEvent::OnHandoff {
+                                from: agent_name.clone(),
+                                to: target.clone(),
+                            })
+                            .await;
+                        if let Some(reason) = on_handoff.denied {
+                            let err = crate::AgentError::HookDenied {
+                                event: "OnHandoff".to_owned(),
+                                reason,
+                            };
+                            let msg = err.to_string();
+                            run_span.record("otel.status_code", "ERROR");
+                            failure.set(err);
+                            yield crate::AgentEvent::RunFailed { error: msg };
+                            return;
+                        }
+
                         yield crate::AgentEvent::HandoffItem {
                             from: agent_name.clone(),
                             to: target.clone(),
@@ -949,6 +1147,9 @@ where
                                 other => yield other,
                             }
                         }
+                        let _ = interceptors
+                            .fire(&crate::HookEvent::OnSubagentStop { agent: target.clone() })
+                            .await;
                         return;
                     }
                 }
@@ -982,6 +1183,15 @@ pub enum AgentError {
     Guardrail {
         /// Which kind of tripwire fired.
         kind: GuardrailKind,
+    },
+
+    /// A hook denied a lifecycle event, aborting the run.
+    #[error("hook denied {event}: {reason}")]
+    HookDenied {
+        /// The lifecycle event that was denied (e.g. `"OnRunStart"`).
+        event: String,
+        /// Reason surfaced by the hook.
+        reason: String,
     },
 
     /// The model produced output that could not be coerced into the
@@ -1114,6 +1324,20 @@ mod failure_slot_tests {
             AgentError::MaxIterationsExceeded { max: 3 }.to_string(),
             "max iterations (3) exceeded"
         );
+    }
+}
+
+#[cfg(test)]
+mod error_display_tests {
+    use crate::AgentError;
+
+    #[test]
+    fn hook_denied_displays() {
+        let e = AgentError::HookDenied {
+            event: "OnRunStart".into(),
+            reason: "blocked".into(),
+        };
+        assert_eq!(e.to_string(), "hook denied OnRunStart: blocked");
     }
 }
 

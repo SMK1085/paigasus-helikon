@@ -5,11 +5,20 @@ use syn::{
     Error, Ident, LitStr, Path, Token,
 };
 
-/// Parsed form of `#[tool(description = "...", name = "...", crate = ::path)]`.
+/// Parsed `effect = read_only | write | side_effect`.
+#[derive(Clone, Copy)]
+pub(crate) enum ToolEffectArg {
+    ReadOnly,
+    Write,
+    SideEffect,
+}
+
+/// Parsed form of `#[tool(description = "...", name = "...", effect = ..., crate = ::path)]`.
 #[derive(Default)]
 pub(crate) struct ToolAttrArgs {
     pub description: Option<LitStr>,
     pub name: Option<LitStr>,
+    pub effect: Option<ToolEffectArg>,
     pub crate_path: Option<Path>,
 }
 
@@ -41,12 +50,29 @@ impl Parse for ToolAttrArgs {
                         let lit: LitStr = input.parse()?;
                         out.name = Some(lit);
                     }
+                    "effect" => {
+                        let val: Ident = input.parse()?;
+                        out.effect = Some(match val.to_string().as_str() {
+                            "read_only" => ToolEffectArg::ReadOnly,
+                            "write" => ToolEffectArg::Write,
+                            "side_effect" => ToolEffectArg::SideEffect,
+                            other => {
+                                return Err(Error::new(
+                                    val.span(),
+                                    format!(
+                                        "invalid `effect` value `{other}`; expected \
+                                         `read_only`, `write`, or `side_effect`"
+                                    ),
+                                ));
+                            }
+                        });
+                    }
                     other => {
                         return Err(Error::new(
                             key.span(),
                             format!(
                                 "unknown #[tool] attribute `{other}`; expected one of \
-                                 `description`, `name`, `crate`",
+                                 `description`, `name`, `effect`, `crate`",
                             ),
                         ));
                     }
