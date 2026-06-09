@@ -1,7 +1,8 @@
 [package]
 name        = "paigasus-helikon-mcp"
-description = "MCP client and server integration for the Paigasus Helikon AI SDK."
+description = "MCP integration for the Paigasus Helikon AI SDK — rmcp client and server wrappers"
 version                = "0.0.0"
+publish                = false
 edition.workspace      = true
 rust-version.workspace = true
 authors.workspace      = true
@@ -10,7 +11,22 @@ repository.workspace   = true
 homepage.workspace     = true
 keywords.workspace     = true
 categories.workspace   = true
-publish                = false
+
+[dependencies]
+paigasus-helikon-core = { workspace = true }
+anyhow                = { workspace = true }
+async-trait           = { workspace = true }
+axum                  = { workspace = true }
+futures-util          = { workspace = true }
+rmcp                  = { workspace = true }
+serde_json            = { workspace = true }
+thiserror             = { workspace = true }
+tokio                 = { workspace = true }
+tokio-util            = { workspace = true }
+
+[dev-dependencies]
+async-stream  = { workspace = true }
+futures-core  = { workspace = true }
 
 [lints]
 workspace = true
