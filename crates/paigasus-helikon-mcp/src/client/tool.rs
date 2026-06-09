@@ -1,7 +1,13 @@
 //! `McpTool` — adapts a remote MCP tool to core's `Tool<Ctx>` trait.
 
-use paigasus_helikon_core::{ToolError, ToolOutput};
+use std::marker::PhantomData;
+use std::sync::LazyLock;
+
+use async_trait::async_trait;
+use paigasus_helikon_core::{Tool, ToolContext, ToolEffect, ToolError, ToolOutput};
 use rmcp::model::CallToolResult;
+
+use crate::client::handle::McpServerHandle;
 
 /// Map an MCP `CallToolResult` into core's `ToolOutput`/`ToolError`.
 ///
@@ -9,8 +15,6 @@ use rmcp::model::CallToolResult;
 /// - `structured_content` (when present) becomes `ToolOutput.content` as-is.
 /// - Otherwise a single text content becomes a JSON string; anything else is
 ///   serialized as a JSON array of content blocks.
-// used by McpTool (Task 4)
-#[allow(dead_code)]
 pub(crate) fn map_call_result(result: CallToolResult) -> Result<ToolOutput, ToolError> {
     if result.is_error == Some(true) {
         // TODO(SMA-327): a structured_error result also carries
@@ -39,8 +43,6 @@ pub(crate) fn map_call_result(result: CallToolResult) -> Result<ToolOutput, Tool
 }
 
 /// Concatenate the text parts of a content vec for error messages.
-// used by McpTool (Task 4)
-#[allow(dead_code)]
 fn content_text(content: &[rmcp::model::Content]) -> String {
     let parts: Vec<&str> = content
         .iter()
@@ -50,6 +52,116 @@ fn content_text(content: &[rmcp::model::Content]) -> String {
         "<no text content>".to_owned()
     } else {
         parts.join("\n")
+    }
+}
+
+/// Placeholder schema advertised by lazy-mode tools.
+static PLACEHOLDER_SCHEMA: LazyLock<serde_json::Value> =
+    LazyLock::new(|| serde_json::json!({ "type": "object", "additionalProperties": true }));
+
+/// A remote MCP tool adapted to core's [`Tool`].
+///
+/// `Ctx` is a phantom: MCP tools never read the user context, so one handle
+/// serves agents of any context type. `ToolEffect::Write` is never produced —
+/// server-declared annotations are untrusted metadata and must not unlock
+/// `AcceptEdits` auto-approval; `read_only_hint == true` maps to `ReadOnly`,
+/// everything else to `SideEffect`.
+pub struct McpTool<Ctx> {
+    handle: McpServerHandle,
+    wire_name: String,
+    name: String,
+    description: String,
+    schema: serde_json::Value,
+    output_schema: Option<serde_json::Value>,
+    effect: ToolEffect,
+    _ctx: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx> McpTool<Ctx> {
+    pub(crate) fn new(handle: McpServerHandle, tool: &rmcp::model::Tool, lazy: bool) -> Self {
+        let wire_name = tool.name.to_string();
+        let name = handle.prefixed(&wire_name);
+        let mut description = tool.description.as_deref().unwrap_or_default().to_owned();
+        let schema = if lazy {
+            if !description.is_empty() {
+                description.push(' ');
+            }
+            description.push_str("(Full input schema available via the `search_tools` tool.)");
+            PLACEHOLDER_SCHEMA.clone()
+        } else {
+            serde_json::Value::Object((*tool.input_schema).clone())
+        };
+        let output_schema = if lazy {
+            None
+        } else {
+            tool.output_schema
+                .as_ref()
+                .map(|s| serde_json::Value::Object((**s).clone()))
+        };
+        let effect = match &tool.annotations {
+            Some(a) if a.read_only_hint == Some(true) => ToolEffect::ReadOnly,
+            _ => ToolEffect::SideEffect,
+        };
+        Self {
+            handle,
+            wire_name,
+            name,
+            description,
+            schema,
+            output_schema,
+            effect,
+            _ctx: PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<Ctx> Tool<Ctx> for McpTool<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+
+    fn output_schema(&self) -> Option<&serde_json::Value> {
+        self.output_schema.as_ref()
+    }
+
+    fn effect(&self) -> ToolEffect {
+        self.effect
+    }
+
+    async fn invoke(
+        &self,
+        _ctx: &ToolContext<Ctx>,
+        args: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        let arguments = match args {
+            serde_json::Value::Object(map) => Some(map),
+            serde_json::Value::Null => None,
+            other => {
+                return Err(ToolError::InvalidArgs {
+                    schema_errors: vec![format!(
+                        "MCP tools take a JSON object as arguments, got: {other}"
+                    )],
+                })
+            }
+        };
+        let result = self
+            .handle
+            .call_tool_raw(&self.wire_name, arguments)
+            .await
+            .map_err(|e| ToolError::Other(anyhow::Error::from(e)))?;
+        map_call_result(result)
     }
 }
 
