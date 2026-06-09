@@ -12,7 +12,7 @@
 pub enum McpError {
     /// The connection / MCP `initialize` handshake failed.
     #[error("failed to connect to MCP server: {0}")]
-    Connect(#[source] Box<dyn std::error::Error + Send + Sync>),
+    Connect(#[from] Box<rmcp::service::ClientInitializeError>),
     /// Spawning the child-process transport failed.
     #[error("failed to spawn MCP server process: {0}")]
     Spawn(#[from] std::io::Error),
@@ -27,7 +27,9 @@ pub enum McpError {
         /// The underlying I/O error.
         source: std::io::Error,
     },
-    /// The running server terminated abnormally.
+    /// The running server terminated abnormally (initialize failure, task
+    /// panic, or HTTP serve error). Constructed only at this crate's serve
+    /// call sites; external callers wrapping other errors use [`McpError::Other`].
     #[error("MCP server terminated abnormally: {0}")]
     Serve(#[source] anyhow::Error),
     /// Anything else.
