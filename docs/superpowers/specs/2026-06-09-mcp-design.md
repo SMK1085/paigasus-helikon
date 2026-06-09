@@ -10,7 +10,7 @@ tool sources, and expose any `Agent<Ctx>` as an MCP server. Thin wrapper around
 |---|---|---|---|
 | rmcp version | `0.16+`, 2025-06-18 spec | **`rmcp = "1.7"`** (`^1.7` in `[workspace.dependencies]`) | 0.16 predates rmcp 1.0 (2026-03); eight 1.x releases since. Building new code on a year-old API buys an immediate migration ticket. An `=1.7.x` pin was considered and rejected: exact pins in a *published* library force resolution conflicts on downstreams using any other rmcp 1.x and block patch fixes. `Cargo.lock` pins our builds; semver guards the 1.x line; CI catches churn. |
 | SSE client transport | builder for `sse` | **Dropped** | rmcp removed SSE transports in 0.11.0 (PR #562); streamable HTTP is the only HTTP transport in 1.x. SSE was deprecated by the 2025-06-18 spec revision itself. |
-| MSRV | — (workspace 1.75) | **Per-crate `rust-version = "1.85"` on `paigasus-helikon-mcp` only**; workspace stays 1.75 (revised from an earlier workspace-wide bump after design review) | rmcp 1.x is edition 2024 (requires ≥ 1.85), but raising the floor for every crate because of one opt-in feature-gated crate punishes downstreams that never enable it. Core/providers/facade-default keep the 1.75 guarantee; only the mcp crate (and the facade *with* `mcp` enabled) require 1.85. CI details below. |
+| MSRV | — (workspace 1.75) | **Workspace `rust-version` → 1.85** (decided 2026-06-09; a per-crate scoped override was considered in design review and rejected — there is no downstream commitment to 1.75 worth the CI complexity of feature-enumerated matrix legs) | rmcp 1.x is edition 2024 (requires ≥ 1.85). CLAUDE.md policy: bump to what cargo demands. One floor for the whole workspace keeps `--all-features` CI legs uniform and avoids the cargo-1.75-vs-edition-2024-lockfile question entirely. |
 | Builder integration | sketch showed `.mcp_servers([...])` on `LlmAgent` builder | **Explicit `handle.tools::<Ctx>().await?` passed to the existing `.tools(...)`** | Core cannot depend on the mcp crate, and `.build()` is sync while discovery is async. Zero core changes keeps this ticket self-contained; builder sugar (a `ToolSource` trait in core) is a possible follow-up. |
 | `lazy` semantics | "defers schema fetch until a tool is invoked" | **Search meta-tool pattern** (see below) | MCP's `tools/list` returns names *and* schemas in one call — there is no separate schema fetch to defer. The 6,000-tool problem is model-context economy, not wire traffic. |
 
@@ -224,25 +224,17 @@ All in-process over `tokio::io::duplex` except the npx acceptance test:
 
 - `[workspace.dependencies]`: `rmcp = "0.16"` → `"1.7"`; the
   `paigasus-helikon-mcp` internal pin gains `version = "0.1.0"`.
-- MSRV (scoped to the mcp crate, not workspace-wide):
-  - `crates/paigasus-helikon-mcp/Cargo.toml` replaces
-    `rust-version.workspace = true` with a literal `rust-version = "1.85"`;
-    `[workspace.package] rust-version` **stays `1.75`** (second documented
-    inheritance exception after the CLI's lints override — CLAUDE.md updated
-    to record both the exception and the rationale).
-  - `ci.yml` 1.75 matrix legs keep running but change args: cargo has no
-    "all-features-except", so the 1.75 leg becomes
-    `--workspace --exclude paigasus-helikon-mcp` with the facade's features
-    **enumerated minus `mcp`** (e.g.
-    `--features paigasus-helikon/openai,paigasus-helikon/anthropic,…`) instead
-    of `--all-features`. The stable legs keep `--all-features` and cover the
-    mcp crate at its real MSRV.
-  - `msrv.yml` (verifies core at 1.75) is unaffected — core doesn't touch rmcp.
-  - **Plan-time verification gate**: confirm with CI's *exact* command that
-    cargo 1.75 tolerates an edition-2024 rmcp sitting in `Cargo.lock` while
-    excluded from the build (the SMA-404 lesson: reproduce CI's command before
-    claiming a 1.75 break or non-break). If resolution itself fails at 1.75,
-    fall back to the workspace-wide 1.85 bump and say so in the PR.
+- MSRV (workspace-wide):
+  - `[workspace.package] rust-version` `1.75` → `1.85`; every member keeps
+    `rust-version.workspace = true` (no inheritance exceptions).
+  - `ci.yml` matrix toolchain `"1.75"` → `"1.85"`; both legs keep their
+    existing args (`--all-features` everywhere). The renamed contexts
+    (`test (…, 1.85)`) are signal-only — `test (ubuntu-latest, stable)` is the
+    required one, so no ruleset edit.
+  - `msrv.yml` is unchanged mechanically (it verifies whatever core declares,
+    which becomes 1.85 via inheritance).
+  - CLAUDE.md's "MSRV is `1.75`" line updated to `1.85` with the rmcp/edition-
+    2024 rationale.
 - Release: 4-step ascend for `paigasus-helikon-mcp` (0.0.0 → 0.1.0, drop
   `publish = false`, drop the `release-plz.toml` block, `chore(release)`
   commit) **plus a facade patch bump** (version + workspace self-pin +
@@ -263,12 +255,8 @@ All in-process over `tokio::io::duplex` except the npx acceptance test:
 ## Out of scope (follow-ups)
 
 - `ToolSource` trait in core + `.mcp_servers(...)` builder sugar — restores
-  the planned ergonomic; **needs a Linear ticket** (requires a same-PR core
-  bump + facade bump when implemented).
-- Reconcile the Notion "MCP Integration" page with this spec's deviation
-  table (explicit `.tools(...)`, streamable-HTTP-only, corrected
-  lazy/`search_tools` description) — the page still shows the superseded
-  design.
+  the planned ergonomic; filed as **SMA-410** (requires a same-PR core bump +
+  facade bump when implemented).
 - Reconnect/backoff, `tools/list_changed` subscription, health checks.
 - SSE transport (only if a concrete SSE-only server shows up).
 - MCP resources/prompts (tools only for now); sampling/elicitation handlers.
