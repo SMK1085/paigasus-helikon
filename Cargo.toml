@@ -5,7 +5,7 @@ members  = ["crates/*"]
 [workspace.package]
 version       = "0.0.0"
 edition       = "2021"
-rust-version  = "1.75"
+rust-version  = "1.85"
 authors       = ["Sven Maschek"]
 license       = "Apache-2.0 OR MIT"
 repository    = "https://github.com/SMK1085/paigasus-helikon"
@@ -16,6 +16,7 @@ categories    = ["api-bindings", "asynchronous"]
 [workspace.dependencies]
 anyhow                = "1"
 async-openai          = "0.40"
+axum                  = "0.8"
 base64                = "0.22"
 async-stream          = "0.3"
 async-trait           = "0.1"
@@ -29,7 +30,15 @@ proc-macro-crate      = "3"
 proc-macro2           = "1"
 quote                 = "1"
 reqwest               = { version = "0.13", default-features = false }
-rmcp                  = "0.16"
+rmcp                  = { version = "1.7", default-features = false, features = [
+  "client",
+  "server",
+  "transport-io",
+  "transport-child-process",
+  "transport-streamable-http-server",
+  "transport-streamable-http-client-reqwest",
+  "reqwest",
+] }
 rustversion           = "1"
 schemars              = "1"
 serde                 = { version = "1", features = ["derive"] }
