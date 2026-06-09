@@ -96,7 +96,7 @@ required-features = ["openai"]
 name    = "tool_dispatch"
 harness = false
 # A benchmark, not a test: `test = false` keeps `cargo test` from building and
-# running the timing loop, and keeps it out of the `test (…, 1.75)` CI job.
+# running the timing loop, and keeps it out of the `test (…, 1.85)` CI job.
 test    = false
 
 [lints]

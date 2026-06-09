@@ -1,9 +1,9 @@
 //! Dispatch microbench (SMA-323): measure `Tool::invoke` dispatch overhead —
 //! registry name-lookup + `dyn Tool` vtable call + JSON-output read.
 //!
-//! Dependency-free (no Criterion) on purpose: Criterion's transitive
-//! `clap_lex` uses `edition2024`, which Cargo 1.75 cannot parse, which would
-//! break the workspace's Rust 1.75 MSRV. A single `block_on` wraps the whole
+//! Dependency-free (no Criterion) on purpose: keeping the bench free of
+//! heavyweight transitive dependencies keeps CI lean and avoids pulling in
+//! framework overhead that would obscure the measured signal. A single `block_on` wraps the whole
 //! measured loop so tokio runtime entry is amortized across all iterations —
 //! the number reflects dispatch, not executor entry. Target: < 50 µs.
 //!
