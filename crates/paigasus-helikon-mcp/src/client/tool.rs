@@ -13,6 +13,9 @@ use rmcp::model::CallToolResult;
 #[allow(dead_code)]
 pub(crate) fn map_call_result(result: CallToolResult) -> Result<ToolOutput, ToolError> {
     if result.is_error == Some(true) {
+        // TODO(SMA-327): a structured_error result also carries
+        // structured_content; today only the text rendering reaches the
+        // model. Surface the structured value if a real server needs it.
         let msg = content_text(&result.content);
         return Err(ToolError::Other(anyhow::anyhow!(
             "MCP tool returned an error: {msg}"
@@ -22,12 +25,13 @@ pub(crate) fn map_call_result(result: CallToolResult) -> Result<ToolOutput, Tool
         return Ok(ToolOutput::new(v));
     }
     let content = result.content;
-    if content.len() == 1 {
-        if let Some(text) = content[0].as_text() {
-            return Ok(ToolOutput::new(serde_json::Value::String(
-                text.text.clone(),
-            )));
-        }
+    if content.len() == 1 && content[0].as_text().is_some() {
+        let text = content.into_iter().next().unwrap();
+        // SAFETY: guarded by `as_text().is_some()` above.
+        let rmcp::model::RawContent::Text(t) = text.raw else {
+            unreachable!()
+        };
+        return Ok(ToolOutput::new(serde_json::Value::String(t.text)));
     }
     let arr =
         serde_json::to_value(&content).map_err(|e| ToolError::Other(anyhow::Error::from(e)))?;
@@ -74,6 +78,10 @@ mod tests {
         let out = map_call_result(r).unwrap();
         assert!(out.content.is_array());
         assert_eq!(out.content.as_array().unwrap().len(), 2);
+        let arr = out.content.as_array().unwrap();
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "a");
+        assert_eq!(arr[1]["text"], "b");
     }
 
     #[test]
