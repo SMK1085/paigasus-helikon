@@ -83,10 +83,14 @@ impl<Ctx> McpTool<Ctx> {
         let name = handle.prefixed(&wire_name);
         let mut description = tool.description.as_deref().unwrap_or_default().to_owned();
         let schema = if lazy {
+            let hint = format!(
+                "(Full input schema available via the `{}` tool.)",
+                handle.prefixed("search_tools")
+            );
             if !description.is_empty() {
                 description.push(' ');
             }
-            description.push_str("(Full input schema available via the `search_tools` tool.)");
+            description.push_str(&hint);
             PLACEHOLDER_SCHEMA.clone()
         } else {
             serde_json::Value::Object((*tool.input_schema).clone())
@@ -142,7 +146,7 @@ where
 
     async fn invoke(
         &self,
-        _ctx: &ToolContext<Ctx>,
+        ctx: &ToolContext<Ctx>,
         args: serde_json::Value,
     ) -> Result<ToolOutput, ToolError> {
         let arguments = match args {
@@ -156,11 +160,22 @@ where
                 })
             }
         };
-        let result = self
-            .handle
-            .call_tool_raw(&self.wire_name, arguments)
-            .await
-            .map_err(|e| ToolError::Other(anyhow::Error::from(e)))?;
+        // Race the remote call against the run's cancellation token: rmcp's
+        // `call_tool` waits indefinitely, so a hung MCP server must not hang
+        // the whole agent run past a cancel.
+        let cancel = ctx.cancel().clone();
+        let call = self.handle.call_tool_raw(&self.wire_name, arguments);
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return Err(ToolError::Other(anyhow::anyhow!(
+                    "MCP tool call `{}` cancelled",
+                    self.name
+                )));
+            }
+            r = call => r,
+        };
+        let result = result.map_err(|e| ToolError::Other(anyhow::Error::from(e)))?;
         map_call_result(result)
     }
 }

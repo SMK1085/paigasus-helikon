@@ -96,7 +96,9 @@ struct HandleInner {
 impl Drop for HandleInner {
     fn drop(&mut self) {
         // Tear the connection task (and any child process) down with the
-        // last handle clone.
+        // last handle clone. rmcp's `RunningService` holds its own DropGuard
+        // on this same token, so this impl is belt-and-braces, not
+        // load-bearing.
         self.cancel.cancel();
     }
 }
@@ -207,6 +209,10 @@ impl McpServerHandle {
 
     /// Close the connection (cancels the rmcp task; kills a stdio child).
     /// Outstanding and subsequent tool calls fail with a transport error.
+    /// Teardown is asynchronous and fire-and-forget: if the tokio runtime is
+    /// shutting down immediately afterwards, a child process may be reaped by
+    /// the OS rather than gracefully; close handles well before runtime
+    /// shutdown.
     pub fn close(&self) {
         self.inner.cancel.cancel();
     }

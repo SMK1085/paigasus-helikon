@@ -10,10 +10,11 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::ErrorData;
 
-/// Fixture MCP server with three tools:
+/// Fixture MCP server with four tools:
 /// - `echo`   — read-only annotated; echoes `{"msg": string}` back as text.
 /// - `boom`   — always returns an `is_error` result.
 /// - `shape`  — returns `structured_content` `{"ok": true}`.
+/// - `sleepy` — sleeps for a minute before answering (cancellation tests).
 #[derive(Clone, Default)]
 pub struct FixtureServer;
 
@@ -43,8 +44,9 @@ impl ServerHandler for FixtureServer {
             .with_annotations(ToolAnnotations::new().read_only(true));
         let boom = Tool::new("boom", "Always fails", echo_schema());
         let shape = Tool::new("shape", "Returns structured content", echo_schema());
+        let sleepy = Tool::new("sleepy", "Sleeps for a minute", echo_schema());
         Ok(ListToolsResult {
-            tools: vec![echo, boom, shape],
+            tools: vec![echo, boom, shape, sleepy],
             ..Default::default()
         })
     }
@@ -67,6 +69,10 @@ impl ServerHandler for FixtureServer {
             }
             "boom" => Ok(CallToolResult::error(vec![Content::text("kaboom")])),
             "shape" => Ok(CallToolResult::structured(serde_json::json!({"ok": true}))),
+            "sleepy" => {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(CallToolResult::success(vec![Content::text("woke")]))
+            }
             other => Err(ErrorData::invalid_params(
                 format!("unknown tool {other}"),
                 None,
