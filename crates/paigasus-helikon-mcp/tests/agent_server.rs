@@ -245,7 +245,7 @@ async fn missing_ctx_factory_errors_at_serve() {
     let server: McpAgentServer<String> = McpAgentServer::new(NeedsCtxAgent);
     let (_client_io, server_io) = tokio::io::duplex(1024);
     let err = server.serve_transport(server_io).await.unwrap_err();
-    assert!(err.to_string().contains("context factory"));
+    assert!(err.to_string().contains("context factory"), "got: {err}");
 }
 
 #[tokio::test]
