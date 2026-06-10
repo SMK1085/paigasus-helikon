@@ -21,3 +21,4 @@ mod server;
 pub use client::handle::{McpConnectBuilder, McpConnectOptions, McpServerHandle};
 pub use client::tool::McpTool;
 pub use error::McpError;
+pub use server::{AgentMcpHandler, McpAgentServer};
