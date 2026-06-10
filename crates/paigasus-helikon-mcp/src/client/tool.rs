@@ -17,9 +17,10 @@ use crate::client::handle::McpServerHandle;
 ///   serialized as a JSON array of content blocks.
 pub(crate) fn map_call_result(result: CallToolResult) -> Result<ToolOutput, ToolError> {
     if result.is_error == Some(true) {
-        // TODO(SMA-327): a structured_error result also carries
+        // Known gap: a structured_error result also carries
         // structured_content; today only the text rendering reaches the
-        // model. Surface the structured value if a real server needs it.
+        // model. Surface the structured value if a real server needs it
+        // (file a follow-up ticket when one does).
         let msg = content_text(&result.content);
         return Err(ToolError::Other(anyhow::anyhow!(
             "MCP tool returned an error: {msg}"

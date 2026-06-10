@@ -11,7 +11,7 @@ tool sources, and expose any `Agent<Ctx>` as an MCP server. Thin wrapper around
 | rmcp version | `0.16+`, 2025-06-18 spec | **`rmcp = "1.7"`** (`^1.7` in `[workspace.dependencies]`) | 0.16 predates rmcp 1.0 (2026-03); eight 1.x releases since. Building new code on a year-old API buys an immediate migration ticket. An `=1.7.x` pin was considered and rejected: exact pins in a *published* library force resolution conflicts on downstreams using any other rmcp 1.x and block patch fixes. `Cargo.lock` pins our builds; semver guards the 1.x line; CI catches churn. |
 | SSE client transport | builder for `sse` | **Dropped** | rmcp removed SSE transports in 0.11.0 (PR #562); streamable HTTP is the only HTTP transport in 1.x. SSE was deprecated by the 2025-06-18 spec revision itself. |
 | MSRV | — (workspace 1.75) | **Workspace `rust-version` → 1.85** (decided 2026-06-09; a per-crate scoped override was considered in design review and rejected — there is no downstream commitment to 1.75 worth the CI complexity of feature-enumerated matrix legs) | rmcp 1.x is edition 2024 (requires ≥ 1.85). CLAUDE.md policy: bump to what cargo demands. One floor for the whole workspace keeps `--all-features` CI legs uniform and avoids the cargo-1.75-vs-edition-2024-lockfile question entirely. |
-| Builder integration | sketch showed `.mcp_servers([...])` on `LlmAgent` builder | **Explicit `handle.tools::<Ctx>().await?` passed to the existing `.tools(...)`** | Core cannot depend on the mcp crate, and `.build()` is sync while discovery is async. Zero core changes keeps this ticket self-contained; builder sugar (a `ToolSource` trait in core) is a possible follow-up. |
+| Builder integration | sketch showed `.mcp_servers([...])` on `LlmAgent` builder | **Explicit `handle.tools::<Ctx>()` (sync — discovery happens at `connect()`) passed to the existing `.tools(...)`** | Core cannot depend on the mcp crate, and `.build()` is sync while discovery is async. Zero core changes keeps this ticket self-contained; builder sugar (a `ToolSource` trait in core) is SMA-410. |
 | `lazy` semantics | "defers schema fetch until a tool is invoked" | **Search meta-tool pattern** (see below) | MCP's `tools/list` returns names *and* schemas in one call — there is no separate schema fetch to defer. The 6,000-tool problem is model-context economy, not wire traffic. |
 
 ## Architecture
@@ -49,8 +49,9 @@ let fs = McpServerHandle::stdio(Command::new("npx"), |cmd| {
     .connect().await?;       // serve + initialize + list_all_tools
 
 let http = McpServerHandle::streamable_http("https://api.example.com/mcp")
-    .auth_header(token)      // optional knobs forwarded to rmcp's transport config
     .connect().await?;
+// auth headers / retry tuning: build rmcp's transport config yourself and use
+// McpServerHandle::streamable_http_with_config(config)
 
 // explicit-lifecycle escape hatch: bring a fully configured transport
 let cp = McpServerHandle::child_process(transport /* TokioChildProcess */)
@@ -59,7 +60,7 @@ let cp = McpServerHandle::child_process(transport /* TokioChildProcess */)
 let agent = LlmAgent::builder()
     .name("research")
     .model(model)
-    .tools(fs.tools::<MyCtx>().await?)
+    .tools(fs.tools::<MyCtx>())   // sync: discovery happened at connect()
     .build()?;
 ```
 
@@ -69,7 +70,8 @@ let agent = LlmAgent::builder()
   explicit-lifecycle distinction.
 - Connect uses the unit client handler: `().serve(transport)`. Tool cache is
   fetched once at connect via `list_all_tools()` (auto-paginating).
-- `close(self).await` cancels the connection explicitly; dropping the last
+- `close(&self)` cancels the connection explicitly (fire-and-forget — rmcp
+  tears the task and child process down asynchronously); dropping the last
   clone tears it down (child processes are killed via process-wrap).
 - Errors before/at connect surface as `McpError`.
 
@@ -126,7 +128,7 @@ let server = McpAgentServer::with_default_ctx(agent);
 
 server.serve_stdio().await?;                          // blocks until disconnect
 server.serve_streamable_http("0.0.0.0:8000").await?;  // axum bind, blocks
-let svc = server.streamable_http_service();           // tower-service escape hatch
+let svc = server.streamable_http_service()?;          // tower-service escape hatch (Result: needs the ctx factory)
 ```
 
 Implements rmcp's `ServerHandler` manually (no `#[tool]` macros — the tool list
@@ -258,6 +260,8 @@ All in-process over `tokio::io::duplex` except the npx acceptance test:
   the planned ergonomic; filed as **SMA-410** (requires a same-PR core bump +
   facade bump when implemented).
 - Reconnect/backoff, `tools/list_changed` subscription, health checks.
+- Lazy-mode name-collision guard: a remote server exposing a tool literally
+  named `search_tools` would collide with the appended meta-tool.
 - SSE transport (only if a concrete SSE-only server shows up).
 - MCP resources/prompts (tools only for now); sampling/elicitation handlers.
 - Multi-tool agent serving (expose handoffs/sub-agents as separate MCP tools).
