@@ -26,7 +26,10 @@ type CtxFactory<Ctx> = Arc<dyn Fn() -> Ctx + Send + Sync>;
 /// Run timeouts come from [`RunConfig::timeout`] (enforced here with
 /// `tokio::time::timeout` — core's `collect()` has no timer), and the MCP
 /// request's cancellation (client disconnect, `notifications/cancelled`)
-/// propagates into the run's `CancellationToken`.
+/// propagates into the run's `CancellationToken` (propagation on disconnect
+/// is not instantaneous: rmcp drains in-flight handlers for up to ~5s before
+/// the token tree is cancelled; configure `RunConfig::timeout` for prompt
+/// bounds).
 pub struct McpAgentServer<Ctx> {
     agent: Arc<dyn Agent<Ctx>>,
     ctx_factory: Option<CtxFactory<Ctx>>,
@@ -127,11 +130,13 @@ where
             .serve(transport)
             .await
             .map_err(|e| McpError::Serve(anyhow::Error::new(e)))?;
-        running
-            .waiting()
-            .await
-            .map_err(|e| McpError::Serve(anyhow::Error::new(e)))?;
-        Ok(())
+        match running.waiting().await {
+            Err(e) => Err(McpError::Serve(anyhow::Error::new(e))),
+            Ok(rmcp::service::QuitReason::JoinError(e)) => {
+                Err(McpError::Serve(anyhow::Error::new(e)))
+            }
+            Ok(_) => Ok(()),
+        }
     }
 
     /// Serve over stdio. Blocks until the client disconnects.
@@ -274,16 +279,14 @@ impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
                 None,
             ));
         }
-        let input = request
-            .arguments
-            .as_ref()
-            .and_then(|a| a.get("input"))
-            .and_then(|v| v.as_str())
+        let args = request.arguments.as_ref();
+        let input_val = args.and_then(|a| a.get("input")).ok_or_else(|| {
+            ErrorData::invalid_params("missing required argument `input`".to_owned(), None)
+        })?;
+        let input = input_val
+            .as_str()
             .ok_or_else(|| {
-                ErrorData::invalid_params(
-                    "missing required string argument `input`".to_owned(),
-                    None,
-                )
+                ErrorData::invalid_params("argument `input` must be a string".to_owned(), None)
             })?
             .to_owned();
 
@@ -305,6 +308,10 @@ impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
                 .run(run_ctx, AgentInput::from_user_text(input))
                 .await
                 .map_err(|e| e.to_string())?;
+            // Deliberate divergence from TokioRunner: no with_failure() slot — at this
+            // boundary every failure is stringified into CallToolResult::error anyway,
+            // so the opaque RunFailed string suffices. Wire the failure handle if
+            // structured error mapping is ever needed here.
             RunResultStreaming::new(stream)
                 .collect()
                 .await

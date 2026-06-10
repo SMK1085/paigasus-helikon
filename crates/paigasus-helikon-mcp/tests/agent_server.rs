@@ -177,3 +177,99 @@ async fn missing_input_is_a_protocol_error() {
         .unwrap_err();
     assert!(err.to_string().contains("input"));
 }
+
+/// Agent whose run stream reports failure.
+struct FailingAgent;
+
+#[async_trait]
+impl Agent<()> for FailingAgent {
+    fn name(&self) -> &str {
+        "failer"
+    }
+    fn description(&self) -> &str {
+        "always fails"
+    }
+    async fn run(
+        &self,
+        _ctx: RunContext<()>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        Ok(Box::pin(async_stream::stream! {
+            yield AgentEvent::RunFailed { error: "model exploded".into() };
+        }))
+    }
+}
+
+#[tokio::test]
+async fn run_failure_surfaces_as_is_error() {
+    let server = McpAgentServer::with_default_ctx(FailingAgent);
+    let client = connect_client(server).await;
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("failer").with_arguments(
+                serde_json::json!({"input": "q"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    let text = result.content[0].as_text().unwrap().text.clone();
+    assert!(text.contains("model exploded"));
+}
+
+/// Agent with a non-`Default` `Ctx`, to prove the factory requirement.
+struct NeedsCtxAgent;
+
+#[async_trait]
+impl Agent<String> for NeedsCtxAgent {
+    fn name(&self) -> &str {
+        "needs-ctx"
+    }
+    fn description(&self) -> &str {
+        "agent over String ctx"
+    }
+    async fn run(
+        &self,
+        _ctx: RunContext<String>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        Ok(Box::pin(futures_util::stream::empty()))
+    }
+}
+
+#[tokio::test]
+async fn missing_ctx_factory_errors_at_serve() {
+    let server: McpAgentServer<String> = McpAgentServer::new(NeedsCtxAgent);
+    let (_client_io, server_io) = tokio::io::duplex(1024);
+    let err = server.serve_transport(server_io).await.unwrap_err();
+    assert!(err.to_string().contains("context factory"));
+}
+
+#[tokio::test]
+async fn non_string_input_is_a_protocol_error() {
+    let server = McpAgentServer::new(ScriptedAgent {
+        reply: "ok".into(),
+        delay: None,
+    })
+    .with_ctx(|| ());
+    let client = connect_client(server).await;
+    let err = client
+        .call_tool(
+            CallToolRequestParams::new("triage_helper").with_arguments(
+                serde_json::json!({"input": 42})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("input") && msg.contains("string"),
+        "got: {msg}"
+    );
+}
