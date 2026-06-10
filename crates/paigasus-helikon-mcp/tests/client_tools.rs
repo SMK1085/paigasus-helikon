@@ -6,28 +6,6 @@ use paigasus_helikon_core::ToolEffect;
 use paigasus_helikon_mcp::McpConnectOptions;
 
 // ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-fn tool_ctx_with_cancel(
-    cancel: paigasus_helikon_core::CancellationToken,
-) -> paigasus_helikon_core::ToolContext<()> {
-    paigasus_helikon_core::RunContext::new(
-        std::sync::Arc::new(()),
-        std::sync::Arc::new(paigasus_helikon_core::MemorySession::new())
-            as std::sync::Arc<dyn paigasus_helikon_core::Session>,
-        paigasus_helikon_core::HookRegistry::new(),
-        paigasus_helikon_core::TracerHandle::builder().build(),
-        cancel,
-    )
-    .to_tool_context()
-}
-
-fn tool_ctx() -> paigasus_helikon_core::ToolContext<()> {
-    tool_ctx_with_cancel(paigasus_helikon_core::CancellationToken::new())
-}
-
-// ---------------------------------------------------------------------------
 // Existing tests
 // ---------------------------------------------------------------------------
 
@@ -69,7 +47,7 @@ async fn invoke_aborts_when_run_cancel_fires() {
     let sleepy = tools.iter().find(|t| t.name() == "sleepy").unwrap();
 
     let cancel = paigasus_helikon_core::CancellationToken::new();
-    let tool_ctx = tool_ctx_with_cancel(cancel.clone());
+    let tool_ctx = support::tool_ctx_with_cancel(cancel.clone());
 
     let cancel2 = cancel.clone();
     tokio::spawn(async move {
@@ -107,7 +85,7 @@ async fn invoke_round_trips_text() {
     let tools = handle.tools::<()>();
     let echo = tools.iter().find(|t| t.name() == "echo").unwrap();
     let out = echo
-        .invoke(&tool_ctx(), serde_json::json!({"msg": "hi"}))
+        .invoke(&support::tool_ctx(), serde_json::json!({"msg": "hi"}))
         .await
         .unwrap();
     assert_eq!(out.content, serde_json::json!("hi"));
@@ -119,7 +97,7 @@ async fn invoke_surfaces_structured_content() {
     let tools = handle.tools::<()>();
     let shape = tools.iter().find(|t| t.name() == "shape").unwrap();
     let out = shape
-        .invoke(&tool_ctx(), serde_json::json!({"msg": "x"}))
+        .invoke(&support::tool_ctx(), serde_json::json!({"msg": "x"}))
         .await
         .unwrap();
     assert_eq!(out.content, serde_json::json!({"ok": true}));
@@ -131,7 +109,7 @@ async fn is_error_result_becomes_tool_error() {
     let tools = handle.tools::<()>();
     let boom = tools.iter().find(|t| t.name() == "boom").unwrap();
     let err = boom
-        .invoke(&tool_ctx(), serde_json::json!({"msg": "x"}))
+        .invoke(&support::tool_ctx(), serde_json::json!({"msg": "x"}))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("kaboom"));
@@ -143,7 +121,7 @@ async fn non_object_args_are_invalid() {
     let tools = handle.tools::<()>();
     let echo = tools.iter().find(|t| t.name() == "echo").unwrap();
     let err = echo
-        .invoke(&tool_ctx(), serde_json::json!([1, 2]))
+        .invoke(&support::tool_ctx(), serde_json::json!([1, 2]))
         .await
         .unwrap_err();
     assert!(matches!(
@@ -163,11 +141,19 @@ async fn calls_after_close_fail() {
     // down (up to 2 s) so we don't race the close against the call.
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
+        // This test relies on the default single-threaded #[tokio::test]
+        // runtime, where one yield_now() deterministically lets the spawned
+        // service task observe the cancellation.  Under a multi_thread flavor
+        // the poll loop below is the actual guarantee.
         tokio::task::yield_now().await;
         let result = echo
-            .invoke(&tool_ctx(), serde_json::json!({"msg": "x"}))
+            .invoke(&support::tool_ctx(), serde_json::json!({"msg": "x"}))
             .await;
-        if result.is_err() {
+        if let Err(ref e) = result {
+            assert!(
+                !matches!(e, paigasus_helikon_core::ToolError::InvalidArgs { .. }),
+                "closed handle returned InvalidArgs instead of transport error"
+            );
             break;
         }
         assert!(

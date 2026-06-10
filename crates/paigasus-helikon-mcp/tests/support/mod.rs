@@ -81,6 +81,28 @@ impl ServerHandler for FixtureServer {
     }
 }
 
+/// Build a [`paigasus_helikon_core::ToolContext`] with a caller-supplied
+/// cancellation token. Useful for cancel-behaviour tests.
+pub fn tool_ctx_with_cancel(
+    cancel: paigasus_helikon_core::CancellationToken,
+) -> paigasus_helikon_core::ToolContext<()> {
+    paigasus_helikon_core::RunContext::new(
+        std::sync::Arc::new(()),
+        std::sync::Arc::new(paigasus_helikon_core::MemorySession::new())
+            as std::sync::Arc<dyn paigasus_helikon_core::Session>,
+        paigasus_helikon_core::HookRegistry::new(),
+        paigasus_helikon_core::TracerHandle::builder().build(),
+        cancel,
+    )
+    .to_tool_context()
+}
+
+/// Build a [`paigasus_helikon_core::ToolContext`] with a fresh, uncancelled
+/// token. Convenience wrapper for tests that don't need cancel control.
+pub fn tool_ctx() -> paigasus_helikon_core::ToolContext<()> {
+    tool_ctx_with_cancel(paigasus_helikon_core::CancellationToken::new())
+}
+
 /// Connect a `McpServerHandle` to an in-process `FixtureServer` over duplex
 /// pipes. The server task runs until the client closes.
 pub async fn connect_fixture(
