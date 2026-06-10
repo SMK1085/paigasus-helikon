@@ -1,5 +1,4 @@
-//! Lazy-mode `search_tools` meta-tool. Real search behavior lands in
-//! SMA-327 Task 7; this is the minimal compiling shape.
+//! The lazy-mode `search_tools` meta-tool.
 
 use std::marker::PhantomData;
 use std::sync::LazyLock;
@@ -13,13 +12,19 @@ use crate::client::handle::McpServerHandle;
 static SEARCH_SCHEMA: LazyLock<serde_json::Value> = LazyLock::new(|| {
     serde_json::json!({
         "type": "object",
-        "properties": { "query": { "type": "string" } },
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Keyword or substring matched (case-insensitively) \
+                                against tool names and descriptions."
+            }
+        },
         "required": ["query"]
     })
 });
 
-/// Lazy-mode meta-tool that serves the real schemas of the server's tools
-/// on demand. Appended to [`McpServerHandle::tools`] output in lazy mode.
+/// Lazy-mode meta-tool: searches the connected server's cached tool list and
+/// returns matching tools' real names, descriptions, and input schemas.
 pub(crate) struct SearchTool<Ctx> {
     handle: McpServerHandle,
     name: String,
@@ -48,7 +53,9 @@ where
     }
 
     fn description(&self) -> &str {
-        "Search this MCP server's tools and return their full input schemas."
+        "Search this MCP server's tools by keyword. Returns matching tools' \
+         names, descriptions, and full input schemas. Call this before using \
+         a tool whose schema you don't know."
     }
 
     fn schema(&self) -> &serde_json::Value {
@@ -62,11 +69,35 @@ where
     async fn invoke(
         &self,
         _ctx: &ToolContext<Ctx>,
-        _args: serde_json::Value,
+        args: serde_json::Value,
     ) -> Result<ToolOutput, ToolError> {
-        // TODO(SMA-327 Task 7): match `query` against the cached tool
-        // descriptors and return their real schemas.
-        let _ = self.handle.cached_tools();
-        Ok(ToolOutput::new(serde_json::Value::Array(vec![])))
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidArgs {
+                schema_errors: vec!["missing required string field `query`".to_owned()],
+            })?
+            .to_lowercase();
+
+        let matches: Vec<serde_json::Value> = self
+            .handle
+            .cached_tools()
+            .iter()
+            .filter(|t| {
+                t.name.to_lowercase().contains(&query)
+                    || t.description
+                        .as_deref()
+                        .is_some_and(|d| d.to_lowercase().contains(&query))
+            })
+            .map(|t| {
+                serde_json::json!({
+                    "name": self.handle.prefixed(&t.name),
+                    "description": t.description.as_deref().unwrap_or_default(),
+                    "input_schema": serde_json::Value::Object((*t.input_schema).clone()),
+                })
+            })
+            .collect();
+
+        Ok(ToolOutput::new(serde_json::Value::Array(matches)))
     }
 }
