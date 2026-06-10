@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.0.0...paigasus-helikon-mcp-v0.1.0) - 2026-06-10
+
+### Added
+
+- *(mcp)* SMA-327 rmcp 1.7 MCP client (`McpServerHandle`): stdio / child-process
+  / streamable-HTTP transports, tool adaptation with effect mapping, tool
+  prefixing, lazy mode and `search_tools` for on-demand discovery.
+- *(mcp)* SMA-327 rmcp 1.7 MCP server (`McpAgentServer`): expose any
+  `LlmAgent` as a single MCP tool, ctx factory, run timeout +
+  cancel-on-disconnect, stdio and streamable-HTTP serving.
+
+### Other
+
+- *(release)* SMA-327 lift stage-1 gates for paigasus-helikon-mcp
+
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-mcp-v0.0.0) - 2026-05-17
 
 ### Added

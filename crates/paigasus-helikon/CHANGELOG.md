@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.3.4...paigasus-helikon-v0.3.5) - 2026-06-10
+
+### Other
+
+- Re-publish with `paigasus-helikon-mcp = ^0.1.0` so the `mcp` feature
+  resolves to the real implementation (SMA-327).
+
 ## [0.3.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.3.3...paigasus-helikon-v0.3.4) - 2026-06-08
 
 ### Other
