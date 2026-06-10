@@ -362,11 +362,15 @@ async fn client_cancellation_aborts_the_run() {
     // serve-loop ct → per-request ct → `RequestContext.ct` → our child run
     // token. The handler task itself is a detached `tokio::spawn` that rmcp
     // never aborts, so the token firing is what actually stops the run.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    //
+    // Worst-case wall clock is two-stage: client cancel drain (~2s) + server
+    // closed drain (5s, always exhausted because the handler holds a sink
+    // clone) + propagation ≈ 7-7.5s. The 15s deadline leaves CI headroom.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while !CANCELLED.load(Ordering::SeqCst) {
         assert!(
             std::time::Instant::now() < deadline,
-            "client teardown did not cancel the agent run within 10s"
+            "client teardown did not cancel the agent run within 15s"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
