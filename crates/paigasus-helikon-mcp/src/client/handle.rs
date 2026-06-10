@@ -115,6 +115,13 @@ pub struct McpServerHandle {
 impl McpServerHandle {
     /// Spawn `command` as a child process speaking MCP over stdio.
     /// `configure` mutates the command (args, env, cwd) before spawning.
+    ///
+    /// # Runtime note
+    ///
+    /// Connect child-process transports from a **multi-thread** tokio runtime
+    /// (`#[tokio::main]`'s default). Under a current-thread runtime the
+    /// `initialize` handshake can stall against the child's pipe I/O
+    /// (observed as `Connect(ConnectionClosed("initialize response"))`).
     pub fn stdio(
         mut command: tokio::process::Command,
         configure: impl FnOnce(&mut tokio::process::Command),
@@ -128,6 +135,11 @@ impl McpServerHandle {
 
     /// Bring a fully configured [`rmcp::transport::TokioChildProcess`]
     /// (built via its `builder()`) for explicit lifecycle control.
+    ///
+    /// # Runtime note
+    ///
+    /// See [`McpServerHandle::stdio`] for the multi-thread runtime requirement
+    /// that applies to all child-process transports.
     pub fn child_process(transport: rmcp::transport::TokioChildProcess) -> McpConnectBuilder {
         McpConnectBuilder {
             kind: TransportKind::ChildProcess(transport),
