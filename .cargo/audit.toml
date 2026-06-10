@@ -7,16 +7,7 @@
 
 [advisories]
 ignore = [
-    # rsa 0.9.10 is pulled into the lockfile by sqlx-mysql but never compiled —
-    # paigasus-helikon-sessions-sqlite sets default-features = false on sqlx
-    # and enables only the sqlite feature. The Marvin Attack is exploitable
-    # only against running decryption code, which we do not build. No upstream
-    # fix advisory exists.
-    "RUSTSEC-2023-0071",
-    # async-std 1.13.2 is a dev-only transitive via opentelemetry_sdk v0.27.1's
-    # `testing` feature (facade dev-dependency, used only by the otel_spans
-    # integration test). No production code is affected; async-std is
-    # discontinued with no drop-in alternative for opentelemetry_sdk 0.27.x.
-    # Mirrored in /deny.toml's [advisories].ignore.
-    "RUSTSEC-2025-0052",
+    # No active advisory ignores needed — both rsa (RUSTSEC-2023-0071) and
+    # async-std (RUSTSEC-2025-0052) were dropped from the lockfile when rmcp 1.7
+    # replaced the older opentelemetry_sdk 0.27.x dev-dep tree (SMA-327).
 ]
