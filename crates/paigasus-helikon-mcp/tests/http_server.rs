@@ -89,3 +89,18 @@ async fn serves_streamable_http_end_to_end() {
     assert_eq!(result.content[0].as_text().unwrap().text, "ping");
     let _ = tokio::time::timeout(Duration::from_secs(3), client.cancel()).await;
 }
+
+#[tokio::test]
+async fn serve_streamable_http_bind_failure_returns_bind_error() {
+    let server = McpAgentServer::with_default_ctx(EchoAgent)
+        .name("x")
+        .version("0");
+    let err = server
+        .serve_streamable_http("not-an-addr:0")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, paigasus_helikon_mcp::McpError::Bind { .. }),
+        "expected McpError::Bind, got: {err:?}"
+    );
+}
