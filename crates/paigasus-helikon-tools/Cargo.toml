@@ -30,6 +30,7 @@ libc = { workspace = true }
 tokio        = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tempfile     = { workspace = true }
 futures-util = { workspace = true }
+futures-core = { workspace = true }
 # Path-only (version-less) internal dev-dep for the example — stripped from the
 # published manifest; examples are not built during `cargo publish --verify`.
 paigasus-helikon-providers-openai = { path = "../paigasus-helikon-providers-openai" }

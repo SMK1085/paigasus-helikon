@@ -1883,6 +1883,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "cap-std",
+ "futures-core",
  "futures-util",
  "libc",
  "paigasus-helikon-core",

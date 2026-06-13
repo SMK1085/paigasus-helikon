@@ -1,0 +1,101 @@
+#![cfg(unix)]
+#![allow(missing_docs)]
+
+mod common;
+
+use std::sync::Arc;
+
+use common::ScriptedModel;
+use futures_util::StreamExt;
+use paigasus_helikon_core::{
+    Agent, AgentEvent, AgentInput, CancellationToken, ContentPart, FinishReason, HookRegistry,
+    Item, LlmAgent, MemorySession, ModelEvent, RunContext, TracerHandle,
+};
+use paigasus_helikon_tools::{BashTool, ReadTool, Sandbox};
+
+#[tokio::test]
+async fn agent_navigates_sandbox_and_reports_contents() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("notes.txt"), "hello sandbox").unwrap();
+    let sandbox = Sandbox::open(tmp.path()).unwrap();
+
+    // Script: turn 0 -> Bash `ls`; turn 1 -> Read `notes.txt`; turn 2 -> answer.
+    let model = ScriptedModel::new(vec![
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "c1".into(),
+                name: Some("Bash".into()),
+                args_delta: "{\"command\":\"ls\"}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "c2".into(),
+                name: Some("Read".into()),
+                args_delta: "{\"path\":\"notes.txt\"}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        vec![
+            ModelEvent::TokenDelta {
+                text: "The sandbox contains notes.txt which says: hello sandbox".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ]);
+
+    let agent = LlmAgent::builder::<()>()
+        .name("sandbox-explorer")
+        .model(model)
+        .instructions("Use the tools to inspect the sandbox, then answer.")
+        .tool(ReadTool::<()>::new(sandbox.clone()))
+        .tool(BashTool::<()>::builder(sandbox).build())
+        .build();
+
+    let ctx: RunContext<()> = RunContext::new(
+        Arc::new(()),
+        Arc::new(MemorySession::new()),
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    );
+
+    let mut stream = agent
+        .run(ctx, AgentInput::from_user_text("What's in the sandbox?"))
+        .await
+        .expect("run starts");
+
+    let mut events = Vec::new();
+    while let Some(ev) = stream.next().await {
+        events.push(ev);
+    }
+
+    // (1) Final assistant text mentions the file contents.
+    let answered = events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TokenDelta { text } if text.contains("hello sandbox")));
+    assert!(answered, "agent should answer with the file contents");
+
+    // (2) ReadTool genuinely read the file: a ToolOutputItem event carries its
+    // real output ("hello sandbox"), which is NOT in any tool-call args.
+    let read_happened = events.iter().any(|e| match e {
+        AgentEvent::ToolOutputItem {
+            item: Item::ToolResult { content, .. },
+        } => content.iter().any(|part| match part {
+            ContentPart::Text { text } => text.contains("hello sandbox"),
+            _ => false,
+        }),
+        _ => false,
+    });
+    assert!(
+        read_happened,
+        "ReadTool should have returned the file's bytes"
+    );
+}
