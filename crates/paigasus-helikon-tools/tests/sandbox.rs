@@ -1,6 +1,23 @@
 #![allow(missing_docs)]
 
+use paigasus_helikon_core::{
+    CancellationToken, HookRegistry, MemorySession, RunContext, Tool, ToolContext, ToolEffect,
+    ToolError, TracerHandle,
+};
 use paigasus_helikon_tools::{Sandbox, SandboxError};
+use std::sync::Arc;
+
+/// Build a `ToolContext<()>` for calling a tool's `invoke` directly.
+fn tool_ctx() -> ToolContext<()> {
+    let run_ctx: RunContext<()> = RunContext::new(
+        Arc::new(()),
+        Arc::new(MemorySession::new()),
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    );
+    run_ctx.to_tool_context()
+}
 
 #[test]
 fn open_succeeds_on_existing_dir() {
@@ -19,4 +36,144 @@ fn open_fails_on_missing_dir() {
 fn sandbox_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Sandbox>();
+}
+
+#[tokio::test]
+async fn read_returns_file_content() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("notes.txt"), "hello sandbox").unwrap();
+    let sandbox = Sandbox::open(tmp.path()).unwrap();
+    let tool: ReadTool = ReadTool::new(sandbox);
+
+    assert_eq!(tool.name(), "Read");
+    assert_eq!(tool.effect(), ToolEffect::ReadOnly);
+
+    let out = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "path": "notes.txt" }))
+        .await
+        .unwrap();
+    assert_eq!(out.content["content"], "hello sandbox");
+}
+
+#[tokio::test]
+async fn read_rejects_parent_escape() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "path": "../secret" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn read_rejects_absolute_path() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "path": "/etc/passwd" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn read_non_utf8_is_denied() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("bad.bin"), [0xff, 0xfe, 0x00]).unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "path": "bad.bin" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn read_missing_file_is_other() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "path": "nope.txt" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Other(_)));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn read_rejects_escaping_symlink() {
+    use paigasus_helikon_tools::ReadTool;
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("secret.txt"),
+        tmp.path().join("link.txt"),
+    )
+    .unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "path": "link.txt" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn read_with_offset_and_limit_windows_lines() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("multi.txt"), "l1\nl2\nl3\nl4\n").unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let out = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "multi.txt", "offset": 2, "limit": 2 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.content["content"], "l2\nl3");
+}
+
+#[tokio::test]
+async fn read_offset_beyond_eof_returns_empty() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("multi.txt"), "l1\nl2\n").unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let out = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "multi.txt", "offset": 100 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.content["content"], "");
+}
+
+#[tokio::test]
+async fn read_full_preserves_trailing_newline_but_window_normalizes() {
+    use paigasus_helikon_tools::ReadTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("t.txt"), "a\nb\n").unwrap();
+    let tool: ReadTool = ReadTool::new(Sandbox::open(tmp.path()).unwrap());
+    let full = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "path": "t.txt" }))
+        .await
+        .unwrap();
+    assert_eq!(full.content["content"], "a\nb\n");
+    let win = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "t.txt", "limit": 2 }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(win.content["content"], "a\nb");
 }

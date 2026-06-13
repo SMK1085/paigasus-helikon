@@ -19,8 +19,6 @@ pub struct Sandbox {
 #[derive(Debug)]
 struct SandboxInner {
     root: PathBuf,
-    // Used via `Sandbox::dir()` starting in Task 4; suppressed until then.
-    #[allow(dead_code)]
     dir: Dir,
 }
 
@@ -52,7 +50,6 @@ impl Sandbox {
     }
 
     /// The underlying capability directory handle.
-    #[allow(dead_code)]
     pub(crate) fn dir(&self) -> &Dir {
         &self.inner.dir
     }
@@ -61,7 +58,6 @@ impl Sandbox {
 /// Reject a tool-supplied path that is absolute or contains a `..`/root/prefix
 /// component before it reaches the capability layer. The `cap-std` `Dir` is the
 /// backstop for symlink escapes; this is the deterministic front gate.
-#[allow(dead_code)]
 pub(crate) fn guard_relative(path: &str) -> Result<&Path, String> {
     let p = Path::new(path);
     if p.components().any(|c| {
