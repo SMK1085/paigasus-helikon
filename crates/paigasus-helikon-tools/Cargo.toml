@@ -39,6 +39,10 @@ wiremock     = { workspace = true }
 # published manifest; examples are not built during `cargo publish --verify`.
 paigasus-helikon-providers-openai = { path = "../paigasus-helikon-providers-openai" }
 
+[[example]]
+name             = "web_research"
+required-features = ["web"]
+
 [features]
 # Network tools (WebFetch + WebSearch). Off by default so FS/Bash-only
 # consumers never pull reqwest. `tokio/net` is needed for the SSRF DNS check.
