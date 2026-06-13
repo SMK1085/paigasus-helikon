@@ -30,3 +30,6 @@ pub use edit::EditTool;
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
+
+#[cfg(feature = "web")]
+pub use web::{WebFetchTool, WebFetchToolBuilder};

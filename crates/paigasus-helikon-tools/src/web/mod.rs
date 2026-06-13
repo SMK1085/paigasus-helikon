@@ -8,3 +8,5 @@
 
 mod fetch;
 pub(crate) mod http;
+
+pub use fetch::{WebFetchTool, WebFetchToolBuilder};

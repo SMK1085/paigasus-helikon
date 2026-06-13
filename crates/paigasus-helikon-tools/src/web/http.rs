@@ -9,7 +9,6 @@ use paigasus_helikon_core::ToolError;
 /// Build a `reqwest::Client` with a fixed user-agent and timeout. When
 /// `follow_redirects` is false the client never auto-redirects (WebFetch drives
 /// redirects itself so it can re-run the SSRF check on every hop).
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 pub(crate) fn build_client(
     user_agent: &str,
     timeout: Duration,
@@ -30,7 +29,6 @@ pub(crate) fn build_client(
 /// `true` if `host` is permitted by the allow/deny lists. A list entry matches
 /// when `host` equals it or is a sub-domain of it (case-insensitive). A deny
 /// match always refuses; with an allow-list set, only matching hosts pass.
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 pub(crate) fn host_allowed(host: &str, allow: Option<&[String]>, deny: &[String]) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     let matches = |entry: &String| {
@@ -49,7 +47,6 @@ pub(crate) fn host_allowed(host: &str, allow: Option<&[String]>, deny: &[String]
 /// `true` if `ip` is in a range the SSRF guard refuses: loopback, RFC1918
 /// private, link-local (incl. `169.254.169.254`), CGNAT, IPv6 ULA, or
 /// unspecified. v4-mapped v6 addresses are unwrapped and re-checked as v4.
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 pub(crate) fn ip_blocked(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4_blocked(v4),
@@ -70,7 +67,6 @@ pub(crate) fn ip_blocked(ip: IpAddr) -> bool {
     }
 }
 
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 fn v4_blocked(ip: Ipv4Addr) -> bool {
     ip.is_loopback()
         || ip.is_private()
@@ -83,20 +79,17 @@ fn v4_blocked(ip: Ipv4Addr) -> bool {
 }
 
 /// `100.64.0.0/10` (RFC 6598 carrier-grade NAT). `std`'s predicate is unstable.
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 fn is_cgnat(ip: Ipv4Addr) -> bool {
     let o = ip.octets();
     o[0] == 100 && (64..=127).contains(&o[1])
 }
 
 /// `fc00::/7` (RFC 4193 unique-local). `std`'s predicate is unstable.
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 fn is_ula(ip: Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xfe00) == 0xfc00
 }
 
 /// `fe80::/10` (link-local). `std`'s predicate is unstable.
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 fn is_v6_link_local(ip: Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xffc0) == 0xfe80
 }
@@ -104,7 +97,6 @@ fn is_v6_link_local(ip: Ipv6Addr) -> bool {
 /// SSRF guard: refuse a URL whose host is, or resolves to, a blocked IP. A
 /// no-op when `allow_private` is true. Resolution failure is operational
 /// (`Other`); a blocked address is a deliberate refusal (`Denied`).
-#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
 pub(crate) async fn ssrf_check(url: &url::Url, allow_private: bool) -> Result<(), ToolError> {
     if allow_private {
         return Ok(());
