@@ -38,12 +38,22 @@ These five decisions were made explicitly and drive the rest of the design.
    swappable (not just abstractly). The tool holds an `Arc<dyn SearchBackend>`
    so the backend is swapped at runtime.
 
-3. **Pure domain allow/deny, no SSRF guard.** `WebFetch` enforces only an
-   optional allow-list / deny-list on the URL host — the same posture as
-   `BashTool`'s command allow/deny. Default is permissive (fetch any public
-   URL). There is **no** built-in private/loopback/link-local IP blocking;
-   per the SMA-328 two-layer model, the runner's `PermissionPolicy`/deny-rules
-   is the real gate and the SSRF posture is the operator's responsibility.
+3. **Domain allow/deny + a default-on SSRF guard.** `WebFetch` enforces an
+   optional allow-list / deny-list on the URL host **and** a default-on SSRF
+   guard that refuses requests resolving to private / loopback / link-local /
+   CGNAT / ULA IPs (including the cloud-metadata address `169.254.169.254`),
+   with an explicit `allow_private_ips(true)` opt-out for trusted internal use.
+   **Rationale (design-review H1, accepted — reverses the original brainstorming
+   call of "no SSRF guard"):** unlike `BashTool`, a web fetcher's *fetched
+   content is the attacker* (prompt injection can steer the model to fetch the
+   metadata endpoint → IAM-credential exfil); the default is open
+   (`SideEffect` + permissive `Default` mode); and the runner layer provably
+   **cannot** express an IP guard — `DenyRule` is exact-tool-name-only (verified
+   `core/src/permission.rs:70-85`) and a custom `PermissionPolicy` would have to
+   re-implement DNS + IP classification in every deployment. So the guard lives
+   **inside the tool**, default-on. The domain allow/deny is still the
+   host-string layer on top (the `BashTool`-style posture); SSRF is the distinct
+   IP-layer guard the two-layer model doesn't cover.
 
 4. **Approach A — two independent tools, no shared public primitive.**
    `WebFetchTool` and `WebSearchTool` (and each backend) construct their own
@@ -125,7 +135,7 @@ In `crates/paigasus-helikon-tools/Cargo.toml`:
 
 ```toml
 [features]
-web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd"]
+web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd", "tokio/net"]
 ```
 
 `reqwest`, `url`, `dom_smoothie`, `htmd` are declared `optional = true`.
@@ -156,6 +166,7 @@ re-export doc line gains a note that the web tools require `tools-web`.
       .max_body_bytes(5 << 20)   // default 5 MiB; cap downloaded body, flag truncation
       .allow_domains(["docs.rs", "example.com"])  // optional; if set, ONLY these (+subdomains)
       .deny_domains(["evil.test"])                // optional; deny ALWAYS wins over allow
+      .allow_private_ips(false)                   // default false; opt-out of the SSRF guard
       .user_agent("paigasus-helikon/<ver>")       // default UA
       .build::<Ctx>()
   ```
@@ -167,14 +178,18 @@ re-export doc line gains a note that the web tools require `tools-web`.
      `Denied { reason: "only http/https URLs are supported" }`.
   2. Extract the host; run the allow/deny check (§6.1). Blocked ⇒
      `Denied { reason }`. **(Satisfies the AC.)**
-  3. `GET` via the shared client with a **custom redirect policy that re-runs
-     the host check on every hop** — a redirect from an allowed host into a
-     blocked host is refused (the request fails and maps to
-     `Denied { reason: "redirect to a blocked domain: <host>" }`), so the
-     deny-list cannot be bypassed via redirect.
-  4. Read the response body incrementally, stopping at `max_body_bytes`; past
+  3. **SSRF guard (§6.2), unless `allow_private_ips`**: resolve the host and
+     reject if it is a literal IP, or resolves to any IP, in a blocked range ⇒
+     `Denied { reason: "host resolves to a blocked (private/loopback/…) address" }`.
+  4. `GET` via the shared client with a **custom redirect policy that re-runs
+     both the host allow/deny check AND the SSRF IP check on every hop** — a
+     redirect from an allowed/public host into a blocked host or a private IP is
+     refused (the request fails and maps to
+     `Denied { reason: "redirect to a blocked domain/address: <host>" }`), so
+     neither the deny-list nor the SSRF guard can be bypassed via redirect.
+  5. Read the response body incrementally, stopping at `max_body_bytes`; past
      the cap ⇒ truncate the body and set `truncated: true`.
-  5. Branch on `Content-Type`:
+  6. Branch on `Content-Type`:
      - HTML (`text/html`, `application/xhtml+xml`) ⇒ `dom_smoothie` readability
        extraction of the main article subtree → `htmd` HTML→Markdown ⇒
        `format: "markdown"`.
@@ -213,6 +228,36 @@ not `notexample.com`. If an allow-list is configured, only matching hosts pass;
 a deny-list match always refuses, taking precedence over the allow-list. This is
 a hard-safety invariant enforced inside the tool (it is *not* a
 `PermissionPolicy` re-invocation — consistent with SMA-328's two-layer model).
+
+### 6.2 SSRF guard (default-on)
+
+A second, IP-layer hard invariant, enforced **before the request is issued**
+unless the builder set `allow_private_ips(true)`:
+
+1. **Resolve** the URL host to its IP set (`tokio::net::lookup_host` against
+   `host:port`; a literal-IP host short-circuits resolution).
+2. **Classify & refuse** if *any* resolved IP falls in a blocked range:
+   loopback (`127.0.0.0/8`, `::1`), RFC1918 private (`10/8`, `172.16/12`,
+   `192.168/16`), link-local (`169.254.0.0/16` — incl. the cloud-metadata IP
+   `169.254.169.254` — and `fe80::/10`), CGNAT (`100.64.0.0/10`), IPv6 ULA
+   (`fc00::/7`), and unspecified (`0.0.0.0`, `::`). Any hit ⇒ `Denied { reason }`.
+3. The redirect policy (§6 step 4) re-applies this classification to every hop's
+   target.
+
+Implementation: `std`'s stable `Ipv4Addr::{is_loopback, is_private,
+is_link_local, is_unspecified}` / `Ipv6Addr::{is_loopback, is_unspecified}`
+cover most ranges; CGNAT (`100.64.0.0/10`) and ULA (`fc00::/7`) are matched by
+hand-rolled CIDR checks (their `std` predicates are unstable). **No new
+dependency** — only `tokio`'s `net` feature (added under the `web` feature).
+
+**Documented residual — DNS rebinding (TOCTOU).** The guard resolves-and-checks,
+then reqwest resolves again at connect time; a hostile resolver could return a
+public IP to our check and a private IP at connect. Closing this needs
+resolve-then-connect IP pinning (a custom connector), which is **out of scope**
+for this ticket (§13) and called out as a known residual in the tool docs. The
+default-on guard still blocks the overwhelming common case — the model fetching
+`http://169.254.169.254/…`, `http://localhost`, or a hostname with a static
+private `A` record.
 
 ## 7. `WebSearchTool` + `SearchBackend`
 
@@ -274,6 +319,15 @@ Each backend builds its own `reqwest::Client` via `web::http::build_client()`.
 absent; the constructors do **not** read the network — they only build the
 client and store the key.
 
+**API-key hygiene (design-review M2, accepted).** A backend error becomes
+`ToolError::Other`, which the runner stringifies into the model-visible tool
+result *and* into traces — and `TavilyBackend` sends the key in the request
+**body**. So each backend **sanitizes** its errors before returning: never
+include the request body or the key, mapping transport/parse failures to a
+generic `"<backend> request failed: <status-or-category>"`. The key is likewise
+redacted from any `tracing` spans the backend emits. A unit test asserts the key
+string never appears in the surfaced error.
+
 ## 8. Shared HTTP helper (`web/http.rs`, private)
 
 - `build_client(user_agent: &str, timeout: Duration, redirect_policy) ->
@@ -281,11 +335,16 @@ client and store the key.
   `reqwest` features), the user-agent, the timeout, and the redirect policy.
 - `host_allowed(host, allow: &Option<Vec<String>>, deny: &[String]) -> bool` —
   the §6.1 matching logic, unit-tested directly.
+- `ip_blocked(ip: IpAddr) -> bool` — the §6.2 SSRF range classification (std
+  predicates + hand-rolled CGNAT/ULA CIDRs), unit-tested directly against known
+  addresses (`169.254.169.254`, `10.0.0.1`, `::1`, `100.64.0.1`, a public IP).
+- `resolve_and_check(host, port, allow_private) -> Result<(), Denied>` —
+  `tokio::net::lookup_host` + `ip_blocked`, short-circuiting literal-IP hosts.
 - The `WebFetch` redirect policy is a `reqwest::redirect::Policy::custom`
-  closure that re-applies `host_allowed` to each hop's target and aborts the
-  redirect chain (yielding a request error) on a blocked host. Search backends
-  use the default redirect policy (they only ever call their own fixed API
-  host).
+  closure that re-applies **both** `host_allowed` and the SSRF IP check to each
+  hop's target and aborts the redirect chain (yielding a request error) on a
+  blocked host or private IP. Search backends use the default redirect policy
+  (they only ever call their own fixed API host).
 
 ## 9. Dependencies & `deny.toml`
 
@@ -299,6 +358,10 @@ declare `optional = true` in the tools crate under the `web` feature:
   resolved in `Cargo.lock` and already pass cargo-deny. (The ticket's mention of
   `ring` is stale — the workspace resolves `aws-lc-rs`.)
 - **`url`** — host extraction for the domain check.
+- **`tokio`** — already a crate dependency; the `web` feature additionally
+  enables `tokio/net` for `lookup_host` (the §6.2 SSRF resolution). The IP-range
+  classification itself adds **no** dependency (std predicates + hand-rolled
+  CGNAT/ULA CIDRs).
 - **`dom_smoothie`** — pure-Rust Readability main-content extraction. Verified
   on crates.io: latest `0.18` (**MIT**). Pin the current major; confirm MSRV
   (≤ 1.85) at implementation.
@@ -327,10 +390,15 @@ the real-API path is a manual example.
   2. **Domain deny is pure** — a `WebFetchTool` with a deny-list returns
      `ToolError::Denied` *before* issuing any request, so this needs no server.
      Also assert a non-http(s) scheme ⇒ `Denied`. **(The AC.)**
-  3. **Localhost round-trip** — a throwaway `tokio::net::TcpListener` serves a
-     canned `200 text/html` response; assert the end-to-end fetch yields the
-     expected Markdown, `status`, and final `url`. (Hand-rolled listener avoids a
-     new dev-dep such as `wiremock`.)
+  3. **SSRF guard is pure (§6.2)** — `ip_blocked` unit tests over known
+     addresses, plus a `WebFetchTool` (guard on) fetching `http://127.0.0.1:<p>`
+     of the test's own listener ⇒ `Denied`, and the same URL with
+     `allow_private_ips(true)` ⇒ succeeds. Covers the literal-metadata-IP case
+     (`http://169.254.169.254`) without network. **(Design-review H1.)**
+  4. **Localhost round-trip** — a throwaway `tokio::net::TcpListener` serves a
+     canned `200 text/html` response; with `allow_private_ips(true)` (loopback)
+     assert the end-to-end fetch yields the expected Markdown, `status`, and
+     final `url`. (Hand-rolled listener avoids a new dev-dep such as `wiremock`.)
 - **`tests/web_search.rs`:**
   1. An in-crate **`ScriptedBackend` implementing `SearchBackend`** drives
      `WebSearchTool` and asserts the normalized `results` output — proving the
@@ -340,6 +408,9 @@ the real-API path is a manual example.
      (the anthropic-SSE-fixture precedent) and assert the mapping, without
      hitting the live API. (The mapping is factored into a private free function
      per backend so it is testable without a live HTTP call.)
+  3. **Key never leaks (§7.1, design-review M2)** — drive a backend against a
+     local listener returning an error status; assert the surfaced
+     `ToolError`/error string contains neither the API key nor the request body.
 - **`examples/web_research.rs` (manual, not CI):**
   `OpenAiModel::chat("gpt-5-mini").build()?` equipped with `WebSearchTool` +
   `WebFetchTool`, behind `OPENAI_API_KEY` and `BRAVE_SEARCH_API_KEY` /
@@ -360,8 +431,8 @@ Reuses the existing `ToolError` — **no core change**.
 | Condition | `ToolError` variant |
 |-----------|---------------------|
 | Args fail schema / missing `url` or `query` | `InvalidArgs { schema_errors }` (recoverable) |
-| Non-http(s) scheme; host blocked by allow/deny (incl. a redirect hop); non-text content-type | `Denied { reason }` |
-| DNS/TLS/connect/timeout failure; search-backend API/transport error | `Other(anyhow::Error)` |
+| Non-http(s) scheme; host blocked by allow/deny (incl. a redirect hop); host resolves to a blocked IP (SSRF guard, §6.2, incl. redirect hops); non-text content-type | `Denied { reason }` |
+| DNS/TLS/connect/timeout failure; search-backend API/transport error (**sanitized** — never echoes key/body, §7.1) | `Other(anyhow::Error)` |
 | non-2xx HTTP status; body truncation | **not errors** — reported in `ToolOutput` (`status`, `truncated`) |
 
 `Denied` = a deliberate refusal (safety boundary or unsatisfiable
@@ -394,8 +465,10 @@ Plain additive `feat` — **no ascend ritual, no manual core/facade bump:**
 ## 13. Out of scope (YAGNI)
 
 - Prompt-driven fetch summarization (needs a `Model`).
-- SSRF / private-IP / loopback / link-local blocking (decision §2.3: pure
-  allow/deny only; SSRF posture is the operator's via the runner).
+- **Resolve-then-connect IP pinning** to close the DNS-rebinding TOCTOU (§6.2).
+  The default-on SSRF guard resolves-and-checks and documents the rebinding
+  residual; a custom pinning connector is a follow-up. (The guard *itself* is
+  **in scope** — design-review H1.)
 - `robots.txt` honoring, rate-limiting, and response caching.
 - Non-text extraction (PDF, images, etc.).
 - A public shared `WebClient` primitive (Approach B — rejected for API
@@ -409,6 +482,11 @@ Plain additive `feat` — **no ascend ritual, no manual core/facade bump:**
 - An agent equipped with `WebFetchTool` can fetch an allowed URL (localhost
   round-trip test + the manual example) and is denied a blocked domain, surfaced
   as `ToolError::Denied { reason }` (`tests/web_fetch.rs`).
+- By default, `WebFetchTool` denies a URL that resolves to a private/loopback/
+  link-local IP (incl. `169.254.169.254`) as `ToolError::Denied`; the
+  `allow_private_ips(true)` opt-out lifts the guard (`tests/web_fetch.rs`).
+- A search backend never surfaces its API key or request body in an error
+  (`tests/web_search.rs`).
 - `WebSearchTool` returns normalized results from at least one real backend
   (Brave **and** Tavily implemented; parse-tested against JSON fixtures; the
   manual example exercises a live backend), and the backend is swappable via the
@@ -418,3 +496,29 @@ Plain additive `feat` — **no ascend ritual, no manual core/facade bump:**
   no `reqwest`.
 - All CI gates green (fmt, clippy `--all-features`, test matrix, docs,
   doc-coverage, commits, pr-title, audit, deny).
+
+## 15. Design-review resolution
+
+A staff-level design review (2026-06-13) was run against this spec. Outcomes,
+folded into the sections above:
+
+- **H1 — SSRF guard (accepted, reverses the original §2.3 call).** Verified the
+  premise: `DenyRule` is exact-tool-name-only (`core/src/permission.rs:70-85`)
+  and the default is open, so the runner layer cannot express an IP guard and a
+  default-open web fetcher ships a credential-exfil path. Added a **default-on**
+  in-tool SSRF guard (§6.2) with an `allow_private_ips` opt-out; DNS-rebinding
+  pinning deferred (§13).
+- **M2 — backend API-key leakage (accepted).** Backends sanitize errors and
+  redact the key from traces; a test guards it (§7.1, §10).
+- **M1 — "feat ⇒ minor bump" (rejected, reviewer incorrect for this repo).** On
+  these `0.x` crates release-plz bumps additive `feat` as a **patch** (minor is
+  the breaking slot). Empirically: SMA-325 `feat(core)` → `0.4.0→0.4.1`,
+  SMA-328 additive → `0.5.0→0.5.1`; the lone minor (SMA-326 `0.4.1→0.5.0`) was a
+  breaking PR. §12's `0.1.0→0.1.1` stands.
+- **L1 — "htmd is MIT" (rejected, reviewer incorrect).** crates.io metadata for
+  `htmd 0.5.4` (what cargo-deny reads) is **Apache-2.0**; both are allowlisted,
+  label unchanged (§9).
+- **M3 / L2 / L3 (noted, no change).** Non-text → `Denied` kept for
+  `ReadTool` consistency; `SideEffect`-blocks-`Plan` is core's documented
+  taxonomy; the private `build_client()` helper is confirmed new (not
+  duplication).
