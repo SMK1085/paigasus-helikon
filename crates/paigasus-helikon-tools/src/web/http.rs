@@ -1,0 +1,232 @@
+//! Private HTTP helpers shared by the web tools: the `reqwest::Client` builder,
+//! host allow/deny matching, and the SSRF IP classifier.
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::time::Duration;
+
+use paigasus_helikon_core::ToolError;
+
+/// Build a `reqwest::Client` with a fixed user-agent and timeout. When
+/// `follow_redirects` is false the client never auto-redirects (WebFetch drives
+/// redirects itself so it can re-run the SSRF check on every hop).
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+pub(crate) fn build_client(
+    user_agent: &str,
+    timeout: Duration,
+    follow_redirects: bool,
+) -> reqwest::Result<reqwest::Client> {
+    let redirect = if follow_redirects {
+        reqwest::redirect::Policy::default()
+    } else {
+        reqwest::redirect::Policy::none()
+    };
+    reqwest::Client::builder()
+        .user_agent(user_agent.to_owned())
+        .timeout(timeout)
+        .redirect(redirect)
+        .build()
+}
+
+/// `true` if `host` is permitted by the allow/deny lists. A list entry matches
+/// when `host` equals it or is a sub-domain of it (case-insensitive). A deny
+/// match always refuses; with an allow-list set, only matching hosts pass.
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+pub(crate) fn host_allowed(host: &str, allow: Option<&[String]>, deny: &[String]) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let matches = |entry: &String| {
+        let e = entry.trim_end_matches('.').to_ascii_lowercase();
+        host == e || host.ends_with(&format!(".{e}"))
+    };
+    if deny.iter().any(matches) {
+        return false;
+    }
+    match allow {
+        Some(list) => list.iter().any(matches),
+        None => true,
+    }
+}
+
+/// `true` if `ip` is in a range the SSRF guard refuses: loopback, RFC1918
+/// private, link-local (incl. `169.254.169.254`), CGNAT, IPv6 ULA, or
+/// unspecified. v4-mapped v6 addresses are unwrapped and re-checked as v4.
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+pub(crate) fn ip_blocked(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4_blocked(v4),
+        IpAddr::V6(v6) => {
+            // v6-specific ranges first, so `::1` / `::` are caught before the
+            // v4 unwrap (`to_ipv4()` would map `::1` to the non-blocked
+            // `0.0.0.1`).
+            if v6.is_loopback() || v6.is_unspecified() || is_ula(v6) || is_v6_link_local(v6) {
+                return true;
+            }
+            // Unwrap both `::ffff:a.b.c.d` (mapped) and the deprecated
+            // `::a.b.c.d` (compatible) and classify the embedded v4.
+            if let Some(v4) = v6.to_ipv4_mapped().or_else(|| v6.to_ipv4()) {
+                return v4_blocked(v4);
+            }
+            false
+        }
+    }
+}
+
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+fn v4_blocked(ip: Ipv4Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_multicast()
+        || is_cgnat(ip)
+}
+
+/// `100.64.0.0/10` (RFC 6598 carrier-grade NAT). `std`'s predicate is unstable.
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+fn is_cgnat(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 100 && (64..=127).contains(&o[1])
+}
+
+/// `fc00::/7` (RFC 4193 unique-local). `std`'s predicate is unstable.
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+fn is_ula(ip: Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// `fe80::/10` (link-local). `std`'s predicate is unstable.
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+fn is_v6_link_local(ip: Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xffc0) == 0xfe80
+}
+
+/// SSRF guard: refuse a URL whose host is, or resolves to, a blocked IP. A
+/// no-op when `allow_private` is true. Resolution failure is operational
+/// (`Other`); a blocked address is a deliberate refusal (`Denied`).
+#[allow(dead_code)] // consumed in SMA-412 follow-up tasks
+pub(crate) async fn ssrf_check(url: &url::Url, allow_private: bool) -> Result<(), ToolError> {
+    if allow_private {
+        return Ok(());
+    }
+    let denied = |host: &str| ToolError::Denied {
+        reason: format!(
+            "host `{host}` resolves to a blocked (private/loopback/link-local) address"
+        ),
+    };
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => {
+            if ip_blocked(IpAddr::V4(ip)) {
+                return Err(denied(&ip.to_string()));
+            }
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            if ip_blocked(IpAddr::V6(ip)) {
+                return Err(denied(&ip.to_string()));
+            }
+        }
+        Some(url::Host::Domain(host)) => {
+            let port = url.port_or_known_default().unwrap_or(80);
+            let addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
+                ToolError::Other(anyhow::anyhow!("DNS resolution failed for `{host}`: {e}"))
+            })?;
+            let mut any = false;
+            for addr in addrs {
+                any = true;
+                if ip_blocked(addr.ip()) {
+                    return Err(denied(host));
+                }
+            }
+            if !any {
+                return Err(ToolError::Other(anyhow::anyhow!(
+                    "no addresses resolved for `{host}`"
+                )));
+            }
+        }
+        None => {
+            return Err(ToolError::Denied {
+                reason: "URL has no host".to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn ip_blocked_rejects_private_and_special_ranges() {
+        for s in [
+            "127.0.0.1",       // loopback
+            "10.0.0.1",        // RFC1918
+            "172.16.0.1",      // RFC1918
+            "192.168.1.1",     // RFC1918
+            "169.254.169.254", // link-local / cloud metadata
+            "100.64.0.1",      // CGNAT
+            "0.0.0.0",         // unspecified
+            "::1",             // v6 loopback
+            "fc00::1",         // v6 ULA
+            "fe80::1",         // v6 link-local
+        ] {
+            assert!(ip_blocked(ip(s)), "{s} should be blocked");
+        }
+    }
+
+    #[test]
+    fn ip_blocked_allows_public_addresses() {
+        for s in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(!ip_blocked(ip(s)), "{s} should be allowed");
+        }
+    }
+
+    #[test]
+    fn ip_blocked_unwraps_v4_mapped_v6() {
+        let mapped = IpAddr::V6(Ipv4Addr::new(169, 254, 169, 254).to_ipv6_mapped());
+        assert!(ip_blocked(mapped));
+    }
+
+    #[test]
+    fn ip_blocked_handles_v6_loopback_and_compat_forms() {
+        // ::1 / :: must stay blocked even though to_ipv4() maps ::1 -> 0.0.0.1
+        assert!(ip_blocked(ip("::1")));
+        assert!(ip_blocked(ip("::")));
+        // deprecated v4-compatible ::a.b.c.d embedding a blocked v4
+        assert!(ip_blocked(ip("::169.254.169.254")));
+        assert!(ip_blocked(ip("::10.0.0.1")));
+        // v4-mapped public address stays allowed
+        assert!(!ip_blocked(ip("::ffff:8.8.8.8")));
+    }
+
+    #[test]
+    fn host_allowed_ignores_trailing_dot() {
+        let deny = vec!["evil.test".to_string()];
+        assert!(!host_allowed("evil.test.", None, &deny));
+        assert!(!host_allowed("api.evil.test.", None, &deny));
+    }
+
+    #[test]
+    fn host_allowed_deny_beats_allow_and_matches_subdomains() {
+        let deny = vec!["evil.test".to_string()];
+        // deny wins
+        assert!(!host_allowed("evil.test", None, &deny));
+        assert!(!host_allowed("api.evil.test", None, &deny)); // subdomain
+                                                              // unrelated host with no allow-list passes
+        assert!(host_allowed("good.test", None, &deny));
+        // allow-list restricts
+        let allow = Some(vec!["docs.rs".to_string()]);
+        assert!(host_allowed("docs.rs", allow.as_deref(), &[]));
+        assert!(host_allowed("api.docs.rs", allow.as_deref(), &[])); // subdomain
+        assert!(!host_allowed("crates.io", allow.as_deref(), &[]));
+        // case-insensitive
+        assert!(!host_allowed("EVIL.test", None, &deny));
+        // partial-label is NOT a match
+        assert!(host_allowed("notevil.test", None, &deny));
+    }
+}

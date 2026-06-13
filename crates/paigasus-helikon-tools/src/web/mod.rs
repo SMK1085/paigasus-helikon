@@ -5,3 +5,5 @@
 //! list **and** a default-on SSRF guard (blocks private/loopback/link-local/
 //! CGNAT/ULA addresses, including the cloud-metadata IP). `WebSearchTool` runs a
 //! query through a swappable `SearchBackend`.
+
+pub(crate) mod http;
