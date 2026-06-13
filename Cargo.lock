@@ -1878,12 +1878,13 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-tools"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "cap-std",
  "futures-util",
+ "libc",
  "paigasus-helikon-core",
  "paigasus-helikon-providers-openai",
  "schemars",
