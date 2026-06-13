@@ -28,7 +28,7 @@ async fn filesystem_server_tools_load_with_schemas() {
     assert!(!tools.is_empty(), "filesystem server exposed no tools");
     let read_tool = tools
         .iter()
-        .find(|t| t.name().contains("read"))
+        .find(|t| t.name().to_ascii_lowercase().contains("read"))
         .expect("expected a read-style tool");
     assert!(read_tool.schema().is_object());
     assert!(!read_tool.description().is_empty());

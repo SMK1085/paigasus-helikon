@@ -64,25 +64,28 @@ fn search_matches(
     query: &str,
 ) -> (Vec<serde_json::Value>, usize) {
     let query_lc = query.to_lowercase();
-    let all_matches: Vec<serde_json::Value> = tools
-        .iter()
-        .filter(|t| {
-            t.name.to_lowercase().contains(&query_lc)
-                || t.description
-                    .as_deref()
-                    .is_some_and(|d| d.to_lowercase().contains(&query_lc))
-        })
-        .map(|t| {
-            serde_json::json!({
+    // Count every match for `total`, but only build JSON (and clone schemas)
+    // for the first `MAX_SEARCH_RESULTS` — on a 6,000-tool server a broad query
+    // otherwise clones thousands of schemas just to discard all but the cap.
+    let mut total = 0usize;
+    let mut capped: Vec<serde_json::Value> = Vec::with_capacity(MAX_SEARCH_RESULTS);
+    for t in tools {
+        let is_match = t.name.to_lowercase().contains(&query_lc)
+            || t.description
+                .as_deref()
+                .is_some_and(|d| d.to_lowercase().contains(&query_lc));
+        if !is_match {
+            continue;
+        }
+        total += 1;
+        if capped.len() < MAX_SEARCH_RESULTS {
+            capped.push(serde_json::json!({
                 "name": prefixer(&t.name),
                 "description": t.description.as_deref().unwrap_or_default(),
                 "input_schema": serde_json::Value::Object((*t.input_schema).clone()),
-            })
-        })
-        .collect();
-
-    let total = all_matches.len();
-    let capped: Vec<serde_json::Value> = all_matches.into_iter().take(MAX_SEARCH_RESULTS).collect();
+            }));
+        }
+    }
     (capped, total)
 }
 

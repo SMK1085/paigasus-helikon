@@ -30,6 +30,20 @@ fn echo_schema() -> std::sync::Arc<rmcp::model::JsonObject> {
     }
 }
 
+/// Schema for the argument-ignoring fixture tools (`boom`, `shape`, `sleepy`),
+/// so the advertised shape matches the handler instead of borrowing `echo`'s.
+fn empty_schema() -> std::sync::Arc<rmcp::model::JsonObject> {
+    let v = serde_json::json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    });
+    match v {
+        serde_json::Value::Object(o) => std::sync::Arc::new(o),
+        _ => unreachable!(),
+    }
+}
+
 impl ServerHandler for FixtureServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -42,9 +56,9 @@ impl ServerHandler for FixtureServer {
     ) -> Result<ListToolsResult, ErrorData> {
         let echo = Tool::new("echo", "Echo a message back", echo_schema())
             .with_annotations(ToolAnnotations::new().read_only(true));
-        let boom = Tool::new("boom", "Always fails", echo_schema());
-        let shape = Tool::new("shape", "Returns structured content", echo_schema());
-        let sleepy = Tool::new("sleepy", "Sleeps for a minute", echo_schema());
+        let boom = Tool::new("boom", "Always fails", empty_schema());
+        let shape = Tool::new("shape", "Returns structured content", empty_schema());
+        let sleepy = Tool::new("sleepy", "Sleeps for a minute", empty_schema());
         Ok(ListToolsResult {
             tools: vec![echo, boom, shape, sleepy],
             ..Default::default()

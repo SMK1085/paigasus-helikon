@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / streamable-HTTP transports, tool adaptation with effect mapping, tool
   prefixing, lazy mode and `search_tools` for on-demand discovery.
 - *(mcp)* SMA-327 rmcp 1.7 MCP server (`McpAgentServer`): expose any
-  `LlmAgent` as a single MCP tool, ctx factory, run timeout +
+  `Agent<Ctx>` as a single MCP tool, ctx factory, run timeout +
   cancel-on-disconnect, stdio and streamable-HTTP serving.
 
 ### Other

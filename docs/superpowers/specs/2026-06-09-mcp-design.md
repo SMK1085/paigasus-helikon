@@ -103,7 +103,7 @@ let agent = LlmAgent::builder()
 `{"type":"object","additionalProperties":true}`, plus one `search_tools`
 meta-tool (also prefixed; `ReadOnly`):
 
-- input: `{ "query": string }`;
+- input: `{ "query": string }` (non-empty; `minLength: 1` in the schema);
 - behavior: substring/keyword match over cached tool names + descriptions;
 - output: matching tools' real names, descriptions, and full input schemas as
   JSON.
