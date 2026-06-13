@@ -11,6 +11,6 @@ mod fetch;
 pub(crate) mod http;
 mod search;
 
-pub use backends::BraveBackend;
+pub use backends::{BraveBackend, TavilyBackend};
 pub use fetch::{WebFetchTool, WebFetchToolBuilder};
 pub use search::{SearchBackend, SearchResult, WebSearchTool, WebSearchToolBuilder};

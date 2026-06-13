@@ -33,6 +33,6 @@ pub use write::WriteTool;
 
 #[cfg(feature = "web")]
 pub use web::{
-    BraveBackend, SearchBackend, SearchResult, WebFetchTool, WebFetchToolBuilder, WebSearchTool,
-    WebSearchToolBuilder,
+    BraveBackend, SearchBackend, SearchResult, TavilyBackend, WebFetchTool, WebFetchToolBuilder,
+    WebSearchTool, WebSearchToolBuilder,
 };
