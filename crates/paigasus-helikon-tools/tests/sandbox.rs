@@ -177,3 +177,97 @@ async fn read_full_preserves_trailing_newline_but_window_normalizes() {
         .unwrap();
     assert_eq!(win.content["content"], "a\nb");
 }
+
+#[tokio::test]
+async fn write_creates_file_and_parents() {
+    use paigasus_helikon_tools::WriteTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: WriteTool = WriteTool::new(Sandbox::open(tmp.path()).unwrap());
+    assert_eq!(tool.effect(), ToolEffect::Write);
+
+    let out = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "sub/dir/out.txt", "content": "data" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.content["bytes_written"], 4);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("sub/dir/out.txt")).unwrap(),
+        "data"
+    );
+}
+
+#[tokio::test]
+async fn write_rejects_escape() {
+    use paigasus_helikon_tools::WriteTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: WriteTool = WriteTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "../evil.txt", "content": "x" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn write_overwrites_existing_file() {
+    use paigasus_helikon_tools::WriteTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("f.txt"), "original").unwrap();
+    let tool: WriteTool = WriteTool::new(Sandbox::open(tmp.path()).unwrap());
+    tool.invoke(
+        &tool_ctx(),
+        serde_json::json!({ "path": "f.txt", "content": "replaced" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+        "replaced"
+    );
+}
+
+#[tokio::test]
+async fn write_top_level_file_no_parent() {
+    use paigasus_helikon_tools::WriteTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: WriteTool = WriteTool::new(Sandbox::open(tmp.path()).unwrap());
+    let out = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "top.txt", "content": "hi" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.content["bytes_written"], 2);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("top.txt")).unwrap(),
+        "hi"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn write_rejects_escaping_symlink() {
+    use paigasus_helikon_tools::WriteTool;
+    let outside = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path().join("pwn.txt"), tmp.path().join("link.txt"))
+        .unwrap();
+    let tool: WriteTool = WriteTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "link.txt", "content": "x" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+    // The write must NOT have escaped the sandbox.
+    assert!(!outside.path().join("pwn.txt").exists());
+}
