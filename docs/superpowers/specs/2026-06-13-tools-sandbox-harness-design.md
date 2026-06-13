@@ -1,6 +1,6 @@
 # SMA-328 — `paigasus-helikon-tools`: sandboxed Read/Write/Edit/Bash harness
 
-**Status:** design approved, pending spec review
+**Status:** approved — incorporates design-review revisions
 **Ticket:** [SMA-328](https://linear.app/smaschek/issue/SMA-328/paigasus-helikon-tools-sandboxed-readwritebashwebfetch-harness)
 **Milestone:** Composition & Extensibility
 **Branch:** `feature/sma-328-paigasus-helikon-tools-sandboxed-readwritebashwebfetch`
@@ -182,9 +182,12 @@ moving a cloned `Arc<SandboxInner>` into the closure.
 ### 6.3 `EditTool`
 - `name() = "Edit"`, `effect() = Write`.
 - Input: `{ path, old_string, new_string, replace_all: Option<bool> }`.
-- Exact string replacement. `old_string` absent ⇒ `Denied`. `old_string`
-  non-unique and `replace_all != true` ⇒ `Denied { reason: "old_string is not
-  unique; pass replace_all or add context" }`. Mirrors Claude Code's `Edit`.
+- Exact string replacement. `path`/`old_string`/`new_string` are **required**
+  schema fields, so a missing field is caught at deserialize ⇒
+  `InvalidArgs` (recoverable), never `Denied`. `old_string` **not found in the
+  file** ⇒ `Denied { reason }`. `old_string` found but non-unique with
+  `replace_all != true` ⇒ `Denied { reason: "old_string is not unique; pass
+  replace_all or add context" }`. Mirrors Claude Code's `Edit`.
 - Output: `{ "path": "<rel>", "replacements": <n> }`.
 
 ### 6.4 `BashTool`
@@ -209,8 +212,18 @@ moving a cloned `Arc<SandboxInner>` into the closure.
   cap).
 - Output: `{ "stdout", "stderr", "exit_code": Option<i32>, "timed_out": bool,
   "truncated": bool }`.
-- **Docs state explicitly**: this is soft confinement, not a security boundary.
-  Pair with `PermissionPolicy` / `DenyRule::tool("Bash")` for real control.
+- **This is a cwd-pinned shell, NOT a security sandbox.** The `cap-std`
+  containment that jails the FS tools does **not** extend to a spawned child
+  process — `sh -c <command>` can read/write anything this process can: absolute
+  paths, `..`, `~` (`HOME` stays in the env allowlist, so `~` resolves to the
+  *real* home), and the network. Both the crate-level docs **and** the
+  model-facing `description()` state this plainly, in those words.
+- **Ungated by default.** In `PermissionMode::Default` with no `PermissionPolicy`
+  installed, the control layer is permissive (returns `Allow`), and `effect() =
+  SideEffect` is not auto-blocked by `Plan`/`AcceptEdits` — so Bash runs
+  **ungated** unless the caller installs a `PermissionPolicy` or
+  `DenyRule::tool("Bash")`. The docs say so loudly, and the example (§8) models a
+  `PermissionPolicy` rather than running Bash wide open.
 
 ## 7. Error model & the core change
 
@@ -219,7 +232,8 @@ In-`invoke` outcomes map as follows:
 | Condition | `ToolError` variant |
 |-----------|---------------------|
 | Args fail schema/deserialize | `InvalidArgs { schema_errors }` (recoverable) |
-| Path escapes root; non-UTF-8 read; Edit `old_string` absent or non-unique without `replace_all`; Bash command blocked by an allow/deny rule | `Denied { reason }` (**new**) |
+| Path escapes root; non-UTF-8 read; Edit `old_string` not found in the file, or found but non-unique without `replace_all`; Bash command blocked by an allow/deny rule | `Denied { reason }` (**new**) |
+| Missing/malformed required args | `InvalidArgs { schema_errors }` (recoverable) |
 | Missing file; unexpected I/O; shell spawn failure | `Other(anyhow::Error)` |
 
 `Denied` is for a *deliberate refusal* — a safety-boundary violation or an
@@ -246,12 +260,14 @@ Denied {
 },
 ```
 
-Additive on a `#[non_exhaustive]` enum ⇒ semver-compatible. **Implementation
-must verify** the runner's `ToolError` handling surfaces `Denied` to the model
-the same way it surfaces `Other` (reported as a tool result, non-recoverable) —
-and specifically does *not* treat it like the recoverable `InvalidArgs`. If the
-runner matches `ToolError` exhaustively-with-wildcard, no change is needed beyond
-confirming the wildcard arm's behavior is the intended one.
+Additive on a `#[non_exhaustive]` enum ⇒ semver-compatible. **Runner behavior
+(`agent.rs:590-595`):** `Tool::invoke`'s result is mapped with *every*
+`ToolError` going uniformly through `Err(e.to_string())` into the tool result —
+there is no per-variant match. So `Denied` needs **zero** compile change and is
+surfaced to the model exactly like `Other`. Corollary: the ADR-10
+"recoverable `InvalidArgs`" distinction is **not** wired at tool dispatch today
+(all variants stringify identically), so the error taxonomy in this section is
+about *message clarity and future-proofing*, not current control flow.
 
 ## 8. Testing & the demo
 
@@ -270,7 +286,10 @@ confirming the wildcard arm's behavior is the intended one.
   portable commands or split by `cfg`.
 - **`examples/explore_sandbox.rs` (manual, not CI):** `OpenAiModel::chat(
   "gpt-5-mini").build()?` + the four tools over a real directory, behind
-  `OPENAI_API_KEY`. `paigasus-helikon-providers-openai` is a **path-only
+  `OPENAI_API_KEY`. It **installs a `PermissionPolicy`** (or at minimum a
+  `DenyRule`/`AskUser` path) governing the `Bash` tool rather than running it
+  wide open, so the example doubles as the canonical "how to gate Bash"
+  reference. `paigasus-helikon-providers-openai` is a **path-only
   dev-dependency** (consistent with the SMA-326 internal-dev-dep convention).
   Examples/tests are not built during `cargo publish --verify`, so this does not
   affect the release (to be confirmed during implementation).
@@ -280,7 +299,8 @@ confirming the wildcard arm's behavior is the intended one.
 Add to `[workspace.dependencies]` (root) and reference via `dep.workspace =
 true`:
 
-- `cap-std` — capability-based sandbox. Verify MSRV ≤ 1.85.
+- `cap-std` — capability-based sandbox. Pin the current major: `cap-std = "4"`.
+  MSRV is 1.70 ≤ our 1.85 (confirm at implementation).
 - `async-trait`, `serde` (derive), `serde_json`, `schemars` — already used
   elsewhere; reuse the existing workspace pins.
 - `tokio` — with `process`, `time`, `rt` features (for `spawn_blocking`,
@@ -291,9 +311,11 @@ true`:
 Dev-dependencies (crate): `tempfile`, `tokio` (test macros / `rt`), and
 `paigasus-helikon-providers-openai` (path-only) for the example.
 
-**`deny.toml`:** add `Apache-2.0 WITH LLVM-exception` to the license allowlist
-(cap-std), and confirm its transitive licenses pass the `deny` gate. Commit the
-resulting `Cargo.lock` update.
+**`deny.toml`:** `cap-std` and its deps (`rustix`, …) are licensed
+`Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT`; `deny.toml` already allows
+`Apache-2.0` and `MIT`, so cargo-deny passes via the OR fallback and **no new
+allowlist entry is expected**. Confirm with `cargo deny check` and add an entry
+only if it actually fails. Commit the resulting `Cargo.lock` update.
 
 ## 10. Release mechanics — the 5-step ascend (+ facade)
 
@@ -301,16 +323,20 @@ Because we add core API (`ToolError::Denied`) consumed by the ascending crate in
 the same PR, the 5-step ascend applies, and the facade is bumped too (the
 second-order drift caveat in CLAUDE.md):
 
-1. **core:** add `ToolError::Denied`; patch-bump `paigasus-helikon-core`; update
-   its CHANGELOG and the `[workspace.dependencies]` core pin. (release-plz
-   publishes core first, so `-tools` verifies against the fresh core.)
+1. **core:** add `ToolError::Denied`; patch-bump `paigasus-helikon-core`
+   (`0.5.0` → `0.5.1`); update its CHANGELOG and the `[workspace.dependencies]`
+   core pin. (release-plz publishes core first, so `-tools` verifies against the
+   fresh core.)
 2. **tools:** `version = "0.0.0" → "0.1.0"`; remove `publish = false` from
    `crates/paigasus-helikon-tools/Cargo.toml`.
 3. **release-plz.toml:** remove the `-tools` `[[package]] … release = false`
    block.
-4. **facade:** add the optional `paigasus-helikon-tools` dep + a `tools` feature
-   + a `pub use` re-export (kebab feature `tools` ↔ snake re-export; doc the
-   re-export); patch-bump `paigasus-helikon` + its self-pin + CHANGELOG.
+4. **facade:** the optional `paigasus-helikon-tools` dep (`Cargo.toml:20`), the
+   `tools` feature (`:35`), and the `pub use paigasus_helikon_tools as tools`
+   re-export (`lib.rs:36`) **already exist** (they currently re-export the empty
+   stub). So the only facade work is the version bump: patch-bump
+   `paigasus-helikon` (`0.3.5` → `0.3.6`) + its self-pin + CHANGELOG (the
+   `dependencies_update`/facade-drift fix). No dep/feature/re-export edits.
 5. Land the version/gate changes as one
    `chore(release): SMA-328 lift stage-1 gates for tools` commit alongside the
    implementation on the feature branch.
