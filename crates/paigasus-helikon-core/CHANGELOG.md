@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.0...paigasus-helikon-core-v0.5.1) - 2026-06-13
+
+### Added
+
+- *(core)* SMA-328 add `ToolError::Denied { reason }` variant for tool-intrinsic boundary violations.
+
 ## [0.5.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.4.1...paigasus-helikon-core-v0.5.0) - 2026-06-08
 
 ### Added

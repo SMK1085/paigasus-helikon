@@ -31,7 +31,7 @@ pub use paigasus_helikon_providers_anthropic as anthropic;
 #[cfg(feature = "mcp")]
 pub use paigasus_helikon_mcp as mcp;
 
-/// Sandboxed Read/Write/Bash/WebFetch tools. Enabled via the `tools` feature.
+/// Sandboxed Read/Write/Edit/Bash tools. Enabled via the `tools` feature.
 #[cfg(feature = "tools")]
 pub use paigasus_helikon_tools as tools;
 

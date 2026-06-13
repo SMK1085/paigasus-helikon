@@ -48,7 +48,8 @@ allow = [
   "MPL-2.0",
   "Unicode-DFS-2016",
   "Unicode-3.0",
-  "Zlib",            # foldhash (via sqlx-core → hashbrown → hashlink); permissive OSI/FSF-approved license
+  "Zlib",                          # foldhash (via sqlx-core → hashbrown → hashlink); permissive OSI/FSF-approved license
+  "Apache-2.0 WITH LLVM-exception", # winx (via cap-std → cap-primitives, pulled by paigasus-helikon-tools); not OR-licensed, so the Apache/MIT fallback doesn't apply
 ]
 exceptions = []
 

@@ -264,9 +264,36 @@ pub enum ToolError {
         schema_errors: Vec<String>,
     },
 
+    /// The tool refused the operation: either a hard safety-boundary violation
+    /// (a path outside the sandbox root, a non-UTF-8 read) or an unsatisfiable
+    /// precondition (an ambiguous edit target, an allow/deny-blocked command).
+    /// Distinct from a [`crate::PermissionPolicy`] denial, which the runner
+    /// resolves before `invoke` is ever called. Not recoverable.
+    #[error("operation denied: {reason}")]
+    Denied {
+        /// Human-readable denial reason, surfaced to the model.
+        reason: String,
+    },
+
     /// Escape hatch for arbitrary tool failures. See ADR-10.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod denied_variant_tests {
+    use super::ToolError;
+
+    #[test]
+    fn denied_displays_reason() {
+        let e = ToolError::Denied {
+            reason: "path escapes the sandbox root".to_owned(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "operation denied: path escapes the sandbox root"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.3.5...paigasus-helikon-v0.3.6) - 2026-06-13
+
+### Other
+
+- Track `paigasus-helikon-tools` 0.1.0 (the `tools` feature now resolves to the
+  real sandboxed Read/Write/Edit/Bash implementation); track
+  `paigasus-helikon-core` 0.5.1 (SMA-328).
+
 ## [0.3.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.3.4...paigasus-helikon-v0.3.5) - 2026-06-10
 
 ### Other

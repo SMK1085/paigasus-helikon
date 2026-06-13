@@ -37,11 +37,6 @@ publish = false
 # here keeps release-plz from proposing bumps or CHANGELOG churn. The two
 # flags MUST move together — see CLAUDE.md for the 4-step ascend recipe.
 [[package]]
-name = "paigasus-helikon-tools"
-publish = false
-release = false
-
-[[package]]
 name = "paigasus-helikon-evals"
 publish = false
 release = false

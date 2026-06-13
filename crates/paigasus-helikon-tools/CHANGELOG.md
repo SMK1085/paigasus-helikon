@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-tools-v0.1.0) - 2026-06-13
+
+### Added
+
+- *(tools)* SMA-328 sandboxed filesystem and process tools — `Sandbox` (cap-std), `ReadTool`, `WriteTool`, `EditTool`, `BashTool`; new `ToolError::Denied` boundary-violation error.
+
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-tools-v0.0.0) - 2026-05-17
 
 ### Added
