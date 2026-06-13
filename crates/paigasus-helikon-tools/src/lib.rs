@@ -16,10 +16,12 @@
 //! control layer is permissive, so `BashTool` runs **ungated**. Pair it with a
 //! `PermissionPolicy` or `DenyRule::tool("Bash")` for real control.
 
+mod edit;
 mod read;
 mod sandbox;
 mod write;
 
+pub use edit::EditTool;
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;

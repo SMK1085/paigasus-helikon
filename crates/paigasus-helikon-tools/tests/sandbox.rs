@@ -271,3 +271,172 @@ async fn write_rejects_escaping_symlink() {
     // The write must NOT have escaped the sandbox.
     assert!(!outside.path().join("pwn.txt").exists());
 }
+
+#[tokio::test]
+async fn edit_replaces_unique_string() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("f.txt"), "alpha beta gamma").unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let out = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "f.txt", "old_string": "beta", "new_string": "BETA" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.content["replacements"], 1);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+        "alpha BETA gamma"
+    );
+}
+
+#[tokio::test]
+async fn edit_not_found_is_denied() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("f.txt"), "alpha").unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "f.txt", "old_string": "zzz", "new_string": "x" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn edit_non_unique_without_replace_all_is_denied() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("f.txt"), "x x x").unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "f.txt", "old_string": "x", "new_string": "y" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn edit_replace_all_replaces_every_occurrence() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("f.txt"), "x x x").unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let out = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({
+                "path": "f.txt", "old_string": "x", "new_string": "y", "replace_all": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.content["replacements"], 3);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+        "y y y"
+    );
+}
+
+#[tokio::test]
+async fn edit_rejects_parent_escape() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "../evil.txt", "old_string": "a", "new_string": "b" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[tokio::test]
+async fn edit_missing_file_is_other() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "nope.txt", "old_string": "a", "new_string": "b" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Other(_)));
+}
+
+#[tokio::test]
+async fn edit_empty_old_string_is_denied() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("f.txt"), "abc").unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "f.txt", "old_string": "", "new_string": "X", "replace_all": true }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+        "abc"
+    );
+}
+
+#[tokio::test]
+async fn edit_preserves_trailing_newline() {
+    use paigasus_helikon_tools::EditTool;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("f.txt"), "alpha\nbeta\n").unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    tool.invoke(
+        &tool_ctx(),
+        serde_json::json!({ "path": "f.txt", "old_string": "beta", "new_string": "BETA" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+        "alpha\nBETA\n"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn edit_rejects_escaping_symlink() {
+    use paigasus_helikon_tools::EditTool;
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.txt"), "secret data").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("secret.txt"),
+        tmp.path().join("link.txt"),
+    )
+    .unwrap();
+    let tool: EditTool = EditTool::new(Sandbox::open(tmp.path()).unwrap());
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "path": "link.txt", "old_string": "secret", "new_string": "PWNED" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
+        "secret data"
+    );
+}
