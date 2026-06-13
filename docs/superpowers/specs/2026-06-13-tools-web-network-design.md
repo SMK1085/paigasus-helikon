@@ -413,7 +413,7 @@ the real-API path is a manual example.
      `ToolError`/error string contains neither the API key nor the request body.
 - **`examples/web_research.rs` (manual, not CI):**
   `OpenAiModel::chat("gpt-5-mini").build()?` equipped with `WebSearchTool` +
-  `WebFetchTool`, behind `OPENAI_API_KEY` and `BRAVE_SEARCH_API_KEY` /
+  `WebFetchTool`, behind `OPENAI_API_KEY` and `BRAVE_API_KEY` /
   `TAVILY_API_KEY`. It **installs a `PermissionPolicy`** (or `DenyRule`) over the
   web tools rather than running them wide open, doubling as the canonical "how to
   gate network tools" reference. `paigasus-helikon-providers-openai` stays a

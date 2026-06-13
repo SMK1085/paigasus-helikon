@@ -1260,10 +1260,10 @@ impl BraveBackend {
         })
     }
 
-    /// Build a backend, reading the key from `BRAVE_SEARCH_API_KEY`.
+    /// Build a backend, reading the key from `BRAVE_API_KEY`.
     pub fn from_env() -> Result<Self, anyhow::Error> {
-        let key = std::env::var("BRAVE_SEARCH_API_KEY")
-            .map_err(|_| anyhow::anyhow!("BRAVE_SEARCH_API_KEY is not set"))?;
+        let key = std::env::var("BRAVE_API_KEY")
+            .map_err(|_| anyhow::anyhow!("BRAVE_API_KEY is not set"))?;
         Self::new(key)
     }
 
@@ -1730,7 +1730,7 @@ Create `crates/paigasus-helikon-tools/examples/web_research.rs`:
 //! with both network tools gated by a `PermissionPolicy`.
 //!
 //! Run with keys:
-//! `OPENAI_API_KEY=... BRAVE_SEARCH_API_KEY=... \
+//! `OPENAI_API_KEY=... BRAVE_API_KEY=... \
 //!   cargo run -p paigasus-helikon-tools --features web --example web_research`
 //!
 //! This example is the canonical reference for gating network tools with a
