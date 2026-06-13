@@ -6,4 +6,5 @@
 //! CGNAT/ULA addresses, including the cloud-metadata IP). `WebSearchTool` runs a
 //! query through a swappable `SearchBackend`.
 
+mod fetch;
 pub(crate) mod http;
