@@ -1,7 +1,7 @@
 [package]
 name        = "paigasus-helikon"
 description = "Paigasus AI SDK — facade crate. Re-exports core plus feature-gated providers and runtimes."
-version                = "0.3.4"
+version                = "0.3.5"
 edition.workspace      = true
 rust-version.workspace = true
 authors.workspace      = true
@@ -96,7 +96,7 @@ required-features = ["openai"]
 name    = "tool_dispatch"
 harness = false
 # A benchmark, not a test: `test = false` keeps `cargo test` from building and
-# running the timing loop, and keeps it out of the `test (…, 1.75)` CI job.
+# running the timing loop, and keeps it out of the `test (…, 1.85)` CI job.
 test    = false
 
 [lints]

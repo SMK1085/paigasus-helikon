@@ -146,11 +146,11 @@ bot — not after.
 
 ## MSRV
 
-The workspace MSRV is **1.75** (declared in `[workspace.package].rust-version`). If a dependency raises the floor, bump `rust-version` to the version cargo demands — do **not** downgrade the dependency.
+The workspace MSRV is **1.85** (declared in `[workspace.package].rust-version`). If a dependency raises the floor, bump `rust-version` to the version cargo demands — do **not** downgrade the dependency.
 
 CI verifies MSRV two ways:
 
-1. `ci / test (… , 1.75)` matrix rows actually compile and run on 1.75.
+1. `ci / test (… , 1.85)` matrix rows actually compile and run on 1.85.
 2. `msrv / verify` runs `cargo msrv --path crates/paigasus-helikon-core verify` to confirm the declared MSRV is truthful. (cargo-msrv has no `--workspace` flag; since every member inherits `rust-version` from `[workspace.package]`, verifying one representative crate is sufficient.)
 
 ## Docstring coverage

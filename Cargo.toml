@@ -5,7 +5,7 @@ members  = ["crates/*"]
 [workspace.package]
 version       = "0.0.0"
 edition       = "2021"
-rust-version  = "1.75"
+rust-version  = "1.85"
 authors       = ["Sven Maschek"]
 license       = "Apache-2.0 OR MIT"
 repository    = "https://github.com/SMK1085/paigasus-helikon"
@@ -16,6 +16,7 @@ categories    = ["api-bindings", "asynchronous"]
 [workspace.dependencies]
 anyhow                = "1"
 async-openai          = "0.40"
+axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64                = "0.22"
 async-stream          = "0.3"
 async-trait           = "0.1"
@@ -29,7 +30,15 @@ proc-macro-crate      = "3"
 proc-macro2           = "1"
 quote                 = "1"
 reqwest               = { version = "0.13", default-features = false }
-rmcp                  = "0.16"
+rmcp                  = { version = "1.7", default-features = false, features = [
+  "client",
+  "server",
+  "transport-io",
+  "transport-child-process",
+  "transport-streamable-http-server",
+  "transport-streamable-http-client-reqwest",
+  "reqwest",
+] }
 rustversion           = "1"
 schemars              = "1"
 serde                 = { version = "1", features = ["derive"] }
@@ -48,12 +57,12 @@ trybuild              = "1"
 wiremock              = "0.6"
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.3.4" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.3.5" }
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.0" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.2" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.5" }
 paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.1.7" }
-paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp",                 version = "0.0.0" }
+paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp",                 version = "0.1.0" }
 paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools",               version = "0.0.0" }
 paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio", version = "0.1.6" }
 paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum",        version = "0.0.0" }
