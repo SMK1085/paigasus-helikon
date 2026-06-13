@@ -32,4 +32,7 @@ pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
 
 #[cfg(feature = "web")]
-pub use web::{WebFetchTool, WebFetchToolBuilder};
+pub use web::{
+    SearchBackend, SearchResult, WebFetchTool, WebFetchToolBuilder, WebSearchTool,
+    WebSearchToolBuilder,
+};
