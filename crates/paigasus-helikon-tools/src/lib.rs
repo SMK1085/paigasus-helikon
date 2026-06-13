@@ -15,3 +15,7 @@
 //! [`PermissionPolicy`](paigasus_helikon_core::PermissionPolicy) installed, the
 //! control layer is permissive, so `BashTool` runs **ungated**. Pair it with a
 //! `PermissionPolicy` or `DenyRule::tool("Bash")` for real control.
+
+mod sandbox;
+
+pub use sandbox::{Sandbox, SandboxError};
