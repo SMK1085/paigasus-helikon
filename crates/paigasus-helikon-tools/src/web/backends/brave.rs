@@ -30,10 +30,10 @@ impl BraveBackend {
         })
     }
 
-    /// Build a backend, reading the key from `BRAVE_SEARCH_API_KEY`.
+    /// Build a backend, reading the key from `BRAVE_API_KEY`.
     pub fn from_env() -> Result<Self, anyhow::Error> {
-        let key = std::env::var("BRAVE_SEARCH_API_KEY")
-            .map_err(|_| anyhow::anyhow!("BRAVE_SEARCH_API_KEY is not set"))?;
+        let key = std::env::var("BRAVE_API_KEY")
+            .map_err(|_| anyhow::anyhow!("BRAVE_API_KEY is not set"))?;
         Self::new(key)
     }
 

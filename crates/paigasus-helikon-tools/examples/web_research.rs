@@ -2,7 +2,7 @@
 //! with both network tools gated by a `PermissionPolicy`.
 //!
 //! Run with keys:
-//! `OPENAI_API_KEY=... BRAVE_SEARCH_API_KEY=... \
+//! `OPENAI_API_KEY=... BRAVE_API_KEY=... \
 //!   cargo run -p paigasus-helikon-tools --features web --example web_research`
 //!
 //! This example is the canonical reference for gating network tools with a

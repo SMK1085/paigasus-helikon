@@ -303,7 +303,7 @@ pub struct SearchResult {
 Each backend builds its own `reqwest::Client` via `web::http::build_client()`.
 
 - **`BraveBackend`** — `BraveBackend::new(api_key)` and
-  `BraveBackend::from_env()` (reads `BRAVE_SEARCH_API_KEY`).
+  `BraveBackend::from_env()` (reads `BRAVE_API_KEY`).
   `GET https://api.search.brave.com/res/v1/web/search?q=<query>&count=<limit>`
   with header `X-Subscription-Token: <key>`. Maps `web.results[]` →
   `{ title, url, description→snippet, content: None }`.
