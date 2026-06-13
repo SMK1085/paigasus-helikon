@@ -99,3 +99,75 @@ async fn agent_navigates_sandbox_and_reports_contents() {
         "ReadTool should have returned the file's bytes"
     );
 }
+
+#[tokio::test]
+async fn agent_surfaces_denied_tool_result() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sandbox = Sandbox::open(tmp.path()).unwrap();
+
+    // Turn 0: model tries to read OUTSIDE the sandbox (path escape) -> Denied.
+    // Turn 1: model gives up and answers.
+    let model = ScriptedModel::new(vec![
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "c1".into(),
+                name: Some("Read".into()),
+                args_delta: "{\"path\":\"../escape.txt\"}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        vec![
+            ModelEvent::TokenDelta {
+                text: "I could not read that file.".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    ]);
+
+    let agent = LlmAgent::builder::<()>()
+        .name("denial-demo")
+        .model(model)
+        .tool(ReadTool::<()>::new(sandbox))
+        .build();
+
+    let ctx: RunContext<()> = RunContext::new(
+        std::sync::Arc::new(()),
+        std::sync::Arc::new(MemorySession::new()),
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    );
+
+    let mut stream = agent
+        .run(ctx, AgentInput::from_user_text("read ../escape.txt"))
+        .await
+        .expect("run starts");
+
+    let mut events = Vec::new();
+    while let Some(ev) = stream.next().await {
+        events.push(ev);
+    }
+
+    // The denial reason ("operation denied: ...") must surface as a tool result
+    // through the runner — proving Denied propagates end-to-end, not just via a
+    // direct invoke(). The runner converts Err(e.to_string()) into
+    // AgentEvent::ToolOutputItem { item: Item::ToolResult { content, .. } }
+    // with a single ContentPart::Text carrying the error string.
+    let denial_surfaced = events.iter().any(|e| match e {
+        AgentEvent::ToolOutputItem {
+            item: Item::ToolResult { content, .. },
+        } => content.iter().any(|part| match part {
+            ContentPart::Text { text } => text.to_lowercase().contains("denied"),
+            _ => false,
+        }),
+        _ => false,
+    });
+    assert!(
+        denial_surfaced,
+        "the Denied error must surface as a tool result via the agent loop; events: {events:#?}"
+    );
+}
