@@ -92,13 +92,20 @@ impl WebFetchToolBuilder {
     }
 
     /// Cap the number of fetches this tool may perform within a single agent
-    /// run (tracked run-scoped via [`ToolContext`]'s state). The `(n+1)`th fetch
-    /// in a run is refused with [`ToolError::Denied`]. Default: unlimited.
+    /// run. The `(n+1)`th fetch in a run is refused with [`ToolError::Denied`].
+    /// Default: unlimited.
     ///
-    /// This is a **best-effort abuse cap**, not a hard concurrency limit: the
-    /// run-scoped counter is read-then-incremented, so simultaneous invocations
-    /// (e.g. parallel sub-agents sharing the run) may overshoot the cap by up to
-    /// the degree of concurrency. The security boundary is the SSRF guard, not
+    /// The cap is **exact**: the run-scoped counter is bumped with an atomic
+    /// check-and-increment on the shared `SessionState`, so even simultaneous
+    /// invocations (parallel sub-agents or parallel tool calls sharing the run)
+    /// admit **at most** `n` fetches in total. "Per run" means one shared
+    /// `SessionState` — the agent run plus its handoff chain and parallel
+    /// sub-agents; an `AgentAsTool` sub-run uses a fresh `SessionState` and so
+    /// gets its own independent budget.
+    ///
+    /// Every *attempt* counts: the use is consumed up front, before the SSRF
+    /// vet and the network request, so a failed, non-2xx, or SSRF-blocked fetch
+    /// still spends one of the `n`. The security boundary is the SSRF guard, not
     /// this counter.
     pub fn max_uses(mut self, n: usize) -> Self {
         self.max_uses = Some(n);
@@ -270,19 +277,13 @@ where
                 schema_errors: vec![e.to_string()],
             })?;
 
-        // Per-run use cap (run-scoped via the shared SessionState).
+        // Per-run use cap (run-scoped, atomic via the shared SessionState).
         if let Some(max) = self.max_uses {
-            let used = ctx
-                .state()
-                .get(USES_KEY)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            if used >= max as u64 {
+            if !ctx.state().increment_u64_if_below(USES_KEY, max as u64) {
                 return Err(ToolError::Denied {
                     reason: format!("WebFetch use limit reached ({max} fetches per run)"),
                 });
             }
-            ctx.state().set(USES_KEY, used + 1);
         }
 
         let mut current = url::Url::parse(&args.url).map_err(|e| ToolError::Denied {
