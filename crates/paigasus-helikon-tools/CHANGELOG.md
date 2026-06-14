@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.0...paigasus-helikon-tools-v0.1.1) - 2026-06-14
+
+### Added
+
+- *(tools)* SMA-412 add WebFetch + WebSearch network tools ([#76](https://github.com/SMK1085/paigasus-helikon/pull/76))
+
 ## [0.1.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-tools-v0.1.0) - 2026-06-13
 
 ### Added
