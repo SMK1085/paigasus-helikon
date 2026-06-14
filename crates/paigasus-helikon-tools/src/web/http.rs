@@ -54,7 +54,13 @@ pub(crate) fn ip_blocked(ip: IpAddr) -> bool {
             // v6-specific ranges first, so `::1` / `::` are caught before the
             // v4 unwrap (`to_ipv4()` would map `::1` to the non-blocked
             // `0.0.0.1`).
-            if v6.is_loopback() || v6.is_unspecified() || is_ula(v6) || is_v6_link_local(v6) {
+            if v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || is_ula(v6)
+                || is_v6_link_local(v6)
+                || is_v6_documentation(v6)
+            {
                 return true;
             }
             // Unwrap both `::ffff:a.b.c.d` (mapped) and the deprecated
@@ -76,12 +82,32 @@ fn v4_blocked(ip: Ipv4Addr) -> bool {
         || ip.is_documentation()
         || ip.is_multicast()
         || is_cgnat(ip)
+        || is_benchmarking_v4(ip)
+        || is_reserved_future_v4(ip)
 }
 
 /// `100.64.0.0/10` (RFC 6598 carrier-grade NAT). `std`'s predicate is unstable.
 fn is_cgnat(ip: Ipv4Addr) -> bool {
     let o = ip.octets();
     o[0] == 100 && (64..=127).contains(&o[1])
+}
+
+/// `198.18.0.0/15` (RFC 2544 benchmarking). `std`'s predicate is unstable.
+fn is_benchmarking_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    o[0] == 198 && (18..=19).contains(&o[1])
+}
+
+/// `240.0.0.0/4` (RFC 1112 reserved-for-future-use; `255.255.255.255` is also
+/// caught by `is_broadcast`). `std`'s predicate is unstable.
+fn is_reserved_future_v4(ip: Ipv4Addr) -> bool {
+    ip.octets()[0] >= 240
+}
+
+/// `2001:db8::/32` (RFC 3849 documentation). `std`'s predicate is unstable.
+fn is_v6_documentation(ip: Ipv6Addr) -> bool {
+    let s = ip.segments();
+    s[0] == 0x2001 && s[1] == 0x0db8
 }
 
 /// `fc00::/7` (RFC 4193 unique-local). `std`'s predicate is unstable.
@@ -163,9 +189,14 @@ mod tests {
             "169.254.169.254", // link-local / cloud metadata
             "100.64.0.1",      // CGNAT
             "0.0.0.0",         // unspecified
+            "198.18.0.1",      // benchmarking 198.18.0.0/15
+            "198.19.0.1",      // benchmarking 198.18.0.0/15
+            "240.0.0.1",       // reserved-for-future 240.0.0.0/4
             "::1",             // v6 loopback
             "fc00::1",         // v6 ULA
             "fe80::1",         // v6 link-local
+            "ff02::1",         // v6 multicast
+            "2001:db8::1",     // v6 documentation 2001:db8::/32
         ] {
             assert!(ip_blocked(ip(s)), "{s} should be blocked");
         }

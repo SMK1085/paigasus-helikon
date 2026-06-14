@@ -53,6 +53,11 @@ pub trait SearchBackend: Send + Sync {
     /// Backend name, for diagnostics.
     fn name(&self) -> &str;
     /// Run `query`. Implementors MUST return at most `limit` normalized results.
+    ///
+    /// Implementors MUST NOT include secrets or sensitive request context (API
+    /// keys, auth headers, raw request bodies) in the returned error — the tool
+    /// surfaces it to the model and traces. The shipped backends sanitize via
+    /// `sanitize_err`; third-party backends must do the same.
     async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, anyhow::Error>;
 }
 

@@ -77,18 +77,23 @@ impl WebFetchToolBuilder {
         self
     }
 
-    /// Override the `User-Agent` header.
+    /// Override the `User-Agent` header. The value must be a valid HTTP header
+    /// value (visible ASCII, no control characters or newlines); an invalid
+    /// value makes [`build`](Self::build) panic.
     pub fn user_agent(mut self, ua: impl Into<String>) -> Self {
         self.user_agent = ua.into();
         self
     }
 
-    /// Finish building. Panics only if the underlying `reqwest::Client` cannot
-    /// be constructed (a misconfigured TLS backend — not reachable with the
-    /// pinned features).
+    /// Finish building. Panics if the `reqwest::Client` cannot be built — with
+    /// the pinned TLS backend the only reachable cause is a `user_agent` set to
+    /// a string containing invalid HTTP header bytes (control chars/newlines);
+    /// the default user-agent always builds. `User-Agent` is trusted integrator
+    /// config (not request/model input), so this is treated as a configuration
+    /// error rather than a recoverable runtime failure.
     pub fn build<Ctx>(self) -> WebFetchTool<Ctx> {
         let client = build_client(&self.user_agent, self.timeout, false)
-            .expect("reqwest client builds with the pinned TLS features");
+            .expect("reqwest client builds (user_agent must be a valid HTTP header value)");
         WebFetchTool {
             client,
             max_body_bytes: self.max_body_bytes,
