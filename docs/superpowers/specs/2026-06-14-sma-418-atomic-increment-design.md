@@ -25,6 +25,7 @@ The only correct fix needs a new primitive on `paigasus-helikon-core::SessionSta
 - **Method name — `increment_u64_if_below`.** Self-documenting about both the stored type and the cap condition. Rejected: `try_increment_u64` and `increment_u64_capped` (cap condition implicit in the param).
 - **Return type — `bool`.** `true` = incremented (admit), `false` = at/over cap (deny). Rejected: `Option<u64>` returning the new count — YAGNI; the only consumer needs admit/deny.
 - **`u64`-specific, not a generic numeric CAS.** Scoped to the one consumer. Rejected: generic over `serde_json::Number` — out of scope.
+- **Release model — pure-auto (no manual bumps).** Let release-plz drive core→tools→facade. Rejected: the ticket's same-PR manual core/facade bump, which targets the *ascend* deadlock and does not apply because `tools` is already released; applying it here would defeat the `dependencies_update` cascade. See §4.
 
 ## Design
 
@@ -76,7 +77,10 @@ if let Some(max) = self.max_uses {
 
 Same placement (up front, before the SSRF vet) preserves the every-attempt-counts semantics, now atomic. `USES_KEY` is unchanged.
 
-Then update the `max_uses` doc comment (`fetch.rs:94-106`): drop the "best-effort abuse cap … the run-scoped counter is read-then-incremented, so simultaneous invocations … may overshoot the cap by up to the degree of concurrency" caveat and state the exact-cap guarantee (at most N fetches per run, including under concurrent invocation).
+Then update the `max_uses` doc comment (`fetch.rs:94-106`): drop the "best-effort abuse cap … the run-scoped counter is read-then-incremented, so simultaneous invocations … may overshoot the cap by up to the degree of concurrency" caveat and state the exact-cap guarantee. The replacement doc must make two things explicit:
+
+- **Scope of "per run."** The cap is exact within one shared `SessionState` — which spans the agent run plus its handoff chain and its parallel sub-agents (`run_tools_concurrent` passes one `tool_ctx`; `subagent_child()` shares `state`). An `AgentAsTool` sub-run builds a **fresh** `RunContext` (separate `SessionState`), so it gets its **own** `max_uses` budget. Phrase it as "at most N per run, where a run is one shared `SessionState`; an `AgentAsTool` sub-run gets a fresh budget" so "exact N" isn't misread as global across all nested agents.
+- **Every attempt counts.** Because the increment is up front (before the SSRF vet and network request), a failed, non-2xx, or SSRF-blocked fetch still consumes a use. This is a true *attempt* cap: a flaky network can exhaust the budget faster than the count of successful fetches, and an attacker probing internal IPs burns it (the latter is the intended behavior). State this contract plainly.
 
 ### 3. Test — concurrency proof
 
@@ -87,16 +91,21 @@ In the `state.rs` `#[cfg(test)]` module:
 
 (An optional integration-level assertion in `-tools` that `WebFetchTool` with `max_uses(N)` admits at most N under concurrent `invoke` may be added if it fits the existing `tests/web_fetch.rs` harness, but the core-level concurrency test is the canonical proof for the acceptance criteria.)
 
-### 4. Release coordination (CLAUDE.md same-PR-core-API rule)
+**Nature of the test (regression guard, not race observer).** Under a correct `Mutex` the `sum(true) == MAX` / `stored == MAX` invariant holds on every run, so the test cannot *observe* the old non-atomic race — it can't be made to flake against the fixed code. Its value is as a regression guard: a revert to the separate `get`/`set` sequence would very likely fail it under 64-thread contention. That is the intended role; keep it as the canonical proof.
 
-`-tools` consumes new `-core` API added in the same PR, so `cargo publish --verify` for `-tools` builds the tarball against the **registry** core (the path is stripped at publish). In this one PR:
+### 4. Release coordination — pure-auto (supersedes the ticket's §4)
 
-- **core** `0.5.1 → 0.5.2` (patch; additive, non-breaking) + its `[workspace.dependencies]` pin + CHANGELOG entry.
-- **facade (`paigasus-helikon`)** `0.3.8 → 0.3.9` (patch + `[workspace.dependencies]` self-pin + CHANGELOG) to avoid the `dependencies_update` drift the manual core bump otherwise causes.
-- **tools**: bumped automatically by release-plz from the `feat`/`fix` commit — no manual bump.
-- release-plz publishes in dependency order: **core → tools → facade**.
+**This diverges from the ticket's §4 deliberately, after design review.** The ticket prescribed same-PR manual bumps of `core` + facade per the CLAUDE.md "same-PR-core-API rule." That rule exists to fix the **ascend deadlock**: when the *consuming* crate is **manually** bumped (`0.0.0 → 0.1.0` per the 4-step ascend recipe), release-plz's `release` step publishes it immediately — before release-plz has bumped `core` — so its `cargo publish --verify` builds against the stale registry `core` (path stripped at publish) and fails. That was SMA-321 (PR #45 failed; #46 fixed it reactively).
 
-(Versions above are the values current on `main` as of this design; re-read each `Cargo.toml` at implementation time and bump from whatever is current.)
+**`paigasus-helikon-tools` is already a released crate (`0.1.2`), not ascending.** So nothing is manually bumped, and release-plz drives everything:
+
+- A single `feat(core): SMA-418 …` PR touches `core/` (new method + `state.rs` test) and `tools/` (the `fetch.rs` rewire + doc).
+- On merge, release-plz's release PR bumps **core** (`feat` ⇒ **patch** on `0.x`: `0.5.1 → 0.5.2`), bumps **tools** (`0.1.2 → 0.1.3`), and — via `dependencies_update = true` — cascades a patch bump to the **facade** with refreshed dependency pins. (`release-plz.toml`'s own comment documents this cascade.)
+- release-plz publishes in **dependency order: core → tools → facade**, so `tools`'s verify runs against the fresh `core` on the registry. No deadlock; the cascade stays intact so **no facade drift**.
+
+No manual version edits, no manual `[workspace.dependencies]` pin edits, no hand-written CHANGELOG entries — release-plz owns all of it. **Reactive fallback only:** if a publish step unexpectedly deadlocks, fix it with a follow-up `chore(release): SMA-418 …` PR (the proven SMA-321/SMA-346 pattern). This is also why the squashed PR commit is a real `feat` (proper changelog entry for the new public method), not a `chore`.
+
+(Versions above are the values current on `main` as of this design; release-plz reads whatever is current at release time.)
 
 ### 5. Branch & conventions
 
@@ -108,7 +117,7 @@ In the `state.rs` `#[cfg(test)]` module:
 
 - `SessionState` exposes an atomic increment-if-below; a concurrency unit test (N tasks racing on the same key) proves the counter never exceeds `max`.
 - `WebFetchTool` with `max_uses(N)` admits **at most** N fetches per run even under concurrent invocation; the best-effort doc caveat is removed.
-- core + facade bumped in the same PR; release publishes cleanly (core first).
+- core + facade bumped in the same PR; release publishes cleanly (core first). *(Intent satisfied via pure-auto per §4: release-plz bumps core/tools/facade and publishes core-first in dependency order. The literal "in the same PR" manual bump is superseded — it targets the ascend deadlock, which does not apply to an already-released `tools`.)*
 - All CI gates green.
 
 ## Out of scope
