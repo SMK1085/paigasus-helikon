@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.1...paigasus-helikon-tools-v0.1.2) - 2026-06-14
+
+### Added
+
+- *(tools)* SMA-417 finish WebFetch SSRF hardening + WebSearch domain filter ([#78](https://github.com/SMK1085/paigasus-helikon/pull/78))
+
 ## [0.1.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.0...paigasus-helikon-tools-v0.1.1) - 2026-06-14
 
 ### Added
