@@ -13,7 +13,9 @@ use crate::web::http::{build_client, host_allowed, ssrf_check};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_BODY: usize = 5 << 20; // 5 MiB
-const MAX_REDIRECTS: usize = 10;
+const MAX_REDIRECTS: usize = 5;
+/// Run-scoped key under which the per-run WebFetch use counter is stored.
+const USES_KEY: &str = "paigasus_helikon_tools::web_fetch::uses";
 const DEFAULT_UA: &str = concat!("paigasus-helikon-tools/", env!("CARGO_PKG_VERSION"));
 
 /// Arguments for [`WebFetchTool`].
@@ -31,6 +33,7 @@ pub struct WebFetchToolBuilder {
     deny_domains: Vec<String>,
     allow_private_ips: bool,
     user_agent: String,
+    max_uses: Option<usize>,
 }
 
 impl WebFetchToolBuilder {
@@ -85,6 +88,14 @@ impl WebFetchToolBuilder {
         self
     }
 
+    /// Cap the number of fetches this tool may perform within a single agent
+    /// run (tracked run-scoped via [`ToolContext`]'s state). The `(n+1)`th fetch
+    /// in a run is refused with [`ToolError::Denied`]. Default: unlimited.
+    pub fn max_uses(mut self, n: usize) -> Self {
+        self.max_uses = Some(n);
+        self
+    }
+
     /// Finish building. Panics if the `reqwest::Client` cannot be built — with
     /// the pinned TLS backend the only reachable cause is a `user_agent` set to
     /// a string containing invalid HTTP header bytes (control chars/newlines);
@@ -92,14 +103,20 @@ impl WebFetchToolBuilder {
     /// config (not request/model input), so this is treated as a configuration
     /// error rather than a recoverable runtime failure.
     pub fn build<Ctx>(self) -> WebFetchTool<Ctx> {
-        let client = build_client(&self.user_agent, self.timeout, false)
-            .expect("reqwest client builds (user_agent must be a valid HTTP header value)");
+        let client = build_client(
+            &self.user_agent,
+            self.timeout,
+            false,
+            Some(self.allow_private_ips),
+        )
+        .expect("reqwest client builds (user_agent must be a valid HTTP header value)");
         WebFetchTool {
             client,
             max_body_bytes: self.max_body_bytes,
             allow_domains: self.allow_domains,
             deny_domains: self.deny_domains,
             allow_private_ips: self.allow_private_ips,
+            max_uses: self.max_uses,
             schema: serde_json::to_value(schemars::schema_for!(WebFetchArgs))
                 .expect("WebFetchArgs schema serializes"),
             _ctx: PhantomData,
@@ -116,6 +133,7 @@ pub struct WebFetchTool<Ctx = ()> {
     allow_domains: Option<Vec<String>>,
     deny_domains: Vec<String>,
     allow_private_ips: bool,
+    max_uses: Option<usize>,
     schema: Value,
     _ctx: PhantomData<fn() -> Ctx>,
 }
@@ -131,6 +149,7 @@ impl WebFetchTool<()> {
             deny_domains: Vec::new(),
             allow_private_ips: false,
             user_agent: DEFAULT_UA.to_owned(),
+            max_uses: None,
         }
     }
 }
@@ -236,11 +255,27 @@ where
         ToolEffect::SideEffect
     }
 
-    async fn invoke(&self, _ctx: &ToolContext<Ctx>, args: Value) -> Result<ToolOutput, ToolError> {
+    async fn invoke(&self, ctx: &ToolContext<Ctx>, args: Value) -> Result<ToolOutput, ToolError> {
         let args: WebFetchArgs =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArgs {
                 schema_errors: vec![e.to_string()],
             })?;
+
+        // Per-run use cap (run-scoped via the shared SessionState).
+        if let Some(max) = self.max_uses {
+            let used = ctx
+                .state()
+                .get(USES_KEY)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            if used >= max as u64 {
+                return Err(ToolError::Denied {
+                    reason: format!("WebFetch use limit reached ({max} fetches per run)"),
+                });
+            }
+            ctx.state().set(USES_KEY, used + 1);
+        }
+
         let mut current = url::Url::parse(&args.url).map_err(|e| ToolError::Denied {
             reason: format!("invalid URL: {e}"),
         })?;

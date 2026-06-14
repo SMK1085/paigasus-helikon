@@ -21,7 +21,7 @@ pub struct BraveBackend {
 impl BraveBackend {
     /// Build a backend with an explicit API key.
     pub fn new(api_key: impl Into<String>) -> Result<Self, anyhow::Error> {
-        let client = build_client(DEFAULT_UA, Duration::from_secs(30), true)
+        let client = build_client(DEFAULT_UA, Duration::from_secs(30), true, None)
             .map_err(|e| anyhow::anyhow!("failed to build HTTP client: {e}"))?;
         Ok(Self {
             client,
@@ -40,7 +40,7 @@ impl BraveBackend {
     #[cfg(test)]
     fn with_endpoint(api_key: impl Into<String>, endpoint: impl Into<String>) -> Self {
         Self {
-            client: build_client(DEFAULT_UA, Duration::from_secs(30), true).unwrap(),
+            client: build_client(DEFAULT_UA, Duration::from_secs(30), true, None).unwrap(),
             api_key: api_key.into(),
             endpoint: endpoint.into(),
         }

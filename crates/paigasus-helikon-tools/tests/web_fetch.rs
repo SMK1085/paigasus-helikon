@@ -104,3 +104,57 @@ async fn truncates_body_at_cap() {
     assert_eq!(out.content["truncated"], true);
     assert_eq!(out.content["content"].as_str().unwrap().len(), 10);
 }
+
+#[tokio::test]
+async fn denies_redirect_chain_over_cap() {
+    let server = MockServer::start().await;
+    let target = server.uri(); // self-redirect loop
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", target.as_str()))
+        .mount(&server)
+        .await;
+
+    // allow_private_ips so the loopback target is reachable; the redirect cap
+    // (5) must still fire on the self-loop.
+    let tool = WebFetchTool::builder()
+        .allow_private_ips(true)
+        .build::<()>();
+    let err = tool
+        .invoke(&ctx(), serde_json::json!({ "url": server.uri() }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }), "got {err:?}");
+}
+
+#[tokio::test]
+async fn max_uses_caps_fetches_per_run() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/plain")
+                .set_body_string("ok"),
+        )
+        .mount(&server)
+        .await;
+
+    let tool = WebFetchTool::builder()
+        .allow_private_ips(true)
+        .max_uses(1)
+        .build::<()>();
+    // One ToolContext shared across both invocations == one agent run.
+    let run = ctx();
+    let first = tool
+        .invoke(&run, serde_json::json!({ "url": server.uri() }))
+        .await
+        .unwrap();
+    assert_eq!(first.content["status"], 200);
+    let err = tool
+        .invoke(&run, serde_json::json!({ "url": server.uri() }))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ToolError::Denied { .. }),
+        "2nd fetch capped; got {err:?}"
+    );
+}
