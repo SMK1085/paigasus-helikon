@@ -1,0 +1,15 @@
+{
+  "query": "mount helicon",
+  "results": [
+    {
+      "title": "Mount Helicon",
+      "url": "https://example.com/helicon",
+      "content": "Mount Helicon is a mountain celebrated in Greek mythology as sacred to the Muses, home to the springs Aganippe and Hippocrene."
+    },
+    {
+      "title": "Hippocrene Spring",
+      "url": "https://example.com/hippocrene",
+      "content": "The Hippocrene was a spring on Mount Helicon, formed by the hoof of Pegasus."
+    }
+  ]
+}

@@ -22,8 +22,17 @@ mod read;
 mod sandbox;
 mod write;
 
+#[cfg(feature = "web")]
+mod web;
+
 pub use bash::{BashTool, BashToolBuilder};
 pub use edit::EditTool;
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
+
+#[cfg(feature = "web")]
+pub use web::{
+    BraveBackend, SearchBackend, SearchResult, TavilyBackend, WebFetchTool, WebFetchToolBuilder,
+    WebSearchTool, WebSearchToolBuilder,
+};

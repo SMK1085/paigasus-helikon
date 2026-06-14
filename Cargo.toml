@@ -57,6 +57,9 @@ tracing-opentelemetry = "0.33"
 opentelemetry_sdk     = { version = "0.32", features = ["rt-tokio", "testing"] }
 opentelemetry-otlp    = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 trybuild              = "1"
+url                   = "2"
+dom_smoothie          = "0.18"
+htmd                  = "0.5"
 wiremock              = "0.6"
 
 # Internal — single source of truth so members depend via `workspace = true`
