@@ -49,3 +49,59 @@ async fn returns_normalized_results_from_backend() {
     // content is None -> omitted
     assert!(results[0].get("content").is_none());
 }
+
+#[tokio::test]
+async fn blocked_domains_drops_matching_results() {
+    let backend = ScriptedBackend(vec![
+        SearchResult::new("A", "https://good.example/a", "s", None),
+        SearchResult::new("B", "https://evil.test/b", "s", None),
+        SearchResult::new("C", "https://api.evil.test/c", "s", None), // subdomain
+    ]);
+    let tool = WebSearchTool::builder(Arc::new(backend))
+        .blocked_domains(["evil.test"])
+        .build::<()>();
+    let out = tool
+        .invoke(&ctx(), serde_json::json!({ "query": "x" }))
+        .await
+        .unwrap();
+    let results = out.content["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["url"], "https://good.example/a");
+}
+
+#[tokio::test]
+async fn allowed_domains_keeps_only_matching_results() {
+    let backend = ScriptedBackend(vec![
+        SearchResult::new("A", "https://docs.rs/x", "s", None),
+        SearchResult::new("B", "https://crates.io/y", "s", None),
+        SearchResult::new("C", "https://api.docs.rs/z", "s", None), // subdomain
+    ]);
+    let tool = WebSearchTool::builder(Arc::new(backend))
+        .allowed_domains(["docs.rs"])
+        .build::<()>();
+    let out = tool
+        .invoke(&ctx(), serde_json::json!({ "query": "x" }))
+        .await
+        .unwrap();
+    let results = out.content["results"].as_array().unwrap();
+    let urls: Vec<&str> = results.iter().map(|r| r["url"].as_str().unwrap()).collect();
+    // exact set — guards against a too-permissive matcher (e.g. `notdocs.rs`)
+    assert_eq!(urls, vec!["https://docs.rs/x", "https://api.docs.rs/z"]);
+}
+
+#[tokio::test]
+async fn empty_allowed_domains_keeps_all_results() {
+    // An empty allow-list normalizes to "no filter", not "reject everything".
+    let backend = ScriptedBackend(vec![
+        SearchResult::new("A", "https://a.example/1", "s", None),
+        SearchResult::new("B", "https://b.example/2", "s", None),
+    ]);
+    let tool = WebSearchTool::builder(Arc::new(backend))
+        .allowed_domains(Vec::<String>::new())
+        .build::<()>();
+    let out = tool
+        .invoke(&ctx(), serde_json::json!({ "query": "x" }))
+        .await
+        .unwrap();
+    assert_eq!(out.content["results"].as_array().unwrap().len(), 2);
+}

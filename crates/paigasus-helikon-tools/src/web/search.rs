@@ -8,6 +8,8 @@ use paigasus_helikon_core::{Tool, ToolContext, ToolEffect, ToolError, ToolOutput
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::web::http::host_allowed;
+
 /// Upper bound on results requested from a backend, regardless of the model's
 /// `limit`.
 const HARD_MAX_RESULTS: usize = 20;
@@ -74,6 +76,8 @@ struct WebSearchArgs {
 pub struct WebSearchToolBuilder {
     backend: Arc<dyn SearchBackend>,
     max_results: usize,
+    allowed_domains: Option<Vec<String>>,
+    blocked_domains: Vec<String>,
 }
 
 impl WebSearchToolBuilder {
@@ -84,11 +88,38 @@ impl WebSearchToolBuilder {
         self
     }
 
+    /// Keep only results whose URL host matches one of these (or a sub-domain).
+    /// When unset — or set to an empty list — any host is kept (subject to
+    /// `blocked_domains`). Normalizing empty → "no filter" avoids the footgun
+    /// where optional/env-derived config silently drops every result.
+    pub fn allowed_domains<I, S>(mut self, hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let hosts: Vec<String> = hosts.into_iter().map(Into::into).collect();
+        self.allowed_domains = (!hosts.is_empty()).then_some(hosts);
+        self
+    }
+
+    /// Drop results whose URL host matches one of these (or a sub-domain).
+    /// Always wins over the allow-list.
+    pub fn blocked_domains<I, S>(mut self, hosts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.blocked_domains = hosts.into_iter().map(Into::into).collect();
+        self
+    }
+
     /// Finish building.
     pub fn build<Ctx>(self) -> WebSearchTool<Ctx> {
         WebSearchTool {
             backend: self.backend,
             max_results: self.max_results,
+            allowed_domains: self.allowed_domains,
+            blocked_domains: self.blocked_domains,
             schema: serde_json::to_value(schemars::schema_for!(WebSearchArgs))
                 .expect("WebSearchArgs schema serializes"),
             _ctx: PhantomData,
@@ -100,17 +131,45 @@ impl WebSearchToolBuilder {
 pub struct WebSearchTool<Ctx = ()> {
     backend: Arc<dyn SearchBackend>,
     max_results: usize,
+    allowed_domains: Option<Vec<String>>,
+    blocked_domains: Vec<String>,
     schema: Value,
     _ctx: PhantomData<fn() -> Ctx>,
 }
 
 impl WebSearchTool<()> {
-    /// Start building a `WebSearchTool` over `backend` (default 5 results).
+    /// Start building a `WebSearchTool` over `backend` (default 5 results, no
+    /// domain filtering).
     pub fn builder(backend: Arc<dyn SearchBackend>) -> WebSearchToolBuilder {
         WebSearchToolBuilder {
             backend,
             max_results: 5,
+            allowed_domains: None,
+            blocked_domains: Vec::new(),
         }
+    }
+}
+
+impl<Ctx> WebSearchTool<Ctx> {
+    /// Drop results whose URL host fails the allow/deny lists. Fast-path returns
+    /// the input unchanged when no domain filter is configured; a result with an
+    /// unparseable / host-less URL is dropped when any filter is active.
+    fn filter_by_domain(&self, results: Vec<SearchResult>) -> Vec<SearchResult> {
+        if self.allowed_domains.is_none() && self.blocked_domains.is_empty() {
+            return results;
+        }
+        results
+            .into_iter()
+            .filter(|r| {
+                url::Url::parse(&r.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_owned))
+                    .map(|h| {
+                        host_allowed(&h, self.allowed_domains.as_deref(), &self.blocked_domains)
+                    })
+                    .unwrap_or(false)
+            })
+            .collect()
     }
 }
 
@@ -149,6 +208,7 @@ where
             self.backend.search(&args.query, limit).await.map_err(|e| {
                 ToolError::Other(anyhow::anyhow!("[{}] {e:#}", self.backend.name()))
             })?;
+        let results = self.filter_by_domain(results);
         Ok(ToolOutput::new(serde_json::json!({ "results": results })))
     }
 }

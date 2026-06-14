@@ -1,29 +1,72 @@
 //! Private HTTP helpers shared by the web tools: the `reqwest::Client` builder,
 //! host allow/deny matching, and the SSRF IP classifier.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use paigasus_helikon_core::ToolError;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 /// Build a `reqwest::Client` with a fixed user-agent and timeout. When
 /// `follow_redirects` is false the client never auto-redirects (WebFetch drives
-/// redirects itself so it can re-run the SSRF check on every hop).
+/// redirects itself so it can re-run the SSRF check on every hop). When
+/// `dns_guard` is `Some(allow_private)`, a [`GuardedResolver`] is installed so
+/// connect-time DNS results are validated through [`ip_blocked`] — pinning the
+/// connection to vetted IPs and closing the DNS-rebinding TOCTOU. `None` uses
+/// the default resolver (search backends, which hit fixed public API hosts).
 pub(crate) fn build_client(
     user_agent: &str,
     timeout: Duration,
     follow_redirects: bool,
+    dns_guard: Option<bool>,
 ) -> reqwest::Result<reqwest::Client> {
     let redirect = if follow_redirects {
         reqwest::redirect::Policy::default()
     } else {
         reqwest::redirect::Policy::none()
     };
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent(user_agent.to_owned())
         .timeout(timeout)
-        .redirect(redirect)
-        .build()
+        .redirect(redirect);
+    if let Some(allow_private) = dns_guard {
+        builder = builder.dns_resolver(Arc::new(GuardedResolver { allow_private }));
+    }
+    builder.build()
+}
+
+/// A `reqwest` DNS resolver that drops resolved addresses failing [`ip_blocked`]
+/// (unless `allow_private`), so the connection is pinned to validated IPs. This
+/// is the connect-time half of the SSRF guard: it closes the rebinding window
+/// between the pre-flight `ssrf_check` and reqwest's own resolution. Numeric-IP
+/// hosts never reach a resolver — they are covered by the literal-IP branch of
+/// [`ssrf_check`].
+struct GuardedResolver {
+    allow_private: bool,
+}
+
+impl Resolve for GuardedResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let allow_private = self.allow_private;
+        Box::pin(async move {
+            let host = name.as_str().to_owned();
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let addrs: Vec<SocketAddr> = if allow_private {
+                resolved.collect()
+            } else {
+                resolved.filter(|a| !ip_blocked(a.ip())).collect()
+            };
+            if addrs.is_empty() {
+                let err: Box<dyn std::error::Error + Send + Sync> =
+                    format!("no allowed addresses resolved for `{host}` (blocked by SSRF guard)")
+                        .into();
+                return Err(err);
+            }
+            let iter: Addrs = Box::new(addrs.into_iter());
+            Ok(iter)
+        })
+    }
 }
 
 /// `true` if `host` is permitted by the allow/deny lists. A list entry matches
@@ -251,5 +294,34 @@ mod tests {
         assert!(!host_allowed("EVIL.test", None, &deny));
         // partial-label is NOT a match
         assert!(host_allowed("notevil.test", None, &deny));
+    }
+
+    #[tokio::test]
+    async fn guarded_resolver_filters_loopback_unless_allowed() {
+        use reqwest::dns::{Name, Resolve};
+        use std::str::FromStr;
+
+        // `localhost` resolves to loopback (127.0.0.1 / ::1) — all blocked, so
+        // the guard leaves no addresses and the resolution fails.
+        let blocked = GuardedResolver {
+            allow_private: false,
+        };
+        assert!(
+            blocked
+                .resolve(Name::from_str("localhost").unwrap())
+                .await
+                .is_err(),
+            "loopback must be filtered out, leaving no addresses"
+        );
+
+        // Passthrough when private IPs are explicitly allowed.
+        let allowed = GuardedResolver {
+            allow_private: true,
+        };
+        let addrs = allowed
+            .resolve(Name::from_str("localhost").unwrap())
+            .await
+            .expect("passthrough resolves localhost");
+        assert!(addrs.count() >= 1, "passthrough returns loopback addresses");
     }
 }
