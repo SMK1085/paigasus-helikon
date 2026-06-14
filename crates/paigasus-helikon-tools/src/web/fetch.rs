@@ -51,14 +51,17 @@ impl WebFetchToolBuilder {
         self
     }
 
-    /// Restrict fetches to these hosts (and their sub-domains). When unset, any
-    /// host is allowed (subject to `deny_domains` and the SSRF guard).
+    /// Restrict fetches to these hosts (and their sub-domains). When unset — or
+    /// set to an empty list — any host is allowed (subject to `deny_domains` and
+    /// the SSRF guard). Normalizing empty → "no restriction" avoids the footgun
+    /// where optional/env-derived config silently blocks every fetch.
     pub fn allow_domains<I, S>(mut self, hosts: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allow_domains = Some(hosts.into_iter().map(Into::into).collect());
+        let hosts: Vec<String> = hosts.into_iter().map(Into::into).collect();
+        self.allow_domains = (!hosts.is_empty()).then_some(hosts);
         self
     }
 
@@ -91,6 +94,12 @@ impl WebFetchToolBuilder {
     /// Cap the number of fetches this tool may perform within a single agent
     /// run (tracked run-scoped via [`ToolContext`]'s state). The `(n+1)`th fetch
     /// in a run is refused with [`ToolError::Denied`]. Default: unlimited.
+    ///
+    /// This is a **best-effort abuse cap**, not a hard concurrency limit: the
+    /// run-scoped counter is read-then-incremented, so simultaneous invocations
+    /// (e.g. parallel sub-agents sharing the run) may overshoot the cap by up to
+    /// the degree of concurrency. The security boundary is the SSRF guard, not
+    /// this counter.
     pub fn max_uses(mut self, n: usize) -> Self {
         self.max_uses = Some(n);
         self

@@ -89,13 +89,16 @@ impl WebSearchToolBuilder {
     }
 
     /// Keep only results whose URL host matches one of these (or a sub-domain).
-    /// When unset, any host is kept (subject to `blocked_domains`).
+    /// When unset — or set to an empty list — any host is kept (subject to
+    /// `blocked_domains`). Normalizing empty → "no filter" avoids the footgun
+    /// where optional/env-derived config silently drops every result.
     pub fn allowed_domains<I, S>(mut self, hosts: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allowed_domains = Some(hosts.into_iter().map(Into::into).collect());
+        let hosts: Vec<String> = hosts.into_iter().map(Into::into).collect();
+        self.allowed_domains = (!hosts.is_empty()).then_some(hosts);
         self
     }
 

@@ -84,8 +84,24 @@ async fn allowed_domains_keeps_only_matching_results() {
         .await
         .unwrap();
     let results = out.content["results"].as_array().unwrap();
-    assert_eq!(results.len(), 2); // docs.rs + api.docs.rs
-    for r in results {
-        assert!(r["url"].as_str().unwrap().contains("docs.rs"));
-    }
+    let urls: Vec<&str> = results.iter().map(|r| r["url"].as_str().unwrap()).collect();
+    // exact set — guards against a too-permissive matcher (e.g. `notdocs.rs`)
+    assert_eq!(urls, vec!["https://docs.rs/x", "https://api.docs.rs/z"]);
+}
+
+#[tokio::test]
+async fn empty_allowed_domains_keeps_all_results() {
+    // An empty allow-list normalizes to "no filter", not "reject everything".
+    let backend = ScriptedBackend(vec![
+        SearchResult::new("A", "https://a.example/1", "s", None),
+        SearchResult::new("B", "https://b.example/2", "s", None),
+    ]);
+    let tool = WebSearchTool::builder(Arc::new(backend))
+        .allowed_domains(Vec::<String>::new())
+        .build::<()>();
+    let out = tool
+        .invoke(&ctx(), serde_json::json!({ "query": "x" }))
+        .await
+        .unwrap();
+    assert_eq!(out.content["results"].as_array().unwrap().len(), 2);
 }
