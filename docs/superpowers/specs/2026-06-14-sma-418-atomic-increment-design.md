@@ -93,9 +93,9 @@ In the `state.rs` `#[cfg(test)]` module:
 
 **Nature of the test (regression guard, not race observer).** Under a correct `Mutex` the `sum(true) == MAX` / `stored == MAX` invariant holds on every run, so the test cannot *observe* the old non-atomic race — it can't be made to flake against the fixed code. Its value is as a regression guard: a revert to the separate `get`/`set` sequence would very likely fail it under 64-thread contention. That is the intended role; keep it as the canonical proof.
 
-### 4. Release coordination — pure-auto (supersedes the ticket's §4)
+### 4. Release coordination — pure-auto
 
-**This diverges from the ticket's §4 deliberately, after design review.** The ticket prescribed same-PR manual bumps of `core` + facade per the CLAUDE.md "same-PR-core-API rule." That rule exists to fix the **ascend deadlock**: when the *consuming* crate is **manually** bumped (`0.0.0 → 0.1.0` per the 4-step ascend recipe), release-plz's `release` step publishes it immediately — before release-plz has bumped `core` — so its `cargo publish --verify` builds against the stale registry `core` (path stripped at publish) and fails. That was SMA-321 (PR #45 failed; #46 fixed it reactively).
+**This deliberately diverges from the release approach prescribed in the ticket.** The ticket called for same-PR manual bumps of `core` + facade per the CLAUDE.md "same-PR-core-API rule." That rule exists to fix the **ascend deadlock**: when the *consuming* crate is **manually** bumped (`0.0.0 → 0.1.0` per the 4-step ascend recipe), release-plz's `release` step publishes it immediately — before release-plz has bumped `core` — so its `cargo publish --verify` builds against the stale registry `core` (path stripped at publish) and fails. That was SMA-321 (PR #45 failed; #46 fixed it reactively).
 
 **`paigasus-helikon-tools` is already a released crate (`0.1.2`), not ascending.** So nothing is manually bumped, and release-plz drives everything:
 
