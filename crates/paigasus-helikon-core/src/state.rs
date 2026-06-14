@@ -58,6 +58,24 @@ impl SessionState {
             .cloned()
             .collect()
     }
+
+    /// Atomically increment the `u64` at `key` if it is below `max`.
+    ///
+    /// Reads the value at `key` (absent or non-`u64` ⇒ treated as `0`); if it
+    /// is `< max`, stores `value + 1` and returns `true`; otherwise leaves it
+    /// untouched and returns `false`. The read-compare-write happens under a
+    /// single lock hold, so concurrent callers racing on the same key never
+    /// collectively exceed `max`.
+    pub fn increment_u64_if_below(&self, key: &str, max: u64) -> bool {
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let current = guard.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+        if current < max {
+            guard.insert(key.to_owned(), serde_json::Value::from(current + 1));
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Control signals a tool can raise to the enclosing driver.
@@ -132,6 +150,61 @@ mod tests {
         let mut k = s.keys();
         k.sort();
         assert_eq!(k, vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    #[test]
+    fn increment_if_below_edge_cases() {
+        let s = SessionState::new();
+
+        // Absent key ⇒ treated as 0; first admits store 1, then 2.
+        assert!(s.increment_u64_if_below("k", 2));
+        assert_eq!(s.get("k").and_then(|v| v.as_u64()), Some(1));
+        assert!(s.increment_u64_if_below("k", 2));
+        assert_eq!(s.get("k").and_then(|v| v.as_u64()), Some(2));
+
+        // At the cap ⇒ false, value unchanged.
+        assert!(!s.increment_u64_if_below("k", 2));
+        assert_eq!(s.get("k").and_then(|v| v.as_u64()), Some(2));
+
+        // max = 0 ⇒ always false, nothing stored.
+        assert!(!s.increment_u64_if_below("zero", 0));
+        assert!(s.get("zero").is_none());
+
+        // Non-u64 value ⇒ treated as 0, overwritten with 1.
+        s.set("garbage", "not a number");
+        assert!(s.increment_u64_if_below("garbage", 1));
+        assert_eq!(s.get("garbage").and_then(|v| v.as_u64()), Some(1));
+    }
+
+    #[test]
+    fn increment_if_below_is_atomic_under_contention() {
+        use std::thread;
+
+        const MAX: u64 = 1000;
+        const THREADS: usize = 64;
+        let s = SessionState::new();
+
+        // Every thread races to admit on the same key until the cap is hit,
+        // tallying how many admits (true) it saw.
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let s = s.clone();
+                thread::spawn(move || {
+                    let mut local = 0u64;
+                    while s.increment_u64_if_below("uses", MAX) {
+                        local += 1;
+                    }
+                    local
+                })
+            })
+            .collect();
+
+        let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+
+        // Exactly MAX admits across all threads, and the stored counter lands
+        // on MAX — never above it. A non-atomic get/set would overshoot here.
+        assert_eq!(total, MAX, "exactly MAX admits across all threads");
+        assert_eq!(s.get("uses").and_then(|v| v.as_u64()), Some(MAX));
     }
 
     use super::ActionsHandle;
