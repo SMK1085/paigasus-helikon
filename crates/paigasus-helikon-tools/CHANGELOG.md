@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.2...paigasus-helikon-tools-v0.1.3) - 2026-06-14
+
+### Added
+
+- *(core)* SMA-418 add atomic increment_u64_if_below for exact max_uses cap ([#80](https://github.com/SMK1085/paigasus-helikon/pull/80))
+
 ## [0.1.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.1...paigasus-helikon-tools-v0.1.2) - 2026-06-14
 
 ### Added
