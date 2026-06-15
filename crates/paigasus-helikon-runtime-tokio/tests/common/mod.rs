@@ -10,10 +10,10 @@ use futures_core::stream::BoxStream;
 use futures_util::stream;
 
 use paigasus_helikon_core::{
-    CancellationToken, ConversationSnapshot, HookRegistry, Instructions, LlmAgent, Model,
-    ModelCapabilities, ModelError, ModelEvent, ModelRequest, ModelSettings, RunConfig, RunContext,
-    SequenceId, Session, SessionError, SessionEvent, Tool, ToolContext, ToolError, ToolOutput,
-    TracerHandle,
+    CancellationToken, ConversationSnapshot, Hook, HookDecision, HookEvent, HookRegistry,
+    Instructions, LlmAgent, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
+    ModelSettings, RunConfig, RunContext, SequenceId, Session, SessionError, SessionEvent, Tool,
+    ToolContext, ToolError, ToolOutput, TracerHandle,
 };
 
 /// Scripted model: one `Vec<ModelEvent>` per `invoke`; empty queue => error.
@@ -75,6 +75,30 @@ impl Model for PendingModel {
 
     fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities::default()
+    }
+}
+
+/// On `OnRunComplete`: cancel the run from inside the hook, then suspend. The
+/// agent yields the terminal event BEFORE firing `OnRunComplete`, so this
+/// deterministically reproduces the "terminal already out, cancel fires during
+/// the post-terminal hook await" window (SMA-421) in a single synchronous poll —
+/// no sleeps, no timing races. The suspended hook is dropped when the cancel
+/// tears down the agent stream.
+pub struct CancelOnRunCompleteHook;
+
+#[async_trait]
+impl<Ctx> Hook<Ctx> for CancelOnRunCompleteHook
+where
+    Ctx: Send + Sync + 'static,
+{
+    async fn on_event(&self, ctx: &RunContext<Ctx>, event: &HookEvent) -> HookDecision {
+        if matches!(event, HookEvent::OnRunComplete) {
+            ctx.cancel().cancel();
+            // Suspend until the cancel tears down the stream; the `Allow` below is
+            // unreachable on this branch.
+            std::future::pending::<()>().await;
+        }
+        HookDecision::Allow
     }
 }
 
@@ -182,6 +206,23 @@ pub fn run_context_with_cancel(cancel: CancellationToken) -> RunContext<()> {
         Arc::new(()),
         Arc::new(NoopSession) as Arc<dyn Session>,
         HookRegistry::new(),
+        TracerHandle::default(),
+        cancel,
+    )
+}
+
+pub fn run_context_with_cancel_and_hooks(
+    cancel: CancellationToken,
+    hooks: Vec<Arc<dyn Hook<()>>>,
+) -> RunContext<()> {
+    let mut registry = HookRegistry::new();
+    for h in hooks {
+        registry.push(h);
+    }
+    RunContext::new(
+        Arc::new(()),
+        Arc::new(NoopSession) as Arc<dyn Session>,
+        registry,
         TracerHandle::default(),
         cancel,
     )
