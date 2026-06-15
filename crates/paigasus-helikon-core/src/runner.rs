@@ -66,6 +66,13 @@ where
     Ctx: Send + Sync + 'static,
 {
     /// Run the agent to completion and return the aggregated result.
+    ///
+    /// **With a `Session`** (always present on [`RunContext`]): the runner loads
+    /// persisted history at start and seeds the conversation as
+    /// `history ++ input.messages`, so `input` is the *new turn* — the session
+    /// owns history. The run's events are persisted at exit. To continue with no
+    /// new turn (or to retry a failed run without re-appending the user message),
+    /// use [`Runner::resume`].
     async fn run(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -75,6 +82,11 @@ where
     ) -> Result<RunResult, RunError>;
 
     /// Run the agent and return a streaming result handle.
+    ///
+    /// Session loading/seeding matches [`Runner::run`]. **The returned stream
+    /// must be driven to its terminal for the run's events to be persisted:** a
+    /// consumer that drops the stream early may skip the finalize step and leave
+    /// a partial turn (or nothing) written.
     async fn run_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
