@@ -1,6 +1,6 @@
 # SMA-392 — Wire Session persistence into the run lifecycle
 
-**Status:** Design approved (incorporates staff review [`…-design-review.md`](./2026-06-15-session-persistence-run-lifecycle-design-review.md), 2026-06-15)
+**Status:** Design approved
 **Date:** 2026-06-15
 **Linear:** [SMA-392](https://linear.app/smaschek/issue/SMA-392/wire-session-persistence-into-the-run-lifecycle-history-load-event)
 **Branch:** `feature/sma-392-wire-session-persistence-into-the-run-lifecycle-history-load`
@@ -36,18 +36,18 @@ the run's semantic items at run exit.
    `SessionRecorder` helper lives in `paigasus-helikon-core`, next to `SessionEvent`
    / `project`, so it is unit-testable without a tokio runtime and reusable by the
    SMA-332 durable runners.
-4. **Tool-call/result pairing on drain (review H1).** When `SessionRecorder` drains,
+4. **Tool-call/result pairing on drain.** When `SessionRecorder` drains,
    any `ToolCalled` with no matching `ToolReturned` (left by a cancel/timeout *during*
    tool execution — see "Dangling tool calls" below) gets a **synthesized**
    `ToolReturned { content: "tool call did not complete (run cancelled/timed out)" }`.
    The persisted log therefore always `project()`s to a provider-valid conversation,
    and a resumed model sees that the call was attempted but interrupted.
-5. **Explicit `resume()` entry point (review H2).** Add `Runner::resume` (and
+5. **Explicit `resume()` entry point.** Add `Runner::resume` (and
    `resume_streamed`) as thin **default** trait methods equal to `run` with an empty
    `AgentInput`. This gives "continue from the session, no new turn" an explicit call
    so callers don't have to remember to blank `input` on retry, without burdening the
    stub runners (default body). `run(ctx, new_turn)` remains "append this new turn."
-6. **Read hard-fails, write is best-effort (review M2).** A `snapshot()` read failure
+6. **Read hard-fails, write is best-effort.** A `snapshot()` read failure
    at load fails the run before the agent starts (loud failure beats silently behaving
    as a fresh conversation). A `finalize()` write failure is logged and swallowed. The
    asymmetry is deliberate and documented; refining read failures into
@@ -134,7 +134,7 @@ knows which agent emitted").
 **Ordering.** Buffer order is `[input events…] ++ [streamed items in stream order]`,
 which matches conversational order.
 
-### Dangling tool calls (review H1)
+### Dangling tool calls
 
 The loop `yield`s a turn's `ToolCallItem`s (`agent.rs:840-890`) **before** awaiting
 `run_tools_concurrent` (`agent.rs:1024`); the matching `ToolOutputItem`s are emitted
@@ -189,7 +189,7 @@ Session **read** failure at load (`snapshot()`) is a hard error — the run cann
 faithfully resume from an unreadable session, so it fails before the agent starts.
 The read/write asymmetry is deliberate (Decision 6).
 
-**Streamed drain requirement (review M3).** `run_streamed` persists via the
+**Streamed drain requirement.** `run_streamed` persists via the
 `async_stream` generator, which calls `finalize()` just before the terminal yield. If
 a consumer drops the stream *before* the terminal, the generator is dropped at its
 suspension point and `finalize()` never runs — so a partial turn (or nothing) is
@@ -218,16 +218,15 @@ conversation **minus** the re-derived `System(instructions)` prefix.
   `append_count`) on each of completed / agent-failure / cancel / timeout.
 - **`SessionRecorder` unit tests** (core, no runtime): input pre-seed ordering,
   per-variant mapping, agent-name resolution (`item.agent` vs tracked), `System`-skip,
-  and **drain pairing** — an unmatched `ToolCalled` yields a synthesized `ToolReturned`
-  (review H1, unit level).
-- **Cancel-mid-tool then resume** (review H1, the one that bites): cancel a tool-using
+  and **drain pairing** — an unmatched `ToolCalled` yields a synthesized `ToolReturned`.
+- **Cancel-mid-tool then resume:** cancel a tool-using
   run *during* tool execution, then `run`/`resume` against the same session; assert the
   second run's first model request is well-formed (no dangling tool call) and the
   synthesized placeholder result is present.
-- **`resume()` round-trip** (review H2): after a completed turn, `resume()` with no
+- **`resume()` round-trip:** after a completed turn, `resume()` with no
   input continues from persisted history; assert the model sees the prior turn and no
   duplication occurs.
-- **Multi-agent attribution** (review M1): a handoff run records the target agent's
+- **Multi-agent attribution:** a handoff run records the target agent's
   assistant messages under the *target's* name.
 - **Streamed parity**: `run_streamed` persists the same events as `run` for an
   identical scripted agent.
@@ -239,8 +238,8 @@ pairing), `Runner::resume` / `resume_streamed`.
 
 **Out of scope:**
 
-- Compaction (`CompactingSession<S>` / `LoopState::Compacting`) — SMA-330. **Note
-  (review L1):** without compaction, each run loads the *entire* history into the model
+- Compaction (`CompactingSession<S>` / `LoopState::Compacting`) — SMA-330. **Note:**
+  without compaction, each run loads the *entire* history into the model
   request, so long multi-turn sessions grow context (token cost + latency) every turn.
   Expected; compaction is the prerequisite for practical long-lived sessions.
 - Structured error at the Runner boundary (`RunResult` / `RunError`) — SMA-346.
