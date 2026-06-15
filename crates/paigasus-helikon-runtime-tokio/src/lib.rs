@@ -13,7 +13,7 @@ use futures_core::stream::BoxStream;
 use futures_util::stream::StreamExt as _;
 use paigasus_helikon_core::{
     Agent, AgentEvent, AgentInput, CancellationToken, RunConfig, RunContext, RunError, RunResult,
-    RunResultStreaming, Runner, Session,
+    RunResultStreaming, Runner, Session, SessionRecorder,
 };
 
 /// How a controlled run ended.
@@ -78,15 +78,42 @@ fn controlled(
     (Box::pin(out), handle)
 }
 
-/// Post-run finalization seam. **SMA-321: placeholder** — flushes zero events
-/// so the session handle is wired end-to-end and the "finalize runs on every
-/// exit" guarantee is testable now. Session persistence + compaction land in a
-/// follow-up, which replaces the empty append with real event writing.
-async fn finalize(session: &Arc<dyn Session>) {
-    // Placeholder seam: the follow-up that adds session persistence replaces
-    // this empty append with real event writing and surfaces/logs the error
-    // instead of discarding it.
-    let _ = session.append(&[]).await;
+/// Snapshot the session into the merged input and seed a recorder with the
+/// run's new-turn messages. A read failure is a hard error: the run cannot
+/// faithfully resume from an unreadable session, so it fails before the agent
+/// starts. (The write side, by contrast, is best-effort — see `finalize`.)
+async fn load_and_record(
+    session: &Arc<dyn Session>,
+    agent_name: &str,
+    input: AgentInput,
+) -> Result<(AgentInput, Arc<Mutex<SessionRecorder>>), RunError> {
+    let snapshot = session
+        .snapshot()
+        .await
+        .map_err(|e| RunError::Other(anyhow::Error::new(e)))?;
+    let mut recorder = SessionRecorder::new(agent_name);
+    recorder.record_input(&input.messages);
+
+    let mut merged = AgentInput::new();
+    merged.messages = snapshot.messages;
+    merged.messages.extend(input.messages);
+    Ok((merged, Arc::new(Mutex::new(recorder))))
+}
+
+/// Post-run finalization: drain the recorder and append the run's events.
+/// Persistence is best-effort — an append error is logged, never propagated, so
+/// the run's outcome (Ok / Cancelled / Timeout / Agent error) is unchanged.
+async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecorder>>) {
+    let events = recorder
+        .lock()
+        .expect("session recorder mutex poisoned")
+        .drain();
+    if let Err(e) = session.append(&events).await {
+        tracing::warn!(
+            error = %e,
+            "session persistence failed during finalize; run outcome unaffected"
+        );
+    }
 }
 
 /// The default ephemeral execution backend. Stateless.
@@ -109,22 +136,33 @@ where
         let ctx = ctx.with_run_config(config);
         let cancel = ctx.cancel().clone();
         let session = ctx.session().clone();
-        // Clone the failure handle before moving ctx into agent.run, mirroring
-        // cancel/session above. collect() reads it after the stream drains.
         let failure = ctx.failure_handle();
 
-        let stream = agent.run(ctx, input).await?;
+        // Load persisted history and seed the recorder with the new turn.
+        let (merged, recorder) = load_and_record(&session, agent.name(), input).await?;
+
+        let stream = agent.run(ctx, merged).await?;
         let (controlled_stream, outcome) = controlled(stream, cancel, timeout);
+        let rec_inspect = Arc::clone(&recorder);
+        let recorded = controlled_stream
+            .inspect(move |ev| {
+                rec_inspect
+                    .lock()
+                    .expect("session recorder mutex poisoned")
+                    .observe(ev)
+            })
+            .boxed();
         // Do NOT `?`-short-circuit before finalize: agent failures surface as
         // collect()=Err, and finalize must still run.
-        let collected = RunResultStreaming::with_failure(controlled_stream, failure)
+        let collected = RunResultStreaming::with_failure(recorded, failure)
             .collect()
             .await;
-        finalize(&session).await;
+        finalize(&session, &recorder).await;
 
         // A cancel/timeout outcome wins even if `collected` is Ok (the run may
         // have finished in the same poll the signal fired); `biased` keeps that
-        // window small.
+        // window small. This precedence is deliberate (SMA-321) — see
+        // `prefired_cancel_still_completes_ready_run`.
         match outcome.get() {
             Outcome::Cancelled => Err(RunError::Cancelled),
             Outcome::TimedOut => Err(RunError::Timeout),
@@ -145,11 +183,22 @@ where
         let session = ctx.session().clone();
         let failure = ctx.failure_handle();
 
-        let stream = agent.run(ctx, input).await?;
-        let (mut controlled_stream, outcome) = controlled(stream, cancel, timeout);
+        let (merged, recorder) = load_and_record(&session, agent.name(), input).await?;
+
+        let stream = agent.run(ctx, merged).await?;
+        let (controlled_stream, outcome) = controlled(stream, cancel, timeout);
+        let rec_inspect = Arc::clone(&recorder);
+        let mut recorded = controlled_stream
+            .inspect(move |ev| {
+                rec_inspect
+                    .lock()
+                    .expect("session recorder mutex poisoned")
+                    .observe(ev)
+            })
+            .boxed();
 
         let out = async_stream::stream! {
-            while let Some(ev) = controlled_stream.next().await {
+            while let Some(ev) = recorded.next().await {
                 // Finalize BEFORE exposing a terminal event: a consumer may stop
                 // polling (and drop the stream) the moment it sees the terminal,
                 // so anything after the `yield` could never run.
@@ -157,7 +206,7 @@ where
                     ev,
                     AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
                 ) {
-                    finalize(&session).await;
+                    finalize(&session, &recorder).await;
                 }
                 yield ev;
             }
@@ -165,26 +214,16 @@ where
             // synthesize one — again after finalize, for the same reason.
             match outcome.get() {
                 Outcome::Cancelled => {
-                    finalize(&session).await;
-                    yield AgentEvent::RunFailed {
-                        error: "run cancelled".to_owned(),
-                    };
+                    finalize(&session, &recorder).await;
+                    yield AgentEvent::RunFailed { error: "run cancelled".to_owned() };
                 }
                 Outcome::TimedOut => {
-                    finalize(&session).await;
-                    yield AgentEvent::RunFailed {
-                        error: "run timed out".to_owned(),
-                    };
+                    finalize(&session, &recorder).await;
+                    yield AgentEvent::RunFailed { error: "run timed out".to_owned() };
                 }
                 Outcome::Completed => {}
             }
         };
-        // A later `.collect()` on this streamed handle surfaces structured
-        // *agent* failures via the slot (e.g. `RunError::Agent(MaxTurnsExceeded)`).
-        // Cancel/timeout are NOT in the slot: they are runner-level outcomes with
-        // no `AgentError` equivalent, so they surface only as the synthesized
-        // terminal `RunFailed` string events above and a `.collect()` maps them
-        // to `RunError::Other`. For structured `Cancelled`/`Timeout`, use `run()`.
         Ok(RunResultStreaming::with_failure(Box::pin(out), failure))
     }
 }

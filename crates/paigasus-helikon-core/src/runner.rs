@@ -16,7 +16,7 @@ use crate::{
 
 /// Pluggable execution backend.
 ///
-/// `Runner` is object-safe: both methods accept `&dyn Agent<Ctx>` rather
+/// `Runner` is object-safe: all methods accept `&dyn Agent<Ctx>` rather
 /// than a generic `<A: Agent<Ctx>>` parameter, which keeps the trait
 /// vtable-friendly while remaining compatible with both concrete and
 /// trait-object agent references.
@@ -66,6 +66,13 @@ where
     Ctx: Send + Sync + 'static,
 {
     /// Run the agent to completion and return the aggregated result.
+    ///
+    /// **With a `Session`** (always present on [`RunContext`]): the runner loads
+    /// persisted history at start and seeds the conversation as
+    /// `history ++ input.messages`, so `input` is the *new turn* — the session
+    /// owns history. The run's events are persisted at exit. To continue with no
+    /// new turn (or to retry a failed run without re-appending the user message),
+    /// use [`Runner::resume`].
     async fn run(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -75,6 +82,11 @@ where
     ) -> Result<RunResult, RunError>;
 
     /// Run the agent and return a streaming result handle.
+    ///
+    /// Session loading/seeding matches [`Runner::run`]. **The returned stream
+    /// must be driven to its terminal for the run's events to be persisted:** a
+    /// consumer that drops the stream early may skip the finalize step and leave
+    /// a partial turn (or nothing) written.
     async fn run_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -82,6 +94,35 @@ where
         input: AgentInput,
         config: RunConfig,
     ) -> Result<RunResultStreaming, RunError>;
+
+    /// Resume a run from the session's persisted history with no new input.
+    ///
+    /// Equivalent to [`Runner::run`] with an empty [`AgentInput`]: the runner
+    /// loads the conversation from `ctx.session()` and continues it. Use this to
+    /// continue a multi-turn session, or to retry a failed run without
+    /// re-appending the previous turn's user message. (With a `Session` present,
+    /// [`Runner::run`]'s `input` is the *new turn*; the session owns history.)
+    async fn resume(
+        &self,
+        agent: &(dyn Agent<Ctx> + '_),
+        ctx: RunContext<Ctx>,
+        config: RunConfig,
+    ) -> Result<RunResult, RunError> {
+        self.run(agent, ctx, AgentInput::new(), config).await
+    }
+
+    /// Streaming counterpart of [`Runner::resume`]: resumes from session
+    /// history with no new input and returns a streaming result handle instead
+    /// of an aggregated [`RunResult`].
+    async fn resume_streamed(
+        &self,
+        agent: &(dyn Agent<Ctx> + '_),
+        ctx: RunContext<Ctx>,
+        config: RunConfig,
+    ) -> Result<RunResultStreaming, RunError> {
+        self.run_streamed(agent, ctx, AgentInput::new(), config)
+            .await
+    }
 }
 
 /// Per-run configuration.
@@ -415,6 +456,92 @@ pub enum RunError {
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::{CancellationToken, HookRegistry, MemorySession, Session, TracerHandle};
+    use std::sync::{Arc, Mutex};
+
+    // Runner that records how many input messages its run/run_streamed saw.
+    #[derive(Default)]
+    struct CapturingRunner {
+        last_len: Arc<Mutex<Option<usize>>>,
+    }
+
+    #[async_trait]
+    impl Runner<()> for CapturingRunner {
+        async fn run(
+            &self,
+            _agent: &(dyn Agent<()> + '_),
+            _ctx: RunContext<()>,
+            input: AgentInput,
+            _config: RunConfig,
+        ) -> Result<RunResult, RunError> {
+            *self.last_len.lock().unwrap() = Some(input.messages.len());
+            Ok(RunResult::default())
+        }
+        async fn run_streamed(
+            &self,
+            _agent: &(dyn Agent<()> + '_),
+            _ctx: RunContext<()>,
+            input: AgentInput,
+            _config: RunConfig,
+        ) -> Result<RunResultStreaming, RunError> {
+            *self.last_len.lock().unwrap() = Some(input.messages.len());
+            let s: futures_core::stream::BoxStream<'static, AgentEvent> =
+                Box::pin(futures_util::stream::empty());
+            Ok(RunResultStreaming::new(s))
+        }
+    }
+
+    struct DummyAgent;
+    #[async_trait]
+    impl Agent<()> for DummyAgent {
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn description(&self) -> &str {
+            "dummy"
+        }
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<futures_core::stream::BoxStream<'static, AgentEvent>, AgentError> {
+            Ok(Box::pin(futures_util::stream::empty()))
+        }
+    }
+
+    fn ctx() -> RunContext<()> {
+        RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn resume_delegates_to_run_with_empty_input() {
+        let r = CapturingRunner::default();
+        r.resume(&DummyAgent, ctx(), RunConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(*r.last_len.lock().unwrap(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn resume_streamed_delegates_with_empty_input() {
+        let r = CapturingRunner::default();
+        let _ = r
+            .resume_streamed(&DummyAgent, ctx(), RunConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(*r.last_len.lock().unwrap(), Some(0));
+    }
 }
 
 #[cfg(test)]
