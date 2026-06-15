@@ -61,7 +61,7 @@ pub enum Item {
 }
 
 /// One content block inside an [`Item`].
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ContentPart {
@@ -109,7 +109,7 @@ pub enum ContentPart {
 }
 
 /// Source of a multimedia content block.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum MediaSource {

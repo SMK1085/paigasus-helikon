@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::{ContentPart, Item};
+use crate::{AgentEvent, ContentPart, Item};
 
 /// Conversation persistence as an append-only event log.
 ///
@@ -361,6 +361,150 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
     ConversationSnapshot { messages }
 }
 
+/// Accumulates one run's semantic items as [`SessionEvent`]s for the runner to
+/// persist at run exit.
+///
+/// The runner pre-seeds the recorder with the run's `AgentInput` messages (the
+/// new turn — which the agent does not re-emit on its event stream), then feeds
+/// it every [`crate::AgentEvent`] as the stream flows. [`SessionRecorder::drain`]
+/// returns the accumulated log, synthesizing a [`SessionEvent::ToolReturned`]
+/// for any tool call left without a result (a run interrupted mid-tool) so the
+/// log always [`project`]s to a provider-valid conversation.
+#[derive(Debug)]
+pub struct SessionRecorder {
+    events: Vec<SessionEvent>,
+    current_agent: String,
+}
+
+impl SessionRecorder {
+    /// Create a recorder seeded with the root agent's name. Used to attribute
+    /// assistant messages whose [`Item::AssistantMessage`] `agent` is `None`,
+    /// before any `RunStarted`/`AgentUpdated` updates the tracked agent.
+    pub fn new(root_agent: impl Into<String>) -> Self {
+        Self {
+            events: Vec::new(),
+            current_agent: root_agent.into(),
+        }
+    }
+
+    /// Record the run's input messages (the new turn). The agent never re-emits
+    /// these on its event stream, so the runner records them directly.
+    /// [`Item::System`] has no [`SessionEvent`] equivalent and is skipped.
+    pub fn record_input(&mut self, messages: &[Item]) {
+        for item in messages {
+            match item {
+                Item::UserMessage { content } => {
+                    self.events
+                        .push(SessionEvent::user_message(content.clone()));
+                }
+                Item::AssistantMessage { content, agent } => {
+                    let name = agent.clone().unwrap_or_else(|| self.current_agent.clone());
+                    self.events
+                        .push(SessionEvent::assistant_message(content.clone(), name));
+                }
+                Item::ToolCall {
+                    call_id,
+                    name,
+                    args,
+                } => {
+                    self.events.push(SessionEvent::tool_called(
+                        call_id.clone(),
+                        name.clone(),
+                        args.clone(),
+                    ));
+                }
+                Item::ToolResult { call_id, content } => {
+                    self.events.push(SessionEvent::tool_returned(
+                        call_id.clone(),
+                        content.clone(),
+                    ));
+                }
+                Item::System { .. } => {
+                    tracing::debug!(
+                        "SessionRecorder: skipping Item::System in input (no SessionEvent variant)"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Observe one [`crate::AgentEvent`] from the run's stream: record the
+    /// semantic items (assistant messages, tool calls, tool results, handoffs)
+    /// and track the active agent from `RunStarted` / `AgentUpdated`.
+    pub fn observe(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::RunStarted { agent } | AgentEvent::AgentUpdated { agent } => {
+                self.current_agent = agent.clone();
+            }
+            AgentEvent::MessageOutput {
+                item: Item::AssistantMessage { content, agent },
+            } => {
+                let name = agent.clone().unwrap_or_else(|| self.current_agent.clone());
+                self.events
+                    .push(SessionEvent::assistant_message(content.clone(), name));
+            }
+            AgentEvent::ToolCallItem {
+                item:
+                    Item::ToolCall {
+                        call_id,
+                        name,
+                        args,
+                    },
+            } => {
+                self.events.push(SessionEvent::tool_called(
+                    call_id.clone(),
+                    name.clone(),
+                    args.clone(),
+                ));
+            }
+            AgentEvent::ToolOutputItem {
+                item: Item::ToolResult { call_id, content },
+            } => {
+                self.events.push(SessionEvent::tool_returned(
+                    call_id.clone(),
+                    content.clone(),
+                ));
+            }
+            AgentEvent::HandoffItem { from, to } => {
+                self.events
+                    .push(SessionEvent::handoff_occurred(from.clone(), to.clone()));
+            }
+            _ => {}
+        }
+    }
+
+    /// Drain the accumulated events, appending a synthesized
+    /// [`SessionEvent::ToolReturned`] for every [`SessionEvent::ToolCalled`]
+    /// left without a matching result (a run cancelled/timed out mid-tool).
+    /// The returned log always [`project`]s to a provider-valid conversation.
+    pub fn drain(&mut self) -> Vec<SessionEvent> {
+        let returned: std::collections::HashSet<String> = self
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                SessionEvent::ToolReturned { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut synthesized = Vec::new();
+        for e in &self.events {
+            if let SessionEvent::ToolCalled { call_id, .. } = e {
+                if !returned.contains(call_id) {
+                    synthesized.push(SessionEvent::tool_returned(
+                        call_id.clone(),
+                        vec![ContentPart::Text {
+                            text: "tool call did not complete (run cancelled/timed out)".to_owned(),
+                        }],
+                    ));
+                }
+            }
+        }
+        let mut out = std::mem::take(&mut self.events);
+        out.extend(synthesized);
+        out
+    }
+}
+
 /// Monotonic position in a [`Session`]'s append-only log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SequenceId(pub u64);
@@ -406,5 +550,198 @@ impl SessionError {
         E: std::error::Error + Send + Sync + 'static,
     {
         Self::Backend(Box::new(e))
+    }
+}
+
+#[cfg(test)]
+mod recorder_tests {
+    use super::*;
+    use crate::AgentEvent;
+
+    fn text(s: &str) -> Vec<ContentPart> {
+        vec![ContentPart::Text { text: s.to_owned() }]
+    }
+
+    #[test]
+    fn record_input_maps_user_and_skips_system() {
+        let mut r = SessionRecorder::new("root");
+        r.record_input(&[
+            Item::System {
+                content: text("sys"),
+            },
+            Item::UserMessage {
+                content: text("hi"),
+            },
+        ]);
+        let out = r.drain();
+        assert_eq!(
+            out.len(),
+            1,
+            "System is skipped; only the user message remains"
+        );
+        assert!(
+            matches!(&out[0], SessionEvent::UserMessage { content, .. } if content == &text("hi"))
+        );
+    }
+
+    #[test]
+    fn observe_records_assistant_with_item_agent() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: text("yo"),
+                agent: Some("speaker".into()),
+            },
+        });
+        let out = r.drain();
+        assert!(
+            matches!(&out[0], SessionEvent::AssistantMessage { agent, .. } if agent == "speaker")
+        );
+    }
+
+    #[test]
+    fn observe_falls_back_to_tracked_agent_then_agent_updated() {
+        let mut r = SessionRecorder::new("root");
+        // No item.agent => falls back to the seeded root.
+        r.observe(&AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: text("a"),
+                agent: None,
+            },
+        });
+        // AgentUpdated changes the tracked agent for subsequent None items.
+        r.observe(&AgentEvent::AgentUpdated {
+            agent: "specialist".into(),
+        });
+        r.observe(&AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: text("b"),
+                agent: None,
+            },
+        });
+        let out = r.drain();
+        assert!(matches!(&out[0], SessionEvent::AssistantMessage { agent, .. } if agent == "root"));
+        assert!(
+            matches!(&out[1], SessionEvent::AssistantMessage { agent, .. } if agent == "specialist")
+        );
+    }
+
+    #[test]
+    fn observe_records_tool_call_result_and_handoff() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&AgentEvent::ToolCallItem {
+            item: Item::ToolCall {
+                call_id: "c1".into(),
+                name: "echo".into(),
+                args: serde_json::json!({}),
+            },
+        });
+        r.observe(&AgentEvent::ToolOutputItem {
+            item: Item::ToolResult {
+                call_id: "c1".into(),
+                content: text("ok"),
+            },
+        });
+        r.observe(&AgentEvent::HandoffItem {
+            from: "a".into(),
+            to: "b".into(),
+        });
+        let out = r.drain();
+        assert!(matches!(&out[0], SessionEvent::ToolCalled { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&out[1], SessionEvent::ToolReturned { call_id, .. } if call_id == "c1"));
+        assert!(
+            matches!(&out[2], SessionEvent::HandoffOccurred { from, to, .. } if from == "a" && to == "b")
+        );
+    }
+
+    #[test]
+    fn drain_synthesizes_result_for_unmatched_tool_call() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&AgentEvent::ToolCallItem {
+            item: Item::ToolCall {
+                call_id: "c1".into(),
+                name: "slow".into(),
+                args: serde_json::json!({}),
+            },
+        });
+        // No ToolOutputItem (interrupted mid-tool).
+        let out = r.drain();
+        assert_eq!(out.len(), 2, "the call plus a synthesized result");
+        assert!(matches!(&out[0], SessionEvent::ToolCalled { call_id, .. } if call_id == "c1"));
+        match &out[1] {
+            SessionEvent::ToolReturned {
+                call_id, content, ..
+            } => {
+                assert_eq!(call_id, "c1");
+                assert!(
+                    matches!(&content[0], ContentPart::Text { text } if text.contains("did not complete"))
+                );
+            }
+            other => panic!("expected synthesized ToolReturned, got {other:?}"),
+        }
+        // project() yields a matched call/result pair (provider-valid).
+        assert_eq!(project(&out).messages.len(), 2);
+    }
+
+    #[test]
+    fn drain_does_not_synthesize_when_result_present() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&AgentEvent::ToolCallItem {
+            item: Item::ToolCall {
+                call_id: "c1".into(),
+                name: "echo".into(),
+                args: serde_json::json!({}),
+            },
+        });
+        r.observe(&AgentEvent::ToolOutputItem {
+            item: Item::ToolResult {
+                call_id: "c1".into(),
+                content: text("ok"),
+            },
+        });
+        assert_eq!(r.drain().len(), 2, "no extra synthesized event");
+    }
+
+    #[test]
+    fn record_input_maps_assistant_and_tool_items() {
+        let mut r = SessionRecorder::new("root");
+        r.record_input(&[
+            Item::AssistantMessage {
+                content: text("reply"),
+                agent: None,
+            },
+            Item::ToolCall {
+                call_id: "c1".into(),
+                name: "fn".into(),
+                args: serde_json::json!({}),
+            },
+            Item::ToolResult {
+                call_id: "c1".into(),
+                content: text("res"),
+            },
+        ]);
+        let out = r.drain();
+        assert_eq!(out.len(), 3);
+        assert!(matches!(&out[0], SessionEvent::AssistantMessage { agent, .. } if agent == "root"));
+        assert!(matches!(&out[1], SessionEvent::ToolCalled { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&out[2], SessionEvent::ToolReturned { call_id, .. } if call_id == "c1"));
+    }
+
+    #[test]
+    fn observe_run_started_sets_tracked_agent() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&AgentEvent::RunStarted {
+            agent: "starter".into(),
+        });
+        r.observe(&AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: text("x"),
+                agent: None,
+            },
+        });
+        let out = r.drain();
+        assert!(
+            matches!(&out[0], SessionEvent::AssistantMessage { agent, .. } if agent == "starter")
+        );
     }
 }
