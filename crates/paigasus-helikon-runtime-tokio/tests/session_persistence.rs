@@ -240,3 +240,105 @@ async fn cancel_mid_tool_persists_provider_valid_log() {
         snap.messages
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_continues_from_history_without_new_turn() {
+    let session: Arc<dyn Session> = Arc::new(MemorySession::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let model = RecordingModel::new(requests.clone(), vec![say("first"), say("second")]);
+    let agent = text_agent(model, Vec::new());
+
+    // Turn 1: a normal run with a new user turn.
+    TokioRunner
+        .run(
+            &agent,
+            run_context_with_session(session.clone()),
+            AgentInput::from_user_text("hello"),
+            RunConfig::default(),
+        )
+        .await
+        .unwrap();
+
+    // resume(): no new turn — continues from persisted history.
+    TokioRunner
+        .resume(
+            &agent,
+            run_context_with_session(session.clone()),
+            RunConfig::default(),
+        )
+        .await
+        .unwrap();
+
+    // The resume request saw turn 1's messages, and added NO new user message.
+    // Drop the lock guard before the subsequent `await` to satisfy clippy's
+    // `await_holding_lock` lint (std::sync::MutexGuard must not cross an await).
+    {
+        let reqs = requests.lock().unwrap();
+        let resume_req = &reqs[1];
+        assert!(
+            resume_req.iter().any(
+                |m| matches!(m, Item::UserMessage { content } if content_text(content) == "hello")
+            ),
+            "resume must load prior history: {resume_req:?}"
+        );
+        let user_count = resume_req
+            .iter()
+            .filter(|m| matches!(m, Item::UserMessage { .. }))
+            .count();
+        assert_eq!(
+            user_count, 1,
+            "resume adds no new user message: {resume_req:?}"
+        );
+    } // lock guard dropped here, before the await below
+
+    // Persisted log: [User hello, Asst first, Asst second] — no second user message.
+    let events = session.events(None).await.unwrap();
+    let user_events = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::UserMessage { .. }))
+        .count();
+    assert_eq!(
+        user_events, 1,
+        "resume persisted no extra user message: {events:?}"
+    );
+    assert_eq!(
+        events.len(),
+        3,
+        "persisted log must be [User, Asst first, Asst second]: {events:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn run_streamed_persists_when_drained() {
+    use futures_util::StreamExt as _;
+
+    let session: Arc<dyn Session> = Arc::new(MemorySession::new());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let model = RecordingModel::new(requests, vec![say("hi")]);
+    let agent = text_agent(model, Vec::new());
+
+    let handle = TokioRunner
+        .run_streamed(
+            &agent,
+            run_context_with_session(session.clone()),
+            AgentInput::from_user_text("yo"),
+            RunConfig::default(),
+        )
+        .await
+        .unwrap();
+
+    // Drain the stream to its terminal so finalize runs.
+    let mut events = handle.events;
+    while events.next().await.is_some() {}
+
+    let persisted = session.events(None).await.unwrap();
+    assert_eq!(
+        persisted.len(),
+        2,
+        "user + assistant persisted: {persisted:?}"
+    );
+    assert!(matches!(&persisted[0], SessionEvent::UserMessage { .. }));
+    assert!(
+        matches!(&persisted[1], SessionEvent::AssistantMessage { agent, .. } if agent == "test")
+    );
+}
