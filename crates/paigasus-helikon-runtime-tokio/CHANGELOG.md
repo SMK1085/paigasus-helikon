@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.7...paigasus-helikon-runtime-tokio-v0.1.8) - 2026-06-15
+
+### Added
+
+- *(runtime-tokio)* SMA-392 wire session persistence into the run lifecycle ([#84](https://github.com/SMK1085/paigasus-helikon/pull/84))
+
 ## [0.1.7](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.6...paigasus-helikon-runtime-tokio-v0.1.7) - 2026-06-14
 
 ### Other
