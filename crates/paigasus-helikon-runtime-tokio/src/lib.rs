@@ -159,7 +159,10 @@ where
             .await;
         finalize(&session, &recorder).await;
 
-        // A cancel/timeout outcome wins even if `collected` is Ok.
+        // A cancel/timeout outcome wins even if `collected` is Ok (the run may
+        // have finished in the same poll the signal fired); `biased` keeps that
+        // window small. This precedence is deliberate (SMA-321) — see
+        // `prefired_cancel_still_completes_ready_run`.
         match outcome.get() {
             Outcome::Cancelled => Err(RunError::Cancelled),
             Outcome::TimedOut => Err(RunError::Timeout),
