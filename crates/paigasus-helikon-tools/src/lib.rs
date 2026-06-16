@@ -5,16 +5,21 @@
 //! capability (`cap-std`), so `ReadTool`, `WriteTool`, and `EditTool`
 //! cannot escape it via `..`, absolute paths, or symlinks.
 //!
-//! # Security note on `BashTool`
+//! # Containment and `BashTool`
 //!
-//! `BashTool` is a **cwd-pinned shell, NOT a security sandbox.** The
-//! `cap-std` containment that jails the filesystem tools does **not** extend to
-//! a spawned child process: a command can read and write anything this process
-//! can — absolute paths, `..`, `~`, and the network. In
-//! [`PermissionMode::Default`](paigasus_helikon_core::PermissionMode) with no
-//! [`PermissionPolicy`](paigasus_helikon_core::PermissionPolicy) installed, the
-//! control layer is permissive, so `BashTool` runs **ungated**. Pair it with a
-//! `PermissionPolicy` or `DenyRule::tool("Bash")` for real control.
+//! `BashTool` runs commands through a pluggable [`ExecutionBackend`], so its
+//! containment depends on the backend it is given. [`HostBackend`] (the default)
+//! is a cwd-pinned shell and **NOT a security boundary** — the `cap-std`
+//! containment that jails the filesystem tools does **not** extend to a spawned
+//! child process, which can read and write anything this process can (absolute
+//! paths, `..`, `~`, and the network). With no
+//! [`PermissionPolicy`](paigasus_helikon_core::PermissionPolicy) installed the
+//! control layer is permissive, so a host-backed `BashTool` runs **ungated** —
+//! pair it with a `PermissionPolicy` or `DenyRule::tool("Bash")`. The
+//! `OsSandboxBackend` (Linux, behind the `os-sandbox` feature) instead enforces
+//! filesystem and syscall containment at the OS layer. Each backend reports what
+//! it enforces via [`ExecutionBackend::guarantees`], surfaced in the tool's
+//! description.
 
 mod bash;
 mod edit;

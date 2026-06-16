@@ -96,6 +96,10 @@ async fn bashtool_delegates_to_any_backend_unchanged() {
         .await
         .unwrap();
     assert_eq!(out.content["stdout"], "mocked");
+    // All ExecOutput fields are projected into the tool output, not just stdout.
+    assert_eq!(out.content["exit_code"], 0);
+    assert_eq!(out.content["timed_out"], false);
+    assert_eq!(out.content["truncated"], false);
     assert_eq!(backend.seen.lock().unwrap().as_slice(), ["echo hi"]);
     // The backend's containment label is surfaced in the tool description.
     assert!(tool.description().contains("mock"));

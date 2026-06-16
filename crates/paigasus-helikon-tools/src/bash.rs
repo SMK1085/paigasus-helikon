@@ -20,7 +20,7 @@ struct BashArgs {
     command: String,
 }
 
-/// Builder for [`BashTool`].
+/// Builder for [`BashTool`]. Obtain one via [`BashTool::builder`].
 pub struct BashToolBuilder {
     backend: Arc<dyn ExecutionBackend>,
     deny_commands: Vec<String>,
@@ -52,11 +52,10 @@ impl BashToolBuilder {
     pub fn build<Ctx>(self) -> BashTool<Ctx> {
         let label = self.backend.guarantees().label;
         let description = format!(
-            "Run a shell command. Containment tier: {label}. Working directory is \
-             pinned to the sandbox root. With the host backend this is NOT a \
-             security sandbox; pair it with a PermissionPolicy or a \
-             DenyRule(\"Bash\"), or use an OS-sandbox backend for OS-enforced \
-             containment."
+            "Run a shell command. Containment tier: {label}. The working directory \
+             is pinned to the sandbox root. The actual enforcement depends on the \
+             configured backend (see the containment tier above); gate access with \
+             a PermissionPolicy or DenyRule(\"Bash\") as needed."
         );
         BashTool {
             backend: self.backend,
