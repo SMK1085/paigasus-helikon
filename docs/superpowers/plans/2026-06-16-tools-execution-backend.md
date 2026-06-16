@@ -1696,41 +1696,34 @@ git commit -m "feat(tools): SMA-413 enforce syscall and network containment via 
 
 ---
 
-### Task 9: Facade feature, version bumps, CHANGELOGs, full gate
+### Task 9: Facade `tools-os-sandbox` feature + full local gate
+
+**Release mechanics (corrected — read first).** `-tools` and the `paigasus-helikon`
+facade are BOTH already-released crates. Per CLAUDE.md, released crates ship
+through **release-plz's normal flow — no manual version/CHANGELOG ritual**. So do
+**NOT** hand-edit any `version`, any `[workspace.dependencies]` self-pin, or any
+`CHANGELOG.md`. On merge, release-plz parses the squashed commit (= the PR title),
+sees the breaking `feat(tools)!:`, minor-bumps `-tools` (`0.1.6 → 0.2.0` on 0.x)
+and its `dependencies_update` cascade bumps the facade. Manually bumping here would
+DEFEAT that cascade (the documented facade-drift trap) — the manual-bump ritual is
+only for stubs ascending from `0.0.0` or same-PR `core` API, neither of which
+applies. The ONLY Cargo edit in this task is the additive facade feature below.
 
 **Files:**
-- Modify: `crates/paigasus-helikon/Cargo.toml` (feature + version), `crates/paigasus-helikon/CHANGELOG.md`
-- Modify: `crates/paigasus-helikon-tools/Cargo.toml` (version), `crates/paigasus-helikon-tools/CHANGELOG.md`
-- Modify: root `Cargo.toml` `[workspace.dependencies]` self-pins
+- Modify: `crates/paigasus-helikon/Cargo.toml` (add the `tools-os-sandbox` feature only)
 
-- [ ] **Step 1: Bump `-tools` to the breaking `0.2.0`**
+- [ ] **Step 1: Add the facade `tools-os-sandbox` feature**
 
-In `crates/paigasus-helikon-tools/Cargo.toml`: `version = "0.1.6"` → `version = "0.2.0"`.
-In root `Cargo.toml` `[workspace.dependencies]`: bump the `paigasus-helikon-tools`
-pin to `0.2.0` (keep the `path` + `version`).
-
-- [ ] **Step 2: Add the facade `tools-os-sandbox` feature + bump the facade**
-
-In `crates/paigasus-helikon/Cargo.toml`, after `tools-web = [...]`:
+In `crates/paigasus-helikon/Cargo.toml` `[features]`, immediately after the
+existing `tools-web = [...]` line, add (mirroring the `tools-web` pattern):
 
 ```toml
 tools-os-sandbox = ["tools", "paigasus-helikon-tools/os-sandbox"]
 ```
 
-Bump the facade `version` (patch) and its `[workspace.dependencies]` self-pin to
-match — this is the facade-drift fix from CLAUDE.md (when a sibling's version
-changes in the same PR, the facade must republish with current reqs). Read the
-current facade version from `crates/paigasus-helikon/Cargo.toml` and bump the
-patch (e.g. `0.3.x` → `0.3.(x+1)`).
+Change nothing else in the facade manifest — no `version` bump, no self-pin edit.
 
-- [ ] **Step 3: Update both CHANGELOGs**
-
-`crates/paigasus-helikon-tools/CHANGELOG.md` — new `0.2.0` section noting the
-breaking `BashTool` reshape, the `ExecutionBackend` trait, `HostBackend`,
-`OsSandboxBackend` (Linux, behind `os-sandbox`). `crates/paigasus-helikon/CHANGELOG.md`
-— patch section noting the new `tools-os-sandbox` feature + sibling bump.
-
-- [ ] **Step 4: Run the FULL local CI gate**
+- [ ] **Step 2: Run the FULL local CI gate**
 
 ```bash
 cargo fmt --all -- --check
@@ -1740,17 +1733,25 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 cargo deny check
 ```
 
-Expected: all green. (On a Linux CI host the `os_sandbox` tests run; on a non-Linux
-dev box they compile out.)
+Expected: all green. On this macOS dev box the Linux-only `os_sandbox` runtime
+tests compile out (they run on Linux CI); the `--all-features` facade build now
+pulls `tools-os-sandbox` → `os-sandbox`, a no-op off-Linux. Doc-coverage
+(`scripts/check-doc-coverage.sh`, pinned nightly) is a CI gate; every new `pub`
+item carries `///` docs, so run it only if that nightly toolchain is already
+installed — otherwise note it as CI-validated.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add Cargo.toml Cargo.lock \
-        crates/paigasus-helikon-tools/Cargo.toml crates/paigasus-helikon-tools/CHANGELOG.md \
-        crates/paigasus-helikon/Cargo.toml crates/paigasus-helikon/CHANGELOG.md
-git commit -m "chore(release): SMA-413 bump tools to 0.2.0 and add facade tools-os-sandbox feature"
+# Only stage Cargo.lock if `git status` shows it changed (a pure feature add
+# usually leaves it untouched).
+git add crates/paigasus-helikon/Cargo.toml
+git commit -m "feat(facade): SMA-413 add tools-os-sandbox feature forwarding"
 ```
+
+> The breaking `0.2.0` bump is NOT made here — it is carried by the PR title
+> `feat(tools)!: …` (see the "Final verification" section) and applied by
+> release-plz on merge.
 
 ---
 
