@@ -1,5 +1,9 @@
 #![allow(missing_docs)]
-#![cfg(all(feature = "os-sandbox", target_os = "linux"))]
+#![cfg(all(
+    feature = "os-sandbox",
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 
 use paigasus_helikon_tools::{ExecutionBackend, Isolation, OsSandboxBackend, Sandbox};
 
@@ -66,4 +70,50 @@ async fn os_sandbox_blocks_write_outside_root_at_os_layer() {
         .unwrap();
     assert_eq!(ok.exit_code, Some(0));
     assert!(tmp.path().join("inside.txt").exists());
+}
+
+#[tokio::test]
+async fn os_sandbox_denies_network_by_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    if landlock_unavailable(tmp.path()) {
+        return;
+    }
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .build()
+        .unwrap();
+    // Pure-shell TCP connect to a public IP; seccomp must block socket(AF_INET).
+    // bash's /dev/tcp triggers socket(2); on failure the redirect errors.
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(
+            "timeout 5 sh -c 'echo > /dev/tcp/1.1.1.1/80' 2>&1; echo rc=$?",
+        ))
+        .await
+        .unwrap();
+    assert!(
+        out.stdout.contains("rc=") && !out.stdout.contains("rc=0"),
+        "network connect must fail under default-deny seccomp; got: {}",
+        out.stdout
+    );
+}
+
+#[tokio::test]
+async fn os_sandbox_allows_network_when_opted_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    if landlock_unavailable(tmp.path()) {
+        return;
+    }
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .allow_network(true)
+        .build()
+        .unwrap();
+    let g = backend.guarantees();
+    assert_eq!(g.network, paigasus_helikon_tools::Isolation::None);
+    // socket() now succeeds (creating a socket needs no external service).
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(
+            "python3 -c 'import socket; socket.socket(); print(\"ok\")' 2>&1 || echo nopy",
+        ))
+        .await
+        .unwrap();
+    assert!(out.stdout.contains("ok") || out.stdout.contains("nopy"));
 }

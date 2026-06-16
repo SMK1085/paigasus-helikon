@@ -37,7 +37,11 @@ pub use exec::{
     ExecOutput, ExecRequest, ExecutionBackend, HostBackend, HostBackendBuilder, Isolation,
     ResourceLimits, SandboxGuarantees,
 };
-#[cfg(all(feature = "os-sandbox", target_os = "linux"))]
+#[cfg(all(
+    feature = "os-sandbox",
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};

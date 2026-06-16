@@ -2,6 +2,7 @@
 //! (filesystem) + seccomp-bpf (syscalls / network). Fail-closed: `build()` errors
 //! if the kernel cannot enforce the requested isolation.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +13,10 @@ use landlock::{
     RulesetCreatedAttr, RulesetStatus, ABI,
 };
 use paigasus_helikon_core::ToolError;
+use seccompiler::{
+    apply_filter, BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+    SeccompFilter, SeccompRule, TargetArch,
+};
 
 use super::{
     spawn_capped, ExecConfig, ExecOutput, ExecRequest, ExecutionBackend, Isolation, ResourceLimits,
@@ -21,6 +26,13 @@ use crate::sandbox::Sandbox;
 
 /// Landlock ABI floor we require for filesystem containment (kernel ≥ 5.13).
 const LANDLOCK_ABI: ABI = ABI::V1;
+
+/// Target arch for the seccomp BPF. The `os_sandbox` module is gated to these two
+/// arches (see `super::os_sandbox` cfg), so exactly one of these is compiled.
+#[cfg(target_arch = "x86_64")]
+const SECCOMP_ARCH: TargetArch = TargetArch::x86_64;
+#[cfg(target_arch = "aarch64")]
+const SECCOMP_ARCH: TargetArch = TargetArch::aarch64;
 
 /// Construction failures for [`OsSandboxBackend`]. Distinct from
 /// `ToolError::Denied` (an in-`run` refusal) and from `SandboxError`.
@@ -138,6 +150,61 @@ fn build_ruleset(
         .add_rules(path_beneath_rules([root], AccessFs::from_all(abi)))
 }
 
+/// Compile (in the parent) a seccomp filter: allow by default, return EPERM for a
+/// dangerous syscall set; when `allow_network` is false also EPERM `socket()` for
+/// `AF_INET`/`AF_INET6` (`AF_UNIX` stays allowed).
+fn build_seccomp(allow_network: bool) -> Result<BpfProgram, ToolError> {
+    // The `backend` constructors (`SeccompCondition/Rule/Filter::new`, the
+    // `BpfProgram` `TryFrom`) all surface `seccompiler::BackendError`, NOT the
+    // top-level `seccompiler::Error` (that one is for `apply_filter`).
+    let err = |e: seccompiler::BackendError| ToolError::Other(anyhow::anyhow!("seccomp: {e}"));
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+
+    // Always-deny dangerous syscalls (empty rule vec = match regardless of args).
+    for sc in [
+        libc::SYS_ptrace,
+        libc::SYS_mount,
+        libc::SYS_umount2,
+        libc::SYS_pivot_root,
+        libc::SYS_chroot,
+        libc::SYS_setns,
+        libc::SYS_unshare,
+        libc::SYS_kexec_load,
+        libc::SYS_bpf,
+        libc::SYS_perf_event_open,
+    ] {
+        rules.insert(sc, vec![]);
+    }
+
+    if !allow_network {
+        // Match `socket(family, ..)` for AF_INET / AF_INET6 (arg0); AF_UNIX is
+        // left allowed so local IPC and `/dev/log`-style sockets keep working.
+        let af = |family: u64| -> Result<SeccompRule, ToolError> {
+            SeccompRule::new(vec![SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Eq,
+                family,
+            )
+            .map_err(err)?])
+            .map_err(err)
+        };
+        rules.insert(
+            libc::SYS_socket,
+            vec![af(libc::AF_INET as u64)?, af(libc::AF_INET6 as u64)?],
+        );
+    }
+
+    let filter = SeccompFilter::new(
+        rules,
+        SeccompAction::Allow,                     // default: allow
+        SeccompAction::Errno(libc::EPERM as u32), // on match: EPERM
+        SECCOMP_ARCH,
+    )
+    .map_err(err)?;
+    filter.try_into().map_err(err)
+}
+
 /// OS-enforced execution backend (Linux). See module docs.
 pub struct OsSandboxBackend {
     cfg: ExecConfig,
@@ -166,19 +233,23 @@ impl OsSandboxBackend {
 impl ExecutionBackend for OsSandboxBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
         let limits = self.limits.clone();
-        // Built in the PARENT (allocations are safe here); Task 8 adds seccomp.
+        // Built in the PARENT (allocations are safe here, not in the child).
         let ruleset = build_ruleset(&self.root, &self.read_paths)
             .map_err(|e| ToolError::Other(anyhow::anyhow!("landlock ruleset: {e}")))?;
         let mut ruleset = Some(ruleset);
+        // Compile the seccomp BPF in the PARENT too (BTreeMap/Vec allocation is
+        // not async-signal-safe and must not happen in the forked child).
+        let seccomp = build_seccomp(self.allow_network)?;
 
         spawn_capped(&self.cfg, &req.command, move |cmd| {
             // SAFETY: the closure runs in the forked child before exec, so it does
             // only async-signal-safe work — no heap allocation, no locks: the
             // `setrlimit` syscalls in `apply_rlimits`, then Landlock's
             // `restrict_self` (`prctl(PR_SET_NO_NEW_PRIVS)` + `landlock_restrict_self`
-            // on an already-created ruleset fd, plus a small stack struct). The
-            // `RulesetCreated` is built in the parent and moved in via `Option::take`
-            // so it is applied exactly once.
+            // on an already-created ruleset fd, plus a small stack struct), then
+            // `apply_filter` (a `prctl(PR_SET_SECCOMP)` syscall over the pre-compiled
+            // BPF). The `RulesetCreated` and `BpfProgram` are built in the parent and
+            // moved in; the ruleset is taken via `Option::take` so it applies once.
             unsafe {
                 cmd.pre_exec(move || {
                     super::apply_rlimits(&limits)?;
@@ -193,6 +264,11 @@ impl ExecutionBackend for OsSandboxBackend {
                             return Err(std::io::Error::other("landlock not fully enforced"));
                         }
                     }
+                    // MUST be after Landlock: `restrict_self` sets PR_SET_NO_NEW_PRIVS,
+                    // which the kernel requires before an unprivileged process may
+                    // install a seccomp filter. Installing seccomp first would fail
+                    // with EACCES (or need CAP_SYS_ADMIN we deliberately don't have).
+                    apply_filter(&seccomp).map_err(|e| std::io::Error::other(e.to_string()))?;
                     Ok(())
                 });
             }

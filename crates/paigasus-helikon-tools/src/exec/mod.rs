@@ -11,9 +11,17 @@ use paigasus_helikon_core::ToolError;
 mod host;
 pub use host::{HostBackend, HostBackendBuilder};
 
-#[cfg(all(feature = "os-sandbox", target_os = "linux"))]
+#[cfg(all(
+    feature = "os-sandbox",
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 mod os_sandbox;
-#[cfg(all(feature = "os-sandbox", target_os = "linux"))]
+#[cfg(all(
+    feature = "os-sandbox",
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub use os_sandbox::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).
