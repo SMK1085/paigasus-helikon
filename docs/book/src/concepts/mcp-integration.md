@@ -5,7 +5,7 @@ The `paigasus-helikon-mcp` crate (facade feature `mcp`, re-exported as `paigasus
 - **Client** — connect to an external MCP server and re-expose its tools to an agent as core [`Tool<Ctx>`](./tools.md) implementations.
 - **Server** — wrap any `Agent<Ctx>` and serve it as a single MCP tool.
 
-Two transports are supported: a stdio child process and streamable HTTP. SSE transports are not supported — rmcp removed them in `0.11.0` and the 2025-06-18 MCP spec revision deprecated HTTP+SSE in favor of streamable HTTP.
+Two transports are supported: a stdio child process and streamable HTTP. SSE transports are not supported — rmcp removed them in `0.11.0` and the 2025-03-26 MCP spec revision deprecated HTTP+SSE in favor of streamable HTTP.
 
 The whole crate is published on [crates.io](https://crates.io/crates/paigasus-helikon-mcp) / [docs.rs](https://docs.rs/paigasus-helikon-mcp). There is no discovery sugar on the agent builder yet: you connect explicitly, then hand the resulting `Vec<Arc<dyn Tool<Ctx>>>` to `LlmAgent::builder().tools(...)` like any other tool list.
 
