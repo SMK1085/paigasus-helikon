@@ -18,6 +18,7 @@
 
 mod bash;
 mod edit;
+mod exec;
 mod read;
 mod sandbox;
 mod write;
@@ -27,6 +28,9 @@ mod web;
 
 pub use bash::{BashTool, BashToolBuilder};
 pub use edit::EditTool;
+pub use exec::{
+    ExecOutput, ExecRequest, ExecutionBackend, Isolation, ResourceLimits, SandboxGuarantees,
+};
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
