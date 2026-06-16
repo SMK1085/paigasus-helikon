@@ -77,7 +77,6 @@ pub struct ExecOutput {
 
 impl ExecOutput {
     /// Construct an `ExecOutput` from all fields.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         stdout: String,
         stderr: String,
@@ -138,8 +137,11 @@ impl SandboxGuarantees {
 
 /// Resource limits applied to a command via `setrlimit` (unix). Each `None`
 /// leaves the inherited limit. See `HostBackend` for the default policy.
+///
+/// Not `#[non_exhaustive]`: this is user-built config (struct-literal
+/// construction from consumer code and integration tests); adding a field later
+/// is an accepted 0.x breaking change.
 #[derive(Debug, Clone, Default)]
-#[non_exhaustive]
 pub struct ResourceLimits {
     /// `RLIMIT_CPU` — CPU seconds.
     pub cpu_seconds: Option<u64>,
