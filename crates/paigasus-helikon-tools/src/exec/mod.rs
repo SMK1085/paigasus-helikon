@@ -8,8 +8,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use paigasus_helikon_core::ToolError;
 
-// mod host;
-// pub use host::{HostBackend, HostBackendBuilder};
+mod host;
+pub use host::{HostBackend, HostBackendBuilder};
 
 // #[cfg(all(feature = "os-sandbox", target_os = "linux"))]
 // mod os_sandbox;
@@ -17,12 +17,8 @@ use paigasus_helikon_core::ToolError;
 // pub use os_sandbox::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).
-// Unused until Task 3 (HostBackend); allow to keep Task 1 clippy-clean.
-#[allow(dead_code)]
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default per-stream output cap, in bytes (1 MiB).
-// Unused until Task 3 (HostBackend); allow to keep Task 1 clippy-clean.
-#[allow(dead_code)]
 pub const DEFAULT_MAX_OUTPUT: usize = 1 << 20;
 
 /// A backend that runs one shell command under some containment tier.
@@ -152,12 +148,162 @@ pub struct ResourceLimits {
     pub address_space_bytes: Option<u64>,
 }
 
-/// Internal config every backend shares; consumed by `spawn_capped`.
-// Unused until Task 2 (spawn_capped); allow to keep Task 1 clippy-clean.
-#[allow(dead_code)]
+/// Internal config every backend shares; consumed by [`spawn_capped`].
 pub(crate) struct ExecConfig {
     pub(crate) cwd: PathBuf,
     pub(crate) env_allowlist: Vec<String>,
     pub(crate) timeout: Duration,
     pub(crate) max_output_bytes: usize,
+}
+
+use std::process::Stdio;
+use tokio::io::AsyncReadExt;
+
+/// Grace period for reaping a killed process and draining its pipes.
+const GRACE: Duration = Duration::from_secs(5);
+
+/// Spawn `command` under `cfg`, draining stdout/stderr concurrently, killing the
+/// whole process group on timeout. `configure_child` runs in the **parent** to
+/// install backend-specific `pre_exec` hooks before spawn.
+pub(crate) async fn spawn_capped(
+    cfg: &ExecConfig,
+    command: &str,
+    configure_child: impl FnOnce(&mut tokio::process::Command),
+) -> Result<ExecOutput, ToolError> {
+    let mut cmd = build_command(command);
+    cmd.current_dir(&cfg.cwd)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for name in &cfg.env_allowlist {
+        if let Ok(val) = std::env::var(name) {
+            cmd.env(name, val);
+        }
+    }
+    #[cfg(unix)]
+    {
+        // New process group so a timeout can kill the whole subtree.
+        cmd.process_group(0);
+    }
+    configure_child(&mut cmd);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| ToolError::Other(anyhow::anyhow!("failed to spawn shell: {e}")))?;
+
+    #[cfg(unix)]
+    let pgid = child.id();
+
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
+
+    let cap = cfg.max_output_bytes;
+    let out_handle = tokio::spawn(read_capped(stdout_pipe, cap));
+    let err_handle = tokio::spawn(read_capped(stderr_pipe, cap));
+
+    let mut timed_out = false;
+    let exit_code: Option<i32>;
+    match tokio::time::timeout(cfg.timeout, child.wait()).await {
+        Ok(status) => {
+            exit_code = status.map_err(|e| ToolError::Other(e.into()))?.code();
+        }
+        Err(_) => {
+            timed_out = true;
+            #[cfg(unix)]
+            {
+                if let Some(pid) = pgid {
+                    // SAFETY: pid < 4_194_304 on supported platforms, so the cast
+                    // and negation are valid; ESRCH (group already gone) is benign.
+                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = child.start_kill();
+            }
+            exit_code = match tokio::time::timeout(GRACE, child.wait()).await {
+                Ok(Ok(status)) => status.code(),
+                _ => None,
+            };
+        }
+    }
+
+    let ((stdout, out_trunc), (stderr, err_trunc)) =
+        tokio::join!(join_reader(out_handle), join_reader(err_handle));
+
+    Ok(ExecOutput {
+        stdout,
+        stderr,
+        exit_code,
+        timed_out,
+        truncated: out_trunc || err_trunc,
+    })
+}
+
+/// Build the platform shell command without yet setting cwd/env.
+fn build_command(command: &str) -> tokio::process::Command {
+    #[cfg(unix)]
+    {
+        let mut c = tokio::process::Command::new("sh");
+        c.arg("-c").arg(command);
+        c
+    }
+    #[cfg(windows)]
+    {
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/C").arg(command);
+        c
+    }
+}
+
+async fn join_reader(handle: tokio::task::JoinHandle<(String, bool)>) -> (String, bool) {
+    let abort = handle.abort_handle();
+    match tokio::time::timeout(GRACE, handle).await {
+        Ok(Ok(captured)) => captured,
+        _ => {
+            abort.abort();
+            (String::new(), false)
+        }
+    }
+}
+
+async fn read_capped<R>(pipe: R, cap: usize) -> (String, bool)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let mut buf = Vec::new();
+    let _ = pipe.take((cap as u64) + 1).read_to_end(&mut buf).await;
+    let truncated = buf.len() > cap;
+    buf.truncate(cap);
+    (String::from_utf8_lossy(&buf).into_owned(), truncated)
+}
+
+/// Apply `limits` to the current process via `setrlimit`. Async-signal-safe
+/// (only `setrlimit` syscalls, no allocation) so it is callable from `pre_exec`.
+#[cfg(unix)]
+pub(crate) fn apply_rlimits(limits: &ResourceLimits) -> std::io::Result<()> {
+    // SAFETY: setrlimit with a stack-allocated rlimit is async-signal-safe.
+    unsafe {
+        let set = |res: libc::c_int, val: u64| -> std::io::Result<()> {
+            let rl = libc::rlimit {
+                rlim_cur: val as libc::rlim_t,
+                rlim_max: val as libc::rlim_t,
+            };
+            if libc::setrlimit(res, &rl) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        };
+        if let Some(s) = limits.cpu_seconds {
+            set(libc::RLIMIT_CPU, s)?;
+        }
+        if let Some(b) = limits.file_size_bytes {
+            set(libc::RLIMIT_FSIZE, b)?;
+        }
+        if let Some(b) = limits.address_space_bytes {
+            set(libc::RLIMIT_AS, b)?;
+        }
+    }
+    Ok(())
 }
