@@ -1,10 +1,12 @@
 # paigasus-helikon-tools
 
-Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature.
+Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature, and OS-enforced Bash containment via Landlock + seccomp behind the `os-sandbox` feature (Linux).
 
 The filesystem tools operate inside a `Sandbox` — a directory opened as an OS-confined capability (`cap-std`), so they cannot escape it via `..`, absolute paths, or symlinks.
 
-> **`BashTool` is a cwd-pinned shell, not a security sandbox.** The `cap-std` containment that jails the filesystem tools does **not** extend to a spawned child process — a command can read and write anything this process can. Pair `BashTool` with a `PermissionPolicy` (or a `DenyRule::tool("Bash")`) for real control.
+`BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, or `OsSandboxBackend` (Linux, feature `os-sandbox`) for OS-kernel-enforced containment via Landlock (filesystem) and seccomp-bpf (syscalls and network).
+
+> **`HostBackend` is NOT a security boundary.** A command it runs can read and write anything this process can. Pair it with a `PermissionPolicy` (or a `DenyRule::tool("Bash")`) for approval-level control, or use `OsSandboxBackend` for OS-enforced containment.
 
 ## Install
 
@@ -12,6 +14,8 @@ The filesystem tools operate inside a `Sandbox` — a directory opened as an OS-
 cargo add paigasus-helikon-tools
 # with the web tools (WebFetch / WebSearch):
 cargo add paigasus-helikon-tools --features web
+# with OS-enforced Bash containment (Linux: Landlock + seccomp):
+cargo add paigasus-helikon-tools --features os-sandbox
 ```
 
 Most users enable the `tools` feature on the [`paigasus-helikon`](https://crates.io/crates/paigasus-helikon) facade instead (and `tools-web` for the web tools), which re-exports this crate as `paigasus_helikon::tools`.
@@ -20,7 +24,7 @@ Most users enable the `tools` feature on the [`paigasus-helikon`](https://crates
 
 ```rust
 use paigasus_helikon_core::LlmAgent;
-use paigasus_helikon_tools::{BashTool, EditTool, ReadTool, Sandbox, WriteTool};
+use paigasus_helikon_tools::{BashTool, EditTool, HostBackend, ReadTool, Sandbox, WriteTool};
 
 // A directory opened as an OS-confined capability.
 let sandbox = Sandbox::open("./workspace")?;
@@ -32,11 +36,11 @@ let agent = LlmAgent::builder::<()>()
     .tool(ReadTool::<()>::new(sandbox.clone()))
     .tool(WriteTool::<()>::new(sandbox.clone()))
     .tool(EditTool::<()>::new(sandbox.clone()))
-    .tool(BashTool::<()>::builder(sandbox).build())
+    .tool(BashTool::<()>::new(HostBackend::builder(sandbox).build()))
     .build();
 ```
 
-Runnable examples live in [`examples/`](https://github.com/SMK1085/paigasus-helikon/tree/main/crates/paigasus-helikon-tools/examples): `explore_sandbox` (FS + Bash, gated by a `PermissionPolicy`) and `web_research` (the `web` tools).
+Runnable examples live in [`examples/`](https://github.com/SMK1085/paigasus-helikon/tree/main/crates/paigasus-helikon-tools/examples): `explore_sandbox` (FS + Bash, gated by a `PermissionPolicy`), `web_research` (the `web` tools), and `os_sandbox_demo` (OS-sandbox containment demo, Linux only, requires `--features os-sandbox`).
 
 ## Links
 

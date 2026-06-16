@@ -44,8 +44,12 @@ wiremock     = { workspace = true }
 paigasus-helikon-providers-openai = { path = "../paigasus-helikon-providers-openai" }
 
 [[example]]
-name             = "web_research"
+name              = "web_research"
 required-features = ["web"]
+
+[[example]]
+name              = "os_sandbox_demo"
+required-features = ["os-sandbox"]
 
 [features]
 # Network tools (WebFetch + WebSearch). Off by default so FS/Bash-only
