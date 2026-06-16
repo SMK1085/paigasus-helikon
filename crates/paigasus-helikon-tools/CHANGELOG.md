@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.5...paigasus-helikon-tools-v0.1.6) - 2026-06-16
+
+### Other
+
+- *(repo)* SMA-424 refresh crate READMEs to match the shipped surface ([#93](https://github.com/SMK1085/paigasus-helikon/pull/93))
+
 ## [0.1.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.4...paigasus-helikon-tools-v0.1.5) - 2026-06-16
 
 ### Other

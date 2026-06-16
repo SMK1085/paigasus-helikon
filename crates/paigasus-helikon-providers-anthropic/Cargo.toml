@@ -1,7 +1,7 @@
 [package]
 name        = "paigasus-helikon-providers-anthropic"
 description = "Anthropic provider for the Paigasus Helikon AI SDK."
-version                = "0.1.10"
+version                = "0.1.11"
 edition.workspace      = true
 rust-version.workspace = true
 authors.workspace      = true
