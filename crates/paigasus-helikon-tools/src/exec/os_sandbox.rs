@@ -7,7 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use landlock::{Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr, ABI};
+use landlock::{
+    path_beneath_rules, Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr,
+    RulesetCreatedAttr, RulesetStatus, ABI,
+};
 use paigasus_helikon_core::ToolError;
 
 use super::{
@@ -110,14 +113,36 @@ fn probe_landlock() -> Result<(), OsSandboxError> {
         .map_err(|e| OsSandboxError::Unsupported(e.to_string()))
 }
 
+/// Read-only system paths a shell + common tools need.
+const SYSTEM_RO: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/etc"];
+
+/// Build (in the parent) a Landlock ruleset: read+write under the sandbox root,
+/// read+exec for the system paths and any extra `read_paths`.
+fn build_ruleset(
+    root: &std::path::Path,
+    read_paths: &[PathBuf],
+) -> Result<landlock::RulesetCreated, landlock::RulesetError> {
+    let abi = LANDLOCK_ABI;
+    let ro: Vec<PathBuf> = SYSTEM_RO
+        .iter()
+        .map(PathBuf::from)
+        .chain(read_paths.iter().cloned())
+        .filter(|p| p.exists())
+        .collect();
+    Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
+        .handle_access(AccessFs::from_all(abi))?
+        .create()?
+        .add_rules(path_beneath_rules(&ro, AccessFs::from_read(abi)))?
+        .add_rules(path_beneath_rules([root], AccessFs::from_all(abi)))
+}
+
 /// OS-enforced execution backend (Linux). See module docs.
 pub struct OsSandboxBackend {
     cfg: ExecConfig,
     limits: ResourceLimits,
     allow_network: bool,
-    #[allow(dead_code)] // wired into the Landlock ruleset in Task 7
     root: PathBuf,
-    #[allow(dead_code)] // wired into the Landlock ruleset in Task 7
     read_paths: Vec<PathBuf>,
 }
 
@@ -140,11 +165,31 @@ impl OsSandboxBackend {
 impl ExecutionBackend for OsSandboxBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
         let limits = self.limits.clone();
-        // Task 7 adds the Landlock ruleset; Task 8 adds the seccomp filter.
+        // Built in the PARENT (allocations are safe here); Task 8 adds seccomp.
+        let ruleset = build_ruleset(&self.root, &self.read_paths)
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("landlock ruleset: {e}")))?;
+        let mut ruleset = Some(ruleset);
+
         spawn_capped(&self.cfg, &req.command, move |cmd| {
-            // SAFETY: apply_rlimits is async-signal-safe.
+            // SAFETY: the closure runs in the forked child before exec. It performs
+            // only async-signal-safe work: setrlimit syscalls and Landlock's
+            // restrict_self (prctl(PR_SET_NO_NEW_PRIVS) + landlock_restrict_self on
+            // an already-created ruleset fd — no heap allocation, just two syscalls
+            // and a small stack struct). The RulesetCreated is built in the parent
+            // and moved in via Option::take so it is applied exactly once.
             unsafe {
-                cmd.pre_exec(move || super::apply_rlimits(&limits));
+                cmd.pre_exec(move || {
+                    super::apply_rlimits(&limits)?;
+                    if let Some(rs) = ruleset.take() {
+                        let status = rs
+                            .restrict_self()
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        if status.ruleset == RulesetStatus::NotEnforced {
+                            return Err(std::io::Error::other("landlock not enforced"));
+                        }
+                    }
+                    Ok(())
+                });
             }
         })
         .await
