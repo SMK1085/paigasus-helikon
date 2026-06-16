@@ -210,8 +210,11 @@ pub struct SandboxGuarantees {
 
 /// Resource limits applied to a command via `setrlimit` (unix). Each `None`
 /// leaves the inherited limit. See [`HostBackend`] for the default policy.
+// NOT `#[non_exhaustive]`: this is user-built config constructed via struct
+// literal from consumer code and integration tests (a separate crate, where
+// `#[non_exhaustive]` would forbid the literal). Adding a field later is an
+// accepted 0.x breaking change.
 #[derive(Debug, Clone, Default)]
-#[non_exhaustive]
 pub struct ResourceLimits {
     /// `RLIMIT_CPU` — CPU seconds.
     pub cpu_seconds: Option<u64>,
@@ -790,21 +793,24 @@ impl ExecutionBackend for MockBackend {
         req: paigasus_helikon_tools::ExecRequest,
     ) -> Result<paigasus_helikon_tools::ExecOutput, ToolError> {
         self.seen.lock().unwrap().push(req.command.clone());
-        Ok(paigasus_helikon_tools::ExecOutput {
-            stdout: "mocked".into(),
-            stderr: String::new(),
-            exit_code: Some(0),
-            timed_out: false,
-            truncated: false,
-        })
+        // `ExecOutput`/`SandboxGuarantees` are `#[non_exhaustive]`, so an
+        // integration test (separate crate) must use the `::new(..)` constructors,
+        // not struct literals.
+        Ok(paigasus_helikon_tools::ExecOutput::new(
+            "mocked".to_string(),
+            String::new(),
+            Some(0),
+            false,
+            false,
+        ))
     }
     fn guarantees(&self) -> SandboxGuarantees {
-        SandboxGuarantees {
-            filesystem: Isolation::OsKernel,
-            network: Isolation::OsKernel,
-            syscalls: Isolation::OsKernel,
-            label: "mock",
-        }
+        SandboxGuarantees::new(
+            Isolation::OsKernel,
+            Isolation::OsKernel,
+            Isolation::OsKernel,
+            "mock",
+        )
     }
 }
 
