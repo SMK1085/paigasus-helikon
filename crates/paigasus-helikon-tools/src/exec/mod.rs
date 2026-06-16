@@ -11,10 +11,10 @@ use paigasus_helikon_core::ToolError;
 mod host;
 pub use host::{HostBackend, HostBackendBuilder};
 
-// #[cfg(all(feature = "os-sandbox", target_os = "linux"))]
-// mod os_sandbox;
-// #[cfg(all(feature = "os-sandbox", target_os = "linux"))]
-// pub use os_sandbox::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
+#[cfg(all(feature = "os-sandbox", target_os = "linux"))]
+mod os_sandbox;
+#[cfg(all(feature = "os-sandbox", target_os = "linux"))]
+pub use os_sandbox::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -285,7 +285,10 @@ where
 pub(crate) fn apply_rlimits(limits: &ResourceLimits) -> std::io::Result<()> {
     // SAFETY: setrlimit with a stack-allocated rlimit is async-signal-safe.
     unsafe {
-        let set = |res: libc::c_int, val: u64| -> std::io::Result<()> {
+        // The resource arg's type differs per target (`c_int` on macOS/BSD/musl,
+        // `__rlimit_resource_t` on Linux glibc), so it is inferred from the
+        // platform's `RLIMIT_*` constants rather than fixed to one type.
+        let set = |res, val: u64| -> std::io::Result<()> {
             let rl = libc::rlimit {
                 rlim_cur: val as libc::rlim_t,
                 rlim_max: val as libc::rlim_t,

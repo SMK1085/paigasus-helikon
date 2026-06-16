@@ -29,6 +29,10 @@ htmd                  = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock    = { workspace = true, optional = true }
+seccompiler = { workspace = true, optional = true }
+
 [dev-dependencies]
 tokio        = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tempfile     = { workspace = true }
@@ -47,6 +51,8 @@ required-features = ["web"]
 # Network tools (WebFetch + WebSearch). Off by default so FS/Bash-only
 # consumers never pull reqwest. `tokio/net` is needed for the SSRF DNS check.
 web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd", "tokio/net"]
+# OS-enforced Bash containment (Linux: Landlock + seccomp). Off by default.
+os-sandbox = ["dep:landlock", "dep:seccompiler"]
 
 [lints]
 workspace = true
