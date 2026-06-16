@@ -5,8 +5,8 @@ Paigasus AI SDK — codename **Helikon**. A Rust SDK for building AI agents with
 [![CI](https://github.com/SMK1085/paigasus-helikon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/SMK1085/paigasus-helikon/actions/workflows/ci.yml)
 [![MSRV](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
-<!-- TODO(post-publish): add crates.io badge once the workspace is published -->
-<!-- TODO(post-publish): add docs.rs badge once the workspace is published -->
+[![crates.io](https://img.shields.io/crates/v/paigasus-helikon.svg)](https://crates.io/crates/paigasus-helikon)
+[![docs.rs](https://docs.rs/paigasus-helikon/badge.svg)](https://docs.rs/paigasus-helikon)
 
 ## What it is
 
@@ -22,30 +22,32 @@ Paigasus is the umbrella; Helikon is the spring. The SDK is the artifact you dra
 
 ## Install
 
-```toml
-[dependencies]
-paigasus-helikon = { version = "0.1", features = ["openai", "anthropic", "mcp", "runtime-tokio"] }
+```bash
+cargo add paigasus-helikon --features openai,macros
 ```
 
-> Pre-release: the workspace currently pins `version = "0.0.0"` and is not yet published to crates.io. The `"0.1"` shown above is the planned first published release — replace with the actual published version once available.
+Turn on the features you need — `openai`, `anthropic`, `mcp`, `tools`, `tools-web`, `sessions-sqlite`, `runtime-tokio`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
 
 ## Workspace at a glance
 
-Thirteen crates under `crates/`:
+Fourteen crates under `crates/`. Nine are published to crates.io; four are not-yet-implemented stubs; the CLI is binary-only.
 
 - **`paigasus-helikon`** — facade re-exporting `core` plus opt-in sibling crates by feature flag.
-- **`paigasus-helikon-core`** — type system, traits, runtime-agnostic primitives.
-- **`paigasus-helikon-cli`** — `helikon` and `paigasus-helikon` binaries.
-- **`paigasus-helikon-macros`** — proc-macro crate (currently empty).
-- **`paigasus-helikon-providers-openai`**, **`-anthropic`** — LLM provider implementations.
-- **`paigasus-helikon-runtime-tokio`**, **`-axum`**, **`-temporal`**, **`-agentcore`** — execution / orchestration runtimes.
-- **`paigasus-helikon-tools`** — tool-calling primitives.
-- **`paigasus-helikon-mcp`** — Model Context Protocol integration.
-- **`paigasus-helikon-evals`** — evaluation harness.
+- **`paigasus-helikon-core`** — type system, traits, the agent loop, runtime-agnostic primitives.
+- **`paigasus-helikon-macros`** — the `#[tool]` attribute and `tools!` proc macros.
+- **`paigasus-helikon-providers-openai`**, **`-anthropic`** — LLM provider adapters.
+- **`paigasus-helikon-sessions-sqlite`** — SQLite-backed session persistence.
+- **`paigasus-helikon-runtime-tokio`** — the default ephemeral Tokio runner.
+- **`paigasus-helikon-tools`** — sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`).
+- **`paigasus-helikon-mcp`** — Model Context Protocol client and server integration.
+- **`paigasus-helikon-cli`** — `helikon` and `paigasus-helikon` binaries (binary-only, not published as a library).
+- **`paigasus-helikon-evals`**, **`-runtime-axum`**, **`-runtime-temporal`**, **`-runtime-agentcore`** — pre-published `0.0.0` name-claim stubs; not yet implemented.
+
+See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for each crate's concern, published state, and current version.
 
 ## Documentation
 
-The public documentation site is published at <https://smk1085.github.io/paigasus-helikon/>. It is currently a scaffold — full chapters land alongside their feature tickets.
+The public documentation site is published at <https://smk1085.github.io/paigasus-helikon/> — a guided mdBook covering the [quickstart](https://smk1085.github.io/paigasus-helikon/getting-started/quickstart.html), the core concepts, and the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html).
 
 To build it locally: `cd docs/book && mdbook serve` (requires `mdbook` and `mdbook-linkcheck` installed via `cargo install`; see [CONTRIBUTING.md](./CONTRIBUTING.md#documentation-site) for exact versions).
 
