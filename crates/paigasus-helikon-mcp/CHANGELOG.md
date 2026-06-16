@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.3...paigasus-helikon-mcp-v0.1.4) - 2026-06-16
+
+### Other
+
+- *(repo)* SMA-423 refresh the book to match the shipped surface ([#91](https://github.com/SMK1085/paigasus-helikon/pull/91))
+
 ## [0.1.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.2...paigasus-helikon-mcp-v0.1.3) - 2026-06-16
 
 ### Other
