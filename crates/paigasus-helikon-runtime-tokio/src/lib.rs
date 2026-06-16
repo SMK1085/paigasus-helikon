@@ -33,6 +33,15 @@ impl OutcomeHandle {
     }
 }
 
+/// Did the run reach a terminal event? Used to decide whether a late
+/// cancel/timeout may override the collected outcome (SMA-421).
+fn is_terminal(ev: &AgentEvent) -> bool {
+    matches!(
+        ev,
+        AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
+    )
+}
+
 /// Wrap an agent event stream with cancel/deadline control.
 ///
 /// Passes agent events through. On cancellation or deadline it commits the
@@ -159,14 +168,23 @@ where
             .await;
         finalize(&session, &recorder).await;
 
-        // A cancel/timeout outcome wins even if `collected` is Ok (the run may
-        // have finished in the same poll the signal fired); `biased` keeps that
-        // window small. This precedence is deliberate (SMA-321) — see
-        // `prefired_cancel_still_completes_ready_run`.
+        // A genuine terminal event (RunCompleted/RunFailed) is the run's true
+        // outcome; a cancel/timeout overrides ONLY when no terminal was observed
+        // — i.e. it actually aborted the run in-flight. This closes the window
+        // where a late cancel (e.g. during a suspending OnRunComplete hook) fires
+        // after the terminal already went out. Cancellation is best-effort and
+        // loses to a terminal that already occurred — see the Runner::run docs.
+        // (SMA-421; deliberately revisits the SMA-321 precedence. The shared-core
+        // hoist for durable runners is tracked as SMA-422.)
+        let saw_terminal = collected
+            .as_ref()
+            .map(|r| r.events.iter().any(is_terminal))
+            .unwrap_or(true); // Err(_) from collect() ⇔ a RunFailed was observed
+
         match outcome.get() {
-            Outcome::Cancelled => Err(RunError::Cancelled),
-            Outcome::TimedOut => Err(RunError::Timeout),
-            Outcome::Completed => collected,
+            Outcome::Cancelled if !saw_terminal => Err(RunError::Cancelled),
+            Outcome::TimedOut if !saw_terminal => Err(RunError::Timeout),
+            _ => collected,
         }
     }
 
@@ -198,30 +216,39 @@ where
             .boxed();
 
         let out = async_stream::stream! {
+            let mut saw_terminal = false;
+            let mut finalized = false;
             while let Some(ev) = recorded.next().await {
                 // Finalize BEFORE exposing a terminal event: a consumer may stop
                 // polling (and drop the stream) the moment it sees the terminal,
                 // so anything after the `yield` could never run.
-                if matches!(
-                    ev,
-                    AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
-                ) {
-                    finalize(&session, &recorder).await;
+                if is_terminal(&ev) {
+                    if !finalized {
+                        finalize(&session, &recorder).await;
+                        finalized = true;
+                    }
+                    saw_terminal = true;
                 }
                 yield ev;
             }
-            // Cancel/timeout: the inner stream ended without a terminal event, so
-            // synthesize one — again after finalize, for the same reason.
-            match outcome.get() {
-                Outcome::Cancelled => {
-                    finalize(&session, &recorder).await;
-                    yield AgentEvent::RunFailed { error: "run cancelled".to_owned() };
+            // Synthesize a terminal ONLY when the run aborted in-flight (no real
+            // terminal was ever yielded). Reaching here with `!saw_terminal` means
+            // the loop never finalized, so finalize directly. A late cancel/timeout
+            // that fired AFTER a real terminal — e.g. during a suspending
+            // OnRunComplete hook — must NOT emit a second, synthetic terminal.
+            // (SMA-421)
+            if !saw_terminal {
+                match outcome.get() {
+                    Outcome::Cancelled => {
+                        finalize(&session, &recorder).await;
+                        yield AgentEvent::RunFailed { error: "run cancelled".to_owned() };
+                    }
+                    Outcome::TimedOut => {
+                        finalize(&session, &recorder).await;
+                        yield AgentEvent::RunFailed { error: "run timed out".to_owned() };
+                    }
+                    Outcome::Completed => {}
                 }
-                Outcome::TimedOut => {
-                    finalize(&session, &recorder).await;
-                    yield AgentEvent::RunFailed { error: "run timed out".to_owned() };
-                }
-                Outcome::Completed => {}
             }
         };
         Ok(RunResultStreaming::with_failure(Box::pin(out), failure))

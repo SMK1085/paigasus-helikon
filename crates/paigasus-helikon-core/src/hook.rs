@@ -77,6 +77,11 @@ pub enum HookEvent {
         to: String,
     },
     /// Fired once at the end of a run.
+    ///
+    /// Best-effort: if the run is cancelled while this hook is still running, the
+    /// hook may be aborted mid-execution (cancellation tears down the agent
+    /// stream, dropping the suspended hook). Consumers needing guaranteed
+    /// post-run cleanup must not rely solely on `OnRunComplete`.
     OnRunComplete,
     /// Fired when a subagent sub-run completes — a handoff target, an
     /// agent-as-tool sub-run, or a workflow sub-agent (Sequential/Parallel/Loop).

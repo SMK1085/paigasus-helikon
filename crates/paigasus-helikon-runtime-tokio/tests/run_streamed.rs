@@ -8,15 +8,15 @@ use std::time::Duration;
 
 use futures_util::stream::StreamExt as _;
 use paigasus_helikon_core::{
-    AgentEvent, AgentInput, CancellationToken, FinishReason, ModelEvent, RunConfig, Runner,
+    AgentEvent, AgentInput, CancellationToken, FinishReason, Hook, ModelEvent, RunConfig, Runner,
     Session, Tool,
 };
 use paigasus_helikon_runtime_tokio::TokioRunner;
 
 use common::{
-    noop_run_context, run_context_with_cancel, run_context_with_session,
-    run_context_with_session_and_cancel, text_agent, CountingSession, MockModel, MockToolBarrier,
-    PendingModel,
+    noop_run_context, run_context_with_cancel, run_context_with_cancel_and_hooks,
+    run_context_with_session, run_context_with_session_and_cancel, text_agent,
+    CancelOnRunCompleteHook, CountingSession, MockModel, MockToolBarrier, PendingModel,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -248,5 +248,48 @@ async fn finalize_runs_even_if_consumer_stops_at_terminal() {
         session.append_count(),
         1,
         "finalize must run before the terminal event is exposed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_then_late_cancel_no_synthetic_terminal() {
+    // Same window via run_streamed: the real terminal already went out, then a
+    // late cancel fires during the OnRunComplete hook. The stream must NOT append
+    // a second, synthetic RunFailed. (SMA-421)
+    let cancel = CancellationToken::new();
+    let ctx = run_context_with_cancel_and_hooks(
+        cancel,
+        vec![Arc::new(CancelOnRunCompleteHook) as Arc<dyn Hook<()>>],
+    );
+    let agent = text_agent(MockModel::quick_hi(), Vec::new());
+
+    let rs = TokioRunner
+        .run_streamed(
+            &agent,
+            ctx,
+            AgentInput::from_user_text("go"),
+            RunConfig::default(),
+        )
+        .await
+        .expect("stream starts");
+
+    let events: Vec<AgentEvent> =
+        tokio::time::timeout(Duration::from_secs(5), rs.events.collect::<Vec<_>>())
+            .await
+            .expect("stream must end within 5s");
+
+    let terminals = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
+            )
+        })
+        .count();
+    assert_eq!(terminals, 1, "exactly one terminal event: {events:?}");
+    assert!(
+        matches!(events.last(), Some(AgentEvent::RunCompleted { .. })),
+        "last event must be RunCompleted (not a synthetic RunFailed): {events:?}"
     );
 }

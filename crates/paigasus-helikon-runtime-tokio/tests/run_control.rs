@@ -5,12 +5,15 @@ mod common;
 
 use std::time::Duration;
 
-use paigasus_helikon_core::{AgentInput, CancellationToken, RunConfig, RunError, Runner, Session};
+use paigasus_helikon_core::{
+    AgentInput, CancellationToken, Hook, RunConfig, RunError, Runner, Session,
+};
 use paigasus_helikon_runtime_tokio::TokioRunner;
 
 use common::{
-    run_context_with_cancel, run_context_with_session, run_context_with_session_and_cancel,
-    text_agent, CountingSession, MockModel, PendingModel,
+    run_context_with_cancel, run_context_with_cancel_and_hooks, run_context_with_session,
+    run_context_with_session_and_cancel, text_agent, CancelOnRunCompleteHook, CountingSession,
+    MockModel, PendingModel,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -60,9 +63,9 @@ async fn timeout_returns_timeout() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefired_cancel_still_completes_ready_run() {
-    // Token already fired before the run starts; because every event is
-    // immediately ready, biased stream-first still lets the run drain to
-    // completion rather than reporting Cancelled.
+    // Token already fired before the run starts; the run drains to completion,
+    // a RunCompleted terminal is observed, and the cancel cannot override it
+    // (SMA-421: a genuine terminal wins over any cancel/timeout).
     let cancel = CancellationToken::new();
     cancel.cancel();
     let ctx = run_context_with_cancel(cancel);
@@ -162,4 +165,32 @@ async fn finalize_runs_on_every_run_exit() {
         "expected timeout path, got {timeout_res:?}"
     );
     assert_eq!(session.append_count(), 1, "finalize on timeout exit");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_then_late_cancel_reports_completed() {
+    // A suspending OnRunComplete hook cancels the run AFTER the terminal event
+    // already went out. The completed run must be reported as Ok — the late
+    // cancel must not override a genuine terminal. (SMA-421)
+    let cancel = CancellationToken::new();
+    let ctx = run_context_with_cancel_and_hooks(
+        cancel,
+        vec![std::sync::Arc::new(CancelOnRunCompleteHook) as std::sync::Arc<dyn Hook<()>>],
+    );
+    let agent = text_agent(MockModel::quick_hi(), Vec::new());
+
+    let res = tokio::time::timeout(
+        Duration::from_secs(5),
+        TokioRunner.run(
+            &agent,
+            ctx,
+            AgentInput::from_user_text("go"),
+            RunConfig::default(),
+        ),
+    )
+    .await
+    .expect("run must settle within 5s");
+
+    assert!(res.is_ok(), "terminal must win over a late cancel: {res:?}");
+    assert_eq!(res.unwrap().final_output, "hi");
 }

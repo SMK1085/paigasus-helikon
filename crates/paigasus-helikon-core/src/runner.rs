@@ -73,6 +73,15 @@ where
     /// owns history. The run's events are persisted at exit. To continue with no
     /// new turn (or to retry a failed run without re-appending the user message),
     /// use [`Runner::resume`].
+    ///
+    /// **Cancellation/timeout is best-effort and loses to a genuine terminal
+    /// event that already occurred.** If the run reaches a terminal
+    /// (`RunCompleted`/`RunFailed`) before — or in the same poll as — a cancel or
+    /// timeout, the runner reports that real outcome (`Ok`, or the structured
+    /// `Err(RunError::Agent(..))`), not `Err(RunError::Cancelled)` /
+    /// `Err(RunError::Timeout)`. The cancel/timeout wins only when it aborted the
+    /// run in-flight, before any terminal event. A caller therefore cannot assume
+    /// "I called `cancel()` ⇒ I get `Cancelled`".
     async fn run(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -87,6 +96,10 @@ where
     /// must be driven to its terminal for the run's events to be persisted:** a
     /// consumer that drops the stream early may skip the finalize step and leave
     /// a partial turn (or nothing) written.
+    ///
+    /// The same cancellation precedence as [`Runner::run`] applies: once a real
+    /// terminal event has been yielded, a late cancel/timeout does not append a
+    /// second, synthetic terminal — the stream ends after the real one.
     async fn run_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
