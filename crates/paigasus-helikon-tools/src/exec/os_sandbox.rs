@@ -179,6 +179,10 @@ fn build_seccomp(allow_network: bool) -> Result<BpfProgram, ToolError> {
     if !allow_network {
         // Match `socket(family, ..)` for AF_INET / AF_INET6 (arg0); AF_UNIX is
         // left allowed so local IPC and `/dev/log`-style sockets keep working.
+        // x86_64/aarch64 use the direct `socket` syscall, so this is the egress
+        // chokepoint. (The x32 ABI ORs a bit into the syscall number and would
+        // slip past, but standard amd64 userland — including CI — ships no x32
+        // binaries, so it is out of scope.)
         let af = |family: u64| -> Result<SeccompRule, ToolError> {
             SeccompRule::new(vec![SeccompCondition::new(
                 0,
@@ -264,10 +268,11 @@ impl ExecutionBackend for OsSandboxBackend {
                             return Err(std::io::Error::other("landlock not fully enforced"));
                         }
                     }
-                    // MUST be after Landlock: `restrict_self` sets PR_SET_NO_NEW_PRIVS,
-                    // which the kernel requires before an unprivileged process may
-                    // install a seccomp filter. Installing seccomp first would fail
-                    // with EACCES (or need CAP_SYS_ADMIN we deliberately don't have).
+                    // Applied after Landlock. An unprivileged seccomp install needs
+                    // PR_SET_NO_NEW_PRIVS, which `restrict_self` sets — though
+                    // `apply_filter` also sets it itself, so this is not a strict
+                    // seccomp prerequisite; we order Landlock first for its own
+                    // semantics.
                     apply_filter(&seccomp).map_err(|e| std::io::Error::other(e.to_string()))?;
                     Ok(())
                 });

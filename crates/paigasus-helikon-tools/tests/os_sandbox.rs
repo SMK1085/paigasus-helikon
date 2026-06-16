@@ -81,17 +81,29 @@ async fn os_sandbox_denies_network_by_default() {
     let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
         .build()
         .unwrap();
-    // Pure-shell TCP connect to a public IP; seccomp must block socket(AF_INET).
-    // bash's /dev/tcp triggers socket(2); on failure the redirect errors.
+    // Create an AF_INET socket directly (no connect, so no external dependency):
+    // the seccomp filter must reject socket(2) with EPERM. We assert on the
+    // specific EPERM signature so the test cannot pass vacuously — if python3
+    // were missing the output would say "not found" (not "Operation not
+    // permitted"), and if the seccomp socket rule regressed the call would
+    // succeed and exit 0. (Earlier this used `sh`'s `/dev/tcp`, a bash-ism that
+    // dash — CI's `/bin/sh` — fails with ENOENT before ever calling socket(2),
+    // which made the test pass even with seccomp removed.)
     let out = backend
         .run(paigasus_helikon_tools::ExecRequest::new(
-            "timeout 5 sh -c 'echo > /dev/tcp/1.1.1.1/80' 2>&1; echo rc=$?",
+            "python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM)' 2>&1",
         ))
         .await
         .unwrap();
+    assert_ne!(
+        out.exit_code,
+        Some(0),
+        "socket(AF_INET) must be denied under default-deny; got: {}",
+        out.stdout
+    );
     assert!(
-        out.stdout.contains("rc=") && !out.stdout.contains("rc=0"),
-        "network connect must fail under default-deny seccomp; got: {}",
+        out.stdout.contains("Operation not permitted") || out.stdout.contains("PermissionError"),
+        "expected an EPERM from the seccomp socket filter, not some other failure; got: {}",
         out.stdout
     );
 }
@@ -106,14 +118,25 @@ async fn os_sandbox_allows_network_when_opted_in() {
         .allow_network(true)
         .build()
         .unwrap();
-    let g = backend.guarantees();
-    assert_eq!(g.network, paigasus_helikon_tools::Isolation::None);
-    // socket() now succeeds (creating a socket needs no external service).
+    assert_eq!(backend.guarantees().network, Isolation::None);
+    // With network allowed, creating an AF_INET socket succeeds. Pairs with the
+    // deny test to pin behavior in both directions: a seccomp regression that
+    // wrongly allowed or wrongly blocked socket(2) fails one of the two.
     let out = backend
         .run(paigasus_helikon_tools::ExecRequest::new(
-            "python3 -c 'import socket; socket.socket(); print(\"ok\")' 2>&1 || echo nopy",
+            "python3 -c 'import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.close(); print(\"ok\")' 2>&1",
         ))
         .await
         .unwrap();
-    assert!(out.stdout.contains("ok") || out.stdout.contains("nopy"));
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "socket(AF_INET) must succeed under allow_network; got: {}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("ok"),
+        "expected ok; got: {}",
+        out.stdout
+    );
 }
