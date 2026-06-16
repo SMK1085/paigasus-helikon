@@ -113,8 +113,9 @@ fn probe_landlock() -> Result<(), OsSandboxError> {
         .map_err(|e| OsSandboxError::Unsupported(e.to_string()))
 }
 
-/// Read-only system paths a shell + common tools need.
-const SYSTEM_RO: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/etc"];
+/// Read-only system paths a shell + common tools need. (`/usr/sbin` is covered
+/// by `/usr`; `/sbin` is listed for distros that have not usr-merged it.)
+const SYSTEM_RO: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"];
 
 /// Build (in the parent) a Landlock ruleset: read+write under the sandbox root,
 /// read+exec for the system paths and any extra `read_paths`.
@@ -171,12 +172,13 @@ impl ExecutionBackend for OsSandboxBackend {
         let mut ruleset = Some(ruleset);
 
         spawn_capped(&self.cfg, &req.command, move |cmd| {
-            // SAFETY: the closure runs in the forked child before exec. It performs
-            // only async-signal-safe work: setrlimit syscalls and Landlock's
-            // restrict_self (prctl(PR_SET_NO_NEW_PRIVS) + landlock_restrict_self on
-            // an already-created ruleset fd — no heap allocation, just two syscalls
-            // and a small stack struct). The RulesetCreated is built in the parent
-            // and moved in via Option::take so it is applied exactly once.
+            // SAFETY: the closure runs in the forked child before exec, so it does
+            // only async-signal-safe work — no heap allocation, no locks: the
+            // `setrlimit` syscalls in `apply_rlimits`, then Landlock's
+            // `restrict_self` (`prctl(PR_SET_NO_NEW_PRIVS)` + `landlock_restrict_self`
+            // on an already-created ruleset fd, plus a small stack struct). The
+            // `RulesetCreated` is built in the parent and moved in via `Option::take`
+            // so it is applied exactly once.
             unsafe {
                 cmd.pre_exec(move || {
                     super::apply_rlimits(&limits)?;
@@ -184,8 +186,11 @@ impl ExecutionBackend for OsSandboxBackend {
                         let status = rs
                             .restrict_self()
                             .map_err(|e| std::io::Error::other(e.to_string()))?;
-                        if status.ruleset == RulesetStatus::NotEnforced {
-                            return Err(std::io::Error::other("landlock not enforced"));
+                        // Fail-closed: accept only full enforcement. Anything less
+                        // (a future ABI making Partial reachable) aborts the exec
+                        // rather than running under weaker containment than claimed.
+                        if status.ruleset != RulesetStatus::FullyEnforced {
+                            return Err(std::io::Error::other("landlock not fully enforced"));
                         }
                     }
                     Ok(())
