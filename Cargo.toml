@@ -15,7 +15,7 @@ categories    = ["api-bindings", "asynchronous"]
 
 [workspace.dependencies]
 anyhow                = "1"
-async-openai          = "0.40"
+async-openai          = "0.41"
 cap-std               = "4"
 axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64                = "0.22"
