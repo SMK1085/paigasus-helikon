@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.3...paigasus-helikon-core-v0.5.4) - 2026-06-16
+
+### Fixed
+
+- *(runtime-tokio)* SMA-421 keep a genuine terminal over a late cancel/timeout ([#86](https://github.com/SMK1085/paigasus-helikon/pull/86))
+
 ## [0.5.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.2...paigasus-helikon-core-v0.5.3) - 2026-06-15
 
 ### Added
