@@ -5,7 +5,9 @@
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 
-use paigasus_helikon_tools::{ExecutionBackend, Isolation, OsSandboxBackend, Sandbox};
+// `ExecutionBackend` is not imported: `build()` returns `Arc<dyn ExecutionBackend>`,
+// so `run`/`guarantees` are called on a trait object (no trait import needed).
+use paigasus_helikon_tools::{Isolation, OsSandboxBackend, Sandbox};
 
 /// Skip (with a loud reason) when the kernel lacks Landlock, rather than passing
 /// silently. Returns true if the caller should `return`.
