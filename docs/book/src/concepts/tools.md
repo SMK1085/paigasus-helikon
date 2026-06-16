@@ -175,13 +175,15 @@ A `Sandbox` is a directory opened as an OS-confined capability via `cap-std`
 `EditTool` (`Write`) operate strictly inside it — they cannot escape via `..`,
 absolute paths, or symlinks; an attempt yields `ToolError::Denied`.
 
-`BashTool` is the exception: it is a **cwd-pinned shell, not a security sandbox**.
-The `cap-std` containment does not extend to a spawned child process, so a command
-can read and write anything this process can — absolute paths, `..`, `~`, and the
-network. Its effect is `SideEffect`, and in `PermissionMode::Default` with no
-`PermissionPolicy` installed it runs ungated. Gate it with a `PermissionPolicy` or a
-`DenyRule::tool("Bash")` for real control — `explore_sandbox.rs` demonstrates the
-former.
+`BashTool` is different: its containment depends on the `ExecutionBackend` it is
+given (see [Containment vs approval](#containment-vs-approval) below). With the
+default `HostBackend` it is a **cwd-pinned shell, not a security sandbox** — the
+`cap-std` containment does not extend to a spawned child process, so a command can
+read and write anything this process can (absolute paths, `..`, `~`, and the
+network). Its effect is `SideEffect`, and in `PermissionMode::Default` with no
+`PermissionPolicy` installed it runs ungated: gate it with a `PermissionPolicy` or a
+`DenyRule::tool("Bash")` (as `explore_sandbox.rs` demonstrates), or use
+`OsSandboxBackend` for OS-enforced containment.
 
 ## Containment vs approval
 

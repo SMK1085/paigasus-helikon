@@ -96,7 +96,7 @@ impl OsSandboxBackendBuilder {
     }
 
     /// Finish building. **Fail-closed:** returns `Err` if Landlock cannot be
-    /// enforced at [`LANDLOCK_ABI`] on this kernel.
+    /// enforced at the required ABI (v1; kernel ≥ 5.13) on this host.
     pub fn build(self) -> Result<Arc<dyn ExecutionBackend>, OsSandboxError> {
         probe_landlock()?;
         Ok(Arc::new(OsSandboxBackend {
