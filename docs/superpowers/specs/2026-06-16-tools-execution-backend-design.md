@@ -1,43 +1,10 @@
 # SMA-413 — `paigasus-helikon-tools`: pluggable `ExecutionBackend` for Bash
 
-**Status:** approved (brainstorm) — revised per design review — pending written-spec re-review
+**Status:** approved (brainstorm) — pending written-spec review
 **Ticket:** [SMA-413](https://linear.app/smaschek/issue/SMA-413/paigasus-helikon-tools-pluggable-executionbackend-for-bash-host-os)
 **Milestone:** Composition & Extensibility
 **Branch:** `feature/sma-413-paigasus-helikon-tools-pluggable-executionbackend-for-bash`
 **Date:** 2026-06-16
-**Design review:** [`2026-06-16-tools-execution-backend-design-review.md`](./2026-06-16-tools-execution-backend-design-review.md) — all findings incorporated (see §0).
-
-## 0. Design-review resolutions
-
-The first draft proposed the `birdcage` crate. The review (H1) flagged that as the
-mechanism to settle before planning; verification confirmed the concern and changed
-the mechanism:
-
-- **H1 — birdcage is GPL-3.0 and FS+network-only.** Verified against crates.io /
-  the repo: latest birdcage is `0.8.1` (Apr 2024; the review's "0.4.0 / Oct 2023"
-  read a *yanked* version), it is licensed **GPL-3.0-or-later**, and its own README
-  says it "focuses **only** on Filesystem and Network operations… is **not** a
-  complete sandbox… applications can still execute most system calls." The GPL
-  license is **disqualifying** for our published `Apache-2.0 OR MIT` crate (license
-  conflict + `cargo deny` gate), independent of the FS-only scope. **Resolution:**
-  drop birdcage; build directly on the maintained, permissive `landlock`
-  (`MIT OR Apache-2.0`, 0.4.5 / May 2026) + `seccompiler`
-  (`Apache-2.0 OR BSD-3-Clause`, 0.5.0 / Mar 2025) primitives. These give *genuine*
-  filesystem **and** syscall enforcement, so `guarantees()` is truthful (the
-  overstated `syscalls: OsKernel` is now backed by a real seccomp policy). Linux-first;
-  macOS Seatbelt deferred (§11) — this matches the ticket's Linux-only AC.
-- **M1 — `pre_exec` fork-safety.** The application model is settled (§8.2): the
-  Landlock ruleset and the seccomp BPF program are built **in the parent** (before
-  fork, where allocation is fine); the child's `pre_exec` runs **only** the
-  async-signal-safe apply syscalls. No `lock()`-style allocation in the child.
-- **M2 — `RLIMIT_AS` is opt-in, not default.** Address-space caps spuriously kill
-  threaded/`mmap`-heavy programs; only `RLIMIT_CPU` and `RLIMIT_FSIZE` are on by
-  default (§7).
-- **L1 — docs lead with `OsSandboxBackend`** on Linux (§13).
-- **L2 — kernel-feature matrix documented; network AC reconciled** (§8.3, §15):
-  Landlock+seccomp need **no namespaces / no userns**, so the deployment matrix is
-  just "Landlock ≥ 5.13 + seccomp"; this PR's network is binary deny/allow,
-  domain-level egress is the follow-up.
 
 ## 1. Summary
 
@@ -62,7 +29,7 @@ Swapping the backend needs **no change to tool or agent code**.
 `-tools` is already released at `0.1.6`; this is a normal release-plz flow with a
 **breaking** API reshape → `0.2.0`. No `paigasus-helikon-core` change is required.
 
-## 2. Scope decisions (resolved during brainstorming + review)
+## 2. Scope decisions
 
 1. **PR scope: trait + `HostBackend` + `OsSandboxBackend` (fs + syscalls, Linux);
    defer the network proxy and macOS.** This PR delivers the `ExecutionBackend`
@@ -75,12 +42,20 @@ Swapping the backend needs **no change to tool or agent code**.
    ticket AC "outbound to a non-allowlisted **domain** is denied" is re-scoped to
    the proxy follow-up; this PR's network story is binary (deny-all or allow-all).
 
-2. **Enforcement mechanism: `landlock` + `seccompiler` directly (Linux).** Chosen
-   over birdcage (GPL-3.0, FS-only — §0/H1), external wrappers (`bwrap`/`sandbox-exec`
-   — external-binary requirement), and `extrasafe` (MIT but ~2yr stale). Both
-   primitives are permissive and current; together they make `guarantees()` honest.
-   The trait seam means the mechanism can still be swapped (e.g. add macOS) without
-   touching `BashTool`.
+2. **Enforcement mechanism: `landlock` + `seccompiler` directly (Linux).**
+   `landlock` (`MIT OR Apache-2.0`, 0.4.5 / May 2026) handles filesystem rules;
+   `seccompiler` (`Apache-2.0 OR BSD-3-Clause`, 0.5.0 / Mar 2025, by the Firecracker
+   team) compiles the syscall/network BPF filter. Both are permissive and current,
+   and together they give *genuine* filesystem **and** syscall enforcement, so
+   `guarantees()` is honest. Rejected alternatives: **birdcage** — a single crate
+   that bundles Linux Landlock + macOS Seatbelt, but it is **GPL-3.0-or-later**
+   (incompatible with our published `Apache-2.0 OR MIT` crate + fails the
+   `cargo deny` license gate) and is filesystem/network-only (its own README: "not
+   a complete sandbox… applications can still execute most system calls"), so it
+   cannot back a `syscalls` guarantee; **external wrappers** (`bwrap` /
+   `sandbox-exec`) — the external-binary requirement; **`extrasafe`** (MIT, but
+   ~2yr stale). The trait seam means the mechanism can still be swapped (e.g. to add
+   macOS — §11) without touching `BashTool`.
 
 3. **Config lives on the backend (clean break).** Execution config — sandbox/cwd,
    timeout, env allowlist, output cap, `rlimit`s — moves onto the backend.
@@ -93,8 +68,9 @@ Swapping the backend needs **no change to tool or agent code**.
    `build()` returns `Err` — never a silent downgrade below what `guarantees()`
    advertises. The caller explicitly falls back to `HostBackend` if it chooses.
 
-5. **`rlimit`s: `RLIMIT_CPU` + `RLIMIT_FSIZE` on by default; `RLIMIT_AS` opt-in**
-   (review M2). `ResourceLimits` is a shared `exec`-module type reused by both
+5. **`rlimit`s: `RLIMIT_CPU` + `RLIMIT_FSIZE` on by default; `RLIMIT_AS` opt-in.**
+   An address-space cap spuriously kills threaded/`mmap`-heavy programs, so it is
+   not on by default. `ResourceLimits` is a shared `exec`-module type reused by both
    backends.
 
 ## 3. Integration surface (existing APIs we build against)
@@ -185,7 +161,7 @@ pub enum Isolation {
 pub struct ResourceLimits {
     pub cpu_seconds: Option<u64>,          // RLIMIT_CPU   — default ON (derived from timeout)
     pub file_size_bytes: Option<u64>,      // RLIMIT_FSIZE — default ON (sane default)
-    pub address_space_bytes: Option<u64>,  // RLIMIT_AS    — default OFF (opt-in; see §7 / review M2)
+    pub address_space_bytes: Option<u64>,  // RLIMIT_AS    — default OFF (opt-in; see §7)
 }
 ```
 
@@ -193,7 +169,7 @@ All four structs are `#[non_exhaustive]` so fields can grow non-breakingly.
 `Isolation` carries only `None` and `OsKernel` here; future tiers
 (`Virtualized` for SMA-416 microVM, `Proxied` for domain-level egress) are additive.
 
-**Honesty note (review H1):** `Isolation::OsKernel` means "a kernel mechanism is
+**Honesty note:** `Isolation::OsKernel` means "a kernel mechanism is
 enforcing this axis." For `OsSandboxBackend`, `filesystem: OsKernel` is Landlock,
 `syscalls: OsKernel` is a real seccomp-bpf policy, and `network: OsKernel` (when
 denied) is the seccomp socket-family filter. The exact posture of each is documented
@@ -256,8 +232,8 @@ HostBackend::builder(sandbox)        // sandbox.root() = cwd
   - `RLIMIT_CPU` — **on by default**, derived from the wall-timeout + a small margin
     (CPU backstop against a spin loop that ignores the wall kill).
   - `RLIMIT_FSIZE` — **on by default**, a sane max-bytes-written cap.
-  - `RLIMIT_AS` — **opt-in / default `None`** (review M2): an address-space cap
-    spuriously kills threaded and `mmap`-heavy programs; documented as approximate.
+  - `RLIMIT_AS` — **opt-in / default `None`**: an address-space cap spuriously
+    kills threaded and `mmap`-heavy programs; documented as approximate.
   - Each field is `Option`; `None` leaves the inherited limit. `RLIMIT_NPROC` is
     not set (per-UID → can starve unrelated host work). Concrete default numbers
     finalized in the plan.
@@ -290,7 +266,7 @@ OsSandboxBackend::builder(sandbox)
     .build() -> Result<Arc<dyn ExecutionBackend>, OsSandboxError>
 ```
 
-### 8.2 Execution & the fork-safe application model (review M1)
+### 8.2 Execution & the fork-safe application model
 
 Same `spawn_capped(...)` path as `HostBackend`, but with a `pre_exec` hook that
 applies the jail. Async-signal-safety dictates a **build-in-parent / apply-in-child**
@@ -330,7 +306,7 @@ contract is documented at the `pre_exec` call site.
   `allow_network(true)` omits that rule → `network: None`. Domain-level allow/deny is
   **out of scope** here (the proxy follow-up); a future refinement can use Landlock
   ABI v4 per-port network rules (kernel 6.7+).
-- **No namespaces required** (review L2): Landlock covers fs and seccomp covers
+- **No namespaces required:** Landlock covers fs and seccomp covers
   syscalls/network, so we need **no** user/mount/net namespaces and therefore **no**
   unprivileged-userns dependency — simplifying the deployment matrix to "Landlock ≥
   5.13 + seccomp."
@@ -421,7 +397,7 @@ commit the `Cargo.lock` update.
   write fails even though path validation would have allowed it), while writing
   inside the root succeeds; with `allow_network(false)` an outbound TCP connection
   fails; `guarantees()` reports `OsKernel` on fs/syscalls (+ network when denied).
-- **CI honesty (review):** Landlock/seccomp availability on the GitHub `ubuntu-latest`
+- **CI honesty:** Landlock/seccomp availability on the GitHub `ubuntu-latest`
   runner is **verified during planning** (kernel ≥ 5.13 + Landlock enabled). Where a
   runner cannot enforce, the test is `#[ignore]`'d with an explicit reason — **never
   silently skipped to green** (a sandbox test that passes because the sandbox is
@@ -434,7 +410,7 @@ commit the `Cargo.lock` update.
 
 Update the mdBook tools/sandbox page: the **containment ≠ approval ≠
 resource-capping** axis; the backends, **leading with `OsSandboxBackend`** on Linux
-(review L1) and its fail-closed fallback story, then `HostBackend` as the
+and its fail-closed fallback story, then `HostBackend` as the
 default-but-unconfined option with its "NOT a security boundary" label; the
 `guarantees()` tiers and exactly what each enforces; and the kernel-feature matrix
 (Landlock ≥ 5.13 + seccomp; no namespaces). Note the proxy + macOS backends as
