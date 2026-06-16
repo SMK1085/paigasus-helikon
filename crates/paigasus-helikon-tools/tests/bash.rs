@@ -7,7 +7,7 @@ use paigasus_helikon_core::{
     CancellationToken, HookRegistry, MemorySession, RunContext, Tool, ToolContext, ToolEffect,
     ToolError, TracerHandle,
 };
-use paigasus_helikon_tools::{BashTool, Sandbox};
+use paigasus_helikon_tools::{BashTool, HostBackend, Sandbox};
 
 fn tool_ctx() -> ToolContext<()> {
     let run_ctx: RunContext<()> = RunContext::new(
@@ -25,7 +25,8 @@ fn tool_ctx() -> ToolContext<()> {
 async fn bash_runs_in_sandbox_cwd() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("marker.txt"), "x").unwrap();
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap()).build();
+    let tool: BashTool =
+        BashTool::new(HostBackend::builder(Sandbox::open(tmp.path()).unwrap()).build());
     assert_eq!(tool.name(), "Bash");
     assert_eq!(tool.effect(), ToolEffect::SideEffect);
 
@@ -45,9 +46,11 @@ async fn bash_runs_in_sandbox_cwd() {
 #[tokio::test]
 async fn bash_times_out() {
     let tmp = tempfile::tempdir().unwrap();
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap())
-        .timeout(Duration::from_millis(200))
-        .build();
+    let tool: BashTool = BashTool::new(
+        HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
+            .timeout(Duration::from_millis(200))
+            .build(),
+    );
     let out = tool
         .invoke(&tool_ctx(), serde_json::json!({ "command": "sleep 5" }))
         .await
@@ -59,9 +62,11 @@ async fn bash_times_out() {
 #[tokio::test]
 async fn bash_truncates_output() {
     let tmp = tempfile::tempdir().unwrap();
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap())
-        .max_output_bytes(16)
-        .build();
+    let tool: BashTool = BashTool::new(
+        HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
+            .max_output_bytes(16)
+            .build(),
+    );
     let out = tool
         .invoke(
             &tool_ctx(),
@@ -77,9 +82,10 @@ async fn bash_truncates_output() {
 #[tokio::test]
 async fn bash_denies_blocked_command() {
     let tmp = tempfile::tempdir().unwrap();
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap())
-        .deny_commands(["rm"])
-        .build();
+    let tool: BashTool =
+        BashTool::builder(HostBackend::builder(Sandbox::open(tmp.path()).unwrap()).build())
+            .deny_commands(["rm"])
+            .build();
     let err = tool
         .invoke(&tool_ctx(), serde_json::json!({ "command": "rm -rf /" }))
         .await
@@ -91,9 +97,11 @@ async fn bash_denies_blocked_command() {
 #[tokio::test]
 async fn bash_timeout_with_background_process_does_not_hang() {
     let tmp = tempfile::tempdir().unwrap();
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap())
-        .timeout(Duration::from_millis(300))
-        .build();
+    let tool: BashTool = BashTool::new(
+        HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
+            .timeout(Duration::from_millis(300))
+            .build(),
+    );
     // The foreground `sleep 30` outlives the timeout; the backgrounded one
     // would, before the group-kill fix, hold the stdout pipe open and hang
     // invoke forever. The outer timeout guards against a regression.
@@ -118,9 +126,10 @@ async fn bash_timeout_with_background_process_does_not_hang() {
 #[tokio::test]
 async fn bash_allow_commands_blocks_unlisted() {
     let tmp = tempfile::tempdir().unwrap();
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap())
-        .allow_commands(["echo"])
-        .build();
+    let tool: BashTool =
+        BashTool::builder(HostBackend::builder(Sandbox::open(tmp.path()).unwrap()).build())
+            .allow_commands(["echo"])
+            .build();
     let ok = tool
         .invoke(&tool_ctx(), serde_json::json!({ "command": "echo hi" }))
         .await
@@ -139,9 +148,11 @@ async fn bash_env_is_scrubbed() {
     let tmp = tempfile::tempdir().unwrap();
     // Override the allowlist to PATH only, so HOME (set in the parent env) is
     // scrubbed from the child.
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap())
-        .env_allowlist(["PATH"])
-        .build();
+    let tool: BashTool = BashTool::new(
+        HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
+            .env_allowlist(["PATH"])
+            .build(),
+    );
     let out = tool
         .invoke(
             &tool_ctx(),
@@ -156,7 +167,8 @@ async fn bash_env_is_scrubbed() {
 #[tokio::test]
 async fn bash_reports_nonzero_exit() {
     let tmp = tempfile::tempdir().unwrap();
-    let tool: BashTool = BashTool::builder(Sandbox::open(tmp.path()).unwrap()).build();
+    let tool: BashTool =
+        BashTool::new(HostBackend::builder(Sandbox::open(tmp.path()).unwrap()).build());
     let out = tool
         .invoke(&tool_ctx(), serde_json::json!({ "command": "exit 3" }))
         .await

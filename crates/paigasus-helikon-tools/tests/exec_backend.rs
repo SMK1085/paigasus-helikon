@@ -32,3 +32,71 @@ fn guarantees_struct_holds_axes_and_label() {
     let o = ExecOutput::new("out".into(), String::new(), Some(0), false, false);
     assert_eq!(o.clone().stdout, "out");
 }
+
+use async_trait::async_trait;
+use paigasus_helikon_core::{
+    CancellationToken, HookRegistry, MemorySession, RunContext, Tool, ToolError, TracerHandle,
+};
+use paigasus_helikon_tools::{BashTool, ExecutionBackend};
+use std::sync::Arc;
+
+/// A backend that records the command and returns a canned output — proves
+/// BashTool calls `run` and maps the result, with no real process.
+struct MockBackend {
+    seen: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl ExecutionBackend for MockBackend {
+    async fn run(
+        &self,
+        req: paigasus_helikon_tools::ExecRequest,
+    ) -> Result<paigasus_helikon_tools::ExecOutput, ToolError> {
+        self.seen.lock().unwrap().push(req.command.clone());
+        // `ExecOutput`/`SandboxGuarantees` are `#[non_exhaustive]`, so an
+        // integration test (separate crate) must use the `::new(..)` constructors,
+        // not struct literals.
+        Ok(paigasus_helikon_tools::ExecOutput::new(
+            "mocked".to_string(),
+            String::new(),
+            Some(0),
+            false,
+            false,
+        ))
+    }
+    fn guarantees(&self) -> SandboxGuarantees {
+        SandboxGuarantees::new(
+            Isolation::OsKernel,
+            Isolation::OsKernel,
+            Isolation::OsKernel,
+            "mock",
+        )
+    }
+}
+
+fn tool_ctx() -> paigasus_helikon_core::ToolContext<()> {
+    RunContext::<()>::new(
+        Arc::new(()),
+        Arc::new(MemorySession::new()),
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    )
+    .to_tool_context()
+}
+
+#[tokio::test]
+async fn bashtool_delegates_to_any_backend_unchanged() {
+    let backend = Arc::new(MockBackend {
+        seen: Default::default(),
+    });
+    let tool: BashTool = BashTool::new(backend.clone());
+    let out = tool
+        .invoke(&tool_ctx(), serde_json::json!({ "command": "echo hi" }))
+        .await
+        .unwrap();
+    assert_eq!(out.content["stdout"], "mocked");
+    assert_eq!(backend.seen.lock().unwrap().as_slice(), ["echo hi"]);
+    // The backend's containment label is surfaced in the tool description.
+    assert!(tool.description().contains("mock"));
+}

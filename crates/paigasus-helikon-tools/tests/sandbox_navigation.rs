@@ -11,7 +11,7 @@ use paigasus_helikon_core::{
     Agent, AgentEvent, AgentInput, CancellationToken, ContentPart, FinishReason, HookRegistry,
     Item, LlmAgent, MemorySession, ModelEvent, RunContext, TracerHandle,
 };
-use paigasus_helikon_tools::{BashTool, ReadTool, Sandbox};
+use paigasus_helikon_tools::{BashTool, HostBackend, ReadTool, Sandbox};
 
 #[tokio::test]
 async fn agent_navigates_sandbox_and_reports_contents() {
@@ -56,7 +56,7 @@ async fn agent_navigates_sandbox_and_reports_contents() {
         .model(model)
         .instructions("Use the tools to inspect the sandbox, then answer.")
         .tool(ReadTool::<()>::new(sandbox.clone()))
-        .tool(BashTool::<()>::builder(sandbox).build())
+        .tool(BashTool::<()>::new(HostBackend::builder(sandbox).build()))
         .build();
 
     let ctx: RunContext<()> = RunContext::new(
