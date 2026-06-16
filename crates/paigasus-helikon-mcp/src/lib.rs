@@ -11,7 +11,7 @@
 //!   over stdio or streamable HTTP.
 //!
 //! SSE transports are not supported: rmcp removed them in 0.11.0 and the
-//! 2025-06-18 MCP spec revision deprecated HTTP+SSE in favor of streamable
+//! 2025-03-26 MCP spec revision deprecated HTTP+SSE in favor of streamable
 //! HTTP.
 //!
 //! # Example: filesystem tools into an agent
