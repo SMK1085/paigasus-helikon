@@ -1,8 +1,9 @@
 //! Map Anthropic HTTP and in-stream errors to [`paigasus_helikon_core::ModelError`].
 //!
 //! Per ADR-10 ("no silent auto-retry in the loop"), the runner never
-//! retries; the application configures retries via
-//! `RunConfig::retry_policy`. Auth failures (401/403) map to `Refused`;
+//! retries; the application configures retries by wrapping the model in
+//! `RetryingModel` (with a `RetryPolicy`) from
+//! `paigasus-helikon-runtime-tokio`. Auth failures (401/403) map to `Refused`;
 //! 429 maps to `RateLimited`; 5xx and 529 map to `Unavailable`. The same
 //! helper is invoked from both the HTTP-response path and the in-stream
 //! `error` SSE event path so behavior is consistent.
