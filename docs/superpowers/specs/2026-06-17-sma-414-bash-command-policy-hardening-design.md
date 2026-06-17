@@ -1,10 +1,9 @@
 # SMA-414 — Bash command-policy hardening
 
-**Status:** approved (design), revised after staff review
+**Status:** approved (design)
 **Date:** 2026-06-17
 **Linear:** [SMA-414](https://linear.app/smaschek/issue/SMA-414/paigasus-helikon-tools-bash-command-policy-hardening-operator-aware)
 **Related:** SMA-326 (PermissionPolicy / PermissionMode), SMA-328 (BashTool)
-**Review:** [`…-design-review.md`](2026-06-17-sma-414-bash-command-policy-hardening-design-review.md) — all 12 findings resolved (traceability table at end).
 
 ## Problem
 
@@ -58,7 +57,7 @@ matched and how their output is handled:
   `control.rs:78–87`) only sees final **model** text, so it is the wrong seam
   for tool-output redaction — `PostToolUse`/`final_json` is correct.
 
-## Design decisions (resolved during brainstorming)
+## Design decisions
 
 | # | Decision |
 |---|----------|
@@ -84,10 +83,9 @@ Because **tools consumes new core API in the same PR**, this triggers the
 CLAUDE.md "same-PR core bump + facade bump" rule: bump
 `paigasus-helikon-core` (patch — the additions are new items + new variants on
 already-`#[non_exhaustive]` enums; `DenyRule`'s internal refactor is non-breaking
-because its `tool` field is **private**, not because of `#[non_exhaustive]`),
-update its `[workspace.dependencies]` pin + CHANGELOG, and bump the facade so it
-republishes with current sibling reqs. release-plz then publishes
-core → tools → facade in dependency order.
+because its `tool` field is **private**), update its `[workspace.dependencies]`
+pin + CHANGELOG, and bump the facade so it republishes with current sibling
+reqs. release-plz then publishes core → tools → facade in dependency order.
 
 ### Component 1 — `command_match` module (core, pure, dependency-free)
 
@@ -102,7 +100,7 @@ pub struct ResolvedCommand {
     pub redirects: Vec<Redirect>,   // parsed redirections (target paths)
 }
 
-pub struct Redirect { pub op: RedirectOp, pub target: String } // > >> 2> &> >& tee/dd handled in guards
+pub struct Redirect { pub op: RedirectOp, pub target: String } // > >> 2> &> >& handled by guards
 
 /// Split a compound command on shell control operators, quote- AND
 /// redirection-aware. Control operators: && || ; | |& & newlines.
@@ -225,9 +223,9 @@ true). Both are carried through `handoff_child` / `subagent_child` /
 top-level breaker is live as soon as the fields exist on `RunContext`; the
 `to_tool_context` projection (a `pub(crate)` carrier) is what keeps **nested
 `agent_as_tool` sub-runs** guarded when they rebuild a child `RunContext`.
-Missing any copy site silently un-guards that path, so the five sites
-(constructor, `handoff_child`, `subagent_child`, `to_tool_context`, and the
-`with_*` builders) are consolidated behind a single
+Missing any copy site silently un-guards that path, so the copy sites
+(constructor, `handoff_child`, `subagent_child`, `to_tool_context`, builders)
+are consolidated behind a single
 `clone_permission_fields(&self) -> PermissionFields` helper, and an explicit
 inheritance test asserts both new fields propagate through all three child
 paths.
@@ -250,8 +248,8 @@ Two matchers, applied to every string in the tool's output JSON:
 2. **Value scan** — literal occurrences of known secret *values* are replaced
    with `***`. The known-value set is sourced **automatically** by scanning the
    **parent process environment** once at run start for variable names matching
-   the same suffixes. To avoid corrupting legitimate output (review #5), a value
-   is included **only** if it clears a **minimum length (≥ 8 chars) and a
+   the same suffixes. To avoid corrupting legitimate output, a value is
+   included **only** if it clears a **minimum length (≥ 8 chars) and a
    minimum-entropy / not-a-common-word** filter, and the set is **size-capped**.
    Short/common secrets (`true`, `dev`, `1234`) are dropped from the value scan
    (they remain covered by the key-name scan when key-labeled). The application
@@ -266,14 +264,14 @@ cannot reintroduce an unredacted secret), gated by a default-on flag with a
 trajectory. **Satisfies AC-3.**
 
 Notes:
-- **Hook visibility (review #10):** by design user `PostToolUse` hooks observe
+- **Hook visibility:** by design user `PostToolUse` hooks observe
   *pre*-redaction output (redaction is the last gate). Documented; acceptable
   for trusted hook code.
-- **Trace ordering (review #9):** the per-tool span records metadata, not
-  output bodies, today — so nothing leaks now. The design records a
-  **redaction-before-trace ordering requirement**: any future tracing that
-  captures tool I/O must read the redacted `final_json`. A test asserts the
-  recorded `ToolResult` Item is redacted.
+- **Trace ordering:** the per-tool span records metadata, not output bodies,
+  today — so nothing leaks now. The design records a **redaction-before-trace
+  ordering requirement**: any future tracing that captures tool I/O must read
+  the redacted `final_json`. A test asserts the recorded `ToolResult` Item is
+  redacted.
 - Empty values (`KEY=`), already-`***` values, and non-string JSON nodes are
   pass-through. Redaction never errors; worst case it is a no-op.
 
@@ -283,8 +281,7 @@ Notes:
 evaluated inside `invoke` *after* authorize) switch from
 `split_whitespace().next()` to core's `command_match` resolution.
 
-**Compound composition rule (review #6 — an intended behavior change, not a
-no-op):**
+**Compound composition rule (an intended behavior change, not a no-op):**
 - **deny** if **any** resolved sub-command's program is in `deny_commands`;
 - with an allowlist, **allow only if every** resolved sub-command's program is
   in `allow_commands`.
@@ -294,7 +291,7 @@ This is stricter than today's first-token matching: `allow=["git"]` +
 refused (the `rm` sub-command is not allowlisted). The change is called out in
 the `BashTool` rustdoc and the tools README.
 
-## Behavior changes & migration (review #3)
+## Behavior changes & migration
 
 This release adds an **always-on destructive floor**. In `Default` mode with no
 policy and no approval handler — the common headless/CI setup — a command the
@@ -313,18 +310,18 @@ from **Allow** to **Ask → Deny**. This is intended hardening, but it is a
 
 ## Testing → AC mapping
 
-| Test | Location | AC / review |
-|------|----------|-------------|
-| `split_operators`: control ops; **does not** mis-split `2>&1` / `&>` / `>&`; glued/quoted redirect targets tokenize | `core` `command_match` | AC-1, #4 |
-| `resolve_command`: env-assignment + wrapper strip incl. `sudo`/`doas`; program unquote (`\rm`, `'rm'`); `bash -c`/`sh -c` payload extraction + depth bound | `core` `command_match` | AC-2, #2 |
-| `DenyRule::bash_command("rm")` blocks `echo ok && rm -rf .`; allows `echo ok`; tool-scoped (non-Bash `command` arg ignored) | `core` `permission` | AC-1, #11 |
-| Breaker denies/asks `rm -rf /`, `rm -rf ~`, `sudo rm -rf /`, `bash -c 'rm -rf /'` under `Bypass`, with & without handler; `without_default_guards()` disables | `core` `control` | AC-2, #2 |
-| Breaker **allows** `echo x > /dev/null`, `cmd 2> /dev/null`; **denies** `echo x > /etc/passwd`, `echo x >/etc/passwd`, `tee "/etc/passwd"` | `core` `control` | AC-2, #1, #4 |
-| `rm` form matrix: caught (`-rf`/`-fr`/`-R -f`/`--recursive --force`, `/`, `/*`, `~`, `rm -rf / tmp`); uncaught documented (`find -delete`, `xargs rm`, `eval`, `$HOME`-expanded) | `core` `control` | #7, #2 |
-| `redact`: key-name (`KEY=`/`KEY:`/`export`), env-value match, **length/entropy floor** (short value not redacted), nested JSON, idempotence, env snapshot-once | `core` `redaction` | AC-3, #5 |
-| Recorded session `ToolResult` Item is redacted | `core` `agent`/integration | AC-3, #9 |
-| Guard-field inheritance through `handoff_child` / `subagent_child` / `to_tool_context` | `core` `context` | #8 |
-| `BashTool` integration: `FOO_API_KEY=secret` echo → `***`; deny list blocks `nice rm -rf .` / `timeout 5 rm x`; allowlist composition (`git status && rm -rf .` refused) | `tools` `tests/bash.rs` | AC-1, AC-3, #6 |
+| Test | Location | AC |
+|------|----------|----|
+| `split_operators`: control ops; **does not** mis-split `2>&1` / `&>` / `>&`; glued/quoted redirect targets tokenize | `core` `command_match` | AC-1 |
+| `resolve_command`: env-assignment + wrapper strip incl. `sudo`/`doas`; program unquote (`\rm`, `'rm'`); `bash -c`/`sh -c` payload extraction + depth bound | `core` `command_match` | AC-2 |
+| `DenyRule::bash_command("rm")` blocks `echo ok && rm -rf .`; allows `echo ok`; tool-scoped (non-Bash `command` arg ignored) | `core` `permission` | AC-1 |
+| Breaker denies/asks `rm -rf /`, `rm -rf ~`, `sudo rm -rf /`, `bash -c 'rm -rf /'` under `Bypass`, with & without handler; `without_default_guards()` disables | `core` `control` | AC-2 |
+| Breaker **allows** `echo x > /dev/null`, `cmd 2> /dev/null`; **denies** `echo x > /etc/passwd`, `echo x >/etc/passwd`, `tee "/etc/passwd"` | `core` `control` | AC-2 |
+| `rm` form matrix: caught (`-rf`/`-fr`/`-R -f`/`--recursive --force`, `/`, `/*`, `~`, `rm -rf / tmp`); uncaught documented (`find -delete`, `xargs rm`, `eval`, `$HOME`-expanded) | `core` `control` | AC-2 |
+| `redact`: key-name (`KEY=`/`KEY:`/`export`), env-value match, **length/entropy floor** (short value not redacted), nested JSON, idempotence, env snapshot-once | `core` `redaction` | AC-3 |
+| Recorded session `ToolResult` Item is redacted | `core` `agent`/integration | AC-3 |
+| Guard-field inheritance through `handoff_child` / `subagent_child` / `to_tool_context` | `core` `context` | AC-2 |
+| `BashTool` integration: `FOO_API_KEY=secret` echo → `***`; deny list blocks `nice rm -rf .` / `timeout 5 rm x`; allowlist composition (`git status && rm -rf .` refused) | `tools` `tests/bash.rs` | AC-1, AC-3 |
 
 ## Documentation
 
@@ -349,20 +346,3 @@ from **Allow** to **Ask → Deny**. This is intended hardening, but it is a
   list with an extension hook.
 - Redacting bare high-entropy tokens that are neither key-labeled in output nor
   sourced from a suffix-matching env var.
-
-## Review traceability
-
-| # | Finding | Resolution |
-|---|---------|-----------|
-| 1 | `/dev/null` denied | Device-node allowlist checked before any `/dev` write rule (Component 3) |
-| 2 | `sudo`/`-c`/quote bypass | Strip `sudo`/`doas`, unquote program token, recurse `bash -c`/`sh -c` (depth 3); `find`/`xargs`/`eval` documented+tested bypasses (Components 1, 3; D5) |
-| 3 | Behavior change as quiet patch | "Behavior changes & migration" section; loud CHANGELOG + migration note |
-| 4 | Tokenizer not redirection-aware | Full redirection-aware scanner; `&`-mis-split fixed (Component 1; D6) |
-| 5 | Redaction value-scan corrupts output | Length/entropy floor + size cap + snapshot-once (Component 4) |
-| 6 | Compound allow/deny composition unspecified | Composition rule defined as intended behavior change (Component 5) |
-| 7 | `rm` form coverage under-specified | Enumerated caught/uncaught forms + test matrix (Components 1, 3; Testing) |
-| 8 | Guard inheritance manual/duplicated | `clone_permission_fields` helper + inheritance test; corrected data-flow note (Component 3) |
-| 9 | "/logs" not fully closed | Redaction-before-trace ordering requirement + `ToolResult`-redacted test (Component 4) |
-| 10 | Hooks see pre-redaction output | Documented as intended (Component 4) |
-| 11 | Guard matcher must be tool-scoped | `Matcher`/`GuardMatcher` engage only for `tool == "Bash"` (Components 2, 3) |
-| 12 | `DenyRule` not `#[non_exhaustive]` | Rationale corrected: non-breaking via private field (Component 2; release note) |
