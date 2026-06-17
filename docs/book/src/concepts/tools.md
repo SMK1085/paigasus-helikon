@@ -164,7 +164,7 @@ let agent = LlmAgent::builder::<()>()
 `ReadTool`, `WriteTool`, and `EditTool` take a `Sandbox` via `::new(sandbox)`.
 `BashTool` takes an `Arc<dyn ExecutionBackend>` — use `HostBackend::builder(sandbox).build()`
 for the default unconfined backend, or `OsSandboxBackend::builder(sandbox).build()`
-(Linux, feature `os-sandbox`) for OS-enforced containment. `BashToolBuilder` exposes
+(Linux + macOS, feature `os-sandbox`) for OS-enforced containment. `BashToolBuilder` exposes
 `allow_commands` and `deny_commands` for command-level filtering. The full example is
 `crates/paigasus-helikon-tools/examples/explore_sandbox.rs`.
 
@@ -206,12 +206,12 @@ independently.
 `BashTool` delegates execution to a value implementing `ExecutionBackend`. Swap the
 backend to change the containment tier without touching any other part of your agent.
 
-#### `OsSandboxBackend` (Linux; feature `os-sandbox`) — recommended for untrusted commands
+#### `OsSandboxBackend` (Linux + macOS; feature `os-sandbox`) — recommended for untrusted commands
 
-The strongest containment tier. Built in the parent process; applied in the child via
-a `pre_exec` hook. **Fail-closed**: `build()` returns `Err(OsSandboxError::Unsupported(…))`
-if the kernel cannot enforce the requested isolation, so a misconfigured host is
-never silently left unprotected.
+The strongest containment tier available on the current platform. Built in the parent
+process; applied in the child via a `pre_exec` hook. **Fail-closed**: `build()`
+returns `Err(OsSandboxError::Unsupported(…))` if the platform cannot enforce the
+requested isolation, so a misconfigured host is never silently left unprotected.
 
 ```rust,ignore
 use paigasus_helikon_tools::{BashTool, OsSandboxBackend, Sandbox};
@@ -220,8 +220,8 @@ let sandbox = Sandbox::open("./workspace")?;
 let backend = match OsSandboxBackend::builder(sandbox).build() {
     Ok(b) => b,
     Err(e) => {
-        // Fall back to HostBackend when Landlock is unavailable (e.g. a macOS
-        // dev machine or a kernel older than 5.13).
+        // Fall back to HostBackend when the OS sandbox is unavailable
+        // (e.g. a Linux kernel older than 5.13).
         eprintln!("OS sandbox unavailable ({e}); falling back to host backend");
         HostBackend::builder(Sandbox::open("./workspace")?).build()
     }
@@ -229,7 +229,9 @@ let backend = match OsSandboxBackend::builder(sandbox).build() {
 let tool = BashTool::<()>::new(backend);
 ```
 
-What `OsSandboxBackend` enforces:
+What `OsSandboxBackend` enforces varies by platform:
+
+**Linux** (kernel ≥ 5.13; x86_64 or aarch64):
 
 | Axis | Mechanism | Guarantee |
 |---|---|---|
@@ -238,11 +240,10 @@ What `OsSandboxBackend` enforces:
 | Syscalls | seccomp-bpf | A small deny-list of dangerous syscalls (`ptrace`, `mount`, `pivot_root`, `chroot`, `setns`, `unshare`, `kexec_load`, `bpf`, `perf_event_open`) always returns `EPERM`. |
 | Resource | `setrlimit` | Configured via `.rlimits(ResourceLimits { … })`; defaults apply a CPU backstop and a 1 GiB file-size cap. |
 
-**Kernel requirements:** Linux ≥ 5.13 (Landlock ABI v1); x86_64 or aarch64 (seccomp
-BPF is architecture-specific). No Linux namespaces or privileged capabilities are
-needed — the entire mechanism is unprivileged.
+No Linux namespaces or privileged capabilities are needed — the entire mechanism is
+unprivileged.
 
-`OsSandboxBackend::guarantees()` returns:
+`OsSandboxBackend::guarantees()` on Linux returns:
 
 ```rust,ignore
 SandboxGuarantees {
@@ -253,9 +254,42 @@ SandboxGuarantees {
 }
 ```
 
+**macOS** (any version that ships `/usr/bin/sandbox-exec`):
+
+The macOS backend uses **Seatbelt** (`sandbox-exec`), Apple's sandbox MAC framework.
+`sandbox-exec` is Apple-deprecated but ships on every macOS release. The posture is
+**write-focused**: filesystem _write_ operations are denied outside the sandbox root,
+while reads are unrestricted (weaker than Linux's read+write containment). Network is
+all-or-nothing: denied by default, which also blocks `AF_UNIX` local sockets; pass
+`.allow_network(true)` to permit all socket families. Seatbelt is an operation MAC,
+not a syscall filter, so `syscalls` is `None`.
+
+| Axis | Mechanism | Guarantee |
+|---|---|---|
+| Filesystem | Seatbelt (sandbox-exec) | **Write-only containment**: writes outside the sandbox root are denied at the OS layer; reads are unrestricted. |
+| Network | Seatbelt (sandbox-exec) | All sockets denied by default (including `AF_UNIX`). Pass `.allow_network(true)` to allow all outbound traffic. |
+| Syscalls | — | No syscall filter; `Isolation::None`. |
+| Resource | `setrlimit` | Same as Linux — configured via `.rlimits(ResourceLimits { … })`. |
+
+`OsSandboxBackend::guarantees()` on macOS returns:
+
+```rust,ignore
+SandboxGuarantees {
+    filesystem: Isolation::OsKernel,   // write-only; reads unrestricted
+    network:    Isolation::OsKernel,   // or Isolation::None if .allow_network(true)
+    syscalls:   Isolation::None,
+    label:      "os-sandbox (seatbelt)",
+}
+```
+
+> **macOS containment is weaker than Linux.** The `OsKernel` label on the filesystem
+> axis means OS-enforced, but only for _writes_. A sandboxed command can still read
+> arbitrary files. Use the Linux backend (or a dedicated Linux CI environment) when
+> read isolation is required.
+
 **Forthcoming:** domain-level network egress proxy (route all outbound traffic
-through a policy-enforcing proxy rather than blocking at the socket layer) and macOS
-Seatbelt containment are tracked in SMA-426.
+through a policy-enforcing proxy rather than blocking at the socket layer) is tracked
+as a follow-up to SMA-426.
 
 #### `HostBackend` (all platforms) — default, unconfined
 
@@ -296,13 +330,16 @@ SandboxGuarantees {
 
 - `Isolation::None` — no OS enforcement; the command has the same access as the
   parent process on that axis.
-- `Isolation::OsKernel` — enforced by an OS kernel mechanism (Landlock LSM for
-  filesystem; seccomp-bpf for network and syscalls). A violating operation returns
-  an OS error — the command cannot bypass it from userspace.
+- `Isolation::OsKernel` — enforced by an OS kernel mechanism. The exact mechanism
+  and strength depend on the platform: on Linux, Landlock LSM for filesystem and
+  seccomp-bpf for network and syscalls (read+write containment); on macOS, Seatbelt
+  for filesystem (write-only; reads unrestricted) and network. A violating operation
+  returns an OS error — the command cannot bypass it from userspace.
 
 The `label` field is a short human-readable string (`"host (no containment)"` /
-`"os-sandbox (landlock+seccomp)"`) that `BashTool` surfaces in its tool description
-so the model knows what tier it is operating under.
+`"os-sandbox (landlock+seccomp)"` on Linux / `"os-sandbox (seatbelt)"` on macOS)
+that `BashTool` surfaces in its tool description so the model knows what tier it is
+operating under.
 
 ### Network tools (`tools-web` feature)
 
