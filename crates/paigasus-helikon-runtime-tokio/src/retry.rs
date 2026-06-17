@@ -111,7 +111,9 @@ impl RetryPolicy {
         } else {
             ceiling
         };
-        let mut delay = Duration::from_secs_f64(secs.max(0.0));
+        // `try_from_secs_f64` errors on a non-finite or out-of-range value (e.g. a
+        // `Duration::MAX`-class `max_delay`); fall back to the cap rather than panic.
+        let mut delay = Duration::try_from_secs_f64(secs.max(0.0)).unwrap_or(self.max_delay);
         if let ModelError::RateLimited {
             retry_after_ms: Some(ms),
         } = err
@@ -355,6 +357,17 @@ mod policy_tests {
     fn max_attempts_one_is_passthrough() {
         let p = RetryPolicy::new().max_attempts(1);
         assert!(p.next_delay(0, &ModelError::Unavailable, 0.0).is_none());
+    }
+
+    #[test]
+    fn pathological_inputs_do_not_panic() {
+        let p = RetryPolicy::new()
+            .base_delay(Duration::from_secs(1))
+            .multiplier(f64::MAX)
+            .max_delay(Duration::MAX)
+            .jitter(false);
+        // Must not panic while constructing the Duration; returns Some delay.
+        assert!(p.next_delay(1, &ModelError::Unavailable, 0.0).is_some());
     }
 }
 
