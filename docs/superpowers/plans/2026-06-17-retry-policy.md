@@ -355,7 +355,6 @@ mod decorator_tests {
     use paigasus_helikon_core::FinishReason;
 
     /// What the i-th `invoke` of [`ScriptModel`] yields.
-    #[derive(Clone)]
     enum Resp {
         /// The stream's first (and only) item is this error.
         ErrFirst(ModelError),
@@ -363,6 +362,34 @@ mod decorator_tests {
         Ok,
         /// `TokenDelta("partial")` then this error (mid-stream).
         OkThenErr(ModelError),
+    }
+
+    // `ModelError` is not `Clone` (it holds `anyhow::Error`), so the script
+    // entries are cloned by reconstructing the test variants by hand.
+    fn clone_err(e: &ModelError) -> ModelError {
+        match e {
+            ModelError::Unavailable => ModelError::Unavailable,
+            ModelError::RateLimited { retry_after_ms } => ModelError::RateLimited {
+                retry_after_ms: *retry_after_ms,
+            },
+            ModelError::ContextLengthExceeded => ModelError::ContextLengthExceeded,
+            ModelError::Refused { reason } => ModelError::Refused {
+                reason: reason.clone(),
+            },
+            ModelError::Transport(s) => ModelError::Transport(s.clone()),
+            ModelError::Other(e) => ModelError::Other(anyhow::anyhow!("{e}")),
+            _ => ModelError::Other(anyhow::anyhow!("unknown variant")),
+        }
+    }
+
+    impl Clone for Resp {
+        fn clone(&self) -> Self {
+            match self {
+                Resp::ErrFirst(e) => Resp::ErrFirst(clone_err(e)),
+                Resp::Ok => Resp::Ok,
+                Resp::OkThenErr(e) => Resp::OkThenErr(clone_err(e)),
+            }
+        }
     }
 
     /// A `Model` that replays a fixed script, one entry per `invoke`, counting calls.
@@ -607,14 +634,16 @@ impl<M: Model + 'static> Model for RetryingModel<M> {
         let s = stream! {
             let mut attempt: u32 = 0;
             loop {
-                // (1) invoke, racing cancellation.
-                let invoked = tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => return,
-                    r = inner.invoke(request.clone(), cancel.clone()) => r,
-                };
+                // (1) Invoke the inner model. NOT raced against cancellation:
+                // lazy-stream providers resolve `invoke` immediately, so racing
+                // it would let a pre-cancelled token skip the invoke entirely and
+                // break the attempt-count contract. The inner model still receives
+                // `cancel` and honors it while streaming; the decorator races
+                // cancellation at the two real-latency points below — the
+                // first-item peek and the backoff sleep.
+                let model_stream_result = inner.invoke(request.clone(), cancel.clone()).await;
 
-                let mut model_stream = match invoked {
+                let mut model_stream = match model_stream_result {
                     Ok(s) => s,
                     Err(e) => {
                         // Outer build-error path; routed through the same policy.
