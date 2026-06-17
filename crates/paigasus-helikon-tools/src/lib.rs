@@ -43,6 +43,8 @@ pub use exec::{
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
+#[cfg(all(feature = "os-sandbox", target_os = "macos"))]
+pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
