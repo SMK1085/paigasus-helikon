@@ -145,8 +145,8 @@ that an agent can use to inspect and modify a project. The four exported tool ty
 report these names to the model: `ReadTool` (`"Read"`), `WriteTool` (`"Write"`),
 `EditTool` (`"Edit"`), and `BashTool` (`"Bash"`).
 
-```rust
-use paigasus_helikon_tools::{BashTool, EditTool, ReadTool, Sandbox, WriteTool};
+```rust,ignore
+use paigasus_helikon_tools::{BashTool, EditTool, HostBackend, ReadTool, Sandbox, WriteTool};
 
 let sandbox = Sandbox::open(".")?;
 
@@ -157,14 +157,15 @@ let agent = LlmAgent::builder::<()>()
     .tool(ReadTool::<()>::new(sandbox.clone()))
     .tool(WriteTool::<()>::new(sandbox.clone()))
     .tool(EditTool::<()>::new(sandbox.clone()))
-    .tool(BashTool::<()>::builder(sandbox).build())
+    .tool(BashTool::<()>::new(HostBackend::builder(sandbox).build()))
     .build();
 ```
 
 `ReadTool`, `WriteTool`, and `EditTool` take a `Sandbox` via `::new(sandbox)`.
-`BashTool` is built through `BashTool::builder(sandbox)`, whose `BashToolBuilder`
-exposes `timeout`, `env_allowlist`, `max_output_bytes`, `allow_commands`, and
-`deny_commands`. The full example is
+`BashTool` takes an `Arc<dyn ExecutionBackend>` — use `HostBackend::builder(sandbox).build()`
+for the default unconfined backend, or `OsSandboxBackend::builder(sandbox).build()`
+(Linux, feature `os-sandbox`) for OS-enforced containment. `BashToolBuilder` exposes
+`allow_commands` and `deny_commands` for command-level filtering. The full example is
 `crates/paigasus-helikon-tools/examples/explore_sandbox.rs`.
 
 ### Confinement model
@@ -174,13 +175,134 @@ A `Sandbox` is a directory opened as an OS-confined capability via `cap-std`
 `EditTool` (`Write`) operate strictly inside it — they cannot escape via `..`,
 absolute paths, or symlinks; an attempt yields `ToolError::Denied`.
 
-`BashTool` is the exception: it is a **cwd-pinned shell, not a security sandbox**.
-The `cap-std` containment does not extend to a spawned child process, so a command
-can read and write anything this process can — absolute paths, `..`, `~`, and the
-network. Its effect is `SideEffect`, and in `PermissionMode::Default` with no
-`PermissionPolicy` installed it runs ungated. Gate it with a `PermissionPolicy` or a
-`DenyRule::tool("Bash")` for real control — `explore_sandbox.rs` demonstrates the
-former.
+`BashTool` is different: its containment depends on the `ExecutionBackend` it is
+given (see [Containment vs approval](#containment-vs-approval) below). With the
+default `HostBackend` it is a **cwd-pinned shell, not a security sandbox** — the
+`cap-std` containment does not extend to a spawned child process, so a command can
+read and write anything this process can (absolute paths, `..`, `~`, and the
+network). Its effect is `SideEffect`, and in `PermissionMode::Default` with no
+`PermissionPolicy` installed it runs ungated: gate it with a `PermissionPolicy` or a
+`DenyRule::tool("Bash")` (as `explore_sandbox.rs` demonstrates), or use
+`OsSandboxBackend` for OS-enforced containment.
+
+## Containment vs approval
+
+`BashTool` separates three independent axes that are often conflated:
+
+- **Containment** — what OS-kernel mechanisms prevent the spawned process from
+  accessing resources it was not granted. Enforced by the `ExecutionBackend`.
+- **Approval** — whether a human or a `PermissionPolicy` must authorise the call
+  before it runs. Enforced by the runner's permission pipeline.
+- **Resource-capping** — CPU time, file-size, and address-space limits applied via
+  `setrlimit` so a runaway command does not exhaust the host.
+
+These are orthogonal: you can grant full filesystem access (no containment) while
+requiring human approval (strict approval), or jail a command to a tmpdir
+(containment) and run it without asking (no approval required). Choose each axis
+independently.
+
+### Execution backends
+
+`BashTool` delegates execution to a value implementing `ExecutionBackend`. Swap the
+backend to change the containment tier without touching any other part of your agent.
+
+#### `OsSandboxBackend` (Linux; feature `os-sandbox`) — recommended for untrusted commands
+
+The strongest containment tier. Built in the parent process; applied in the child via
+a `pre_exec` hook. **Fail-closed**: `build()` returns `Err(OsSandboxError::Unsupported(…))`
+if the kernel cannot enforce the requested isolation, so a misconfigured host is
+never silently left unprotected.
+
+```rust,ignore
+use paigasus_helikon_tools::{BashTool, OsSandboxBackend, Sandbox};
+
+let sandbox = Sandbox::open("./workspace")?;
+let backend = match OsSandboxBackend::builder(sandbox).build() {
+    Ok(b) => b,
+    Err(e) => {
+        // Fall back to HostBackend when Landlock is unavailable (e.g. a macOS
+        // dev machine or a kernel older than 5.13).
+        eprintln!("OS sandbox unavailable ({e}); falling back to host backend");
+        HostBackend::builder(Sandbox::open("./workspace")?).build()
+    }
+};
+let tool = BashTool::<()>::new(backend);
+```
+
+What `OsSandboxBackend` enforces:
+
+| Axis | Mechanism | Guarantee |
+|---|---|---|
+| Filesystem | Landlock (LSM, kernel ≥ 5.13) | Read+write only under the sandbox root; read-only for a system path set (`/usr`, `/bin`, `/lib`, …). Attempts to write outside the root fail at the OS layer — not just at the shell level. |
+| Network | seccomp-bpf | `socket(AF_INET)` and `socket(AF_INET6)` return `EPERM` by default. `AF_UNIX` (local sockets) is allowed. Pass `.allow_network(true)` to lift the IP egress restriction. |
+| Syscalls | seccomp-bpf | A small deny-list of dangerous syscalls (`ptrace`, `mount`, `pivot_root`, `chroot`, `setns`, `unshare`, `kexec_load`, `bpf`, `perf_event_open`) always returns `EPERM`. |
+| Resource | `setrlimit` | Configured via `.rlimits(ResourceLimits { … })`; defaults apply a CPU backstop and a 1 GiB file-size cap. |
+
+**Kernel requirements:** Linux ≥ 5.13 (Landlock ABI v1); x86_64 or aarch64 (seccomp
+BPF is architecture-specific). No Linux namespaces or privileged capabilities are
+needed — the entire mechanism is unprivileged.
+
+`OsSandboxBackend::guarantees()` returns:
+
+```rust,ignore
+SandboxGuarantees {
+    filesystem: Isolation::OsKernel,
+    network:    Isolation::OsKernel,  // or Isolation::None if .allow_network(true)
+    syscalls:   Isolation::OsKernel,
+    label:      "os-sandbox (landlock+seccomp)",
+}
+```
+
+**Forthcoming:** domain-level network egress proxy (route all outbound traffic
+through a policy-enforcing proxy rather than blocking at the socket layer) and macOS
+Seatbelt containment are tracked in SMA-426.
+
+#### `HostBackend` (all platforms) — default, unconfined
+
+The default backend. Pins the working directory to the sandbox root and scrubs the
+environment to a configurable allowlist, but spawned commands have the same OS
+access as the parent process.
+
+```rust,ignore
+use paigasus_helikon_tools::{BashTool, HostBackend, Sandbox};
+
+let backend = HostBackend::builder(Sandbox::open("./workspace")?)
+    .timeout(std::time::Duration::from_secs(10))
+    .env_allowlist(["PATH", "HOME"])
+    .build();
+let tool = BashTool::<()>::new(backend);
+```
+
+`HostBackend::guarantees()` returns:
+
+```rust,ignore
+SandboxGuarantees {
+    filesystem: Isolation::None,
+    network:    Isolation::None,
+    syscalls:   Isolation::None,
+    label:      "host (no containment)",
+}
+```
+
+> **`HostBackend` is NOT a security boundary.** A command it runs can read and
+> write anything the parent process can. Pair it with a `PermissionPolicy` or a
+> `DenyRule::tool("Bash")` for approval-level control, or use `OsSandboxBackend`
+> for OS-enforced containment.
+
+### `guarantees()` tiers
+
+`ExecutionBackend::guarantees()` returns a `SandboxGuarantees` struct with an
+`Isolation` value on each axis:
+
+- `Isolation::None` — no OS enforcement; the command has the same access as the
+  parent process on that axis.
+- `Isolation::OsKernel` — enforced by an OS kernel mechanism (Landlock LSM for
+  filesystem; seccomp-bpf for network and syscalls). A violating operation returns
+  an OS error — the command cannot bypass it from userspace.
+
+The `label` field is a short human-readable string (`"host (no containment)"` /
+`"os-sandbox (landlock+seccomp)"`) that `BashTool` surfaces in its tool description
+so the model knows what tier it is operating under.
 
 ### Network tools (`tools-web` feature)
 

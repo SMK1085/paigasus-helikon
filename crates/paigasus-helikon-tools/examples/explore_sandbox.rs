@@ -18,7 +18,7 @@ use paigasus_helikon_core::{
     PermissionDecision, PermissionPolicy, RunContext, TracerHandle,
 };
 use paigasus_helikon_providers_openai::OpenAiModel;
-use paigasus_helikon_tools::{BashTool, EditTool, ReadTool, Sandbox, WriteTool};
+use paigasus_helikon_tools::{BashTool, EditTool, HostBackend, ReadTool, Sandbox, WriteTool};
 
 /// Allow every tool except `Bash`, which is escalated to `AskUser`. Because no
 /// [`ApprovalHandler`](paigasus_helikon_core::ApprovalHandler) is installed on
@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         .tool(ReadTool::<()>::new(sandbox.clone()))
         .tool(WriteTool::<()>::new(sandbox.clone()))
         .tool(EditTool::<()>::new(sandbox.clone()))
-        .tool(BashTool::<()>::builder(sandbox).build())
+        .tool(BashTool::<()>::new(HostBackend::builder(sandbox).build()))
         .build();
 
     // Install the gating policy on the run context. No ApprovalHandler is

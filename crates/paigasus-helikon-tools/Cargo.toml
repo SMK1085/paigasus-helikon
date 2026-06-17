@@ -29,6 +29,10 @@ htmd                  = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock    = { workspace = true, optional = true }
+seccompiler = { workspace = true, optional = true }
+
 [dev-dependencies]
 tokio        = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tempfile     = { workspace = true }
@@ -40,13 +44,19 @@ wiremock     = { workspace = true }
 paigasus-helikon-providers-openai = { path = "../paigasus-helikon-providers-openai" }
 
 [[example]]
-name             = "web_research"
+name              = "web_research"
 required-features = ["web"]
+
+[[example]]
+name              = "os_sandbox_demo"
+required-features = ["os-sandbox"]
 
 [features]
 # Network tools (WebFetch + WebSearch). Off by default so FS/Bash-only
 # consumers never pull reqwest. `tokio/net` is needed for the SSRF DNS check.
 web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd", "tokio/net"]
+# OS-enforced Bash containment (Linux: Landlock + seccomp). Off by default.
+os-sandbox = ["dep:landlock", "dep:seccompiler"]
 
 [lints]
 workspace = true
