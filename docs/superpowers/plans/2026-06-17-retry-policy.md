@@ -154,9 +154,13 @@ mod policy_tests {
             .base_delay(Duration::from_secs(10))
             .multiplier(10.0)
             .max_delay(Duration::from_secs(5))
+            .max_attempts(4) // attempt index 2 must be within budget, else the exhaustion guard returns None
             .jitter(false);
         // Without the cap this would be 10s * 10^2 = 1000s; cap pins it at 5s.
-        assert_eq!(p.next_delay(2, &ModelError::Unavailable, 0.0).unwrap(), Duration::from_secs(5));
+        assert_eq!(
+            p.next_delay(2, &ModelError::Unavailable, 0.0).unwrap(),
+            Duration::from_secs(5)
+        );
     }
 
     #[test]
