@@ -84,3 +84,59 @@ async fn os_sandbox_blocks_write_outside_root_at_os_layer() {
     );
     assert!(tmp.path().join("inside.txt").exists());
 }
+
+/// A `python3` probe: connect to a closed local port. Prints EPERM if the sandbox
+/// blocks connect(2), REFUSED if it reached the network stack. `2>&1` folds the
+/// (unused) stderr into stdout. python3 ships on the GitHub macOS runner.
+const NET_PROBE: &str = r#"python3 -c 'import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(2)
+try:
+    s.connect(("127.0.0.1", 9)); print("CONNECTED")
+except PermissionError: print("EPERM")
+except ConnectionRefusedError: print("REFUSED")
+except Exception as e: print("OTHER", type(e).__name__)' 2>&1"#;
+
+#[tokio::test]
+async fn os_sandbox_denies_network_by_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    if seatbelt_unavailable(tmp.path()) {
+        return;
+    }
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .build()
+        .unwrap();
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(NET_PROBE))
+        .await
+        .unwrap();
+    assert!(
+        out.stdout.contains("EPERM"),
+        "connect must be sandbox-denied (EPERM) under default-deny; got: {}",
+        out.stdout
+    );
+}
+
+#[tokio::test]
+async fn os_sandbox_allows_network_when_opted_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    if seatbelt_unavailable(tmp.path()) {
+        return;
+    }
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .allow_network(true)
+        .build()
+        .unwrap();
+    assert_eq!(backend.guarantees().network, Isolation::None);
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(NET_PROBE))
+        .await
+        .unwrap();
+    // Reached the stack → closed port refuses. Pairs with the deny test so a
+    // regression in either direction fails one of the two.
+    assert!(
+        out.stdout.contains("REFUSED"),
+        "connect must reach the stack (REFUSED) under allow_network; got: {}",
+        out.stdout
+    );
+}
