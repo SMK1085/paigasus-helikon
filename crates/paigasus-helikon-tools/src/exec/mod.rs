@@ -172,8 +172,10 @@ use tokio::io::AsyncReadExt;
 const GRACE: Duration = Duration::from_secs(5);
 
 /// Spawn `command` under `cfg`, draining stdout/stderr concurrently, killing the
-/// whole process group on timeout. `configure_child` runs in the **parent** to
-/// install backend-specific `pre_exec` hooks before spawn.
+/// whole process group on timeout. `prefix`, when non-empty, is prepended as
+/// `program [args...]` ahead of `sh -c <command>` (used by the macOS Seatbelt
+/// backend to wrap the shell in `sandbox-exec`). `configure_child` runs in the
+/// **parent** to install backend-specific `pre_exec` hooks before spawn.
 pub(crate) async fn spawn_capped(
     cfg: &ExecConfig,
     prefix: &[OsString],
