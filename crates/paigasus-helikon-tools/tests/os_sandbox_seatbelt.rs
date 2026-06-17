@@ -38,3 +38,49 @@ async fn os_sandbox_builds_and_reports_guarantees() {
     assert_eq!(g.network, Isolation::OsKernel); // default deny
     assert_eq!(g.label, "os-sandbox (seatbelt)");
 }
+
+#[tokio::test]
+async fn os_sandbox_blocks_write_outside_root_at_os_layer() {
+    let tmp = tempfile::tempdir().unwrap();
+    if seatbelt_unavailable(tmp.path()) {
+        return;
+    }
+    let outside = tempfile::tempdir().unwrap(); // sibling dir NOT under the sandbox root
+    let target = outside.path().join("escape.txt");
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .build()
+        .unwrap();
+
+    // Absolute path outside the root: the shell's own logic would allow it;
+    // Seatbelt must block the write at the OS layer.
+    let cmd = format!("echo pwned > {}", target.display());
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(cmd))
+        .await
+        .unwrap();
+    assert_ne!(
+        out.exit_code,
+        Some(0),
+        "write outside root must fail; stderr={}",
+        out.stderr
+    );
+    assert!(
+        !target.exists(),
+        "no file may be created outside the sandbox root"
+    );
+
+    // A write INSIDE the root (cwd = root) succeeds.
+    let ok = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(
+            "echo ok > inside.txt",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        ok.exit_code,
+        Some(0),
+        "write inside root must succeed; stderr={}",
+        ok.stderr
+    );
+    assert!(tmp.path().join("inside.txt").exists());
+}
