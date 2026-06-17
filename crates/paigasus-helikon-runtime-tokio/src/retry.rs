@@ -96,7 +96,10 @@ impl RetryPolicy {
         err: &ModelError,
         jitter_fraction: f64,
     ) -> Option<Duration> {
-        if !Self::is_retryable(err) || attempt + 1 >= self.max_attempts {
+        // `max_attempts` is always ≥ 1 (the builder clamps it), so this is
+        // equivalent to `attempt + 1 >= max_attempts` but avoids the `+ 1`
+        // overflow for a pathological `attempt` near `u32::MAX`.
+        if !Self::is_retryable(err) || attempt >= self.max_attempts.saturating_sub(1) {
             return None;
         }
         let grown = self.base_delay.as_secs_f64() * self.multiplier.powi(attempt as i32);
