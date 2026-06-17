@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.6...paigasus-helikon-tools-v0.2.0) - 2026-06-17
+
+### Added
+
+- *(tools)* [**breaking**] SMA-413 add pluggable ExecutionBackend with Host and OS-sandbox backends ([#95](https://github.com/SMK1085/paigasus-helikon/pull/95))
+
 ## [0.1.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.1.5...paigasus-helikon-tools-v0.1.6) - 2026-06-16
 
 ### Other
