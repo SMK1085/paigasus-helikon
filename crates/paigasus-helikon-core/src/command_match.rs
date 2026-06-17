@@ -25,6 +25,10 @@ pub fn split_operators(command: &str) -> Vec<&str> {
             continue;
         }
         if in_double {
+            if c == b'\\' && i + 1 < n {
+                i += 2; // skip the escaped char (e.g. \")
+                continue;
+            }
             if c == b'"' {
                 in_double = false;
             }
@@ -81,7 +85,7 @@ pub fn split_operators(command: &str) -> Vec<&str> {
 }
 
 fn push_segment<'a>(s: &'a str, start: usize, end: usize, out: &mut Vec<&'a str>) {
-    let seg = s[start..end.min(s.len())].trim();
+    let seg = s[start..end].trim(); // end is always <= s.len()
     if !seg.is_empty() {
         out.push(seg);
     }
@@ -114,5 +118,24 @@ mod split_tests {
     fn does_not_split_inside_quotes() {
         assert_eq!(split_operators("echo 'a && b'"), vec!["echo 'a && b'"]);
         assert_eq!(split_operators("echo \"x ; y\""), vec!["echo \"x ; y\""]);
+    }
+
+    #[test]
+    fn backslash_escapes_an_operator() {
+        assert_eq!(split_operators(r"echo a\;b"), vec![r"echo a\;b"]);
+    }
+
+    #[test]
+    fn empty_and_whitespace_yield_no_segments() {
+        assert!(split_operators("").is_empty());
+        assert!(split_operators("   ").is_empty());
+    }
+
+    #[test]
+    fn escaped_quote_inside_double_quotes_does_not_split() {
+        assert_eq!(
+            split_operators("echo \"foo\\\"bar; baz\""),
+            vec!["echo \"foo\\\"bar; baz\""]
+        );
     }
 }
