@@ -17,6 +17,7 @@
 pub mod agent;
 pub mod agent_as_tool;
 pub mod agent_builder;
+pub mod command_match;
 pub mod context;
 pub mod control;
 pub mod guardrail;
