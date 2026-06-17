@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.1...paigasus-helikon-tools-v0.2.2) - 2026-06-17
+
+### Added
+
+- *(tools)* SMA-426 add macOS Seatbelt ExecutionBackend for Bash ([#99](https://github.com/SMK1085/paigasus-helikon/pull/99))
+
 ### Added
 
 - *(tools)* SMA-426 add a macOS Seatbelt `OsSandboxBackend` (via `sandbox-exec`) behind the existing `os-sandbox` feature — write-focused OS containment (deny-by-default; writes outside the sandbox root denied at the OS layer; reads unrestricted; all-or-nothing network), same API as the Linux backend.
