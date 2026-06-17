@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.11...paigasus-helikon-providers-anthropic-v0.1.12) - 2026-06-17
+
+### Added
+
+- *(runtime-tokio)* SMA-393 add RetryingModel retry decorator for transient errors ([#97](https://github.com/SMK1085/paigasus-helikon/pull/97))
+
 ## [0.1.11](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.10...paigasus-helikon-providers-anthropic-v0.1.11) - 2026-06-16
 
 ### Other

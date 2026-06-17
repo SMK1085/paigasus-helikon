@@ -1,7 +1,7 @@
 [package]
 name        = "paigasus-helikon-providers-openai"
 description = "OpenAI provider for the Paigasus Helikon AI SDK."
-version                = "0.2.10"
+version                = "0.2.11"
 edition.workspace      = true
 rust-version.workspace = true
 authors.workspace      = true
