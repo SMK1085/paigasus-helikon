@@ -155,14 +155,25 @@ fn wrapper_prefix(root: &Path, profile: &str) -> Vec<OsString> {
     ]
 }
 
-/// Fail-closed probe: run a real shell under the profile that writes a file inside
-/// the root, then removes it. Validates `sandbox-exec` exists, the profile
-/// compiles, the shell starts under it, and the root write-rule actually permits
-/// writes (catching a canonicalization/rule bug at construction). The marker path
-/// is passed as `$1` (argv), never interpolated into the script. The
-/// write-OUTSIDE-root denial is covered by the AC test (a required CI check).
+/// Fail-closed probe: run a real shell under the profile and verify the sandbox
+/// actually contains it — a write **inside** the root must succeed AND a write
+/// **outside** the root must be denied. Also confirms `sandbox-exec` exists, the
+/// profile compiles, and the shell starts under it. Both paths are passed as argv
+/// (`$1`/`$2`), never interpolated into the script. A silently-permissive sandbox
+/// (the outside write succeeds) makes `build()` error here rather than falsely
+/// reporting containment — defense in depth alongside the CI acceptance test.
 fn probe(root: &Path, profile: &str) -> Result<(), OsSandboxError> {
     let marker = root.join(".helikon-seatbelt-probe");
+    // A path the sandbox must NOT permit writing to. The root's parent is always
+    // outside the write-allowed ROOT subpath; for the usual tempdir root it is
+    // host-writable, so a denial genuinely exercises Seatbelt rather than host
+    // permissions. (`unwrap_or(root)` only fires for a filesystem-root sandbox,
+    // which is not a real configuration.)
+    let outside = root
+        .parent()
+        .unwrap_or(root)
+        .join(".helikon-seatbelt-probe-outside");
+    let _ = std::fs::remove_file(&outside);
     let out = std::process::Command::new(SANDBOX_EXEC)
         .arg("-D")
         .arg(format!("ROOT={}", root.display()))
@@ -170,12 +181,17 @@ fn probe(root: &Path, profile: &str) -> Result<(), OsSandboxError> {
         .arg(profile)
         .arg("/bin/sh")
         .arg("-c")
-        .arg(r#"echo ok > "$1" && rm -f "$1""#)
+        // `set -e` makes an inside-write denial ($1) abort non-zero. If the
+        // outside write ($2) *succeeds*, the sandbox isn't containing -> exit 42.
+        // Both denied/allowed-correctly -> exit 0.
+        .arg(r#"set -e; echo ok > "$1"; if echo escape > "$2" 2>/dev/null; then exit 42; fi; rm -f "$1""#)
         .arg("seatbelt-probe") // $0
         .arg(&marker) // $1 — no shell interpolation
+        .arg(&outside) // $2 — no shell interpolation
         .output()
         .map_err(|e| OsSandboxError::Unsupported(format!("cannot run {SANDBOX_EXEC}: {e}")))?;
     let _ = std::fs::remove_file(&marker);
+    let _ = std::fs::remove_file(&outside);
     if !out.status.success() {
         return Err(OsSandboxError::Unsupported(format!(
             "Seatbelt probe failed (status {:?}): {}",

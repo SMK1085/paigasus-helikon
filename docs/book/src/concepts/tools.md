@@ -217,15 +217,12 @@ requested isolation, so a misconfigured host is never silently left unprotected.
 use paigasus_helikon_tools::{BashTool, OsSandboxBackend, Sandbox};
 
 let sandbox = Sandbox::open("./workspace")?;
-let backend = match OsSandboxBackend::builder(sandbox).build() {
-    Ok(b) => b,
-    Err(e) => {
-        // Fall back to HostBackend when the OS sandbox is unavailable
-        // (e.g. a Linux kernel older than 5.13).
-        eprintln!("OS sandbox unavailable ({e}); falling back to host backend");
-        HostBackend::builder(Sandbox::open("./workspace")?).build()
-    }
-};
+// Fail-closed: `build()` errors if the OS cannot enforce the requested isolation,
+// so containment is never silently downgraded. Propagate the error rather than
+// dropping to an unconfined backend. A caller that genuinely wants a degraded mode
+// can match on the error and opt in to `HostBackend` explicitly — but that is a
+// deliberate, security-relevant choice, not a default.
+let backend = OsSandboxBackend::builder(sandbox).build()?;
 let tool = BashTool::<()>::new(backend);
 ```
 
