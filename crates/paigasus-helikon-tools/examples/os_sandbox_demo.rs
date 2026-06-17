@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let backend = match OsSandboxBackend::builder(Sandbox::open(dir.path())?).build() {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("OS sandbox unavailable ({e}); this host lacks Landlock.");
+            eprintln!("OS sandbox unavailable ({e}); this host lacks the kernel sandbox (Linux Landlock / macOS Seatbelt).");
             return Ok(());
         }
     };
