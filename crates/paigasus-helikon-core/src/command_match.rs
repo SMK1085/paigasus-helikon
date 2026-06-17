@@ -122,6 +122,55 @@ pub struct ResolvedCommand {
     pub redirects: Vec<Redirect>,
 }
 
+/// Maximum `bash -c` / `sh -c` re-entry depth the matcher follows.
+pub const MAX_REENTRY_DEPTH: usize = 3;
+
+const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash"];
+
+/// If `cmd` invokes a known shell with a `-c <string>` argument, return the
+/// inner command string for re-parsing.
+pub fn shell_c_payload(cmd: &ResolvedCommand) -> Option<&str> {
+    if !SHELLS.contains(&cmd.program.as_str()) {
+        return None;
+    }
+    let mut it = cmd.args.iter();
+    while let Some(a) = it.next() {
+        if a == "-c" {
+            return it.next().map(String::as_str);
+        }
+        if let Some(rest) = a.strip_prefix("-c") {
+            if !rest.is_empty() {
+                return Some(rest);
+            }
+        }
+    }
+    None
+}
+
+/// Split a compound command and resolve every sub-command, following
+/// `bash -c` / `sh -c` re-entry up to [`MAX_REENTRY_DEPTH`].
+pub fn resolve_all(command: &str) -> Vec<ResolvedCommand> {
+    let mut out = Vec::new();
+    resolve_into(command, 0, &mut out);
+    out
+}
+
+fn resolve_into(command: &str, depth: usize, out: &mut Vec<ResolvedCommand>) {
+    for seg in split_operators(command) {
+        if let Some(cmd) = resolve_command(seg) {
+            if depth < MAX_REENTRY_DEPTH {
+                if let Some(inner) = shell_c_payload(&cmd) {
+                    let inner = inner.to_owned();
+                    out.push(cmd);
+                    resolve_into(&inner, depth + 1, out);
+                    continue;
+                }
+            }
+            out.push(cmd);
+        }
+    }
+}
+
 /// Wrappers stripped from the front of a sub-command before resolving the
 /// program. After the wrapper we skip a leading run of option tokens (`-x`) and
 /// bare numeric "value"/duration tokens (e.g. `timeout 5`, `nice -n 10`).
@@ -490,5 +539,32 @@ mod split_tests {
             split_operators("echo \"foo\\\"bar; baz\""),
             vec!["echo \"foo\\\"bar; baz\""]
         );
+    }
+}
+
+#[cfg(test)]
+mod resolve_all_tests {
+    use super::*;
+
+    fn programs(cmd: &str) -> Vec<String> {
+        resolve_all(cmd).into_iter().map(|c| c.program).collect()
+    }
+
+    #[test]
+    fn flattens_compound_commands() {
+        assert_eq!(programs("echo ok && rm -rf ."), vec!["echo", "rm"]);
+    }
+
+    #[test]
+    fn recurses_into_shell_c() {
+        assert!(programs("bash -c 'rm -rf /'").contains(&"rm".to_string()));
+        assert!(programs("sh -c \"echo hi && rm x\"").contains(&"rm".to_string()));
+    }
+
+    #[test]
+    fn recursion_is_depth_bounded() {
+        // Deeply nested -c beyond MAX_REENTRY_DEPTH must terminate (not loop).
+        let nested = "bash -c 'bash -c \"bash -c \\\"bash -c rm\\\"\"'";
+        let _ = resolve_all(nested);
     }
 }
