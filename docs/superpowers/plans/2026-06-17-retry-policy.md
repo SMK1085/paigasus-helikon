@@ -284,7 +284,9 @@ impl RetryPolicy {
         let cap = self.max_delay.as_secs_f64();
         let ceiling = if grown.is_finite() { grown.min(cap) } else { cap };
         let secs = if self.jitter { ceiling * jitter_fraction } else { ceiling };
-        let mut delay = Duration::from_secs_f64(secs.max(0.0));
+        // `try_from_secs_f64` errors on a non-finite / out-of-range value (e.g. a
+        // `Duration::MAX`-class `max_delay`); fall back to the cap rather than panic.
+        let mut delay = Duration::try_from_secs_f64(secs.max(0.0)).unwrap_or(self.max_delay);
         if let ModelError::RateLimited {
             retry_after_ms: Some(ms),
         } = err
