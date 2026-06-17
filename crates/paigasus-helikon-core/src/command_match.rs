@@ -140,11 +140,31 @@ pub fn resolve_command(segment: &str) -> Option<ResolvedCommand> {
             continue;
         }
         if WRAPPERS.contains(&first.as_str()) {
-            words.remove(0);
-            // Skip leading options and bare numeric value/duration tokens.
+            let wrapper = words.remove(0);
+            // Short options that take a SEPARATE argument, per wrapper. After
+            // such an option we also skip the following non-option token, so the
+            // wrapper's option-value is never mistaken for the program.
+            let arg_opts: &[&str] = match wrapper.as_str() {
+                "sudo" | "doas" => &["-u", "-g", "-C", "-h", "-p", "-r", "-t", "-U", "-R", "-c"],
+                "timeout" => &["-s", "-k"],
+                "nice" => &["-n"],
+                "stdbuf" => &["-i", "-o", "-e"],
+                "env" => &["-u", "-C", "-S"],
+                _ => &[],
+            };
             while let Some(w) = words.first() {
                 let numeric = !w.is_empty() && w.chars().all(|c| c.is_ascii_digit() || c == '.');
-                if w.starts_with('-') || numeric {
+                if w.starts_with('-') {
+                    let takes_arg = arg_opts.contains(&w.as_str());
+                    words.remove(0);
+                    if takes_arg {
+                        if let Some(v) = words.first() {
+                            if !v.starts_with('-') {
+                                words.remove(0);
+                            }
+                        }
+                    }
+                } else if numeric {
                     words.remove(0);
                 } else {
                     break;
@@ -209,7 +229,7 @@ fn tokenize(segment: &str) -> (Vec<String>, Vec<Redirect>) {
             continue;
         }
         let (word, next) = read_word(segment, i);
-        if !word.is_empty() || next > i {
+        if !word.is_empty() {
             words.push(word);
         }
         i = if next > i { next } else { i + 1 };
@@ -255,6 +275,9 @@ fn parse_redirect(s: &str, start: usize) -> (Option<Redirect>, usize) {
         );
     }
     let (target, next) = read_redirect_target(s, i);
+    if target.is_empty() {
+        return (None, next);
+    }
     (Some(Redirect { op, target }), next)
 }
 
@@ -394,6 +417,30 @@ mod resolve_tests {
     #[test]
     fn empty_segment_is_none() {
         assert!(resolve_command("   ").is_none());
+    }
+
+    #[test]
+    fn strips_wrapper_options_that_take_an_argument() {
+        // sudo -u root must not let "root" become the program (security).
+        assert_eq!(
+            resolve_command("sudo -u root rm /etc/passwd")
+                .unwrap()
+                .program,
+            "rm"
+        );
+        assert_eq!(resolve_command("doas -u root rm x").unwrap().program, "rm");
+        assert_eq!(
+            resolve_command("timeout -s KILL 5 rm x").unwrap().program,
+            "rm"
+        );
+        // bare flags without a separate arg must NOT swallow the program
+        assert_eq!(resolve_command("sudo -i rm x").unwrap().program, "rm");
+    }
+
+    #[test]
+    fn empty_redirect_target_is_dropped() {
+        let r = resolve_command("echo >").unwrap();
+        assert!(r.redirects.is_empty());
     }
 }
 
