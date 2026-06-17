@@ -158,6 +158,33 @@ paigasus-helikon = { version = "0.3", features = ["openai", "macros"] }
 ```
 
 Feature names are kebab-case (`openai`, `anthropic`); the `pub use` aliases are
-snake-case (`openai`, `anthropic`, `providers_openai`). See
+snake_case (`openai`, `anthropic`, `providers_openai`). See
 [Workspace Layout](../getting-started/workspace-layout.md) for the full feature
 map and [Crates](../reference/crates.md) for the published crate list.
+
+## Retrying transient errors
+
+Provider calls can fail transiently — rate limits (`RateLimited`), `503`s
+(`Unavailable`), or dropped connections (`Transport`). Per ADR-10 the agent loop
+never auto-retries; retry is an opt-in composition-layer concern.
+
+`paigasus-helikon-runtime-tokio` provides a `RetryingModel<M>` decorator: it
+wraps any `Model` and retries those transient variants with exponential backoff
+and jitter. It is configured by **wrapping the model** (not via `RunConfig`),
+and is disabled unless you wrap.
+
+```rust,ignore
+use std::time::Duration;
+use paigasus_helikon_runtime_tokio::{RetryPolicy, RetryingModel};
+
+let policy = RetryPolicy::new()
+    .max_attempts(4)
+    .base_delay(Duration::from_millis(250));
+let resilient = RetryingModel::new(model, policy);
+```
+
+Retry covers *connection establishment*: a retryable error that arrives before
+any content has streamed is retried; once tokens or tool-call deltas have been
+emitted, a later error is surfaced rather than retried (output can't be
+un-emitted). `RateLimited { retry_after_ms }` waits at least the provider's
+hint, and backoff sleeps abort promptly on run cancellation.

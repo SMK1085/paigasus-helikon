@@ -391,8 +391,10 @@ pub enum ResponseFormat {
 /// [`ModelEvent`] stream.
 ///
 /// Per ADR-10 (*No silent auto-retry inside the loop*), the runner never
-/// retries on these — retries are an application-layer concern configured
-/// via `RunConfig::retry_policy` (lands with the runner ticket).
+/// retries on these — retries are an application-layer concern. Wrap a
+/// [`Model`] in `RetryingModel` (with a `RetryPolicy`) from
+/// `paigasus-helikon-runtime-tokio` to retry the transient variants
+/// (`Unavailable`, `RateLimited`, `Transport`) with backoff.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ModelError {

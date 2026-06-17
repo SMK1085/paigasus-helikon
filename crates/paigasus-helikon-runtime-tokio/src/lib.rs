@@ -16,6 +16,9 @@ use paigasus_helikon_core::{
     RunResultStreaming, Runner, Session, SessionRecorder,
 };
 
+pub mod retry;
+pub use retry::{RetryPolicy, RetryingModel};
+
 /// How a controlled run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {

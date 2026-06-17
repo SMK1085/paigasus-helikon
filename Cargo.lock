@@ -2094,6 +2094,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "fastrand",
  "futures-core",
  "futures-util",
  "paigasus-helikon-core",

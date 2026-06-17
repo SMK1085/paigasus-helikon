@@ -2,8 +2,9 @@
 //! [`paigasus_helikon_core::ModelError`].
 //!
 //! Per ADR-10 ("no silent auto-retry in the loop"), the loop never
-//! retries on `ModelError`; the application configures retries via
-//! `RunConfig::retry_policy`. Auth failures (401/403) map to
+//! retries on `ModelError`; the application configures retries by wrapping
+//! the model in `RetryingModel` (with a `RetryPolicy`) from
+//! `paigasus-helikon-runtime-tokio`. Auth failures (401/403) map to
 //! `Refused` (non-retryable, the correct semantic for bad credentials).
 //! 429 maps to `RateLimited`. 502/503/504 map to `Unavailable`.
 //! Other 5xx (500, 501, 505+) fall through to `Other`.
