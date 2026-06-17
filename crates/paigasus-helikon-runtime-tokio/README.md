@@ -31,6 +31,30 @@ println!("{}", result.final_output);
 
 `TokioRunner` loads persisted history from the run's `Session` at start and writes the run's events back at exit, so `input` is the *new turn* rather than the whole conversation. Cancellation and timeout are best-effort — they lose to a terminal event that already occurred (see the crate docs).
 
+## Retrying transient errors
+
+Wrap any `Model` in `RetryingModel` to retry transient provider failures
+(`Unavailable`, `RateLimited`, `Transport`) with exponential backoff + jitter.
+Retry is **opt-in** — configured by wrapping the model, not via `RunConfig`
+(the runner can't reach the agent's model, and core can't sleep) — and is
+disabled unless you wrap. It covers *connection establishment*: once a response
+has started streaming, a mid-stream drop is surfaced rather than retried.
+
+```rust
+use std::time::Duration;
+use paigasus_helikon_runtime_tokio::{RetryPolicy, RetryingModel};
+
+// `model` is any `Model` (e.g. an OpenAI or Anthropic provider).
+let policy = RetryPolicy::new()
+    .max_attempts(4)
+    .base_delay(Duration::from_millis(250));
+let resilient = RetryingModel::new(model, policy);
+// Build your agent with `resilient` as its model.
+```
+
+`RateLimited { retry_after_ms }` waits at least the provider's hint; backoff
+sleeps abort promptly on cancellation.
+
 ## Links
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-runtime-tokio)
