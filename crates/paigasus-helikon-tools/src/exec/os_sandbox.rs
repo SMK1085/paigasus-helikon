@@ -245,7 +245,7 @@ impl ExecutionBackend for OsSandboxBackend {
         // not async-signal-safe and must not happen in the forked child).
         let seccomp = build_seccomp(self.allow_network)?;
 
-        spawn_capped(&self.cfg, &req.command, move |cmd| {
+        spawn_capped(&self.cfg, &[], &req.command, move |cmd| {
             // SAFETY: the closure runs in the forked child before exec, so it does
             // only async-signal-safe work — no heap allocation, no locks: the
             // `setrlimit` syscalls in `apply_rlimits`, then Landlock's
