@@ -1,0 +1,142 @@
+#![allow(missing_docs)]
+#![cfg(all(feature = "os-sandbox", target_os = "macos"))]
+
+// `ExecutionBackend` is not imported: `build()` returns `Arc<dyn ExecutionBackend>`,
+// so trait methods resolve on the trait object without the trait in scope.
+use paigasus_helikon_tools::{Isolation, OsSandboxBackend, Sandbox};
+
+/// Skip (loudly) when Seatbelt can't be established here — UNLESS
+/// `HELIKON_REQUIRE_SANDBOX=1`, in which case an unavailable sandbox is a hard
+/// failure, so a CI runner that stops enforcing turns the build red, never green.
+/// Returns true if the caller should `return`.
+fn seatbelt_unavailable(root: &std::path::Path) -> bool {
+    if OsSandboxBackend::builder(Sandbox::open(root).unwrap())
+        .build()
+        .is_ok()
+    {
+        return false;
+    }
+    if std::env::var("HELIKON_REQUIRE_SANDBOX").as_deref() == Ok("1") {
+        panic!("HELIKON_REQUIRE_SANDBOX=1 but Seatbelt could not be established on this host");
+    }
+    eprintln!("SKIP: Seatbelt unavailable on this host; os-sandbox AC not exercised");
+    true
+}
+
+#[tokio::test]
+async fn os_sandbox_builds_and_reports_guarantees() {
+    let tmp = tempfile::tempdir().unwrap();
+    if seatbelt_unavailable(tmp.path()) {
+        return;
+    }
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .build()
+        .expect("Seatbelt available");
+    let g = backend.guarantees();
+    assert_eq!(g.filesystem, Isolation::OsKernel);
+    assert_eq!(g.syscalls, Isolation::None);
+    assert_eq!(g.network, Isolation::OsKernel); // default deny
+    assert_eq!(g.label, "os-sandbox (seatbelt)");
+}
+
+#[tokio::test]
+async fn os_sandbox_blocks_write_outside_root_at_os_layer() {
+    let tmp = tempfile::tempdir().unwrap();
+    if seatbelt_unavailable(tmp.path()) {
+        return;
+    }
+    let outside = tempfile::tempdir().unwrap(); // sibling dir NOT under the sandbox root
+    let target = outside.path().join("escape.txt");
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .build()
+        .unwrap();
+
+    // Absolute path outside the root: the shell's own logic would allow it;
+    // Seatbelt must block the write at the OS layer.
+    let cmd = format!("echo pwned > {}", target.display());
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(cmd))
+        .await
+        .unwrap();
+    assert_ne!(
+        out.exit_code,
+        Some(0),
+        "write outside root must fail; stderr={}",
+        out.stderr
+    );
+    assert!(
+        !target.exists(),
+        "no file may be created outside the sandbox root"
+    );
+
+    // A write INSIDE the root (cwd = root) succeeds.
+    let ok = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(
+            "echo ok > inside.txt",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        ok.exit_code,
+        Some(0),
+        "write inside root must succeed; stderr={}",
+        ok.stderr
+    );
+    assert!(tmp.path().join("inside.txt").exists());
+}
+
+/// A `python3` probe: connect to a closed local port. Prints EPERM if the sandbox
+/// blocks connect(2), REFUSED if it reached the network stack. `2>&1` folds the
+/// (unused) stderr into stdout. python3 ships on the GitHub macOS runner.
+const NET_PROBE: &str = r#"python3 -c 'import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(2)
+try:
+    s.connect(("127.0.0.1", 9)); print("CONNECTED")
+except PermissionError: print("EPERM")
+except ConnectionRefusedError: print("REFUSED")
+except Exception as e: print("OTHER", type(e).__name__)' 2>&1"#;
+
+#[tokio::test]
+async fn os_sandbox_denies_network_by_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    if seatbelt_unavailable(tmp.path()) {
+        return;
+    }
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .build()
+        .unwrap();
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(NET_PROBE))
+        .await
+        .unwrap();
+    assert!(
+        out.stdout.contains("EPERM"),
+        "connect must be sandbox-denied (EPERM) under default-deny; got: {}",
+        out.stdout
+    );
+}
+
+#[tokio::test]
+async fn os_sandbox_allows_network_when_opted_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    if seatbelt_unavailable(tmp.path()) {
+        return;
+    }
+    let backend = OsSandboxBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .allow_network(true)
+        .build()
+        .unwrap();
+    assert_eq!(backend.guarantees().network, Isolation::None);
+    let out = backend
+        .run(paigasus_helikon_tools::ExecRequest::new(NET_PROBE))
+        .await
+        .unwrap();
+    // Reached the stack → closed port refuses. Pairs with the deny test so a
+    // regression in either direction fails one of the two.
+    assert!(
+        out.stdout.contains("REFUSED"),
+        "connect must reach the stack (REFUSED) under allow_network; got: {}",
+        out.stdout
+    );
+}

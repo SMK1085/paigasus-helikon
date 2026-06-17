@@ -16,10 +16,12 @@
 //! [`PermissionPolicy`](paigasus_helikon_core::PermissionPolicy) installed the
 //! control layer is permissive, so a host-backed `BashTool` runs **ungated** —
 //! pair it with a `PermissionPolicy` or `DenyRule::tool("Bash")`. The
-//! `OsSandboxBackend` (Linux, behind the `os-sandbox` feature) instead enforces
-//! filesystem and syscall containment at the OS layer. Each backend reports what
-//! it enforces via [`ExecutionBackend::guarantees`], surfaced in the tool's
-//! description.
+//! `OsSandboxBackend` (behind the `os-sandbox` feature) instead enforces
+//! containment at the OS layer — on Linux via Landlock + seccomp (filesystem
+//! reads/writes + syscalls + network), on macOS via Seatbelt (`sandbox-exec`;
+//! write-only filesystem containment + an all-or-nothing network toggle). Each
+//! backend reports what it enforces via [`ExecutionBackend::guarantees`], surfaced
+//! in the tool's description.
 
 mod bash;
 mod edit;
@@ -42,6 +44,8 @@ pub use exec::{
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
+pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
+#[cfg(all(feature = "os-sandbox", target_os = "macos"))]
 pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};

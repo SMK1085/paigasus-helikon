@@ -1,10 +1,10 @@
 # paigasus-helikon-tools
 
-Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature, and OS-enforced Bash containment via Landlock + seccomp behind the `os-sandbox` feature (Linux).
+Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature, and OS-enforced Bash containment behind the `os-sandbox` feature (Linux: Landlock + seccomp; macOS: Seatbelt).
 
 The filesystem tools operate inside a `Sandbox` — a directory opened as an OS-confined capability (`cap-std`), so they cannot escape it via `..`, absolute paths, or symlinks.
 
-`BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, or `OsSandboxBackend` (Linux, feature `os-sandbox`) for OS-kernel-enforced containment via Landlock (filesystem) and seccomp-bpf (syscalls and network).
+`BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, or `OsSandboxBackend` (feature `os-sandbox`) for OS-kernel-enforced containment — Linux via Landlock (filesystem) + seccomp-bpf (syscalls and network) with read+write restriction; macOS via Seatbelt (`sandbox-exec`) with **write-only** containment (reads unrestricted) and an all-or-nothing network toggle.
 
 > **`HostBackend` is NOT a security boundary.** A command it runs can read and write anything this process can. Pair it with a `PermissionPolicy` (or a `DenyRule::tool("Bash")`) for approval-level control, or use `OsSandboxBackend` for OS-enforced containment.
 
@@ -14,7 +14,7 @@ The filesystem tools operate inside a `Sandbox` — a directory opened as an OS-
 cargo add paigasus-helikon-tools
 # with the web tools (WebFetch / WebSearch):
 cargo add paigasus-helikon-tools --features web
-# with OS-enforced Bash containment (Linux: Landlock + seccomp):
+# with OS-enforced Bash containment (Linux: Landlock + seccomp; macOS: Seatbelt):
 cargo add paigasus-helikon-tools --features os-sandbox
 ```
 
@@ -40,7 +40,7 @@ let agent = LlmAgent::builder::<()>()
     .build();
 ```
 
-Runnable examples live in [`examples/`](https://github.com/SMK1085/paigasus-helikon/tree/main/crates/paigasus-helikon-tools/examples): `explore_sandbox` (FS + Bash, gated by a `PermissionPolicy`), `web_research` (the `web` tools), and `os_sandbox_demo` (OS-sandbox containment demo, Linux only, requires `--features os-sandbox`).
+Runnable examples live in [`examples/`](https://github.com/SMK1085/paigasus-helikon/tree/main/crates/paigasus-helikon-tools/examples): `explore_sandbox` (FS + Bash, gated by a `PermissionPolicy`), `web_research` (the `web` tools), and `os_sandbox_demo` (OS-sandbox containment demo, Linux + macOS, requires `--features os-sandbox`).
 
 ## Links
 

@@ -1,11 +1,16 @@
-//! OS-sandbox demo (Linux). Run with:
+//! OS-sandbox demo (Linux/macOS). Run with:
 //!   cargo run -p paigasus-helikon-tools --features os-sandbox --example os_sandbox_demo
 #![allow(missing_docs)]
 
 #[cfg(all(
     feature = "os-sandbox",
-    target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+    any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos"
+    )
 ))]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -18,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let backend = match OsSandboxBackend::builder(Sandbox::open(dir.path())?).build() {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("OS sandbox unavailable ({e}); this host lacks Landlock.");
+            eprintln!("OS sandbox unavailable ({e}); this host lacks the kernel sandbox (Linux Landlock / macOS Seatbelt).");
             return Ok(());
         }
     };
@@ -35,9 +40,14 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(not(all(
     feature = "os-sandbox",
-    target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+    any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos"
+    )
 )))]
 fn main() {
-    eprintln!("This example requires --features os-sandbox on Linux (x86_64/aarch64).");
+    eprintln!("This example requires --features os-sandbox on Linux (x86_64/aarch64) or macOS.");
 }

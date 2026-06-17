@@ -111,7 +111,7 @@ impl HostBackend {
 impl ExecutionBackend for HostBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
         let limits = self.limits.clone();
-        spawn_capped(&self.cfg, &req.command, move |_cmd| {
+        spawn_capped(&self.cfg, &[], &req.command, move |_cmd| {
             #[cfg(unix)]
             {
                 // SAFETY: apply_rlimits is async-signal-safe (setrlimit only).

@@ -14,12 +14,15 @@ use paigasus_helikon_tools::{Isolation, OsSandboxBackend, Sandbox};
 fn landlock_unavailable(tmp: &std::path::Path) -> bool {
     if OsSandboxBackend::builder(Sandbox::open(tmp).unwrap())
         .build()
-        .is_err()
+        .is_ok()
     {
-        eprintln!("SKIP: Landlock unavailable on this kernel; os-sandbox AC not exercised");
-        return true;
+        return false;
     }
-    false
+    if std::env::var("HELIKON_REQUIRE_SANDBOX").as_deref() == Ok("1") {
+        panic!("HELIKON_REQUIRE_SANDBOX=1 but Landlock could not be established on this host");
+    }
+    eprintln!("SKIP: Landlock unavailable on this kernel; os-sandbox AC not exercised");
+    true
 }
 
 #[tokio::test]

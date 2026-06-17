@@ -59,6 +59,9 @@ jobs:
           - toolchain: "1.85"
             test_args: --workspace --all-features -- --skip trybuild_ui
     runs-on: ${{ matrix.os }}
+    env:
+      # Turn a silently-unenforcing sandbox into a hard failure (never green-by-skip).
+      HELIKON_REQUIRE_SANDBOX: 1
     steps:
       # actions/checkout v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd

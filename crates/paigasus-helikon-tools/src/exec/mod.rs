@@ -2,6 +2,7 @@
 //! the shared types describing a backend's *containment* (distinct from the
 //! runner's *approval* policy and from resource-capping).
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,6 +24,11 @@ mod os_sandbox;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 pub use os_sandbox::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
+
+#[cfg(all(feature = "os-sandbox", target_os = "macos"))]
+mod os_sandbox_seatbelt;
+#[cfg(all(feature = "os-sandbox", target_os = "macos"))]
+pub use os_sandbox_seatbelt::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -171,14 +177,17 @@ use tokio::io::AsyncReadExt;
 const GRACE: Duration = Duration::from_secs(5);
 
 /// Spawn `command` under `cfg`, draining stdout/stderr concurrently, killing the
-/// whole process group on timeout. `configure_child` runs in the **parent** to
-/// install backend-specific `pre_exec` hooks before spawn.
+/// whole process group on timeout. `prefix`, when non-empty, is prepended as
+/// `program [args...]` ahead of `sh -c <command>` (used by the macOS Seatbelt
+/// backend to wrap the shell in `sandbox-exec`). `configure_child` runs in the
+/// **parent** to install backend-specific `pre_exec` hooks before spawn.
 pub(crate) async fn spawn_capped(
     cfg: &ExecConfig,
+    prefix: &[OsString],
     command: &str,
     configure_child: impl FnOnce(&mut tokio::process::Command),
 ) -> Result<ExecOutput, ToolError> {
-    let mut cmd = build_command(command);
+    let mut cmd = build_command(prefix, command);
     cmd.current_dir(&cfg.cwd)
         .env_clear()
         .stdin(Stdio::null())
@@ -249,16 +258,31 @@ pub(crate) async fn spawn_capped(
     })
 }
 
-/// Build the platform shell command without yet setting cwd/env.
-fn build_command(command: &str) -> tokio::process::Command {
+/// Build the platform shell command without yet setting cwd/env. `prefix`, when
+/// non-empty, is prepended as `program [args...]` before `sh -c <command>` — used
+/// by the macOS Seatbelt backend to wrap the shell in `sandbox-exec`. Empty for
+/// the host and Linux backends.
+fn build_command(prefix: &[OsString], command: &str) -> tokio::process::Command {
     #[cfg(unix)]
     {
-        let mut c = tokio::process::Command::new("sh");
-        c.arg("-c").arg(command);
-        c
+        match prefix.split_first() {
+            Some((program, rest)) => {
+                let mut c = tokio::process::Command::new(program);
+                c.args(rest).arg("sh").arg("-c").arg(command);
+                c
+            }
+            None => {
+                let mut c = tokio::process::Command::new("sh");
+                c.arg("-c").arg(command);
+                c
+            }
+        }
     }
     #[cfg(windows)]
     {
+        // `prefix` is always empty on Windows; bind it to avoid `unused_variables`
+        // under `-D warnings` (clippy runs on ubuntu; Windows is signal-only).
+        let _ = prefix;
         let mut c = tokio::process::Command::new("cmd");
         c.arg("/C").arg(command);
         c

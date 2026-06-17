@@ -17,6 +17,7 @@
           { "context": "fmt" },
           { "context": "clippy" },
           { "context": "test (ubuntu-latest, stable)" },
+          { "context": "test (macos-latest, stable)" },
           { "context": "docs" },
           { "context": "doc-coverage" },
           { "context": "book-build" },
