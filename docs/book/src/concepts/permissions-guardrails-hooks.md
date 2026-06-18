@@ -10,7 +10,7 @@ They are orthogonal. A tool call passes the permission pipeline; a hook can stil
 
 ## Permissions
 
-A tool call is authorized by the pipeline `deny rules › mode › policy › AskUser`, evaluated in that order. The pieces:
+A tool call is authorized by the pipeline `deny rules › guard rules › mode › policy › AskUser`, evaluated in that order. The pieces:
 
 - `PermissionMode` — a `#[non_exhaustive]` enum: `Default` (defer to policy; permissive when no policy), `AcceptEdits` (auto-approve tools whose `ToolEffect` is `Write`), `Plan` (deny any tool whose `ToolEffect` is not `ReadOnly`), `Bypass` (allow all — deny rules still apply). `Bypass` is **sticky**: `RunContext::with_permission_mode` refuses to downgrade it, and it propagates to sub-agents.
 - `DenyRule` — a first-class rule evaluated **before** mode, so it overrides even `Bypass`. v1 matches by exact tool name: `DenyRule::tool("Bash")`. See also **Guard rules** below for the higher-level Bash-command matcher.

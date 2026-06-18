@@ -108,9 +108,9 @@ where
         None
     }
 
-    /// Authorize one tool call on its effective args: `deny rules › mode ›
-    /// policy › AskUser`. Returns the resolved decision (never `AskUser` — that
-    /// is resolved here via the approval handler, default Deny).
+    /// Authorize one tool call on its effective args: `deny rules › guard rules ›
+    /// mode › policy › AskUser`. Returns the resolved decision (never `AskUser` —
+    /// that is resolved here via the approval handler, default Deny).
     pub(crate) async fn authorize(
         &self,
         tool: &str,
