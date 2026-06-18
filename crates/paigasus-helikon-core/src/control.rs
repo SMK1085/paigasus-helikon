@@ -109,8 +109,9 @@ where
     }
 
     /// Authorize one tool call on its effective args: `deny rules › guard rules ›
-    /// mode › policy › AskUser`. Returns the resolved decision (never `AskUser` —
-    /// that is resolved here via the approval handler, default Deny).
+    /// allow rules › mode › policy › AskUser`. Returns the resolved decision
+    /// (never `AskUser` — that is resolved here via the approval handler, default
+    /// Deny).
     pub(crate) async fn authorize(
         &self,
         tool: &str,
@@ -157,6 +158,13 @@ where
                 }
             }
         }
+        // 3. Allow rules — positive short-circuit in ANY mode (after deny+guard,
+        // before mode). A global per-tool/per-command pre-approval that skips
+        // the policy. Deny and guard already ran, so this cannot resurrect a
+        // denied/guarded call.
+        if self.ctx.allow_rules().iter().any(|r| r.matches(tool, args)) {
+            return PermissionDecision::Allow;
+        }
         // 2. Mode.
         match self.ctx.permission_mode() {
             PermissionMode::Bypass => return PermissionDecision::Allow,
@@ -167,6 +175,11 @@ where
             }
             PermissionMode::AcceptEdits if effect == ToolEffect::Write => {
                 return PermissionDecision::Allow;
+            }
+            PermissionMode::DontAsk => {
+                return PermissionDecision::Deny {
+                    reason: format!("DontAsk mode: no allow rule matched `{tool}`"),
+                };
             }
             _ => {}
         }
@@ -530,6 +543,88 @@ mod authorize_tests {
         let args = json!({ "command": "rm -rf /" });
         assert!(matches!(
             i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    struct PanicPolicy;
+    #[async_trait]
+    impl PermissionPolicy<()> for PanicPolicy {
+        async fn check(
+            &self,
+            _: &RunContext<()>,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> PermissionDecision {
+            panic!("policy must not be consulted under DontAsk");
+        }
+    }
+
+    #[tokio::test]
+    async fn dont_ask_denies_without_invoking_policy() {
+        use crate::AllowRule;
+        let c = ctx()
+            .with_permission_mode(PermissionMode::DontAsk)
+            .with_permission_policy(Arc::new(PanicPolicy))
+            .with_allow_rules(vec![AllowRule::tool("Read")]);
+        let i = interceptors(&c);
+        // allowed tool → Allow (policy never called)
+        assert!(matches!(
+            i.authorize("Read", ToolEffect::ReadOnly, &json!({"path": "a"}))
+                .await,
+            PermissionDecision::Allow
+        ));
+        // unlisted tool → Deny (policy never called → no panic)
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &json!({"command": "ls"}))
+                .await,
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn allow_rule_short_circuits_in_default_mode() {
+        use crate::AllowRule;
+        let c = ctx()
+            .with_permission_policy(Arc::new(AskPolicy)) // would otherwise Ask→Deny
+            .with_allow_rules(vec![AllowRule::tool("WebSearch")]);
+        let i = interceptors(&c);
+        assert!(matches!(
+            i.authorize("WebSearch", ToolEffect::SideEffect, &json!({}))
+                .await,
+            PermissionDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn deny_path_beats_bypass() {
+        use crate::DenyRule;
+        let c = ctx()
+            .with_permission_mode(PermissionMode::Bypass)
+            .with_deny_rules(vec![DenyRule::read(".env")]);
+        let i = interceptors(&c);
+        assert!(matches!(
+            i.authorize("Read", ToolEffect::ReadOnly, &json!({"path": "cfg/.env"}))
+                .await,
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn breaker_beats_accept_edits_and_allow_rule() {
+        use crate::AllowRule;
+        let c = ctx()
+            .with_permission_mode(PermissionMode::AcceptEdits)
+            .with_allow_rules(vec![AllowRule::edit(".git/**")]); // must NOT override breaker
+        let i = interceptors(&c);
+        // no approval handler installed → Ask resolves to Deny
+        assert!(matches!(
+            i.authorize(
+                "Write",
+                ToolEffect::Write,
+                &json!({"path": ".git/config", "content": "x"})
+            )
+            .await,
             PermissionDecision::Deny { .. }
         ));
     }

@@ -55,7 +55,8 @@ pub enum PermissionDecision {
 }
 
 /// Authorizes a tool call. The decision pipeline runs
-/// `deny rules › mode › this policy` (see `control.rs`).
+/// `deny rules › guard rules › allow rules › mode › this policy` (see
+/// `control.rs`).
 #[async_trait]
 pub trait PermissionPolicy<Ctx>: Send + Sync
 where
