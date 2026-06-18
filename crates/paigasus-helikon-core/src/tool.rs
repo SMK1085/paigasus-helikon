@@ -121,6 +121,14 @@ where
     pub(crate) deny_rules: Vec<DenyRule>,
     // read by agent_as_tool in a later task
     pub(crate) approval_handler: Option<Arc<dyn ApprovalHandler>>,
+    /// Carrier: user guard rules from the parent [`crate::RunContext`].
+    pub(crate) guard_rules: Vec<crate::GuardRule>,
+    /// Carrier: whether built-in destructive guards are active.
+    pub(crate) default_guards: bool,
+    /// Carrier: whether tool-output redaction is active.
+    pub(crate) redact_output: bool,
+    /// Carrier: extra secret values to redact from tool output.
+    pub(crate) extra_secrets: Vec<String>,
 }
 
 impl<Ctx> ToolContext<Ctx>
@@ -148,6 +156,10 @@ where
             permission_policy: None,
             deny_rules: Vec::new(),
             approval_handler: None,
+            guard_rules: Vec::new(),
+            default_guards: true,
+            redact_output: true,
+            extra_secrets: Vec::new(),
         }
     }
 
@@ -209,20 +221,35 @@ where
     }
 
     /// Install the permission config (used by [`crate::RunContext::to_tool_context`]).
-    /// `policy`/`deny_rules`/`handler` are `pub(crate)` carriers read only by
-    /// the `agent_as_tool` rebuild path — not exposed to tools.
+    /// `policy`/`deny_rules`/`handler`/`guard_rules` and associated fields are
+    /// `pub(crate)` carriers read only by the `agent_as_tool` rebuild path —
+    /// not exposed to tools.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_permissions(
         mut self,
         mode: PermissionMode,
         policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
         deny_rules: Vec<DenyRule>,
         handler: Option<Arc<dyn ApprovalHandler>>,
+        guard_rules: Vec<crate::GuardRule>,
+        default_guards: bool,
+        redact_output: bool,
+        extra_secrets: Vec<String>,
     ) -> Self {
         self.permission_mode = mode;
         self.permission_policy = policy;
         self.deny_rules = deny_rules;
         self.approval_handler = handler;
+        self.guard_rules = guard_rules;
+        self.default_guards = default_guards;
+        self.redact_output = redact_output;
+        self.extra_secrets = extra_secrets;
         self
+    }
+
+    /// The run's user guard rules (carrier for `agent_as_tool` rebuild).
+    pub fn guard_rules(&self) -> &[crate::GuardRule] {
+        &self.guard_rules
     }
 }
 
