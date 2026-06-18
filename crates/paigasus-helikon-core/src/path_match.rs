@@ -7,7 +7,8 @@
 //! a pattern without a `/` matches at any depth; a pattern with a `/` is
 //! anchored to the path root. Matching is case-insensitive.
 
-// Items are pub(crate) and will be consumed by permission.rs in a later task.
+// Items are pub(crate) and consumed by permission.rs in later tasks (SMA-415
+// Tasks 3-4). Remove this allow once those consumers land.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -40,13 +41,24 @@ pub(crate) fn clean_path(path: &str) -> String {
 /// any `.git` or `.ssh` path component, or a final component equal to `.env`
 /// or beginning `.env.` (e.g. `.env.local`). Component equality — never a
 /// substring — so `name.git/`, `.gitignore`, and `environment.env` do not trip.
+/// Comparison is case-insensitive (so `.SSH/` / `.ENV` cannot bypass the
+/// breaker on case-insensitive filesystems), matching [`PathGlob`].
 pub(crate) fn is_protected_dotpath(path: &str) -> bool {
     let cleaned = clean_path(path);
     let comps: Vec<&str> = cleaned.split('/').filter(|c| !c.is_empty()).collect();
-    if comps.iter().any(|c| *c == ".git" || *c == ".ssh") {
+    if comps
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(".git") || c.eq_ignore_ascii_case(".ssh"))
+    {
         return true;
     }
-    matches!(comps.last(), Some(last) if *last == ".env" || last.starts_with(".env."))
+    match comps.last() {
+        Some(last) => {
+            let lower = last.to_ascii_lowercase();
+            lower == ".env" || lower.starts_with(".env.")
+        }
+        None => false,
+    }
 }
 
 /// A compiled, case-insensitive path-glob. Cheap to clone (the matcher is
@@ -60,7 +72,9 @@ pub(crate) struct PathGlob {
 }
 
 impl PathGlob {
-    /// Compile `pattern` (normalized by trimming a leading `./` or `/`).
+    /// Compile `pattern` (normalized by trimming a leading `./` or `/`). A
+    /// degenerate pattern that normalizes to empty (e.g. `"/"`) compiles to a
+    /// matcher that never matches.
     pub(crate) fn new(pattern: impl Into<String>) -> Self {
         let pattern = normalize_pattern(pattern.into());
         let set = Arc::new(build_globset(&pattern));
@@ -126,6 +140,7 @@ mod tests {
         assert_eq!(clean_path("a/../b"), "b");
         assert_eq!(clean_path("src/../.git/config"), ".git/config");
         assert_eq!(clean_path("../escape"), "../escape"); // leading .. survives
+        assert_eq!(clean_path("a/../../b"), "../b"); // escape via subdir survives
     }
 
     #[test]
@@ -180,6 +195,12 @@ mod tests {
         assert!(is_protected_dotpath("a/.ssh/id_rsa"));
         assert!(is_protected_dotpath(".env"));
         assert!(is_protected_dotpath("src/.env.local"));
+        // case-insensitive (cannot bypass on case-insensitive filesystems)
+        assert!(is_protected_dotpath(".SSH/id_rsa"));
+        assert!(is_protected_dotpath(".Git/config"));
+        assert!(is_protected_dotpath("config/.ENV"));
+        // `..` that collapses INTO a protected component still trips
+        assert!(is_protected_dotpath("src/../.git/config"));
         // does NOT trip
         assert!(!is_protected_dotpath("name.git/config")); // bare repo
         assert!(!is_protected_dotpath(".gitignore"));
