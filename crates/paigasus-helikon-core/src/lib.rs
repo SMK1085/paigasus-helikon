@@ -27,6 +27,7 @@ pub mod item;
 pub mod loop_state;
 pub mod model;
 pub mod permission;
+pub mod redaction;
 pub mod runner;
 pub mod schema;
 pub mod session;
