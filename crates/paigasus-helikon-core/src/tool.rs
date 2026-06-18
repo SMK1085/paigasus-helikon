@@ -8,8 +8,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
-    ActionsHandle, ApprovalHandler, CancellationToken, DenyRule, HookRegistry, PermissionMode,
-    PermissionPolicy, SessionState, TracerHandle,
+    ActionsHandle, AllowRule, ApprovalHandler, CancellationToken, DenyRule, HookRegistry,
+    PermissionMode, PermissionPolicy, SessionState, TracerHandle,
 };
 
 /// A tool's side-effect profile. Drives [`crate::PermissionMode`] decisions:
@@ -103,6 +103,7 @@ where
     pub(crate) mode: PermissionMode,
     pub(crate) policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
     pub(crate) deny_rules: Vec<DenyRule>,
+    pub(crate) allow_rules: Vec<AllowRule>,
     pub(crate) approval_handler: Option<Arc<dyn ApprovalHandler>>,
     pub(crate) guard_rules: Vec<crate::GuardRule>,
     pub(crate) default_guards: bool,
@@ -137,6 +138,8 @@ where
     pub(crate) permission_policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
     // read by agent_as_tool in a later task
     pub(crate) deny_rules: Vec<DenyRule>,
+    /// Carrier: allow rules from the parent [`crate::RunContext`].
+    pub(crate) allow_rules: Vec<AllowRule>,
     // read by agent_as_tool in a later task
     pub(crate) approval_handler: Option<Arc<dyn ApprovalHandler>>,
     /// Carrier: user guard rules from the parent [`crate::RunContext`].
@@ -173,6 +176,7 @@ where
             permission_mode: PermissionMode::Default,
             permission_policy: None,
             deny_rules: Vec::new(),
+            allow_rules: Vec::new(),
             approval_handler: None,
             guard_rules: Vec::new(),
             default_guards: true,
@@ -246,6 +250,7 @@ where
         self.permission_mode = fields.mode;
         self.permission_policy = fields.policy;
         self.deny_rules = fields.deny_rules;
+        self.allow_rules = fields.allow_rules;
         self.approval_handler = fields.approval_handler;
         self.guard_rules = fields.guard_rules;
         self.default_guards = fields.default_guards;
