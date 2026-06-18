@@ -114,8 +114,10 @@ where
         // Isolated sub-context: fresh session + empty hooks; inherit user_ctx,
         // tracer, and the child cancel token; stamp the incremented depth.
         // Security-critical: the parent's permission config (mode, policy,
-        // deny rules, approval handler) MUST cross into the sub-run so that a
-        // `Plan`/`Bypass`/policy decision applies to the wrapped agent's tools.
+        // deny rules, approval handler, guard rules, and the redaction config)
+        // MUST cross into the sub-run so that a `Plan`/`Bypass`/policy
+        // decision applies to the wrapped agent's tools, and so that custom
+        // guard rules and extra-secret redaction remain in force.
         let mut sub_ctx = RunContext::new(
             Arc::clone(ctx.user_ctx()),
             Arc::new(MemorySession::new()),
@@ -125,12 +127,20 @@ where
         )
         .with_agent_depth(depth + 1)
         .with_permission_mode(ctx.permission_mode())
-        .with_deny_rules(ctx.deny_rules.clone());
+        .with_deny_rules(ctx.deny_rules.clone())
+        .with_guard_rules(ctx.guard_rules.clone())
+        .with_extra_secrets(ctx.extra_secrets.clone());
         if let Some(p) = ctx.permission_policy.clone() {
             sub_ctx = sub_ctx.with_permission_policy(p);
         }
         if let Some(h) = ctx.approval_handler.clone() {
             sub_ctx = sub_ctx.with_approval_handler(h);
+        }
+        if !ctx.default_guards {
+            sub_ctx = sub_ctx.without_default_guards();
+        }
+        if !ctx.redact_output {
+            sub_ctx = sub_ctx.without_output_redaction();
         }
 
         let failure = sub_ctx.failure_handle();
