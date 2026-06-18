@@ -102,8 +102,10 @@ impl DenyRule {
         }
     }
 
-    /// Deny a `Read` whose `path` arg matches `pattern` (gitignore-style; see
-    /// [`crate::path_match`]). Lexical and **advisory** — not a sandbox.
+    /// Deny a `Read` whose `path` arg matches `pattern` (gitignore-style glob:
+    /// no `/` matches at any depth, a `/` anchors to the path root,
+    /// case-insensitive). Scoped to the `Read` tool only — does **not** match
+    /// `Edit`/`Write`. Lexical and **advisory** — not a sandbox.
     pub fn read(pattern: impl Into<String>) -> Self {
         Self {
             matcher: Matcher::ReadPath(crate::path_match::PathGlob::new(pattern)),
@@ -169,9 +171,13 @@ fn path_arg_matches(
 /// How an [`AllowRule`] matches a call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AllowMatcher {
+    /// Exact tool name.
     Tool(String),
+    /// Bash call where **every** sub-command's program equals this (fail-closed).
     BashProgram(String),
+    /// `Read` tool whose `path` arg matches this glob.
     ReadPath(crate::path_match::PathGlob),
+    /// `Edit`/`Write` tool whose `path` arg matches this glob.
     EditPath(crate::path_match::PathGlob),
 }
 
@@ -206,8 +212,9 @@ impl AllowRule {
         }
     }
 
-    /// Allow a `Read` whose `path` arg matches `pattern` (gitignore-style;
-    /// advisory, not a sandbox — see [`crate::path_match`]).
+    /// Allow a `Read` whose `path` arg matches `pattern` (same gitignore-style
+    /// glob semantics as [`DenyRule::read`]). Scoped to the `Read` tool only —
+    /// does **not** match `Edit`/`Write`. Advisory, not a sandbox.
     pub fn read(pattern: impl Into<String>) -> Self {
         Self {
             matcher: AllowMatcher::ReadPath(crate::path_match::PathGlob::new(pattern)),
@@ -595,6 +602,11 @@ mod tests {
         assert!(AllowRule::read("src/**").matches("Read", &json!({ "path": "src/a.rs" })));
         assert!(AllowRule::edit("src/**").matches("Write", &json!({ "path": "src/a.rs" })));
         assert!(!AllowRule::edit("src/**").matches("Write", &json!({ "path": "etc/x" })));
+        // read is scoped to Read — it does NOT cover Write/Edit
+        assert!(!AllowRule::read("src/**").matches("Write", &json!({ "path": "src/a.rs" })));
+        // a missing/non-string path arg matches nothing (no panic)
+        assert!(!AllowRule::read("**").matches("Read", &json!({})));
+        assert!(!DenyRule::read("**").matches("Read", &json!({})));
     }
 
     #[test]
