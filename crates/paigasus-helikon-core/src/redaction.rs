@@ -14,8 +14,8 @@ const MIN_SECRET_LEN: usize = 8;
 const REDACTED: &str = "***";
 
 /// A snapshot of secret values eligible for literal value-scanning. Built once
-/// per run; values below [`MIN_SECRET_LEN`] or that look like common words are
-/// dropped.
+/// per run; values below 8 chars (see `MIN_SECRET_LEN`) or that look like common
+/// words are dropped.
 #[derive(Debug, Clone, Default)]
 pub struct SecretSet {
     values: Vec<String>,
@@ -56,6 +56,17 @@ fn is_common_word(v: &str) -> bool {
 }
 
 /// Walk `value`, redacting every string within. Never errors.
+///
+/// # Limitations (v1)
+/// - **One assignment per line:** only the first `KEY=`/`KEY:` on a line is
+///   checked, so a secret in a second assignment on the same line
+///   (`FOO=1 BAR_TOKEN=secret`) is matched only if its value is in the env-sourced
+///   value set. One-variable-per-line output (the common `env`/`.env` shape) is
+///   fully covered.
+/// - **Value-scan is case-sensitive:** an env-sourced secret that appears with
+///   different casing in output is not caught by the value-scan.
+/// - **Key-name scan is underscore-form only** (`X_API_KEY`, not `X-API-KEY`)
+///   and does not scan JSON object keys.
 pub fn redact(value: &Value, secrets: &SecretSet) -> Value {
     match value {
         Value::String(s) => Value::String(redact_str(s, secrets)),
