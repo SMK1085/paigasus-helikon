@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.2...paigasus-helikon-tools-v0.2.3) - 2026-06-18
+
+### Added
+
+- *(core)* SMA-414 add operator-aware deny matching, destructive breaker, and output redaction ([#101](https://github.com/SMK1085/paigasus-helikon/pull/101))
+
 ## [0.2.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.1...paigasus-helikon-tools-v0.2.2) - 2026-06-17
 
 ### Added
