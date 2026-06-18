@@ -1379,3 +1379,94 @@ mod output_type_tests {
         assert!(!err.is_empty(), "expected at least one error string");
     }
 }
+
+#[cfg(test)]
+mod redaction_e2e_tests {
+    use super::*;
+    use crate::{
+        CancellationToken, ContentPart, HookRegistry, MemorySession, RunContext, Session, Tool,
+        ToolContext, ToolError, ToolOutput, TracerHandle,
+    };
+    use async_trait::async_trait;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    struct SecretTool;
+
+    #[async_trait]
+    impl Tool<()> for SecretTool {
+        fn name(&self) -> &str {
+            "secret"
+        }
+
+        fn description(&self) -> &str {
+            "returns a secret"
+        }
+
+        fn schema(&self) -> &serde_json::Value {
+            use std::sync::OnceLock;
+            static SCHEMA: OnceLock<serde_json::Value> = OnceLock::new();
+            SCHEMA.get_or_init(|| json!({ "type": "object" }))
+        }
+
+        async fn invoke(
+            &self,
+            _ctx: &ToolContext<()>,
+            _args: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::new(
+                json!({ "stdout": "FOO_API_KEY=supersecretvalue" }),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_output_secret_is_redacted_before_model() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        );
+        let tool_ctx = ctx.to_tool_context();
+        let interceptors = crate::control::Interceptors {
+            ctx: &ctx,
+            input_guardrails: &[],
+            output_guardrails: &[],
+            agent_hooks: &[],
+        };
+        let tools: Vec<Arc<dyn Tool<()>>> = vec![Arc::new(SecretTool)];
+        let calls = vec![crate::ToolCallRequest {
+            call_id: "c1".to_owned(),
+            name: "secret".to_owned(),
+            args: json!({}),
+        }];
+        let span = tracing::Span::none();
+        let (outcomes, _events) =
+            run_tools_concurrent(&tools, &calls, &interceptors, &tool_ctx, None, &span).await;
+
+        assert_eq!(outcomes.len(), 1);
+        let parts = outcomes[0].result.as_ref().expect("tool ran ok");
+        // Collect all text across content parts and assert redaction.
+        let rendered: String = parts
+            .iter()
+            .filter_map(|p| {
+                if let ContentPart::Text { text } = p {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains("FOO_API_KEY=***"),
+            "expected redacted key, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("supersecretvalue"),
+            "secret leaked into tool output: {rendered}"
+        );
+    }
+}
