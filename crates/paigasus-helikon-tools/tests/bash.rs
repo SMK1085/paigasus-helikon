@@ -144,6 +144,71 @@ async fn bash_allow_commands_blocks_unlisted() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn bash_deny_matches_compound_subcommand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: BashTool =
+        BashTool::builder(HostBackend::builder(Sandbox::open(tmp.path()).unwrap()).build())
+            .deny_commands(["rm"])
+            .build();
+    // compound: rm is the second sub-command — first-token matching missed this.
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "command": "echo ok && rm -rf ." }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+    // wrapper-stripped: `nice rm` resolves to program `rm`.
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "command": "nice rm -rf ." }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+    // benign compound is allowed and runs.
+    let ok = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "command": "echo ok && ls" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.content["exit_code"], 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_allow_requires_all_subcommands() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool: BashTool =
+        BashTool::builder(HostBackend::builder(Sandbox::open(tmp.path()).unwrap()).build())
+            .allow_commands(["echo", "ls"])
+            .build();
+    // every sub-command allowed → runs.
+    let ok = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "command": "echo hi && ls" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.content["exit_code"], 0);
+    // one disallowed sub-command (rm) → denied (rm never executes).
+    let err = tool
+        .invoke(
+            &tool_ctx(),
+            serde_json::json!({ "command": "echo hi && rm -rf ." }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Denied { .. }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn bash_env_is_scrubbed() {
     let tmp = tempfile::tempdir().unwrap();
     // Override the allowlist to PATH only, so HOME (set in the parent env) is

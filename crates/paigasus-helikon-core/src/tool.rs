@@ -92,6 +92,24 @@ where
     ) -> Result<ToolOutput, ToolError>;
 }
 
+/// Bundle of the run's permission/guard/redaction config, projected from
+/// [`crate::RunContext`] into [`ToolContext`]. A struct (not a long positional
+/// arg list) so same-typed fields like `default_guards`/`redact_output` can't be
+/// transposed silently.
+pub(crate) struct PermissionFields<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    pub(crate) mode: PermissionMode,
+    pub(crate) policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
+    pub(crate) deny_rules: Vec<DenyRule>,
+    pub(crate) approval_handler: Option<Arc<dyn ApprovalHandler>>,
+    pub(crate) guard_rules: Vec<crate::GuardRule>,
+    pub(crate) default_guards: bool,
+    pub(crate) redact_output: bool,
+    pub(crate) extra_secrets: Vec<String>,
+}
+
 /// Narrower view of [`crate::RunContext`] passed to [`Tool::invoke`].
 ///
 /// Deliberately excludes the session handle: tools must not bypass the
@@ -121,6 +139,14 @@ where
     pub(crate) deny_rules: Vec<DenyRule>,
     // read by agent_as_tool in a later task
     pub(crate) approval_handler: Option<Arc<dyn ApprovalHandler>>,
+    /// Carrier: user guard rules from the parent [`crate::RunContext`].
+    pub(crate) guard_rules: Vec<crate::GuardRule>,
+    /// Carrier: whether built-in destructive guards are active.
+    pub(crate) default_guards: bool,
+    /// Carrier: whether tool-output redaction is active.
+    pub(crate) redact_output: bool,
+    /// Carrier: extra secret values to redact from tool output.
+    pub(crate) extra_secrets: Vec<String>,
 }
 
 impl<Ctx> ToolContext<Ctx>
@@ -148,6 +174,10 @@ where
             permission_policy: None,
             deny_rules: Vec::new(),
             approval_handler: None,
+            guard_rules: Vec::new(),
+            default_guards: true,
+            redact_output: true,
+            extra_secrets: Vec::new(),
         }
     }
 
@@ -208,21 +238,25 @@ where
         self.permission_mode
     }
 
-    /// Install the permission config (used by [`crate::RunContext::to_tool_context`]).
-    /// `policy`/`deny_rules`/`handler` are `pub(crate)` carriers read only by
-    /// the `agent_as_tool` rebuild path — not exposed to tools.
-    pub(crate) fn with_permissions(
-        mut self,
-        mode: PermissionMode,
-        policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
-        deny_rules: Vec<DenyRule>,
-        handler: Option<Arc<dyn ApprovalHandler>>,
-    ) -> Self {
-        self.permission_mode = mode;
-        self.permission_policy = policy;
-        self.deny_rules = deny_rules;
-        self.approval_handler = handler;
+    /// Install the permission/guard/redaction config (used by
+    /// [`crate::RunContext::to_tool_context`]). The policy/deny/guard/handler
+    /// fields are `pub(crate)` carriers read only by the `agent_as_tool` rebuild
+    /// path — not exposed to tools.
+    pub(crate) fn with_permissions(mut self, fields: PermissionFields<Ctx>) -> Self {
+        self.permission_mode = fields.mode;
+        self.permission_policy = fields.policy;
+        self.deny_rules = fields.deny_rules;
+        self.approval_handler = fields.approval_handler;
+        self.guard_rules = fields.guard_rules;
+        self.default_guards = fields.default_guards;
+        self.redact_output = fields.redact_output;
+        self.extra_secrets = fields.extra_secrets;
         self
+    }
+
+    /// The run's user guard rules (carrier for `agent_as_tool` rebuild).
+    pub fn guard_rules(&self) -> &[crate::GuardRule] {
+        &self.guard_rules
     }
 }
 

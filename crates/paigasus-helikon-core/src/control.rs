@@ -108,9 +108,9 @@ where
         None
     }
 
-    /// Authorize one tool call on its effective args: `deny rules › mode ›
-    /// policy › AskUser`. Returns the resolved decision (never `AskUser` — that
-    /// is resolved here via the approval handler, default Deny).
+    /// Authorize one tool call on its effective args: `deny rules › guard rules ›
+    /// mode › policy › AskUser`. Returns the resolved decision (never `AskUser` —
+    /// that is resolved here via the approval handler, default Deny).
     pub(crate) async fn authorize(
         &self,
         tool: &str,
@@ -122,6 +122,40 @@ where
             return PermissionDecision::Deny {
                 reason: format!("denied by deny rule: {tool}"),
             };
+        }
+        // 1a/1b. Guard rules — built-in destructive defaults (unless opted out)
+        // then user guard rules. Run before mode, so they beat Bypass; may Ask.
+        let builtin = if self.ctx.default_guards() {
+            crate::GuardRule::destructive_defaults()
+        } else {
+            Vec::new()
+        };
+        for guard in builtin.iter().chain(self.ctx.guard_rules()) {
+            if guard.matches(tool, args) {
+                match guard.action() {
+                    crate::GuardAction::Deny { reason } => {
+                        return PermissionDecision::Deny {
+                            reason: reason.clone(),
+                        };
+                    }
+                    crate::GuardAction::Ask { prompt } => {
+                        let Some(handler) = self.ctx.approval_handler() else {
+                            return PermissionDecision::Deny {
+                                reason: format!("destructive command requires approval: {prompt}"),
+                            };
+                        };
+                        // Approval clears THIS guard only — continue the pipeline
+                        // so a later guard, mode (e.g. `Plan`), and the policy
+                        // still apply. Approval is not a blanket authorization.
+                        match handler.decide(tool, prompt, args).await {
+                            ApprovalOutcome::Allow => continue,
+                            ApprovalOutcome::Deny { reason } => {
+                                return PermissionDecision::Deny { reason };
+                            }
+                        }
+                    }
+                }
+            }
         }
         // 2. Mode.
         match self.ctx.permission_mode() {
@@ -445,6 +479,58 @@ mod authorize_tests {
         assert!(matches!(
             i.authorize("t", ToolEffect::SideEffect, &json!({})).await,
             PermissionDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn destructive_guard_denies_under_bypass_without_handler() {
+        let c = ctx().with_permission_mode(PermissionMode::Bypass);
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn destructive_guard_asks_under_bypass_with_handler() {
+        let c = ctx()
+            .with_permission_mode(PermissionMode::Bypass)
+            .with_approval_handler(Arc::new(AllowHandler));
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn without_default_guards_lets_bypass_allow_destructive() {
+        let c = ctx()
+            .with_permission_mode(PermissionMode::Bypass)
+            .without_default_guards();
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn guard_approval_does_not_bypass_mode() {
+        // An approving handler clears the destructive guard, but the rest of the
+        // pipeline still runs — `Plan` mode denies the side-effecting tool.
+        let c = ctx()
+            .with_permission_mode(PermissionMode::Plan)
+            .with_approval_handler(Arc::new(AllowHandler));
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Deny { .. }
         ));
     }
 }

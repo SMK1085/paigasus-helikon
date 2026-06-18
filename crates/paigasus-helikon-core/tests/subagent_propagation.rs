@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use common::{MockAgent, MockModel, MockTool};
 use paigasus_helikon_core::{
-    Agent, AgentAsTool, AgentEvent, AgentInput, CancellationToken, FinishReason, Hook,
+    Agent, AgentAsTool, AgentEvent, AgentInput, CancellationToken, FinishReason, GuardRule, Hook,
     HookDecision, HookEvent, HookRegistry, LlmAgent, MemorySession, ModelEvent, PermissionMode,
     RunContext, Session, Tool, TracerHandle,
 };
@@ -181,6 +181,84 @@ async fn agent_as_tool_fires_on_subagent_stop() {
     assert!(
         seen.lock().unwrap().iter().any(|n| n == "inner"),
         "agent-as-tool sub-run fires OnSubagentStop with the inner agent's name"
+    );
+}
+
+/// Test D — SMA-414: guard rules, `default_guards`, `redact_output`, and
+/// `extra_secrets` all propagate from the parent `ToolContext` into the
+/// agent-as-tool sub-run's `RunContext`.
+///
+/// Strategy (lighter-probe): the wrapped agent is a `MockAgent` whose behavior
+/// closure captures a shared `Arc<Mutex<...>>` and records the four values it
+/// observes on the `RunContext` it receives. `AgentAsTool::invoke` is driven
+/// directly via `RunContext::to_tool_context()` (the same idiom used in
+/// `plan_mode_propagates_into_agent_as_tool_sub_run`). After the invoke
+/// completes the recorded values are asserted against the parent's config.
+#[tokio::test]
+async fn guard_and_redaction_config_propagates_into_agent_as_tool_sub_run() {
+    /// Snapshot of the four SMA-414 fields as seen by the inner agent.
+    #[derive(Default)]
+    struct Observed {
+        guard_rules_len: usize,
+        default_guards: bool,
+        redact_output: bool,
+        extra_secrets: Vec<String>,
+    }
+
+    let observed: Arc<Mutex<Observed>> = Arc::new(Mutex::new(Observed::default()));
+    let obs_clone = Arc::clone(&observed);
+
+    let inner = MockAgent::<()>::new("probe", move |ctx| {
+        let mut obs = obs_clone.lock().unwrap();
+        obs.guard_rules_len = ctx.guard_rules().len();
+        obs.default_guards = ctx.default_guards();
+        obs.redact_output = ctx.redact_output();
+        obs.extra_secrets = ctx.extra_secrets().to_vec();
+        Vec::new()
+    });
+
+    let wrapper = AgentAsTool::new(inner).with_name("probe");
+
+    // Parent context: two custom guard rules, extra secret, default_guards off,
+    // redact_output off.
+    let parent_guard_rules = GuardRule::destructive_defaults(); // non-empty slice
+    let parent_guard_rules_len = parent_guard_rules.len();
+    let run_ctx: RunContext<()> = RunContext::new(
+        Arc::new(()),
+        Arc::new(MemorySession::new()) as Arc<dyn Session>,
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    )
+    .with_guard_rules(parent_guard_rules)
+    .with_extra_secrets(vec!["zzsecretvalue".to_owned()])
+    .without_default_guards()
+    .without_output_redaction();
+
+    let tc = run_ctx.to_tool_context();
+    let _ = wrapper
+        .invoke(&tc, serde_json::json!({ "input": "probe" }))
+        .await
+        .expect("invoke ok");
+
+    let obs = observed.lock().unwrap();
+    assert_eq!(
+        obs.guard_rules_len, parent_guard_rules_len,
+        "guard_rules must propagate: expected {parent_guard_rules_len} rules, got {}",
+        obs.guard_rules_len
+    );
+    assert!(
+        !obs.default_guards,
+        "default_guards=false must propagate into the sub-run"
+    );
+    assert!(
+        !obs.redact_output,
+        "redact_output=false must propagate into the sub-run"
+    );
+    assert!(
+        obs.extra_secrets.contains(&"zzsecretvalue".to_owned()),
+        "extra_secrets must propagate; got {:?}",
+        obs.extra_secrets
     );
 }
 

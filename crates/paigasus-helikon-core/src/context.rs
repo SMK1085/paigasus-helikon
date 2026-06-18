@@ -85,6 +85,14 @@ where
     deny_rules: Vec<DenyRule>,
     /// Resolves `AskUser` decisions; `None` → deny by default.
     approval_handler: Option<Arc<dyn ApprovalHandler>>,
+    /// User-supplied guard rules, evaluated before mode (can Ask or Deny).
+    guard_rules: Vec<crate::GuardRule>,
+    /// Whether the always-on destructive default guards are consulted.
+    default_guards: bool,
+    /// Whether tool output is redacted before re-entering context.
+    redact_output: bool,
+    /// Extra secret values to redact, beyond the auto-sourced env set.
+    extra_secrets: Vec<String>,
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -114,6 +122,10 @@ where
             permission_policy: None,
             deny_rules: Vec::new(),
             approval_handler: None,
+            guard_rules: Vec::new(),
+            default_guards: true,
+            redact_output: true,
+            extra_secrets: Vec::new(),
         }
     }
 
@@ -205,6 +217,10 @@ where
             permission_policy: self.permission_policy.clone(),
             deny_rules: self.deny_rules.clone(),
             approval_handler: self.approval_handler.clone(),
+            guard_rules: self.guard_rules.clone(),
+            default_guards: self.default_guards,
+            redact_output: self.redact_output,
+            extra_secrets: self.extra_secrets.clone(),
         }
     }
 
@@ -229,6 +245,10 @@ where
             permission_policy: self.permission_policy.clone(),
             deny_rules: self.deny_rules.clone(),
             approval_handler: self.approval_handler.clone(),
+            guard_rules: self.guard_rules.clone(),
+            default_guards: self.default_guards,
+            redact_output: self.redact_output,
+            extra_secrets: self.extra_secrets.clone(),
         }
     }
 
@@ -287,6 +307,66 @@ where
         self.approval_handler.as_ref()
     }
 
+    /// Install user guard rules (evaluated before mode; can Ask or Deny).
+    pub fn with_guard_rules(mut self, rules: Vec<crate::GuardRule>) -> Self {
+        self.guard_rules = rules;
+        self
+    }
+
+    /// Disable the always-on built-in destructive guard set (power-user opt-out).
+    pub fn without_default_guards(mut self) -> Self {
+        self.default_guards = false;
+        self
+    }
+
+    /// Disable automatic secret redaction of tool output.
+    pub fn without_output_redaction(mut self) -> Self {
+        self.redact_output = false;
+        self
+    }
+
+    /// Add extra secret values to redact from tool output. Additive: chained
+    /// calls accumulate (earlier secrets are never dropped).
+    pub fn with_extra_secrets(mut self, secrets: Vec<String>) -> Self {
+        self.extra_secrets.extend(secrets);
+        self
+    }
+
+    /// The run's user guard rules.
+    pub fn guard_rules(&self) -> &[crate::GuardRule] {
+        &self.guard_rules
+    }
+
+    /// Whether built-in destructive guards are active.
+    pub fn default_guards(&self) -> bool {
+        self.default_guards
+    }
+
+    /// Whether tool-output redaction is active.
+    pub fn redact_output(&self) -> bool {
+        self.redact_output
+    }
+
+    /// Extra secret values to redact.
+    pub fn extra_secrets(&self) -> &[String] {
+        &self.extra_secrets
+    }
+
+    /// Clone the permission/guard/redaction config into a [`crate::tool::PermissionFields`]
+    /// bundle for projection into a [`ToolContext`].
+    pub(crate) fn clone_permission_fields(&self) -> crate::tool::PermissionFields<Ctx> {
+        crate::tool::PermissionFields {
+            mode: self.permission_mode,
+            policy: self.permission_policy.clone(),
+            deny_rules: self.deny_rules.clone(),
+            approval_handler: self.approval_handler.clone(),
+            guard_rules: self.guard_rules.clone(),
+            default_guards: self.default_guards,
+            redact_output: self.redact_output,
+            extra_secrets: self.extra_secrets.clone(),
+        }
+    }
+
     /// Project the narrower [`ToolContext`] from this [`RunContext`].
     ///
     /// Tools receive `user_ctx`, `tracer`, and a **child** cancellation
@@ -314,12 +394,7 @@ where
         .with_state(self.state.clone())
         .with_actions(self.actions.clone())
         .with_hooks(self.hooks.clone())
-        .with_permissions(
-            self.permission_mode,
-            self.permission_policy.clone(),
-            self.deny_rules.clone(),
-            self.approval_handler.clone(),
-        )
+        .with_permissions(self.clone_permission_fields())
     }
 }
 
@@ -522,6 +597,41 @@ mod runcontext_tests {
             ctx.to_tool_context().permission_mode(),
             crate::PermissionMode::Bypass
         );
+    }
+
+    #[test]
+    fn guard_rules_default_on_and_inherit_through_children() {
+        use crate::{GuardRule, PermissionMode};
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_permission_mode(PermissionMode::Bypass)
+        .with_guard_rules(vec![GuardRule::destructive_defaults().remove(0)]);
+
+        assert!(ctx.default_guards());
+        assert_eq!(ctx.guard_rules().len(), 1);
+        assert_eq!(ctx.handoff_child().guard_rules().len(), 1);
+        assert_eq!(ctx.subagent_child().guard_rules().len(), 1);
+        assert_eq!(ctx.to_tool_context().guard_rules().len(), 1);
+        assert!(ctx.handoff_child().default_guards());
+    }
+
+    #[test]
+    fn without_default_guards_disables_builtins() {
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .without_default_guards();
+        assert!(!ctx.default_guards());
+        assert!(!ctx.subagent_child().default_guards());
     }
 
     #[test]
