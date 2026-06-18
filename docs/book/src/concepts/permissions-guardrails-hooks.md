@@ -13,7 +13,7 @@ They are orthogonal. A tool call passes the permission pipeline; a hook can stil
 A tool call is authorized by the pipeline `deny rules › mode › policy › AskUser`, evaluated in that order. The pieces:
 
 - `PermissionMode` — a `#[non_exhaustive]` enum: `Default` (defer to policy; permissive when no policy), `AcceptEdits` (auto-approve tools whose `ToolEffect` is `Write`), `Plan` (deny any tool whose `ToolEffect` is not `ReadOnly`), `Bypass` (allow all — deny rules still apply). `Bypass` is **sticky**: `RunContext::with_permission_mode` refuses to downgrade it, and it propagates to sub-agents.
-- `DenyRule` — a first-class rule evaluated **before** mode, so it overrides even `Bypass`. v1 matches by exact tool name: `DenyRule::tool("Bash")`.
+- `DenyRule` — a first-class rule evaluated **before** mode, so it overrides even `Bypass`. v1 matches by exact tool name: `DenyRule::tool("Bash")`. See also **Guard rules** below for the higher-level Bash-command matcher.
 - `PermissionPolicy<Ctx>` — the `canUseTool` trait. Its async `check` returns a `PermissionDecision`: `Allow`, `Deny { reason }`, `AskUser { prompt }`, or `Replace { args }` (sanitize the call's arguments before execution).
 - `ApprovalHandler` — resolves an `AskUser` decision out of band. Its `decide` returns an `ApprovalOutcome` (`Allow` or `Deny { reason }`) — it cannot recursively ask. With **no** approval handler installed, `AskUser` resolves to deny.
 
@@ -76,6 +76,40 @@ let ctx: RunContext<()> = RunContext::new(
 ```
 
 `with_permission_mode`, `with_deny_rules`, `with_permission_policy`, and `with_approval_handler` are consuming builder methods on `RunContext`; the corresponding readers are `permission_mode`, `deny_rules`, `permission_policy`, and `approval_handler`. A tool's `ToolEffect` (`ReadOnly`, `Write`, or `SideEffect`) is what `AcceptEdits` and `Plan` mode test against — see [Tools](./tools.md).
+
+### Guard rules & the destructive-command breaker
+
+Guard rules sit *above* the permission pipeline. A `GuardRule` has an action — `Deny` or `Ask` — and is evaluated **before** permission mode. Even `PermissionMode::Bypass` does not skip them.
+
+An always-on built-in set, `GuardRule::destructive_defaults()`, is installed on every `RunContext` automatically. It blocks two classes of command:
+
+- **Recursive removes at catastrophic paths.** `rm -rf /` and `rm -rf ~` (the home directory) are blocked by default.
+- **Writes to protected system paths.** Commands that write to `/etc`, `/usr`, `/bin`, `/sbin`, `/sys`, `/boot`, `/dev`, or `/` are blocked. A device-node allowlist exempts the common redirect target `> /dev/null` (and other `/dev/null`, `/dev/stderr`, `/dev/stdout` forms) so ordinary output suppression is never blocked.
+
+The default action for a matched rule is `Ask`, which **resolves to Deny when no `ApprovalHandler` is installed** — the common headless/CI configuration.
+
+> **Behavior change.** In `Default` mode with no policy and no approval handler — the typical unattended setup — a command matching a destructive guard now resolves to **Deny** rather than running silently. To restore interactive behavior, install an `ApprovalHandler` (the runner will prompt before blocking). To disable the guards entirely, call `RunContext::without_default_guards()`:
+>
+> ```rust
+> let ctx = RunContext::new(/* … */)
+>     .without_default_guards();
+> ```
+
+### Operator-aware deny matching
+
+`DenyRule::bash_command("rm")` matches when **any sub-command** of a compound command resolves to that program. The matcher:
+
+1. Splits the command string on `&&`, `||`, `;`, `|`, `|&`, `&`, and newlines.
+2. Strips fixed wrappers — `timeout`, `nice`, `nohup`, `stdbuf`, `env`, `command`, `sudo`, `doas` — and their flags.
+3. Unquotes the program token.
+4. Follows `bash -c '…'` / `sh -c '…'` re-entry to a bounded depth.
+
+As a result, `echo ok && rm -rf .`, `sudo rm -rf /`, and `bash -c 'rm -rf /'` are all caught by a single `DenyRule::bash_command("rm")`.
+
+`BashTool`'s own `deny_commands`/`allow_commands` lists use the same matcher, with a defined composition rule:
+
+- **deny list** — the command is denied if **any** sub-command's program is denied.
+- **allow list** — the command is permitted only if **every** sub-command's program is in the list.
 
 ## Guardrails
 
@@ -178,12 +212,49 @@ registry.push(Arc::new(AuditLog));
 
 `HookRegistry` is the run-level container: `new`, `push`, `iter`, and `is_empty`. It is the third positional argument to [`RunContext::new`](./core-primitives.md) and is shared (cloned) across handed-off and sub-agent contexts.
 
+### Secret redaction
+
+On by default, tool output is scrubbed of secret-shaped strings before it re-enters the model context and the session trajectory. Redaction runs as the **final** transform on `PostToolUse` output — after any user `PostToolUse` hook.
+
+Two matchers run in sequence:
+
+1. **Key-name patterns.** Lines matching `KEY=value`, `KEY: value`, or `export KEY=value` where `KEY` ends (case-insensitively) in `_API_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, or `_CREDENTIAL` have the value portion replaced with `***`.
+2. **Known-secret value scan.** Literal occurrences of known secret values — the parent process's secret-named env vars, plus any strings registered via `RunContext::with_extra_secrets(…)` — are replaced with `***`. A length floor (≥ 8 characters, common English words excluded) prevents over-matching from corrupting ordinary output.
+
+To add application-specific secrets to the scan:
+
+```rust
+let ctx = RunContext::new(/* … */)
+    .with_extra_secrets(vec!["my-api-key-value".to_string()]);
+```
+
+To disable redaction entirely:
+
+```rust
+let ctx = RunContext::new(/* … */)
+    .without_output_redaction();
+```
+
+### Scope & limitations
+
+The v1 Bash guard and deny-matching are pragmatic, not based on a full POSIX shell parser. Known limitations:
+
+- **Command substitution is not parsed.** Tokens inside `$(…)` or backtick expressions are not inspected.
+- **`find -exec`/`find -delete`, `xargs`, and `eval`** are not followed into their arguments; only the top-level program name is matched.
+- **Variable-indirect command strings** (`eval "$VAR"`, `$CMD arg`) are not resolved — the matcher sees literal pre-expansion tokens.
+- **Shell-expanded globs and variables** in the command string are not expanded before matching.
+- **`bash -c` re-entry** is followed to a bounded depth only; deeply nested shells are not fully traced.
+- **`rm -rf <protected-prefix>`** — only `/` (root) and `~` (home directory) are guarded against recursive removal. Subtrees such as `/etc` or `/usr` are protected only against writes, not `rm -rf`.
+- **Relative redirect targets** such as `> ../../etc/passwd` are not canonicalized; only absolute protected paths are matched on the write-guard.
+- **Redaction limitations:** only the first `KEY=`/`KEY:` occurrence per line is processed; value-scan matching is case-sensitive; key-name matching requires underscore form (`X_API_KEY`, not `X-API-KEY`) and does not scan JSON object keys.
+
 ## How they compose
 
 For a single tool call, the layers run in this order:
 
 1. The `PreToolUse` hook fires — it may deny or `ReplaceInput` the args.
-2. The permission pipeline authorizes the (possibly rewritten) call: `deny rules › mode › policy › AskUser`.
+2. The permission pipeline authorizes the (possibly rewritten) call: `guard rules › deny rules › mode › policy › AskUser`.
 3. The tool runs; the `PostToolUse` hook fires — it may `ReplaceOutput`.
+4. Secret redaction runs as the final transform on the output before it enters the model context.
 
 Input guardrails gate user text before the loop begins; output guardrails gate the final model text before it is returned. See [The Agent Loop](./agent-loop.md) for where each seam sits in the run, and [Multi-Agent Patterns](./multi-agent-patterns.md) for how `Bypass` mode and the shared registry propagate across handoffs.

@@ -42,6 +42,12 @@ let agent = LlmAgent::builder::<()>()
 
 Runnable examples live in [`examples/`](https://github.com/SMK1085/paigasus-helikon/tree/main/crates/paigasus-helikon-tools/examples): `explore_sandbox` (FS + Bash, gated by a `PermissionPolicy`), `web_research` (the `web` tools), and `os_sandbox_demo` (OS-sandbox containment demo, Linux + macOS, requires `--features os-sandbox`).
 
+## Safety
+
+`BashTool`'s `deny_commands` and `allow_commands` lists are **operator-aware**: a deny rule blocks a program that appears in any sub-command of a compound or pipelined command string (`&&`, `||`, `;`, `|`, `sudo`, `bash -c`, etc.), and an allow list requires every sub-command's program to be listed. This prevents simple bypasses such as `echo ok && rm -rf .`.
+
+When `BashTool` runs inside the agent loop, tool output is automatically scrubbed of secret-shaped strings (env vars whose names end in `_API_KEY`, `_TOKEN`, `_SECRET`, etc., plus any values registered with `RunContext::with_extra_secrets`) before the output re-enters the model context. See [Permissions, Guardrails & Hooks](https://smk1085.github.io/paigasus-helikon/concepts/permissions-guardrails-hooks.html) for the full rules and opt-out knobs.
+
 ## Links
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-tools)
