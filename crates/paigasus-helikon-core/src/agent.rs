@@ -525,6 +525,8 @@ where
     Ctx: Send + Sync + 'static,
 {
     let denied_events: std::sync::Mutex<Vec<crate::AgentEvent>> = std::sync::Mutex::new(Vec::new());
+    let redact_output = interceptors.ctx.redact_output();
+    let secrets = crate::redaction::SecretSet::from_env_and_extra(interceptors.ctx.extra_secrets());
 
     let futures = calls.iter().map(|call| {
         let tool = tools.iter().find(|t| t.name() == call.name).cloned();
@@ -536,6 +538,7 @@ where
         let name = call.name.clone();
         let orig_args = call.args.clone();
         let denied_events = &denied_events;
+        let secrets = &secrets;
         let span = tracing::info_span!(
             parent: parent,
             "tool.execute",
@@ -615,6 +618,13 @@ where
                         Err(format!("blocked by PostToolUse hook: {reason}"))
                     } else {
                         let final_json = post.replacement.unwrap_or(output_json);
+                        // Redaction is the FINAL transform — after user PostToolUse
+                        // hooks — so a hook cannot reintroduce an unredacted secret.
+                        let final_json = if redact_output {
+                            crate::redaction::redact(&final_json, secrets)
+                        } else {
+                            final_json
+                        };
                         Ok(tool_output_to_content_parts(&crate::ToolOutput::new(
                             final_json,
                         )))
