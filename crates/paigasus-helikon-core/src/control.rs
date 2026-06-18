@@ -123,6 +123,31 @@ where
                 reason: format!("denied by deny rule: {tool}"),
             };
         }
+        // 1a/1b. Guard rules — built-in destructive defaults (unless opted out)
+        // then user guard rules. Run before mode, so they beat Bypass; may Ask.
+        let builtin = if self.ctx.default_guards() {
+            crate::GuardRule::destructive_defaults()
+        } else {
+            Vec::new()
+        };
+        for guard in builtin.iter().chain(self.ctx.guard_rules()) {
+            if guard.matches(tool, args) {
+                return match guard.action() {
+                    crate::GuardAction::Deny { reason } => PermissionDecision::Deny {
+                        reason: reason.clone(),
+                    },
+                    crate::GuardAction::Ask { prompt } => match self.ctx.approval_handler() {
+                        None => PermissionDecision::Deny {
+                            reason: format!("destructive command requires approval: {prompt}"),
+                        },
+                        Some(handler) => match handler.decide(tool, prompt, args).await {
+                            ApprovalOutcome::Allow => PermissionDecision::Allow,
+                            ApprovalOutcome::Deny { reason } => PermissionDecision::Deny { reason },
+                        },
+                    },
+                };
+            }
+        }
         // 2. Mode.
         match self.ctx.permission_mode() {
             PermissionMode::Bypass => return PermissionDecision::Allow,
@@ -444,6 +469,43 @@ mod authorize_tests {
         let i = interceptors(&c);
         assert!(matches!(
             i.authorize("t", ToolEffect::SideEffect, &json!({})).await,
+            PermissionDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn destructive_guard_denies_under_bypass_without_handler() {
+        let c = ctx().with_permission_mode(PermissionMode::Bypass);
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn destructive_guard_asks_under_bypass_with_handler() {
+        let c = ctx()
+            .with_permission_mode(PermissionMode::Bypass)
+            .with_approval_handler(Arc::new(AllowHandler));
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn without_default_guards_lets_bypass_allow_destructive() {
+        let c = ctx()
+            .with_permission_mode(PermissionMode::Bypass)
+            .without_default_guards();
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
             PermissionDecision::Allow
         ));
     }
