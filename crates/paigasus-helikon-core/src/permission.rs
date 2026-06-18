@@ -7,9 +7,10 @@ use crate::RunContext;
 
 /// How permission mode governs tool calls.
 ///
-/// `Bypass` propagates to subagents and **cannot be overridden** — a typed
-/// enum, not a string. The non-override property is enforced by
-/// [`RunContext::with_permission_mode`], which refuses to downgrade `Bypass`.
+/// Transitions are **tighten-only**, enforced by
+/// [`RunContext::with_permission_mode`]: `Bypass` never loosens (it may only
+/// tighten to `DontAsk`), and `DontAsk` is terminal. Both propagate to
+/// subagents — a typed enum, not a string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum PermissionMode {
