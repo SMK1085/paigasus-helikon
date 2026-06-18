@@ -253,7 +253,7 @@ The v1 Bash guard and deny-matching are pragmatic, not based on a full POSIX she
 For a single tool call, the layers run in this order:
 
 1. The `PreToolUse` hook fires — it may deny or `ReplaceInput` the args.
-2. The permission pipeline authorizes the (possibly rewritten) call: `guard rules › deny rules › mode › policy › AskUser`.
+2. The permission pipeline authorizes the (possibly rewritten) call: `deny rules › guard rules › mode › policy › AskUser`.
 3. The tool runs; the `PostToolUse` hook fires — it may `ReplaceOutput`.
 4. Secret redaction runs as the final transform on the output before it enters the model context.
 
