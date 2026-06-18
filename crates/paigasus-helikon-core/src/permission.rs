@@ -163,6 +163,9 @@ enum GuardMatcher {
     /// A write whose target resolves under a protected prefix (Bash redirects,
     /// `tee`/`dd`, or the Write/Edit `path` arg). Honors the device-node allowlist.
     ProtectedPathWrite,
+    /// A write whose target has a `.git`/`.ssh` path component or a `.env`(`.env.*`)
+    /// final component (Bash redirects, `tee`/`dd`, or the Write/Edit `path` arg).
+    ProtectedDotPathWrite,
 }
 
 /// A pre-mode safety rule. Like [`DenyRule`] it runs before permission mode and
@@ -208,6 +211,7 @@ impl GuardRule {
                     .any(is_rm_rf_root_or_home)
             }
             GuardMatcher::ProtectedPathWrite => protected_path_write(tool, args),
+            GuardMatcher::ProtectedDotPathWrite => protected_dotpath_write(tool, args),
         }
     }
 
@@ -225,6 +229,12 @@ impl GuardRule {
                 matcher: GuardMatcher::ProtectedPathWrite,
                 action: GuardAction::Ask {
                     prompt: "write to a protected system path".to_owned(),
+                },
+            },
+            GuardRule {
+                matcher: GuardMatcher::ProtectedDotPathWrite,
+                action: GuardAction::Ask {
+                    prompt: "write to a protected VCS/secret path (.git, .ssh, .env)".to_owned(),
                 },
             },
         ]
@@ -301,6 +311,43 @@ fn protected_path_write(tool: &str, args: &serde_json::Value) -> bool {
     false
 }
 
+fn protected_dotpath_write(tool: &str, args: &serde_json::Value) -> bool {
+    if matches!(tool, "Write" | "Edit") {
+        if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
+            if crate::path_match::is_protected_dotpath(p) {
+                return true;
+            }
+        }
+    }
+    if let Some(cmd) = bash_command_str(tool, args) {
+        for c in crate::command_match::resolve_all(cmd) {
+            for r in &c.redirects {
+                use crate::command_match::RedirectOp;
+                if matches!(r.op, RedirectOp::Out | RedirectOp::Append)
+                    && crate::path_match::is_protected_dotpath(&r.target)
+                {
+                    return true;
+                }
+            }
+            if c.program == "tee"
+                && c.args
+                    .iter()
+                    .any(|a| crate::path_match::is_protected_dotpath(a))
+            {
+                return true;
+            }
+            if c.program == "dd" {
+                if let Some(of) = c.args.iter().find_map(|a| a.strip_prefix("of=")) {
+                    if crate::path_match::is_protected_dotpath(of) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 fn is_protected_path(path: &str) -> bool {
     if DEVICE_ALLOWLIST.contains(&path) {
         return false;
@@ -364,6 +411,32 @@ mod guard_tests {
         assert!(GuardRule::destructive_defaults()
             .iter()
             .all(|g| matches!(g.action(), GuardAction::Ask { .. })));
+    }
+
+    #[test]
+    fn matches_protected_dotpath_write() {
+        // Write/Edit tool path arg
+        let g = GuardRule::destructive_defaults();
+        assert!(g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": ".git/config", "content": "x" }))));
+        assert!(g
+            .iter()
+            .any(|r| r.matches("Edit", &json!({ "path": "a/.ssh/known_hosts" }))));
+        assert!(g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": ".env.local", "content": "x" }))));
+        // bare repo / lookalikes do NOT trip
+        assert!(!g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": "repo.git/HEAD", "content": "x" }))));
+        assert!(!g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": ".gitignore", "content": "x" }))));
+        // bash redirect into .git
+        assert!(matched("echo x > .git/config"));
+        assert!(matched("echo x | tee .ssh/authorized_keys"));
+        assert!(!matched("echo x > notes.txt"));
     }
 }
 
