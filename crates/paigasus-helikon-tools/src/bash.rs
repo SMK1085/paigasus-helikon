@@ -28,7 +28,11 @@ pub struct BashToolBuilder {
 }
 
 impl BashToolBuilder {
-    /// Refuse any command whose first whitespace-delimited token is in this list.
+    /// Refuse a command if ANY sub-command's resolved program is in this list.
+    ///
+    /// Compound commands are split operator-aware: a deny rule blocks the call
+    /// if ANY sub-command's program matches (so `echo ok && rm -rf .` is refused
+    /// under `deny=["rm"]`).
     pub fn deny_commands<I, S>(mut self, names: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -38,7 +42,11 @@ impl BashToolBuilder {
         self
     }
 
-    /// If set, allow ONLY commands whose first token is in this list.
+    /// If set, allow ONLY commands where EVERY sub-command's program is in this list.
+    ///
+    /// Compound commands are split operator-aware: an allow list permits the call
+    /// only if EVERY sub-command's program is listed (so `git status && rm -rf .`
+    /// is refused under `allow=["git"]`).
     pub fn allow_commands<I, S>(mut self, names: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -70,6 +78,11 @@ impl BashToolBuilder {
 }
 
 /// A shell tool backed by a pluggable [`ExecutionBackend`].
+///
+/// Command allow/deny lists are evaluated operator-aware: compound commands
+/// (e.g. `echo ok && rm -rf .`) are split into sub-commands before matching.
+/// A deny rule blocks the call if ANY sub-command's resolved program is denied;
+/// an allow list permits the call only if EVERY sub-command's program is listed.
 pub struct BashTool<Ctx = ()> {
     backend: Arc<dyn ExecutionBackend>,
     deny_commands: Vec<String>,
@@ -97,16 +110,23 @@ impl BashTool<()> {
 
 impl<Ctx> BashTool<Ctx> {
     fn check_command_allowed(&self, command: &str) -> Result<(), ToolError> {
-        let first = command.split_whitespace().next().unwrap_or("");
-        if self.deny_commands.iter().any(|d| d == first) {
+        let resolved = paigasus_helikon_core::command_match::resolve_all(command);
+        let programs: Vec<&str> = resolved.iter().map(|c| c.program.as_str()).collect();
+
+        // Deny if ANY sub-command's program is denied.
+        if let Some(bad) = programs
+            .iter()
+            .find(|p| self.deny_commands.iter().any(|d| d == *p))
+        {
             return Err(ToolError::Denied {
-                reason: format!("command `{first}` is blocked by the deny list"),
+                reason: format!("command `{bad}` is blocked by the deny list"),
             });
         }
+        // With an allowlist, ALL sub-command programs must be allowed.
         if let Some(allow) = &self.allow_commands {
-            if !allow.iter().any(|a| a == first) {
+            if let Some(bad) = programs.iter().find(|p| !allow.iter().any(|a| a == *p)) {
                 return Err(ToolError::Denied {
-                    reason: format!("command `{first}` is not in the allow list"),
+                    reason: format!("command `{bad}` is not in the allow list"),
                 });
             }
         }
