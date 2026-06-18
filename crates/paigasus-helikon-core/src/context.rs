@@ -351,6 +351,21 @@ where
         &self.extra_secrets
     }
 
+    /// Clone the permission/guard/redaction config into a [`crate::tool::PermissionFields`]
+    /// bundle for projection into a [`ToolContext`].
+    pub(crate) fn clone_permission_fields(&self) -> crate::tool::PermissionFields<Ctx> {
+        crate::tool::PermissionFields {
+            mode: self.permission_mode,
+            policy: self.permission_policy.clone(),
+            deny_rules: self.deny_rules.clone(),
+            approval_handler: self.approval_handler.clone(),
+            guard_rules: self.guard_rules.clone(),
+            default_guards: self.default_guards,
+            redact_output: self.redact_output,
+            extra_secrets: self.extra_secrets.clone(),
+        }
+    }
+
     /// Project the narrower [`ToolContext`] from this [`RunContext`].
     ///
     /// Tools receive `user_ctx`, `tracer`, and a **child** cancellation
@@ -378,16 +393,7 @@ where
         .with_state(self.state.clone())
         .with_actions(self.actions.clone())
         .with_hooks(self.hooks.clone())
-        .with_permissions(
-            self.permission_mode,
-            self.permission_policy.clone(),
-            self.deny_rules.clone(),
-            self.approval_handler.clone(),
-            self.guard_rules.clone(),
-            self.default_guards,
-            self.redact_output,
-            self.extra_secrets.clone(),
-        )
+        .with_permissions(self.clone_permission_fields())
     }
 }
 
