@@ -11,11 +11,14 @@ use std::sync::Arc;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
-/// Lexically clean a candidate path: strip a leading `./`, drop `.` components,
-/// and collapse `..` without touching the filesystem. A leading `..` that
-/// escapes the root survives (so it will not match an anchored pattern).
+/// Lexically clean a candidate path: normalize `\` to `/` (so Windows-style
+/// separators can't smuggle a `.git`/`.ssh`/`.env` component past matching),
+/// strip a leading `./`, drop `.` components, and collapse `..` without touching
+/// the filesystem. A leading `..` that escapes the root survives (so it will not
+/// match an anchored pattern).
 pub(crate) fn clean_path(path: &str) -> String {
-    let trimmed = path.strip_prefix("./").unwrap_or(path);
+    let normalized = path.replace('\\', "/");
+    let trimmed = normalized.strip_prefix("./").unwrap_or(&normalized);
     let mut out: Vec<&str> = Vec::new();
     for comp in trimmed.split('/') {
         match comp {
@@ -100,6 +103,7 @@ impl std::fmt::Debug for PathGlob {
 /// Trim a leading `./` then a single leading `/` (gitignore anchor — we anchor
 /// instead by the presence of an interior `/`).
 fn normalize_pattern(pat: String) -> String {
+    let pat = pat.replace('\\', "/");
     let p = pat.strip_prefix("./").unwrap_or(&pat);
     let p = p.strip_prefix('/').unwrap_or(p);
     p.to_owned()
@@ -107,23 +111,39 @@ fn normalize_pattern(pat: String) -> String {
 
 /// Build a case-insensitive `GlobSet`. A pattern with no `/` is unanchored
 /// (matches at any depth) → `{pat, **/pat}`; a pattern with a `/` is anchored.
+///
+/// An invalid glob is a programmer error (call-site literals), so it fails fast
+/// via `debug_assert!` in debug/test builds; in release it is logged and the
+/// rule degrades to a non-matching matcher rather than panicking a live agent.
 fn build_globset(pattern: &str) -> GlobSet {
-    let globs: Vec<String> = if pattern.contains('/') {
+    // A bare `**` already matches at any depth, so don't form a redundant
+    // (and potentially rejected) `**/**`.
+    let globs: Vec<String> = if pattern.contains('/') || pattern == "**" {
         vec![pattern.to_owned()]
     } else {
         vec![pattern.to_owned(), format!("**/{pattern}")]
     };
     let mut builder = GlobSetBuilder::new();
-    for g in globs {
-        if let Ok(glob) = GlobBuilder::new(&g)
+    for g in &globs {
+        match GlobBuilder::new(g)
             .case_insensitive(true)
             .literal_separator(true)
             .build()
         {
-            builder.add(glob);
+            Ok(glob) => {
+                builder.add(glob);
+            }
+            Err(e) => {
+                debug_assert!(false, "invalid path-rule glob `{g}`: {e}");
+                tracing::warn!(glob = %g, error = %e, "invalid path-rule glob; this rule will not match");
+            }
         }
     }
-    builder.build().unwrap_or_else(|_| GlobSet::empty())
+    builder.build().unwrap_or_else(|e| {
+        debug_assert!(false, "path-rule globset build failed: {e}");
+        tracing::warn!(error = %e, "path-rule globset build failed; this rule will not match");
+        GlobSet::empty()
+    })
 }
 
 #[cfg(test)]
@@ -137,6 +157,18 @@ mod tests {
         assert_eq!(clean_path("src/../.git/config"), ".git/config");
         assert_eq!(clean_path("../escape"), "../escape"); // leading .. survives
         assert_eq!(clean_path("a/../../b"), "../b"); // escape via subdir survives
+        assert_eq!(clean_path("a\\b\\c"), "a/b/c"); // backslashes normalized to /
+        assert_eq!(clean_path(".\\src\\..\\.git"), ".git"); // mixed Windows-style
+    }
+
+    #[test]
+    fn windows_backslash_paths_cannot_bypass_matching() {
+        // A `.git\config` write must still trip the breaker and a glob.
+        assert!(is_protected_dotpath(".git\\config"));
+        assert!(is_protected_dotpath("a\\.ssh\\id_rsa"));
+        assert!(is_protected_dotpath("cfg\\.env"));
+        assert!(PathGlob::new(".env").matches_path("cfg\\.env"));
+        assert!(PathGlob::new("src/**").matches_path("src\\main.rs"));
     }
 
     #[test]

@@ -146,8 +146,10 @@ where
                             };
                         };
                         // Approval clears THIS guard only — continue the pipeline
-                        // so a later guard, mode (e.g. `Plan`), and the policy
-                        // still apply. Approval is not a blanket authorization.
+                        // so later guards and the allow/mode/policy steps still
+                        // apply. A matching allow rule may still short-circuit
+                        // before mode/policy; approval itself is not a blanket
+                        // authorization.
                         match handler.decide(tool, prompt, args).await {
                             ApprovalOutcome::Allow => continue,
                             ApprovalOutcome::Deny { reason } => {

@@ -267,7 +267,7 @@ async fn guard_and_redaction_config_propagates_into_agent_as_tool_sub_run() {
 ///
 /// This is the fourth and final permission-field copy site (`handoff_child`,
 /// `subagent_child`, and `to_tool_context` are the other three). Missing it is a
-/// *fail-open* bug: under `DontAsk` every call is denied unless an allow rule
+/// *fail-closed* propagation bug: under `DontAsk` every call is denied unless an allow rule
 /// matches, so an agent-as-tool sub-run that lost the parent's `allow_rules`
 /// would silently deny everything — and a unit-level inheritance test can't catch
 /// the agent-as-tool rebuild path, only this integration test can.

@@ -118,9 +118,9 @@ where
         // redaction config) MUST cross into the sub-run so that a
         // `Plan`/`Bypass`/`DontAsk`/policy decision applies to the wrapped
         // agent's tools, and so that custom guard rules and extra-secret
-        // redaction remain in force. Dropping the allow rules is fail-open:
-        // under `DontAsk` an unmatched call is denied, so a sub-run that lost
-        // them would silently deny everything.
+        // redaction remain in force. Dropping the allow rules is a fail-closed
+        // propagation bug: under `DontAsk` an unmatched call is denied, so a
+        // sub-run that lost them would silently deny everything.
         let mut sub_ctx = RunContext::new(
             Arc::clone(ctx.user_ctx()),
             Arc::new(MemorySession::new()),
