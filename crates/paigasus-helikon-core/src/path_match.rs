@@ -7,10 +7,6 @@
 //! a pattern without a `/` matches at any depth; a pattern with a `/` is
 //! anchored to the path root. Matching is case-insensitive.
 
-// Items are pub(crate) and consumed by permission.rs in later tasks (SMA-415
-// Tasks 3-4). Remove this allow once those consumers land.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
