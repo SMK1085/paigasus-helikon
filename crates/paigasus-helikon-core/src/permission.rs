@@ -139,6 +139,234 @@ pub enum ApprovalOutcome {
     },
 }
 
+/// The action a tripped [`GuardRule`] takes. Evaluated **before** mode, so it
+/// overrides even [`PermissionMode::Bypass`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GuardAction {
+    /// Hard-deny with a reason.
+    Deny {
+        /// Human-readable denial reason.
+        reason: String,
+    },
+    /// Ask a human via the [`ApprovalHandler`] (default Deny when none).
+    Ask {
+        /// Prompt shown to the approver.
+        prompt: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GuardMatcher {
+    /// `rm` with recursive+force flags targeting `/` or `~` (literal).
+    RmRecursiveRootOrHome,
+    /// A write whose target resolves under a protected prefix (Bash redirects,
+    /// `tee`/`dd`, or the Write/Edit `path` arg). Honors the device-node allowlist.
+    ProtectedPathWrite,
+}
+
+/// A pre-mode safety rule. Like [`DenyRule`] it runs before permission mode and
+/// beats `Bypass`, but it may **ask** a human instead of hard-denying.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardRule {
+    matcher: GuardMatcher,
+    action: GuardAction,
+}
+
+/// Protected path prefixes. A write resolving under any of these trips
+/// [`GuardMatcher::ProtectedPathWrite`].
+const PROTECTED_PREFIXES: &[&str] = &["/etc", "/usr", "/bin", "/sbin", "/sys", "/boot", "/dev"];
+
+/// Device nodes that are safe write targets despite the `/dev` prefix. Checked
+/// before the protected-prefix rule so `cmd > /dev/null` is never denied.
+const DEVICE_ALLOWLIST: &[&str] = &[
+    "/dev/null",
+    "/dev/zero",
+    "/dev/full",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/tty",
+    "/dev/random",
+    "/dev/urandom",
+];
+
+impl GuardRule {
+    /// The action this rule takes when it matches.
+    pub fn action(&self) -> &GuardAction {
+        &self.action
+    }
+
+    /// `true` if this guard trips for `tool` invoked with `args`.
+    pub fn matches(&self, tool: &str, args: &serde_json::Value) -> bool {
+        match &self.matcher {
+            GuardMatcher::RmRecursiveRootOrHome => {
+                let Some(cmd) = bash_command_str(tool, args) else {
+                    return false;
+                };
+                crate::command_match::resolve_all(cmd)
+                    .iter()
+                    .any(is_rm_rf_root_or_home)
+            }
+            GuardMatcher::ProtectedPathWrite => protected_path_write(tool, args),
+        }
+    }
+
+    /// The always-on destructive guard set: `rm -rf /`, `rm -rf ~`, and
+    /// protected-path writes. All default to [`GuardAction::Ask`].
+    pub fn destructive_defaults() -> Vec<GuardRule> {
+        vec![
+            GuardRule {
+                matcher: GuardMatcher::RmRecursiveRootOrHome,
+                action: GuardAction::Ask {
+                    prompt: "destructive command: recursive force-remove of / or ~".to_owned(),
+                },
+            },
+            GuardRule {
+                matcher: GuardMatcher::ProtectedPathWrite,
+                action: GuardAction::Ask {
+                    prompt: "write to a protected system path".to_owned(),
+                },
+            },
+        ]
+    }
+}
+
+fn bash_command_str<'a>(tool: &str, args: &'a serde_json::Value) -> Option<&'a str> {
+    if tool != "Bash" {
+        return None;
+    }
+    args.get("command").and_then(|v| v.as_str())
+}
+
+fn is_rm_rf_root_or_home(cmd: &crate::command_match::ResolvedCommand) -> bool {
+    if cmd.program != "rm" {
+        return false;
+    }
+    let mut recursive = false;
+    let mut force = false;
+    let mut targets: Vec<&str> = Vec::new();
+    for a in &cmd.args {
+        if a.starts_with("--") {
+            match a.as_str() {
+                "--recursive" => recursive = true,
+                "--force" => force = true,
+                _ => {}
+            }
+        } else if let Some(flags) = a.strip_prefix('-') {
+            if flags.contains('r') || flags.contains('R') {
+                recursive = true;
+            }
+            if flags.contains('f') {
+                force = true;
+            }
+        } else {
+            targets.push(a);
+        }
+    }
+    recursive && force && targets.iter().any(|t| is_root_or_home(t))
+}
+
+fn is_root_or_home(target: &str) -> bool {
+    matches!(target, "/" | "/*" | "~" | "~/" | "${HOME}" | "$HOME")
+}
+
+fn protected_path_write(tool: &str, args: &serde_json::Value) -> bool {
+    if matches!(tool, "Write" | "Edit") {
+        if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
+            return is_protected_path(p);
+        }
+    }
+    if let Some(cmd) = bash_command_str(tool, args) {
+        for c in crate::command_match::resolve_all(cmd) {
+            for r in &c.redirects {
+                use crate::command_match::RedirectOp;
+                if matches!(r.op, RedirectOp::Out | RedirectOp::Append)
+                    && is_protected_path(&r.target)
+                {
+                    return true;
+                }
+            }
+            if c.program == "tee" && c.args.iter().any(|a| is_protected_path(a)) {
+                return true;
+            }
+            if c.program == "dd" {
+                if let Some(of) = c.args.iter().find_map(|a| a.strip_prefix("of=")) {
+                    if is_protected_path(of) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn is_protected_path(path: &str) -> bool {
+    if DEVICE_ALLOWLIST.contains(&path) {
+        return false;
+    }
+    if path == "/" {
+        return true;
+    }
+    PROTECTED_PREFIXES
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")))
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn matched(cmd: &str) -> bool {
+        let bash = json!({ "command": cmd });
+        GuardRule::destructive_defaults()
+            .iter()
+            .any(|g| g.matches("Bash", &bash))
+    }
+
+    #[test]
+    fn matches_rm_rf_root_and_home() {
+        assert!(matched("rm -rf /"));
+        assert!(matched("rm -rf ~"));
+        assert!(matched("rm -fr /"));
+        assert!(matched("sudo rm -rf /"));
+        assert!(matched("bash -c 'rm -rf /'"));
+        assert!(matched("rm -rf / tmp")); // spacing bug
+    }
+
+    #[test]
+    fn ignores_safe_rm() {
+        assert!(!matched("rm -rf ./build"));
+        assert!(!matched("rm file.txt"));
+    }
+
+    #[test]
+    fn matches_protected_path_write_but_allows_dev_null() {
+        assert!(matched("echo x > /etc/passwd"));
+        assert!(matched("echo x >/etc/passwd"));
+        assert!(matched("tee /etc/hosts"));
+        assert!(!matched("echo x > /dev/null"));
+        assert!(!matched("cmd 2> /dev/null"));
+    }
+
+    #[test]
+    fn protected_path_write_matches_write_tool_path_arg() {
+        let g = GuardRule::destructive_defaults();
+        let write = json!({ "path": "/etc/passwd", "content": "x" });
+        assert!(g.iter().any(|r| r.matches("Write", &write)));
+        let safe = json!({ "path": "./notes.txt", "content": "x" });
+        assert!(!g.iter().any(|r| r.matches("Write", &safe)));
+    }
+
+    #[test]
+    fn destructive_defaults_use_ask_action() {
+        assert!(GuardRule::destructive_defaults()
+            .iter()
+            .all(|g| matches!(g.action(), GuardAction::Ask { .. })));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
