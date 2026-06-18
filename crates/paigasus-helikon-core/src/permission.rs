@@ -64,23 +64,56 @@ where
     ) -> PermissionDecision;
 }
 
+/// How a [`DenyRule`] matches a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Matcher {
+    /// Exact tool name.
+    Tool(String),
+    /// Any Bash sub-command whose resolved program equals this. Tool-scoped to
+    /// the `Bash` tool.
+    BashProgram(String),
+}
+
 /// A first-class deny rule, evaluated **before** mode — so it overrides even
-/// [`PermissionMode::Bypass`]. v1 matches by exact tool name.
+/// [`PermissionMode::Bypass`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DenyRule {
-    tool: String,
+    matcher: Matcher,
 }
 
 impl DenyRule {
     /// Deny a tool by its exact name.
     pub fn tool(name: impl Into<String>) -> Self {
-        Self { tool: name.into() }
+        Self {
+            matcher: Matcher::Tool(name.into()),
+        }
     }
 
-    /// `true` if this rule denies `tool`. `_args` is reserved for richer
-    /// (arg-aware) matchers in a later ticket.
-    pub fn matches(&self, tool: &str, _args: &serde_json::Value) -> bool {
-        self.tool == tool
+    /// Deny a Bash call whose compound command contains a sub-command whose
+    /// resolved program equals `program` (operator-, wrapper-, and
+    /// `bash -c`-aware). Only matches the `Bash` tool.
+    pub fn bash_command(program: impl Into<String>) -> Self {
+        Self {
+            matcher: Matcher::BashProgram(program.into()),
+        }
+    }
+
+    /// `true` if this rule denies `tool` invoked with `args`.
+    pub fn matches(&self, tool: &str, args: &serde_json::Value) -> bool {
+        match &self.matcher {
+            Matcher::Tool(name) => name == tool,
+            Matcher::BashProgram(program) => {
+                if tool != "Bash" {
+                    return false;
+                }
+                let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
+                    return false;
+                };
+                crate::command_match::resolve_all(command)
+                    .iter()
+                    .any(|c| &c.program == program)
+            }
+        }
     }
 }
 
@@ -122,5 +155,28 @@ mod tests {
         assert!(rule.matches("rm", &json!({})));
         assert!(!rule.matches("ls", &json!({})));
         assert!(rule.matches("rm", &json!({"path": "/etc/passwd"})));
+    }
+
+    #[test]
+    fn bash_command_matches_any_subcommand_program() {
+        let rule = DenyRule::bash_command("rm");
+        let args = json!({ "command": "echo ok && rm -rf ." });
+        assert!(rule.matches("Bash", &args));
+        let safe = json!({ "command": "echo ok && ls" });
+        assert!(!rule.matches("Bash", &safe));
+    }
+
+    #[test]
+    fn bash_command_is_tool_scoped() {
+        let rule = DenyRule::bash_command("rm");
+        // A non-Bash tool carrying a `command` field must not trip it.
+        assert!(!rule.matches("Other", &json!({ "command": "rm -rf ." })));
+    }
+
+    #[test]
+    fn bash_command_sees_through_sudo_and_bash_c() {
+        let rule = DenyRule::bash_command("rm");
+        assert!(rule.matches("Bash", &json!({ "command": "sudo rm -rf /" })));
+        assert!(rule.matches("Bash", &json!({ "command": "bash -c 'rm -rf /'" })));
     }
 }
