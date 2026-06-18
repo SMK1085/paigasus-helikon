@@ -132,20 +132,29 @@ where
         };
         for guard in builtin.iter().chain(self.ctx.guard_rules()) {
             if guard.matches(tool, args) {
-                return match guard.action() {
-                    crate::GuardAction::Deny { reason } => PermissionDecision::Deny {
-                        reason: reason.clone(),
-                    },
-                    crate::GuardAction::Ask { prompt } => match self.ctx.approval_handler() {
-                        None => PermissionDecision::Deny {
-                            reason: format!("destructive command requires approval: {prompt}"),
-                        },
-                        Some(handler) => match handler.decide(tool, prompt, args).await {
-                            ApprovalOutcome::Allow => PermissionDecision::Allow,
-                            ApprovalOutcome::Deny { reason } => PermissionDecision::Deny { reason },
-                        },
-                    },
-                };
+                match guard.action() {
+                    crate::GuardAction::Deny { reason } => {
+                        return PermissionDecision::Deny {
+                            reason: reason.clone(),
+                        };
+                    }
+                    crate::GuardAction::Ask { prompt } => {
+                        let Some(handler) = self.ctx.approval_handler() else {
+                            return PermissionDecision::Deny {
+                                reason: format!("destructive command requires approval: {prompt}"),
+                            };
+                        };
+                        // Approval clears THIS guard only — continue the pipeline
+                        // so a later guard, mode (e.g. `Plan`), and the policy
+                        // still apply. Approval is not a blanket authorization.
+                        match handler.decide(tool, prompt, args).await {
+                            ApprovalOutcome::Allow => continue,
+                            ApprovalOutcome::Deny { reason } => {
+                                return PermissionDecision::Deny { reason };
+                            }
+                        }
+                    }
+                }
             }
         }
         // 2. Mode.
@@ -507,6 +516,21 @@ mod authorize_tests {
         assert!(matches!(
             i.authorize("Bash", ToolEffect::SideEffect, &args).await,
             PermissionDecision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn guard_approval_does_not_bypass_mode() {
+        // An approving handler clears the destructive guard, but the rest of the
+        // pipeline still runs — `Plan` mode denies the side-effecting tool.
+        let c = ctx()
+            .with_permission_mode(PermissionMode::Plan)
+            .with_approval_handler(Arc::new(AllowHandler));
+        let i = interceptors(&c);
+        let args = json!({ "command": "rm -rf /" });
+        assert!(matches!(
+            i.authorize("Bash", ToolEffect::SideEffect, &args).await,
+            PermissionDecision::Deny { .. }
         ));
     }
 }

@@ -325,9 +325,10 @@ where
         self
     }
 
-    /// Add extra secret values to redact from tool output.
+    /// Add extra secret values to redact from tool output. Additive: chained
+    /// calls accumulate (earlier secrets are never dropped).
     pub fn with_extra_secrets(mut self, secrets: Vec<String>) -> Self {
-        self.extra_secrets = secrets;
+        self.extra_secrets.extend(secrets);
         self
     }
 
