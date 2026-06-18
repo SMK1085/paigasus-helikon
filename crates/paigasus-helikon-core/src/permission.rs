@@ -23,6 +23,11 @@ pub enum PermissionMode {
     Plan,
     /// Dangerous: allow all (deny rules still apply). Propagates; sticky.
     Bypass,
+    /// Locked-down headless inverse of `Bypass`: deny-by-default. The policy
+    /// (`canUseTool`) is never invoked; only an [`crate::AllowRule`] (after
+    /// the deny+guard steps) can permit a call. Sticky and terminal — once set
+    /// it cannot be loosened.
+    DontAsk,
 }
 
 /// The outcome of a [`PermissionPolicy::check`] (or the resolved decision).

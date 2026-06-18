@@ -265,11 +265,18 @@ where
         self
     }
 
-    /// Set the permission mode. **Monotonic on `Bypass`:** once the mode is
-    /// `Bypass`, this is a no-op — `Bypass` cannot be downgraded (the safety
-    /// invariant). All other transitions apply.
+    /// Set the permission mode — **tighten-only**. Loosening is refused:
+    /// `DontAsk` is terminal (no transition off it), and `Bypass` may only
+    /// tighten to `DontAsk`, never loosen. All other transitions apply.
     pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
-        if self.permission_mode != PermissionMode::Bypass {
+        use PermissionMode::*;
+        let allowed = match (self.permission_mode, mode) {
+            (DontAsk, _) => false,
+            (Bypass, DontAsk) => true,
+            (Bypass, _) => false,
+            _ => true,
+        };
+        if allowed {
             self.permission_mode = mode;
         }
         self
@@ -579,6 +586,53 @@ mod runcontext_tests {
         .with_permission_mode(crate::PermissionMode::Bypass)
         .with_permission_mode(crate::PermissionMode::Plan); // no-op
         assert_eq!(ctx.permission_mode(), crate::PermissionMode::Bypass);
+    }
+
+    #[test]
+    fn permission_mode_is_tighten_only() {
+        use crate::PermissionMode::*;
+        let base = || {
+            RunContext::new(
+                Arc::new(()),
+                Arc::new(MemorySession::new()) as Arc<dyn Session>,
+                HookRegistry::new(),
+                TracerHandle::default(),
+                CancellationToken::new(),
+            )
+        };
+        // Bypass can tighten to DontAsk …
+        assert_eq!(
+            base()
+                .with_permission_mode(Bypass)
+                .with_permission_mode(DontAsk)
+                .permission_mode(),
+            DontAsk
+        );
+        // … but cannot loosen to Default/Plan.
+        assert_eq!(
+            base()
+                .with_permission_mode(Bypass)
+                .with_permission_mode(Default)
+                .permission_mode(),
+            Bypass
+        );
+        // DontAsk is terminal — no transition off it.
+        assert_eq!(
+            base()
+                .with_permission_mode(DontAsk)
+                .with_permission_mode(Bypass)
+                .permission_mode(),
+            DontAsk
+        );
+        assert_eq!(
+            base()
+                .with_permission_mode(DontAsk)
+                .with_permission_mode(Default)
+                .permission_mode(),
+            DontAsk
+        );
+        // Normal modes still settable.
+        assert_eq!(base().with_permission_mode(Plan).permission_mode(), Plan);
     }
 
     #[test]
