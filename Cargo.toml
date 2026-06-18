@@ -26,6 +26,7 @@ fastrand              = "2"
 futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
 insta                 = "1"
+globset               = "0.4"
 jiff                  = { version = "0.2", features = ["serde"] }
 landlock              = "0.4"
 libc                  = "0.2"
