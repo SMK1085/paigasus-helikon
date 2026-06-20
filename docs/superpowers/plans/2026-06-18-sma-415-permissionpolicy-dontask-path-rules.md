@@ -1181,8 +1181,10 @@ git commit -m "docs(core): SMA-415 document DontAsk, AllowRule, path rules & bre
 
 - [ ] **Step 1: Confirm `AllowRule` is reachable through the facade**
 
-Run: `cargo build -p paigasus-helikon --all-features` then
-`echo 'fn _t() { let _ = paigasus_helikon::core::AllowRule::tool("x"); }' >/dev/null` (sanity — the path resolves via the wholesale `pub use … as core`). No code change expected.
+Reachability is structural: the facade does `pub use paigasus_helikon_core as core;` and `core` does `pub use permission::*;`, so `paigasus_helikon::core::AllowRule` resolves automatically with **no facade edit**. Validate by compiling the facade with every feature (a real compile, not a string echo):
+
+Run: `cargo build -p paigasus-helikon --all-features`
+Expected: builds clean. No code change expected. (For an explicit compile-time assertion, temporarily add `#[test] fn _facade_path() { let _ = paigasus_helikon::core::AllowRule::tool("x"); }`, `cargo test` it, then remove it.)
 
 - [ ] **Step 2: Run every gate locally (mirrors `.github/workflows/ci.yml`)**
 
