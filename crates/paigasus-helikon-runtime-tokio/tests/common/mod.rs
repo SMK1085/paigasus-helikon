@@ -13,7 +13,7 @@ use paigasus_helikon_core::{
     CancellationToken, ConversationSnapshot, Hook, HookDecision, HookEvent, HookRegistry,
     Instructions, LlmAgent, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
     ModelSettings, RunConfig, RunContext, SequenceId, Session, SessionError, SessionEvent, Tool,
-    ToolContext, ToolError, ToolOutput, TracerHandle,
+    ToolContext, ToolError, ToolOutput,
 };
 
 /// Scripted model: one `Vec<ModelEvent>` per `invoke`; empty queue => error.
@@ -192,23 +192,13 @@ impl Session for NoopSession {
 }
 
 pub fn noop_run_context() -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(NoopSession) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(()).with_session(Arc::new(NoopSession))
 }
 
 pub fn run_context_with_cancel(cancel: CancellationToken) -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(NoopSession) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        cancel,
-    )
+    RunContext::ephemeral(())
+        .with_session(Arc::new(NoopSession))
+        .with_cancel(cancel)
 }
 
 pub fn run_context_with_cancel_and_hooks(
@@ -219,36 +209,23 @@ pub fn run_context_with_cancel_and_hooks(
     for h in hooks {
         registry.push(h);
     }
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(NoopSession) as Arc<dyn Session>,
-        registry,
-        TracerHandle::default(),
-        cancel,
-    )
+    RunContext::ephemeral(())
+        .with_session(Arc::new(NoopSession))
+        .with_hooks(registry)
+        .with_cancel(cancel)
 }
 
 pub fn run_context_with_session(session: Arc<dyn Session>) -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        session,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(()).with_session(session)
 }
 
 pub fn run_context_with_session_and_cancel(
     session: Arc<dyn Session>,
     cancel: CancellationToken,
 ) -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        session,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        cancel,
-    )
+    RunContext::ephemeral(())
+        .with_session(session)
+        .with_cancel(cancel)
 }
 
 /// Build an `LlmAgent<(), M>` with the given model and tools.
