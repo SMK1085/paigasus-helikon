@@ -116,6 +116,12 @@ fn normalize_pattern(pat: String) -> String {
 /// via `debug_assert!` in debug/test builds; in release it is logged and the
 /// rule degrades to a non-matching matcher rather than panicking a live agent.
 fn build_globset(pattern: &str) -> GlobSet {
+    // A pattern that normalized to empty (e.g. `/` or `./`) is degenerate —
+    // match nothing, and skip `GlobBuilder` (which would reject an empty glob
+    // and trip the debug assertion below).
+    if pattern.is_empty() {
+        return GlobSet::empty();
+    }
     // A bare `**` already matches at any depth, so don't form a redundant
     // (and potentially rejected) `**/**`.
     let globs: Vec<String> = if pattern.contains('/') || pattern == "**" {
@@ -214,6 +220,15 @@ mod tests {
     #[test]
     fn path_glob_eq_is_normalized() {
         assert_eq!(PathGlob::new(".env"), PathGlob::new("./.env"));
+    }
+
+    #[test]
+    fn degenerate_root_pattern_never_matches() {
+        // A pattern that normalizes to empty (e.g. `/`, `./`) matches nothing.
+        let g = PathGlob::new("/");
+        assert!(!g.matches_path(".env"));
+        assert!(!g.matches_path("src/main.rs"));
+        assert!(!g.matches_path("/"));
     }
 
     #[test]

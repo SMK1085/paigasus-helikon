@@ -128,15 +128,25 @@ pub(crate) fn clean_path(path: &str) -> String {
 
 /// `true` if the cleaned path writes into a protected VCS/secret location:
 /// any `.git` or `.ssh` path component, or a final component equal to `.env`
-/// or beginning `.env.` (e.g. `.env.local`). Component equality — never a
-/// substring — so `name.git/`, `.gitignore`, and `environment.env` do not trip.
+/// or beginning `.env.` (e.g. `.env.local`). Component equality (case-insensitive)
+/// — never a substring — so `name.git/`, `.gitignore`, and `environment.env` do
+/// not trip, while `.SSH/` / `.ENV` cannot bypass the breaker.
 pub(crate) fn is_protected_dotpath(path: &str) -> bool {
     let cleaned = clean_path(path);
     let comps: Vec<&str> = cleaned.split('/').filter(|c| !c.is_empty()).collect();
-    if comps.iter().any(|c| *c == ".git" || *c == ".ssh") {
+    if comps
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(".git") || c.eq_ignore_ascii_case(".ssh"))
+    {
         return true;
     }
-    matches!(comps.last(), Some(last) if *last == ".env" || last.starts_with(".env."))
+    match comps.last() {
+        Some(last) => {
+            let lower = last.to_ascii_lowercase();
+            lower == ".env" || lower.starts_with(".env.")
+        }
+        None => false,
+    }
 }
 
 /// A compiled, case-insensitive path-glob. Cheap to clone (the matcher is
