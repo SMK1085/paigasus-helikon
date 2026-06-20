@@ -43,11 +43,8 @@ Construct with `Handoff::to(agent)` (owned agent) or `Handoff::shared(arc)`
 (a pre-wrapped `Arc<dyn Agent<Ctx>>`).
 
 ```rust
-use std::sync::Arc;
-
 use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, Handoff, HookRegistry, LlmAgent,
-    MemorySession, RunContext, RunResultStreaming, TracerHandle,
+    Agent, AgentInput, Handoff, LlmAgent, RunContext, RunResultStreaming,
 };
 use paigasus_helikon::openai::OpenAiModel;
 
@@ -77,13 +74,7 @@ async fn main() -> anyhow::Result<()> {
         .handoffs([Handoff::to(budgeting), Handoff::to(investing)])
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input = AgentInput::from_user_text("How should I start investing $5,000?");
 

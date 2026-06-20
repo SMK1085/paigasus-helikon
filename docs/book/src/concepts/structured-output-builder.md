@@ -56,12 +56,9 @@ A default agent returns text: `RunResultStreaming::collect()` yields a
 disturb the `HasName`/`HasModel` markers.
 
 ```rust
-use std::sync::Arc;
-
 use paigasus_helikon::anthropic::AnthropicModel;
 use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession,
-    RunContext, RunResultStreaming, TracerHandle,
+    Agent, AgentInput, LlmAgent, RunContext, RunResultStreaming,
 };
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -91,13 +88,7 @@ async fn main() -> anyhow::Result<()> {
         .output_type::<TransactionCategory>()
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input = AgentInput::from_user_text("NETFLIX.COM 866-579-7172 CA — $15.49");
 

@@ -20,10 +20,8 @@ Nine crates are published to [crates.io](https://crates.io/crates/paigasus-helik
 A minimal run:
 
 ```rust
-use std::sync::Arc;
 use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession,
-    RunContext, RunResultStreaming, TracerHandle,
+    Agent, AgentInput, LlmAgent, RunContext, RunResultStreaming,
 };
 use paigasus_helikon::openai::OpenAiModel;
 
@@ -37,13 +35,7 @@ async fn main() -> anyhow::Result<()> {
         .instructions("You are a budgeting assistant. ...")
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input = AgentInput::from_user_text("How am I doing on my dining budget this month?");
 

@@ -38,11 +38,11 @@ assert_eq!(tracer.user_id(), Some("demo-user"));
 assert_eq!(tracer.tags(), &["example", "prod"]);
 ```
 
-The handle is passed to `RunContext::new` as its fourth argument (alongside the
-user context, session, hook registry, and cancellation token). The loop reads it
-back via `RunContext::tracer` and emits the configured `session.id`, `user.id`,
-and `tags` onto the trace. `TracerHandleBuilder` is a consuming builder — its
-`with_*` methods take and return `self`.
+The handle is passed to `RunContext` via `.with_tracer(tracer)` — or use
+`RunContext::ephemeral(()).with_tracer(tracer)` when you want all other defaults.
+The loop reads it back via `RunContext::tracer` and emits the configured
+`session.id`, `user.id`, and `tags` onto the trace. `TracerHandleBuilder` is a
+consuming builder — its `with_*` methods take and return `self`.
 
 ### Exporting to an OTel backend
 
