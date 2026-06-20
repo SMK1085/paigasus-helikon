@@ -67,19 +67,19 @@ htmd                  = "0.5"
 wiremock              = "0.6"
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.3" }
-paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.7" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.4" }
+paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.8" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.3" }
-paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.12" }
-paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.1.13" }
-paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp", version = "0.1.7" }
-paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools", version = "0.2.3" }
-paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio", version = "0.1.12" }
+paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.13" }
+paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.1.14" }
+paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp", version = "0.1.8" }
+paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools", version = "0.2.4" }
+paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio", version = "0.1.13" }
 paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum",        version = "0.0.0" }
 paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.0.0" }
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
-paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.14" }
+paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.15" }
 
 [workspace.lints.rust]
 missing_docs = "warn"
