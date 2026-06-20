@@ -222,7 +222,11 @@ Unit tests added to `runcontext_tests` in `context.rs`:
 
 - `ephemeral_matches_new_defaults` — `agent_depth == 0`, `permission_mode ==
   Default`, `default_guards()`, `redact_output()`, `run_config().is_none()`,
-  `hooks().is_empty()`, and the session round-trips an `append` + `snapshot`.
+  `hooks().is_empty()`, `deny_rules()`/`allow_rules()` empty. (Sync-only, to
+  match the existing `#[test]` style of the inline `runcontext_tests` module —
+  no tokio runtime is pulled in. The async session `append`/`snapshot` path is
+  exercised instead by the migration sweep, which runs real agent loops through
+  ephemeral-built `MemorySession` contexts.)
 - `ephemeral_shared_keeps_inner_ctx_type` — build via `ephemeral_shared(Arc::new(Marker))`
   and assert the resolved `Ctx` is the **inner** type, not `Arc<Marker>` (guards
   against the double-wrap the old `impl Into` design could express; here it is
