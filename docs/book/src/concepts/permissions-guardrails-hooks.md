@@ -10,10 +10,10 @@ They are orthogonal. A tool call passes the permission pipeline; a hook can stil
 
 ## Permissions
 
-A tool call is authorized by the pipeline `deny rules › guard rules › mode › policy › AskUser`, evaluated in that order. The pieces:
+A tool call is authorized by the pipeline `deny rules › guard rules › allow rules › mode › policy › AskUser`, evaluated in that order. The pieces:
 
-- `PermissionMode` — a `#[non_exhaustive]` enum: `Default` (defer to policy; permissive when no policy), `AcceptEdits` (auto-approve tools whose `ToolEffect` is `Write`), `Plan` (deny any tool whose `ToolEffect` is not `ReadOnly`), `Bypass` (allow all — deny rules still apply). `Bypass` is **sticky**: `RunContext::with_permission_mode` refuses to downgrade it, and it propagates to sub-agents.
-- `DenyRule` — a first-class rule evaluated **before** mode, so it overrides even `Bypass`. v1 matches by exact tool name: `DenyRule::tool("Bash")`. See also **Guard rules** below for the higher-level Bash-command matcher.
+- `PermissionMode` — a `#[non_exhaustive]` enum: `Default` (defer to policy; permissive when no policy), `AcceptEdits` (auto-approve tools whose `ToolEffect` is `Write`), `Plan` (deny any tool whose `ToolEffect` is not `ReadOnly`), `Bypass` (allow all — deny rules still apply), and `DontAsk` (deny-by-default headless lockdown — the policy is never invoked; only an allow rule can permit a call). Mode is **tighten-only**: `RunContext::with_permission_mode` refuses to loosen `Bypass` (it may only tighten to `DontAsk`), and `DontAsk` is terminal. `Bypass` and `DontAsk` both propagate to sub-agents.
+- `DenyRule` — a first-class rule evaluated **before** mode, so it overrides even `Bypass`. Matches by exact tool name (`DenyRule::tool("Bash")`), by Bash sub-command program (`DenyRule::bash_command("rm")`), or by filesystem path glob (`DenyRule::read(".env")` / `DenyRule::edit("dist/**")` — see **Allow rules & filesystem path rules** below). See also **Guard rules** below for the higher-level Bash-command matcher.
 - `PermissionPolicy<Ctx>` — the `canUseTool` trait. Its async `check` returns a `PermissionDecision`: `Allow`, `Deny { reason }`, `AskUser { prompt }`, or `Replace { args }` (sanitize the call's arguments before execution).
 - `ApprovalHandler` — resolves an `AskUser` decision out of band. Its `decide` returns an `ApprovalOutcome` (`Allow` or `Deny { reason }`) — it cannot recursively ask. With **no** approval handler installed, `AskUser` resolves to deny.
 
@@ -110,6 +110,51 @@ As a result, `echo ok && rm -rf .`, `sudo rm -rf /`, and `bash -c 'rm -rf /'` ar
 
 - **deny list** — the command is denied if **any** sub-command's program is denied.
 - **allow list** — the command is permitted only if **every** sub-command's program is in the list.
+
+### Allow rules & filesystem path rules
+
+`AllowRule` is the positive counterpart of `DenyRule`. A matching allow rule
+resolves the call to `Allow` **after** the deny and guard steps but **before**
+mode — in *every* mode — and `canUseTool` is not consulted for it. It is a
+**global, all-modes, per-tool pre-approval**, so prefer the narrow forms:
+
+- `AllowRule::tool("WebSearch")` — allow a tool by name.
+- `AllowRule::bash_command("git")` — allow a Bash call only when *every*
+  sub-command's program is `git` (fail-closed on a mixed compound command).
+- `AllowRule::read("src/**")` / `AllowRule::edit("src/**")` — allow `Read` /
+  `Edit`+`Write` whose `path` matches a gitignore-style glob.
+
+`DenyRule` gains the same path forms: `DenyRule::read(".env")` blocks reads of
+`.env` at any depth; `DenyRule::edit("dist/**")` blocks writes under `dist`.
+Under `DontAsk`, allow rules are the *only* way a call is permitted:
+
+```rust
+let ctx = RunContext::new(/* … */)
+    .with_allow_rules(vec![
+        AllowRule::tool("WebSearch"),
+        AllowRule::edit("src/**"),
+    ])
+    .with_permission_mode(PermissionMode::DontAsk);
+```
+
+**Path rules are advisory, not a sandbox.** Core has no filesystem root, so a
+path rule is a lexical match on the `path` argument (`..` is collapsed and
+matching is case-insensitive, but the real boundary is the cap-std root in
+`paigasus-helikon-tools`). Pattern syntax: a pattern without a `/` matches at
+any depth (`.env`, `*.pem`); a pattern with a `/` is anchored to the root
+(`src/**`). Because an allow rule short-circuits the mode, a matched
+`AllowRule::edit("src/**")` permits a write even under `Plan`'s read-only gate —
+intended, since an allow rule is a pre-approval.
+
+### The `.git`/`.ssh`/`.env` write breaker
+
+A third built-in guard joins `destructive_defaults()`: a write whose target has
+a `.git` or `.ssh` path component, or a final component `.env`/`.env.*`, is
+`Ask` (→ Deny when headless). Component-exact and case-insensitive, so
+`name.git/`, `.gitignore`, and `environment.env` are unaffected while `.SSH/`
+and `.ENV` still trip. It runs before mode and before allow rules, so a `.git/`
+write is refused even under `AcceptEdits` and even with a matching
+`AllowRule::edit(".git/**")`. Disabled by `without_default_guards()`.
 
 ## Guardrails
 
@@ -253,7 +298,7 @@ The v1 Bash guard and deny-matching are pragmatic, not based on a full POSIX she
 For a single tool call, the layers run in this order:
 
 1. The `PreToolUse` hook fires — it may deny or `ReplaceInput` the args.
-2. The permission pipeline authorizes the (possibly rewritten) call: `deny rules › guard rules › mode › policy › AskUser`.
+2. The permission pipeline authorizes the (possibly rewritten) call: `deny rules › guard rules › allow rules › mode › policy › AskUser`.
 3. The tool runs; the `PostToolUse` hook fires — it may `ReplaceOutput`.
 4. Secret redaction runs as the final transform on the output before it enters the model context.
 

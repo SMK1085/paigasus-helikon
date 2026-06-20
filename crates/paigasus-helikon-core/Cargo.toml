@@ -23,6 +23,7 @@ schemars       = { workspace = true }
 futures-util   = { workspace = true }
 async-stream   = { workspace = true }
 jiff           = { workspace = true }
+globset        = { workspace = true }
 tracing        = { workspace = true }
 
 [dev-dependencies]

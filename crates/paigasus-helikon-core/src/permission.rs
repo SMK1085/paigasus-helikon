@@ -7,9 +7,10 @@ use crate::RunContext;
 
 /// How permission mode governs tool calls.
 ///
-/// `Bypass` propagates to subagents and **cannot be overridden** — a typed
-/// enum, not a string. The non-override property is enforced by
-/// [`RunContext::with_permission_mode`], which refuses to downgrade `Bypass`.
+/// Transitions are **tighten-only**, enforced by
+/// [`RunContext::with_permission_mode`]: `Bypass` never loosens (it may only
+/// tighten to `DontAsk`), and `DontAsk` is terminal. Both propagate to
+/// subagents — a typed enum, not a string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum PermissionMode {
@@ -23,6 +24,11 @@ pub enum PermissionMode {
     Plan,
     /// Dangerous: allow all (deny rules still apply). Propagates; sticky.
     Bypass,
+    /// Locked-down headless inverse of `Bypass`: deny-by-default. The policy
+    /// (`canUseTool`) is never invoked; only an [`crate::AllowRule`] (after
+    /// the deny+guard steps) can permit a call. Sticky and terminal — once set
+    /// it cannot be loosened.
+    DontAsk,
 }
 
 /// The outcome of a [`PermissionPolicy::check`] (or the resolved decision).
@@ -49,7 +55,8 @@ pub enum PermissionDecision {
 }
 
 /// Authorizes a tool call. The decision pipeline runs
-/// `deny rules › mode › this policy` (see `control.rs`).
+/// `deny rules › guard rules › allow rules › mode › this policy` (see
+/// `control.rs`).
 #[async_trait]
 pub trait PermissionPolicy<Ctx>: Send + Sync
 where
@@ -72,6 +79,10 @@ enum Matcher {
     /// Any Bash sub-command whose resolved program equals this. Tool-scoped to
     /// the `Bash` tool.
     BashProgram(String),
+    /// `Read` tool whose `path` arg matches this glob.
+    ReadPath(crate::path_match::PathGlob),
+    /// `Edit`/`Write` tool whose `path` arg matches this glob.
+    EditPath(crate::path_match::PathGlob),
 }
 
 /// A first-class deny rule, evaluated **before** mode — so it overrides even
@@ -98,6 +109,23 @@ impl DenyRule {
         }
     }
 
+    /// Deny a `Read` whose `path` arg matches `pattern` (gitignore-style glob:
+    /// no `/` matches at any depth, a `/` anchors to the path root,
+    /// case-insensitive). Scoped to the `Read` tool only — does **not** match
+    /// `Edit`/`Write`. Lexical and **advisory** — not a sandbox.
+    pub fn read(pattern: impl Into<String>) -> Self {
+        Self {
+            matcher: Matcher::ReadPath(crate::path_match::PathGlob::new(pattern)),
+        }
+    }
+
+    /// Deny an `Edit`/`Write` whose `path` arg matches `pattern`.
+    pub fn edit(pattern: impl Into<String>) -> Self {
+        Self {
+            matcher: Matcher::EditPath(crate::path_match::PathGlob::new(pattern)),
+        }
+    }
+
     /// `true` if this rule denies `tool` invoked with `args`.
     pub fn matches(&self, tool: &str, args: &serde_json::Value) -> bool {
         match &self.matcher {
@@ -113,6 +141,116 @@ impl DenyRule {
                     .iter()
                     .any(|c| &c.program == program)
             }
+            Matcher::ReadPath(glob) => path_arg_matches(tool, args, PathKind::Read, glob),
+            Matcher::EditPath(glob) => path_arg_matches(tool, args, PathKind::Edit, glob),
+        }
+    }
+}
+
+/// Which tool family a path-rule applies to.
+#[derive(Clone, Copy)]
+enum PathKind {
+    Read,
+    Edit,
+}
+
+/// `true` if `tool` is in `kind`'s family and its `path` arg matches `glob`.
+/// `Read` → tool `"Read"`; `Edit` → tools `"Edit"` and `"Write"`.
+fn path_arg_matches(
+    tool: &str,
+    args: &serde_json::Value,
+    kind: PathKind,
+    glob: &crate::path_match::PathGlob,
+) -> bool {
+    let applies = match kind {
+        PathKind::Read => tool == "Read",
+        PathKind::Edit => tool == "Edit" || tool == "Write",
+    };
+    if !applies {
+        return false;
+    }
+    args.get("path")
+        .and_then(|v| v.as_str())
+        .map(|p| glob.matches_path(p))
+        .unwrap_or(false)
+}
+
+/// How an [`AllowRule`] matches a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AllowMatcher {
+    /// Exact tool name.
+    Tool(String),
+    /// Bash call where **every** sub-command's program equals this (fail-closed).
+    BashProgram(String),
+    /// `Read` tool whose `path` arg matches this glob.
+    ReadPath(crate::path_match::PathGlob),
+    /// `Edit`/`Write` tool whose `path` arg matches this glob.
+    EditPath(crate::path_match::PathGlob),
+}
+
+/// A positive permission rule: a **global, all-modes, per-tool/per-command
+/// pre-approval**. When an allow rule matches, the call is allowed in *every*
+/// mode and `canUseTool` is **not** consulted for it (the deny and guard steps
+/// still run first). Prefer [`AllowRule::bash_command`] over
+/// `AllowRule::tool("Bash")` so a single allowed program does not disable all
+/// Bash policy checks. Evaluated after deny + guard, before mode (see
+/// `control.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowRule {
+    matcher: AllowMatcher,
+}
+
+impl AllowRule {
+    /// Allow a tool by its exact name.
+    pub fn tool(name: impl Into<String>) -> Self {
+        Self {
+            matcher: AllowMatcher::Tool(name.into()),
+        }
+    }
+
+    /// Allow a Bash call **only when every** resolved sub-command's program
+    /// equals `program` (operator-, wrapper-, `bash -c`-aware). A compound
+    /// command with any other program does not match (fail-closed). Only the
+    /// `Bash` tool. v1 does not compose multiple `bash_command` allows across a
+    /// single compound command.
+    pub fn bash_command(program: impl Into<String>) -> Self {
+        Self {
+            matcher: AllowMatcher::BashProgram(program.into()),
+        }
+    }
+
+    /// Allow a `Read` whose `path` arg matches `pattern` (same gitignore-style
+    /// glob semantics as [`DenyRule::read`]). Scoped to the `Read` tool only —
+    /// does **not** match `Edit`/`Write`. Advisory, not a sandbox.
+    pub fn read(pattern: impl Into<String>) -> Self {
+        Self {
+            matcher: AllowMatcher::ReadPath(crate::path_match::PathGlob::new(pattern)),
+        }
+    }
+
+    /// Allow an `Edit`/`Write` whose `path` arg matches `pattern`.
+    pub fn edit(pattern: impl Into<String>) -> Self {
+        Self {
+            matcher: AllowMatcher::EditPath(crate::path_match::PathGlob::new(pattern)),
+        }
+    }
+
+    /// `true` if this rule allows `tool` invoked with `args`.
+    pub fn matches(&self, tool: &str, args: &serde_json::Value) -> bool {
+        match &self.matcher {
+            AllowMatcher::Tool(name) => name == tool,
+            AllowMatcher::BashProgram(program) => {
+                if tool != "Bash" {
+                    return false;
+                }
+                let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
+                    return false;
+                };
+                let subs = crate::command_match::resolve_all(command);
+                !subs.is_empty() && subs.iter().all(|c| &c.program == program)
+            }
+            AllowMatcher::ReadPath(glob) => path_arg_matches(tool, args, PathKind::Read, glob),
+            AllowMatcher::EditPath(glob) => path_arg_matches(tool, args, PathKind::Edit, glob),
         }
     }
 }
@@ -163,6 +301,9 @@ enum GuardMatcher {
     /// A write whose target resolves under a protected prefix (Bash redirects,
     /// `tee`/`dd`, or the Write/Edit `path` arg). Honors the device-node allowlist.
     ProtectedPathWrite,
+    /// A write whose target has a `.git`/`.ssh` path component or a `.env`(`.env.*`)
+    /// final component (Bash redirects, `tee`/`dd`, or the Write/Edit `path` arg).
+    ProtectedDotPathWrite,
 }
 
 /// A pre-mode safety rule. Like [`DenyRule`] it runs before permission mode and
@@ -208,6 +349,7 @@ impl GuardRule {
                     .any(is_rm_rf_root_or_home)
             }
             GuardMatcher::ProtectedPathWrite => protected_path_write(tool, args),
+            GuardMatcher::ProtectedDotPathWrite => protected_dotpath_write(tool, args),
         }
     }
 
@@ -225,6 +367,12 @@ impl GuardRule {
                 matcher: GuardMatcher::ProtectedPathWrite,
                 action: GuardAction::Ask {
                     prompt: "write to a protected system path".to_owned(),
+                },
+            },
+            GuardRule {
+                matcher: GuardMatcher::ProtectedDotPathWrite,
+                action: GuardAction::Ask {
+                    prompt: "write to a protected VCS/secret path (.git, .ssh, .env)".to_owned(),
                 },
             },
         ]
@@ -301,6 +449,43 @@ fn protected_path_write(tool: &str, args: &serde_json::Value) -> bool {
     false
 }
 
+fn protected_dotpath_write(tool: &str, args: &serde_json::Value) -> bool {
+    if matches!(tool, "Write" | "Edit") {
+        if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
+            if crate::path_match::is_protected_dotpath(p) {
+                return true;
+            }
+        }
+    }
+    if let Some(cmd) = bash_command_str(tool, args) {
+        for c in crate::command_match::resolve_all(cmd) {
+            for r in &c.redirects {
+                use crate::command_match::RedirectOp;
+                if matches!(r.op, RedirectOp::Out | RedirectOp::Append)
+                    && crate::path_match::is_protected_dotpath(&r.target)
+                {
+                    return true;
+                }
+            }
+            if c.program == "tee"
+                && c.args
+                    .iter()
+                    .any(|a| crate::path_match::is_protected_dotpath(a))
+            {
+                return true;
+            }
+            if c.program == "dd" {
+                if let Some(of) = c.args.iter().find_map(|a| a.strip_prefix("of=")) {
+                    if crate::path_match::is_protected_dotpath(of) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 fn is_protected_path(path: &str) -> bool {
     if DEVICE_ALLOWLIST.contains(&path) {
         return false;
@@ -365,6 +550,32 @@ mod guard_tests {
             .iter()
             .all(|g| matches!(g.action(), GuardAction::Ask { .. })));
     }
+
+    #[test]
+    fn matches_protected_dotpath_write() {
+        // Write/Edit tool path arg
+        let g = GuardRule::destructive_defaults();
+        assert!(g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": ".git/config", "content": "x" }))));
+        assert!(g
+            .iter()
+            .any(|r| r.matches("Edit", &json!({ "path": "a/.ssh/known_hosts" }))));
+        assert!(g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": ".env.local", "content": "x" }))));
+        // bare repo / lookalikes do NOT trip
+        assert!(!g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": "repo.git/HEAD", "content": "x" }))));
+        assert!(!g
+            .iter()
+            .any(|r| r.matches("Write", &json!({ "path": ".gitignore", "content": "x" }))));
+        // bash redirect into .git
+        assert!(matched("echo x > .git/config"));
+        assert!(matched("echo x | tee .ssh/authorized_keys"));
+        assert!(!matched("echo x > notes.txt"));
+    }
 }
 
 #[cfg(test)]
@@ -375,6 +586,44 @@ mod tests {
     #[test]
     fn permission_mode_default_is_default_variant() {
         assert_eq!(PermissionMode::default(), PermissionMode::Default);
+    }
+
+    #[test]
+    fn deny_rule_read_edit_path_variants() {
+        let dr = DenyRule::read(".env");
+        assert!(dr.matches("Read", &json!({ "path": "config/.env" })));
+        assert!(!dr.matches("Read", &json!({ "path": "config/app.toml" })));
+        assert!(!dr.matches("Edit", &json!({ "path": ".env" }))); // read-scoped
+
+        let de = DenyRule::edit("src/**");
+        assert!(de.matches("Edit", &json!({ "path": "src/a.rs" })));
+        assert!(de.matches("Write", &json!({ "path": "src/a.rs" }))); // edit covers Write
+        assert!(!de.matches("Read", &json!({ "path": "src/a.rs" })));
+    }
+
+    #[test]
+    fn allow_rule_tool_and_path() {
+        assert!(AllowRule::tool("WebSearch").matches("WebSearch", &json!({})));
+        assert!(!AllowRule::tool("WebSearch").matches("Bash", &json!({})));
+
+        assert!(AllowRule::read("src/**").matches("Read", &json!({ "path": "src/a.rs" })));
+        assert!(AllowRule::edit("src/**").matches("Write", &json!({ "path": "src/a.rs" })));
+        assert!(!AllowRule::edit("src/**").matches("Write", &json!({ "path": "etc/x" })));
+        // read is scoped to Read — it does NOT cover Write/Edit
+        assert!(!AllowRule::read("src/**").matches("Write", &json!({ "path": "src/a.rs" })));
+        // a missing/non-string path arg matches nothing (no panic)
+        assert!(!AllowRule::read("**").matches("Read", &json!({})));
+        assert!(!DenyRule::read("**").matches("Read", &json!({})));
+    }
+
+    #[test]
+    fn allow_rule_bash_command_requires_every_subcommand() {
+        let rule = AllowRule::bash_command("git");
+        assert!(rule.matches("Bash", &json!({ "command": "git status && git push" })));
+        // a non-git sub-command means the allow rule does NOT fire (fail-closed)
+        assert!(!rule.matches("Bash", &json!({ "command": "git status && rm -rf ." })));
+        assert!(!rule.matches("Bash", &json!({ "command": "" })));
+        assert!(!rule.matches("Other", &json!({ "command": "git status" })));
     }
 
     #[test]

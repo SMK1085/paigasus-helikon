@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use crate::{
-    ActionsHandle, ApprovalHandler, DenyRule, FailureSlot, Hook, PermissionMode, PermissionPolicy,
-    RunConfig, Session, SessionState, ToolContext,
+    ActionsHandle, AllowRule, ApprovalHandler, DenyRule, FailureSlot, Hook, PermissionMode,
+    PermissionPolicy, RunConfig, Session, SessionState, ToolContext,
 };
 
 /// Carries the per-run state shared across the agent loop, tools,
@@ -83,6 +83,9 @@ where
     permission_policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
     /// Deny rules evaluated before mode (override even `Bypass`).
     deny_rules: Vec<DenyRule>,
+    /// Allow rules evaluated after deny+guard, before mode (positive
+    /// short-circuit in any mode; the only path to Allow under `DontAsk`).
+    allow_rules: Vec<AllowRule>,
     /// Resolves `AskUser` decisions; `None` → deny by default.
     approval_handler: Option<Arc<dyn ApprovalHandler>>,
     /// User-supplied guard rules, evaluated before mode (can Ask or Deny).
@@ -121,6 +124,7 @@ where
             permission_mode: PermissionMode::Default,
             permission_policy: None,
             deny_rules: Vec::new(),
+            allow_rules: Vec::new(),
             approval_handler: None,
             guard_rules: Vec::new(),
             default_guards: true,
@@ -216,6 +220,7 @@ where
             permission_mode: self.permission_mode,
             permission_policy: self.permission_policy.clone(),
             deny_rules: self.deny_rules.clone(),
+            allow_rules: self.allow_rules.clone(),
             approval_handler: self.approval_handler.clone(),
             guard_rules: self.guard_rules.clone(),
             default_guards: self.default_guards,
@@ -244,6 +249,7 @@ where
             permission_mode: self.permission_mode,
             permission_policy: self.permission_policy.clone(),
             deny_rules: self.deny_rules.clone(),
+            allow_rules: self.allow_rules.clone(),
             approval_handler: self.approval_handler.clone(),
             guard_rules: self.guard_rules.clone(),
             default_guards: self.default_guards,
@@ -259,11 +265,18 @@ where
         self
     }
 
-    /// Set the permission mode. **Monotonic on `Bypass`:** once the mode is
-    /// `Bypass`, this is a no-op — `Bypass` cannot be downgraded (the safety
-    /// invariant). All other transitions apply.
+    /// Set the permission mode — **tighten-only**. Loosening is refused:
+    /// `DontAsk` is terminal (no transition off it), and `Bypass` may only
+    /// tighten to `DontAsk`, never loosen. All other transitions apply.
     pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
-        if self.permission_mode != PermissionMode::Bypass {
+        use PermissionMode::*;
+        let allowed = match (self.permission_mode, mode) {
+            (DontAsk, _) => false,
+            (Bypass, DontAsk) => true,
+            (Bypass, _) => false,
+            _ => true,
+        };
+        if allowed {
             self.permission_mode = mode;
         }
         self
@@ -278,6 +291,12 @@ where
     /// Install deny rules, evaluated before mode (override even `Bypass`).
     pub fn with_deny_rules(mut self, rules: Vec<DenyRule>) -> Self {
         self.deny_rules = rules;
+        self
+    }
+
+    /// Install allow rules (positive short-circuit; see [`crate::AllowRule`]).
+    pub fn with_allow_rules(mut self, rules: Vec<AllowRule>) -> Self {
+        self.allow_rules = rules;
         self
     }
 
@@ -300,6 +319,11 @@ where
     /// The run's deny rules.
     pub fn deny_rules(&self) -> &[DenyRule] {
         &self.deny_rules
+    }
+
+    /// The run's allow rules.
+    pub fn allow_rules(&self) -> &[AllowRule] {
+        &self.allow_rules
     }
 
     /// The run's approval handler, if installed.
@@ -359,6 +383,7 @@ where
             mode: self.permission_mode,
             policy: self.permission_policy.clone(),
             deny_rules: self.deny_rules.clone(),
+            allow_rules: self.allow_rules.clone(),
             approval_handler: self.approval_handler.clone(),
             guard_rules: self.guard_rules.clone(),
             default_guards: self.default_guards,
@@ -564,6 +589,53 @@ mod runcontext_tests {
     }
 
     #[test]
+    fn permission_mode_is_tighten_only() {
+        use crate::PermissionMode::*;
+        let base = || {
+            RunContext::new(
+                Arc::new(()),
+                Arc::new(MemorySession::new()) as Arc<dyn Session>,
+                HookRegistry::new(),
+                TracerHandle::default(),
+                CancellationToken::new(),
+            )
+        };
+        // Bypass can tighten to DontAsk …
+        assert_eq!(
+            base()
+                .with_permission_mode(Bypass)
+                .with_permission_mode(DontAsk)
+                .permission_mode(),
+            DontAsk
+        );
+        // … but cannot loosen to Default/Plan.
+        assert_eq!(
+            base()
+                .with_permission_mode(Bypass)
+                .with_permission_mode(Default)
+                .permission_mode(),
+            Bypass
+        );
+        // DontAsk is terminal — no transition off it.
+        assert_eq!(
+            base()
+                .with_permission_mode(DontAsk)
+                .with_permission_mode(Bypass)
+                .permission_mode(),
+            DontAsk
+        );
+        assert_eq!(
+            base()
+                .with_permission_mode(DontAsk)
+                .with_permission_mode(Default)
+                .permission_mode(),
+            DontAsk
+        );
+        // Normal modes still settable.
+        assert_eq!(base().with_permission_mode(Plan).permission_mode(), Plan);
+    }
+
+    #[test]
     fn handoff_child_inherits_mode_and_keeps_bypass_sticky() {
         let ctx: RunContext<()> = RunContext::new(
             Arc::new(()),
@@ -618,6 +690,26 @@ mod runcontext_tests {
         assert_eq!(ctx.subagent_child().guard_rules().len(), 1);
         assert_eq!(ctx.to_tool_context().guard_rules().len(), 1);
         assert!(ctx.handoff_child().default_guards());
+    }
+
+    #[test]
+    fn allow_rules_inherit_through_children() {
+        use crate::AllowRule;
+        let ctx: RunContext<()> = RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()) as Arc<dyn Session>,
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+        .with_allow_rules(vec![AllowRule::tool("WebSearch")]);
+        assert_eq!(ctx.allow_rules().len(), 1);
+        assert_eq!(ctx.handoff_child().allow_rules().len(), 1);
+        assert_eq!(ctx.subagent_child().allow_rules().len(), 1);
+        // copy-site #3: the PermissionFields projection consumed by to_tool_context.
+        // clone_permission_fields is pub(crate) and PermissionFields.allow_rules is
+        // pub(crate), both reachable from this in-crate test module.
+        assert_eq!(ctx.clone_permission_fields().allow_rules.len(), 1);
     }
 
     #[test]

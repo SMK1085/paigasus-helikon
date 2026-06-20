@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use common::{MockAgent, MockModel, MockTool};
 use paigasus_helikon_core::{
-    Agent, AgentAsTool, AgentEvent, AgentInput, CancellationToken, FinishReason, GuardRule, Hook,
-    HookDecision, HookEvent, HookRegistry, LlmAgent, MemorySession, ModelEvent, PermissionMode,
-    RunContext, Session, Tool, TracerHandle,
+    Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, CancellationToken, FinishReason,
+    GuardRule, Hook, HookDecision, HookEvent, HookRegistry, LlmAgent, MemorySession, ModelEvent,
+    PermissionMode, RunContext, Session, Tool, TracerHandle,
 };
 
 /// Turn 1: call `tool_name` with `{}`. Turn 2: stop with `"done"`. Two scripts so
@@ -259,6 +259,78 @@ async fn guard_and_redaction_config_propagates_into_agent_as_tool_sub_run() {
         obs.extra_secrets.contains(&"zzsecretvalue".to_owned()),
         "extra_secrets must propagate; got {:?}",
         obs.extra_secrets
+    );
+}
+
+/// Test E — SMA-415: `allow_rules` *and* `PermissionMode::DontAsk` propagate
+/// from the parent `ToolContext` into the agent-as-tool sub-run's `RunContext`.
+///
+/// This is the fourth and final permission-field copy site (`handoff_child`,
+/// `subagent_child`, and `to_tool_context` are the other three). Missing it is a
+/// *fail-closed* propagation bug: under `DontAsk` every call is denied unless an allow rule
+/// matches, so an agent-as-tool sub-run that lost the parent's `allow_rules`
+/// would silently deny everything — and a unit-level inheritance test can't catch
+/// the agent-as-tool rebuild path, only this integration test can.
+///
+/// Strategy mirrors Test D's lighter-probe: the wrapped `MockAgent` records
+/// `allow_rules().len()` and `permission_mode()` off the `RunContext` it receives.
+/// The parent carries one `AllowRule::tool("probe")` and `DontAsk`.
+#[tokio::test]
+async fn allow_rules_and_dont_ask_propagate_into_agent_as_tool_sub_run() {
+    /// Snapshot of the two SMA-415 fields as seen by the inner agent.
+    #[derive(Default)]
+    struct Observed {
+        allow_rules_len: usize,
+        permission_mode: Option<PermissionMode>,
+    }
+
+    let observed: Arc<Mutex<Observed>> = Arc::new(Mutex::new(Observed::default()));
+    let obs_clone = Arc::clone(&observed);
+
+    let inner = MockAgent::<()>::new("probe", move |ctx| {
+        let mut obs = obs_clone.lock().unwrap();
+        obs.allow_rules_len = ctx.allow_rules().len();
+        obs.permission_mode = Some(ctx.permission_mode());
+        Vec::new()
+    });
+
+    let wrapper = AgentAsTool::new(inner).with_name("probe");
+
+    // Parent context: one allow rule scoped to the inner agent's tool name, and
+    // `DontAsk` (terminal/tighten-only — set once, sticks).
+    let run_ctx: RunContext<()> = RunContext::new(
+        Arc::new(()),
+        Arc::new(MemorySession::new()) as Arc<dyn Session>,
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    )
+    .with_allow_rules(vec![AllowRule::tool("probe")])
+    .with_permission_mode(PermissionMode::DontAsk);
+
+    let tc = run_ctx.to_tool_context();
+    assert_eq!(
+        tc.permission_mode(),
+        PermissionMode::DontAsk,
+        "tool context must carry DontAsk from the parent run context"
+    );
+
+    let _ = wrapper
+        .invoke(&tc, serde_json::json!({ "input": "probe" }))
+        .await
+        .expect("invoke ok");
+
+    let obs = observed.lock().unwrap();
+    assert_eq!(
+        obs.allow_rules_len, 1,
+        "allow_rules must propagate into the sub-run: expected 1, got {}",
+        obs.allow_rules_len
+    );
+    assert_eq!(
+        obs.permission_mode,
+        Some(PermissionMode::DontAsk),
+        "PermissionMode::DontAsk must propagate into the sub-run; got {:?}",
+        obs.permission_mode
     );
 }
 

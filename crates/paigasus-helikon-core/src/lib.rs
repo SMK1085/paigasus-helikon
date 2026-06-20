@@ -26,6 +26,7 @@ pub mod hook;
 pub mod item;
 pub mod loop_state;
 pub mod model;
+mod path_match;
 pub mod permission;
 pub mod redaction;
 pub mod runner;
