@@ -100,15 +100,9 @@ impl ServerHandler for FixtureServer {
 pub fn tool_ctx_with_cancel(
     cancel: paigasus_helikon_core::CancellationToken,
 ) -> paigasus_helikon_core::ToolContext<()> {
-    paigasus_helikon_core::RunContext::new(
-        std::sync::Arc::new(()),
-        std::sync::Arc::new(paigasus_helikon_core::MemorySession::new())
-            as std::sync::Arc<dyn paigasus_helikon_core::Session>,
-        paigasus_helikon_core::HookRegistry::new(),
-        paigasus_helikon_core::TracerHandle::builder().build(),
-        cancel,
-    )
-    .to_tool_context()
+    paigasus_helikon_core::RunContext::ephemeral(())
+        .with_cancel(cancel)
+        .to_tool_context()
 }
 
 /// Build a [`paigasus_helikon_core::ToolContext`] with a fresh, uncancelled
