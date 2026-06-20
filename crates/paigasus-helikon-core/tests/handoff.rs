@@ -3,22 +3,14 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::sync::Arc;
-
 use common::{MockModel, MockTool};
 use paigasus_helikon_core::{
-    Agent, AgentEvent, AgentInput, CancellationToken, FinishReason, HookRegistry, LlmAgent,
-    MemorySession, ModelEvent, RunConfig, RunContext, RunResultStreaming, Session, TracerHandle,
+    Agent, AgentEvent, AgentInput, FinishReason, LlmAgent, ModelEvent, RunConfig, RunContext,
+    RunResultStreaming,
 };
 
 fn ctx() -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(())
 }
 
 fn transfer_turn(tool: &str) -> Vec<ModelEvent> {

@@ -9,9 +9,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use common::{MockAgent, MockModel, MockTool};
 use paigasus_helikon_core::{
-    Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, CancellationToken, FinishReason,
-    GuardRule, Hook, HookDecision, HookEvent, HookRegistry, LlmAgent, MemorySession, ModelEvent,
-    PermissionMode, RunContext, Session, Tool, TracerHandle,
+    Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, FinishReason, GuardRule, Hook,
+    HookDecision, HookEvent, HookRegistry, LlmAgent, ModelEvent, PermissionMode, RunContext, Tool,
 };
 
 /// Turn 1: call `tool_name` with `{}`. Turn 2: stop with `"done"`. Two scripts so
@@ -62,14 +61,8 @@ async fn plan_mode_propagates_into_agent_as_tool_sub_run() {
 
     let wrapper = AgentAsTool::new(inner).with_name("inner");
 
-    let run_ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
-    .with_permission_mode(PermissionMode::Plan);
+    let run_ctx: RunContext<()> =
+        RunContext::ephemeral(()).with_permission_mode(PermissionMode::Plan);
 
     let tc = run_ctx.to_tool_context();
     assert_eq!(
@@ -120,13 +113,7 @@ async fn sequential_agent_fires_on_subagent_stop_per_child() {
 
     let mut reg = HookRegistry::<()>::new();
     reg.push(Arc::new(StopRecorder(seen.clone())));
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        reg,
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(()).with_hooks(reg);
 
     let mut stream = workflow
         .run(ctx, AgentInput::from_user_text("go"))
@@ -155,20 +142,11 @@ async fn sequential_agent_fires_on_subagent_stop_per_child() {
 /// the stop event to the parent's `StopRecorder` with the wrapped agent's name.
 #[tokio::test]
 async fn agent_as_tool_fires_on_subagent_stop() {
-    use paigasus_helikon_core::{
-        AgentAsTool, CancellationToken, HookRegistry, MemorySession, RunContext, Session, Tool,
-        TracerHandle,
-    };
+    use paigasus_helikon_core::{AgentAsTool, HookRegistry, RunContext, Tool};
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let mut reg = HookRegistry::<()>::new();
     reg.push(std::sync::Arc::new(StopRecorder(seen.clone())));
-    let parent = RunContext::new(
-        std::sync::Arc::new(()),
-        std::sync::Arc::new(MemorySession::new()) as std::sync::Arc<dyn Session>,
-        reg,
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let parent = RunContext::ephemeral(()).with_hooks(reg);
 
     let inner = common::MockAgent::new("inner", |_| Vec::new());
     let wrapper = AgentAsTool::new(inner).with_name("inner_tool");
@@ -223,17 +201,11 @@ async fn guard_and_redaction_config_propagates_into_agent_as_tool_sub_run() {
     // redact_output off.
     let parent_guard_rules = GuardRule::destructive_defaults(); // non-empty slice
     let parent_guard_rules_len = parent_guard_rules.len();
-    let run_ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
-    .with_guard_rules(parent_guard_rules)
-    .with_extra_secrets(vec!["zzsecretvalue".to_owned()])
-    .without_default_guards()
-    .without_output_redaction();
+    let run_ctx: RunContext<()> = RunContext::ephemeral(())
+        .with_guard_rules(parent_guard_rules)
+        .with_extra_secrets(vec!["zzsecretvalue".to_owned()])
+        .without_default_guards()
+        .without_output_redaction();
 
     let tc = run_ctx.to_tool_context();
     let _ = wrapper
@@ -298,15 +270,9 @@ async fn allow_rules_and_dont_ask_propagate_into_agent_as_tool_sub_run() {
 
     // Parent context: one allow rule scoped to the inner agent's tool name, and
     // `DontAsk` (terminal/tighten-only — set once, sticks).
-    let run_ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
-    .with_allow_rules(vec![AllowRule::tool("probe")])
-    .with_permission_mode(PermissionMode::DontAsk);
+    let run_ctx: RunContext<()> = RunContext::ephemeral(())
+        .with_allow_rules(vec![AllowRule::tool("probe")])
+        .with_permission_mode(PermissionMode::DontAsk);
 
     let tc = run_ctx.to_tool_context();
     assert_eq!(
@@ -338,20 +304,11 @@ async fn allow_rules_and_dont_ask_propagate_into_agent_as_tool_sub_run() {
 /// handoff and workflow paths (which report failed sub-runs as stopped).
 #[tokio::test]
 async fn agent_as_tool_fires_on_subagent_stop_on_failure() {
-    use paigasus_helikon_core::{
-        AgentAsTool, CancellationToken, HookRegistry, MemorySession, RunContext, Session, Tool,
-        TracerHandle,
-    };
+    use paigasus_helikon_core::{AgentAsTool, HookRegistry, RunContext, Tool};
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let mut reg = HookRegistry::<()>::new();
     reg.push(std::sync::Arc::new(StopRecorder(seen.clone())));
-    let parent = RunContext::new(
-        std::sync::Arc::new(()),
-        std::sync::Arc::new(MemorySession::new()) as std::sync::Arc<dyn Session>,
-        reg,
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let parent = RunContext::ephemeral(()).with_hooks(reg);
 
     // The inner agent fails: its stream yields RunFailed, so collect() errors.
     let inner = common::MockAgent::new("inner", |_| {

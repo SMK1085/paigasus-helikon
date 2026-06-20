@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 
 use common::{msg_and_complete, MockAgent};
 use paigasus_helikon_core::{
-    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, HookRegistry, MemorySession,
-    RunContext, RunResultStreaming, SequentialAgent, Session, TracerHandle,
+    Agent, AgentError, AgentEvent, AgentInput, RunContext, RunResultStreaming, SequentialAgent,
+    TracerHandle,
 };
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
@@ -109,13 +109,7 @@ fn ctx() -> RunContext<()> {
 }
 
 fn ctx_with_tracer(tracer: TracerHandle) -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        tracer,
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(()).with_tracer(tracer)
 }
 
 /// Drive `fut` to completion under a [`SpanCapture`] subscriber on a single

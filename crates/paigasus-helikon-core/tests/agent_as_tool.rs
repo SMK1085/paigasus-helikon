@@ -7,19 +7,13 @@ use std::sync::Arc;
 
 use common::MockModel;
 use paigasus_helikon_core::{
-    Agent, AgentAsTool, AgentEvent, AgentInput, CancellationToken, FinishReason, HookRegistry,
-    Item, LlmAgent, MemorySession, ModelEvent, RunContext, RunResultStreaming, Session, Tool,
-    ToolContext, TracerHandle,
+    Agent, AgentAsTool, AgentEvent, AgentInput, CancellationToken, FinishReason, Item, LlmAgent,
+    MemorySession, ModelEvent, RunContext, RunResultStreaming, Session, Tool, ToolContext,
+    TracerHandle,
 };
 
 fn ctx() -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(())
 }
 
 fn text_turn(text: &str) -> Vec<ModelEvent> {
@@ -65,13 +59,7 @@ async fn agent_as_tool_isolates_session() {
         .build();
     let tool = AgentAsTool::new(sub);
 
-    let run_ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        parent_session.clone() as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let run_ctx: RunContext<()> = RunContext::ephemeral(()).with_session(parent_session.clone());
     let tc = run_ctx.to_tool_context();
     let _ = tool
         .invoke(&tc, serde_json::json!({ "input": "go" }))

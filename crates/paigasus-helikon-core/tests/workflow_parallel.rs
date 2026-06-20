@@ -4,24 +4,16 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::sync::Arc;
-
 use common::{msg_and_complete, MockAgent};
 use futures_util::StreamExt as _;
 use paigasus_helikon_core::{
-    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, HookRegistry, MemorySession,
-    ParallelAgent, RunContext, RunError, RunResultStreaming, Session, TracerHandle,
+    Agent, AgentError, AgentEvent, AgentInput, ParallelAgent, RunContext, RunError,
+    RunResultStreaming,
 };
 use serde_json::json;
 
 fn ctx() -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(())
 }
 
 #[tokio::test]

@@ -8,19 +8,12 @@ use std::sync::Arc;
 
 use common::{msg_and_complete, EscalatingTool, MockAgent, MockModel};
 use paigasus_helikon_core::{
-    Agent, AgentError, AgentEvent, AgentInput, CancellationToken, FinishReason, HookRegistry,
-    LlmAgent, LoopAgent, MemorySession, ModelEvent, RunContext, RunError, RunResultStreaming,
-    Session, Tool, TracerHandle,
+    Agent, AgentError, AgentEvent, AgentInput, FinishReason, LlmAgent, LoopAgent, ModelEvent,
+    RunContext, RunError, RunResultStreaming, Tool,
 };
 
 fn ctx() -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(())
 }
 
 #[tokio::test]
