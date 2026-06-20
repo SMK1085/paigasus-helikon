@@ -133,6 +133,88 @@ where
         }
     }
 
+    /// Zero-config context for the common ephemeral case: in-memory session,
+    /// no hooks, default tracer, fresh cancellation token. Takes the user
+    /// context **by value** and wraps it in an `Arc` internally, so the unit
+    /// case is simply `RunContext::ephemeral(())`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use paigasus_helikon_core::RunContext;
+    ///
+    /// let ctx: RunContext<()> = RunContext::ephemeral(());
+    /// assert!(ctx.hooks().is_empty());
+    /// ```
+    pub fn ephemeral(user_ctx: Ctx) -> Self {
+        Self::ephemeral_shared(Arc::new(user_ctx))
+    }
+
+    /// As [`RunContext::ephemeral`], but takes a pre-built `Arc<Ctx>` to
+    /// **share** one user context across several ephemeral runs (e.g. a
+    /// request-scoped server sharing an `Arc<AppCtx>`) without cloning it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paigasus_helikon_core::RunContext;
+    ///
+    /// struct AppCtx;
+    /// let app = Arc::new(AppCtx);
+    /// let _ctx = RunContext::ephemeral_shared(Arc::clone(&app));
+    /// ```
+    pub fn ephemeral_shared(user_ctx: Arc<Ctx>) -> Self {
+        Self::new(
+            user_ctx,
+            Arc::new(crate::MemorySession::new()),
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+    }
+
+    /// Replace the session handle. Pairs with [`RunContext::ephemeral`] to
+    /// install a persistent session over the in-memory default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paigasus_helikon_core::{MemorySession, RunContext, TracerHandle};
+    ///
+    /// let _ctx: RunContext<()> = RunContext::ephemeral(())
+    ///     .with_session(Arc::new(MemorySession::new()))
+    ///     .with_tracer(TracerHandle::builder().with_session_id("s").build());
+    /// ```
+    pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = session;
+        self
+    }
+
+    /// Replace the hook registry.
+    pub fn with_hooks(mut self, hooks: HookRegistry<Ctx>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// Replace the tracer handle (e.g. a populated [`TracerHandle::builder`]).
+    pub fn with_tracer(mut self, tracer: TracerHandle) -> Self {
+        self.tracer = tracer;
+        self
+    }
+
+    /// Replace the cancellation token (e.g. to share one across runs).
+    ///
+    /// Intended for the builder chain on a freshly constructed context. It
+    /// swaps the token wholesale and does **not** retroactively re-link any
+    /// child tokens already derived via `handoff_child` / `subagent_child` /
+    /// `to_tool_context` — so it is not a mid-run cancel swap.
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
     /// Borrow the user context.
     pub fn user_ctx(&self) -> &Arc<Ctx> {
         &self.user_ctx
@@ -750,6 +832,70 @@ mod runcontext_tests {
         use crate::AgentError;
         child.failure_handle().set(AgentError::MaxTurnsExceeded(1));
         assert!(ctx.failure_handle().take().is_none(), "fresh failure slot");
+    }
+
+    #[test]
+    fn ephemeral_matches_new_defaults() {
+        let ctx: RunContext<()> = RunContext::ephemeral(());
+        assert_eq!(ctx.agent_depth(), 0);
+        assert_eq!(ctx.permission_mode(), crate::PermissionMode::Default);
+        assert!(ctx.default_guards());
+        assert!(ctx.redact_output());
+        assert!(ctx.run_config().is_none());
+        assert!(ctx.hooks().is_empty());
+        assert!(ctx.deny_rules().is_empty());
+        assert!(ctx.allow_rules().is_empty());
+    }
+
+    #[test]
+    fn ephemeral_shared_keeps_inner_ctx_type() {
+        struct Marker;
+        let ctx: RunContext<Marker> = RunContext::ephemeral_shared(Arc::new(Marker));
+        // Compile-time proof that Ctx == Marker, not Arc<Marker>: user_ctx()
+        // returns &Arc<Marker>, so .as_ref() yields &Marker.
+        let _inner: &Marker = ctx.user_ctx().as_ref();
+    }
+
+    #[test]
+    fn with_session_swaps_handle() {
+        let session: Arc<dyn Session> = Arc::new(MemorySession::new());
+        let ctx: RunContext<()> = RunContext::ephemeral(()).with_session(Arc::clone(&session));
+        assert!(Arc::ptr_eq(ctx.session(), &session));
+    }
+
+    #[test]
+    fn with_hooks_installs_registry() {
+        struct NoopHook;
+        #[async_trait::async_trait]
+        impl crate::Hook<()> for NoopHook {
+            async fn on_event(
+                &self,
+                _ctx: &RunContext<()>,
+                _event: &crate::HookEvent,
+            ) -> crate::HookDecision {
+                crate::HookDecision::Allow
+            }
+        }
+        let mut registry = HookRegistry::<()>::new();
+        registry.push(Arc::new(NoopHook));
+        let ctx: RunContext<()> = RunContext::ephemeral(()).with_hooks(registry);
+        assert!(!ctx.hooks().is_empty());
+    }
+
+    #[test]
+    fn with_tracer_round_trips() {
+        let ctx: RunContext<()> = RunContext::ephemeral(())
+            .with_tracer(TracerHandle::builder().with_session_id("sess-1").build());
+        assert_eq!(ctx.tracer().session_id(), Some("sess-1"));
+    }
+
+    #[test]
+    fn with_cancel_token_cancels() {
+        let token = CancellationToken::new();
+        let ctx: RunContext<()> = RunContext::ephemeral(()).with_cancel(token.clone());
+        assert!(!ctx.cancel().is_cancelled());
+        token.cancel();
+        assert!(ctx.cancel().is_cancelled());
     }
 }
 
