@@ -15,8 +15,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    Agent, AgentEvent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession,
-    PermissionDecision, PermissionPolicy, RunContext, TracerHandle,
+    Agent, AgentEvent, AgentInput, LlmAgent, PermissionDecision, PermissionPolicy, RunContext,
 };
 use paigasus_helikon_providers_openai::OpenAiModel;
 use paigasus_helikon_tools::{BraveBackend, WebFetchTool, WebSearchTool};
@@ -63,14 +62,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Install the gating policy on the run context. No ApprovalHandler is
     // installed, so AskUser on unexpected tools resolves to Deny (safe default).
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
-    .with_permission_policy(Arc::new(AllowWebTools));
+    let ctx: RunContext<()> =
+        RunContext::ephemeral(()).with_permission_policy(Arc::new(AllowWebTools));
 
     let input = AgentInput::from_user_text(
         "What is the Hippocrene spring and how does it relate to Mount Helicon?",

@@ -14,8 +14,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    Agent, AgentEvent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession,
-    PermissionDecision, PermissionPolicy, RunContext, TracerHandle,
+    Agent, AgentEvent, AgentInput, LlmAgent, PermissionDecision, PermissionPolicy, RunContext,
 };
 use paigasus_helikon_providers_openai::OpenAiModel;
 use paigasus_helikon_tools::{BashTool, EditTool, HostBackend, ReadTool, Sandbox, WriteTool};
@@ -70,14 +69,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Install the gating policy on the run context. No ApprovalHandler is
     // installed, so AskUser on Bash resolves to Deny (safe default).
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
-    .with_permission_policy(Arc::new(GateBash));
+    let ctx: RunContext<()> = RunContext::ephemeral(()).with_permission_policy(Arc::new(GateBash));
 
     let input =
         AgentInput::from_user_text("List the files here and summarize what this project is.");
