@@ -22,9 +22,9 @@ use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider, SpanData, 
 use tracing_subscriber::prelude::*;
 
 use paigasus_helikon::core::{
-    AgentInput, CancellationToken, ConversationSnapshot, FinishReason, HookRegistry, Instructions,
-    LlmAgent, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, ModelSettings,
-    RunConfig, RunContext, Runner, SequenceId, Session, SessionError, SessionEvent, TracerHandle,
+    AgentInput, CancellationToken, ConversationSnapshot, FinishReason, Instructions, LlmAgent,
+    Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, ModelSettings, RunConfig,
+    RunContext, Runner, SequenceId, Session, SessionError, SessionEvent, TracerHandle,
 };
 use paigasus_helikon::runtime_tokio::TokioRunner;
 
@@ -167,18 +167,16 @@ async fn main() -> anyhow::Result<()> {
         _output: std::marker::PhantomData,
     };
 
-    let ctx = RunContext::new(
-        Arc::new(()),
-        Arc::new(NoopSession) as Arc<dyn Session>,
-        HookRegistry::<()>::new(),
-        TracerHandle::builder()
-            .with_session_id("demo-session")
-            .with_user_id("demo-user")
-            .with_tag("example")
-            .with_tag("sma-322")
-            .build(),
-        CancellationToken::new(),
-    );
+    let ctx = RunContext::ephemeral(())
+        .with_session(Arc::new(NoopSession))
+        .with_tracer(
+            TracerHandle::builder()
+                .with_session_id("demo-session")
+                .with_user_id("demo-user")
+                .with_tag("example")
+                .with_tag("sma-322")
+                .build(),
+        );
 
     let result = TokioRunner
         .run(
