@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.7...paigasus-helikon-core-v0.5.8) - 2026-06-20
+
+### Added
+
+- *(core)* SMA-415 add DontAsk mode + filesystem path rules ([#103](https://github.com/SMK1085/paigasus-helikon/pull/103))
+
 ## [0.5.7](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.6...paigasus-helikon-core-v0.5.7) - 2026-06-18
 
 ### Added
