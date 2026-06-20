@@ -1,21 +1,11 @@
 #![allow(missing_docs)]
 
-use paigasus_helikon_core::{
-    CancellationToken, HookRegistry, MemorySession, RunContext, Tool, ToolContext, ToolEffect,
-    ToolError, TracerHandle,
-};
+use paigasus_helikon_core::{RunContext, Tool, ToolContext, ToolEffect, ToolError};
 use paigasus_helikon_tools::{Sandbox, SandboxError};
-use std::sync::Arc;
 
 /// Build a `ToolContext<()>` for calling a tool's `invoke` directly.
 fn tool_ctx() -> ToolContext<()> {
-    let run_ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let run_ctx: RunContext<()> = RunContext::ephemeral(());
     run_ctx.to_tool_context()
 }
 

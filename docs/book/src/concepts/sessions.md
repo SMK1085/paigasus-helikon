@@ -123,27 +123,27 @@ concurrent writers.
 
 ## Plugging a session into a run
 
-`RunContext::new` takes the session as its second argument, as an
-`Arc<dyn Session>`. Any `Session` impl drops in:
+`RunContext` accepts any `Arc<dyn Session>` via the `.with_session(...)` setter.
+The quickest path is `RunContext::ephemeral(())`, which already installs an
+in-memory `MemorySession`. To substitute a persistent backend, call
+`.with_session(...)` on the ephemeral context:
 
 ```rust
 use std::sync::Arc;
-use paigasus_helikon::core::{
-    CancellationToken, HookRegistry, MemorySession, RunContext, TracerHandle,
-};
+use paigasus_helikon::core::{MemorySession, RunContext};
 
-let ctx: RunContext<()> = RunContext::new(
-    Arc::new(()),
-    Arc::new(MemorySession::new()),
-    HookRegistry::<()>::new(),
-    TracerHandle::default(),
-    CancellationToken::new(),
-);
+// Default: in-memory session.
+let ctx: RunContext<()> = RunContext::ephemeral(());
+
+// Persistent: swap the session backend.
+// let ctx: RunContext<()> = RunContext::ephemeral(())
+//     .with_session(Arc::new(SqliteSession::open(pool, "user-42").await?));
 ```
 
-Swap `Arc::new(MemorySession::new())` for `Arc::new(SqliteSession::open(pool,
-"user-42").await?)` to persist across process restarts. Tools do **not** see the
-session handle — persistence is the runner's job, not a tool's.
+Any `Session` impl drops in via `.with_session(Arc::new(your_backend))`. Swap
+`MemorySession` for `SqliteSession::open(pool, "user-42").await?` to persist
+across process restarts. Tools do **not** see the session handle — persistence is
+the runner's job, not a tool's.
 
 ## Run-lifecycle persistence
 

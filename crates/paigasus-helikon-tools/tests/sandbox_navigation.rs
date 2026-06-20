@@ -3,13 +3,11 @@
 
 mod common;
 
-use std::sync::Arc;
-
 use common::ScriptedModel;
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    Agent, AgentEvent, AgentInput, CancellationToken, ContentPart, FinishReason, HookRegistry,
-    Item, LlmAgent, MemorySession, ModelEvent, RunContext, TracerHandle,
+    Agent, AgentEvent, AgentInput, ContentPart, FinishReason, Item, LlmAgent, ModelEvent,
+    RunContext,
 };
 use paigasus_helikon_tools::{BashTool, HostBackend, ReadTool, Sandbox};
 
@@ -59,13 +57,7 @@ async fn agent_navigates_sandbox_and_reports_contents() {
         .tool(BashTool::<()>::new(HostBackend::builder(sandbox).build()))
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let mut stream = agent
         .run(ctx, AgentInput::from_user_text("What's in the sandbox?"))
@@ -134,13 +126,7 @@ async fn agent_surfaces_denied_tool_result() {
         .tool(ReadTool::<()>::new(sandbox))
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        std::sync::Arc::new(()),
-        std::sync::Arc::new(MemorySession::new()),
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let mut stream = agent
         .run(ctx, AgentInput::from_user_text("read ../escape.txt"))

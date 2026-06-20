@@ -10,13 +10,9 @@
 //! rejects it.
 
 use std::io::Write;
-use std::sync::Arc;
 
 use futures_util::StreamExt;
-use paigasus_helikon::core::{
-    Agent, AgentEvent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession,
-    RunContext, TracerHandle,
-};
+use paigasus_helikon::core::{Agent, AgentEvent, AgentInput, LlmAgent, RunContext};
 use paigasus_helikon::openai::OpenAiModel;
 
 #[tokio::main]
@@ -29,13 +25,7 @@ async fn main() -> anyhow::Result<()> {
         .instructions("You are a personal-finance assistant. Answer concisely.")
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input =
         AgentInput::from_user_text("Give me three quick tips to trim my monthly subscriptions.");

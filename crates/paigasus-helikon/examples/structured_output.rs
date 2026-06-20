@@ -10,13 +10,8 @@
 //! The model id (`claude-sonnet-4-6`) is current as of writing; swap it for
 //! any available model if the API rejects it.
 
-use std::sync::Arc;
-
 use paigasus_helikon::anthropic::AnthropicModel;
-use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession, RunContext,
-    RunResultStreaming, TracerHandle,
-};
+use paigasus_helikon::core::{Agent, AgentInput, LlmAgent, RunContext, RunResultStreaming};
 
 #[allow(dead_code)]
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -46,13 +41,7 @@ async fn main() -> anyhow::Result<()> {
         .output_type::<TransactionCategory>()
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input = AgentInput::from_user_text("NETFLIX.COM 866-579-7172 CA — $15.49");
 

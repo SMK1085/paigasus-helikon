@@ -6,23 +6,14 @@ mod common;
 
 use common::{MockModel, MockTool};
 use futures_util::stream::StreamExt as _;
-use paigasus_helikon_core::{
-    Agent, AgentError, AgentInput, CancellationToken, HookRegistry, LlmAgent, RunContext, Session,
-    TracerHandle,
-};
+use paigasus_helikon_core::{Agent, AgentError, AgentInput, LlmAgent, RunContext};
 use std::sync::Arc;
 
 // A no-op session local to this test (common::NoopSession is also available).
 use common::NoopSession;
 
 fn ctx() -> RunContext<()> {
-    RunContext::new(
-        Arc::new(()),
-        Arc::new(NoopSession) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(()).with_session(Arc::new(NoopSession))
 }
 
 /// Drain a raw agent event stream to exhaustion (discarding events).

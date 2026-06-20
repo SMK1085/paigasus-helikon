@@ -23,9 +23,8 @@ Permissions attach to the `RunContext`:
 use std::sync::Arc;
 use async_trait::async_trait;
 use paigasus_helikon::core::{
-    ApprovalHandler, ApprovalOutcome, CancellationToken, DenyRule, HookRegistry,
-    MemorySession, PermissionDecision, PermissionMode, PermissionPolicy, RunContext,
-    TracerHandle,
+    ApprovalHandler, ApprovalOutcome, DenyRule,
+    PermissionDecision, PermissionMode, PermissionPolicy, RunContext,
 };
 
 // A policy that asks before any tool touching the network.
@@ -62,17 +61,11 @@ impl ApprovalHandler for AutoApprove {
     }
 }
 
-let ctx: RunContext<()> = RunContext::new(
-    Arc::new(()),
-    Arc::new(MemorySession::new()),
-    HookRegistry::<()>::new(),
-    TracerHandle::default(),
-    CancellationToken::new(),
-)
-.with_permission_mode(PermissionMode::AcceptEdits)
-.with_deny_rules(vec![DenyRule::tool("Bash")])
-.with_permission_policy(Arc::new(AskOnNetwork))
-.with_approval_handler(Arc::new(AutoApprove));
+let ctx: RunContext<()> = RunContext::ephemeral(())
+    .with_permission_mode(PermissionMode::AcceptEdits)
+    .with_deny_rules(vec![DenyRule::tool("Bash")])
+    .with_permission_policy(Arc::new(AskOnNetwork))
+    .with_approval_handler(Arc::new(AutoApprove));
 ```
 
 `with_permission_mode`, `with_deny_rules`, `with_permission_policy`, and `with_approval_handler` are consuming builder methods on `RunContext`; the corresponding readers are `permission_mode`, `deny_rules`, `permission_policy`, and `approval_handler`. A tool's `ToolEffect` (`ReadOnly`, `Write`, or `SideEffect`) is what `AcceptEdits` and `Plan` mode test against — see [Tools](./tools.md).
@@ -91,7 +84,7 @@ The default action for a matched rule is `Ask`, which **resolves to Deny when no
 > **Behavior change.** In `Default` mode with no policy and no approval handler — the typical unattended setup — a command matching a destructive guard now resolves to **Deny** rather than running silently. To restore interactive behavior, install an `ApprovalHandler` (the runner will prompt before blocking). To disable the guards entirely, call `RunContext::without_default_guards()`:
 >
 > ```rust
-> let ctx = RunContext::new(/* … */)
+> let ctx = RunContext::ephemeral(())
 >     .without_default_guards();
 > ```
 
@@ -129,7 +122,7 @@ mode — in *every* mode — and `canUseTool` is not consulted for it. It is a
 Under `DontAsk`, allow rules are the *only* way a call is permitted:
 
 ```rust
-let ctx = RunContext::new(/* … */)
+let ctx = RunContext::ephemeral(())
     .with_allow_rules(vec![
         AllowRule::tool("WebSearch"),
         AllowRule::edit("src/**"),
@@ -255,7 +248,7 @@ let mut registry = HookRegistry::<()>::new();
 registry.push(Arc::new(AuditLog));
 ```
 
-`HookRegistry` is the run-level container: `new`, `push`, `iter`, and `is_empty`. It is the third positional argument to [`RunContext::new`](./core-primitives.md) and is shared (cloned) across handed-off and sub-agent contexts.
+`HookRegistry` is the run-level container: `new`, `push`, `iter`, and `is_empty`. It is passed to [`RunContext`](./core-primitives.md) via `.with_hooks(registry)` (or supplied automatically by `RunContext::ephemeral`, which installs an empty registry) and is shared (cloned) across handed-off and sub-agent contexts.
 
 ### Secret redaction
 
@@ -269,14 +262,14 @@ Two matchers run in sequence:
 To add application-specific secrets to the scan:
 
 ```rust
-let ctx = RunContext::new(/* … */)
+let ctx = RunContext::ephemeral(())
     .with_extra_secrets(vec!["my-api-key-value".to_string()]);
 ```
 
 To disable redaction entirely:
 
 ```rust
-let ctx = RunContext::new(/* … */)
+let ctx = RunContext::ephemeral(())
     .without_output_redaction();
 ```
 

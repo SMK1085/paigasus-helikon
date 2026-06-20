@@ -14,11 +14,8 @@
 //! The model id (`gpt-5-mini`) — swap it for any available model if the API
 //! rejects it.
 
-use std::sync::Arc;
-
 use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession, RunContext,
-    RunResultStreaming, ToolContext, ToolError, TracerHandle,
+    Agent, AgentInput, LlmAgent, RunContext, RunResultStreaming, ToolContext, ToolError,
 };
 use paigasus_helikon::openai::OpenAiModel;
 use paigasus_helikon::{tool, tools};
@@ -121,13 +118,7 @@ async fn main() -> anyhow::Result<()> {
         .tools(tools![lookup_spending, budget_status])
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input = AgentInput::from_user_text("How am I doing on my dining budget this month?");
 

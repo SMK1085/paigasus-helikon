@@ -1,22 +1,12 @@
 #![allow(missing_docs)]
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use paigasus_helikon_core::{
-    CancellationToken, HookRegistry, MemorySession, RunContext, Tool, ToolContext, ToolEffect,
-    ToolError, TracerHandle,
-};
+use paigasus_helikon_core::{RunContext, Tool, ToolContext, ToolEffect, ToolError};
 use paigasus_helikon_tools::{BashTool, HostBackend, Sandbox};
 
 fn tool_ctx() -> ToolContext<()> {
-    let run_ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let run_ctx: RunContext<()> = RunContext::ephemeral(());
     run_ctx.to_tool_context()
 }
 

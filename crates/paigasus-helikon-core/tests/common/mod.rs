@@ -14,9 +14,9 @@ use futures_util::stream;
 
 use paigasus_helikon_core::{
     Agent, AgentError, AgentEvent, AgentInput, CancellationToken, ContentPart,
-    ConversationSnapshot, HookRegistry, Item, Model, ModelCapabilities, ModelError, ModelEvent,
-    ModelRequest, RunContext, SequenceId, Session, SessionError, SessionEvent, TokenUsage, Tool,
-    ToolContext, ToolError, ToolOutput, TracerHandle,
+    ConversationSnapshot, Item, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
+    RunContext, SequenceId, Session, SessionError, SessionEvent, TokenUsage, Tool, ToolContext,
+    ToolError, ToolOutput,
 };
 
 /// A scripted [`Model`] that emits a pre-recorded sequence of
@@ -181,13 +181,7 @@ pub fn noop_run_context<Ctx>() -> RunContext<Ctx>
 where
     Ctx: Default + Send + Sync + 'static,
 {
-    RunContext::new(
-        Arc::new(Ctx::default()),
-        Arc::new(NoopSession) as Arc<dyn Session>,
-        HookRegistry::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    )
+    RunContext::ephemeral(Ctx::default()).with_session(Arc::new(NoopSession))
 }
 
 use std::sync::atomic::{AtomicUsize, Ordering};

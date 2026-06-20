@@ -11,10 +11,10 @@ use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SimpleSp
 use tracing_subscriber::prelude::*;
 
 use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, ConversationSnapshot, FinishReason, HookRegistry,
-    Instructions, LlmAgent, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
-    ModelSettings, RunConfig, RunContext, RunResultStreaming, SequenceId, Session, SessionError,
-    SessionEvent, Tool, ToolContext, ToolError, ToolOutput, TracerHandle,
+    Agent, AgentInput, CancellationToken, ConversationSnapshot, FinishReason, Instructions,
+    LlmAgent, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, ModelSettings,
+    RunConfig, RunContext, RunResultStreaming, SequenceId, Session, SessionError, SessionEvent,
+    Tool, ToolContext, ToolError, ToolOutput, TracerHandle,
 };
 
 struct ScriptedModel {
@@ -153,17 +153,15 @@ async fn emits_genai_semconv_span_tree() {
             _output: std::marker::PhantomData,
         };
 
-        let ctx = RunContext::new(
-            Arc::new(()),
-            Arc::new(NoopSession) as Arc<dyn Session>,
-            HookRegistry::<()>::new(),
-            TracerHandle::builder()
-                .with_session_id("sess-1")
-                .with_user_id("user-1")
-                .with_tag("prod")
-                .build(),
-            CancellationToken::new(),
-        );
+        let ctx = RunContext::ephemeral(())
+            .with_session(Arc::new(NoopSession))
+            .with_tracer(
+                TracerHandle::builder()
+                    .with_session_id("sess-1")
+                    .with_user_id("user-1")
+                    .with_tag("prod")
+                    .build(),
+            );
 
         let stream = agent
             .run(ctx, AgentInput::from_user_text("hi"))
@@ -291,13 +289,7 @@ async fn run_span_usage_is_last_seen_not_summed_within_a_turn() {
             config: RunConfig::default(),
             _output: std::marker::PhantomData,
         };
-        let ctx = RunContext::new(
-            Arc::new(()),
-            Arc::new(NoopSession) as Arc<dyn Session>,
-            HookRegistry::<()>::new(),
-            TracerHandle::default(),
-            CancellationToken::new(),
-        );
+        let ctx = RunContext::ephemeral(()).with_session(Arc::new(NoopSession));
         let stream = agent
             .run(ctx, AgentInput::from_user_text("hi"))
             .await

@@ -28,11 +28,9 @@ export OPENAI_API_KEY=sk-...
 Each `#[tool]` function takes a `&ToolContext<()>` and a single `Deserialize + JsonSchema` argument struct, and returns `Result<T, ToolError>` where `T` is `Serialize + JsonSchema`. The doc comment on the function becomes the tool description the model sees; the doc comments on the argument fields become the JSON-Schema field descriptions.
 
 ```rust
-use std::sync::Arc;
-
 use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession, RunContext,
-    RunResultStreaming, ToolContext, ToolError, TracerHandle,
+    Agent, AgentInput, LlmAgent, RunContext,
+    RunResultStreaming, ToolContext, ToolError,
 };
 use paigasus_helikon::openai::OpenAiModel;
 use paigasus_helikon::{tool, tools};
@@ -135,13 +133,7 @@ async fn main() -> anyhow::Result<()> {
         .tools(tools![lookup_spending, budget_status])
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input = AgentInput::from_user_text("How am I doing on my dining budget this month?");
 
@@ -157,7 +149,7 @@ What each piece does:
 
 - `OpenAiModel::chat("gpt-5-mini").build()?` constructs the model adapter. The id is an example — swap it for any available model if the API rejects it.
 - `LlmAgent::builder::<()>()` opens the agent builder; the `()` type parameter is the per-run context state (here, the unit type — no shared state). `.name`, `.model`, `.instructions`, and `.tools(tools![...])` configure it; `.build()` finalizes.
-- `RunContext::new` takes exactly five arguments: an `Arc` over the context state (`Arc::new(())`), an `Arc` over the `Session` (`MemorySession::new()` for an ephemeral in-memory transcript), a `HookRegistry::<()>::new()`, a `TracerHandle::default()`, and a `CancellationToken::new()`.
+- `RunContext::ephemeral(())` is the one-liner for the all-defaults case: an in-memory `MemorySession`, an empty `HookRegistry`, a default `TracerHandle`, and a fresh `CancellationToken`. Use consuming setters (`.with_session(...)`, `.with_hooks(...)`, `.with_tracer(...)`, `.with_cancel(...)`) to override individual parts.
 - `AgentInput::from_user_text(...)` builds the initial user turn.
 - `agent.run(ctx, input).await?` returns an event stream; `RunResultStreaming::new(stream).collect().await?` drains it to a final result. `result.final_output` is the agent's plain-text answer.
 

@@ -67,10 +67,8 @@ The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them;
 The common case: call `run`, then drain the stream into a `RunResult` with `RunResultStreaming`.
 
 ```rust
-use std::sync::Arc;
 use paigasus_helikon::core::{
-    Agent, AgentInput, CancellationToken, HookRegistry, LlmAgent, MemorySession,
-    RunContext, RunResultStreaming, TracerHandle,
+    Agent, AgentInput, LlmAgent, RunContext, RunResultStreaming,
 };
 use paigasus_helikon::openai::OpenAiModel;
 
@@ -82,13 +80,7 @@ async fn main() -> anyhow::Result<()> {
         .instructions("You are a budgeting assistant.")
         .build();
 
-    let ctx: RunContext<()> = RunContext::new(
-        Arc::new(()),
-        Arc::new(MemorySession::new()),
-        HookRegistry::<()>::new(),
-        TracerHandle::default(),
-        CancellationToken::new(),
-    );
+    let ctx: RunContext<()> = RunContext::ephemeral(());
 
     let input = AgentInput::from_user_text("How am I doing on my dining budget this month?");
 
