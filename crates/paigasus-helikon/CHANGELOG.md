@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.4...paigasus-helikon-v0.4.5) - 2026-06-20
+
+### Added
+
+- *(core)* SMA-403 add runcontext ephemeral constructor and dependency setters ([#105](https://github.com/SMK1085/paigasus-helikon/pull/105))
+
 ## [0.4.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.3...paigasus-helikon-v0.4.4) - 2026-06-20
 
 ### Other
