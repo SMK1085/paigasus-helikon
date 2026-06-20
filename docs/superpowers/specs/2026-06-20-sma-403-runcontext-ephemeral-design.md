@@ -45,11 +45,19 @@ the existing self-builder idiom — **no new builder type, no behavior change to
 
 ```rust
 /// Zero-config context for the common ephemeral case: in-memory session,
-/// no hooks, default tracer, fresh cancellation token. Accepts a bare value
-/// (`ephemeral(())`) or a pre-built `Arc` (`ephemeral(shared_arc)`).
-pub fn ephemeral(user_ctx: impl Into<Arc<Ctx>>) -> Self {
+/// no hooks, default tracer, fresh cancellation token. Takes the user
+/// context **by value** and wraps it in an `Arc` internally, so the unit
+/// case is simply `RunContext::ephemeral(())`.
+pub fn ephemeral(user_ctx: Ctx) -> Self {
+    Self::ephemeral_shared(Arc::new(user_ctx))
+}
+
+/// As [`RunContext::ephemeral`], but takes a pre-built `Arc<Ctx>` to **share**
+/// one user context across several ephemeral runs (e.g. a request-scoped
+/// server sharing an `Arc<AppCtx>`) without cloning it.
+pub fn ephemeral_shared(user_ctx: Arc<Ctx>) -> Self {
     Self::new(
-        user_ctx.into(),
+        user_ctx,
         Arc::new(MemorySession::new()),
         HookRegistry::new(),
         TracerHandle::default(),
@@ -77,6 +85,11 @@ pub fn with_tracer(mut self, tracer: TracerHandle) -> Self {
 }
 
 /// Replace the cancellation token (e.g. to share one across runs).
+///
+/// Intended for the builder chain on a freshly constructed context. It
+/// swaps the token wholesale and does **not** retroactively re-link any
+/// child tokens already derived via `handoff_child` / `subagent_child` /
+/// `to_tool_context` — so it is not a mid-run cancel swap.
 pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
     self.cancel = cancel;
     self
@@ -85,14 +98,25 @@ pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
 
 ### Semantics & rationale
 
-- **`ephemeral` is a thin delegation to `new`** — it produces a byte-for-byte
-  identical `RunContext` to today's verbose form. There is no second code path
-  to reason about and no behavioral divergence to test against.
-- **`ephemeral` takes `impl Into<Arc<Ctx>>`** so both `ephemeral(())` (bare
-  value, via the blanket `Arc<T>: From<T>`) and `ephemeral(existing_arc)`
-  (reflexive `From<Arc<T>>`, shares the `Arc` without double-wrapping) work.
-  The turbofish/type annotation the `()` case occasionally needs is already
-  required with `new` today, so this is not a regression.
+- **Both constructors are thin delegations to `new`** (`ephemeral` →
+  `ephemeral_shared` → `new`) — they produce a byte-for-byte identical
+  `RunContext` to today's verbose form. There is no second code path to reason
+  about and no behavioral divergence to test against.
+- **`ephemeral` takes `Ctx` by value; `ephemeral_shared` takes `Arc<Ctx>`.**
+  This two-method split was chosen over a single `ephemeral(impl Into<Arc<Ctx>>)`
+  after a verified inference defect: with `impl Into<Arc<Ctx>>`, the value form
+  is unambiguous, but the **`Arc` form is not** — `ephemeral(arc)` with an
+  unconstrained `Ctx` fails to compile with `E0283` (both `From<T> for Arc<T>`
+  and the reflexive `From<T> for T` satisfy the bound), and an explicit
+  mis-annotation `RunContext::<Arc<MyCtx>>::ephemeral(arc)` compiles **silently
+  double-wrapped**. Both behaviors were reproduced against the compiler
+  (`rustc --edition 2021`, 2026-06-20). Taking `Ctx` by value (wrap internally)
+  and `Arc<Ctx>` explicitly removes the ambiguity *by construction* — there is
+  no `Into` to resolve, so the double-wrap path cannot be expressed. `Ctx` is
+  pinned by the argument type in both methods.
+- **`ephemeral_shared` has no in-repo caller** (every migration site uses the
+  value form). It is a deliberate downstream affordance, so its coverage is a
+  dedicated unit test + a rustdoc doctest rather than the migration sweep.
 - **The four setters take the `Arc<dyn Session>` / concrete-type forms**,
   deliberately matching the established convention for the existing setters
   (`with_permission_policy` / `with_approval_handler` take `Arc<dyn …>`;
@@ -122,6 +146,10 @@ let ctx = RunContext::ephemeral(my_ctx)
 // Custom tracer (the langfuse example):
 let ctx = RunContext::ephemeral(())
     .with_tracer(TracerHandle::builder().with_session_id("sess-1").build());
+
+// Share one user context across many ephemeral runs:
+let app = Arc::new(AppCtx::new());
+let ctx = RunContext::ephemeral_shared(Arc::clone(&app));
 ```
 
 ## Migration scope
@@ -167,8 +195,12 @@ sweep doubles as integration coverage.
 
 User-facing additive `-core` API → CLAUDE.md requires book + crate-README parity:
 
-- Add an `ephemeral` doctest to the `RunContext` rustdoc in `context.rs`
-  (one-liner form; `MemorySession` is re-exported at the core crate root).
+- Add rustdoc doctests to `context.rs` covering each migrated pattern so the
+  examples are **compiler-checked** by `cargo test --doc` (mdBook code blocks
+  are not compiled by CI — only linkcheck runs — so the book pages alone can
+  drift to a typo'd API silently): the `ephemeral(())` one-liner, an
+  `ephemeral_shared(Arc<_>)` form, and a `.with_session(...).with_tracer(...)`
+  builder chain. (`MemorySession` is re-exported at the core crate root.)
 - **mdBook:** `RunContext::new` appears across **9 pages** under `docs/book/src/`
   (`introduction`, `getting-started/quickstart`, and the `concepts/`
   pages `core-primitives`, `multi-agent-patterns`, `observability-evaluation`,
@@ -191,8 +223,10 @@ Unit tests added to `runcontext_tests` in `context.rs`:
 - `ephemeral_matches_new_defaults` — `agent_depth == 0`, `permission_mode ==
   Default`, `default_guards()`, `redact_output()`, `run_config().is_none()`,
   `hooks().is_empty()`, and the session round-trips an `append` + `snapshot`.
-- `ephemeral_accepts_value_and_arc` — both `ephemeral(())` and
-  `ephemeral(Arc::new(()))` compile and produce an equivalent context.
+- `ephemeral_shared_keeps_inner_ctx_type` — build via `ephemeral_shared(Arc::new(Marker))`
+  and assert the resolved `Ctx` is the **inner** type, not `Arc<Marker>` (guards
+  against the double-wrap the old `impl Into` design could express; here it is
+  structurally impossible, but the test locks the contract).
 - `with_session_swaps_handle`, `with_hooks_installs_registry`,
   `with_tracer_round_trips` (surfaces `session_id`), `with_cancel_token_cancels`
   (the installed token's `cancel()` is observed via the context's `cancel()`).
