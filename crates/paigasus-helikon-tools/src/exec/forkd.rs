@@ -363,6 +363,9 @@ fn truncate(mut s: String, cap: usize) -> (String, bool) {
 #[async_trait]
 impl ExecutionBackend for ForkdBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
+        // Accepted skeleton gap: if the controller commits a fork but we fail to
+        // read its id (decode error / client timeout after commit), that sandbox
+        // is orphaned — we have no id to DELETE. SMA-437 adds GC/reconciliation.
         let id = self.fork().await?;
         // The wall-clock command timeout governs exec; teardown always runs.
         let exec_result = tokio::time::timeout(self.timeout, self.exec(&id, &req.command)).await;
