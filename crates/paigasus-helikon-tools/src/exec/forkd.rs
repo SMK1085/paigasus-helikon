@@ -193,9 +193,9 @@ impl ForkdBackendBuilder {
         self
     }
 
-    /// Finish building into a [`ForkdBackend`] directly (useful for unit tests
-    /// that need to inspect the struct fields).
-    pub fn into_backend(self) -> Result<ForkdBackend, ForkdError> {
+    /// Build into the concrete [`ForkdBackend`] — used by [`Self::build`] and the
+    /// in-module unit tests. Public callers go through `build()`.
+    fn into_backend(self) -> Result<ForkdBackend, ForkdError> {
         // Validate the controller URL up front (parsed value is discarded).
         reqwest::Url::parse(&self.controller_url)
             .map_err(|_| ForkdError::InvalidUrl(self.controller_url.clone()))?;
@@ -230,7 +230,9 @@ impl ForkdBackendBuilder {
 
 /// The microVM execution backend — a REST client of the forkd controller. See
 /// the module docs: experimental skeleton; egress is carried but not enforced.
-#[derive(Debug)]
+///
+/// `Debug` is implemented manually to **redact the bearer `token`** — a derived
+/// `Debug` would leak it into logs/traces.
 pub struct ForkdBackend {
     client: reqwest::Client,
     base: String,
@@ -238,8 +240,20 @@ pub struct ForkdBackend {
     snapshot: String,
     timeout: Duration,
     max_output_bytes: usize,
-    /// Egress policy carried by the backend (enforcement is SMA-437).
-    pub egress: EgressPolicy,
+    egress: EgressPolicy,
+}
+
+impl std::fmt::Debug for ForkdBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForkdBackend")
+            .field("base", &self.base)
+            .field("token", &"<redacted>")
+            .field("snapshot", &self.snapshot)
+            .field("timeout", &self.timeout)
+            .field("max_output_bytes", &self.max_output_bytes)
+            .field("egress", &self.egress)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ForkdBackend {
@@ -256,6 +270,12 @@ impl ForkdBackend {
             max_output_bytes: DEFAULT_MAX_OUTPUT,
             egress: EgressPolicy::deny_all(),
         }
+    }
+
+    /// The egress policy this backend carries. Enforcement is deferred to
+    /// SMA-437; this read accessor lets callers inspect the declared intent.
+    pub fn egress_policy(&self) -> &EgressPolicy {
+        &self.egress
     }
 
     async fn post_json<T: serde::de::DeserializeOwned>(
@@ -477,7 +497,22 @@ mod tests {
             .egress_policy(EgressPolicy::deny_all().allow_domains(["pypi.org"]))
             .into_backend()
             .unwrap();
-        assert!(b.egress.is_allowed("pypi.org"));
-        assert!(!b.egress.is_allowed("evil.test"));
+        assert!(b.egress_policy().is_allowed("pypi.org"));
+        assert!(!b.egress_policy().is_allowed("evil.test"));
+    }
+
+    #[test]
+    fn debug_redacts_the_bearer_token() {
+        let b = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("super-secret-token")
+            .snapshot("s")
+            .into_backend()
+            .unwrap();
+        let dbg = format!("{b:?}");
+        assert!(
+            !dbg.contains("super-secret-token"),
+            "token leaked in Debug: {dbg}"
+        );
+        assert!(dbg.contains("redacted"));
     }
 }
