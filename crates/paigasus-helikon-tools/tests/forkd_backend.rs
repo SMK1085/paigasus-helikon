@@ -1,6 +1,8 @@
 #![cfg(feature = "microvm")]
 #![allow(missing_docs)]
 
+use std::time::Duration;
+
 use paigasus_helikon_tools::{ExecRequest, ForkdBackend};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -41,4 +43,118 @@ async fn forks_execs_and_destroys() {
     assert_eq!(out.exit_code, Some(0));
     assert!(!out.timed_out);
     assert!(!out.truncated);
+}
+
+#[tokio::test]
+async fn controller_5xx_maps_to_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/sandboxes"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let backend = ForkdBackend::builder(server.uri())
+        .bearer_token("test-token")
+        .snapshot("snap-1")
+        .build()
+        .unwrap();
+    let err = backend.run(ExecRequest::new("echo hi")).await.unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("HTTP 500"), "unexpected error: {msg}");
+    // Token hygiene: auth material never appears in the error text.
+    assert!(!msg.contains("test-token"), "token leaked: {msg}");
+}
+
+#[tokio::test]
+async fn exec_timeout_reports_timed_out_and_still_destroys() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/sandboxes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"sb-2"}])))
+        .mount(&server)
+        .await;
+    // Exec hangs well past the command timeout.
+    Mock::given(method("POST"))
+        .and(path("/v1/sandboxes/sb-2/exec"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(30))
+                .set_body_json(serde_json::json!({"stdout":"","stderr":"","exit_code":0})),
+        )
+        .mount(&server)
+        .await;
+    // Scoped destroy mock asserts teardown fired exactly once on the timeout path.
+    let destroy = Mock::given(method("DELETE"))
+        .and(path("/v1/sandboxes/sb-2"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount_as_scoped(&server)
+        .await;
+
+    let backend = ForkdBackend::builder(server.uri())
+        .bearer_token("test-token")
+        .snapshot("snap-1")
+        .timeout(Duration::from_millis(100))
+        .build()
+        .unwrap();
+    let out = backend.run(ExecRequest::new("sleep 30")).await.unwrap();
+    assert!(out.timed_out);
+    assert_eq!(out.exit_code, None);
+    // Dropping the scoped mock verifies the .expect(1) on destroy.
+    drop(destroy);
+}
+
+#[tokio::test]
+async fn output_over_cap_is_truncated() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/sandboxes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"sb-3"}])))
+        .mount(&server)
+        .await;
+    let big = "x".repeat(50);
+    Mock::given(method("POST"))
+        .and(path("/v1/sandboxes/sb-3/exec"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"stdout": big, "stderr":"", "exit_code":0})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/v1/sandboxes/sb-3"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let backend = ForkdBackend::builder(server.uri())
+        .bearer_token("t")
+        .snapshot("s")
+        .max_output_bytes(10)
+        .build()
+        .unwrap();
+    let out = backend.run(ExecRequest::new("yes")).await.unwrap();
+    assert_eq!(out.stdout.len(), 10);
+    assert!(out.truncated);
+}
+
+#[tokio::test]
+#[ignore = "needs a live forkd controller + /dev/kvm; run on a Linux KVM host (SMA-437)"]
+async fn live_forkd_runs_bash_in_a_microvm() {
+    // Set FORKD_URL / FORKD_TOKEN / FORKD_SNAPSHOT to point at a real controller.
+    let url = std::env::var("FORKD_URL").expect("FORKD_URL");
+    let token = std::env::var("FORKD_TOKEN").expect("FORKD_TOKEN");
+    let snapshot = std::env::var("FORKD_SNAPSHOT").expect("FORKD_SNAPSHOT");
+    let backend = ForkdBackend::builder(url)
+        .bearer_token(token)
+        .snapshot(snapshot)
+        .build()
+        .unwrap();
+    let out = backend
+        .run(ExecRequest::new("echo from-a-microvm"))
+        .await
+        .unwrap();
+    assert_eq!(out.stdout.trim(), "from-a-microvm");
+    assert_eq!(out.exit_code, Some(0));
 }
