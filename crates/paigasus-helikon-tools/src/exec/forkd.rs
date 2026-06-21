@@ -4,6 +4,21 @@
 //! and egress *enforcement* are deferred to SMA-437; `guarantees().network` is
 //! honestly `None`.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use paigasus_helikon_core::ToolError;
+
+use super::{
+    ExecOutput, ExecRequest, ExecutionBackend, Isolation, SandboxGuarantees, DEFAULT_MAX_OUTPUT,
+    DEFAULT_TIMEOUT,
+};
+
+const DEFAULT_UA: &str = concat!("paigasus-helikon-tools/", env!("CARGO_PKG_VERSION"));
+/// Fixed control-plane timeout for the destroy call (the command timeout governs exec).
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Construction-time failures for [`ForkdBackend`]. Runtime failures (daemon
 /// unreachable, fork/exec error) surface as `ToolError::Other` from `run`.
 ///
@@ -128,6 +143,243 @@ impl EgressPolicy {
     }
 }
 
+/// Builder for [`ForkdBackend`].
+pub struct ForkdBackendBuilder {
+    controller_url: String,
+    bearer_token: Option<String>,
+    controller_ca: Option<Vec<u8>>,
+    snapshot: Option<String>,
+    timeout: Duration,
+    max_output_bytes: usize,
+    egress: EgressPolicy,
+}
+
+impl ForkdBackendBuilder {
+    /// Bearer token presented to the controller (required).
+    pub fn bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.bearer_token = Some(token.into());
+        self
+    }
+
+    /// PEM trust root / cert pin for the controller's TLS (required for a
+    /// self-signed localhost daemon; use a real CA for a remote host).
+    pub fn controller_ca(mut self, pem: impl Into<Vec<u8>>) -> Self {
+        self.controller_ca = Some(pem.into());
+        self
+    }
+
+    /// Warmed parent snapshot tag to fork children from (required; forkd's
+    /// `snapshot_tag`).
+    pub fn snapshot(mut self, tag: impl Into<String>) -> Self {
+        self.snapshot = Some(tag.into());
+        self
+    }
+
+    /// Wall-clock timeout for the exec step (default 30s).
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Truncate captured stdout/stderr to this many bytes each (default 1 MiB).
+    pub fn max_output_bytes(mut self, n: usize) -> Self {
+        self.max_output_bytes = n;
+        self
+    }
+
+    /// Egress policy the backend carries (enforcement is SMA-437).
+    pub fn egress_policy(mut self, policy: EgressPolicy) -> Self {
+        self.egress = policy;
+        self
+    }
+
+    /// Finish building into a [`ForkdBackend`] directly (useful for unit tests
+    /// that need to inspect the struct fields).
+    pub fn into_backend(self) -> Result<ForkdBackend, ForkdError> {
+        // Validate the controller URL up front (parsed value is discarded).
+        reqwest::Url::parse(&self.controller_url)
+            .map_err(|_| ForkdError::InvalidUrl(self.controller_url.clone()))?;
+        let token = self
+            .bearer_token
+            .ok_or(ForkdError::MissingConfig("bearer_token"))?;
+        let snapshot = self.snapshot.ok_or(ForkdError::MissingConfig("snapshot"))?;
+        let mut cb = reqwest::Client::builder()
+            .user_agent(DEFAULT_UA)
+            .connect_timeout(CONTROL_TIMEOUT);
+        if let Some(pem) = &self.controller_ca {
+            let cert = reqwest::Certificate::from_pem(pem).map_err(|_| ForkdError::InvalidCa)?;
+            cb = cb.add_root_certificate(cert);
+        }
+        let client = cb.build().map_err(|_| ForkdError::ClientBuild)?;
+        Ok(ForkdBackend {
+            client,
+            base: self.controller_url.trim_end_matches('/').to_string(),
+            token,
+            snapshot,
+            timeout: self.timeout,
+            max_output_bytes: self.max_output_bytes,
+            egress: self.egress,
+        })
+    }
+
+    /// Finish building into a shareable `Arc<dyn ExecutionBackend>`.
+    pub fn build(self) -> Result<Arc<dyn ExecutionBackend>, ForkdError> {
+        Ok(Arc::new(self.into_backend()?))
+    }
+}
+
+/// The microVM execution backend — a REST client of the forkd controller. See
+/// the module docs: experimental skeleton; egress is carried but not enforced.
+#[derive(Debug)]
+pub struct ForkdBackend {
+    client: reqwest::Client,
+    base: String,
+    token: String,
+    snapshot: String,
+    timeout: Duration,
+    max_output_bytes: usize,
+    /// Egress policy carried by the backend (enforcement is SMA-437).
+    pub egress: EgressPolicy,
+}
+
+impl ForkdBackend {
+    /// Start building a backend against the controller at `controller_url`
+    /// (e.g. `"https://127.0.0.1:8889"`). Defaults: 30s timeout, 1 MiB output
+    /// cap, `EgressPolicy::deny_all()`.
+    pub fn builder(controller_url: impl Into<String>) -> ForkdBackendBuilder {
+        ForkdBackendBuilder {
+            controller_url: controller_url.into(),
+            bearer_token: None,
+            controller_ca: None,
+            snapshot: None,
+            timeout: DEFAULT_TIMEOUT,
+            max_output_bytes: DEFAULT_MAX_OUTPUT,
+            egress: EgressPolicy::deny_all(),
+        }
+    }
+
+    async fn post_json<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &impl serde::Serialize,
+    ) -> Result<T, ToolError> {
+        // The bearer token rides only in the Authorization header — never in
+        // the URL/body — so reqwest's error Display (URL only) cannot leak it.
+        let resp = self
+            .client
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd request failed: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(ToolError::Other(anyhow::anyhow!(
+                "forkd controller returned HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        resp.json::<T>()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd response decode failed: {e}")))
+    }
+
+    async fn fork(&self) -> Result<String, ToolError> {
+        let url = format!("{}/v1/sandboxes", self.base);
+        let body = ForkReq {
+            snapshot_tag: &self.snapshot,
+            n: 1,
+            per_child_netns: true,
+        };
+        // Fork returns an array (n children); we requested 1, so take the first.
+        let list: Vec<SandboxInfo> =
+            tokio::time::timeout(self.timeout, self.post_json(&url, &body))
+                .await
+                .map_err(|_| ToolError::Other(anyhow::anyhow!("forkd: fork timed out")))??;
+        list.into_iter()
+            .next()
+            .map(|s| s.id)
+            .ok_or_else(|| ToolError::Other(anyhow::anyhow!("forkd returned no sandbox")))
+    }
+
+    async fn exec(&self, id: &str, command: &str) -> Result<ExecResp, ToolError> {
+        let url = format!("{}/v1/sandboxes/{id}/exec", self.base);
+        // `args` runs verbatim in the guest, so wrap the shell command.
+        self.post_json(
+            &url,
+            &ExecReq {
+                args: ["sh", "-c", command],
+                timeout_secs: self.timeout.as_secs(),
+            },
+        )
+        .await
+    }
+
+    async fn destroy(&self, id: &str) {
+        // Best-effort teardown; failures here are not surfaced to the model.
+        let url = format!("{}/v1/sandboxes/{id}", self.base);
+        let _ = self
+            .client
+            .delete(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await;
+    }
+}
+
+/// Truncate `s` to `cap` bytes on a char boundary; returns `(s, truncated)`.
+fn truncate(mut s: String, cap: usize) -> (String, bool) {
+    if s.len() <= cap {
+        return (s, false);
+    }
+    let mut end = cap;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+    (s, true)
+}
+
+#[async_trait]
+impl ExecutionBackend for ForkdBackend {
+    async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
+        let id = self.fork().await?;
+        // The wall-clock command timeout governs exec; teardown always runs.
+        let exec_result = tokio::time::timeout(self.timeout, self.exec(&id, &req.command)).await;
+        let _ = tokio::time::timeout(CONTROL_TIMEOUT, self.destroy(&id)).await;
+        match exec_result {
+            Ok(Ok(resp)) => {
+                let (stdout, t1) = truncate(resp.stdout, self.max_output_bytes);
+                let (stderr, t2) = truncate(resp.stderr, self.max_output_bytes);
+                Ok(ExecOutput::new(
+                    stdout,
+                    stderr,
+                    resp.exit_code,
+                    false,
+                    t1 || t2,
+                ))
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => Ok(ExecOutput::new(
+                String::new(),
+                String::new(),
+                None,
+                true,
+                false,
+            )),
+        }
+    }
+
+    fn guarantees(&self) -> SandboxGuarantees {
+        SandboxGuarantees::new(
+            Isolation::Virtualized, // filesystem — separate guest kernel + rootfs
+            Isolation::None,        // network — egress NOT filtered yet (SMA-437)
+            Isolation::Virtualized, // syscalls — guest kernel, not a host filter
+            "forkd (firecracker microvm — experimental)",
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +446,38 @@ mod tests {
         assert!(!p.is_allowed("evil.test"));
         assert!(!p.is_allowed("api.evil.test")); // sub-domain
         assert!(p.is_allowed("good.test")); // no allow-list -> default allow
+    }
+
+    #[test]
+    fn guarantees_are_honest() {
+        let b = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .into_backend()
+            .unwrap();
+        let g = b.guarantees();
+        assert_eq!(g.filesystem, Isolation::Virtualized);
+        assert_eq!(g.syscalls, Isolation::Virtualized);
+        assert_eq!(g.network, Isolation::None); // egress NOT enforced in the skeleton
+        assert!(g.label.contains("experimental"));
+    }
+
+    #[test]
+    fn builder_carries_egress_policy_and_requires_fields() {
+        // Missing snapshot -> construction error.
+        let err = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .into_backend()
+            .unwrap_err();
+        assert!(matches!(err, ForkdError::MissingConfig("snapshot")));
+        // The configured policy is carried on the backend.
+        let b = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .egress_policy(EgressPolicy::deny_all().allow_domains(["pypi.org"]))
+            .into_backend()
+            .unwrap();
+        assert!(b.egress.is_allowed("pypi.org"));
+        assert!(!b.egress.is_allowed("evil.test"));
     }
 }

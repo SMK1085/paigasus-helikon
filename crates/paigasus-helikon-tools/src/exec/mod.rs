@@ -33,7 +33,7 @@ pub use os_sandbox_seatbelt::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandb
 #[cfg(feature = "microvm")]
 mod forkd;
 #[cfg(feature = "microvm")]
-pub use forkd::{EgressPolicy, ForkdError};
+pub use forkd::{EgressPolicy, ForkdBackend, ForkdBackendBuilder, ForkdError};
 
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
