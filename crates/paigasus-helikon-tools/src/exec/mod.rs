@@ -30,6 +30,11 @@ mod os_sandbox_seatbelt;
 #[cfg(all(feature = "os-sandbox", target_os = "macos"))]
 pub use os_sandbox_seatbelt::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 
+#[cfg(feature = "microvm")]
+mod forkd;
+#[cfg(feature = "microvm")]
+pub use forkd::EgressPolicy;
+
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default per-stream output cap, in bytes (1 MiB).
