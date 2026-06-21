@@ -1,6 +1,6 @@
 # SMA-416 — `paigasus-helikon-tools`: microVM `ExecutionBackend` (forkd / Firecracker) — spike + skeleton
 
-**Status:** approved (brainstorm) — pending written-spec review
+**Status:** approved — ready for implementation planning
 **Ticket:** [SMA-416](https://linear.app/smaschek/issue/SMA-416/paigasus-helikon-tools-microvm-executionbackend-forkd-firecracker)
 **Milestone:** Composition & Extensibility
 **Branch:** `feature/sma-416-paigasus-helikon-tools-microvm-executionbackend-forkd`
@@ -125,7 +125,7 @@ ForkdBackend::builder(controller_url)   // e.g. "https://127.0.0.1:8080"
 - `ForkdError` — crate-local `thiserror` / `#[non_exhaustive]` enum for
   **construction** failures (malformed URL, missing token, unreadable CA), parallel
   to `OsSandboxError`. Runtime failures surface as `ToolError::Other` from `run`.
-- **TLS trust (review #3) — required, no silent neutering.** rustls rejects
+- **TLS trust — required, no silent neutering.** rustls rejects
   self-signed certs by default, so the builder takes `.controller_ca(pem)` to add a
   trust root or pin the controller's cert. **A localhost daemon** (self-signed) must
   supply its CA/pin; **a remote daemon** (decision §2.3) must use a real CA — there
@@ -133,7 +133,7 @@ ForkdBackend::builder(controller_url)   // e.g. "https://127.0.0.1:8080"
   a network MITM. We deliberately do **not** expose `danger_accept_invalid_certs`;
   the spike note records why (it silently neuters TLS). If no CA is given and the
   controller cert is untrusted, `build()`/first request fails closed.
-- **Bearer-token hygiene (review #9).** The token must never appear in `ForkdError`
+- **Bearer-token hygiene.** The token must never appear in `ForkdError`
   or `ToolError::Other` messages or in trace spans. reqwest errors carry the URL but
   not headers — keep it that way; redact in any custom error/`Display`. SMA-414's
   output redaction does **not** cover construction-time errors, so this is enforced
@@ -149,9 +149,9 @@ ForkdBackend::builder(controller_url)   // e.g. "https://127.0.0.1:8080"
 1. **Fork** a microVM from the warmed `snapshot` (COW) → VM id.
 2. **Exec** `sh -c <req.command>` inside, forwarding the env allowlist.
 3. **Collect** stdout/stderr/exit. The `max_output_bytes` cap and the wall-clock
-   `timeout` are **new code over the HTTP response** — *not* `spawn_capped` reuse
-   (review #8): that helper is bound to a local `tokio::process::Command` with pipes
-   + process-group kill, which a REST client has none of. The cap truncates the
+   `timeout` are **new code over the HTTP response** — *not* `spawn_capped` reuse:
+   that helper is bound to a local `tokio::process::Command` with pipes +
+   process-group kill, which a REST client has none of. The cap truncates the
    response body; the timeout aborts the request and triggers VM teardown, reporting
    `timed_out`.
 4. **Destroy** the VM (best-effort, in a guard so it runs on the error/timeout path
@@ -175,7 +175,7 @@ SandboxGuarantees {
 When the layered egress policy lands, `network` upgrades to the appropriate tier
 (`Proxied` / `Virtualized`) — added by that follow-up, non-breaking.
 
-**Per-axis honesty caveats (reviews #5, #7) — to state plainly in the docs:**
+**Per-axis honesty caveats — to state plainly in the docs:**
 
 - **Network: the skeleton microVM is NOT network-contained, and is *weaker* than
   `OsSandboxBackend` on egress.** `network: None` is the same tier `HostBackend`
@@ -191,7 +191,7 @@ When the layered egress policy lands, `network` upgrades to the appropriate tier
   seccomp filter over the *host* syscall set). The doc on `Isolation::Virtualized`
   (§4) states this so consumers don't read `Virtualized` as "restricted/filtered."
 
-### 3.4 Snapshot (guest image) contract — what makes "it runs" real (review #2)
+### 3.4 Snapshot (guest image) contract — what makes "it runs" real
 
 `.snapshot(template_id)` is the linchpin: a fork from a snapshot without a usable
 userland produces nothing, so the difference between "skeleton compiles" and "a
@@ -211,8 +211,8 @@ point at:
 - **How exec reaches the userland:** forkd's controller exec endpoint runs the
   command **inside the booted guest**; the builder's `env_allowlist` values are
   forwarded as guest environment. (Verified against forkd's exec-in-guest model;
-  exact endpoint shape is pinned in the spike, review #4.)
-- **CoW shared state — deployment warning (review #6):** every child inherits the
+  exact endpoint shape is pinned during the spike.)
+- **CoW shared state — deployment warning:** every child inherits the
   warmed parent's filesystem **and** memory copy-on-write, so any credential or
   secret baked into the snapshot is visible to **every** sandboxed run. **Do not
   provision the warmed snapshot with the agent's secrets present.** (forkd reseeds
@@ -220,8 +220,8 @@ point at:
   only static secrets are.)
 
 Building/maintaining the image is out of scope here (§9) and tracked by the live-KVM
-follow-up **SMA-437** (review #1), but the contract above is recorded so the deferral
-isn't a landmine.
+follow-up **SMA-437**, but the contract above is recorded so the deferral isn't a
+landmine.
 
 ## 4. The `Isolation::Virtualized` variant
 
@@ -229,7 +229,7 @@ isn't a landmine.
 `Virtualized` for this ticket. Adding it is additive/non-breaking (downstream
 matches already require a wildcard arm). No other backend changes its `guarantees()`.
 
-Doc string (review #7 — disambiguate the semantics): *"Isolated by a
+Doc string (disambiguating the semantics): *"Isolated by a
 hardware-virtualization (KVM/hypervisor) boundary — a separate guest kernel.
 `Virtualized` means the whole machine is isolated, **not** that any one axis is
 filtered: a microVM does not filter syscalls the way `OsKernel` (seccomp) does — the
@@ -268,7 +268,7 @@ committed on the branch, recording:
   `ToolError::Other`), and that the configured `EgressPolicy` is carried. A unit test
   asserts `guarantees()` reports the honest tiers (`Virtualized` fs/syscalls,
   `None` network).
-- **Mock fidelity (review #4) — pin to forkd's *published* contract, not our guess.**
+- **Mock fidelity — pin to forkd's *published* contract, not our guess.**
   forkd is pre-1.0 with explicit API churn, so a mock built to our *assumption* is
   green-by-construction. The wiremock request/response shapes are pinned to forkd's
   **documented** API (its OpenAPI/schema if it publishes one; otherwise its
@@ -278,7 +278,7 @@ committed on the branch, recording:
   `/dev/kvm` — and shape the mock from that, not from invention. (The macOS dev host
   can't run forkd, so this transcript-capture is a best-effort Linux-box spike step,
   not a CI gate.)
-- **Timeout → VM-teardown path (review #8) has its own test:** the mock simulates a
+- **Timeout → VM-teardown path has its own test:** the mock simulates a
   slow / oversized response body; the test asserts the request is aborted, `ExecOutput`
   reports `timed_out` / `truncated`, **and** the teardown (destroy) call still fires
   on that path.
@@ -305,7 +305,7 @@ committed on the branch, recording:
 - **Docs (same PR, per CLAUDE.md):** mdBook sandbox page gains the **microVM tier**
   (clearly marked **experimental/skeleton**, KVM-only at runtime, egress deferred),
   led by where it sits in the containment ladder — **but the ladder note must state
-  plainly (review #5) that the skeleton microVM is not network-contained today and is
+  plainly that the skeleton microVM is not network-contained today and is
   *weaker than `OsSandboxBackend`* on the egress axis** until the proxy follow-up, so
   "strongest tier" doesn't mislead a reader comparing `guarantees()`. Update the
   `-tools` README, the facade README, and the root README feature→module maps for
@@ -331,8 +331,8 @@ The ticket's ACs, restated against what this PR actually delivers:
 - ✅ **CI green** (fmt, clippy incl. `--all-features`, the test matrix, docs,
   doc-coverage, commits, pr-title, audit, deny) and `mdbook build` clean.
 
-**Tracker honesty (reviews #1, #10) — don't mark the strongest tier Done on a
-skeleton.** Linear auto-closes SMA-416 when this PR merges, but both *executable* AC
+**Tracker honesty — don't mark the strongest tier Done on a skeleton.** Linear
+auto-closes SMA-416 when this PR merges, but both *executable* AC
 halves (a Bash command actually run in a VM; egress actually enforced) are deferred.
 So before merge we **(a)** re-scope SMA-416's own ACs to exactly what ships — spike
 note + compiling, mock-tested skeleton — and update the ticket's "Linux/KVM/x86_64
@@ -352,22 +352,3 @@ related to SMA-413/SMA-412).
 - A shared `microvm/` abstraction or the `E2bBackend` itself (§2.6).
 - Real KVM CI / a self-hosted KVM runner.
 - Per-call stdin / env overrides on `ExecRequest` (`#[non_exhaustive]` reserves room).
-
-## 10. Staff-review resolutions (2026-06-21)
-
-All ten points from
-[`2026-06-21-sma-416-forkd-microvm-design-review.md`](2026-06-21-sma-416-forkd-microvm-design-review.md)
-evaluated and accepted (forkd's reality was independently confirmed by the review).
-
-| # | Review item | Resolution | Where |
-|---|-------------|-----------|-------|
-| 1 | Ticket auto-closes Done with executable ACs deferred | SMA-416 re-scoped to spike+skeleton; live-KVM+egress follow-up filed as **SMA-437** | §8 tracker note; Linear (done) |
-| 2 | Snapshot provisioning contract unspecified | New snapshot-contract subsection (contents, who warms it, exec→userland) | §3.4 |
-| 3 | Controller TLS trust unspecified (worse with remote, #3 scope) | `.controller_ca(pem)` knob; no `danger_accept_invalid_certs`; localhost vs remote story; fail-closed | §3.2 |
-| 4 | Mock green-by-construction vs assumed alpha API | Pin mock to forkd's *published* contract; capture real-controller transcript where a Linux host exists | §6 |
-| 5 | "Strongest tier" vs `network: None` | Docs/ladder must state microVM is not network-contained, weaker than OsSandbox on egress, until proxy | §3.3, §7 |
-| 6 | CoW shares warmed-snapshot state across forks | Deployment warning: never bake secrets into the snapshot (RNG reseed noted) | §3.4 |
-| 7 | `syscalls: Virtualized` overloads the axis | `Virtualized` doc clarifies "VM boundary, not filtered" | §3.3, §4 |
-| 8 | Output cap/timeout re-implemented, not "shared" | Wording corrected (new code over HTTP, not `spawn_capped`); dedicated teardown-on-timeout test | §3.3, §6 |
-| 9 | Bearer-token hygiene | Token kept out of `ForkdError`/`ToolError`/spans; redact in custom `Display` | §3.2 |
-| 10 | Sanctioned Linux-only scope departure | Recorded in spike note; update ticket AC text | §2.3, §5, §8 |
