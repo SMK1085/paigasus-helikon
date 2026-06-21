@@ -216,7 +216,8 @@ The strongest containment tier on the filesystem and syscall axes: each command 
 inside a KVM-isolated Firecracker microVM orchestrated by the forkd daemon. The
 `ForkdBackend` itself is a portable REST client (no Linux-kernel dependency in the
 client crate); the daemon side requires Linux + `/dev/kvm`. Platform availability is
-checked at runtime via `build()`, not compile time.
+checked at runtime when controller requests are made (for example on `run()`), not
+at compile time.
 
 > **Skeleton status (SMA-416).** The fork → exec → destroy REST flow is implemented
 > and mock-tested. A live KVM run and network-egress enforcement are deferred to

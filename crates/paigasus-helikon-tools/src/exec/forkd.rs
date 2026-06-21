@@ -38,6 +38,10 @@ pub enum ForkdError {
     /// The reqwest client could not be constructed.
     #[error("failed to build forkd HTTP client")]
     ClientBuild,
+    /// A plain-`http` controller URL on a non-loopback host — this would send the
+    /// bearer token in cleartext over the network. Use `https` for remote hosts.
+    #[error("insecure forkd controller URL: use https for non-loopback hosts")]
+    InsecureControllerUrl,
 }
 
 /// `POST /v1/sandboxes` request body — fork `n` children (we use 1) copy-on-write
@@ -196,9 +200,15 @@ impl ForkdBackendBuilder {
     /// Build into the concrete [`ForkdBackend`] — used by [`Self::build`] and the
     /// in-module unit tests. Public callers go through `build()`.
     fn into_backend(self) -> Result<ForkdBackend, ForkdError> {
-        // Validate the controller URL up front (parsed value is discarded).
-        reqwest::Url::parse(&self.controller_url)
+        // Validate the controller URL up front. Reject plain `http` to a
+        // non-loopback host: the bearer token would travel in cleartext, the
+        // network-MITM threat the TLS-trust story exists to prevent. Loopback
+        // `http` (forkd's documented default) stays allowed.
+        let parsed = reqwest::Url::parse(&self.controller_url)
             .map_err(|_| ForkdError::InvalidUrl(self.controller_url.clone()))?;
+        if parsed.scheme() == "http" && !host_is_loopback(&parsed) {
+            return Err(ForkdError::InsecureControllerUrl);
+        }
         let token = self
             .bearer_token
             .ok_or(ForkdError::MissingConfig("bearer_token"))?;
@@ -345,6 +355,21 @@ impl ForkdBackend {
             .send()
             .await;
     }
+}
+
+/// `true` if `url`'s host is loopback (`localhost`, `127.0.0.0/8`, or `::1`), so a
+/// plain-`http` controller there does not expose the bearer token to the network.
+fn host_is_loopback(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    // `host_str` may keep IPv6 brackets (`[::1]`); strip them before comparing.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Truncate `s` to `cap` bytes on a char boundary; returns `(s, truncated)`.
@@ -502,6 +527,29 @@ mod tests {
             .unwrap();
         assert!(b.egress_policy().is_allowed("pypi.org"));
         assert!(!b.egress_policy().is_allowed("evil.test"));
+    }
+
+    #[test]
+    fn rejects_insecure_remote_http_controller() {
+        // Remote plain-HTTP would leak the bearer token in cleartext — rejected.
+        let err = ForkdBackend::builder("http://forkd.example.com:8889")
+            .bearer_token("t")
+            .snapshot("s")
+            .into_backend()
+            .unwrap_err();
+        assert!(matches!(err, ForkdError::InsecureControllerUrl));
+        // Loopback plain-HTTP (forkd's documented default) is allowed.
+        assert!(ForkdBackend::builder("http://127.0.0.1:8889")
+            .bearer_token("t")
+            .snapshot("s")
+            .into_backend()
+            .is_ok());
+        // HTTPS to a remote host is allowed.
+        assert!(ForkdBackend::builder("https://forkd.example.com:8889")
+            .bearer_token("t")
+            .snapshot("s")
+            .into_backend()
+            .is_ok());
     }
 
     #[test]
