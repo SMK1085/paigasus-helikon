@@ -35,6 +35,8 @@ mod web;
 
 pub use bash::{BashTool, BashToolBuilder};
 pub use edit::EditTool;
+#[cfg(feature = "microvm")]
+pub use exec::{EgressPolicy, ForkdError};
 pub use exec::{
     ExecOutput, ExecRequest, ExecutionBackend, HostBackend, HostBackendBuilder, Isolation,
     ResourceLimits, SandboxGuarantees,
@@ -47,8 +49,6 @@ pub use exec::{
 pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 #[cfg(all(feature = "os-sandbox", target_os = "macos"))]
 pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
-#[cfg(feature = "microvm")]
-pub use exec::EgressPolicy;
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
