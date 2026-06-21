@@ -339,6 +339,29 @@ In `crates/paigasus-helikon-tools/src/exec/forkd.rs`, inside `mod tests`, add:
     }
 
     #[test]
+    fn requests_serialize_to_forkd_shapes() {
+        // Pins the wire shape and exercises the request structs (so they aren't
+        // dead code before Task 5 uses them).
+        let f = serde_json::to_value(ForkReq {
+            snapshot_tag: "t",
+            n: 1,
+            per_child_netns: true,
+        })
+        .unwrap();
+        assert_eq!(f["snapshot_tag"], "t");
+        assert_eq!(f["n"], 1);
+        assert_eq!(f["per_child_netns"], true);
+        let e = serde_json::to_value(ExecReq {
+            args: ["sh", "-c", "echo hi"],
+            timeout_secs: 30,
+        })
+        .unwrap();
+        assert_eq!(e["args"][0], "sh");
+        assert_eq!(e["args"][2], "echo hi");
+        assert_eq!(e["timeout_secs"], 30);
+    }
+
+    #[test]
     fn forkd_error_never_embeds_a_token() {
         // Construction errors must be safe to log: no auth material in Display.
         let e = ForkdError::MissingConfig("bearer_token");
