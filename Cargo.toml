@@ -27,7 +27,10 @@ futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
 insta                 = "1"
 globset               = "0.4"
-jiff                  = { version = "0.2", features = ["serde"] }
+# Pinned to 0.2.28: jiff 0.2.29 activates a `defmt` integration that pulls the
+# unmaintained `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`.
+# Relax once jiff drops that transitive dep.
+jiff                  = { version = "=0.2.28", features = ["serde"] }
 landlock              = "0.4"
 libc                  = "0.2"
 opentelemetry         = "0.32"
