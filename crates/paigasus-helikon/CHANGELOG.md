@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.5...paigasus-helikon-v0.4.6) - 2026-06-21
+
+### Added
+
+- *(tools)* SMA-416 add forkd microVM ExecutionBackend skeleton + spike note ([#107](https://github.com/SMK1085/paigasus-helikon/pull/107))
+
 ## [0.4.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.4...paigasus-helikon-v0.4.5) - 2026-06-20
 
 ### Added
