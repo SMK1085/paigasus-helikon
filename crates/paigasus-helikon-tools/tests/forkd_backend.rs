@@ -18,6 +18,7 @@ async fn forks_execs_and_destroys() {
         .await;
     Mock::given(method("POST"))
         .and(path("/v1/sandboxes/sb-1/exec"))
+        .and(header("authorization", "Bearer test-token"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"stdout":"hello\n","stderr":"","exit_code":0})),
@@ -26,6 +27,7 @@ async fn forks_execs_and_destroys() {
         .await;
     Mock::given(method("DELETE"))
         .and(path("/v1/sandboxes/sb-1"))
+        .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
@@ -77,6 +79,7 @@ async fn exec_timeout_reports_timed_out_and_still_destroys() {
     // Exec hangs well past the command timeout.
     Mock::given(method("POST"))
         .and(path("/v1/sandboxes/sb-2/exec"))
+        .and(header("authorization", "Bearer test-token"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_delay(Duration::from_secs(30))
@@ -87,6 +90,7 @@ async fn exec_timeout_reports_timed_out_and_still_destroys() {
     // Scoped destroy mock asserts teardown fired exactly once on the timeout path.
     let destroy = Mock::given(method("DELETE"))
         .and(path("/v1/sandboxes/sb-2"))
+        .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount_as_scoped(&server)
@@ -116,6 +120,7 @@ async fn output_over_cap_is_truncated() {
     let big = "x".repeat(50);
     Mock::given(method("POST"))
         .and(path("/v1/sandboxes/sb-3/exec"))
+        .and(header("authorization", "Bearer t"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"stdout": big, "stderr":"", "exit_code":0})),
@@ -124,6 +129,7 @@ async fn output_over_cap_is_truncated() {
         .await;
     Mock::given(method("DELETE"))
         .and(path("/v1/sandboxes/sb-3"))
+        .and(header("authorization", "Bearer t"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
