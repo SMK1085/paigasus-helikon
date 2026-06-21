@@ -98,8 +98,9 @@ snapshots.
 
 The `POST /v1/sandboxes/:id/exec` endpoint runs the specified `args` **inside the booted
 guest** (not on the host). The `args` array is passed verbatim; there is no implicit shell
-expansion. To run a shell command, pass `["sh", "-c", "<cmd>"]`. The builder's
-`env_allowlist` entries are forwarded as guest environment variables.
+expansion. To run a shell command, pass `["sh", "-c", "<cmd>"]`. forkd's exec endpoint has
+**no** per-call `env` field, so the environment must be baked into the warmed snapshot's boot;
+the skeleton sends no env and exposes no `env_allowlist` builder option.
 
 **Copy-on-write shared state — deployment warning:**
 
@@ -198,10 +199,10 @@ The confirmed forkd API differs:
   builder's `.timeout()` and also enforces a client-side reqwest timeout for defense in
   depth.
 - Destroy is `DELETE /v1/sandboxes/:id`, not a separate path.
-- There is no explicit `env` field on the exec endpoint in the confirmed API (env forwarding
-  is handled by the warmed snapshot's boot environment and forkd's agent-protocol layer).
-  The skeleton's `env_allowlist` is documented as an operator-side snapshot configuration
-  concern rather than a per-exec injection.
+- There is no explicit `env` field on the exec endpoint in the confirmed API (env is handled
+  by the warmed snapshot's boot environment). The skeleton therefore exposes **no**
+  `env_allowlist` builder option — environment is an operator-side snapshot concern, not a
+  per-exec injection.
 
 The wiremock mock shapes in `tests/forkd_backend.rs` follow the **confirmed** API, not the
 assumed contract.

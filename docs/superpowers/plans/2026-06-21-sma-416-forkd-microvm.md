@@ -29,15 +29,17 @@
 
 **Do NOT manually bump versions or edit CHANGELOGs.** `-tools` and the facade are already-released; release-plz auto-bumps both from the conventional commits on merge (additive `feat` → 0.x patch). Manual bumps would defeat the cascade.
 
-**Assumed forkd controller REST contract** (Task 1 confirms against forkd's published docs; if it differs, update the paths/serde in Tasks 4–5 and note it in the spike):
+**Confirmed forkd controller REST contract** (Task 1 verified this against forkd's `docs/API.md`, v0.5.2, and it was double-checked via WebFetch — the resource is `/v1/sandboxes`, exec takes `args: string[]` + `timeout_secs`, there is **no per-exec `env` field**, and fork returns an **array**):
 
 | Step | Method + path | Request JSON | Response JSON |
 |------|---------------|--------------|---------------|
-| Fork | `POST {base}/v1/vms` | `{"snapshot":"<id>"}` | `{"id":"<vm_id>"}` |
-| Exec | `POST {base}/v1/vms/{id}/exec` | `{"command":"<sh -c arg>","env":{...}}` | `{"stdout":"…","stderr":"…","exit_code":0}` |
-| Destroy | `DELETE {base}/v1/vms/{id}` | — | (status only) |
+| Fork | `POST {base}/v1/sandboxes` | `{"snapshot_tag":"<tag>","n":1,"per_child_netns":true}` | `[{"id":"sb-…", …}]` (array; take `[0]`) |
+| Exec | `POST {base}/v1/sandboxes/{id}/exec` | `{"args":["sh","-c","<cmd>"],"timeout_secs":<N>}` | `{"stdout":"…","stderr":"…","exit_code":0}` |
+| Destroy | `DELETE {base}/v1/sandboxes/{id}` | — | `204 No Content` |
 
-All requests carry `Authorization: Bearer <token>`.
+All requests carry `Authorization: Bearer <token>` (every route except `/healthz`).
+
+**No `env` injection:** forkd's exec endpoint has no env field — env is a snapshot-boot concern (documented in the spike note), so the skeleton does **not** carry an `env_allowlist`. The wall-clock command timeout is sent as `timeout_secs` (daemon-side) **and** enforced client-side via `tokio::time::timeout` (defense in depth).
 
 ---
 
@@ -321,8 +323,11 @@ In `crates/paigasus-helikon-tools/src/exec/forkd.rs`, inside `mod tests`, add:
 ```rust
     #[test]
     fn fork_and_exec_responses_deserialize() {
-        let f: ForkResp = serde_json::from_str(r#"{"id":"vm-9"}"#).unwrap();
-        assert_eq!(f.id, "vm-9");
+        // Fork returns an ARRAY of sandboxes (even for n:1); we take the first.
+        // Unknown fields (snapshot_tag, …) are ignored.
+        let v: Vec<SandboxInfo> =
+            serde_json::from_str(r#"[{"id":"sb-9","snapshot_tag":"t"}]"#).unwrap();
+        assert_eq!(v[0].id, "sb-9");
         // exit_code may be absent (killed by signal) -> None.
         let e: ExecResp =
             serde_json::from_str(r#"{"stdout":"hi","stderr":"","exit_code":0}"#).unwrap();
@@ -346,15 +351,13 @@ In `crates/paigasus-helikon-tools/src/exec/forkd.rs`, inside `mod tests`, add:
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p paigasus-helikon-tools --features microvm --lib forkd::tests`
-Expected: FAIL — `ForkResp` / `ExecResp` / `ForkdError` not found.
+Expected: FAIL — `SandboxInfo` / `ExecResp` / `ForkdError` not found.
 
 - [ ] **Step 3: Implement the types**
 
 In `crates/paigasus-helikon-tools/src/exec/forkd.rs`, at the top (below the module doc), add the imports and types:
 
 ```rust
-use std::collections::BTreeMap;
-
 /// Construction-time failures for [`ForkdBackend`]. Runtime failures (daemon
 /// unreachable, fork/exec error) surface as `ToolError::Other` from `run`.
 ///
@@ -365,7 +368,7 @@ pub enum ForkdError {
     /// The controller URL could not be parsed.
     #[error("invalid forkd controller URL: {0}")]
     InvalidUrl(String),
-    /// A required field (bearer token / snapshot id) was not set.
+    /// A required field (bearer token / snapshot tag) was not set.
     #[error("missing required forkd config: {0}")]
     MissingConfig(&'static str),
     /// The controller CA PEM could not be parsed.
@@ -376,26 +379,32 @@ pub enum ForkdError {
     ClientBuild,
 }
 
-/// `POST /v1/vms` request body — fork a microVM from a warmed snapshot.
+/// `POST /v1/sandboxes` request body — fork `n` children (we use 1) copy-on-write
+/// from a warmed snapshot, each in its own network namespace.
 #[derive(serde::Serialize)]
 struct ForkReq<'a> {
-    snapshot: &'a str,
+    snapshot_tag: &'a str,
+    n: u32,
+    per_child_netns: bool,
 }
 
-/// `POST /v1/vms` response — the new VM id.
+/// One sandbox in the `POST /v1/sandboxes` response **array**. forkd returns more
+/// fields (snapshot_tag, guest_addr, …); only `id` is needed, the rest are ignored.
 #[derive(serde::Deserialize)]
-struct ForkResp {
+struct SandboxInfo {
     id: String,
 }
 
-/// `POST /v1/vms/{id}/exec` request body.
+/// `POST /v1/sandboxes/{id}/exec` request body. `args` runs verbatim in the guest
+/// (no shell expansion), so a shell command is wrapped as `["sh","-c","<cmd>"]`.
+/// `timeout_secs` is the daemon-side cap (we also enforce one client-side).
 #[derive(serde::Serialize)]
 struct ExecReq<'a> {
-    command: &'a str,
-    env: BTreeMap<String, String>,
+    args: [&'a str; 3],
+    timeout_secs: u64,
 }
 
-/// `POST /v1/vms/{id}/exec` response — captured guest output.
+/// `POST /v1/sandboxes/{id}/exec` response — captured guest output.
 #[derive(serde::Deserialize)]
 struct ExecResp {
     #[serde(default)]
@@ -459,20 +468,22 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 async fn forks_execs_and_destroys() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/vms"))
+        .and(path("/v1/sandboxes"))
         .and(header("authorization", "Bearer test-token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"vm-1"})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"sb-1"}])),
+        )
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/vms/vm-1/exec"))
+        .and(path("/v1/sandboxes/sb-1/exec"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::json!({"stdout":"hello\n","stderr":"","exit_code":0}),
         ))
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
-        .and(path("/v1/vms/vm-1"))
+        .and(path("/v1/sandboxes/sb-1"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
@@ -543,7 +554,7 @@ Expected: FAIL — `ForkdBackend` / `into_backend` / `guarantees` not found.
 
 - [ ] **Step 3: Implement the backend**
 
-In `crates/paigasus-helikon-tools/src/exec/forkd.rs`, add the imports just below the existing `use std::collections::BTreeMap;`:
+In `crates/paigasus-helikon-tools/src/exec/forkd.rs`, add these imports at the top of the file (below the `//!` module doc, alongside the Task-4 types):
 
 ```rust
 use std::sync::Arc;
@@ -573,7 +584,6 @@ pub struct ForkdBackendBuilder {
     snapshot: Option<String>,
     timeout: Duration,
     max_output_bytes: usize,
-    env_allowlist: Vec<String>,
     egress: EgressPolicy,
 }
 
@@ -589,9 +599,10 @@ impl ForkdBackendBuilder {
         self.controller_ca = Some(pem.into());
         self
     }
-    /// Warmed parent snapshot id to fork children from (required).
-    pub fn snapshot(mut self, id: impl Into<String>) -> Self {
-        self.snapshot = Some(id.into());
+    /// Warmed parent snapshot tag to fork children from (required; forkd's
+    /// `snapshot_tag`).
+    pub fn snapshot(mut self, tag: impl Into<String>) -> Self {
+        self.snapshot = Some(tag.into());
         self
     }
     /// Wall-clock timeout for the exec step (default 30s).
@@ -602,15 +613,6 @@ impl ForkdBackendBuilder {
     /// Truncate captured stdout/stderr to this many bytes each (default 1 MiB).
     pub fn max_output_bytes(mut self, n: usize) -> Self {
         self.max_output_bytes = n;
-        self
-    }
-    /// Env var names forwarded into the guest (default `["PATH","HOME"]`).
-    pub fn env_allowlist<I, S>(mut self, names: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.env_allowlist = names.into_iter().map(Into::into).collect();
         self
     }
     /// Egress policy the backend carries (enforcement is SMA-437).
@@ -640,7 +642,6 @@ impl ForkdBackendBuilder {
             snapshot,
             timeout: self.timeout,
             max_output_bytes: self.max_output_bytes,
-            env_allowlist: self.env_allowlist,
             egress: self.egress,
         })
     }
@@ -660,14 +661,13 @@ pub struct ForkdBackend {
     snapshot: String,
     timeout: Duration,
     max_output_bytes: usize,
-    env_allowlist: Vec<String>,
     egress: EgressPolicy,
 }
 
 impl ForkdBackend {
     /// Start building a backend against the controller at `controller_url`
-    /// (e.g. `"https://127.0.0.1:8080"`). Defaults: 30s timeout, 1 MiB output cap,
-    /// `["PATH","HOME"]` env allowlist, `EgressPolicy::deny_all()`.
+    /// (e.g. `"https://127.0.0.1:8889"`). Defaults: 30s timeout, 1 MiB output cap,
+    /// `EgressPolicy::deny_all()`.
     pub fn builder(controller_url: impl Into<String>) -> ForkdBackendBuilder {
         ForkdBackendBuilder {
             controller_url: controller_url.into(),
@@ -676,16 +676,8 @@ impl ForkdBackend {
             snapshot: None,
             timeout: DEFAULT_TIMEOUT,
             max_output_bytes: DEFAULT_MAX_OUTPUT,
-            env_allowlist: vec!["PATH".to_owned(), "HOME".to_owned()],
             egress: EgressPolicy::deny_all(),
         }
-    }
-
-    fn env_map(&self) -> BTreeMap<String, String> {
-        self.env_allowlist
-            .iter()
-            .filter_map(|k| std::env::var(k).ok().map(|v| (k.clone(), v)))
-            .collect()
     }
 
     async fn post_json<T: serde::de::DeserializeOwned>(
@@ -715,31 +707,39 @@ impl ForkdBackend {
     }
 
     async fn fork(&self) -> Result<String, ToolError> {
-        let url = format!("{}/v1/vms", self.base);
-        let resp: ForkResp = tokio::time::timeout(
-            self.timeout,
-            self.post_json(&url, &ForkReq { snapshot: &self.snapshot }),
-        )
-        .await
-        .map_err(|_| ToolError::Other(anyhow::anyhow!("forkd: fork timed out")))??;
-        Ok(resp.id)
+        let url = format!("{}/v1/sandboxes", self.base);
+        let body = ForkReq {
+            snapshot_tag: &self.snapshot,
+            n: 1,
+            per_child_netns: true,
+        };
+        // Fork returns an array (n children); we requested 1, so take the first.
+        let list: Vec<SandboxInfo> =
+            tokio::time::timeout(self.timeout, self.post_json(&url, &body))
+                .await
+                .map_err(|_| ToolError::Other(anyhow::anyhow!("forkd: fork timed out")))??;
+        list.into_iter()
+            .next()
+            .map(|s| s.id)
+            .ok_or_else(|| ToolError::Other(anyhow::anyhow!("forkd returned no sandbox")))
     }
 
-    async fn exec(&self, vm_id: &str, command: &str) -> Result<ExecResp, ToolError> {
-        let url = format!("{}/v1/vms/{}/exec", self.base, vm_id);
+    async fn exec(&self, id: &str, command: &str) -> Result<ExecResp, ToolError> {
+        let url = format!("{}/v1/sandboxes/{id}/exec", self.base);
+        // `args` runs verbatim in the guest, so wrap the shell command.
         self.post_json(
             &url,
             &ExecReq {
-                command,
-                env: self.env_map(),
+                args: ["sh", "-c", command],
+                timeout_secs: self.timeout.as_secs(),
             },
         )
         .await
     }
 
-    async fn destroy(&self, vm_id: &str) {
+    async fn destroy(&self, id: &str) {
         // Best-effort teardown; failures here are not surfaced to the model.
-        let url = format!("{}/v1/vms/{}", self.base, vm_id);
+        let url = format!("{}/v1/sandboxes/{id}", self.base);
         let _ = self.client.delete(&url).bearer_auth(&self.token).send().await;
     }
 }
@@ -760,10 +760,10 @@ fn truncate(mut s: String, cap: usize) -> (String, bool) {
 #[async_trait]
 impl ExecutionBackend for ForkdBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
-        let vm_id = self.fork().await?;
+        let id = self.fork().await?;
         // The wall-clock command timeout governs exec; teardown always runs.
-        let exec_result = tokio::time::timeout(self.timeout, self.exec(&vm_id, &req.command)).await;
-        let _ = tokio::time::timeout(CONTROL_TIMEOUT, self.destroy(&vm_id)).await;
+        let exec_result = tokio::time::timeout(self.timeout, self.exec(&id, &req.command)).await;
+        let _ = tokio::time::timeout(CONTROL_TIMEOUT, self.destroy(&id)).await;
         match exec_result {
             Ok(Ok(resp)) => {
                 let (stdout, t1) = truncate(resp.stdout, self.max_output_bytes);
@@ -830,7 +830,7 @@ use std::time::Duration;
 async fn controller_5xx_maps_to_error() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/vms"))
+        .and(path("/v1/sandboxes"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;
@@ -851,13 +851,15 @@ async fn controller_5xx_maps_to_error() {
 async fn exec_timeout_reports_timed_out_and_still_destroys() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/vms"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"vm-2"})))
+        .and(path("/v1/sandboxes"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"sb-2"}])),
+        )
         .mount(&server)
         .await;
     // Exec hangs well past the command timeout.
     Mock::given(method("POST"))
-        .and(path("/v1/vms/vm-2/exec"))
+        .and(path("/v1/sandboxes/sb-2/exec"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_delay(Duration::from_secs(30))
@@ -867,7 +869,7 @@ async fn exec_timeout_reports_timed_out_and_still_destroys() {
         .await;
     // Scoped destroy mock asserts teardown fired exactly once on the timeout path.
     let destroy = Mock::given(method("DELETE"))
-        .and(path("/v1/vms/vm-2"))
+        .and(path("/v1/sandboxes/sb-2"))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount_as_scoped(&server)
@@ -890,20 +892,22 @@ async fn exec_timeout_reports_timed_out_and_still_destroys() {
 async fn output_over_cap_is_truncated() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/vms"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"vm-3"})))
+        .and(path("/v1/sandboxes"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"sb-3"}])),
+        )
         .mount(&server)
         .await;
     let big = "x".repeat(50);
     Mock::given(method("POST"))
-        .and(path("/v1/vms/vm-3/exec"))
+        .and(path("/v1/sandboxes/sb-3/exec"))
         .respond_with(ResponseTemplate::new(200).set_body_json(
             serde_json::json!({"stdout": big, "stderr":"", "exit_code":0}),
         ))
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
-        .and(path("/v1/vms/vm-3"))
+        .and(path("/v1/sandboxes/sb-3"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
@@ -1051,7 +1055,7 @@ git commit -m "chore(tools): SMA-416 satisfy fmt/clippy/doc gates for forkd back
 ## Self-review notes (for the executor)
 
 - **Spec coverage:** Task 1 = spike note (AC 1). Tasks 2–6 = `ForkdBackend` skeleton + `Isolation::Virtualized` + honest `guarantees()` + `EgressPolicy` carried + `#[ignore]`'d live test (AC 2, re-scoped). Task 7 = docs. Task 8 = CI gates. The E2B sibling is verified-not-built (the trait is unchanged + object-safe). The portable-client (no target gate) decision is realized in Task 3 (`microvm = ["dep:reqwest"]`, no `cfg(target_os)`).
-- **Type consistency:** `into_backend()` (private, used by `build()` and unit tests) returns the concrete `ForkdBackend`; `build()` returns `Arc<dyn ExecutionBackend>`. `EgressPolicy::is_allowed`, `ForkdError` variants, and the REST structs (`ForkReq`/`ForkResp`/`ExecReq`/`ExecResp`) are referenced consistently across tasks.
+- **Type consistency:** `into_backend()` (private, used by `build()` and unit tests) returns the concrete `ForkdBackend`; `build()` returns `Arc<dyn ExecutionBackend>`. `EgressPolicy::is_allowed`, `ForkdError` variants, and the REST structs (`ForkReq`/`SandboxInfo`/`ExecReq`/`ExecResp`) are referenced consistently across tasks.
 - **Egress honesty:** `guarantees().network == Isolation::None` is asserted in `guarantees_are_honest` — the skeleton never claims egress containment it doesn't enforce.
 - **No manual version bumps** — release-plz owns them.
 
