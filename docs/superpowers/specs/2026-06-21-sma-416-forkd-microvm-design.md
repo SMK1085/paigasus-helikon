@@ -220,8 +220,8 @@ point at:
   only static secrets are.)
 
 Building/maintaining the image is out of scope here (§9) and tracked by the live-KVM
-follow-up (review #1), but the contract above is recorded so the deferral isn't a
-landmine.
+follow-up **SMA-437** (review #1), but the contract above is recorded so the deferral
+isn't a landmine.
 
 ## 4. The `Isolation::Virtualized` variant
 
@@ -340,8 +340,9 @@ only" wording to record the sanctioned portability departure (§2.3); and **(b)*
 file a follow-up issue for **live-KVM validation + egress enforcement** (the netns +
 CONNECT-proxy layers, the real `#[ignore]`'d test un-ignored on a KVM host), linked
 to the SMA-413 §11 proxy follow-up. That way "Done" on SMA-416 is *true*, and the
-microVM tier isn't silently claimed as delivered. (Linear edits proposed to the human
-partner before execution — see the handoff after this spec.)
+microVM tier isn't silently claimed as delivered. **Done (2026-06-21):** SMA-416
+re-scoped in place; the follow-up is filed as **SMA-437** (blocked-by SMA-416,
+related to SMA-413/SMA-412).
 
 ## 9. Out of scope (YAGNI)
 
@@ -360,7 +361,7 @@ evaluated and accepted (forkd's reality was independently confirmed by the revie
 
 | # | Review item | Resolution | Where |
 |---|-------------|-----------|-------|
-| 1 | Ticket auto-closes Done with executable ACs deferred | Re-scope SMA-416 ACs to spike+skeleton; file live-KVM+egress follow-up | §8 tracker note; Linear handoff |
+| 1 | Ticket auto-closes Done with executable ACs deferred | SMA-416 re-scoped to spike+skeleton; live-KVM+egress follow-up filed as **SMA-437** | §8 tracker note; Linear (done) |
 | 2 | Snapshot provisioning contract unspecified | New snapshot-contract subsection (contents, who warms it, exec→userland) | §3.4 |
 | 3 | Controller TLS trust unspecified (worse with remote, #3 scope) | `.controller_ca(pem)` knob; no `danger_accept_invalid_certs`; localhost vs remote story; fail-closed | §3.2 |
 | 4 | Mock green-by-construction vs assumed alpha API | Pin mock to forkd's *published* contract; capture real-controller transcript where a Linux host exists | §6 |
