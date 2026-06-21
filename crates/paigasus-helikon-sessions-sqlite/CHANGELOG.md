@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-sqlite-v0.1.16...paigasus-helikon-sessions-sqlite-v0.1.17) - 2026-06-21
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.1.16](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-sqlite-v0.1.15...paigasus-helikon-sessions-sqlite-v0.1.16) - 2026-06-20
 
 ### Other
