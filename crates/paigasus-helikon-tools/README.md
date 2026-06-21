@@ -1,10 +1,10 @@
 # paigasus-helikon-tools
 
-Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature, and OS-enforced Bash containment behind the `os-sandbox` feature (Linux: Landlock + seccomp; macOS: Seatbelt).
+Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature, OS-enforced Bash containment behind the `os-sandbox` feature (Linux: Landlock + seccomp; macOS: Seatbelt), and microVM Bash containment via the forkd Firecracker controller behind the `microvm` feature (portable REST client; experimental skeleton — SMA-416).
 
 The filesystem tools operate inside a `Sandbox` — a directory opened as an OS-confined capability (`cap-std`), so they cannot escape it via `..`, absolute paths, or symlinks.
 
-`BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, or `OsSandboxBackend` (feature `os-sandbox`) for OS-kernel-enforced containment — Linux via Landlock (filesystem) + seccomp-bpf (syscalls and network) with read+write restriction; macOS via Seatbelt (`sandbox-exec`) with **write-only** containment (reads unrestricted) and an all-or-nothing network toggle.
+`BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, `OsSandboxBackend` (feature `os-sandbox`) for OS-kernel-enforced containment — Linux via Landlock (filesystem) + seccomp-bpf (syscalls and network) with read+write restriction; macOS via Seatbelt (`sandbox-exec`) with **write-only** containment (reads unrestricted) and an all-or-nothing network toggle — or `ForkdBackend` (feature `microvm`, experimental skeleton) for microVM-level containment via the forkd Firecracker controller. **Network egress is not yet enforced in the skeleton (`Isolation::None` on the network axis)** — use `OsSandboxBackend` when egress containment matters today.
 
 > **`HostBackend` is NOT a security boundary.** A command it runs can read and write anything this process can. Pair it with a `PermissionPolicy` (or a `DenyRule::tool("Bash")`) for approval-level control, or use `OsSandboxBackend` for OS-enforced containment.
 
@@ -16,6 +16,8 @@ cargo add paigasus-helikon-tools
 cargo add paigasus-helikon-tools --features web
 # with OS-enforced Bash containment (Linux: Landlock + seccomp; macOS: Seatbelt):
 cargo add paigasus-helikon-tools --features os-sandbox
+# with microVM Bash containment via forkd/Firecracker (experimental skeleton — SMA-416):
+cargo add paigasus-helikon-tools --features microvm
 ```
 
 Most users enable the `tools` feature on the [`paigasus-helikon`](https://crates.io/crates/paigasus-helikon) facade instead (and `tools-web` for the web tools), which re-exports this crate as `paigasus_helikon::tools`.
