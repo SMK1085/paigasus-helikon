@@ -104,3 +104,17 @@ async fn bashtool_delegates_to_any_backend_unchanged() {
     // The backend's containment label is surfaced in the tool description.
     assert!(tool.description().contains("mock"));
 }
+
+#[test]
+fn isolation_has_virtualized_variant() {
+    // Virtualized is a distinct, stronger tier than OsKernel.
+    let g = SandboxGuarantees::new(
+        Isolation::Virtualized,
+        Isolation::None,
+        Isolation::Virtualized,
+        "vm",
+    );
+    assert_eq!(g.filesystem, Isolation::Virtualized);
+    assert_eq!(g.syscalls, Isolation::Virtualized);
+    assert_ne!(Isolation::Virtualized, Isolation::OsKernel);
+}
