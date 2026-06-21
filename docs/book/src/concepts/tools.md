@@ -165,8 +165,9 @@ let agent = LlmAgent::builder::<()>()
 `BashTool` takes an `Arc<dyn ExecutionBackend>` — use `HostBackend::builder(sandbox).build()`
 for the default unconfined backend, `OsSandboxBackend::builder(sandbox).build()`
 (Linux + macOS, feature `os-sandbox`) for OS-enforced containment, or
-`ForkdBackend::builder(forkd_url).sandbox(sandbox).build()?` (Linux KVM, feature
-`microvm`, experimental) for microVM-level isolation. `BashToolBuilder` exposes
+`ForkdBackend::builder(controller_url).bearer_token(token).snapshot(tag).build()?`
+(Linux KVM, feature `microvm`, experimental) for microVM-level isolation — unlike the
+other backends it takes a forkd controller URL, not a `Sandbox`. `BashToolBuilder` exposes
 `allow_commands` and `deny_commands` for command-level filtering. The full example is
 `crates/paigasus-helikon-tools/examples/explore_sandbox.rs`.
 
@@ -235,7 +236,7 @@ SandboxGuarantees {
     filesystem: Isolation::Virtualized,
     network:    Isolation::None,       // not yet enforced — SMA-437
     syscalls:   Isolation::Virtualized,
-    label:      "microvm (forkd/firecracker) [skeleton]",
+    label:      "forkd (firecracker microvm — experimental)",
 }
 ```
 
