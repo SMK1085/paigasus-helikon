@@ -35,6 +35,8 @@ mod web;
 
 pub use bash::{BashTool, BashToolBuilder};
 pub use edit::EditTool;
+#[cfg(feature = "microvm")]
+pub use exec::{EgressPolicy, ForkdBackend, ForkdBackendBuilder, ForkdError};
 pub use exec::{
     ExecOutput, ExecRequest, ExecutionBackend, HostBackend, HostBackendBuilder, Isolation,
     ResourceLimits, SandboxGuarantees,

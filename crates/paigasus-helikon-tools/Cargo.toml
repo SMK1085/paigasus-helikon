@@ -57,6 +57,9 @@ required-features = ["os-sandbox"]
 web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd", "tokio/net"]
 # OS-enforced Bash containment (Linux: Landlock + seccomp). Off by default.
 os-sandbox = ["dep:landlock", "dep:seccompiler"]
+# microVM Bash containment (forkd Firecracker controller, REST client). Off by
+# default. Portable: the client compiles everywhere; the daemon needs Linux/KVM.
+microvm = ["dep:reqwest"]
 
 [lints]
 workspace = true

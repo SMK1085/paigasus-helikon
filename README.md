@@ -26,7 +26,7 @@ Paigasus is the umbrella; Helikon is the spring. The SDK is the artifact you dra
 cargo add paigasus-helikon --features openai,macros
 ```
 
-Turn on the features you need — `openai`, `anthropic`, `mcp`, `tools`, `tools-web`, `sessions-sqlite`, `runtime-tokio`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
+Turn on the features you need — `openai`, `anthropic`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `runtime-tokio`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
 
 ## Workspace at a glance
 
@@ -38,7 +38,7 @@ Fourteen crates under `crates/`. Nine are published to crates.io; four are not-y
 - **`paigasus-helikon-providers-openai`**, **`-anthropic`** — LLM provider adapters.
 - **`paigasus-helikon-sessions-sqlite`** — SQLite-backed session persistence.
 - **`paigasus-helikon-runtime-tokio`** — the default ephemeral Tokio runner.
-- **`paigasus-helikon-tools`** — sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`).
+- **`paigasus-helikon-tools`** — sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`; OS-enforced containment behind `os-sandbox`; microVM containment via forkd/Firecracker behind `microvm`, experimental skeleton — SMA-416).
 - **`paigasus-helikon-mcp`** — Model Context Protocol client and server integration.
 - **`paigasus-helikon-cli`** — `helikon` and `paigasus-helikon` binaries (binary-only, not published as a library).
 - **`paigasus-helikon-evals`**, **`-runtime-axum`**, **`-runtime-temporal`**, **`-runtime-agentcore`** — pre-published `0.0.0` name-claim stubs; not yet implemented.

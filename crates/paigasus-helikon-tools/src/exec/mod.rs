@@ -30,6 +30,11 @@ mod os_sandbox_seatbelt;
 #[cfg(all(feature = "os-sandbox", target_os = "macos"))]
 pub use os_sandbox_seatbelt::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 
+#[cfg(feature = "microvm")]
+mod forkd;
+#[cfg(feature = "microvm")]
+pub use forkd::{EgressPolicy, ForkdBackend, ForkdBackendBuilder, ForkdError};
+
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default per-stream output cap, in bytes (1 MiB).
@@ -112,6 +117,13 @@ pub enum Isolation {
     None,
     /// Enforced by an OS kernel mechanism (Landlock / seccomp-bpf).
     OsKernel,
+    /// Isolated by a hardware-virtualization (KVM/hypervisor) boundary — a
+    /// separate guest kernel. `Virtualized` means the whole machine is isolated,
+    /// **not** that any one axis is filtered: a microVM does not filter syscalls
+    /// the way `OsKernel` (seccomp) does — the guest issues syscalls to its own
+    /// kernel. Stronger overall than `OsKernel`, but read each axis as "behind a
+    /// VM boundary," not "restricted by an allowlist."
+    Virtualized,
 }
 
 /// What a backend enforces, surfaced to docs / traces / the tool description.

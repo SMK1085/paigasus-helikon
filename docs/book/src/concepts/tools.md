@@ -163,8 +163,11 @@ let agent = LlmAgent::builder::<()>()
 
 `ReadTool`, `WriteTool`, and `EditTool` take a `Sandbox` via `::new(sandbox)`.
 `BashTool` takes an `Arc<dyn ExecutionBackend>` — use `HostBackend::builder(sandbox).build()`
-for the default unconfined backend, or `OsSandboxBackend::builder(sandbox).build()`
-(Linux + macOS, feature `os-sandbox`) for OS-enforced containment. `BashToolBuilder` exposes
+for the default unconfined backend, `OsSandboxBackend::builder(sandbox).build()`
+(Linux + macOS, feature `os-sandbox`) for OS-enforced containment, or
+`ForkdBackend::builder(controller_url).bearer_token(token).snapshot(tag).build()?`
+(Linux KVM, feature `microvm`, experimental) for microVM-level isolation — unlike the
+other backends it takes a forkd controller URL, not a `Sandbox`. `BashToolBuilder` exposes
 `allow_commands` and `deny_commands` for command-level filtering. The full example is
 `crates/paigasus-helikon-tools/examples/explore_sandbox.rs`.
 
@@ -183,7 +186,8 @@ read and write anything this process can (absolute paths, `..`, `~`, and the
 network). Its effect is `SideEffect`, and in `PermissionMode::Default` with no
 `PermissionPolicy` installed it runs ungated: gate it with a `PermissionPolicy` or a
 `DenyRule::tool("Bash")` (as `explore_sandbox.rs` demonstrates), or use
-`OsSandboxBackend` for OS-enforced containment.
+`OsSandboxBackend` for OS-enforced containment, or `ForkdBackend` (feature
+`microvm`, experimental skeleton — SMA-416) for microVM-level isolation.
 
 ## Containment vs approval
 
@@ -205,6 +209,37 @@ independently.
 
 `BashTool` delegates execution to a value implementing `ExecutionBackend`. Swap the
 backend to change the containment tier without touching any other part of your agent.
+
+#### `ForkdBackend` (Linux KVM; feature `microvm`) — microVM containment, experimental skeleton
+
+The strongest containment tier on the filesystem and syscall axes: each command runs
+inside a KVM-isolated Firecracker microVM orchestrated by the forkd daemon. The
+`ForkdBackend` itself is a portable REST client (no Linux-kernel dependency in the
+client crate); the daemon side requires Linux + `/dev/kvm`. Platform availability is
+checked at runtime when controller requests are made (for example on `run()`), not
+at compile time.
+
+> **Skeleton status (SMA-416).** The fork → exec → destroy REST flow is implemented
+> and mock-tested. A live KVM run and network-egress enforcement are deferred to
+> SMA-437. **Do not enable `microvm` in production today.**
+
+> **Honesty caveat — network axis.** `ForkdBackend::guarantees().network` currently
+> returns `Isolation::None`. That makes it *weaker than `OsSandboxBackend`* on the
+> egress axis until the layered netns + proxy policy lands in SMA-437. `Virtualized`
+> on the filesystem and syscall axes means "behind a VM boundary," not a
+> syscall/path allowlist — those guarantees are real even in skeleton form. But
+> outbound network traffic is not yet intercepted or blocked.
+
+`ForkdBackend::guarantees()` (skeleton, SMA-416):
+
+```rust,ignore
+SandboxGuarantees {
+    filesystem: Isolation::Virtualized,
+    network:    Isolation::None,       // not yet enforced — SMA-437
+    syscalls:   Isolation::Virtualized,
+    label:      "forkd (firecracker microvm — experimental)",
+}
+```
 
 #### `OsSandboxBackend` (Linux + macOS; feature `os-sandbox`) — recommended for untrusted commands
 
@@ -332,11 +367,16 @@ SandboxGuarantees {
   seccomp-bpf for network and syscalls (read+write containment); on macOS, Seatbelt
   for filesystem (write-only; reads unrestricted) and network. A violating operation
   returns an OS error — the command cannot bypass it from userspace.
+- `Isolation::Virtualized` — enforced by a VM boundary (Firecracker microVM via
+  `ForkdBackend`). The command runs inside a KVM guest; host filesystem and syscalls
+  are inaccessible by construction. **Network is separately gated** — the `microvm`
+  skeleton (SMA-416) reports `Isolation::None` on the network axis until egress
+  enforcement lands in SMA-437.
 
 The `label` field is a short human-readable string (`"host (no containment)"` /
-`"os-sandbox (landlock+seccomp)"` on Linux / `"os-sandbox (seatbelt)"` on macOS)
-that `BashTool` surfaces in its tool description so the model knows what tier it is
-operating under.
+`"os-sandbox (landlock+seccomp)"` on Linux / `"os-sandbox (seatbelt)"` on macOS /
+`"microvm (forkd/firecracker) [skeleton]"`) that `BashTool` surfaces in its tool
+description so the model knows what tier it is operating under.
 
 ### Network tools (`tools-web` feature)
 
