@@ -44,6 +44,9 @@ pub enum ForkdError {
     /// bearer token in cleartext over the network. Use `https` for remote hosts.
     #[error("insecure forkd controller URL: use https for non-loopback hosts")]
     InsecureControllerUrl,
+    /// `enforce_egress` was set but the proxy endpoint could not be reached.
+    #[error("egress proxy endpoint is unreachable")]
+    ProxyUnreachable,
 }
 
 /// `POST /v1/sandboxes` request body — fork `n` children (we use 1) copy-on-write
@@ -91,6 +94,7 @@ pub struct ForkdBackendBuilder {
     timeout: Duration,
     max_output_bytes: usize,
     egress: EgressPolicy,
+    enforce_egress: Option<String>,
 }
 
 impl ForkdBackendBuilder {
@@ -132,6 +136,19 @@ impl ForkdBackendBuilder {
         self
     }
 
+    /// Attest that the layered egress enforcement (per-VM netns default-deny + the
+    /// [`EgressProxy`](crate::EgressProxy) at `proxy_endpoint`) is deployed, so
+    /// `guarantees().network` reports [`Isolation::Proxied`]. `build()` probes the
+    /// proxy for reachability and fails closed if it cannot connect — but it
+    /// **cannot** verify the host's netns rules, so this is an operator attestation
+    /// (the same trust model the kernel/hypervisor tiers use). Without this, the
+    /// network guarantee stays [`Isolation::None`]. `proxy_endpoint` is `host:port`
+    /// or a URL.
+    pub fn enforce_egress(mut self, proxy_endpoint: impl Into<String>) -> Self {
+        self.enforce_egress = Some(proxy_endpoint.into());
+        self
+    }
+
     /// Build into the concrete [`ForkdBackend`] — used by [`Self::build`] and the
     /// in-module unit tests. Public callers go through `build()`.
     fn into_backend(self) -> Result<ForkdBackend, ForkdError> {
@@ -156,6 +173,13 @@ impl ForkdBackendBuilder {
             cb = cb.add_root_certificate(cert);
         }
         let client = cb.build().map_err(|_| ForkdError::ClientBuild)?;
+        let egress_enforced = match &self.enforce_egress {
+            Some(ep) => {
+                probe_proxy_reachable(ep).map_err(|_| ForkdError::ProxyUnreachable)?;
+                true
+            }
+            None => false,
+        };
         Ok(ForkdBackend {
             client,
             base: self.controller_url.trim_end_matches('/').to_string(),
@@ -164,6 +188,7 @@ impl ForkdBackendBuilder {
             timeout: self.timeout,
             max_output_bytes: self.max_output_bytes,
             egress: self.egress,
+            egress_enforced,
         })
     }
 
@@ -186,6 +211,7 @@ pub struct ForkdBackend {
     timeout: Duration,
     max_output_bytes: usize,
     egress: EgressPolicy,
+    egress_enforced: bool,
 }
 
 impl std::fmt::Debug for ForkdBackend {
@@ -214,6 +240,7 @@ impl ForkdBackend {
             timeout: DEFAULT_TIMEOUT,
             max_output_bytes: DEFAULT_MAX_OUTPUT,
             egress: EgressPolicy::deny_all(),
+            enforce_egress: None,
         }
     }
 
@@ -292,6 +319,24 @@ impl ForkdBackend {
     }
 }
 
+/// Best-effort reachability probe: a short TCP connect to the proxy endpoint.
+/// Sync (callable from the sync `build()`), uses `std::net` with a 3-second timeout.
+/// Accepts `host:port` or a URL (strips `http://`/`https://` scheme if present).
+fn probe_proxy_reachable(endpoint: &str) -> std::io::Result<()> {
+    use std::net::ToSocketAddrs;
+    // Strip a scheme and trailing slash if present.
+    let hostport = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .unwrap_or(endpoint)
+        .trim_end_matches('/');
+    let addr = hostport
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no addr"))?;
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).map(|_| ())
+}
+
 /// `true` if `url`'s host is loopback (`localhost`, `127.0.0.0/8`, or `::1`), so a
 /// plain-`http` controller there does not expose the bearer token to the network.
 fn host_is_loopback(url: &reqwest::Url) -> bool {
@@ -354,9 +399,14 @@ impl ExecutionBackend for ForkdBackend {
     }
 
     fn guarantees(&self) -> SandboxGuarantees {
+        let network = if self.egress_enforced {
+            Isolation::Proxied
+        } else {
+            Isolation::None
+        };
         SandboxGuarantees::new(
             Isolation::Virtualized, // filesystem — separate guest kernel + rootfs
-            Isolation::None,        // network — egress NOT filtered yet (SMA-437)
+            network,                // network — Proxied when enforce_egress is set
             Isolation::Virtualized, // syscalls — guest kernel, not a host filter
             "forkd (firecracker microvm — experimental)",
         )
@@ -425,8 +475,18 @@ mod tests {
         let g = b.guarantees();
         assert_eq!(g.filesystem, Isolation::Virtualized);
         assert_eq!(g.syscalls, Isolation::Virtualized);
-        assert_eq!(g.network, Isolation::None); // egress NOT enforced in the skeleton
+        assert_eq!(g.network, Isolation::None); // egress NOT enforced without enforce_egress
         assert!(g.label.contains("experimental"));
+    }
+
+    #[test]
+    fn guarantees_network_none_without_enforce_egress() {
+        let b = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .into_backend()
+            .unwrap();
+        assert_eq!(b.guarantees().network, Isolation::None);
     }
 
     #[test]

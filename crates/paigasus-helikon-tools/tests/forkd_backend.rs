@@ -146,6 +146,33 @@ async fn output_over_cap_is_truncated() {
 }
 
 #[tokio::test]
+async fn enforce_egress_reports_proxied_when_proxy_reachable() {
+    let proxy = MockServer::start().await;
+    // The reachability probe hits the proxy endpoint; any TCP-accepting server passes.
+    let backend = ForkdBackend::builder("http://127.0.0.1:1") // controller unused here
+        .bearer_token("t")
+        .snapshot("s")
+        .enforce_egress(proxy.uri())
+        .build()
+        .expect("builds when proxy reachable");
+    assert_eq!(
+        backend.guarantees().network,
+        paigasus_helikon_tools::Isolation::Proxied
+    );
+}
+
+#[tokio::test]
+async fn enforce_egress_fails_closed_when_proxy_unreachable() {
+    // Port 1 on loopback refuses; build() must fail rather than report Proxied.
+    let err = ForkdBackend::builder("https://127.0.0.1:8080")
+        .bearer_token("t")
+        .snapshot("s")
+        .enforce_egress("http://127.0.0.1:1")
+        .build();
+    assert!(err.is_err(), "unreachable proxy must fail closed");
+}
+
+#[tokio::test]
 #[ignore = "needs a live forkd controller + /dev/kvm; run on a Linux KVM host (SMA-437)"]
 async fn live_forkd_runs_bash_in_a_microvm() {
     // Set FORKD_URL / FORKD_TOKEN / FORKD_SNAPSHOT to point at a real controller.
