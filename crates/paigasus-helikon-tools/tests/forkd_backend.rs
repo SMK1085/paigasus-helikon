@@ -1,5 +1,5 @@
-#![cfg(feature = "microvm")]
 #![allow(missing_docs)]
+#![cfg(feature = "microvm")]
 
 use std::time::Duration;
 

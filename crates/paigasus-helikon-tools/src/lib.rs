@@ -26,6 +26,8 @@
 mod bash;
 mod edit;
 mod exec;
+#[cfg(any(feature = "web", feature = "microvm"))]
+mod net;
 mod read;
 mod sandbox;
 mod write;
@@ -52,6 +54,9 @@ pub use exec::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandboxError};
 pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
+
+#[cfg(any(feature = "web", feature = "microvm"))]
+pub use net::{ip_blocked, GuardedResolver};
 
 #[cfg(feature = "web")]
 pub use web::{
