@@ -33,7 +33,7 @@ pub(crate) fn build_client(
         .timeout(timeout)
         .redirect(redirect);
     if let Some(allow_private) = dns_guard {
-        builder = builder.dns_resolver(Arc::new(GuardedResolver { allow_private }));
+        builder = builder.dns_resolver(Arc::new(GuardedResolver::new(allow_private)));
     }
     builder.build()
 }
@@ -48,7 +48,15 @@ pub struct GuardedResolver {
     /// When `true`, private/loopback/link-local addresses are permitted (no SSRF
     /// filtering). When `false`, all addresses classified as blocked by
     /// [`ip_blocked`] are filtered out before the connection is made.
-    pub allow_private: bool,
+    allow_private: bool,
+}
+
+impl GuardedResolver {
+    /// Build a resolver that drops resolved addresses failing the SSRF block
+    /// (unless `allow_private`), pinning connections to vetted IPs.
+    pub fn new(allow_private: bool) -> Self {
+        Self { allow_private }
+    }
 }
 
 impl Resolve for GuardedResolver {
@@ -388,9 +396,7 @@ mod tests {
 
         // `localhost` resolves to loopback (127.0.0.1 / ::1) — all blocked, so
         // the guard leaves no addresses and the resolution fails.
-        let blocked = GuardedResolver {
-            allow_private: false,
-        };
+        let blocked = GuardedResolver::new(false);
         assert!(
             blocked
                 .resolve(Name::from_str("localhost").unwrap())
@@ -400,9 +406,7 @@ mod tests {
         );
 
         // Passthrough when private IPs are explicitly allowed.
-        let allowed = GuardedResolver {
-            allow_private: true,
-        };
+        let allowed = GuardedResolver::new(true);
         let addrs = allowed
             .resolve(Name::from_str("localhost").unwrap())
             .await
