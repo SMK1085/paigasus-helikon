@@ -30,7 +30,7 @@ globset               = "0.4"
 # Pinned to 0.2.28: jiff 0.2.29 activates a `defmt` integration that pulls the
 # unmaintained `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`.
 # Relax once jiff drops that transitive dep.
-jiff                  = { version = "=0.2.28", features = ["serde"] }
+jiff                  = { version = "=0.2.29", features = ["serde"] }
 landlock              = "0.4"
 libc                  = "0.2"
 opentelemetry         = "0.32"
