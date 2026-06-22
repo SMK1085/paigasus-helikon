@@ -17,6 +17,15 @@ pub struct NoModel;
 /// is now reachable once `HasName` is also satisfied.
 pub struct HasModel;
 
+/// Typestate marker: no [`crate::ToolSource`] has been registered. `.build()`
+/// (sync) is available; this is the default.
+pub struct NoSources;
+
+/// Typestate marker: at least one [`crate::ToolSource`] has been registered.
+/// `.build()` is a compile error — finalize with `build_resolved` instead
+/// (the async finalizer lands in a follow-up task).
+pub struct HasSources;
+
 /// Typestate-driven builder for [`crate::LlmAgent`].
 ///
 /// Constructed via [`crate::LlmAgent::builder()`]. `Ctx` is the per-run
@@ -28,7 +37,7 @@ pub struct HasModel;
 ///
 /// `.build()` only exists once both `N = HasName` and `Mo = HasModel`.
 /// Trying to `.build()` earlier is a compile error.
-pub struct LlmAgentBuilder<Ctx, M, T, N, Mo>
+pub struct LlmAgentBuilder<Ctx, M, T, N, Mo, So = NoSources>
 where
     Ctx: Send + Sync + 'static,
 {
@@ -37,6 +46,7 @@ where
     instructions: Option<std::sync::Arc<dyn crate::Instructions<Ctx>>>,
     model: Option<std::sync::Arc<M>>,
     tools: Vec<std::sync::Arc<dyn crate::Tool<Ctx>>>,
+    tool_sources: Vec<std::sync::Arc<dyn crate::ToolSource<Ctx>>>,
     handoffs: Vec<crate::Handoff<Ctx>>,
     output_type: Option<crate::OutputType>,
     input_guardrails: Vec<std::sync::Arc<dyn crate::Guardrail<Ctx>>>,
@@ -44,13 +54,14 @@ where
     hooks: Vec<std::sync::Arc<dyn crate::Hook<Ctx>>>,
     model_settings: crate::ModelSettings,
     config: crate::RunConfig,
-    // `fn() -> _` (not `(N, Mo, T)`) so the builder is `Send + Sync` regardless
-    // of N/Mo/T's auto-traits, and to keep typestate markers out of drop-check.
+    // `fn() -> _` (not `(N, Mo, So, T)`) so the builder is `Send + Sync`
+    // regardless of N/Mo/So/T's auto-traits, and to keep typestate markers
+    // out of drop-check.
     #[allow(clippy::type_complexity)]
-    _state: std::marker::PhantomData<fn() -> (N, Mo, T)>,
+    _state: std::marker::PhantomData<fn() -> (N, Mo, So, T)>,
 }
 
-impl<Ctx> LlmAgentBuilder<Ctx, (), String, NoName, NoModel>
+impl<Ctx> LlmAgentBuilder<Ctx, (), String, NoName, NoModel, NoSources>
 where
     Ctx: Send + Sync + 'static,
 {
@@ -67,6 +78,7 @@ where
             instructions: None,
             model: None,
             tools: Vec::new(),
+            tool_sources: Vec::new(),
             handoffs: Vec::new(),
             output_type: None,
             input_guardrails: Vec::new(),
@@ -80,9 +92,9 @@ where
 }
 
 // Any-state setters: callable in every typestate combination, return Self
-// unchanged in (N, Mo, T) generics. Each takes `mut self`, mutates a field,
+// unchanged in (N, Mo, So, T) generics. Each takes `mut self`, mutates a field,
 // returns Self.
-impl<Ctx, M, T, N, Mo> LlmAgentBuilder<Ctx, M, T, N, Mo>
+impl<Ctx, M, T, N, Mo, So> LlmAgentBuilder<Ctx, M, T, N, Mo, So>
 where
     Ctx: Send + Sync + 'static,
 {
@@ -250,7 +262,7 @@ where
 
 // .name(…) — only callable when the Name marker is NoName. Transitions
 // to HasName, leaving every other generic parameter unchanged.
-impl<Ctx, M, T, Mo> LlmAgentBuilder<Ctx, M, T, NoName, Mo>
+impl<Ctx, M, T, Mo, So> LlmAgentBuilder<Ctx, M, T, NoName, Mo, So>
 where
     Ctx: Send + Sync + 'static,
 {
@@ -258,13 +270,14 @@ where
     ///
     /// Once called, `.name` is no longer in scope — calling it a second
     /// time is a compile error.
-    pub fn name(self, n: impl Into<String>) -> LlmAgentBuilder<Ctx, M, T, HasName, Mo> {
+    pub fn name(self, n: impl Into<String>) -> LlmAgentBuilder<Ctx, M, T, HasName, Mo, So> {
         LlmAgentBuilder {
             name: Some(n.into()),
             description: self.description,
             instructions: self.instructions,
             model: self.model,
             tools: self.tools,
+            tool_sources: self.tool_sources,
             handoffs: self.handoffs,
             output_type: self.output_type,
             input_guardrails: self.input_guardrails,
@@ -280,17 +293,17 @@ where
 // .model(…) / .shared_model(…) — only callable when the Model marker is
 // NoModel. Transition consumes self and rebuilds with the new M2 generic
 // inferred from the model argument.
-impl<Ctx, M0, T, N> LlmAgentBuilder<Ctx, M0, T, N, NoModel>
+impl<Ctx, M0, T, N, So> LlmAgentBuilder<Ctx, M0, T, N, NoModel, So>
 where
     Ctx: Send + Sync + 'static,
 {
     /// Set the agent's model from an owned value.
     ///
     /// `M2` is inferred from the argument type; the builder transitions
-    /// to `LlmAgentBuilder<Ctx, M2, T, N, HasModel>`. Wraps the value in
+    /// to `LlmAgentBuilder<Ctx, M2, T, N, HasModel, So>`. Wraps the value in
     /// an `Arc` internally — use [`Self::shared_model`] if the model is
     /// already shared across multiple agents.
-    pub fn model<M2>(self, m: M2) -> LlmAgentBuilder<Ctx, M2, T, N, HasModel>
+    pub fn model<M2>(self, m: M2) -> LlmAgentBuilder<Ctx, M2, T, N, HasModel, So>
     where
         M2: crate::Model + 'static,
     {
@@ -300,7 +313,10 @@ where
     /// Set the agent's model from a pre-wrapped `Arc`.
     ///
     /// Stores the supplied `Arc` directly — no re-wrapping.
-    pub fn shared_model<M2>(self, m: std::sync::Arc<M2>) -> LlmAgentBuilder<Ctx, M2, T, N, HasModel>
+    pub fn shared_model<M2>(
+        self,
+        m: std::sync::Arc<M2>,
+    ) -> LlmAgentBuilder<Ctx, M2, T, N, HasModel, So>
     where
         M2: crate::Model + 'static,
     {
@@ -310,6 +326,7 @@ where
             instructions: self.instructions,
             model: Some(m),
             tools: self.tools,
+            tool_sources: self.tool_sources,
             handoffs: self.handoffs,
             output_type: self.output_type,
             input_guardrails: self.input_guardrails,
@@ -326,7 +343,7 @@ where
 // guarantees `.name` and `.model` were both called, so the corresponding
 // `Option`s are `Some`. We `.expect` with typestate-referencing messages
 // for diagnostic clarity if the unreachable ever fires.
-impl<Ctx, M, T> LlmAgentBuilder<Ctx, M, T, HasName, HasModel>
+impl<Ctx, M, T> LlmAgentBuilder<Ctx, M, T, HasName, HasModel, NoSources>
 where
     Ctx: Send + Sync + 'static,
     M: crate::Model + 'static,
@@ -358,9 +375,93 @@ where
     }
 }
 
+// Source registration — any state in. Each call transitions So -> HasSources,
+// which removes the sync `.build()` from scope (use `.build_resolved()`).
+impl<Ctx, M, T, N, Mo, So> LlmAgentBuilder<Ctx, M, T, N, Mo, So>
+where
+    Ctx: Send + Sync + 'static,
+{
+    /// Register a tool source whose tools are discovered at
+    /// `build_resolved`. Removes the sync `.build()` from scope.
+    pub fn tool_source(
+        mut self,
+        s: impl crate::ToolSource<Ctx> + 'static,
+    ) -> LlmAgentBuilder<Ctx, M, T, N, Mo, HasSources> {
+        self.tool_sources
+            .push(std::sync::Arc::new(s) as std::sync::Arc<dyn crate::ToolSource<Ctx>>);
+        self.into_has_sources()
+    }
+
+    /// Register a pre-wrapped tool source.
+    pub fn shared_tool_source(
+        mut self,
+        s: std::sync::Arc<dyn crate::ToolSource<Ctx>>,
+    ) -> LlmAgentBuilder<Ctx, M, T, N, Mo, HasSources> {
+        self.tool_sources.push(s);
+        self.into_has_sources()
+    }
+
+    /// Register several **homogeneous** tool sources, e.g. `[handle_a, handle_b]`.
+    /// To mix source *types*, use [`Self::shared_tool_sources`].
+    pub fn tool_sources<I, S>(mut self, sources: I) -> LlmAgentBuilder<Ctx, M, T, N, Mo, HasSources>
+    where
+        I: IntoIterator<Item = S>,
+        S: crate::ToolSource<Ctx> + 'static,
+    {
+        for s in sources {
+            self.tool_sources
+                .push(std::sync::Arc::new(s) as std::sync::Arc<dyn crate::ToolSource<Ctx>>);
+        }
+        self.into_has_sources()
+    }
+
+    /// Register several **heterogeneous / pre-wrapped** tool sources.
+    pub fn shared_tool_sources<I>(
+        mut self,
+        sources: I,
+    ) -> LlmAgentBuilder<Ctx, M, T, N, Mo, HasSources>
+    where
+        I: IntoIterator<Item = std::sync::Arc<dyn crate::ToolSource<Ctx>>>,
+    {
+        self.tool_sources.extend(sources);
+        self.into_has_sources()
+    }
+
+    /// Ergonomic alias for [`Self::tool_sources`], matching the MCP mental
+    /// model. Despite the name, accepts any [`crate::ToolSource`] (core is
+    /// MCP-agnostic).
+    pub fn mcp_servers<I, S>(self, servers: I) -> LlmAgentBuilder<Ctx, M, T, N, Mo, HasSources>
+    where
+        I: IntoIterator<Item = S>,
+        S: crate::ToolSource<Ctx> + 'static,
+    {
+        self.tool_sources(servers)
+    }
+
+    /// Private: rebuild the builder in the `HasSources` typestate.
+    fn into_has_sources(self) -> LlmAgentBuilder<Ctx, M, T, N, Mo, HasSources> {
+        LlmAgentBuilder {
+            name: self.name,
+            description: self.description,
+            instructions: self.instructions,
+            model: self.model,
+            tools: self.tools,
+            tool_sources: self.tool_sources,
+            handoffs: self.handoffs,
+            output_type: self.output_type,
+            input_guardrails: self.input_guardrails,
+            output_guardrails: self.output_guardrails,
+            hooks: self.hooks,
+            model_settings: self.model_settings,
+            config: self.config,
+            _state: std::marker::PhantomData,
+        }
+    }
+}
+
 // .output_type::<T>() — any-state, repeatable. Each call is a typestate
 // transition that swaps the T generic and populates the OutputType schema.
-impl<Ctx, M, T0, N, Mo> LlmAgentBuilder<Ctx, M, T0, N, Mo>
+impl<Ctx, M, T0, N, Mo, So> LlmAgentBuilder<Ctx, M, T0, N, Mo, So>
 where
     Ctx: Send + Sync + 'static,
 {
@@ -377,7 +478,7 @@ where
     /// `Send + Sync + 'static` is needed by `Agent::run`'s async boundary
     /// (and also enforced at `.build()` — duplicating it here surfaces
     /// the error at the call site that picked the wrong `T`).
-    pub fn output_type<T2>(self) -> LlmAgentBuilder<Ctx, M, T2, N, Mo>
+    pub fn output_type<T2>(self) -> LlmAgentBuilder<Ctx, M, T2, N, Mo, So>
     where
         T2: Send + Sync + 'static + serde::de::DeserializeOwned + schemars::JsonSchema,
     {
@@ -387,6 +488,7 @@ where
             instructions: self.instructions,
             model: self.model,
             tools: self.tools,
+            tool_sources: self.tool_sources,
             handoffs: self.handoffs,
             output_type: Some(crate::OutputType::from_schema::<T2>()),
             input_guardrails: self.input_guardrails,
@@ -452,6 +554,20 @@ mod tests {
             Ok(ToolOutput {
                 content: serde_json::Value::String("ok".into()),
             })
+        }
+    }
+
+    // A `ToolSource` whose resolution yields no tools — enough to exercise the
+    // builder's source-registration typestate at compile time. Mirrors
+    // `OkSource` from the `ToolSource` trait's own tests (Task 1).
+    struct StubSource;
+    #[async_trait]
+    impl<Ctx> crate::ToolSource<Ctx> for StubSource
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        async fn tools(&self) -> Result<Vec<Arc<dyn Tool<Ctx>>>, crate::ToolSourceError> {
+            Ok(vec![])
         }
     }
 
@@ -606,5 +722,31 @@ mod tests {
             .build();
         assert_eq!(agent.handoffs.len(), 1);
         assert_eq!(agent.handoffs[0].agent().name(), "sub");
+    }
+
+    #[test]
+    fn build_unaffected_with_no_sources() {
+        // The `So = NoSources` default keeps the existing sync `.build()` path
+        // working unchanged when no source is registered.
+        let agent = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool(StubTool)
+            .build();
+        assert_eq!(agent.tools.len(), 1);
+    }
+
+    #[test]
+    fn registration_methods_typecheck() {
+        // Registering a source must compile and yield a HasSources builder
+        // (which no longer has `.build()`); we just construct and drop it.
+        let _b = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool_source(StubSource);
+        let _b2 = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .mcp_servers([StubSource, StubSource]);
     }
 }
