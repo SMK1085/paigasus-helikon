@@ -5,7 +5,9 @@
 //! - **Client** — `McpServerHandle` connects to an external MCP server
 //!   (stdio child process or streamable HTTP) and re-exposes its tools as
 //!   [`paigasus_helikon_core::Tool`] implementations. Discovery happens once
-//!   at connect; `tools()` is synchronous.
+//!   at connect; `tools()` is synchronous. Alternatively, register the handle
+//!   directly with `.mcp_servers([...])` on the agent builder and call
+//!   `.build_resolved()` — `McpServerHandle` implements `ToolSource<Ctx>`.
 //! - **Server** — `McpAgentServer` wraps any
 //!   [`paigasus_helikon_core::Agent`] and serves it as a single MCP tool
 //!   over stdio or streamable HTTP.
@@ -29,6 +31,34 @@
 //!
 //! let tools = fs.tools::<()>(); // pass to LlmAgent::builder().tools(...)
 //! # let _ = tools;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Example: auto-discovery via the builder
+//!
+//! `McpServerHandle` implements `ToolSource<Ctx>`, so you can register it
+//! directly on the agent builder and let `.build_resolved()` discover and
+//! merge the tools in one async step. A duplicate tool name across sources
+//! fails the build with `ToolSourceError::DuplicateName`.
+//!
+//! ```no_run
+//! # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+//! use paigasus_helikon_mcp::McpServerHandle;
+//!
+//! let fs = McpServerHandle::stdio(tokio::process::Command::new("npx"), |cmd| {
+//!     cmd.args(["-y", "@modelcontextprotocol/server-filesystem", "/data"]);
+//! })
+//! .connect()
+//! .await?;
+//!
+//! // let agent = LlmAgent::builder::<()>()
+//! //     .name("assistant")
+//! //     .model(model)
+//! //     .mcp_servers([fs])
+//! //     .build_resolved()
+//! //     .await?;
+//! # let _ = fs;
 //! # Ok(())
 //! # }
 //! ```

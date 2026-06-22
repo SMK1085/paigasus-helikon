@@ -17,7 +17,7 @@ Most users enable the `mcp` feature on the [`paigasus-helikon`](https://crates.i
 
 ## Example
 
-Expose an external MCP server's tools to an agent:
+Expose an external MCP server's tools to an agent — explicit path:
 
 ```rust
 use paigasus_helikon_mcp::McpServerHandle;
@@ -31,6 +31,20 @@ let fs = McpServerHandle::stdio(tokio::process::Command::new("npx"), |cmd| {
 
 let tools = fs.tools::<()>(); // pass to LlmAgent::builder().tools(...)
 ```
+
+`McpServerHandle` implements `ToolSource<Ctx>` from `paigasus-helikon-core`, so you can also register handles directly on the agent builder and let `.build_resolved()` discover and merge the tools in one step:
+
+```rust
+// After connecting the handle as above (without .tool_prefix if not needed):
+// let agent = LlmAgent::builder::<()>()
+//     .name("assistant")
+//     .model(model)
+//     .mcp_servers([fs])
+//     .build_resolved()
+//     .await?;
+```
+
+A duplicate tool name across registered sources fails the build with `ToolSourceError::DuplicateName`.
 
 ## Links
 

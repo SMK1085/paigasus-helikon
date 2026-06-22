@@ -1,0 +1,14 @@
+error[E0599]: no method named `build` found for struct `LlmAgentBuilder<(), MockModel, String, HasName, HasModel, HasSources>` in the current scope
+  --> tests/ui/builder_source_blocks_build.rs:44:10
+   |
+40 |       let _agent = LlmAgent::builder::<()>()
+   |  __________________-
+41 | |         .name("x")
+42 | |         .model(MockModel)
+43 | |         .tool_source(S)
+44 | |         .build();
+   | |         -^^^^^ method not found in `LlmAgentBuilder<(), MockModel, String, HasName, HasModel, HasSources>`
+   | |_________|
+   |
+   |
+   = note: the method was found for `LlmAgentBuilder<Ctx, M, T, HasName, HasModel>`

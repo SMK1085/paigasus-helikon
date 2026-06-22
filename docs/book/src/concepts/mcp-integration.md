@@ -7,7 +7,7 @@ The `paigasus-helikon-mcp` crate (facade feature `mcp`, re-exported as `paigasus
 
 Two transports are supported: a stdio child process and streamable HTTP. SSE transports are not supported — rmcp removed them in `0.11.0` and the 2025-03-26 MCP spec revision deprecated HTTP+SSE in favor of streamable HTTP.
 
-The whole crate is published on [crates.io](https://crates.io/crates/paigasus-helikon-mcp) / [docs.rs](https://docs.rs/paigasus-helikon-mcp). There is no discovery sugar on the agent builder yet: you connect explicitly, then hand the resulting `Vec<Arc<dyn Tool<Ctx>>>` to `LlmAgent::builder().tools(...)` like any other tool list.
+The whole crate is published on [crates.io](https://crates.io/crates/paigasus-helikon-mcp) / [docs.rs](https://docs.rs/paigasus-helikon-mcp). `McpServerHandle` implements the core `ToolSource<Ctx>` trait, so you can register handles directly on the agent builder with `.mcp_servers([fs, ...])` (or `.tool_source(handle)`) and finalize with `.build_resolved().await?`, which discovers and merges the remote tools in one step. A duplicate tool name across sources fails the build with `ToolSourceError::DuplicateName`. The explicit `.tools(handle.tools::<Ctx>())` path remains valid as a lower-level alternative when you need direct access to the `Vec<Arc<dyn Tool<Ctx>>>`.
 
 ## Client: external tools into an agent
 
@@ -34,6 +34,32 @@ let fs = McpServerHandle::stdio(tokio::process::Command::new("npx"), |cmd| {
 let tools = fs.tools::<()>(); // Vec<Arc<dyn Tool<()>>>
 // .tools(tools) on an LlmAgent::builder, then run the agent.
 # let _ = tools;
+# Ok(())
+# }
+```
+
+**Ergonomic alternative — register the handle directly on the builder:**
+
+```rust,no_run
+# async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+use paigasus_helikon_core::LlmAgent;
+use paigasus_helikon_mcp::McpServerHandle;
+
+let fs = McpServerHandle::stdio(tokio::process::Command::new("npx"), |cmd| {
+    cmd.args(["-y", "@modelcontextprotocol/server-filesystem", "/data"]);
+})
+.connect()
+.await?;
+
+// `.mcp_servers([...])` accepts any `ToolSource<Ctx>` — `McpServerHandle` implements it.
+// `.build_resolved().await?` resolves all sources and merges their tools.
+// A duplicate tool name across sources returns `ToolSourceError::DuplicateName`.
+let _agent = LlmAgent::builder::<()>()
+    .name("assistant")
+    .model(/* any Model impl */)
+    .mcp_servers([fs])
+    .build_resolved()
+    .await?;
 # Ok(())
 # }
 ```

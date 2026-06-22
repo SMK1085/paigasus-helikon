@@ -28,6 +28,8 @@ Each feature gates one sibling crate behind a module on `paigasus_helikon::`:
 
 Feature names are kebab-case; the module aliases are snake-case. The `evals`, `runtime-axum`, `runtime-temporal`, and `runtime-agentcore` features exist but gate not-yet-implemented stub crates — don't enable them yet. The `paigasus_helikon::schema::strict()` JSON-Schema normalizer is available regardless of features.
 
+When using the `mcp` feature, `McpServerHandle` (from `paigasus_helikon::mcp`) implements `ToolSource<Ctx>` from core. Register MCP server handles directly on the builder with `.mcp_servers([...])` and finalize with `.build_resolved().await?` — no need to convert to a `Vec<Arc<dyn Tool<Ctx>>>` manually. See the [MCP integration guide](https://smk1085.github.io/paigasus-helikon/concepts/mcp-integration.html) for details.
+
 ## Example
 
 A minimal agent against OpenAI (enable `openai`). This crate's `README.md` is its rustdoc front page, so the example is marked `ignore` (it reads `OPENAI_API_KEY` and calls the network); the same program ships compile-checked as `examples/budget_assistant_openai.rs`:

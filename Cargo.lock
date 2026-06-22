@@ -1922,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1961,7 +1961,7 @@ version = "0.0.0"
 
 [[package]]
 name = "paigasus-helikon-core"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2008,7 +2008,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-mcp"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "async-stream",

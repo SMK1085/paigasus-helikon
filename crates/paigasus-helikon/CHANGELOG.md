@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- *(facade)* SMA-410 re-export the new core tool-source API; track core 0.5.11 / mcp 0.1.11
+
 ## [0.4.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.5...paigasus-helikon-v0.4.6) - 2026-06-21
 
 ### Added

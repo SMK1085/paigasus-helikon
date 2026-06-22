@@ -27,6 +27,8 @@ let agent = LlmAgent::builder::<()>()
     .build();
 ```
 
+When tools come from an async source (e.g. an MCP server handle), register them via `.tool_source(source)` / `.mcp_servers([...])` and finalize asynchronously with `.build_resolved().await?`. Any type that implements the `ToolSource<Ctx>` trait — including `McpServerHandle` from `paigasus-helikon-mcp` — can be registered this way. A duplicate tool name across sources fails the build with `ToolSourceError::DuplicateName`.
+
 See the [quickstart](https://smk1085.github.io/paigasus-helikon/getting-started/quickstart.html) for a complete, runnable agent that drives the tool-calling loop end-to-end.
 
 ## Links

@@ -9,6 +9,7 @@ fn trybuild_ui() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/builder_missing_*.rs");
     t.compile_fail("tests/ui/builder_*_twice.rs");
+    t.compile_fail("tests/ui/builder_source_blocks_build.rs");
     t.pass("tests/ui/builder_happy_path.rs");
     t.pass("tests/ui/builder_output_type_typed.rs");
 }
