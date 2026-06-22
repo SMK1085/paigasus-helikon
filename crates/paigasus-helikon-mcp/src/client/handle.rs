@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use paigasus_helikon_core::Tool;
+use paigasus_helikon_core::{Tool, ToolSource, ToolSourceError};
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::ServiceExt;
@@ -253,5 +253,18 @@ impl McpServerHandle {
             params = params.with_arguments(args);
         }
         Ok(self.inner.service.call_tool(params).await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl<Ctx> ToolSource<Ctx> for McpServerHandle
+where
+    Ctx: Send + Sync + 'static,
+{
+    /// Resolve this server's tools. Discovery already happened at `connect()`,
+    /// so the inherent `McpServerHandle::tools` adapter is cheap and
+    /// infallible — this wrapper always returns `Ok`.
+    async fn tools(&self) -> Result<Vec<Arc<dyn Tool<Ctx>>>, ToolSourceError> {
+        Ok(<McpServerHandle>::tools::<Ctx>(self))
     }
 }

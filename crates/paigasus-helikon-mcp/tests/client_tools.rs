@@ -76,6 +76,20 @@ async fn tool_prefix_is_applied() {
 }
 
 // ---------------------------------------------------------------------------
+// ToolSource trait impl
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tool_source_impl_matches_inherent_tools() {
+    use paigasus_helikon_core::ToolSource;
+    let handle = support::connect_fixture(McpConnectOptions::new()).await;
+    let inherent = handle.tools::<()>();
+    let via_trait = ToolSource::<()>::tools(&handle).await.expect("resolve");
+    assert_eq!(via_trait.len(), inherent.len());
+    assert_eq!(via_trait.len(), 4); // fixture exposes 4 tools
+}
+
+// ---------------------------------------------------------------------------
 // New: invoke round-trips, error mapping, close semantics
 // ---------------------------------------------------------------------------
 
