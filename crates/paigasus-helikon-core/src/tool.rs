@@ -319,6 +319,61 @@ pub enum ToolError {
     Other(#[from] anyhow::Error),
 }
 
+/// Errors raised while resolving a [`ToolSource`] or merging resolved tools.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ToolSourceError {
+    /// A source failed to produce its tools (e.g. a transport/discovery failure).
+    ///
+    /// Constructed by the failing [`ToolSource`] implementation, which supplies
+    /// its own `source` label; the agent builder propagates it unchanged.
+    #[error("tool source {source:?} failed to resolve: {cause}")]
+    Resolution {
+        /// Caller-meaningful label for the failing source (supplied by the impl).
+        source: String,
+        /// Underlying cause.
+        #[source]
+        cause: anyhow::Error,
+    },
+
+    /// A resolved source introduced a tool whose name already exists in the
+    /// merged namespace (static tools or an earlier source). Rejected at build
+    /// time rather than silently shadowed, because tools dispatch by name.
+    #[error("duplicate tool name {name:?} introduced by a tool source")]
+    DuplicateName {
+        /// The conflicting tool name.
+        name: String,
+    },
+
+    /// Escape hatch for arbitrary source failures.
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+/// An asynchronous provider of [`Tool`]s, resolved when the agent is built.
+///
+/// Implemented by anything that can produce tools through (potentially) async
+/// work — for example an MCP server handle that discovered its tools over a
+/// transport. Register sources on the builder via
+/// [`crate::LlmAgentBuilder::tool_source`], [`crate::LlmAgentBuilder::tool_sources`],
+/// or [`crate::LlmAgentBuilder::mcp_servers`]; they are resolved exactly once by
+/// [`crate::LlmAgentBuilder::build_resolved`].
+///
+/// Object-safe by the same construction as [`Tool`] — held as
+/// `Arc<dyn ToolSource<Ctx>>`.
+#[async_trait]
+pub trait ToolSource<Ctx>: Send + Sync
+where
+    Ctx: Send + Sync + 'static,
+{
+    /// Resolve the tools this source provides.
+    ///
+    /// Called once, at `build_resolved()`. Returning `Err` aborts the build
+    /// with that [`ToolSourceError`]. Implementations that want labeled errors
+    /// construct [`ToolSourceError::Resolution`] themselves.
+    async fn tools(&self) -> Result<Vec<Arc<dyn Tool<Ctx>>>, ToolSourceError>;
+}
+
 #[cfg(test)]
 mod denied_variant_tests {
     use super::ToolError;
@@ -342,6 +397,64 @@ mod effect_tests {
     #[test]
     fn tool_effect_default_is_side_effect() {
         assert_eq!(ToolEffect::default(), ToolEffect::SideEffect);
+    }
+}
+
+#[cfg(test)]
+mod tool_source_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct OneTool;
+    #[async_trait]
+    impl<Ctx> Tool<Ctx> for OneTool
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        fn name(&self) -> &str {
+            "one"
+        }
+        fn description(&self) -> &str {
+            "one tool"
+        }
+        fn schema(&self) -> &serde_json::Value {
+            static S: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+            S.get_or_init(|| serde_json::json!({"type":"object"}))
+        }
+        async fn invoke(
+            &self,
+            _c: &ToolContext<Ctx>,
+            _a: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::new(serde_json::Value::Null))
+        }
+    }
+
+    struct OkSource;
+    #[async_trait]
+    impl<Ctx> ToolSource<Ctx> for OkSource
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        async fn tools(&self) -> Result<Vec<Arc<dyn Tool<Ctx>>>, ToolSourceError> {
+            Ok(vec![Arc::new(OneTool) as Arc<dyn Tool<Ctx>>])
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_source_yields_tools() {
+        let src = OkSource;
+        let tools = ToolSource::<()>::tools(&src).await.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name(), "one");
+    }
+
+    #[test]
+    fn duplicate_name_error_renders() {
+        let e = ToolSourceError::DuplicateName {
+            name: "echo".into(),
+        };
+        assert!(e.to_string().contains("echo"));
     }
 }
 
