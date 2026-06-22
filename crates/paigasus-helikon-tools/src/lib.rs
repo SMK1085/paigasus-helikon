@@ -37,12 +37,12 @@ mod web;
 
 pub use bash::{BashTool, BashToolBuilder};
 pub use edit::EditTool;
-#[cfg(feature = "microvm")]
-pub use exec::{EgressPolicy, ForkdBackend, ForkdBackendBuilder, ForkdError};
 pub use exec::{
     ExecOutput, ExecRequest, ExecutionBackend, HostBackend, HostBackendBuilder, Isolation,
     ResourceLimits, SandboxGuarantees,
 };
+#[cfg(feature = "microvm")]
+pub use exec::{ForkdBackend, ForkdBackendBuilder, ForkdError};
 #[cfg(all(
     feature = "os-sandbox",
     target_os = "linux",
@@ -56,7 +56,7 @@ pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
 
 #[cfg(any(feature = "web", feature = "microvm"))]
-pub use net::{ip_blocked, GuardedResolver};
+pub use net::{ip_blocked, EgressPolicy, GuardedResolver};
 
 #[cfg(feature = "web")]
 pub use web::{

@@ -6,4 +6,4 @@ pub mod policy;
 #[cfg(feature = "microvm")]
 pub mod proxy;
 
-pub use policy::{ip_blocked, GuardedResolver};
+pub use policy::{ip_blocked, EgressPolicy, GuardedResolver};

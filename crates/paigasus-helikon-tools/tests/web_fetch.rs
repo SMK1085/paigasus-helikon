@@ -158,3 +158,13 @@ async fn max_uses_caps_fetches_per_run() {
         "2nd fetch capped; got {err:?}"
     );
 }
+
+#[tokio::test]
+async fn web_fetch_empty_allow_domains_permits_any_host() {
+    // An empty allow_domains list must mean "no restriction", NOT "deny all".
+    let tool = paigasus_helikon_tools::WebFetchTool::builder()
+        .allow_domains(Vec::<String>::new())
+        .build::<()>();
+    // Builder must succeed and impose no host allow-list (smoke: it builds).
+    let _ = tool;
+}

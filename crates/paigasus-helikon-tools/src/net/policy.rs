@@ -218,6 +218,86 @@ pub(crate) async fn ssrf_check(url: &url::Url, allow_private: bool) -> Result<()
     Ok(())
 }
 
+/// Domain allow/deny + private-IP (SSRF) policy shared by the `web` tools and the
+/// `microvm` egress proxy/backend. The single public policy type (SMA-437).
+///
+/// Domain matching is sub-domain-aware, case-insensitive, and trailing-dot-
+/// insensitive: `example.com` matches `example.com` and `api.example.com`.
+///
+/// **Empty-allow-list semantics matter:** `allow: None` means *no restriction*
+/// (any host, subject to `deny`); `allow: Some(empty)` means *deny everything*.
+/// `deny_all()` builds the latter; `allow_all()` the former.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EgressPolicy {
+    allow: Option<Vec<String>>,
+    deny: Vec<String>,
+    allow_private_ips: bool,
+}
+
+impl EgressPolicy {
+    /// Deny all egress (an empty allow-list permits nothing).
+    pub fn deny_all() -> Self {
+        Self {
+            allow: Some(Vec::new()),
+            deny: Vec::new(),
+            allow_private_ips: false,
+        }
+    }
+
+    /// Allow all egress (no allow-list, no deny-list).
+    pub fn allow_all() -> Self {
+        Self::default()
+    }
+
+    /// Add allowed domains. Setting any allow-list switches the policy to
+    /// default-deny (only listed domains and their sub-domains are permitted).
+    pub fn allow_domains<I, S>(mut self, domains: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allow
+            .get_or_insert_with(Vec::new)
+            .extend(domains.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add denied domains. A deny match always refuses, beating any allow.
+    pub fn deny_domains<I, S>(mut self, domains: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.deny.extend(domains.into_iter().map(Into::into));
+        self
+    }
+
+    /// Permit private/loopback/link-local IPs (default: deny them as SSRF risks).
+    pub fn allow_private_ips(mut self, allow: bool) -> Self {
+        self.allow_private_ips = allow;
+        self
+    }
+
+    /// `true` if `host` is permitted: not denied, and — when an allow-list is set
+    /// — matching it (itself or a sub-domain).
+    pub fn is_host_allowed(&self, host: &str) -> bool {
+        host_allowed(host, self.allow.as_deref(), &self.deny)
+    }
+
+    /// `true` if `ip` may be connected to: a public address, or any address when
+    /// `allow_private_ips` is set.
+    pub fn is_ip_allowed(&self, ip: std::net::IpAddr) -> bool {
+        self.allow_private_ips || !ip_blocked(ip)
+    }
+
+    /// Deprecated alias for [`Self::is_host_allowed`], kept for source
+    /// compatibility with the SMA-416 `EgressPolicy`.
+    #[deprecated(note = "renamed to is_host_allowed")]
+    pub fn is_allowed(&self, host: &str) -> bool {
+        self.is_host_allowed(host)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,5 +408,35 @@ mod tests {
             .await
             .expect("passthrough resolves localhost");
         assert!(addrs.count() >= 1, "passthrough returns loopback addresses");
+    }
+
+    #[test]
+    fn egress_policy_host_and_ip_checks() {
+        use std::net::IpAddr;
+        let p = EgressPolicy::deny_all().allow_domains(["pypi.org"]);
+        assert!(p.is_host_allowed("pypi.org"));
+        assert!(p.is_host_allowed("files.pypi.org"));
+        assert!(!p.is_host_allowed("evil.test"));
+        // private IPs blocked by default; allowed when toggled
+        let priv_ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(!p.is_ip_allowed(priv_ip));
+        let pub_ip: IpAddr = "8.8.8.8".parse().unwrap();
+        assert!(p.is_ip_allowed(pub_ip));
+        let p2 = EgressPolicy::allow_all().allow_private_ips(true);
+        assert!(p2.is_ip_allowed(priv_ip));
+    }
+
+    #[test]
+    fn egress_policy_deprecated_is_allowed_alias_still_works() {
+        let p = EgressPolicy::allow_all().deny_domains(["evil.test"]);
+        #[allow(deprecated)]
+        let denied = p.is_allowed("evil.test");
+        assert!(!denied);
+    }
+
+    #[test]
+    fn egress_policy_empty_allow_list_means_deny_all_for_forkd_default() {
+        let p = EgressPolicy::deny_all(); // allow: Some(empty) -> deny everything
+        assert!(!p.is_host_allowed("anything.test"));
     }
 }
