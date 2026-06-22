@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(mcp)* SMA-410 implement `ToolSource` for `McpServerHandle`
+
 ## [0.1.10](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.9...paigasus-helikon-mcp-v0.1.10) - 2026-06-21
 
 ### Other
