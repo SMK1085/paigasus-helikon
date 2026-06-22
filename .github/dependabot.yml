@@ -12,6 +12,13 @@ updates:
       prefix: "chore(deps)"
     labels: ["area:deps"]
     assignees: ["SMK1085"]
+    ignore:
+      # jiff 0.2.29 activates a `defmt` integration that pulls the unmaintained
+      # `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`. Matches
+      # the `=0.2.28` pin in the root Cargo.toml. Drop this once a later jiff
+      # release sheds that transitive dep (a newer version will be re-proposed).
+      - dependency-name: "jiff"
+        versions: ["0.2.29"]
     groups:
       tokio-stack:
         patterns:
