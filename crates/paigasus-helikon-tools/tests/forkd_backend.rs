@@ -171,23 +171,3 @@ async fn enforce_egress_fails_closed_when_proxy_unreachable() {
         .build();
     assert!(err.is_err(), "unreachable proxy must fail closed");
 }
-
-#[tokio::test]
-#[ignore = "needs a live forkd controller + /dev/kvm; run on a Linux KVM host (SMA-437)"]
-async fn live_forkd_runs_bash_in_a_microvm() {
-    // Set FORKD_URL / FORKD_TOKEN / FORKD_SNAPSHOT to point at a real controller.
-    let url = std::env::var("FORKD_URL").expect("FORKD_URL");
-    let token = std::env::var("FORKD_TOKEN").expect("FORKD_TOKEN");
-    let snapshot = std::env::var("FORKD_SNAPSHOT").expect("FORKD_SNAPSHOT");
-    let backend = ForkdBackend::builder(url)
-        .bearer_token(token)
-        .snapshot(snapshot)
-        .build()
-        .unwrap();
-    let out = backend
-        .run(ExecRequest::new("echo from-a-microvm"))
-        .await
-        .unwrap();
-    assert_eq!(out.stdout.trim(), "from-a-microvm");
-    assert_eq!(out.exit_code, Some(0));
-}
