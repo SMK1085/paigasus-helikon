@@ -1,6 +1,6 @@
 # SMA-437 — `paigasus-helikon-tools`: forkd microVM — egress enforcement + live-KVM validation
 
-**Status:** draft — pending adversarial challenge + GATE 1 approval
+**Status:** revised after adversarial challenge — pending GATE 1 approval
 **Ticket:** [SMA-437](https://linear.app/smaschek/issue/SMA-437/paigasus-helikon-tools-forkd-microvm-live-kvm-validation-egress)
 **Milestone:** Composition & Extensibility
 **Branch:** `feature/sma-437-paigasus-helikon-tools-forkd-microvm-live-kvm-validation`
@@ -15,251 +15,277 @@ SMA-416 shipped a compiling, mock-tested `ForkdBackend` — a portable REST clie
 the forkd Firecracker controller — that *carries* an `EgressPolicy` but does **not**
 enforce it, and honestly reports `guarantees().network = Isolation::None`. This
 ticket makes the microVM tier **actually contain egress** and **actually validate
-end-to-end on KVM**. It delivers, in one PR:
+end-to-end on KVM**. It delivers, in one PR (structured as separable commits):
 
-1. **Egress enforcement (the CI-provable half).** Promote SMA-412's host/IP/SSRF
+1. **Egress enforcement (the CI-provable code).** Promote SMA-412's host/IP/SSRF
    policy to a **public shared type** (`net::EgressPolicy`), build a **CONNECT
    egress proxy** (`net::EgressProxy`) that enforces the domain allow/deny policy +
    the private-IP (SSRF) block, add the `Isolation::Proxied` variant, and upgrade
    `ForkdBackend::guarantees().network` from `None` to `Proxied` when the backend is
-   built in enforced-egress mode. **All of this is pure async Rust, unit/loopback
-   tested green in CI — no KVM required.**
+   built in enforced-egress mode. **All pure async Rust, unit/loopback tested in CI —
+   no KVM required.**
 
-2. **Live-KVM validation (the operator-run half).** A **cloud-agnostic, Dockerized
-   forkd+KVM harness** (`docker compose` running forkd with `--device /dev/kvm` + the
-   egress proxy as a sidecar + per-VM netns default-deny iptables), a **guest-image
-   build script**, a **GCP nested-virtualization reference launch script** (the
-   chosen reference cloud; AWS/Hetzner/DO documented as alternatives), an **env- and
-   feature-gated live integration test**, and a **runbook**. The live fork→exec→
-   destroy + egress-deny path is exercised on a real x86_64 KVM host.
+2. **Live-KVM validation (operator-run code + procedure).** A **cloud-agnostic,
+   Dockerized forkd+KVM harness** (`docker compose` running forkd with `--device
+   /dev/kvm` + the egress proxy sidecar + a **committed, reviewable per-VM netns
+   default-deny + REDIRECT iptables ruleset**), a **guest-image build script** (with a
+   secret-scan gate), a **GCP nested-virtualization reference launch script**
+   (AWS/Hetzner/DO documented as alternatives), an **env-gated live integration
+   test**, and a **runbook**. Run on a real x86_64 KVM host (a GCP nested-virt VM),
+   with the live output attached to the PR.
 
-**Hard environment constraint (the reason for the two-half split).** The dev host is
-macOS on Apple Silicon (arm64) and GitHub-hosted CI has no `/dev/kvm`. Verified
-empirically: a container on this host has **no `/dev/kvm` and no `vmx`/`svm` CPU
-flag** (Docker Desktop's linuxkit VM exposes no nested virtualization), and forkd
-ships **x86_64-Linux-only** — so KVM cannot run here at all. Everything KVM-dependent
-is therefore authored + lint-validated here and **executed on an x86_64 KVM Linux
-host** (per Sven: a **GCP nested-virtualization VM**, provisioned by the launch
-script, run live this work-cycle once the code exists; credentials supplied via
+**Hard environment constraint (the reason for the two-part split).** The dev host is
+macOS on Apple Silicon (arm64) with no nested virtualization, and GitHub-hosted CI
+has no `/dev/kvm`. Verified empirically: a container here has **no `/dev/kvm` and no
+`vmx`/`svm` flag**, and forkd ships **x86_64-Linux-only** (v0.5.2) with **no native
+Docker image**. So KVM cannot run here at all — everything KVM-dependent is authored +
+lint-validated here and **executed on an x86_64 GCP nested-virt VM** (credentials via
 interactive `gcloud auth login`, never pasted into chat).
 
-`-tools` is at `0.2.6`; this is an **additive** change (new `#[non_exhaustive]` enum
-variant + new public types in a feature-gated module) → patch bump **`0.2.7`**,
-normal release-plz flow, **no `paigasus-helikon-core` change**.
+`-tools` is at `0.2.6`; additive change (new `#[non_exhaustive]` enum variant + new
+public types in a feature-gated module, **no source-breaking renames**) → patch bump
+**`0.2.7`**, normal release-plz flow, **no `paigasus-helikon-core` change**.
 
 ## 2. Decisions resolved in brainstorming
 
-1. **Maximal scope, no deferral.** All four ticket ACs' code/scripts/docs land in
-   this one PR. Nothing is punted to a new ticket.
+1. **Maximal scope, one PR (Sven's call).** All four ACs' code/scripts/docs land
+   together, structured as separable commits (policy+proxy+variant+TLS first; harness/
+   scripts/runbook+live test second) so the security-critical proxy gets a clean
+   review. (The challenger recommended splitting into two PRs; surfaced at GATE 1.)
 2. **Live validation = a Dockerized forkd+KVM harness on GCP nested-virt**, exercised
-   via an env-gated live test + a runbook. **No new self-hosted GitHub Actions
-   workflow** (Sven: "no CI dependency"). The harness is cloud-agnostic; GCP is the
+   via an env-gated live test + a runbook, with output attached to the PR. **No
+   self-hosted GitHub Actions workflow.** The harness is cloud-agnostic; GCP is the
    reference provisioner.
-3. **Egress enforcement is layered** (the SMA-416 §6 / SMA-413 §11 model):
-   **Layer 1 — per-VM netns default-deny** (host iptables in each child netns: DROP
-   all egress except the route to the proxy) and **Layer 2 — a CONNECT proxy
-   enforcing the domain policy** (HTTP/S). Layer 1 is host config the harness
-   deploys + the runbook documents (not Rust, not CI-testable here). Layer 2 is *our*
-   Rust code and **is** CI-testable on loopback — it is the artifact that proves the
-   AC "a non-allowlisted egress attempt is denied."
-4. **`guarantees().network` stays honest** (the SMA-413 H1 rule). The upgrade to
-   `Proxied` is **gated on the backend being built in enforced-egress mode** (an
-   explicit builder opt-in that *attests* the operator has deployed both layers — the
-   same trust model the other tiers use for the kernel/hypervisor). Default (no
-   enforced egress) remains `Isolation::None`. We never advertise containment we are
-   not configured to enforce.
-5. **Promotion lives in `-tools`, not `core`.** The shared policy is shared between
-   the `web` tools and the `microvm` backend/proxy — both in `paigasus-helikon-tools`
-   — so a crate-internal `net` module promoted to `pub` suffices. **No core change →
-   no ascend ritual, no manual facade bump.**
-6. **The CONNECT proxy is purpose-built Rust, not Squid/tinyproxy.** Only our own
-   proxy can enforce *our* exact `EgressPolicy` semantics (sub-domain matching,
-   deny-beats-allow) and reuse `ip_blocked` for the SSRF/rebinding guard. ~250 lines
-   of tokio; it is also the testable artifact for the egress AC.
+3. **Egress enforcement is layered** (SMA-416 §6 / SMA-413 §11). **Layer 1 — per-VM
+   netns default-deny + REDIRECT** (host iptables in each child netns: DROP all egress
+   except DNS to a vetted resolver and TCP 80/443 transparently REDIRECTed to the
+   proxy; everything else — raw TCP, UDP/QUIC — dropped). **Layer 2 — a CONNECT/HTTP
+   proxy enforcing the domain policy.** Layer 1 is the **load-bearing general
+   mechanism** (it is what actually stops non-proxy-aware clients, DNS exfil, QUIC,
+   raw TCP); Layer 2 enforces *domain* policy on the HTTP/S that Layer 1 funnels to
+   it. Layer 1 ships as a **committed, reviewable iptables ruleset** + the harness
+   that loads it; it is live-proven (not CI-proven, no KVM here). Layer 2 is *our*
+   Rust code and **is** CI-tested on loopback.
+4. **`guarantees().network` honesty (the SMA-413 H1 rule), hardened per the
+   challenge.** See §3.4. The upgrade to `Proxied` is gated on an explicit
+   enforced-egress opt-in that *attests both layers are deployed*, with a build-time
+   proxy-reachability probe, and a doc that **enumerates the bypass surface** (what
+   escapes if Layer 1 is absent). Default stays `Isolation::None`. (Alternative
+   considered: never raise the tier, expose policy via an advisory accessor only —
+   surfaced at GATE 1.)
+5. **Promotion lives in `-tools`, not `core`.** No core change → no ascend ritual.
+6. **Purpose-built CONNECT proxy**, not Squid/tinyproxy — only it can enforce our
+   exact `EgressPolicy` semantics + reuse `ip_blocked` for the rebinding guard.
 
 ## 3. Egress enforcement (the CI-provable code)
 
-### 3.1 Promote the SMA-412 policy to a public shared type
+### 3.1 Promote the SMA-412 policy to a public shared type — **no source-breaking change**
 
 Today SMA-412's `host_allowed` / `ip_blocked` / `GuardedResolver` / `ssrf_check` /
 `build_client` are `pub(crate)` in `src/web/http.rs`, and `forkd.rs` carries a
-**second, duplicated** domain matcher (`EgressPolicy::is_allowed`). We unify both
-behind one public type.
+**duplicate** domain matcher (`EgressPolicy::is_allowed`). Unify behind one public
+type in a new module `src/net/`, compiled under `#[cfg(any(feature = "web", feature =
+"microvm"))]`.
 
-**New module `src/net/`**, compiled under `#[cfg(any(feature = "web", feature =
-"microvm"))]`:
+**Public-surface audit of the existing `EgressPolicy` (`exec/forkd.rs`, re-exported at
+`lib.rs`) — every shipped item is preserved:**
 
-- **`net::policy`** — the promoted policy:
-  - **`pub struct EgressPolicy`** (the single shared type): domain `allow`/`deny`
-    lists **plus** an `allow_private_ips` toggle. Builder-style: `deny_all()`,
-    `allow_all()`, `allow_domains(..)`, `deny_domains(..)`, `allow_private_ips(bool)`.
-    Checks: `is_host_allowed(&str) -> bool` (the promoted `host_allowed` logic —
-    sub-domain-aware, case-insensitive, trailing-dot-insensitive, deny-beats-allow)
-    and `is_ip_allowed(IpAddr) -> bool` (wrapping the promoted `ip_blocked`
-    classifier, honoring `allow_private_ips`).
-  - **`pub fn ip_blocked(IpAddr) -> bool`** and the SSRF range helpers — promoted
-    verbatim (the existing exhaustive v4/v6 range coverage and tests move with them).
-  - **`pub struct GuardedResolver`** + `pub(crate) fn build_client(..)` +
-    `pub(crate) async fn ssrf_check(..)` — promoted; `GuardedResolver` now resolves
-    through `EgressPolicy::is_ip_allowed`. Made `pub` because the cloud `E2bBackend`
-    sibling and other reqwest controllers can reuse it.
-- **`web` refactor (no public-API change).** `web/http.rs` shrinks to re-exports from
-  `net`; `web/fetch.rs`, `web/search.rs`, `web/backends/*` import from `net`.
-  `WebFetchToolBuilder`'s public methods (`allow_domains` / `deny_domains` /
-  `allow_private_ips`) are **unchanged**; internally they now build/consult an
-  `EgressPolicy`. The existing `web` tests stay green (the moved tests are the
-  regression guard).
-- **`forkd.rs`** drops its duplicated `EgressPolicy` definition and re-uses
-  `net::EgressPolicy`. `paigasus_helikon_tools::EgressPolicy` remains the canonical
-  crate-root path (the re-export simply moves from `exec` to `net`), so there is **no
-  external breakage**.
+| Existing `pub` item | After promotion |
+|---|---|
+| `EgressPolicy::deny_all()` | unchanged |
+| `EgressPolicy::allow_all()` | unchanged |
+| `EgressPolicy::allow_domains(..)` | unchanged |
+| `EgressPolicy::deny_domains(..)` | unchanged |
+| `EgressPolicy::is_allowed(&str)` | **retained as `#[deprecated(note="renamed to is_host_allowed")]` alias** delegating to `is_host_allowed` — **no source breakage** |
+| (new) `is_host_allowed(&str)` | added |
+| (new) `allow_private_ips(bool)` / `is_ip_allowed(IpAddr)` | added |
+
+`EgressPolicy` gains `#[derive(PartialEq, Eq)]` (cheap; lets tests + the enforcement
+config compare). The canonical path `paigasus_helikon_tools::EgressPolicy` stays — the
+re-export moves from `exec` to `net`, which is not a source change for consumers.
+
+**Empty-allow-list semantics — pinned to avoid the web/forkd drift the challenge
+flagged.** The type distinguishes `allow: None` (**no restriction**) from `allow:
+Some(vec![])` (**deny all**). The two consumers keep their *opposite* defaults:
+
+- **web** (`WebFetchTool`/`WebSearchTool`): builder maps an **empty** `allow_domains`
+  to `allow: None` (no restriction) — exactly today's `fetch.rs` guard. Default
+  `allow_private_ips = false`.
+- **forkd** `EgressPolicy::deny_all()`: `allow: Some(vec![])` (deny all) — today's
+  default for the backend.
+
+A **regression test** asserts `WebFetchTool` built with an empty `allow_domains` still
+permits arbitrary hosts (the empty-list-≠-deny-all guarantee).
+
+**`web` refactor (public API unchanged).** `web/http.rs` shrinks to re-exports from
+`net`; `web/{fetch,search}.rs` and `web/backends/*` import from `net`. The moved unit
+tests are the behavioral regression guard. `GuardedResolver` + `ssrf_check` +
+`build_client` move to `net`; `GuardedResolver` becomes `pub` (reusable by the cloud
+`E2bBackend` sibling).
 
 ### 3.2 The CONNECT egress proxy
 
 **New module `src/net/proxy`** (under `#[cfg(feature = "microvm")]`):
 
-- **`pub struct EgressProxy`** constructed from an `EgressPolicy`. `pub async fn
-  serve(self, listener: tokio::net::TcpListener) -> io::Result<()>` accepts
-  connections and, per connection:
-  - **`CONNECT host:port` (HTTPS tunneling — the primary path):** parse the request
-    line + headers; check `policy.is_host_allowed(host)`; resolve the host and check
-    every address with `policy.is_ip_allowed(ip)` (closes the DNS-rebinding window,
-    pinning the tunnel to a vetted address); on pass, reply `200 Connection
-    Established` and `tokio::io::copy_bidirectional` the byte stream; on fail, reply
-    `403 Forbidden` and close. **No upstream connection is made for a denied host.**
-  - **Absolute-URI plain HTTP (`GET http://host/… HTTP/1.1`):** enforce the `Host`
-    against the policy, then forward via a `build_client`-built reqwest client (reuses
-    the guarded resolver). Handled so plain HTTP cannot bypass enforcement once netns
-    default-deny routes all egress here.
-- **Bearer/secret hygiene:** the proxy logs hostnames + verdicts (allow/deny) but
-  never request bodies or `Authorization` headers.
-- **Reusability:** the proxy takes an `EgressPolicy` and a listener — it is
-  deployment-agnostic. The Docker harness runs it as a sidecar on the forkd host; a
-  test runs it on `127.0.0.1`.
+- **`pub struct EgressProxy`** from an `EgressPolicy`. `pub async fn serve(self,
+  listener: tokio::net::TcpListener) -> io::Result<()>`. Per connection:
+  - **`CONNECT host:port` (HTTPS tunneling, primary path):** parse request line +
+    headers (robustly — bounded read to `\r\n\r\n`, reject malformed/oversized);
+    `policy.is_host_allowed(host)`; resolve + check **every** address with
+    `policy.is_ip_allowed(ip)` (closes the DNS-rebinding window, pinning the tunnel);
+    on pass → `200 Connection Established` + `copy_bidirectional`; on fail → **fast**
+    `403 Forbidden` + close (no upstream connection for a denied host).
+  - **Absolute-URI plain HTTP** (`GET http://host/… HTTP/1.1`): enforce `Host`, then
+    forward via a `build_client`-built reqwest client (guarded resolver). Handled so
+    plain HTTP can't bypass once Layer 1 REDIRECTs it here.
+- **Secret hygiene:** logs hostnames + allow/deny verdicts only — never bodies or
+  `Authorization` headers.
 
-**Why this proves the AC here, without KVM:** the deny decision happens *in the proxy*
-before any tunnel — so "non-allowlisted egress is denied" is a pure loopback test
-(below, §6).
+**Transparent-REDIRECT note.** Because Layer 1 REDIRECTs guest TCP 80/443 to the proxy
+(§4.1), the proxy also accepts the original-destination form for REDIRECTed
+connections; the CONNECT form covers proxy-aware (`HTTP_PROXY`) clients. Both reach the
+same policy check.
 
 ### 3.3 The `Isolation::Proxied` variant
 
-`Isolation` is `#[non_exhaustive]`; adding a variant is additive/non-breaking
-(downstream matches already need a wildcard arm). Doc string:
+`Isolation` is `#[non_exhaustive]`; adding a variant is additive/non-breaking. Doc
+string (honest about the bypass surface):
 
-> *"Egress is filtered by an allow/deny **domain** policy enforced at a CONNECT
-> proxy (application layer, HTTP/S). `Proxied` describes the proxied traffic only:
-> raw L3/L4 containment depends on the deployment's per-VM netns default-deny, which
-> the backend does not itself verify. Read as 'egress is policy-filtered for proxied
-> traffic,' not 'all packets are blocked.'"*
+> *"Egress is filtered by an allow/deny **domain** policy at a CONNECT/HTTP proxy
+> (application layer). `Proxied` is meaningful **only in the layered deployment**: a
+> per-VM netns default-deny that drops all egress except the proxy path (and DNS to a
+> vetted resolver). Without that L3/L4 default-deny, non-proxy-aware clients, DNS
+> (UDP/53), QUIC/HTTP-3 (UDP/443), and raw TCP **escape** — the proxy never sees them.
+> The backend cannot verify the host's netns rules, so this tier reflects an operator
+> attestation (see `ForkdBackendBuilder::enforce_egress`), the same trust model the
+> other tiers apply to the kernel/hypervisor. Read as 'HTTP/S egress is domain-
+> filtered, given the netns default-deny,' not 'all packets are blocked.'"*
 
-This is categorically distinct from `OsKernel` (a seccomp socket-family block) and
-from `Virtualized` (a hypervisor boundary).
+### 3.4 `ForkdBackend` integration & the hardened honesty model
 
-### 3.4 `ForkdBackend` integration & the honesty model
+- New builder opt-in: **`.enforce_egress(proxy_endpoint: impl Into<String>)`**. It
+  marks the backend's **already-carried** `EgressPolicy` (set via `.egress_policy()`)
+  as enforced and records where the proxy lives. There is **one** policy value — no
+  dual-policy "must match" check (the challenge's ambiguity removed).
+- When set:
+  - `build()` runs a **proxy-reachability probe** (cheap liveness check against
+    `proxy_endpoint`); an unreachable proxy **fails closed** at construction, so a
+    mistyped endpoint never silently yields an un-enforced backend reporting `Proxied`.
+  - `guarantees().network` reports **`Isolation::Proxied`**.
+- When **not** set: `guarantees().network` stays `Isolation::None` (today's behavior).
+- **Honesty caveat (on the method doc):** reachability ≠ data-path proof; the backend
+  cannot verify Layer 1. `.enforce_egress()` *attests* the operator deployed both
+  layers (the harness/runbook do exactly that). The bypass surface is enumerated on
+  `Isolation::Proxied` (§3.3). The existing `egress_policy()` accessor remains the
+  advisory read of declared intent.
 
-- New builder opt-in: **`.enforce_egress(EgressEnforcement)`** where
-  `EgressEnforcement` records the proxy endpoint the operator has deployed (and the
-  `EgressPolicy` it enforces — which must equal the policy the backend carries, so
-  declared intent and enforced reality are one value). When set:
-  - `guarantees().network` reports **`Isolation::Proxied`** (and the label drops
-    "experimental" for the network axis caveat).
-  - `build()` **optionally health-checks** the proxy endpoint reachability (a cheap
-    liveness probe) so a fat-fingered endpoint fails closed at construction rather
-    than silently un-enforced.
-- When `.enforce_egress(..)` is **not** set, `guarantees().network` stays
-  `Isolation::None` exactly as today.
-- **Honesty caveat (documented on the method):** the backend cannot verify the host's
-  netns iptables; `Proxied` *attests* that the operator deployed Layer 1 + Layer 2
-  (which the harness/runbook do). This mirrors how `OsSandboxBackend` trusts the
-  kernel applied the seccomp filter. The default is the safe lie-free `None`.
+**GATE 1 decision point.** The challenger argued for never raising the tier on
+attestation (keep `None`, expose policy via an accessor only) as maximally honest. The
+ticket AC explicitly asks to "upgrade `guarantees().network` … to `Proxied`/
+`Virtualized`," so the spec's default is the hardened-attestation `Proxied`. Sven
+chooses at GATE 1.
 
-## 4. Live-KVM validation (the operator-run code + procedure)
+## 4. Live-KVM validation (operator-run code + procedure)
 
-Authored + lint-validated here; **executed on an x86_64 GCP nested-virt VM.**
+Authored + lint-validated here; **executed on an x86_64 GCP nested-virt VM**, output
+attached to the PR.
 
 ### 4.1 Dockerized forkd+KVM harness — `docker/forkd/`
 
-- **`Dockerfile`** — Ubuntu 22.04 base; installs the forkd `v0.5.2-x86_64-linux`
-  release + a Firecracker binary; builds + installs the `EgressProxy` (a thin
-  `--bin egress-proxy` example/bin, or the harness invokes it via the test crate);
-  bakes the controller TLS cert/key + bearer token file paths.
-- **`docker-compose.yml`** — runs the container with `--device /dev/kvm`, the netns
-  capabilities (`--cap-add=NET_ADMIN`, `--sysctl` as needed), publishes the
-  controller port, and runs the egress proxy sidecar. `forkd doctor` runs at start to
-  fail fast if KVM/cgroup-v2/Firecracker are missing.
-- **`entrypoint.sh`** — provisions per-child netns (forkd's `netns-setup.sh`), applies
-  **Layer 1 default-deny iptables** in each netns (DROP egress except to the proxy),
-  starts `forkd-controller` with `--tls-cert/--tls-key/--token-file`, starts the
-  proxy.
+- **`Dockerfile`** — Ubuntu 22.04; installs forkd `v0.5.2-x86_64-linux` + a Firecracker
+  binary; builds the egress proxy (`examples/egress_proxy.rs`, a thin
+  `EgressProxy::serve` runner); stages the TLS cert/key + token-file paths.
+- **`docker-compose.yml`** — runs with `--device /dev/kvm`, `--cap-add=NET_ADMIN` (+
+  the device-cgroup rule for `/dev/kvm`; `--privileged` only if a documented minimal
+  cap set proves insufficient), publishes the controller TLS port, runs the proxy
+  sidecar. `forkd doctor` runs at start to fail fast on missing KVM/cgroup-v2/Firecracker.
+- **`netns-deny.rules`** (committed, reviewable) — the Layer 1 iptables ruleset: per
+  child netns, DROP all egress except DNS to the vetted resolver and TCP 80/443
+  REDIRECTed to the proxy. **`entrypoint.sh`** provisions netns (forkd's
+  `netns-setup.sh`), loads `netns-deny.rules`, asserts they are loaded (fails the
+  container start otherwise), starts the controller + proxy.
 
 ### 4.2 Guest-image build — `scripts/forkd/build-guest-image.sh`
 
-Builds a minimal guest rootfs (kernel + init + `/bin/sh` + coreutils, e.g. busybox)
-with **`HTTP_PROXY`/`HTTPS_PROXY` baked into the guest profile** pointing at the proxy
-(required because forkd's exec endpoint has **no per-call env** — confirmed against
-`docs/API.md`), then warms + snapshots it via `POST /v1/snapshots`. **No secrets are
-baked in** (the CoW-shared-state warning from SMA-416 §3.4 — every child inherits the
-warmed parent). The script documents who runs it (the operator, on the KVM host).
+Builds a minimal guest rootfs (kernel + init + `/bin/sh` + coreutils via busybox), with
+`HTTP_PROXY`/`HTTPS_PROXY` baked into the guest profile (a **convenience** for
+proxy-aware clients; the *general* closure is Layer 1 REDIRECT — see §4.1), then warms +
+snapshots via `POST /v1/snapshots` (`{tag, kernel, rootfs, rw, tap, boot_wait_secs}`,
+confirmed contract). **Secret-scan gate:** before snapshotting, the script greps the
+rootfs for the bearer token + common secret patterns and **fails** if any are found (the
+CoW-shared-state hazard from SMA-416 §3.4 — every child inherits the warmed parent).
 
 ### 4.3 GCP nested-virt launch — `scripts/forkd/gcp-launch.sh` + `gcp-teardown.sh`
 
-`gcloud compute instances create` with `--enable-nested-virtualization` on a small
-x86_64 Intel instance (e.g. `n2-standard-4`, zone `europe-west1-b`), a startup script
-that installs Docker + brings the harness up. Teardown deletes the instance. The
-runbook lists AWS (C8i nested-virt / `.metal`), Hetzner bare metal, and DO as
-documented alternatives.
+`gcloud compute instances create … --enable-nested-virtualization` on a small x86_64
+Intel instance (e.g. `n2-standard-4`, zone `europe-west1-b`); startup script installs
+Docker + brings the harness up. The runbook (§4.5) covers **container-level KVM
+passthrough** (`--device /dev/kvm` + device-cgroup), not just host nested-virt. Teardown
+deletes the instance.
 
-### 4.4 Env- & feature-gated live tests — `tests/forkd_live.rs`
+### 4.4 Env-gated live tests — `tests/forkd_live.rs` (**un-`#[ignore]`'d**)
 
-`#![cfg(feature = "microvm-live")]` (a new **off-by-default, test-only** feature).
-Because the live tests are *feature-gated*, they are **absent** from the normal CI
-build — **not silently passing** (the SMA-413 honesty rule: a green-because-inactive
-sandbox test is worse than no test). On the KVM host the runbook runs
-`cargo test -p paigasus-helikon-tools --features microvm,microvm-live -- forkd_live`,
-with `FORKD_URL`/`FORKD_TOKEN`/`FORKD_SNAPSHOT` (+ `FORKD_CA`) set. Two tests:
+Under `#![cfg(feature = "microvm")]` (so it **compiles on every PR** under
+`--features microvm` / `--all-features` — no bit-rot). **No `#[ignore]`, no separate
+feature.** Each test begins with a runtime guard:
+
+```rust
+let Ok(url) = std::env::var("FORKD_URL") else {
+    eprintln!("SKIP live forkd test: set FORKD_URL/FORKD_TOKEN/FORKD_SNAPSHOT to run"); return;
+};
+```
+
+so in CI (no controller) it **skips loudly** (visible, not silent-green), and on the KVM
+host it runs for real. Two tests:
 
 1. **`live_forkd_runs_bash_in_a_microvm`** — `echo from-a-microvm` → asserts stdout +
-   `exit_code == 0` (the existing `#[ignore]`'d test, promoted to feature-gated).
-2. **`live_forkd_denies_nonallowlisted_egress`** — with a policy allowing only
-   `example.com`, a guest command hitting a **non-allowlisted** domain fails/timeouts
-   (proxy 403 + netns deny), while a command hitting the allowlisted domain succeeds.
-   This is the live proof of the egress AC.
+   `exit_code == 0` (the promoted ex-`#[ignore]` test).
+2. **`live_forkd_denies_nonallowlisted_egress`** — policy allows only `example.com`; a
+   **proxy-aware** guest command hitting a **non-allowlisted** domain must fail
+   **fast** (proxy 403 → curl non-zero exit, asserted *well under* the wall-clock
+   timeout, so **deny is distinguished from a hang** — the challenger's Q1); the
+   allowlisted domain succeeds.
+
+The honest CI story (mirroring SMA-416 §8): CI compile-checks these; the real run is
+done once on GCP with output pasted into the PR. AC#2 is re-scoped accordingly (§9).
 
 ### 4.5 Runbook — `docs/runbooks/forkd-live-validation.md`
 
-End-to-end: `gcloud auth login` (interactive; no secret in chat) → `gcp-launch.sh` →
-`build-guest-image.sh` → `docker compose up` → run the `microvm-live` tests with
-`FORKD_*` env → observe egress-deny → `gcp-teardown.sh`. Plus the real-CA
-non-loopback TLS story (forkd `--tls-cert/--tls-key`; `.controller_ca(pem)`) and the
+`gcloud auth login` → `gcp-launch.sh` → `build-guest-image.sh` → `docker compose up`
+(incl. container `/dev/kvm` passthrough) → run the live tests with `FORKD_*` env →
+observe egress-deny → `gcp-teardown.sh`. Plus the real-CA non-loopback TLS story and
 AWS/Hetzner/DO alternatives.
 
 ## 5. Controller TLS trust (end-to-end)
 
-The builder already takes `.controller_ca(pem)` and rejects remote plain-`http`
-(`InsecureControllerUrl`). This ticket adds **a loopback TLS integration test**
-(`tests/forkd_tls.rs`, no KVM): start a minimal self-signed rustls server (dev-deps
-`rcgen` + `tokio-rustls`), then assert (a) a `ForkdBackend` **without**
-`.controller_ca` fails the first request with a TLS trust error, and (b) **with**
-`.controller_ca(<self-signed cert>)` it succeeds. This proves trust is enforced and
-that **`danger_accept_invalid_certs` is never used**. The runbook documents the real
-(non-loopback) deployment: forkd served over TLS with a real CA, or the self-signed
-CA pinned via `.controller_ca`.
+The builder already takes `.controller_ca(pem)` and rejects remote plain-`http`. Add a
+loopback TLS integration test (`tests/forkd_tls.rs`, no KVM): **generate a fresh
+self-signed cert in-test via `rcgen`** (never installed system-wide, to avoid the
+platform-verifier fragility the challenge flagged), start a minimal `tokio-rustls`
+server, then assert (a) a `ForkdBackend` **without** `.controller_ca` fails to connect
+(assert on **connection failure**, not an error-string match), and (b) **with**
+`.controller_ca(<that cert>)` it succeeds. Proves trust is enforced and
+`danger_accept_invalid_certs` is never used. The runbook documents the real-CA
+deployment (forkd `--tls-cert/--tls-key`; or pin the self-signed CA via
+`.controller_ca`).
 
 ## 6. Tests
 
 | Test (file) | Gate | Proves |
 |---|---|---|
-| `egress_proxy.rs` — deny non-allowlisted domain → 403 (no upstream) | CI (`microvm`) | AC: non-allowlisted egress denied |
-| `egress_proxy.rs` — domain-allowed but resolves to private IP → denied (SSRF) | CI (`microvm`) | rebinding/SSRF guard in the proxy |
-| `egress_proxy.rs` — allow_private_ips + allowlisted loopback → bytes tunnel through | CI (`microvm`) | the allow path actually proxies |
-| `net::policy` unit tests (moved from `web/http.rs`) | CI | promoted policy unchanged (regression guard) |
-| `forkd_backend.rs` mock fork→exec→destroy, timeout/teardown, truncation, 5xx | CI (`microvm`) | existing skeleton contract (unchanged) |
+| `egress_proxy.rs` — deny non-allowlisted domain → fast 403 (no upstream) | CI (`microvm`) | proxy denies non-allowlisted egress |
+| `egress_proxy.rs` — domain-allowed but resolves to private IP → denied | CI (`microvm`) | rebinding/SSRF guard |
+| `egress_proxy.rs` — allow_private_ips + allowlisted loopback → bytes tunnel | CI (`microvm`) | the allow path proxies |
+| `net::policy` unit tests (moved from `web/http.rs`) | CI | promoted policy unchanged |
+| `web` empty-`allow_domains` → all hosts permitted | CI (`web`) | no empty-list deny-all regression |
+| `forkd_backend.rs` mock fork→exec→destroy, timeout/teardown, truncation, 5xx | CI (`microvm`) | skeleton contract (unchanged) |
+| `is_allowed` deprecated alias still compiles + behaves | CI (`microvm`) | no source breakage |
 | `guarantees()` — `Proxied` with `.enforce_egress`, `None` without | CI (`microvm`) | honesty model |
-| `forkd_tls.rs` — fail without CA / succeed with CA | CI (`microvm`) | TLS trust enforced; no danger flag |
-| `forkd_live.rs` — live run + live egress-deny | **`microvm-live`**, env-gated, KVM host | AC: live KVM run + live egress enforcement |
+| `forkd_tls.rs` — fail without CA / succeed with CA | CI (`microvm`) | TLS trust; no danger flag |
+| `forkd_live.rs` — live run + live fast-deny | `microvm`, env-gated, KVM host | AC#2 + live AC#3 |
 
-Feature gating keeps the default build and the non-`microvm` matrix from compiling any
-of this. cargo-deny stays green (new dev-deps `rcgen`/`tokio-rustls` are MIT/Apache).
+cargo-deny verified by **running** `cargo deny check` against the resolved graph (not
+asserting licenses).
 
 ## 7. Module layout
 
@@ -267,74 +293,112 @@ of this. cargo-deny stays green (new dev-deps `rcgen`/`tokio-rustls` are MIT/Apa
 crates/paigasus-helikon-tools/src/
   net/                       # NEW — cfg(any(feature="web", feature="microvm"))
     mod.rs                   # re-exports
-    policy.rs                # EgressPolicy (shared), ip_blocked, GuardedResolver, ssrf_check, build_client
-    proxy.rs                 # EgressProxy (CONNECT + absolute-URI HTTP) — cfg(feature="microvm")
+    policy.rs                # EgressPolicy (shared; is_allowed deprecated alias), ip_blocked, GuardedResolver, ssrf_check, build_client
+    proxy.rs                 # EgressProxy — cfg(feature="microvm")
   web/http.rs                # shrinks to thin re-exports from net
   web/{fetch,search}.rs, web/backends/*   # import from net
   exec/mod.rs                # + Isolation::Proxied
-  exec/forkd.rs              # EgressPolicy from net; .enforce_egress + Proxied guarantee
+  exec/forkd.rs              # EgressPolicy from net; .enforce_egress + probe + Proxied guarantee
   lib.rs                     # pub use net::{EgressPolicy, EgressProxy, GuardedResolver, ...}
-docker/forkd/                # NEW — Dockerfile, docker-compose.yml, entrypoint.sh
-scripts/forkd/               # NEW — build-guest-image.sh, gcp-launch.sh, gcp-teardown.sh
+  examples/egress_proxy.rs   # NEW — EgressProxy::serve runner used by the harness
+docker/forkd/                # NEW — Dockerfile, docker-compose.yml, entrypoint.sh, netns-deny.rules
+scripts/forkd/               # NEW — build-guest-image.sh (+secret-scan), gcp-launch.sh, gcp-teardown.sh
 docs/runbooks/forkd-live-validation.md   # NEW runbook
 crates/paigasus-helikon-tools/tests/
   egress_proxy.rs, forkd_tls.rs          # NEW (CI)
-  forkd_live.rs                          # NEW — cfg(feature="microvm-live")
-  forkd_backend.rs                       # existing; #[ignore]'d test moves to forkd_live.rs
+  forkd_live.rs                          # NEW — cfg(feature="microvm"), env-gated, NOT #[ignore]'d
+  forkd_backend.rs                       # existing; the #[ignore]'d test moves to forkd_live.rs
 ```
 
 ## 8. Release & docs
 
-- **Version:** `-tools` `0.2.6 → 0.2.7`. Additive `feat(tools)` → patch on 0.x.
-  **No core change** → no ascend ritual. Facade cascades via release-plz's
-  `dependencies_update` (release-plz performs the `-tools` bump, so the cascade runs).
-- **Features:** `microvm = ["dep:reqwest", "dep:url", "tokio/net"]` (adds `url` +
-  `tokio/net` for the proxy + shared policy). New **`microvm-live`** test-only feature
-  (no deps; gates `tests/forkd_live.rs`). No new facade passthrough feature
-  (`tools-microvm` already exists; live tests are internal).
-- **Dev-deps:** `rcgen`, `tokio-rustls` (TLS test) — added to `[workspace.dependencies]`
-  + `[dev-dependencies]`; licenses MIT/Apache (cargo-deny clean).
+- **Version:** `-tools` `0.2.6 → 0.2.7` (additive patch on 0.x). **No core change** →
+  no ascend ritual. Facade cascades via release-plz `dependencies_update` (release-plz
+  performs the `-tools` bump, so the cascade runs); **verify at release time** the
+  facade self-pin to `paigasus-helikon-tools` moves `0.2.6 → 0.2.7`.
+- **Features:** `microvm = ["dep:reqwest", "dep:url", "tokio/net", "tokio/io-util"]`
+  (proxy needs `tokio/net` + `io-util` for `copy_bidirectional`; policy needs `url` +
+  `tokio/net`). **No `microvm-live` feature** (live tests are env-gated, not
+  feature-gated). No new facade passthrough feature.
+- **Dev-deps:** `rcgen`, `tokio-rustls` (TLS test) added to `[workspace.dependencies]`
+  + `[dev-dependencies]`. Licenses **verified by running `cargo deny check`** (not
+  asserted): note `rcgen` pulls `yasna` (BSD-3-Clause — allowlisted) + `pem` (MIT);
+  `tokio-rustls` is already in the graph via reqwest.
+- **Lib-only build verification** (the reqwest-feature-gating/devdep-masking footgun):
+  confirm `cargo build -p paigasus-helikon-tools --features microvm` (no `web`, no
+  dev-deps) compiles the proxy + policy.
 - **Docs (same PR, per CLAUDE.md):** mdBook `concepts/tools.md` microVM tier — egress
-  now **Proxied** when enforced; update the containment-ladder caveat (egress is no
-  longer the weak axis once the proxy is deployed, but is `None` in the un-enforced
-  default). `-tools` README (egress enforcement + harness/runbook pointer). Facade +
-  root README only if the feature→module map changes (the `Isolation::Proxied`
-  variant + `EgressProxy` warrant a one-line note). New runbook page linked from
-  SUMMARY if it belongs in the book; otherwise it lives under `docs/runbooks/`.
-  `mdbook build docs/book` stays clean (`warning-policy = "error"`). `///` on every new
-  `pub` item.
+  **Proxied** when the layered enforcement is deployed (with the bypass caveat), `None`
+  in the un-enforced default; update the containment-ladder note. `-tools` README
+  (egress enforcement + harness/runbook pointer). Facade + root README feature→module
+  notes for `Isolation::Proxied` + `EgressProxy`. Runbook under `docs/runbooks/`,
+  linked from SUMMARY if it belongs in the book. `mdbook build docs/book` clean
+  (`warning-policy = "error"`). `///` on every new `pub` item.
 
-## 9. Acceptance criteria mapping
+## 9. Acceptance criteria mapping (honest)
 
-- ✅ **Guest snapshot image** — `build-guest-image.sh` + runbook (contract from
-  SMA-416 §3.4; no secrets baked; HTTP_PROXY baked for egress routing). Operator-run
-  on the KVM host.
-- ✅ **Live KVM run** — `forkd_live.rs::live_forkd_runs_bash_in_a_microvm`, feature+env
-  gated, run on the GCP nested-virt VM via the runbook.
-- ✅ **Egress enforcement (layered)** — Layer 1 netns default-deny (harness iptables) +
-  Layer 2 `EgressProxy` (CI-tested); `guarantees().network` upgrades `None → Proxied`
-  in enforced mode; live-proven by `live_forkd_denies_nonallowlisted_egress`.
-- ✅ **Controller TLS trust end-to-end** — `forkd_tls.rs` (CI) + runbook real-CA story;
-  no `danger_accept_invalid_certs`.
+- ⚠️ **Guest snapshot image** — `build-guest-image.sh` (+ secret-scan gate) + runbook
+  (contract from SMA-416 §3.4). Operator-run on the KVM host; "no secrets baked" is
+  enforced by the scan step, not merely documented.
+- ⚠️ **Live KVM run** — `forkd_live.rs::live_forkd_runs_bash_in_a_microvm`, un-
+  `#[ignore]`'d + env-gated; **executed once on the GCP nested-virt VM, output attached
+  to the PR**; CI compile-checks it (skips loudly without a controller). Re-scoped like
+  SMA-416 §8 — not claimed as a CI-green gate.
+- ⚠️ **Egress enforcement (layered)** — Layer 2 (`EgressProxy`) is **CI-tested**
+  (non-allowlisted egress → fast 403). Layer 1 (netns default-deny + REDIRECT) ships as
+  a **committed, reviewable iptables ruleset** + harness assertion; it is **live-proven**
+  by `live_forkd_denies_nonallowlisted_egress` on GCP (output attached), not CI-proven.
+  `guarantees().network` upgrades `None → Proxied` in enforced mode (hardened
+  attestation, §3.4).
+- ✅ **Controller TLS trust end-to-end** — `forkd_tls.rs` (CI, in-test cert) + runbook
+  real-CA story; no `danger_accept_invalid_certs`.
 
 ## 10. Out of scope (YAGNI)
 
+- **GC/reconciliation of orphaned sandboxes** (the `forkd.rs` decode-after-commit
+  window) — the skeleton named SMA-437 for this, but minimal reconciliation (list-by-
+  tag/age + reap) is a self-contained chunk; **consciously re-deferred to a new
+  follow-up ticket** (filed before merge) and noted here + in the `forkd.rs` comment.
+  The orphan window remains rare (decode/timeout after a committed fork).
 - The `E2bBackend` cloud sibling (verified-compatible, not built).
 - Unix-socket controller transport (TCP+TLS only).
-- A transparent (iptables-REDIRECT) proxy mode — explicit CONNECT + baked HTTP_PROXY
-  is sufficient and matches the AC; transparent mode is a noted future option.
-- Per-call stdin/env on `ExecRequest` (forkd exec has no env field anyway).
 - A self-hosted GitHub Actions KVM runner / required CI gate for the live path.
-- Embedding `forkd-vmm` (the rejected SMA-416 §2.2 seam).
+- Embedding `forkd-vmm` (rejected SMA-416 §2.2 seam).
+- Per-call stdin/env on `ExecRequest` (forkd exec has no env field).
 
 ## 11. Risks
 
 | Risk | Mitigation |
 |---|---|
-| forkd is alpha (pre-1.0 API churn); pinned `v0.5.2` | REST boundary + harness pin one version; API re-verified against `docs/API.md` (fork/exec/destroy/snapshot/healthz confirmed). |
-| `Proxied` is an honor-system attestation (host iptables unverifiable) | Default stays `None`; opt-in is explicit + documented; build-time proxy reachability probe; same trust model as other tiers. |
-| Live path can't run in this env (no KVM) | Authored + lint-checked here; executed once on the GCP nested-virt VM via the runbook before merge. |
-| Plain-HTTP egress could bypass a CONNECT-only proxy | Proxy also handles absolute-URI HTTP; netns default-deny routes *all* egress through the proxy. |
-| New dev-deps trip cargo-deny | `rcgen`/`tokio-rustls` are MIT/Apache (allowlisted); verify `cargo deny check`. |
-| Refactor breaks the `web` feature | `web` public API unchanged; moved tests are the regression guard; verify `cargo test -p paigasus-helikon-tools --features web`. |
+| forkd is alpha (pre-1.0 churn); pinned `v0.5.2` | REST boundary + pinned version; API re-verified against `docs/API.md`. |
+| `Proxied` is an attestation (host iptables unverifiable) | Default `None`; explicit opt-in; build-time proxy probe; doc enumerates bypass surface; GATE 1 may choose to keep `None`. |
+| Egress closure depends on Layer 1, not `HTTP_PROXY` | Layer 1 (netns default-deny + REDIRECT) is the load-bearing mechanism, shipped as a reviewable ruleset; `HTTP_PROXY` is convenience only; live-proven. |
+| Policy unification flips web's empty-allow semantics | `allow: None` (no restriction) vs `Some(empty)` (deny-all) pinned; web maps empty→None; regression test. |
+| Public-API breakage on the patch bump | `is_allowed` retained as `#[deprecated]` alias; full surface audited (§3.1). |
+| Live path can't run here (no KVM) | Authored + lint-checked here; executed once on GCP via the runbook before merge. |
+| Container `/dev/kvm` passthrough subtlety | Runbook covers device-cgroup + `--device /dev/kvm` (+ minimal caps), not just host nested-virt. |
+| New dev-deps trip cargo-deny | `rcgen`/`tokio-rustls` licenses verified by running `cargo deny check`, not asserted. |
+| Refactor breaks `web` | `web` public API unchanged; moved tests + empty-allow regression test guard it; verify `cargo test -p paigasus-helikon-tools --features web`. |
+| Live test bit-rots | `cfg(feature="microvm")` (not a bespoke feature) → compiled under `--all-features` every PR; runtime env-skip keeps the CI run green without a controller. |
+
+## 12. Challenge resolutions (2026-06-22 spec-challenger)
+
+- **B1 (AC#3 done-by-doc):** folded — Layer 1 shipped as a committed reviewable
+  ruleset + harness assertion; AC#3 mapping downgraded to ⚠️; live fast-deny test with
+  attached output.
+- **B2 (false no-breakage):** folded — `is_allowed` kept as `#[deprecated]` alias;
+  public surface audited (§3.1).
+- **B3 (`Proxied` unsound):** folded — bypass surface enumerated on the variant doc;
+  two-layer attestation; build-time probe; default `None`; GATE 1 alternative noted.
+- **M4 (split PRs):** not auto-folded — conflicts with Sven's single-PR + run-live-now
+  choice; one PR with separable commits; surfaced at GATE 1.
+- **M5 (HTTP_PROXY ≠ universal):** folded — Layer 1 REDIRECT is load-bearing; HTTP_PROXY
+  demoted to convenience; transparent REDIRECT adopted.
+- **M6 (un-#[ignore]):** folded — dropped the `microvm-live` feature; env-gated,
+  literally un-`#[ignore]`'d, compiled every PR, loud CI skip; AC#2 re-scoped.
+- **M7 (empty-allow drift):** folded — semantics pinned + regression test (§3.1).
+- **M8 (orphan GC):** folded — consciously re-deferred to a named follow-up (§10).
+- **MINORs/QUESTIONs:** folded — `tokio/io-util`; rcgen license verified not asserted;
+  in-test cert; secret-scan; fast-deny vs timeout; container KVM passthrough; lib-only
+  build check; facade-cascade verify; `EgressPolicy` gains `PartialEq`.
 ```
