@@ -501,6 +501,70 @@ where
     }
 }
 
+// .build_resolved() — async finalizer available for any So once Name+Model are
+// set. Resolves all sources concurrently, merges (static first, then sources in
+// registration order), rejects source-introduced name collisions, and builds.
+impl<Ctx, M, T, So> LlmAgentBuilder<Ctx, M, T, HasName, HasModel, So>
+where
+    Ctx: Send + Sync + 'static,
+    M: crate::Model + 'static,
+    T: Send + Sync + 'static,
+{
+    /// Resolve all registered [`crate::ToolSource`]s and finalize into an
+    /// [`crate::LlmAgent`].
+    ///
+    /// Sources resolve concurrently (registration order preserved in the
+    /// merged tool list, after the static `.tool(...)` tools). A source that
+    /// introduces a tool name already present in the merged namespace fails
+    /// with [`crate::ToolSourceError::DuplicateName`]; a source whose
+    /// `tools()` errors aborts the build with that error (remaining in-flight
+    /// resolutions are dropped). With no sources this is equivalent to
+    /// `build`.
+    pub async fn build_resolved(
+        self,
+    ) -> Result<crate::LlmAgent<Ctx, M, T>, crate::ToolSourceError> {
+        // Resolve concurrently; try_join_all preserves input order.
+        let resolved: Vec<Vec<std::sync::Arc<dyn crate::Tool<Ctx>>>> =
+            futures_util::future::try_join_all(self.tool_sources.iter().map(|s| s.tools())).await?;
+
+        // Merge: static tools first, then resolved tools in registration order.
+        // Seed the seen-set with static names (owned, so we can then move
+        // `self.tools` into `merged` without a borrow conflict). Only a name a
+        // SOURCE introduces is rejected — static-vs-static is left to first-wins.
+        let mut seen: std::collections::HashSet<String> =
+            self.tools.iter().map(|t| t.name().to_owned()).collect();
+        let mut merged = self.tools;
+        for per_source in resolved {
+            for tool in per_source {
+                if !seen.insert(tool.name().to_owned()) {
+                    return Err(crate::ToolSourceError::DuplicateName {
+                        name: tool.name().to_owned(),
+                    });
+                }
+                merged.push(tool);
+            }
+        }
+
+        Ok(crate::LlmAgent {
+            name: self.name.expect("typestate HasName guarantees Some"),
+            description: self.description.unwrap_or_default(),
+            instructions: self
+                .instructions
+                .unwrap_or_else(|| std::sync::Arc::new(String::new())),
+            model: self.model.expect("typestate HasModel guarantees Some"),
+            tools: merged,
+            handoffs: self.handoffs,
+            output_type: self.output_type,
+            input_guardrails: self.input_guardrails,
+            output_guardrails: self.output_guardrails,
+            hooks: self.hooks,
+            model_settings: self.model_settings,
+            config: self.config,
+            _output: std::marker::PhantomData,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -748,5 +812,186 @@ mod tests {
             .name("t")
             .model(StubModel)
             .mcp_servers([StubSource, StubSource]);
+    }
+
+    // ── build_resolved behavior tests ────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct NamedTool(&'static str);
+    #[async_trait]
+    impl<Ctx> Tool<Ctx> for NamedTool
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "named"
+        }
+        fn schema(&self) -> &serde_json::Value {
+            static S: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+            S.get_or_init(|| serde_json::json!({"type":"object"}))
+        }
+        async fn invoke(
+            &self,
+            _c: &ToolContext<Ctx>,
+            _a: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                content: serde_json::Value::Null,
+            })
+        }
+    }
+
+    struct CountingSource {
+        names: Vec<&'static str>,
+        calls: Arc<AtomicUsize>,
+    }
+    #[async_trait]
+    impl<Ctx> crate::ToolSource<Ctx> for CountingSource
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        async fn tools(&self) -> Result<Vec<Arc<dyn Tool<Ctx>>>, crate::ToolSourceError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .names
+                .iter()
+                .map(|n| Arc::new(NamedTool(n)) as Arc<dyn Tool<Ctx>>)
+                .collect())
+        }
+    }
+
+    struct FailingSource;
+    #[async_trait]
+    impl<Ctx> crate::ToolSource<Ctx> for FailingSource
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        async fn tools(&self) -> Result<Vec<Arc<dyn Tool<Ctx>>>, crate::ToolSourceError> {
+            Err(crate::ToolSourceError::Resolution {
+                source: "failing".into(),
+                cause: anyhow::anyhow!("boom"),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn build_resolved_zero_sources_equals_build() {
+        let agent = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool(NamedTool("a"))
+            .build_resolved()
+            .await
+            .unwrap();
+        assert_eq!(agent.tools.len(), 1);
+        assert_eq!(agent.tools[0].name(), "a");
+    }
+
+    #[tokio::test]
+    async fn build_resolved_appends_sources_in_order() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let agent = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool(NamedTool("static"))
+            .tool_source(CountingSource {
+                names: vec!["s1a", "s1b"],
+                calls: calls.clone(),
+            })
+            .tool_source(CountingSource {
+                names: vec!["s2"],
+                calls: calls.clone(),
+            })
+            .build_resolved()
+            .await
+            .unwrap();
+        let names: Vec<&str> = agent.tools.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["static", "s1a", "s1b", "s2"]);
+        assert_eq!(calls.load(Ordering::SeqCst), 2); // each source resolved once
+    }
+
+    #[tokio::test]
+    async fn build_resolved_rejects_source_vs_static_duplicate() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let result = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool(NamedTool("dup"))
+            .tool_source(CountingSource {
+                names: vec!["dup"],
+                calls,
+            })
+            .build_resolved()
+            .await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected Err but got Ok"),
+        };
+        assert!(matches!(err, crate::ToolSourceError::DuplicateName { name } if name == "dup"));
+    }
+
+    #[tokio::test]
+    async fn build_resolved_rejects_source_vs_source_duplicate() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let result = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool_source(CountingSource {
+                names: vec!["x"],
+                calls: calls.clone(),
+            })
+            .tool_source(CountingSource {
+                names: vec!["x"],
+                calls,
+            })
+            .build_resolved()
+            .await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected Err but got Ok"),
+        };
+        assert!(matches!(err, crate::ToolSourceError::DuplicateName { name } if name == "x"));
+    }
+
+    #[tokio::test]
+    async fn build_resolved_allows_static_vs_static_duplicate() {
+        // Static duplicates keep today's first-wins behavior even via build_resolved,
+        // as long as no SOURCE introduces the collision.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let agent = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool(NamedTool("same"))
+            .tool(NamedTool("same"))
+            .tool_source(CountingSource {
+                names: vec!["fresh"],
+                calls,
+            })
+            .build_resolved()
+            .await
+            .unwrap();
+        let names: Vec<&str> = agent.tools.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["same", "same", "fresh"]);
+    }
+
+    #[tokio::test]
+    async fn build_resolved_propagates_source_failure() {
+        let result = LlmAgent::builder::<()>()
+            .name("t")
+            .model(StubModel)
+            .tool_source(FailingSource)
+            .build_resolved()
+            .await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected Err but got Ok"),
+        };
+        assert!(
+            matches!(err, crate::ToolSourceError::Resolution { source, .. } if source == "failing")
+        );
     }
 }
