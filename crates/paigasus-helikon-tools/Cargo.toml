@@ -39,6 +39,8 @@ tempfile     = { workspace = true }
 futures-util = { workspace = true }
 futures-core = { workspace = true }
 wiremock     = { workspace = true }
+rcgen        = { workspace = true }
+tokio-rustls = { workspace = true }
 # Path-only (version-less) internal dev-dep for the example — stripped from the
 # published manifest; examples are not built during `cargo publish --verify`.
 paigasus-helikon-providers-openai = { path = "../paigasus-helikon-providers-openai" }

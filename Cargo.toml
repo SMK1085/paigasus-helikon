@@ -68,6 +68,8 @@ url                   = "2"
 dom_smoothie          = "0.18"
 htmd                  = "0.5"
 wiremock              = "0.6"
+rcgen                 = "0.14"
+tokio-rustls          = "0.26"
 
 # Internal — single source of truth so members depend via `workspace = true`
 paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.7" }
