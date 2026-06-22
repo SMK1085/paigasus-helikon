@@ -22,8 +22,7 @@ pub struct HasModel;
 pub struct NoSources;
 
 /// Typestate marker: at least one [`crate::ToolSource`] has been registered.
-/// `.build()` is a compile error — finalize with `build_resolved` instead
-/// (the async finalizer lands in a follow-up task).
+/// `.build()` is a compile error — finalize with `build_resolved` instead.
 pub struct HasSources;
 
 /// Typestate-driven builder for [`crate::LlmAgent`].
