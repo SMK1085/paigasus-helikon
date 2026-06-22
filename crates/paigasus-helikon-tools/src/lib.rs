@@ -55,6 +55,8 @@ pub use read::ReadTool;
 pub use sandbox::{Sandbox, SandboxError};
 pub use write::WriteTool;
 
+#[cfg(feature = "microvm")]
+pub use net::EgressProxy;
 #[cfg(any(feature = "web", feature = "microvm"))]
 pub use net::{ip_blocked, EgressPolicy, GuardedResolver};
 

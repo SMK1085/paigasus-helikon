@@ -7,3 +7,5 @@ pub mod policy;
 pub mod proxy;
 
 pub use policy::{ip_blocked, EgressPolicy, GuardedResolver};
+#[cfg(feature = "microvm")]
+pub use proxy::EgressProxy;
