@@ -59,7 +59,7 @@ web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd", "tokio/net"]
 os-sandbox = ["dep:landlock", "dep:seccompiler"]
 # microVM Bash containment (forkd Firecracker controller, REST client). Off by
 # default. Portable: the client compiles everywhere; the daemon needs Linux/KVM.
-microvm = ["dep:reqwest"]
+microvm = ["dep:reqwest", "dep:url", "tokio/net", "tokio/io-util"]
 
 [lints]
 workspace = true

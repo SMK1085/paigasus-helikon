@@ -124,6 +124,17 @@ pub enum Isolation {
     /// kernel. Stronger overall than `OsKernel`, but read each axis as "behind a
     /// VM boundary," not "restricted by an allowlist."
     Virtualized,
+    /// Egress is filtered by an allow/deny **domain** policy at a CONNECT/HTTP
+    /// proxy (application layer). `Proxied` is meaningful **only in the layered
+    /// deployment**: a per-VM netns default-deny that drops all egress except the
+    /// proxy path (and DNS to a vetted resolver). Without that L3/L4 default-deny,
+    /// non-proxy-aware clients, DNS (UDP/53), QUIC/HTTP-3 (UDP/443), and raw TCP
+    /// **escape** — the proxy never sees them. The backend cannot verify the host's
+    /// netns rules, so this tier reflects an operator attestation (see
+    /// `ForkdBackendBuilder::enforce_egress`), the same trust model the other tiers
+    /// apply to the kernel/hypervisor. Read as "HTTP/S egress is domain-filtered,
+    /// given the netns default-deny," not "all packets are blocked."
+    Proxied,
 }
 
 /// What a backend enforces, surfaced to docs / traces / the tool description.

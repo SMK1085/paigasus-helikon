@@ -4,9 +4,12 @@
 //! the `web` feature.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+#[cfg(feature = "web")]
 use std::sync::Arc;
+#[cfg(feature = "web")]
 use std::time::Duration;
 
+#[cfg(feature = "web")]
 use paigasus_helikon_core::ToolError;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
@@ -17,6 +20,7 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 /// connect-time DNS results are validated through [`ip_blocked`] — pinning the
 /// connection to vetted IPs and closing the DNS-rebinding TOCTOU. `None` uses
 /// the default resolver (search backends, which hit fixed public API hosts).
+#[cfg(feature = "web")]
 pub(crate) fn build_client(
     user_agent: &str,
     timeout: Duration,
@@ -179,6 +183,7 @@ fn is_v6_link_local(ip: Ipv6Addr) -> bool {
 /// SSRF guard: refuse a URL whose host is, or resolves to, a blocked IP. A
 /// no-op when `allow_private` is true. Resolution failure is operational
 /// (`Other`); a blocked address is a deliberate refusal (`Denied`).
+#[cfg(feature = "web")]
 pub(crate) async fn ssrf_check(url: &url::Url, allow_private: bool) -> Result<(), ToolError> {
     if allow_private {
         return Ok(());
