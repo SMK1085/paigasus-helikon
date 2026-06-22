@@ -354,10 +354,8 @@ pub enum ToolSourceError {
 ///
 /// Implemented by anything that can produce tools through (potentially) async
 /// work — for example an MCP server handle that discovered its tools over a
-/// transport. Register sources on the builder via
-/// [`crate::LlmAgentBuilder::tool_source`], [`crate::LlmAgentBuilder::tool_sources`],
-/// or [`crate::LlmAgentBuilder::mcp_servers`]; they are resolved exactly once by
-/// [`crate::LlmAgentBuilder::build_resolved`].
+/// transport. Register sources on the builder via its `tool_source`, `tool_sources`, or
+/// `mcp_servers` methods; they are resolved exactly once by `build_resolved`.
 ///
 /// Object-safe by the same construction as [`Tool`] — held as
 /// `Arc<dyn ToolSource<Ctx>>`.
