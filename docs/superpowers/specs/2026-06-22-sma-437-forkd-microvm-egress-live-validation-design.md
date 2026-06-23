@@ -28,7 +28,7 @@ end-to-end on KVM**. It delivers, in one PR (structured as separable commits):
 2. **Live-KVM validation (operator-run code + procedure).** A **cloud-agnostic,
    Dockerized forkd+KVM harness** (`docker compose` running forkd with `--device
    /dev/kvm` + the egress proxy sidecar + a **committed, reviewable per-VM netns
-   default-deny + REDIRECT iptables ruleset**), a **guest-image build script** (with a
+   default-deny iptables ruleset**), a **guest-image build script** (with a
    secret-scan gate), a **GCP nested-virtualization reference launch script**
    (AWS/Hetzner/DO documented as alternatives), an **env-gated live integration
    test**, and a **runbook**. Run on a real x86_64 KVM host (a GCP nested-virt VM),
