@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.6...paigasus-helikon-tools-v0.2.7) - 2026-06-23
+
+### Added
+
+- *(tools)* SMA-437 enforce forkd microVM egress + add live-KVM validation harness ([#114](https://github.com/SMK1085/paigasus-helikon/pull/114))
+
 ## [0.2.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.5...paigasus-helikon-tools-v0.2.6) - 2026-06-21
 
 ### Added

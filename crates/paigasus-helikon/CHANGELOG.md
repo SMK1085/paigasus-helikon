@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.7...paigasus-helikon-v0.4.8) - 2026-06-23
+
+### Added
+
+- *(tools)* SMA-437 enforce forkd microVM egress + add live-KVM validation harness ([#114](https://github.com/SMK1085/paigasus-helikon/pull/114))
+
 ### Other
 
 - *(facade)* SMA-410 re-export the new core tool-source API; track core 0.5.11 / mcp 0.1.11
