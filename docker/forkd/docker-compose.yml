@@ -1,0 +1,22 @@
+services:
+  forkd:
+    build:
+      context: .
+    devices:
+      - "/dev/kvm:/dev/kvm"
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PROXY_PORT: "8443"
+      EGRESS_ALLOW: "example.com"
+      DNS_IP: "1.1.1.1"
+    volumes:
+      # cargo-built proxy binary + TLS material + token + warmed snapshot dir.
+      - ./egress-proxy:/usr/local/bin/egress-proxy:ro
+      - ./tls:/etc/forkd/tls:ro
+      - ./token:/etc/forkd/token:ro
+      - forkd-snapshots:/var/lib/forkd
+    ports:
+      - "8889:8889"
+volumes:
+  forkd-snapshots:

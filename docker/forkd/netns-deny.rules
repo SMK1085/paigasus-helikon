@@ -1,0 +1,9 @@
+# SMA-437 Layer-1 per-netns default-deny. Applied inside each child netns.
+# Drop all egress except: DNS to the vetted resolver, and TCP to the egress proxy.
+*filter
+:OUTPUT DROP [0:0]
+-A OUTPUT -o lo -j ACCEPT
+-A OUTPUT -p udp -d ${DNS_IP} --dport 53 -j ACCEPT
+-A OUTPUT -p tcp -d ${PROXY_IP} --dport ${PROXY_PORT} -j ACCEPT
+-A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+COMMIT
