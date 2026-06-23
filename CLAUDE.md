@@ -90,6 +90,7 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
   # gh api repos/<owner>/<repo>/git/tags/<sha> | jq -r '.object.sha'
   ```
   Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `github-actions` group track patch/minor updates from there. The above-the-fold human-readable version stays as a `# action vX.Y.Z` comment so the SHA is auditable.
+- **After a PR merges to `main`, release-plz opens/updates a `chore: release` PR** (authored by the paigasusbot App); the crates.io publish only happens once that PR is green and merged. Check it after every merge and watch its CI — its release-PR `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on the bot PR **only** (independent of `main`); fix with a `chore(deps)` pin and release-plz regenerates the PR clean.
 
 ## CI
 
@@ -108,6 +109,8 @@ The SBOM workflow invokes `cargo cyclonedx --manifest-path crates/paigasus-helik
 `deny.toml` declares `version = 2` under both `[advisories]` and `[licenses]` — v1 fields (`vulnerability`, `unmaintained`, `unsound`, `copyleft`, etc.) are removed in modern cargo-deny and adding them will fail with a schema error. The license allowlist includes `Unicode-3.0` in addition to the ticket-prescribed `Unicode-DFS-2016` because `unicode-ident ≥ 1.0.13` (pulled transitively by `serde_derive`) relicensed in 2024. cargo-deny's advisory DB lives at `~/.cargo/advisory-dbs` (plural) per `deny.toml`'s `db-path`; cargo-audit's DB is at `~/.cargo/advisory-db` (singular) — each tool caches its own, and the CI cache directories are scoped per-workflow.
 
 Dependabot is configured for `cargo` + `github-actions` ecosystems, weekly Monday 06:00 UTC (aligned with the daily audit cron), with patch + minor updates grouped into one PR per ecosystem.
+
+The **`microvm`/forkd live-KVM path is not validated locally or in GitHub CI** — the dev host is arm64 macOS (no `/dev/kvm`) and GitHub runners have none. Validate it on a **GCP nested-virtualization VM** (Ubuntu 24.04 — the forkd binaries need glibc ≥ 2.38; Intel `n2`) per `docs/runbooks/forkd-live-validation.md`. The `tests/forkd_live.rs` tests are env-gated (`FORKD_URL` / `FORKD_TOKEN` / `FORKD_SNAPSHOT`) and loud-skip when no controller is configured, so `cargo test` stays green without one.
 
 ## Local hooks
 
