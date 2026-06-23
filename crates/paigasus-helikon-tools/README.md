@@ -33,7 +33,7 @@ let backend = ForkdBackend::builder("https://controller:8889")
 assert_eq!(backend.guarantees().network, Isolation::Proxied);
 ```
 
-The `microvm` feature enables `reqwest`, `url`, and `tokio/net` + `tokio/io-util`
+The `microvm` feature enables `reqwest` and `tokio/net` + `tokio/io-util`
 (needed for the async tunnel copy). For the full deployment checklist (Docker harness,
 GCP launch, guest-image build, live validation tests) see
 `docs/runbooks/forkd-live-validation.md` in the repository.
