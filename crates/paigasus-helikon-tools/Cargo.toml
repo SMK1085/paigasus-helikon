@@ -1,7 +1,7 @@
 [package]
 name        = "paigasus-helikon-tools"
 description = "Sandboxed Read/Write/Edit/Bash tools for the Paigasus Helikon AI SDK."
-version                = "0.2.6"
+version                = "0.2.7"
 edition.workspace      = true
 rust-version.workspace = true
 authors.workspace      = true
