@@ -14,8 +14,10 @@ gcloud compute instances create "$VM_NAME" \
     set -e
     apt-get update && apt-get install -y docker.io docker-compose-plugin
     systemctl enable --now docker
-    # KVM check inside the VM:
-    ls -l /dev/kvm || echo "WARN: /dev/kvm absent — nested virt not enabled?"
+    # KVM check — fail hard; a missing /dev/kvm means nested virtualization was not
+    # enabled at VM creation (cannot be added after the fact on GCP). A broken host
+    # silently producing non-KVM runs is worse than a loud provisioning failure.
+    if [ ! -e /dev/kvm ]; then echo "FATAL: /dev/kvm absent — nested virtualization not enabled"; exit 1; fi
   '
 echo "VM $VM_NAME up in $GCP_ZONE. SSH in, copy docker/forkd + the cargo-built egress-proxy, then 'docker compose up'."
 echo "See docs/runbooks/forkd-live-validation.md."

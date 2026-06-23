@@ -85,12 +85,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # Option B: cross-compile on macOS (requires cargo-cross or cross-rs)
 cross build -p paigasus-helikon-tools --features microvm --example egress_proxy \
   --target x86_64-unknown-linux-gnu --release
-scp target/x86_64-unknown-linux-gnu/release/examples/egress-proxy \
-  forkd-kvm:~/forkd/egress-proxy
+# Note: cargo produces `egress_proxy` (underscore); rename to `egress-proxy` (hyphen)
+# to match the path the Docker Compose mount and Dockerfile COPY expect.
+cp target/x86_64-unknown-linux-gnu/release/examples/egress_proxy ~/forkd/egress-proxy
+scp ~/forkd/egress-proxy forkd-kvm:~/forkd/egress-proxy
 
 # Option C: build directly on the VM (simplest)
 cargo build -p paigasus-helikon-tools --features microvm --example egress_proxy --release
-cp target/release/examples/egress_proxy ~/docker/forkd/egress-proxy
+# Rename: cargo outputs egress_proxy (underscore); the harness expects egress-proxy (hyphen).
+cp target/release/examples/egress_proxy ~/forkd/egress-proxy
 ```
 
 ---
@@ -114,16 +117,26 @@ On the **VM**, in `~/forkd/`:
 
 ```bash
 mkdir -p tls
-# Self-signed cert for the controller (non-loopback TLS; see Note below).
+# Use the VM's EXTERNAL IP (the same IP used in FORKD_URL) for the SAN.
+# Do NOT use `hostname -I | awk '{print $1}'` — that can pick the internal/private
+# interface address, causing TLS handshake failures when connecting from outside.
+# Set VM_IP to the external IP shown in the GCP console or via:
+#   gcloud compute instances describe forkd-kvm --zone "$GCP_ZONE" \
+#     --format 'get(networkInterfaces[0].accessConfigs[0].natIP)'
+VM_IP="<your-vm-external-ip>"   # e.g. 34.90.12.34
 openssl req -x509 -newkey rsa:4096 -nodes \
   -keyout tls/key.pem -out tls/cert.pem \
   -days 365 -subj "/CN=forkd-kvm" \
-  -addext "subjectAltName=IP:$(hostname -I | awk '{print $1}')"
+  -addext "subjectAltName=IP:${VM_IP}"
 
 # Bearer token (random 32 bytes, base64-encoded, no newline).
 openssl rand -base64 32 | tr -d '\n' > token
 chmod 600 token tls/key.pem
 ```
+
+> **Note — use `VM_IP` consistently:** the same IP must appear in both the SAN above
+> and in the `FORKD_URL` env var when running the integration tests (Step 7). A
+> mismatch causes TLS hostname verification to fail.
 
 > **Note — real-CA non-loopback TLS:** for long-running or shared validation
 > environments, replace the self-signed cert with one issued by Let's Encrypt

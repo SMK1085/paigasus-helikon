@@ -73,15 +73,16 @@ async fn live_forkd_denies_nonallowlisted_egress() {
     };
     // A proxy-aware client hitting a NON-allowlisted domain must fail FAST (proxy
     // 403), distinguishing "denied" from "hung/timeout".
+    // Uses busybox wget (static, present in the guest image) rather than curl.
     let start = Instant::now();
     let out = backend
         .run(ExecRequest::new(
-            "curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://evil.test || echo DENIED",
+            "wget -q -T 5 -O /dev/null https://evil.test && echo ALLOWED || echo DENIED",
         ))
         .await
         .unwrap();
     assert!(
-        out.stdout.contains("DENIED") || out.stdout.trim() == "403",
+        out.stdout.contains("DENIED"),
         "non-allowlisted egress should be denied, got: {:?}",
         out.stdout
     );
@@ -93,13 +94,13 @@ async fn live_forkd_denies_nonallowlisted_egress() {
     // The allowlisted domain must succeed.
     let ok = backend
         .run(ExecRequest::new(
-            "curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://example.com",
+            "wget -q -T 5 -O /dev/null https://example.com && echo OK || echo FAIL",
         ))
         .await
         .unwrap();
-    assert_eq!(
-        ok.stdout.trim(),
-        "200",
-        "allow-listed egress should succeed"
+    assert!(
+        ok.stdout.contains("OK"),
+        "allow-listed egress should succeed, got: {:?}",
+        ok.stdout
     );
 }

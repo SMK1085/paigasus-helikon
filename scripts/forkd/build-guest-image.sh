@@ -13,10 +13,14 @@ mkdir -p "$MOUNT_DIR"
 # Cleanup trap: unmount and remove work dir on any exit (success, error, or signal).
 trap 'umount "$MOUNT_DIR" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
-# --- assemble a minimal rootfs (busybox + curl + ca-certs) ---
+# --- assemble a minimal rootfs (busybox + ca-certs) ---
+# The guest uses busybox wget (static) for HTTP egress — it is installed via
+# `busybox --install` below. Do NOT copy the host curl binary: it is
+# dynamically linked and its shared libraries are not present in the guest,
+# causing it to crash at runtime. If curl is required, install a static build
+# explicitly (e.g. from https://github.com/moparisthebest/static-curl/releases).
 mkdir -p "$WORK/rootfs"/{bin,etc,proc,sys,dev}
 busybox --install -s "$WORK/rootfs/bin"
-cp "$(command -v curl)" "$WORK/rootfs/bin/" || true
 cat > "$WORK/rootfs/etc/profile" <<EOF
 export HTTP_PROXY=http://${PROXY_ADDR}
 export HTTPS_PROXY=http://${PROXY_ADDR}

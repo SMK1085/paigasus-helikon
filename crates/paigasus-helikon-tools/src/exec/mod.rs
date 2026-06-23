@@ -33,6 +33,7 @@ pub use os_sandbox_seatbelt::{OsSandboxBackend, OsSandboxBackendBuilder, OsSandb
 #[cfg(feature = "microvm")]
 mod forkd;
 #[cfg(feature = "microvm")]
+/// forkd microVM backend types.
 pub use forkd::{ForkdBackend, ForkdBackendBuilder, ForkdError};
 
 /// Default wall-clock timeout for a command (matches the SMA-328 `BashTool`).

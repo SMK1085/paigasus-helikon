@@ -57,15 +57,15 @@ public types in a feature-gated module, **no source-breaking renames**) → patc
    self-hosted GitHub Actions workflow.** The harness is cloud-agnostic; GCP is the
    reference provisioner.
 3. **Egress enforcement is layered** (SMA-416 §6 / SMA-413 §11). **Layer 1 — per-VM
-   netns default-deny + REDIRECT** (host iptables in each child netns: DROP all egress
-   except DNS to a vetted resolver and TCP 80/443 transparently REDIRECTed to the
-   proxy; everything else — raw TCP, UDP/QUIC — dropped). **Layer 2 — a CONNECT/HTTP
-   proxy enforcing the domain policy.** Layer 1 is the **load-bearing general
-   mechanism** (it is what actually stops non-proxy-aware clients, DNS exfil, QUIC,
-   raw TCP); Layer 2 enforces *domain* policy on the HTTP/S that Layer 1 funnels to
-   it. Layer 1 ships as a **committed, reviewable iptables ruleset** + the harness
-   that loads it; it is live-proven (not CI-proven, no KVM here). Layer 2 is *our*
-   Rust code and **is** CI-tested on loopback.
+   netns default-deny** (host iptables in each child netns: DROP all egress except DNS
+   (UDP+TCP) to a vetted resolver and TCP to the egress proxy port; no iptables REDIRECT
+   — non-proxy-aware traffic is simply dropped; everything else — raw TCP, UDP/QUIC —
+   dropped). **Layer 2 — a CONNECT/HTTPS proxy enforcing the domain policy.** Layer 1
+   is the **load-bearing general mechanism** (it is what actually stops non-proxy-aware
+   clients, DNS exfil, QUIC, raw TCP); Layer 2 enforces *domain* policy on the HTTPS
+   that proxy-aware clients route through it. Layer 1 ships as a **committed, reviewable
+   iptables ruleset** + the harness that loads it; it is live-proven (not CI-proven, no
+   KVM here). Layer 2 is *our* Rust code and **is** CI-tested on loopback.
 4. **`guarantees().network` honesty (the SMA-413 H1 rule), hardened per the
    challenge.** See §3.4. The upgrade to `Proxied` is gated on an explicit
    enforced-egress opt-in that *attests both layers are deployed*, with a build-time
@@ -135,16 +135,17 @@ tests are the behavioral regression guard. `GuardedResolver` + `ssrf_check` +
     `policy.is_ip_allowed(ip)` (closes the DNS-rebinding window, pinning the tunnel);
     on pass → `200 Connection Established` + `copy_bidirectional`; on fail → **fast**
     `403 Forbidden` + close (no upstream connection for a denied host).
-  - **Absolute-URI plain HTTP** (`GET http://host/… HTTP/1.1`): enforce `Host`, then
-    forward via a `build_client`-built reqwest client (guarded resolver). Handled so
-    plain HTTP can't bypass once Layer 1 REDIRECTs it here.
+  - **Absolute-URI plain HTTP** (`GET http://host/… HTTP/1.1`): enforce `Host` against
+    the policy; non-allowlisted hosts receive `403 Forbidden`; allowlisted hosts receive
+    `501 Not Implemented` (plain-HTTP forwarding is not supported — `CONNECT`/HTTPS is
+    the enforced path). Plain HTTP is not forwarded upstream.
 - **Secret hygiene:** logs hostnames + allow/deny verdicts only — never bodies or
   `Authorization` headers.
 
-**Transparent-REDIRECT note.** Because Layer 1 REDIRECTs guest TCP 80/443 to the proxy
-(§4.1), the proxy also accepts the original-destination form for REDIRECTed
-connections; the CONNECT form covers proxy-aware (`HTTP_PROXY`) clients. Both reach the
-same policy check.
+**No transparent-REDIRECT.** Layer 1 uses DROP-default with explicit allow rules for
+DNS and the proxy port only; there is no iptables REDIRECT. Non-proxy-aware traffic
+is dropped at L3/L4. Proxy-aware clients (`HTTP_PROXY`/`HTTPS_PROXY`) use the
+CONNECT form to reach the proxy, which enforces the domain policy.
 
 ### 3.3 The `Isolation::Proxied` variant
 
@@ -200,19 +201,22 @@ attached to the PR.
   cap set proves insufficient), publishes the controller TLS port, runs the proxy
   sidecar. `forkd doctor` runs at start to fail fast on missing KVM/cgroup-v2/Firecracker.
 - **`netns-deny.rules`** (committed, reviewable) — the Layer 1 iptables ruleset: per
-  child netns, DROP all egress except DNS to the vetted resolver and TCP 80/443
-  REDIRECTed to the proxy. **`entrypoint.sh`** provisions netns (forkd's
-  `netns-setup.sh`), loads `netns-deny.rules`, asserts they are loaded (fails the
-  container start otherwise), starts the controller + proxy.
+  child netns, DROP all egress except DNS (UDP+TCP) to the vetted resolver and TCP
+  to the proxy port. Non-proxy-aware traffic is dropped (no iptables REDIRECT is used
+  — non-proxy-aware clients cannot reach the proxy and their traffic is simply
+  dropped by the default-deny OUTPUT policy). **`entrypoint.sh`** loads
+  `netns-deny.rules` and `netns-deny6.rules` (IPv6 companion), asserts the OUTPUT
+  policy is DROP (fails the container start otherwise), and starts the controller.
 
 ### 4.2 Guest-image build — `scripts/forkd/build-guest-image.sh`
 
 Builds a minimal guest rootfs (kernel + init + `/bin/sh` + coreutils via busybox), with
 `HTTP_PROXY`/`HTTPS_PROXY` baked into the guest profile (a **convenience** for
-proxy-aware clients; the *general* closure is Layer 1 REDIRECT — see §4.1), then warms +
-snapshots via `POST /v1/snapshots` (`{tag, kernel, rootfs, rw, tap, boot_wait_secs}`,
-confirmed contract). **Secret-scan gate:** before snapshotting, the script greps the
-rootfs for the bearer token + common secret patterns and **fails** if any are found (the
+proxy-aware clients; the *general* closure is Layer 1 default-deny — non-proxy-aware
+traffic is dropped at the netns level, see §4.1), then warms + snapshots via
+`POST /v1/snapshots` (`{tag, kernel, rootfs, rw, tap, boot_wait_secs}`, confirmed
+contract). **Secret-scan gate:** before snapshotting, the script greps the rootfs for
+the bearer token + common secret patterns and **fails** if any are found (the
 CoW-shared-state hazard from SMA-416 §3.4 — every child inherits the warmed parent).
 
 ### 4.3 GCP nested-virt launch — `scripts/forkd/gcp-launch.sh` + `gcp-teardown.sh`
@@ -372,7 +376,7 @@ crates/paigasus-helikon-tools/tests/
 |---|---|
 | forkd is alpha (pre-1.0 churn); pinned `v0.5.2` | REST boundary + pinned version; API re-verified against `docs/API.md`. |
 | `Proxied` is an attestation (host iptables unverifiable) | Default `None`; explicit opt-in; build-time proxy probe; doc enumerates bypass surface; GATE 1 may choose to keep `None`. |
-| Egress closure depends on Layer 1, not `HTTP_PROXY` | Layer 1 (netns default-deny + REDIRECT) is the load-bearing mechanism, shipped as a reviewable ruleset; `HTTP_PROXY` is convenience only; live-proven. |
+| Egress closure depends on Layer 1, not `HTTP_PROXY` | Layer 1 (netns default-deny DROP) is the load-bearing mechanism, shipped as a reviewable ruleset; `HTTP_PROXY` is convenience only; live-proven. |
 | Policy unification flips web's empty-allow semantics | `allow: None` (no restriction) vs `Some(empty)` (deny-all) pinned; web maps empty→None; regression test. |
 | Public-API breakage on the patch bump | `is_allowed` retained as `#[deprecated]` alias; full surface audited (§3.1). |
 | Live path can't run here (no KVM) | Authored + lint-checked here; executed once on GCP via the runbook before merge. |
@@ -392,8 +396,9 @@ crates/paigasus-helikon-tools/tests/
   two-layer attestation; build-time probe; default `None`; GATE 1 alternative noted.
 - **M4 (split PRs):** not auto-folded — conflicts with Sven's single-PR + run-live-now
   choice; one PR with separable commits; surfaced at GATE 1.
-- **M5 (HTTP_PROXY ≠ universal):** folded — Layer 1 REDIRECT is load-bearing; HTTP_PROXY
-  demoted to convenience; transparent REDIRECT adopted.
+- **M5 (HTTP_PROXY ≠ universal):** folded — Layer 1 default-deny DROP is load-bearing;
+  HTTP_PROXY demoted to convenience; non-proxy-aware traffic is dropped at L3/L4
+  (no transparent REDIRECT — DROP only).
 - **M6 (un-#[ignore]):** folded — dropped the `microvm-live` feature; env-gated,
   literally un-`#[ignore]`'d, compiled every PR, loud CI skip; AC#2 re-scoped.
 - **M7 (empty-allow drift):** folded — semantics pinned + regression test (§3.1).

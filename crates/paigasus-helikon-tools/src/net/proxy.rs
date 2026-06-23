@@ -1,17 +1,25 @@
 //! [`EgressProxy`] — an explicit forward proxy that enforces an [`EgressPolicy`]
-//! on outbound traffic from the microVM tier. HTTPS via `CONNECT` tunneling;
-//! plain HTTP via absolute-URI forwarding. Both paths check the destination host
-//! against the domain allow/deny policy and the resolved IPs against the SSRF
-//! (private-range) block before any upstream connection is made.
+//! on outbound traffic from the microVM tier. HTTPS is tunneled via `CONNECT`;
+//! the destination host is checked against the domain allow/deny policy and
+//! the resolved IPs are checked against the SSRF (private-range) block before
+//! any upstream connection is made. Plain-HTTP absolute-URI requests are also
+//! host-checked: non-allowlisted hosts receive `403 Forbidden`; allowlisted
+//! hosts receive `501 Not Implemented` (plain-HTTP forwarding is not supported —
+//! `CONNECT`/HTTPS is the enforced path). Non-proxy-aware traffic is dropped by
+//! the per-VM netns default-deny (L3/L4) before it reaches the proxy.
 
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::policy::EgressPolicy;
+
+/// Per-connection I/O timeout: header read and DNS lookup must complete within this.
+const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// An egress-policy-enforcing forward proxy. Run it with [`Self::serve`] against a
 /// bound [`TcpListener`]; each accepted connection is handled on its own task.
@@ -57,7 +65,16 @@ async fn handle(mut client: TcpStream, policy: Arc<EgressPolicy>) -> io::Result<
             client.write_all(BAD).await?;
             return Ok(());
         }
-        if client.read(&mut byte).await? == 0 {
+        let n = match tokio::time::timeout(IO_TIMEOUT, client.read(&mut byte)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                // Header read timed out.
+                let _ = client.write_all(BAD).await;
+                return Ok(());
+            }
+        };
+        if n == 0 {
             return Ok(()); // client closed
         }
         head.push(byte[0]);
@@ -106,20 +123,37 @@ async fn handle_connect(
         return Ok(());
     }
     // Resolve and vet EVERY address (closes DNS-rebinding window).
-    let addrs: Vec<SocketAddr> = match tokio::net::lookup_host((host.as_str(), port)).await {
-        Ok(it) => it.filter(|a| policy.is_ip_allowed(a.ip())).collect(),
-        Err(_) => {
+    // Wrap lookup_host in a timeout to avoid hanging on a slow resolver.
+    let addrs: Vec<SocketAddr> = match tokio::time::timeout(
+        IO_TIMEOUT,
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await
+    {
+        Ok(Ok(it)) => it.filter(|a| policy.is_ip_allowed(a.ip())).collect(),
+        Ok(Err(_)) | Err(_) => {
             client.write_all(DENY).await?;
             return Ok(());
         }
     };
-    let Some(addr) = addrs.into_iter().next() else {
+    if addrs.is_empty() {
         client.write_all(DENY).await?; // resolved only to blocked IPs
         return Ok(());
-    };
-    let mut upstream = match TcpStream::connect(addr).await {
-        Ok(s) => s,
-        Err(_) => {
+    }
+    // Try every vetted address; use the first that connects.
+    let mut upstream_opt: Option<TcpStream> = None;
+    for addr in addrs {
+        match TcpStream::connect(addr).await {
+            Ok(s) => {
+                upstream_opt = Some(s);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+    let mut upstream = match upstream_opt {
+        Some(s) => s,
+        None => {
             client
                 .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                 .await?;

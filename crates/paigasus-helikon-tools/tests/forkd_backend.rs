@@ -164,10 +164,14 @@ async fn enforce_egress_reports_proxied_when_proxy_reachable() {
 #[tokio::test]
 async fn enforce_egress_fails_closed_when_proxy_unreachable() {
     // Port 1 on loopback refuses; build() must fail rather than report Proxied.
-    let err = ForkdBackend::builder("https://127.0.0.1:8080")
+    let result = ForkdBackend::builder("https://127.0.0.1:8080")
         .bearer_token("t")
         .snapshot("s")
         .enforce_egress("http://127.0.0.1:1")
         .build();
-    assert!(err.is_err(), "unreachable proxy must fail closed");
+    let err = result.err().expect("unreachable proxy must fail closed");
+    assert!(
+        matches!(err, paigasus_helikon_tools::ForkdError::ProxyUnreachable),
+        "expected ProxyUnreachable, got: {err}"
+    );
 }

@@ -1,10 +1,12 @@
 //! [`ForkdBackend`] — the microVM execution tier: a portable REST client of the
 //! forkd Firecracker controller. Feature-gated behind `microvm`. **Experimental**
 //! (SMA-416/SMA-437): the fork→exec→destroy flow is real and egress enforcement
-//! now exists — call `.enforce_egress(proxy_endpoint)` on the builder to route
-//! traffic through a deployed [`EgressProxy`](crate::EgressProxy) and report
-//! `guarantees().network == `[`Isolation::Proxied`]`. The default (no
-//! `.enforce_egress`) leaves `guarantees().network` as [`Isolation::None`].
+//! now exists — after deploying the per-VM netns rules that force traffic through a
+//! [`EgressProxy`](crate::EgressProxy), call `.enforce_egress(proxy_endpoint)` to
+//! *attest* that setup and report [`Isolation::Proxied`] from
+//! `guarantees().network`; the default (no `.enforce_egress`) leaves it
+//! [`Isolation::None`]. (The netns rules do the routing; the method only probes +
+//! flips the reported guarantee.)
 //! The live KVM run is validated via the harness/runbook
 //! (`docs/runbooks/forkd-live-validation.md`).
 
@@ -329,6 +331,9 @@ impl ForkdBackend {
 /// Best-effort reachability probe: a short TCP connect to the proxy endpoint.
 /// Sync (callable from the sync `build()`), uses `std::net` with a 3-second timeout.
 /// Accepts `host:port` or a URL (strips `http://`/`https://` scheme if present).
+/// Iterates ALL resolved addresses and returns `Ok(())` on the first successful
+/// connect, so a mix of unreachable IPv6 and reachable IPv4 addresses does not
+/// cause a false failure.
 fn probe_proxy_reachable(endpoint: &str) -> std::io::Result<()> {
     use std::net::ToSocketAddrs;
     // Strip a scheme and trailing slash if present.
@@ -337,11 +342,22 @@ fn probe_proxy_reachable(endpoint: &str) -> std::io::Result<()> {
         .or_else(|| endpoint.strip_prefix("https://"))
         .unwrap_or(endpoint)
         .trim_end_matches('/');
-    let addr = hostport
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no addr"))?;
-    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)).map(|_| ())
+    let addrs: Vec<_> = hostport.to_socket_addrs()?.collect();
+    if addrs.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no addresses resolved",
+        ));
+    }
+    let timeout = std::time::Duration::from_secs(3);
+    let mut last_err = std::io::Error::new(std::io::ErrorKind::NotFound, "no addresses resolved");
+    for addr in addrs {
+        match std::net::TcpStream::connect_timeout(&addr, timeout) {
+            Ok(_) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
 }
 
 /// `true` if `url`'s host is loopback (`localhost`, `127.0.0.0/8`, or `::1`), so a
