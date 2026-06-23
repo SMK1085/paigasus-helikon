@@ -1,8 +1,12 @@
 //! [`ForkdBackend`] — the microVM execution tier: a portable REST client of the
-//! forkd Firecracker controller. Feature-gated behind `microvm`. **Experimental
-//! skeleton** (SMA-416): the fork→exec→destroy flow is real but the live KVM run
-//! and egress *enforcement* are deferred to SMA-437; `guarantees().network` is
-//! honestly `None`.
+//! forkd Firecracker controller. Feature-gated behind `microvm`. **Experimental**
+//! (SMA-416/SMA-437): the fork→exec→destroy flow is real and egress enforcement
+//! now exists — call `.enforce_egress(proxy_endpoint)` on the builder to route
+//! traffic through a deployed [`EgressProxy`](crate::EgressProxy) and report
+//! `guarantees().network == `[`Isolation::Proxied`]`. The default (no
+//! `.enforce_egress`) leaves `guarantees().network` as [`Isolation::None`].
+//! The live KVM run is validated via the harness/runbook
+//! (`docs/runbooks/forkd-live-validation.md`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -130,7 +134,9 @@ impl ForkdBackendBuilder {
         self
     }
 
-    /// Egress policy the backend carries (enforcement is SMA-437).
+    /// Egress policy the backend carries. The policy is declared here; call
+    /// `.enforce_egress()` to attest that it is enforced by the deployed
+    /// [`EgressProxy`](crate::EgressProxy) + per-VM netns default-deny.
     pub fn egress_policy(mut self, policy: EgressPolicy) -> Self {
         self.egress = policy;
         self
@@ -244,8 +250,9 @@ impl ForkdBackend {
         }
     }
 
-    /// The egress policy this backend carries. Enforcement is deferred to
-    /// SMA-437; this read accessor lets callers inspect the declared intent.
+    /// The egress policy this backend carries. This accessor reads the declared
+    /// policy; enforcement is attested via `.enforce_egress()` at build time
+    /// (see its doc for the trust model).
     pub fn egress_policy(&self) -> &EgressPolicy {
         &self.egress
     }

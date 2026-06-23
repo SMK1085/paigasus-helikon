@@ -40,8 +40,12 @@ fn backend(enforce: bool) -> Option<std::sync::Arc<dyn paigasus_helikon_tools::E
         b = b.controller_ca(std::fs::read(ca_path).expect("FORKD_CA file readable"));
     }
     if enforce {
-        let proxy =
-            std::env::var("FORKD_PROXY").expect("FORKD_PROXY must be set for enforced-egress test");
+        let Ok(proxy) = std::env::var("FORKD_PROXY") else {
+            eprintln!(
+                "SKIP enforced-egress test: set FORKD_PROXY to run against a live egress proxy"
+            );
+            return None;
+        };
         b = b
             .egress_policy(EgressPolicy::deny_all().allow_domains(["example.com"]))
             .enforce_egress(proxy);
@@ -72,7 +76,7 @@ async fn live_forkd_denies_nonallowlisted_egress() {
     let start = Instant::now();
     let out = backend
         .run(ExecRequest::new(
-            "curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://evil.test || echo DENIED",
+            "curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://evil.test || echo DENIED",
         ))
         .await
         .unwrap();
@@ -89,7 +93,7 @@ async fn live_forkd_denies_nonallowlisted_egress() {
     // The allowlisted domain must succeed.
     let ok = backend
         .run(ExecRequest::new(
-            "curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://example.com",
+            "curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://example.com",
         ))
         .await
         .unwrap();

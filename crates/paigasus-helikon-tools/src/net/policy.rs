@@ -45,9 +45,9 @@ pub(crate) fn build_client(
 /// A `reqwest` DNS resolver that drops resolved addresses failing [`ip_blocked`]
 /// (unless `allow_private`), so the connection is pinned to validated IPs. This
 /// is the connect-time half of the SSRF guard: it closes the rebinding window
-/// between the pre-flight `ssrf_check` and reqwest's own resolution. Numeric-IP
+/// between the pre-flight SSRF check and reqwest's own resolution. Numeric-IP
 /// hosts never reach a resolver — they are covered by the literal-IP branch of
-/// [`ssrf_check`].
+/// the pre-flight SSRF check.
 pub struct GuardedResolver {
     /// When `true`, private/loopback/link-local addresses are permitted (no SSRF
     /// filtering). When `false`, all addresses classified as blocked by
