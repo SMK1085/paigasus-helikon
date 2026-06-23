@@ -1,5 +1,7 @@
 # forkd + Firecracker + Helikon egress proxy — x86_64 Linux KVM host only.
-FROM ubuntu:22.04
+# forkd v0.5.2 binaries require glibc ≥2.38; Ubuntu 22.04 (glibc 2.35) does NOT work.
+# Ubuntu 24.04 (glibc 2.39) is required.
+FROM ubuntu:24.04
 ARG FORKD_VERSION=0.5.2
 ARG FORKD_SHA256=786371cd10f75f7a24b44a9fae803569872f2cd45b7b2b19ded24a4c2d945102
 RUN apt-get update && apt-get install -y --no-install-recommends \

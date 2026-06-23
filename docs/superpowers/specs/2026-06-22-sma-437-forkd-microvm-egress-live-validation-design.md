@@ -57,12 +57,17 @@ public types in a feature-gated module, **no source-breaking renames**) → patc
    self-hosted GitHub Actions workflow.** The harness is cloud-agnostic; GCP is the
    reference provisioner.
 3. **Egress enforcement is layered** (SMA-416 §6 / SMA-413 §11). **Layer 1 — per-VM
-   netns default-deny** (host iptables in each child netns: DROP all egress except DNS
-   (UDP+TCP) to a vetted resolver and TCP to the egress proxy port; no iptables REDIRECT
-   — non-proxy-aware traffic is simply dropped; everything else — raw TCP, UDP/QUIC —
-   dropped). **Layer 2 — a CONNECT/HTTPS proxy enforcing the domain policy.** Layer 1
-   is the **load-bearing general mechanism** (it is what actually stops non-proxy-aware
-   clients, DNS exfil, QUIC, raw TCP); Layer 2 enforces *domain* policy on the HTTPS
+   netns default-deny** (host iptables in each child netns, **FORWARD chain**: drop
+   guest-tap→uplink forwarding (`-i forkd-tap0 -o veth0 -j DROP`) — the guest's packets
+   are *routed* through FORWARD, not OUTPUT; OUTPUT belongs to processes running inside
+   the netns, i.e. the egress proxy itself). The egress proxy runs **inside each child
+   netns** (started via `ip netns exec <ns> egress-proxy`, bound to
+   `0.0.0.0:${PROXY_PORT}`, reachable by the guest at the tap host-side IP
+   `10.42.0.1:<port>`), with a per-netns DNS resolver (`/etc/netns/<ns>/resolv.conf`)
+   so the proxy can resolve CONNECT targets. Non-proxy-aware traffic (raw TCP, UDP/QUIC,
+   DNS exfil) is dropped at the FORWARD chain; the proxy→upstream path uses OUTPUT
+   (unblocked). **Layer 2 — a CONNECT/HTTPS proxy enforcing the domain policy.** Layer 1
+   is the **load-bearing general mechanism**; Layer 2 enforces *domain* policy on HTTPS
    that proxy-aware clients route through it. Layer 1 ships as a **committed, reviewable
    iptables ruleset** + the harness that loads it; it is live-proven (not CI-proven, no
    KVM here). Layer 2 is *our* Rust code and **is** CI-tested on loopback.
@@ -193,20 +198,27 @@ attached to the PR.
 
 ### 4.1 Dockerized forkd+KVM harness — `docker/forkd/`
 
-- **`Dockerfile`** — Ubuntu 22.04; installs forkd `v0.5.2-x86_64-linux` + a Firecracker
-  binary; builds the egress proxy (`examples/egress_proxy.rs`, a thin
-  `EgressProxy::serve` runner); stages the TLS cert/key + token-file paths.
+- **`Dockerfile`** — Ubuntu 24.04 (glibc 2.39 — forkd v0.5.2 binaries require glibc
+  ≥2.38; Ubuntu 22.04 with glibc 2.35 does **not** work); installs forkd
+  `v0.5.2-x86_64-linux` + a Firecracker binary; builds the egress proxy
+  (`examples/egress_proxy.rs`, a thin `EgressProxy::serve` runner); stages the TLS
+  cert/key + token-file paths.
 - **`docker-compose.yml`** — runs with `--device /dev/kvm`, `--cap-add=NET_ADMIN` (+
   the device-cgroup rule for `/dev/kvm`; `--privileged` only if a documented minimal
   cap set proves insufficient), publishes the controller TLS port, runs the proxy
   sidecar. `forkd doctor` runs at start to fail fast on missing KVM/cgroup-v2/Firecracker.
 - **`netns-deny.rules`** (committed, reviewable) — the Layer 1 iptables ruleset: per
-  child netns, DROP all egress except DNS (UDP+TCP) to the vetted resolver and TCP
-  to the proxy port. Non-proxy-aware traffic is dropped (no iptables REDIRECT is used
-  — non-proxy-aware clients cannot reach the proxy and their traffic is simply
-  dropped by the default-deny OUTPUT policy). **`entrypoint.sh`** loads
-  `netns-deny.rules` and `netns-deny6.rules` (IPv6 companion), asserts the OUTPUT
-  policy is DROP (fails the container start otherwise), and starts the controller.
+  child netns, **FORWARD-chain** drop of guest-tap→uplink forwarding
+  (`-i ${GUEST_IF} -o ${UPLINK_IF} -j DROP`). The guest's egress is routed through
+  FORWARD (not OUTPUT); OUTPUT is used only by processes running inside the netns
+  (i.e. the egress proxy itself). Non-proxy-aware traffic (raw TCP, UDP/QUIC) is dropped
+  at FORWARD; the proxy's own outbound uses OUTPUT (unblocked). A blanket OUTPUT DROP
+  is **incorrect** for this topology — it would break both the in-netns proxy and the
+  controller→agent management path. **`entrypoint.sh`** also writes the per-netns DNS
+  resolver (`/etc/netns/<ns>/resolv.conf`) and starts the egress proxy **inside** each
+  child netns (`ip netns exec <ns> egress-proxy`) before loading `netns-deny.rules` and
+  `netns-deny6.rules` (IPv6 companion), asserts the FORWARD drop rule is present (fails
+  the container start otherwise), and starts the controller.
 
 ### 4.2 Guest-image build — `scripts/forkd/build-guest-image.sh`
 

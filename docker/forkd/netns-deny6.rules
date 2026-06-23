@@ -1,10 +1,7 @@
-# SMA-437 Layer-1 per-netns IPv6 default-deny companion to netns-deny.rules.
-# Applied inside each child netns alongside the IPv4 ruleset.
-# Default-deny all IPv6 egress. No proxy/DNS allow rules here: the egress proxy
-# and DNS resolver are reached over IPv4 in this harness — IPv6 traffic has no
-# permitted path and is dropped entirely.
+# SMA-437 Layer-1 per-netns IPv6 default-deny (FORWARD-based; see netns-deny.rules).
+# Drops guest IPv6 forwarding to the uplink. The proxy + resolver are reached over
+# IPv4 in this harness, so no IPv6 allow rules are needed.
 *filter
-:OUTPUT DROP [0:0]
--A OUTPUT -o lo -j ACCEPT
--A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+:FORWARD ACCEPT [0:0]
+-A FORWARD -i ${GUEST_IF} -o ${UPLINK_IF} -j DROP
 COMMIT
