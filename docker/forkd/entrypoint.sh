@@ -58,6 +58,14 @@ else
       env EGRESS_BIND="0.0.0.0:${PROXY_PORT}" EGRESS_ALLOW="${EGRESS_ALLOW}" \
       /usr/local/bin/egress-proxy &
 
+    # Assert the egress proxy came up inside the netns before proceeding.
+    _ok=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      if ip netns exec "${ns}" ss -ltn 2>/dev/null | grep -q ":${PROXY_PORT} "; then _ok=1; break; fi
+      sleep 0.3
+    done
+    [ "${_ok}" = 1 ] || { echo "FATAL: egress proxy failed to start in netns ${ns}"; exit 1; }
+
     # (c) Load Layer-1 FORWARD-chain rules (IPv4).
     # The FORWARD chain drops guest(${GUEST_IF}) -> uplink(${UPLINK_IF}) forwarding,
     # blocking raw/non-proxy egress while leaving the controller->agent path and the

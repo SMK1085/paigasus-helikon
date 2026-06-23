@@ -219,8 +219,8 @@ source "$HOME/.cargo/env"
 # Build the egress proxy example (runs inside each child netns).
 cargo build -p paigasus-helikon-tools --features microvm --example egress_proxy --release
 # Rename: cargo outputs egress_proxy (underscore); the harness expects egress-proxy (hyphen).
-cp target/release/examples/egress_proxy /usr/local/bin/egress-proxy
-chmod +x /usr/local/bin/egress-proxy
+# /usr/local/bin is root-owned; sudo is required for a regular SSH user.
+sudo install -m0755 target/release/examples/egress_proxy /usr/local/bin/egress-proxy
 ```
 
 ---
@@ -263,18 +263,39 @@ ip netns exec ${NS} iptables -S FORWARD \
 
 **Validate egress enforcement** (expected results from the live run):
 
+> **Note:** plain `curl` is unsuitable for these assertions — its exit code is 0 for both
+> HTTP 200 and 403, so the deny check can falsely pass, and a TLS/timeout error is
+> indistinguishable from a FORWARD-drop. Use the explicit CONNECT-status checks below,
+> or `curl -sS -o /dev/null -w '%{http_code}'` if you must use curl.
+
 ```bash
-# Raw egress to 1.1.1.1:443 — BLOCKED by the FORWARD rule (no response / timeout).
-ip netns exec ${NS} curl --max-time 3 https://1.1.1.1/ || echo "blocked as expected"
+# Layer-1 — raw TCP block (no TLS, so the block is unambiguous).
+# Expect: RAW_BLOCKED OSError (FORWARD-chain drop; no response at all).
+ip netns exec ${NS} python3 -c '
+import socket
+try:
+    socket.create_connection(("1.1.1.1", 443), timeout=6)
+    print("RAW_REACHED")
+except Exception as e:
+    print("RAW_BLOCKED", type(e).__name__)'
 
-# Via proxy, allowlisted domain — ALLOWED (CONNECT 200).
-ip netns exec ${NS} curl -x http://10.42.0.1:8443 https://example.com/ -so /dev/null \
-  && echo "proxy: example.com allowed"
-
-# Via proxy, non-allowlisted domain — DENIED (403 fast, no hang).
-ip netns exec ${NS} curl -x http://10.42.0.1:8443 https://www.google.com/ -so /dev/null \
-  && echo "should not reach here" \
-  || echo "proxy: www.google.com denied (403)"
+# Layer-2 — proxy allow/deny via explicit CONNECT status.
+# HTTPConnection.set_tunnel raises on a non-200 CONNECT response, making allow vs deny unambiguous.
+# Expect: example.com ALLOWED_200
+#         www.google.com DENIED (Tunnel connection failed: 403 Forbidden)
+ip netns exec ${NS} python3 -c '
+import http.client
+def t(h):
+    c = http.client.HTTPConnection("10.42.0.1", 8443, timeout=10)
+    c.set_tunnel(h, 443)
+    try:
+        c.connect()
+        print(h, "ALLOWED_200")
+        c.close()
+    except Exception as e:
+        print(h, "DENIED", str(e)[:50])
+t("example.com")
+t("www.google.com")'
 ```
 
 ---
