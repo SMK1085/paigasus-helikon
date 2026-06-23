@@ -90,7 +90,7 @@ Third-party version pins live in `[workspace.dependencies]` (root). Members refe
   # gh api repos/<owner>/<repo>/git/tags/<sha> | jq -r '.object.sha'
   ```
   Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `github-actions` group track patch/minor updates from there. The above-the-fold human-readable version stays as a `# action vX.Y.Z` comment so the SHA is auditable.
-- **After a PR merges to `main`, release-plz opens/updates a `chore: release` PR** (authored by the paigasusbot App); the crates.io publish only happens once that PR is green and merged. Check it after every merge and watch its CI — its release-PR `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on the bot PR **only** (independent of `main`); fix with a `chore(deps)` pin and release-plz regenerates the PR clean.
+- **After a PR merges to `main`, release-plz opens/updates a `chore: release` PR** (authored by the paigasusbot App) carrying the version bumps + CHANGELOG; in the normal flow **merging that PR is what publishes to crates.io** (the merged feature PR left versions matching the registry, so its own `main` push publishes nothing). The exception is a PR that bumps its own version — the stub-ascend ritual — which publishes on its own merge with no separate release PR. Check the release PR after every merge and watch its CI — its release-PR `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on the bot PR **only** (independent of `main`); fix with a `chore(deps)` pin and release-plz regenerates the PR clean.
 
 ## CI
 
