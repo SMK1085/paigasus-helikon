@@ -349,7 +349,7 @@ crates/paigasus-helikon-tools/tests/
   to the PR**; CI compile-checks it (skips loudly without a controller). Re-scoped like
   SMA-416 §8 — not claimed as a CI-green gate.
 - ⚠️ **Egress enforcement (layered)** — Layer 2 (`EgressProxy`) is **CI-tested**
-  (non-allowlisted egress → fast 403). Layer 1 (netns default-deny + REDIRECT) ships as
+  (non-allowlisted egress → fast 403). Layer 1 (netns default-deny) ships as
   a **committed, reviewable iptables ruleset** + harness assertion; it is **live-proven**
   by `live_forkd_denies_nonallowlisted_egress` on GCP (output attached), not CI-proven.
   `guarantees().network` upgrades `None → Proxied` in enforced mode (hardened
