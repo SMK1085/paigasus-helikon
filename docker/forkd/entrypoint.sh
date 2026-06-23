@@ -87,9 +87,14 @@ else
   done
 fi
 
-# Start the controller over TLS with bearer auth.
-exec forkd-controller \
+# Start the controller over TLS with bearer auth. `serve` is the required
+# subcommand. NOTE: per-child-netns is a per-FORK request field (ForkdBackend
+# sends "per_child_netns": true in the POST /v1/sandboxes body) — it is NOT a
+# daemon flag, so it must not be passed here. --snapshot-root points the daemon
+# at where `forkd from-image`/`forkd snapshot` wrote the tag (override via
+# FORKD_SNAPSHOT_ROOT to match your snapshot volume).
+exec forkd-controller serve \
   --tls-cert /etc/forkd/tls/cert.pem \
   --tls-key  /etc/forkd/tls/key.pem \
   --token-file /etc/forkd/token \
-  --per-child-netns
+  --snapshot-root "${FORKD_SNAPSHOT_ROOT:-/root/.local/share/forkd/snapshots}"
