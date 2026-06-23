@@ -18,6 +18,36 @@
 
 ---
 
+## Live-topology validation (confirm on first bring-up)
+
+Before running the integration tests, verify these items against the real system:
+
+1. **`PROXY_IP` / veth address reachable from the child netns** — confirm that the address
+   configured as `PROXY_IP` in `entrypoint.sh` (default `172.17.0.1`, the Docker bridge
+   gateway) is actually reachable from inside a forkd-created child netns. If forkd uses
+   a veth pair instead of the bridge, update `PROXY_IP` to the veth peer address and
+   re-export `PROXY_ADDR` accordingly when running `build-guest-image.sh`.
+
+2. **Layer-1 rules applied per forkd-created netns (not just at startup)** — the
+   `entrypoint.sh` startup loop only covers pre-existing netns. Each netns forkd creates
+   at fork time must receive the `netns-deny.rules` iptables ruleset before the child
+   process starts. Confirm your forkd version (v0.5.2) applies these rules via its
+   `--per-child-netns` flag; if not, wire a post-fork hook or wrapper script.
+
+3. **Exact forkd binary names in the v0.5.2 tarball** — the harness expects a `forkd`
+   CLI binary and a `forkd-controller` daemon binary, and uses `forkd doctor` for the
+   preflight check. Verify these names match what is in the v0.5.2 release tarball before
+   running the harness; if the tarball ships different names, update `entrypoint.sh` and
+   the Dockerfile accordingly.
+
+4. **Proxy port (8443) reachable from wherever `cargo test` runs** — the `enforce_egress`
+   reachability probe connects to port 8443 on the forkd host. If running `cargo test`
+   from the dev machine (not the GCP VM), ensure the VM's firewall allows inbound 8443
+   from the dev machine's IP. If running on the VM itself, the port is local and no
+   firewall rule is needed.
+
+---
+
 ## Step 1 — Provision the GCP VM
 
 ```bash
@@ -56,7 +86,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cross build -p paigasus-helikon-tools --features microvm --example egress_proxy \
   --target x86_64-unknown-linux-gnu --release
 scp target/x86_64-unknown-linux-gnu/release/examples/egress-proxy \
-  forkd-kvm:~/docker/forkd/egress-proxy
+  forkd-kvm:~/forkd/egress-proxy
 
 # Option C: build directly on the VM (simplest)
 cargo build -p paigasus-helikon-tools --features microvm --example egress_proxy --release

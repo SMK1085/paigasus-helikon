@@ -8,6 +8,10 @@ set -euo pipefail
 : "${FORKD_TOKEN:?set FORKD_TOKEN}"
 : "${SNAPSHOT_TAG:=helikon}"
 WORK="$(mktemp -d)"
+MOUNT_DIR="$WORK/mnt"
+mkdir -p "$MOUNT_DIR"
+# Cleanup trap: unmount and remove work dir on any exit (success, error, or signal).
+trap 'umount "$MOUNT_DIR" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 # --- assemble a minimal rootfs (busybox + curl + ca-certs) ---
 mkdir -p "$WORK/rootfs"/{bin,etc,proc,sys,dev}
@@ -21,7 +25,7 @@ export https_proxy=http://${PROXY_ADDR}
 EOF
 
 # --- SECRET SCAN: refuse to snapshot if any secret material is present ---
-if grep -RInE '(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|Bearer [A-Za-z0-9._-]{20,})' "$WORK/rootfs"; then
+if grep -RInE '(BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}|Bearer [A-Za-z0-9._-]{20,}|"private_key"|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})' "$WORK/rootfs"; then
   echo "FATAL: secret-like material found in rootfs — refusing to snapshot (CoW is shared to every child)."
   exit 1
 fi
@@ -32,12 +36,9 @@ ROOTFS_SIZE_MB=$(du -sm "$WORK/rootfs" | awk '{print int($1 * 1.5 + 32)}')
 mkdir -p "$(dirname "$ROOTFS")"
 dd if=/dev/zero of="$ROOTFS" bs=1M count="${ROOTFS_SIZE_MB}" status=none
 mkfs.ext4 -F -L helikon "$ROOTFS" > /dev/null
-MOUNT_DIR="$(mktemp -d)"
 mount -o loop "$ROOTFS" "$MOUNT_DIR"
 cp -a "$WORK/rootfs/." "$MOUNT_DIR/"
 umount "$MOUNT_DIR"
-rmdir "$MOUNT_DIR"
-rm -rf "$WORK"
 
 # --- warm + snapshot ---
 curl -fsSL -X POST "${FORKD_URL%/}/v1/snapshots" \

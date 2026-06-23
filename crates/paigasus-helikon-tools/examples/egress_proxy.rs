@@ -3,7 +3,7 @@
 //! and a comma-separated allow-list from `EGRESS_ALLOW`.
 //!
 //! Run: `EGRESS_ALLOW=example.com cargo run -p paigasus-helikon-tools \
-//!       --features microvm --example egress_proxy`
+//!       --features microvm --example egress_proxy --release`
 
 use paigasus_helikon_tools::{EgressPolicy, EgressProxy};
 use tokio::net::TcpListener;

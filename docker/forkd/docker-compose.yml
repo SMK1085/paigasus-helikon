@@ -18,5 +18,8 @@ services:
       - forkd-snapshots:/var/lib/forkd
     ports:
       - "8889:8889"
+      # Expose egress proxy port to host for the live enforce_egress reachability probe.
+      # Firewall this port (e.g. GCP firewall rule) appropriately in non-test environments.
+      - "8443:8443"
 volumes:
   forkd-snapshots:
