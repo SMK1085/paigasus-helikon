@@ -1,14 +1,22 @@
 //! [`ForkdBackend`] — the microVM execution tier: a portable REST client of the
-//! forkd Firecracker controller. Feature-gated behind `microvm`. **Experimental
-//! skeleton** (SMA-416): the fork→exec→destroy flow is real but the live KVM run
-//! and egress *enforcement* are deferred to SMA-437; `guarantees().network` is
-//! honestly `None`.
+//! forkd Firecracker controller. Feature-gated behind `microvm`. **Experimental**
+//! (SMA-416/SMA-437): the fork→exec→destroy flow is real and egress enforcement
+//! now exists — after deploying the per-VM netns rules that force traffic through a
+//! [`EgressProxy`](crate::EgressProxy), call `.enforce_egress(proxy_endpoint)` to
+//! *attest* that setup and report [`Isolation::Proxied`] from
+//! `guarantees().network`; the default (no `.enforce_egress`) leaves it
+//! [`Isolation::None`]. (The netns rules do the routing; the method only probes +
+//! flips the reported guarantee.)
+//! The live KVM run is validated via the harness/runbook
+//! (`docs/runbooks/forkd-live-validation.md`).
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use paigasus_helikon_core::ToolError;
+
+use crate::net::policy::EgressPolicy;
 
 use super::{
     ExecOutput, ExecRequest, ExecutionBackend, Isolation, SandboxGuarantees, DEFAULT_MAX_OUTPUT,
@@ -42,6 +50,9 @@ pub enum ForkdError {
     /// bearer token in cleartext over the network. Use `https` for remote hosts.
     #[error("insecure forkd controller URL: use https for non-loopback hosts")]
     InsecureControllerUrl,
+    /// `enforce_egress` was set but the proxy endpoint could not be reached.
+    #[error("egress proxy endpoint is unreachable")]
+    ProxyUnreachable,
 }
 
 /// `POST /v1/sandboxes` request body — fork `n` children (we use 1) copy-on-write
@@ -80,73 +91,6 @@ struct ExecResp {
     exit_code: Option<i32>,
 }
 
-/// Domain allow/deny config the backend **carries**. The skeleton does not yet
-/// *enforce* egress (the netns + CONNECT-proxy layers are SMA-437); this type is
-/// the seam that follow-up enforces, and the future cloud sibling shares.
-///
-/// Matching is sub-domain-aware, case-insensitive, and trailing-dot-insensitive:
-/// `example.com` matches `example.com` and `api.example.com`.
-#[derive(Debug, Clone, Default)]
-pub struct EgressPolicy {
-    allow: Option<Vec<String>>,
-    deny: Vec<String>,
-}
-
-impl EgressPolicy {
-    /// Deny all egress (an empty allow-list permits nothing).
-    pub fn deny_all() -> Self {
-        Self {
-            allow: Some(Vec::new()),
-            deny: Vec::new(),
-        }
-    }
-
-    /// Allow all egress (no allow-list and no deny-list).
-    pub fn allow_all() -> Self {
-        Self::default()
-    }
-
-    /// Add allowed domains. Setting any allow-list switches the policy to
-    /// default-deny (only listed domains and their sub-domains are permitted).
-    pub fn allow_domains<I, S>(mut self, domains: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.allow
-            .get_or_insert_with(Vec::new)
-            .extend(domains.into_iter().map(Into::into));
-        self
-    }
-
-    /// Add denied domains. A deny match always refuses, beating any allow.
-    pub fn deny_domains<I, S>(mut self, domains: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.deny.extend(domains.into_iter().map(Into::into));
-        self
-    }
-
-    /// `true` if `host` is permitted: not denied, and — when an allow-list is set
-    /// — matching it (itself or a sub-domain).
-    pub fn is_allowed(&self, host: &str) -> bool {
-        let host = host.trim_end_matches('.').to_ascii_lowercase();
-        let matches = |entry: &String| {
-            let e = entry.trim_end_matches('.').to_ascii_lowercase();
-            host == e || host.ends_with(&format!(".{e}"))
-        };
-        if self.deny.iter().any(matches) {
-            return false;
-        }
-        match &self.allow {
-            Some(list) => list.iter().any(matches),
-            None => true,
-        }
-    }
-}
-
 /// Builder for [`ForkdBackend`].
 pub struct ForkdBackendBuilder {
     controller_url: String,
@@ -156,6 +100,7 @@ pub struct ForkdBackendBuilder {
     timeout: Duration,
     max_output_bytes: usize,
     egress: EgressPolicy,
+    enforce_egress: Option<String>,
 }
 
 impl ForkdBackendBuilder {
@@ -191,9 +136,24 @@ impl ForkdBackendBuilder {
         self
     }
 
-    /// Egress policy the backend carries (enforcement is SMA-437).
+    /// Egress policy the backend carries. The policy is declared here; call
+    /// `.enforce_egress()` to attest that it is enforced by the deployed
+    /// [`EgressProxy`](crate::EgressProxy) + per-VM netns default-deny.
     pub fn egress_policy(mut self, policy: EgressPolicy) -> Self {
         self.egress = policy;
+        self
+    }
+
+    /// Attest that the layered egress enforcement (per-VM netns default-deny + the
+    /// [`EgressProxy`](crate::EgressProxy) at `proxy_endpoint`) is deployed, so
+    /// `guarantees().network` reports [`Isolation::Proxied`]. `build()` probes the
+    /// proxy for reachability and fails closed if it cannot connect — but it
+    /// **cannot** verify the host's netns rules, so this is an operator attestation
+    /// (the same trust model the kernel/hypervisor tiers use). Without this, the
+    /// network guarantee stays [`Isolation::None`]. `proxy_endpoint` is `host:port`
+    /// or a URL.
+    pub fn enforce_egress(mut self, proxy_endpoint: impl Into<String>) -> Self {
+        self.enforce_egress = Some(proxy_endpoint.into());
         self
     }
 
@@ -221,6 +181,13 @@ impl ForkdBackendBuilder {
             cb = cb.add_root_certificate(cert);
         }
         let client = cb.build().map_err(|_| ForkdError::ClientBuild)?;
+        let egress_enforced = match &self.enforce_egress {
+            Some(ep) => {
+                probe_proxy_reachable(ep).map_err(|_| ForkdError::ProxyUnreachable)?;
+                true
+            }
+            None => false,
+        };
         Ok(ForkdBackend {
             client,
             base: self.controller_url.trim_end_matches('/').to_string(),
@@ -229,6 +196,7 @@ impl ForkdBackendBuilder {
             timeout: self.timeout,
             max_output_bytes: self.max_output_bytes,
             egress: self.egress,
+            egress_enforced,
         })
     }
 
@@ -251,6 +219,7 @@ pub struct ForkdBackend {
     timeout: Duration,
     max_output_bytes: usize,
     egress: EgressPolicy,
+    egress_enforced: bool,
 }
 
 impl std::fmt::Debug for ForkdBackend {
@@ -279,11 +248,13 @@ impl ForkdBackend {
             timeout: DEFAULT_TIMEOUT,
             max_output_bytes: DEFAULT_MAX_OUTPUT,
             egress: EgressPolicy::deny_all(),
+            enforce_egress: None,
         }
     }
 
-    /// The egress policy this backend carries. Enforcement is deferred to
-    /// SMA-437; this read accessor lets callers inspect the declared intent.
+    /// The egress policy this backend carries. This accessor reads the declared
+    /// policy; enforcement is attested via `.enforce_egress()` at build time
+    /// (see its doc for the trust model).
     pub fn egress_policy(&self) -> &EgressPolicy {
         &self.egress
     }
@@ -357,6 +328,38 @@ impl ForkdBackend {
     }
 }
 
+/// Best-effort reachability probe: a short TCP connect to the proxy endpoint.
+/// Sync (callable from the sync `build()`), uses `std::net` with a 3-second timeout.
+/// Accepts `host:port` or a URL (strips `http://`/`https://` scheme if present).
+/// Iterates ALL resolved addresses and returns `Ok(())` on the first successful
+/// connect, so a mix of unreachable IPv6 and reachable IPv4 addresses does not
+/// cause a false failure.
+fn probe_proxy_reachable(endpoint: &str) -> std::io::Result<()> {
+    use std::net::ToSocketAddrs;
+    // Strip a scheme and trailing slash if present.
+    let hostport = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .unwrap_or(endpoint)
+        .trim_end_matches('/');
+    let addrs: Vec<_> = hostport.to_socket_addrs()?.collect();
+    if addrs.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no addresses resolved",
+        ));
+    }
+    let timeout = std::time::Duration::from_secs(3);
+    let mut last_err = std::io::Error::new(std::io::ErrorKind::NotFound, "no addresses resolved");
+    for addr in addrs {
+        match std::net::TcpStream::connect_timeout(&addr, timeout) {
+            Ok(_) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
 /// `true` if `url`'s host is loopback (`localhost`, `127.0.0.0/8`, or `::1`), so a
 /// plain-`http` controller there does not expose the bearer token to the network.
 fn host_is_loopback(url: &reqwest::Url) -> bool {
@@ -419,9 +422,14 @@ impl ExecutionBackend for ForkdBackend {
     }
 
     fn guarantees(&self) -> SandboxGuarantees {
+        let network = if self.egress_enforced {
+            Isolation::Proxied
+        } else {
+            Isolation::None
+        };
         SandboxGuarantees::new(
             Isolation::Virtualized, // filesystem — separate guest kernel + rootfs
-            Isolation::None,        // network — egress NOT filtered yet (SMA-437)
+            network,                // network — Proxied when enforce_egress is set
             Isolation::Virtualized, // syscalls — guest kernel, not a host filter
             "forkd (firecracker microvm — experimental)",
         )
@@ -481,22 +489,6 @@ mod tests {
     }
 
     #[test]
-    fn egress_policy_deny_all_then_allowlist() {
-        let p = EgressPolicy::deny_all().allow_domains(["pypi.org"]);
-        assert!(p.is_allowed("pypi.org"));
-        assert!(p.is_allowed("files.pypi.org")); // sub-domain
-        assert!(!p.is_allowed("evil.test")); // not on the allow-list
-    }
-
-    #[test]
-    fn egress_policy_deny_beats_allow_and_default_allows() {
-        let p = EgressPolicy::allow_all().deny_domains(["evil.test"]);
-        assert!(!p.is_allowed("evil.test"));
-        assert!(!p.is_allowed("api.evil.test")); // sub-domain
-        assert!(p.is_allowed("good.test")); // no allow-list -> default allow
-    }
-
-    #[test]
     fn guarantees_are_honest() {
         let b = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("t")
@@ -506,8 +498,18 @@ mod tests {
         let g = b.guarantees();
         assert_eq!(g.filesystem, Isolation::Virtualized);
         assert_eq!(g.syscalls, Isolation::Virtualized);
-        assert_eq!(g.network, Isolation::None); // egress NOT enforced in the skeleton
+        assert_eq!(g.network, Isolation::None); // egress NOT enforced without enforce_egress
         assert!(g.label.contains("experimental"));
+    }
+
+    #[test]
+    fn guarantees_network_none_without_enforce_egress() {
+        let b = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .into_backend()
+            .unwrap();
+        assert_eq!(b.guarantees().network, Isolation::None);
     }
 
     #[test]
@@ -525,8 +527,8 @@ mod tests {
             .egress_policy(EgressPolicy::deny_all().allow_domains(["pypi.org"]))
             .into_backend()
             .unwrap();
-        assert!(b.egress_policy().is_allowed("pypi.org"));
-        assert!(!b.egress_policy().is_allowed("evil.test"));
+        assert!(b.egress_policy().is_host_allowed("pypi.org"));
+        assert!(!b.egress_policy().is_host_allowed("evil.test"));
     }
 
     #[test]

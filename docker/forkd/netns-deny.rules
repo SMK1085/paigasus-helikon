@@ -1,0 +1,13 @@
+# SMA-437 Layer-1 per-netns default-deny — forkd tap/FORWARD topology.
+# In forkd's per-child netns the guest sits behind ${GUEST_IF} and its egress is
+# ROUTED (FORWARD chain) out via ${UPLINK_IF} to the uplink. The guest's packets
+# do NOT traverse this netns's OUTPUT chain (OUTPUT belongs to processes running
+# inside the netns, e.g. the egress proxy). So Layer-1 filters FORWARD, dropping
+# guest(${GUEST_IF}) -> uplink(${UPLINK_IF}) forwarding. This blocks raw/non-proxy
+# egress, DNS exfil, QUIC, etc., while leaving ACCEPTed: the controller->agent
+# path (${UPLINK_IF}->${GUEST_IF}), the guest->in-netns-proxy path (local
+# delivery to the ${GUEST_IF} host IP), and the proxy->upstream path (OUTPUT).
+*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -i ${GUEST_IF} -o ${UPLINK_IF} -j DROP
+COMMIT

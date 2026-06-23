@@ -22,7 +22,7 @@ Each feature gates one sibling crate behind a module on `paigasus_helikon::`:
 | `tools` | `tools` | `paigasus-helikon-tools` |
 | `tools-web` | adds `WebFetch` / `WebSearch` | `paigasus-helikon-tools/web` |
 | `tools-os-sandbox` | adds `OsSandboxBackend` (Linux + macOS) | `paigasus-helikon-tools/os-sandbox` |
-| `tools-microvm` | adds `ForkdBackend` (microVM via forkd/Firecracker; experimental skeleton — SMA-416) | `paigasus-helikon-tools/microvm` |
+| `tools-microvm` | adds `ForkdBackend`, `EgressProxy`, `EgressPolicy`, `Isolation::Proxied` (microVM + domain-filtered egress via forkd/Firecracker; experimental — SMA-437) | `paigasus-helikon-tools/microvm` |
 | `sessions-sqlite` | `sessions_sqlite` | `paigasus-helikon-sessions-sqlite` |
 | `runtime-tokio` | `runtime_tokio` | `paigasus-helikon-runtime-tokio` |
 

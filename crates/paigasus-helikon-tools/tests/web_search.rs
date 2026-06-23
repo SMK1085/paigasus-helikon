@@ -1,5 +1,5 @@
-#![cfg(feature = "web")]
 #![allow(missing_docs)]
+#![cfg(feature = "web")]
 
 use std::sync::Arc;
 

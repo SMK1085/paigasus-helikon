@@ -1,0 +1,25 @@
+services:
+  forkd:
+    build:
+      context: .
+    devices:
+      - "/dev/kvm:/dev/kvm"
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PROXY_PORT: "8443"
+      EGRESS_ALLOW: "example.com"
+      DNS_IP: "1.1.1.1"
+    volumes:
+      # cargo-built proxy binary + TLS material + token + warmed snapshot dir.
+      - ./egress-proxy:/usr/local/bin/egress-proxy:ro
+      - ./tls:/etc/forkd/tls:ro
+      - ./token:/etc/forkd/token:ro
+      - forkd-snapshots:/var/lib/forkd
+    ports:
+      - "8889:8889"
+      # Expose egress proxy port to host for the live enforce_egress reachability probe.
+      # Firewall this port (e.g. GCP firewall rule) appropriately in non-test environments.
+      - "8443:8443"
+volumes:
+  forkd-snapshots:

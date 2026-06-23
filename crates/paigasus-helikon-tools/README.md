@@ -1,10 +1,42 @@
 # paigasus-helikon-tools
 
-Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature, OS-enforced Bash containment behind the `os-sandbox` feature (Linux: Landlock + seccomp; macOS: Seatbelt), and microVM Bash containment via the forkd Firecracker controller behind the `microvm` feature (portable REST client; experimental skeleton — SMA-416).
+Sandboxed filesystem and process tools for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. Provides `ReadTool`, `WriteTool`, `EditTool`, and `BashTool`, plus `WebFetchTool` / `WebSearchTool` behind the `web` feature, OS-enforced Bash containment behind the `os-sandbox` feature (Linux: Landlock + seccomp; macOS: Seatbelt), and microVM Bash containment via the forkd Firecracker controller behind the `microvm` feature (portable REST client; experimental — SMA-416/SMA-437).
 
 The filesystem tools operate inside a `Sandbox` — a directory opened as an OS-confined capability (`cap-std`), so they cannot escape it via `..`, absolute paths, or symlinks.
 
-`BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, `OsSandboxBackend` (feature `os-sandbox`) for OS-kernel-enforced containment — Linux via Landlock (filesystem) + seccomp-bpf (syscalls and network) with read+write restriction; macOS via Seatbelt (`sandbox-exec`) with **write-only** containment (reads unrestricted) and an all-or-nothing network toggle — or `ForkdBackend` (feature `microvm`, experimental skeleton) for microVM-level containment via the forkd Firecracker controller. **Network egress is not yet enforced in the skeleton (`Isolation::None` on the network axis)** — use `OsSandboxBackend` when egress containment matters today.
+`BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, `OsSandboxBackend` (feature `os-sandbox`) for OS-kernel-enforced containment — Linux via Landlock (filesystem) + seccomp-bpf (syscalls and network) with read+write restriction; macOS via Seatbelt (`sandbox-exec`) with **write-only** containment (reads unrestricted) and an all-or-nothing network toggle — or `ForkdBackend` (feature `microvm`, experimental) for microVM-level containment via the forkd Firecracker controller with optional domain-filtered egress enforcement via `EgressProxy` (SMA-437).
+
+### microVM egress enforcement (`microvm` feature, SMA-437)
+
+`ForkdBackend` can report `Isolation::Proxied` on the network axis when the layered
+egress enforcement is deployed: a per-VM netns default-deny (iptables) that routes
+all guest HTTP/S through `EgressProxy`, which enforces an `EgressPolicy` (domain
+allow/deny list + SSRF block on resolved IPs).
+
+```rust
+use paigasus_helikon_tools::{EgressPolicy, EgressProxy, ForkdBackend, Isolation};
+use tokio::net::TcpListener;
+
+// Run the proxy (standalone, or as part of the Docker harness).
+let listener = TcpListener::bind("0.0.0.0:8443").await?;
+let policy = EgressPolicy::deny_all().allow_domains(["example.com"]);
+tokio::spawn(EgressProxy::new(policy.clone()).serve(listener));
+
+// Build the backend — attest the proxy is deployed + probe it for reachability.
+let backend = ForkdBackend::builder("https://controller:8889")
+    .bearer_token(token)
+    .snapshot("helikon")
+    .egress_policy(policy)
+    .enforce_egress("0.0.0.0:8443")   // fails closed if unreachable
+    .build()?;
+
+assert_eq!(backend.guarantees().network, Isolation::Proxied);
+```
+
+The `microvm` feature enables `reqwest` and `tokio/net` + `tokio/io-util`
+(needed for the async tunnel copy). For the full deployment checklist (Docker harness,
+GCP launch, guest-image build, live validation tests) see
+`docs/runbooks/forkd-live-validation.md` in the repository.
 
 > **`HostBackend` is NOT a security boundary.** A command it runs can read and write anything this process can. Pair it with a `PermissionPolicy` (or a `DenyRule::tool("Bash")`) for approval-level control, or use `OsSandboxBackend` for OS-enforced containment.
 
@@ -16,7 +48,7 @@ cargo add paigasus-helikon-tools
 cargo add paigasus-helikon-tools --features web
 # with OS-enforced Bash containment (Linux: Landlock + seccomp; macOS: Seatbelt):
 cargo add paigasus-helikon-tools --features os-sandbox
-# with microVM Bash containment via forkd/Firecracker (experimental skeleton — SMA-416):
+# with microVM Bash containment + egress enforcement via forkd/Firecracker (experimental — SMA-437):
 cargo add paigasus-helikon-tools --features microvm
 ```
 

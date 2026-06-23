@@ -167,7 +167,9 @@ for the default unconfined backend, `OsSandboxBackend::builder(sandbox).build()`
 (Linux + macOS, feature `os-sandbox`) for OS-enforced containment, or
 `ForkdBackend::builder(controller_url).bearer_token(token).snapshot(tag).build()?`
 (Linux KVM, feature `microvm`, experimental) for microVM-level isolation — unlike the
-other backends it takes a forkd controller URL, not a `Sandbox`. `BashToolBuilder` exposes
+other backends it takes a forkd controller URL, not a `Sandbox`; add
+`.egress_policy(…).enforce_egress(proxy_endpoint)` to reach `Isolation::Proxied` on the
+network axis via `EgressProxy` (see the runbook). `BashToolBuilder` exposes
 `allow_commands` and `deny_commands` for command-level filtering. The full example is
 `crates/paigasus-helikon-tools/examples/explore_sandbox.rs`.
 
@@ -187,7 +189,8 @@ network). Its effect is `SideEffect`, and in `PermissionMode::Default` with no
 `PermissionPolicy` installed it runs ungated: gate it with a `PermissionPolicy` or a
 `DenyRule::tool("Bash")` (as `explore_sandbox.rs` demonstrates), or use
 `OsSandboxBackend` for OS-enforced containment, or `ForkdBackend` (feature
-`microvm`, experimental skeleton — SMA-416) for microVM-level isolation.
+`microvm`, experimental) for microVM-level isolation with optional `Isolation::Proxied`
+network enforcement via `EgressProxy`.
 
 ## Containment vs approval
 
@@ -210,7 +213,7 @@ independently.
 `BashTool` delegates execution to a value implementing `ExecutionBackend`. Swap the
 backend to change the containment tier without touching any other part of your agent.
 
-#### `ForkdBackend` (Linux KVM; feature `microvm`) — microVM containment, experimental skeleton
+#### `ForkdBackend` (Linux KVM; feature `microvm`) — microVM containment, experimental
 
 The strongest containment tier on the filesystem and syscall axes: each command runs
 inside a KVM-isolated Firecracker microVM orchestrated by the forkd daemon. The
@@ -219,23 +222,60 @@ client crate); the daemon side requires Linux + `/dev/kvm`. Platform availabilit
 checked at runtime when controller requests are made (for example on `run()`), not
 at compile time.
 
-> **Skeleton status (SMA-416).** The fork → exec → destroy REST flow is implemented
-> and mock-tested. A live KVM run and network-egress enforcement are deferred to
-> SMA-437. **Do not enable `microvm` in production today.**
+> **Experimental.** The fork → exec → destroy REST flow is implemented and
+> mock-tested (SMA-416). Network egress enforcement via `EgressProxy` is now
+> implemented (SMA-437) but requires a live deployment — see
+> `docs/runbooks/forkd-live-validation.md` in the repository.
+> **Do not enable `microvm` in production without completing the deployment
+> checklist in the runbook.**
 
-> **Honesty caveat — network axis.** `ForkdBackend::guarantees().network` currently
-> returns `Isolation::None`. That makes it *weaker than `OsSandboxBackend`* on the
-> egress axis until the layered netns + proxy policy lands in SMA-437. `Virtualized`
-> on the filesystem and syscall axes means "behind a VM boundary," not a
-> syscall/path allowlist — those guarantees are real even in skeleton form. But
-> outbound network traffic is not yet intercepted or blocked.
+**Network containment — layered model (SMA-437).** The `microvm` network guarantee
+now has two states depending on whether the layered egress enforcement is deployed:
 
-`ForkdBackend::guarantees()` (skeleton, SMA-416):
+- **`Isolation::None` (default)** — no network enforcement is in place. The microVM
+  can reach any host the host network allows. This is the state when
+  `ForkdBackend::builder(…).build()` is called *without* `.enforce_egress(…)`.
+- **`Isolation::Proxied` (enforced)** — all HTTP/S egress is domain-filtered at the
+  [`EgressProxy`](https://docs.rs/paigasus-helikon-tools/latest/paigasus_helikon_tools/struct.EgressProxy.html)
+  (application layer). Meaningful **only in the layered deployment**: a per-VM netns
+  default-deny (iptables) that routes all egress through the proxy, so non-proxy-aware
+  clients, UDP/53 DNS, QUIC/HTTP-3, and raw TCP cannot escape. The backend itself
+  cannot verify the host's netns rules; this tier reflects an **operator attestation**
+  via `.enforce_egress(proxy_endpoint)` (the same trust model the kernel/hypervisor
+  tiers use for their respective boundaries). A reachability probe to the proxy is run
+  at build time and fails closed if the proxy is unreachable.
+
+To reach `Isolation::Proxied`:
+
+```rust,ignore
+// Requires the layered deployment described in the runbook.
+let backend = ForkdBackend::builder("https://controller:8889")
+    .bearer_token(token)
+    .snapshot("helikon")
+    .egress_policy(EgressPolicy::deny_all().allow_domains(["example.com"]))
+    .enforce_egress("proxy-host:8443")   // attest + probe
+    .build()?;
+
+assert_eq!(backend.guarantees().network, Isolation::Proxied);
+```
+
+`ForkdBackend::guarantees()` — un-enforced (default):
 
 ```rust,ignore
 SandboxGuarantees {
     filesystem: Isolation::Virtualized,
-    network:    Isolation::None,       // not yet enforced — SMA-437
+    network:    Isolation::None,       // default — deploy EgressProxy to reach Proxied
+    syscalls:   Isolation::Virtualized,
+    label:      "forkd (firecracker microvm — experimental)",
+}
+```
+
+`ForkdBackend::guarantees()` — with `.enforce_egress()`:
+
+```rust,ignore
+SandboxGuarantees {
+    filesystem: Isolation::Virtualized,
+    network:    Isolation::Proxied,    // layered netns default-deny + EgressProxy deployed
     syscalls:   Isolation::Virtualized,
     label:      "forkd (firecracker microvm — experimental)",
 }
@@ -319,9 +359,9 @@ SandboxGuarantees {
 > arbitrary files. Use the Linux backend (or a dedicated Linux CI environment) when
 > read isolation is required.
 
-**Forthcoming:** domain-level network egress proxy (route all outbound traffic
-through a policy-enforcing proxy rather than blocking at the socket layer) is tracked
-as a follow-up to SMA-426.
+**Domain-level network egress filtering** (route outbound traffic through a
+policy-enforcing `EgressProxy` rather than blocking at the socket layer) is available
+for the `microvm` tier (SMA-437). See `ForkdBackend` and `Isolation::Proxied` above.
 
 #### `HostBackend` (all platforms) — default, unconfined
 
@@ -369,9 +409,15 @@ SandboxGuarantees {
   returns an OS error — the command cannot bypass it from userspace.
 - `Isolation::Virtualized` — enforced by a VM boundary (Firecracker microVM via
   `ForkdBackend`). The command runs inside a KVM guest; host filesystem and syscalls
-  are inaccessible by construction. **Network is separately gated** — the `microvm`
-  skeleton (SMA-416) reports `Isolation::None` on the network axis until egress
-  enforcement lands in SMA-437.
+  are inaccessible by construction. Network is separately gated — see
+  `Isolation::Proxied` below.
+- `Isolation::Proxied` — egress filtered at a CONNECT/HTTP proxy (`EgressProxy`)
+  enforcing a domain allow/deny policy. Meaningful only in the **layered deployment**:
+  a per-VM netns default-deny that forces all guest TCP through the proxy (UDP/QUIC
+  cannot reach the proxy and are dropped at L3/L4). Without the netns rules, raw TCP
+  and UDP escape. The backend cannot verify the host's netns configuration, so
+  `Proxied` is an operator attestation — the same trust model `Virtualized` uses for
+  the hypervisor boundary. See `ForkdBackendBuilder::enforce_egress`.
 
 The `label` field is a short human-readable string (`"host (no containment)"` /
 `"os-sandbox (landlock+seccomp)"` on Linux / `"os-sandbox (seatbelt)"` on macOS /

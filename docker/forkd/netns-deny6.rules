@@ -1,0 +1,7 @@
+# SMA-437 Layer-1 per-netns IPv6 default-deny (FORWARD-based; see netns-deny.rules).
+# Drops guest IPv6 forwarding to the uplink. The proxy + resolver are reached over
+# IPv4 in this harness, so no IPv6 allow rules are needed.
+*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -i ${GUEST_IF} -o ${UPLINK_IF} -j DROP
+COMMIT

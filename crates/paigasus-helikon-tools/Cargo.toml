@@ -39,6 +39,8 @@ tempfile     = { workspace = true }
 futures-util = { workspace = true }
 futures-core = { workspace = true }
 wiremock     = { workspace = true }
+rcgen        = { workspace = true }
+tokio-rustls = { workspace = true }
 # Path-only (version-less) internal dev-dep for the example — stripped from the
 # published manifest; examples are not built during `cargo publish --verify`.
 paigasus-helikon-providers-openai = { path = "../paigasus-helikon-providers-openai" }
@@ -51,6 +53,10 @@ required-features = ["web"]
 name              = "os_sandbox_demo"
 required-features = ["os-sandbox"]
 
+[[example]]
+name              = "egress_proxy"
+required-features = ["microvm"]
+
 [features]
 # Network tools (WebFetch + WebSearch). Off by default so FS/Bash-only
 # consumers never pull reqwest. `tokio/net` is needed for the SSRF DNS check.
@@ -59,7 +65,7 @@ web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd", "tokio/net"]
 os-sandbox = ["dep:landlock", "dep:seccompiler"]
 # microVM Bash containment (forkd Firecracker controller, REST client). Off by
 # default. Portable: the client compiles everywhere; the daemon needs Linux/KVM.
-microvm = ["dep:reqwest"]
+microvm = ["dep:reqwest", "tokio/net", "tokio/io-util"]
 
 [lints]
 workspace = true
