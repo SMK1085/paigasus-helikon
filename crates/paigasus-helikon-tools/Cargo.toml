@@ -53,6 +53,10 @@ required-features = ["web"]
 name              = "os_sandbox_demo"
 required-features = ["os-sandbox"]
 
+[[example]]
+name              = "egress_proxy"
+required-features = ["microvm"]
+
 [features]
 # Network tools (WebFetch + WebSearch). Off by default so FS/Bash-only
 # consumers never pull reqwest. `tokio/net` is needed for the SSRF DNS check.
