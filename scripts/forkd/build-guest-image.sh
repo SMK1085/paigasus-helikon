@@ -21,6 +21,19 @@ trap 'umount "$MOUNT_DIR" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 # explicitly (e.g. from https://github.com/moparisthebest/static-curl/releases).
 mkdir -p "$WORK/rootfs"/{bin,etc,proc,sys,dev}
 busybox --install -s "$WORK/rootfs/bin"
+
+# CA bundle: guest-side HTTPS clients need trusted roots to validate the proxy's
+# upstream TLS. Copy the host bundle into the rootfs; fail hard if it is absent
+# rather than shipping a guest that silently cannot validate certificates.
+# (The guest also needs a TLS-capable HTTP client — confirm on first live
+# bring-up, see docs/runbooks/forkd-live-validation.md.)
+if [ ! -d /etc/ssl/certs ]; then
+  echo "FATAL: host CA bundle /etc/ssl/certs not found — cannot provision guest TLS trust"
+  exit 1
+fi
+mkdir -p "$WORK/rootfs/etc/ssl/certs"
+cp -a /etc/ssl/certs/. "$WORK/rootfs/etc/ssl/certs/"
+
 cat > "$WORK/rootfs/etc/profile" <<EOF
 export HTTP_PROXY=http://${PROXY_ADDR}
 export HTTPS_PROXY=http://${PROXY_ADDR}
