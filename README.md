@@ -38,7 +38,7 @@ Fourteen crates under `crates/`. Nine are published to crates.io; four are not-y
 - **`paigasus-helikon-providers-openai`**, **`-anthropic`** — LLM provider adapters.
 - **`paigasus-helikon-sessions-sqlite`** — SQLite-backed session persistence.
 - **`paigasus-helikon-runtime-tokio`** — the default ephemeral Tokio runner.
-- **`paigasus-helikon-tools`** — sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`; OS-enforced containment behind `os-sandbox`; microVM containment via forkd/Firecracker behind `microvm`, experimental skeleton — SMA-416).
+- **`paigasus-helikon-tools`** — sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`; OS-enforced containment behind `os-sandbox`; microVM containment via forkd/Firecracker behind `microvm`, experimental — SMA-437: includes `EgressProxy`, `EgressPolicy`, and `Isolation::Proxied` for domain-filtered egress enforcement).
 - **`paigasus-helikon-mcp`** — Model Context Protocol client and server integration.
 - **`paigasus-helikon-cli`** — `helikon` and `paigasus-helikon` binaries (binary-only, not published as a library).
 - **`paigasus-helikon-evals`**, **`-runtime-axum`**, **`-runtime-temporal`**, **`-runtime-agentcore`** — pre-published `0.0.0` name-claim stubs; not yet implemented.
