@@ -96,14 +96,28 @@ struct SandboxInfo {
 
 /// One sandbox in the `GET /v1/sandboxes` list response. Same item shape as the fork
 /// response (SMA-416 spike §7) — we read only what reconcile needs and ignore the
-/// rest. `created_at_unix` is `Option` so one odd entry can't fail the whole decode;
-/// a missing/unparseable timestamp is counted `skipped_unageable` (never reaped).
+/// rest. `created_at_unix` is parsed leniently so one odd entry can't fail the whole
+/// decode: a missing field, `null`, or a non-integer value (string/float) all map to
+/// `None` and are counted `skipped_unageable` (never reaped) rather than aborting the
+/// sweep — the loud signal that the wire contract drifted.
 #[derive(serde::Deserialize)]
 struct SandboxListEntry {
     id: String,
     snapshot_tag: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_unix_secs")]
     created_at_unix: Option<u64>,
+}
+
+/// Deserialize `created_at_unix` without ever erroring on a present-but-wrong-typed
+/// value: accept an integer that fits `u64`, map anything else (`null`, string, float,
+/// negative) to `None`. This keeps a single malformed LIST entry from aborting the
+/// whole `Vec<SandboxListEntry>` decode (it becomes `skipped_unageable` instead).
+fn lenient_unix_secs<'de, D>(de: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(de)?;
+    Ok(value.as_ref().and_then(serde_json::Value::as_u64))
 }
 
 /// `POST /v1/sandboxes/{id}/exec` request body. `args` runs verbatim in the guest
@@ -601,6 +615,16 @@ mod tests {
         let no_ts: SandboxListEntry =
             serde_json::from_str(r#"{"id":"sb-2","snapshot_tag":"t"}"#).unwrap();
         assert_eq!(no_ts.created_at_unix, None);
+        // A present-but-malformed created_at_unix (string / float / null) maps to None
+        // rather than failing the decode — one odd entry can't abort the whole sweep.
+        for bad in [
+            r#"{"id":"x","snapshot_tag":"t","created_at_unix":"not-a-number"}"#,
+            r#"{"id":"x","snapshot_tag":"t","created_at_unix":1718000000.5}"#,
+            r#"{"id":"x","snapshot_tag":"t","created_at_unix":null}"#,
+        ] {
+            let e: SandboxListEntry = serde_json::from_str(bad).unwrap();
+            assert_eq!(e.created_at_unix, None, "malformed should be None: {bad}");
+        }
     }
 
     #[test]

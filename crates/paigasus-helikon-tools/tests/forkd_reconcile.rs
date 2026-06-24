@@ -104,6 +104,43 @@ async fn reconcile_list_decode_error_is_error() {
 }
 
 #[tokio::test]
+async fn reconcile_skips_malformed_timestamp_without_aborting() {
+    // One entry has a malformed (string) created_at_unix; a valid old tag-match sits
+    // beside it. The malformed entry must be counted skipped_unageable and the sweep
+    // must still reap the valid orphan — a single bad entry can't abort the whole pass.
+    let server = MockServer::start().await;
+    let old = now_secs() - 600;
+    Mock::given(method("GET"))
+        .and(path("/v1/sandboxes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id":"bad-ts",   "snapshot_tag":"snap-1", "created_at_unix":"not-a-number"},
+            {"id":"old-match","snapshot_tag":"snap-1", "created_at_unix": old}
+        ])))
+        .mount(&server)
+        .await;
+    let del = Mock::given(method("DELETE"))
+        .and(path("/v1/sandboxes/old-match"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount_as_scoped(&server)
+        .await;
+
+    let backend = ForkdBackend::builder(server.uri())
+        .bearer_token("t")
+        .snapshot("snap-1")
+        .build_backend()
+        .unwrap();
+    let report = backend
+        .reconcile()
+        .await
+        .expect("malformed entry must not abort the sweep");
+    assert_eq!(report.scanned, 2);
+    assert_eq!(report.reaped, vec!["old-match".to_string()]);
+    assert_eq!(report.skipped_unageable, 1);
+    drop(del);
+}
+
+#[tokio::test]
 async fn reconcile_delete_failure_is_nonfatal() {
     let server = MockServer::start().await;
     let old = now_secs() - 600;
