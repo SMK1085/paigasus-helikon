@@ -26,6 +26,13 @@ use super::{
 const DEFAULT_UA: &str = concat!("paigasus-helikon-tools/", env!("CARGO_PKG_VERSION"));
 /// Fixed control-plane timeout for the destroy call (the command timeout governs exec).
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default minimum age a tag-matching sandbox must reach before [`ForkdBackend::reconcile`]
+/// will reap it (10× the default exec timeout). MUST exceed your longest expected run.
+const DEFAULT_REAP_AGE: Duration = Duration::from_secs(300);
+/// Bounded concurrency for the reconcile reap fan-out (simultaneous in-flight DELETEs).
+// Task 2 consumes this inside `reconcile()`; suppress the dead-code lint until then.
+#[allow(dead_code)]
+const REAP_CONCURRENCY: usize = 8;
 
 /// Construction-time failures for [`ForkdBackend`]. Runtime failures (daemon
 /// unreachable, fork/exec error) surface as `ToolError::Other` from `run`.
@@ -101,6 +108,7 @@ pub struct ForkdBackendBuilder {
     max_output_bytes: usize,
     egress: EgressPolicy,
     enforce_egress: Option<String>,
+    reap_age: Duration,
 }
 
 impl ForkdBackendBuilder {
@@ -157,9 +165,20 @@ impl ForkdBackendBuilder {
         self
     }
 
-    /// Build into the concrete [`ForkdBackend`] — used by [`Self::build`] and the
-    /// in-module unit tests. Public callers go through `build()`.
-    fn into_backend(self) -> Result<ForkdBackend, ForkdError> {
+    /// Minimum age a tag-matching sandbox must reach before [`ForkdBackend::reconcile`]
+    /// will reap it. MUST exceed your longest expected run **plus** any clock skew
+    /// between this host and the controller host, or a long legitimate run could be
+    /// reaped. Default: 300s (10× the default 30s exec timeout).
+    pub fn reap_age(mut self, age: Duration) -> Self {
+        self.reap_age = age;
+        self
+    }
+
+    /// Finish building into the concrete [`ForkdBackend`]. Use this (instead of
+    /// [`Self::build`]) when you need to call [`ForkdBackend::reconcile`], which the
+    /// `Arc<dyn ExecutionBackend>` returned by `build()` cannot reach. Wrap the result
+    /// in an `Arc` once and clone it to a `Arc<dyn ExecutionBackend>` for `BashTool`.
+    pub fn build_backend(self) -> Result<ForkdBackend, ForkdError> {
         // Validate the controller URL up front. Reject plain `http` to a
         // non-loopback host: the bearer token would travel in cleartext, the
         // network-MITM threat the TLS-trust story exists to prevent. Loopback
@@ -197,12 +216,13 @@ impl ForkdBackendBuilder {
             max_output_bytes: self.max_output_bytes,
             egress: self.egress,
             egress_enforced,
+            reap_age: self.reap_age,
         })
     }
 
     /// Finish building into a shareable `Arc<dyn ExecutionBackend>`.
     pub fn build(self) -> Result<Arc<dyn ExecutionBackend>, ForkdError> {
-        Ok(Arc::new(self.into_backend()?))
+        Ok(Arc::new(self.build_backend()?))
     }
 }
 
@@ -220,6 +240,9 @@ pub struct ForkdBackend {
     max_output_bytes: usize,
     egress: EgressPolicy,
     egress_enforced: bool,
+    // Task 2 reads this inside `reconcile()`; suppress the dead-code lint until then.
+    #[allow(dead_code)]
+    reap_age: Duration,
 }
 
 impl std::fmt::Debug for ForkdBackend {
@@ -249,6 +272,7 @@ impl ForkdBackend {
             max_output_bytes: DEFAULT_MAX_OUTPUT,
             egress: EgressPolicy::deny_all(),
             enforce_egress: None,
+            reap_age: DEFAULT_REAP_AGE,
         }
     }
 
@@ -493,7 +517,7 @@ mod tests {
         let b = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap();
         let g = b.guarantees();
         assert_eq!(g.filesystem, Isolation::Virtualized);
@@ -507,7 +531,7 @@ mod tests {
         let b = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap();
         assert_eq!(b.guarantees().network, Isolation::None);
     }
@@ -517,7 +541,7 @@ mod tests {
         // Missing snapshot -> construction error.
         let err = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("t")
-            .into_backend()
+            .build_backend()
             .unwrap_err();
         assert!(matches!(err, ForkdError::MissingConfig("snapshot")));
         // The configured policy is carried on the backend.
@@ -525,7 +549,7 @@ mod tests {
             .bearer_token("t")
             .snapshot("s")
             .egress_policy(EgressPolicy::deny_all().allow_domains(["pypi.org"]))
-            .into_backend()
+            .build_backend()
             .unwrap();
         assert!(b.egress_policy().is_host_allowed("pypi.org"));
         assert!(!b.egress_policy().is_host_allowed("evil.test"));
@@ -537,20 +561,20 @@ mod tests {
         let err = ForkdBackend::builder("http://forkd.example.com:8889")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap_err();
         assert!(matches!(err, ForkdError::InsecureControllerUrl));
         // Loopback plain-HTTP (forkd's documented default) is allowed.
         assert!(ForkdBackend::builder("http://127.0.0.1:8889")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .is_ok());
         // HTTPS to a remote host is allowed.
         assert!(ForkdBackend::builder("https://forkd.example.com:8889")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .is_ok());
     }
 
@@ -559,7 +583,7 @@ mod tests {
         let b = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("super-secret-token")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap();
         let dbg = format!("{b:?}");
         assert!(
@@ -567,5 +591,24 @@ mod tests {
             "token leaked in Debug: {dbg}"
         );
         assert!(dbg.contains("redacted"));
+    }
+
+    #[test]
+    fn builder_sets_reap_age_and_build_backend_is_public() {
+        // Default reap_age is DEFAULT_REAP_AGE.
+        let b = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .build_backend()
+            .unwrap();
+        assert_eq!(b.reap_age, DEFAULT_REAP_AGE);
+        // A custom reap_age is carried onto the backend.
+        let b2 = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .reap_age(Duration::from_secs(42))
+            .build_backend()
+            .unwrap();
+        assert_eq!(b2.reap_age, Duration::from_secs(42));
     }
 }

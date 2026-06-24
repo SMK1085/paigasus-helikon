@@ -25,6 +25,7 @@ reqwest               = { workspace = true, optional = true, features = ["json",
 url                   = { workspace = true, optional = true }
 dom_smoothie          = { workspace = true, optional = true }
 htmd                  = { workspace = true, optional = true }
+futures-util          = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -65,7 +66,7 @@ web = ["dep:reqwest", "dep:url", "dep:dom_smoothie", "dep:htmd", "tokio/net"]
 os-sandbox = ["dep:landlock", "dep:seccompiler"]
 # microVM Bash containment (forkd Firecracker controller, REST client). Off by
 # default. Portable: the client compiles everywhere; the daemon needs Linux/KVM.
-microvm = ["dep:reqwest", "tokio/net", "tokio/io-util"]
+microvm = ["dep:reqwest", "dep:futures-util", "tokio/net", "tokio/io-util"]
 
 [lints]
 workspace = true
