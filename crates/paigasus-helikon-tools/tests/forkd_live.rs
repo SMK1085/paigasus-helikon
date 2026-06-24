@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use paigasus_helikon_tools::{EgressPolicy, ExecRequest, ForkdBackend};
+use paigasus_helikon_tools::{EgressPolicy, ExecRequest, ExecutionBackend, ForkdBackend};
 
 /// Returns `(url, token, snapshot)` if all three env vars are set, otherwise
 /// prints a loud skip message to stderr and returns `None`.
@@ -51,6 +51,18 @@ fn backend(enforce: bool) -> Option<std::sync::Arc<dyn paigasus_helikon_tools::E
             .enforce_egress(proxy);
     }
     Some(b.build().expect("backend builds"))
+}
+
+/// Build the concrete `ForkdBackend` (not `Arc<dyn>`) so `reconcile()` is reachable.
+fn concrete_backend() -> Option<ForkdBackend> {
+    let (url, token, snapshot) = live_env()?;
+    let mut b = ForkdBackend::builder(url)
+        .bearer_token(token)
+        .snapshot(snapshot);
+    if let Ok(ca_path) = std::env::var("FORKD_CA") {
+        b = b.controller_ca(std::fs::read(ca_path).expect("FORKD_CA file readable"));
+    }
+    Some(b.build_backend().expect("backend builds"))
 }
 
 #[tokio::test]
@@ -102,5 +114,24 @@ async fn live_forkd_denies_nonallowlisted_egress() {
         ok.stdout.contains("OK"),
         "allow-listed egress should succeed, got: {:?}",
         ok.stdout
+    );
+}
+
+#[tokio::test]
+async fn live_forkd_reconcile_is_callable() {
+    let Some(backend) = concrete_backend() else {
+        return;
+    };
+    // Prime one real run (it self-destructs) so the controller has handled our tag.
+    let _ = backend.run(ExecRequest::new("echo prime")).await;
+    let report = backend
+        .reconcile()
+        .await
+        .expect("reconcile succeeds against a live controller");
+    // Loud, inspectable record — true orphan-injection + created_at_unix contract
+    // verification are the manual runbook step (forkd-live-validation.md).
+    eprintln!(
+        "live reconcile: scanned={} reaped={:?} failed={:?} skipped_unageable={}",
+        report.scanned, report.reaped, report.failed, report.skipped_unageable
     );
 }

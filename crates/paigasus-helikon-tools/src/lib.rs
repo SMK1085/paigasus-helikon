@@ -43,7 +43,7 @@ pub use exec::{
 };
 /// forkd microVM backend types.
 #[cfg(feature = "microvm")]
-pub use exec::{ForkdBackend, ForkdBackendBuilder, ForkdError};
+pub use exec::{ForkdBackend, ForkdBackendBuilder, ForkdError, ReconcileReport};
 #[cfg(all(
     feature = "os-sandbox",
     target_os = "linux",

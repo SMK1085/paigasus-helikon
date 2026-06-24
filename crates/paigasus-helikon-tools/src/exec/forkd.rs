@@ -26,6 +26,11 @@ use super::{
 const DEFAULT_UA: &str = concat!("paigasus-helikon-tools/", env!("CARGO_PKG_VERSION"));
 /// Fixed control-plane timeout for the destroy call (the command timeout governs exec).
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default minimum age a tag-matching sandbox must reach before [`ForkdBackend::reconcile`]
+/// will reap it (10× the default exec timeout). MUST exceed your longest expected run.
+const DEFAULT_REAP_AGE: Duration = Duration::from_secs(300);
+/// Bounded concurrency for the reconcile reap fan-out (simultaneous in-flight DELETEs).
+const REAP_CONCURRENCY: usize = 8;
 
 /// Construction-time failures for [`ForkdBackend`]. Runtime failures (daemon
 /// unreachable, fork/exec error) surface as `ToolError::Other` from `run`.
@@ -55,6 +60,24 @@ pub enum ForkdError {
     ProxyUnreachable,
 }
 
+/// Outcome of a [`ForkdBackend::reconcile`] sweep.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ReconcileReport {
+    /// Total sandboxes the controller LIST returned (across *all* snapshot tags) —
+    /// observability into host load, independent of the reap set.
+    pub scanned: usize,
+    /// Ids successfully reaped (DELETE 2xx, or 404 = already gone → idempotent).
+    pub reaped: Vec<String>,
+    /// Ids that matched and were old enough but whose DELETE errored (non-404).
+    /// Best-effort; non-fatal.
+    pub failed: Vec<String>,
+    /// Tag-matching entries whose `created_at_unix` was absent/unparseable, so they
+    /// could not be aged and were **not** reaped. A high value with empty `reaped`
+    /// signals the controller's LIST wire shape drifted.
+    pub skipped_unageable: usize,
+}
+
 /// `POST /v1/sandboxes` request body — fork `n` children (we use 1) copy-on-write
 /// from a warmed snapshot, each in its own network namespace.
 #[derive(serde::Serialize)]
@@ -69,6 +92,32 @@ struct ForkReq<'a> {
 #[derive(serde::Deserialize)]
 struct SandboxInfo {
     id: String,
+}
+
+/// One sandbox in the `GET /v1/sandboxes` list response. Same item shape as the fork
+/// response (SMA-416 spike §7) — we read only what reconcile needs and ignore the
+/// rest. `created_at_unix` is parsed leniently so one odd entry can't fail the whole
+/// decode: a missing field, `null`, or a non-integer value (string/float) all map to
+/// `None` and are counted `skipped_unageable` (never reaped) rather than aborting the
+/// sweep — the loud signal that the wire contract drifted.
+#[derive(serde::Deserialize)]
+struct SandboxListEntry {
+    id: String,
+    snapshot_tag: String,
+    #[serde(default, deserialize_with = "lenient_unix_secs")]
+    created_at_unix: Option<u64>,
+}
+
+/// Deserialize `created_at_unix` without ever erroring on a present-but-wrong-typed
+/// value: accept an integer that fits `u64`, map anything else (`null`, string, float,
+/// negative) to `None`. This keeps a single malformed LIST entry from aborting the
+/// whole `Vec<SandboxListEntry>` decode (it becomes `skipped_unageable` instead).
+fn lenient_unix_secs<'de, D>(de: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(de)?;
+    Ok(value.as_ref().and_then(serde_json::Value::as_u64))
 }
 
 /// `POST /v1/sandboxes/{id}/exec` request body. `args` runs verbatim in the guest
@@ -101,6 +150,7 @@ pub struct ForkdBackendBuilder {
     max_output_bytes: usize,
     egress: EgressPolicy,
     enforce_egress: Option<String>,
+    reap_age: Duration,
 }
 
 impl ForkdBackendBuilder {
@@ -157,9 +207,20 @@ impl ForkdBackendBuilder {
         self
     }
 
-    /// Build into the concrete [`ForkdBackend`] — used by [`Self::build`] and the
-    /// in-module unit tests. Public callers go through `build()`.
-    fn into_backend(self) -> Result<ForkdBackend, ForkdError> {
+    /// Minimum age a tag-matching sandbox must reach before [`ForkdBackend::reconcile`]
+    /// will reap it. MUST exceed your longest expected run **plus** any clock skew
+    /// between this host and the controller host, or a long legitimate run could be
+    /// reaped. Default: 300s (10× the default 30s exec timeout).
+    pub fn reap_age(mut self, age: Duration) -> Self {
+        self.reap_age = age;
+        self
+    }
+
+    /// Finish building into the concrete [`ForkdBackend`]. Use this (instead of
+    /// [`Self::build`]) when you need to call [`ForkdBackend::reconcile`], which the
+    /// `Arc<dyn ExecutionBackend>` returned by `build()` cannot reach. Wrap the result
+    /// in an `Arc` once and clone it to a `Arc<dyn ExecutionBackend>` for `BashTool`.
+    pub fn build_backend(self) -> Result<ForkdBackend, ForkdError> {
         // Validate the controller URL up front. Reject plain `http` to a
         // non-loopback host: the bearer token would travel in cleartext, the
         // network-MITM threat the TLS-trust story exists to prevent. Loopback
@@ -197,12 +258,13 @@ impl ForkdBackendBuilder {
             max_output_bytes: self.max_output_bytes,
             egress: self.egress,
             egress_enforced,
+            reap_age: self.reap_age,
         })
     }
 
     /// Finish building into a shareable `Arc<dyn ExecutionBackend>`.
     pub fn build(self) -> Result<Arc<dyn ExecutionBackend>, ForkdError> {
-        Ok(Arc::new(self.into_backend()?))
+        Ok(Arc::new(self.build_backend()?))
     }
 }
 
@@ -220,6 +282,7 @@ pub struct ForkdBackend {
     max_output_bytes: usize,
     egress: EgressPolicy,
     egress_enforced: bool,
+    reap_age: Duration,
 }
 
 impl std::fmt::Debug for ForkdBackend {
@@ -231,6 +294,7 @@ impl std::fmt::Debug for ForkdBackend {
             .field("timeout", &self.timeout)
             .field("max_output_bytes", &self.max_output_bytes)
             .field("egress", &self.egress)
+            .field("reap_age", &self.reap_age)
             .finish_non_exhaustive()
     }
 }
@@ -249,6 +313,7 @@ impl ForkdBackend {
             max_output_bytes: DEFAULT_MAX_OUTPUT,
             egress: EgressPolicy::deny_all(),
             enforce_egress: None,
+            reap_age: DEFAULT_REAP_AGE,
         }
     }
 
@@ -271,6 +336,27 @@ impl ForkdBackend {
             .post(url)
             .bearer_auth(&self.token)
             .json(body)
+            .send()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd request failed: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(ToolError::Other(anyhow::anyhow!(
+                "forkd controller returned HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        resp.json::<T>()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd response decode failed: {e}")))
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, ToolError> {
+        // Mirrors post_json: bearer in the header only; error text carries the URL,
+        // never the token.
+        let resp = self
+            .client
+            .get(url)
+            .bearer_auth(&self.token)
             .send()
             .await
             .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd request failed: {e}")))?;
@@ -316,15 +402,89 @@ impl ForkdBackend {
         .await
     }
 
-    async fn destroy(&self, id: &str) {
-        // Best-effort teardown; failures here are not surfaced to the model.
+    /// DELETE a sandbox, returning the outcome. A `404` is treated as success
+    /// (already gone — idempotent under concurrent/repeat sweeps).
+    async fn try_destroy(&self, id: &str) -> Result<(), ToolError> {
         let url = format!("{}/v1/sandboxes/{id}", self.base);
-        let _ = self
+        let resp = self
             .client
             .delete(&url)
             .bearer_auth(&self.token)
             .send()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd request failed: {e}")))?;
+        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(())
+        } else {
+            Err(ToolError::Other(anyhow::anyhow!(
+                "forkd controller returned HTTP {}",
+                resp.status().as_u16()
+            )))
+        }
+    }
+
+    async fn destroy(&self, id: &str) {
+        // Best-effort teardown; failures here are not surfaced to the model.
+        let _ = self.try_destroy(id).await;
+    }
+
+    /// List the controller's sandboxes and reap orphans of this backend's snapshot
+    /// tag that are strictly older than [`reap_age`](ForkdBackendBuilder::reap_age).
+    ///
+    /// Best-effort per sandbox: only a failed LIST returns `Err`; per-sandbox DELETE
+    /// failures (non-404) land in [`ReconcileReport::failed`]. Deletes run with
+    /// bounded concurrency, so worst-case latency on a degraded controller is about
+    /// `CONTROL_TIMEOUT + ceil(N / REAP_CONCURRENCY) * CONTROL_TIMEOUT` for `N`
+    /// candidates. Safe under the operator invariant `reap_age > longest run + skew`.
+    pub async fn reconcile(&self) -> Result<ReconcileReport, ToolError> {
+        let url = format!("{}/v1/sandboxes", self.base);
+        let list: Vec<SandboxListEntry> =
+            tokio::time::timeout(CONTROL_TIMEOUT, self.get_json(&url))
+                .await
+                .map_err(|_| ToolError::Other(anyhow::anyhow!("forkd: list timed out")))??;
+        let scanned = list.len();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let reap_age_secs = self.reap_age.as_secs();
+
+        let mut skipped_unageable = 0usize;
+        let mut candidates: Vec<String> = Vec::new();
+        for entry in list {
+            if entry.snapshot_tag != self.snapshot {
+                continue; // other tag — counts only toward `scanned`
+            }
+            match entry.created_at_unix {
+                None => skipped_unageable += 1,
+                Some(t) if now.saturating_sub(t) > reap_age_secs => candidates.push(entry.id),
+                Some(_) => {} // young enough — protected
+            }
+        }
+
+        let mut reaped = Vec::new();
+        let mut failed = Vec::new();
+        for chunk in candidates.chunks(REAP_CONCURRENCY) {
+            let outcomes = futures_util::future::join_all(chunk.iter().map(|id| async move {
+                let res = tokio::time::timeout(CONTROL_TIMEOUT, self.try_destroy(id)).await;
+                (id.clone(), matches!(res, Ok(Ok(()))))
+            }))
             .await;
+            for (id, ok) in outcomes {
+                if ok {
+                    reaped.push(id);
+                } else {
+                    failed.push(id);
+                }
+            }
+        }
+
+        Ok(ReconcileReport {
+            scanned,
+            reaped,
+            failed,
+            skipped_unageable,
+        })
     }
 }
 
@@ -391,9 +551,11 @@ fn truncate(mut s: String, cap: usize) -> (String, bool) {
 #[async_trait]
 impl ExecutionBackend for ForkdBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
-        // Accepted skeleton gap: if the controller commits a fork but we fail to
-        // read its id (decode error / client timeout after commit), that sandbox
-        // is orphaned — we have no id to DELETE. SMA-437 adds GC/reconciliation.
+        // Accepted gap: if the controller commits a fork but we fail to read its id
+        // (decode error / client timeout after commit), that sandbox is orphaned — we
+        // have no id to DELETE here. It is reaped by the age-based `reconcile()` sweep
+        // (SMA-447) once it ages past `reap_age`, provided the controller stamps a
+        // parseable `created_at_unix` (otherwise it surfaces as `skipped_unageable`).
         let id = self.fork().await?;
         // The wall-clock command timeout governs exec; teardown always runs.
         let exec_result = tokio::time::timeout(self.timeout, self.exec(&id, &req.command)).await;
@@ -439,6 +601,31 @@ impl ExecutionBackend for ForkdBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_list_entry_deserializes() {
+        // Extra fields (guest_addr, pid, …) are ignored; created_at_unix may be absent.
+        let with_ts: SandboxListEntry = serde_json::from_str(
+            r#"{"id":"sb-1","snapshot_tag":"t","guest_addr":"10.0.0.2","created_at_unix":1718000000}"#,
+        )
+        .unwrap();
+        assert_eq!(with_ts.id, "sb-1");
+        assert_eq!(with_ts.snapshot_tag, "t");
+        assert_eq!(with_ts.created_at_unix, Some(1718000000));
+        let no_ts: SandboxListEntry =
+            serde_json::from_str(r#"{"id":"sb-2","snapshot_tag":"t"}"#).unwrap();
+        assert_eq!(no_ts.created_at_unix, None);
+        // A present-but-malformed created_at_unix (string / float / null) maps to None
+        // rather than failing the decode — one odd entry can't abort the whole sweep.
+        for bad in [
+            r#"{"id":"x","snapshot_tag":"t","created_at_unix":"not-a-number"}"#,
+            r#"{"id":"x","snapshot_tag":"t","created_at_unix":1718000000.5}"#,
+            r#"{"id":"x","snapshot_tag":"t","created_at_unix":null}"#,
+        ] {
+            let e: SandboxListEntry = serde_json::from_str(bad).unwrap();
+            assert_eq!(e.created_at_unix, None, "malformed should be None: {bad}");
+        }
+    }
 
     #[test]
     fn fork_and_exec_responses_deserialize() {
@@ -493,7 +680,7 @@ mod tests {
         let b = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap();
         let g = b.guarantees();
         assert_eq!(g.filesystem, Isolation::Virtualized);
@@ -507,7 +694,7 @@ mod tests {
         let b = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap();
         assert_eq!(b.guarantees().network, Isolation::None);
     }
@@ -517,7 +704,7 @@ mod tests {
         // Missing snapshot -> construction error.
         let err = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("t")
-            .into_backend()
+            .build_backend()
             .unwrap_err();
         assert!(matches!(err, ForkdError::MissingConfig("snapshot")));
         // The configured policy is carried on the backend.
@@ -525,7 +712,7 @@ mod tests {
             .bearer_token("t")
             .snapshot("s")
             .egress_policy(EgressPolicy::deny_all().allow_domains(["pypi.org"]))
-            .into_backend()
+            .build_backend()
             .unwrap();
         assert!(b.egress_policy().is_host_allowed("pypi.org"));
         assert!(!b.egress_policy().is_host_allowed("evil.test"));
@@ -537,20 +724,20 @@ mod tests {
         let err = ForkdBackend::builder("http://forkd.example.com:8889")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap_err();
         assert!(matches!(err, ForkdError::InsecureControllerUrl));
         // Loopback plain-HTTP (forkd's documented default) is allowed.
         assert!(ForkdBackend::builder("http://127.0.0.1:8889")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .is_ok());
         // HTTPS to a remote host is allowed.
         assert!(ForkdBackend::builder("https://forkd.example.com:8889")
             .bearer_token("t")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .is_ok());
     }
 
@@ -559,7 +746,7 @@ mod tests {
         let b = ForkdBackend::builder("https://localhost:8080")
             .bearer_token("super-secret-token")
             .snapshot("s")
-            .into_backend()
+            .build_backend()
             .unwrap();
         let dbg = format!("{b:?}");
         assert!(
@@ -567,5 +754,24 @@ mod tests {
             "token leaked in Debug: {dbg}"
         );
         assert!(dbg.contains("redacted"));
+    }
+
+    #[test]
+    fn builder_sets_reap_age_and_build_backend_is_public() {
+        // Default reap_age is DEFAULT_REAP_AGE.
+        let b = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .build_backend()
+            .unwrap();
+        assert_eq!(b.reap_age, DEFAULT_REAP_AGE);
+        // A custom reap_age is carried onto the backend.
+        let b2 = ForkdBackend::builder("https://localhost:8080")
+            .bearer_token("t")
+            .snapshot("s")
+            .reap_age(Duration::from_secs(42))
+            .build_backend()
+            .unwrap();
+        assert_eq!(b2.reap_age, Duration::from_secs(42));
     }
 }

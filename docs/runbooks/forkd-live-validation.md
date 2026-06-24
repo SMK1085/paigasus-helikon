@@ -398,3 +398,32 @@ install the dependencies from Step 2 manually, then follow Steps 3–9.
 **Secret scan fails**
 - Check `grep -RInE '(BEGIN [A-Z ]*PRIVATE KEY|AKIA…|Bearer …)' "$WORK/rootfs"` output.
 - Never copy service account key files or tokens into the rootfs staging directory.
+
+## Validating reconcile() (SMA-447)
+
+`reconcile()` is exercised as a smoke test by `live_forkd_reconcile_is_callable`
+(env-gated, runs with `FORKD_URL`/`FORKD_TOKEN`/`FORKD_SNAPSHOT` like the other live
+tests). Two things still need a human eye on a live controller:
+
+1. **Wire-contract check (BLOCKER-1).** The age filter depends on the LIST item
+   carrying `created_at_unix` as integer **seconds**. Capture a real body and confirm:
+
+   ```bash
+   curl -sS -H "Authorization: Bearer $FORKD_TOKEN" "$FORKD_URL/v1/sandboxes" | jq '.[0]'
+   ```
+
+   If the timestamp field is named differently, or is a float / milliseconds / RFC3339
+   string, `reconcile()` will report every entry as `skipped_unageable` and reap
+   nothing. Adjust `SandboxListEntry::created_at_unix` (name / type) before relying on
+   GC in production.
+
+2. **Orphan-injection check.** Prove a real orphan is reaped:
+
+   ```bash
+   # Create a sandbox out-of-band and do NOT destroy it:
+   curl -sS -H "Authorization: Bearer $FORKD_TOKEN" -H 'content-type: application/json' \
+     -d '{"snapshot_tag":"'"$FORKD_SNAPSHOT"'","n":1,"per_child_netns":true}' \
+     "$FORKD_URL/v1/sandboxes"
+   # Wait > reap_age, then run a reconcile built with a short reap_age (e.g. 1s) and
+   # confirm the leaked id appears in `reaped`. forkd ls should then show it gone.
+   ```
