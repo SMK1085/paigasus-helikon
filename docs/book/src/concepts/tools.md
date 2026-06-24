@@ -281,6 +281,17 @@ SandboxGuarantees {
 }
 ```
 
+**GC / reconciliation (SMA-447).** A fork that commits a microVM on the controller
+but whose id the client never learns (a decode error, or a client-side timeout after
+commit) leaks that VM — there is no id to `DELETE`. Build the concrete backend with
+`build_backend()` (instead of `build()`) and call `reconcile()` from your own
+scheduler or shutdown hook: it lists the controller's sandboxes and reaps the ones of
+this backend's snapshot tag that are strictly older than `reap_age` (builder option,
+default 300s), returning a `ReconcileReport { scanned, reaped, failed,
+skipped_unageable }`. Detection is age-only and stateless, so it is safe across
+multiple SDK processes sharing one controller — but you **must** set `reap_age` above
+your longest expected run plus clock skew, or a still-running command could be reaped.
+
 #### `OsSandboxBackend` (Linux + macOS; feature `os-sandbox`) — recommended for untrusted commands
 
 The strongest containment tier available on the current platform. Built in the parent

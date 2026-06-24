@@ -38,6 +38,36 @@ The `microvm` feature enables `reqwest` and `tokio/net` + `tokio/io-util`
 GCP launch, guest-image build, live validation tests) see
 `docs/runbooks/forkd-live-validation.md` in the repository.
 
+### microVM GC / reconciliation (SMA-447)
+
+A forked microVM leaks if the controller commits it but the client never learns its
+id (a decode error, or a client-side timeout firing *after* the fork commits). To
+reap such orphans, build the **concrete** backend with `build_backend()`, then call
+`reconcile()` from your own scheduler / shutdown hook:
+
+```rust
+use std::sync::Arc;
+use paigasus_helikon_tools::{ExecutionBackend, ForkdBackend};
+
+let backend: Arc<ForkdBackend> = Arc::new(
+    ForkdBackend::builder("https://controller:8889")
+        .bearer_token(token)
+        .snapshot("agent-base")
+        .reap_age(std::time::Duration::from_secs(600)) // > your longest run + clock skew
+        .build_backend()?,
+);
+let shared: Arc<dyn ExecutionBackend> = backend.clone(); // hand to BashTool
+
+// later, periodically:
+let report = backend.reconcile().await?;
+// report.scanned / reaped / failed / skipped_unageable
+```
+
+`reconcile()` lists `GET /v1/sandboxes`, reaps sandboxes of this backend's
+`snapshot` tag strictly older than `reap_age` (default 300s), and is best-effort —
+only a failed LIST is an error. **Invariant:** set `reap_age` above your longest
+expected run plus any clock skew, or a long legitimate run could be reaped.
+
 > **`HostBackend` is NOT a security boundary.** A command it runs can read and write anything this process can. Pair it with a `PermissionPolicy` (or a `DenyRule::tool("Bash")`) for approval-level control, or use `OsSandboxBackend` for OS-enforced containment.
 
 ## Install
