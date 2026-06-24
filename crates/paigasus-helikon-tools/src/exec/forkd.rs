@@ -30,8 +30,6 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
 /// will reap it (10× the default exec timeout). MUST exceed your longest expected run.
 const DEFAULT_REAP_AGE: Duration = Duration::from_secs(300);
 /// Bounded concurrency for the reconcile reap fan-out (simultaneous in-flight DELETEs).
-// Task 2 consumes this inside `reconcile()`; suppress the dead-code lint until then.
-#[allow(dead_code)]
 const REAP_CONCURRENCY: usize = 8;
 
 /// Construction-time failures for [`ForkdBackend`]. Runtime failures (daemon
@@ -62,6 +60,24 @@ pub enum ForkdError {
     ProxyUnreachable,
 }
 
+/// Outcome of a [`ForkdBackend::reconcile`] sweep.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ReconcileReport {
+    /// Total sandboxes the controller LIST returned (across *all* snapshot tags) —
+    /// observability into host load, independent of the reap set.
+    pub scanned: usize,
+    /// Ids successfully reaped (DELETE 2xx, or 404 = already gone → idempotent).
+    pub reaped: Vec<String>,
+    /// Ids that matched and were old enough but whose DELETE errored (non-404).
+    /// Best-effort; non-fatal.
+    pub failed: Vec<String>,
+    /// Tag-matching entries whose `created_at_unix` was absent/unparseable, so they
+    /// could not be aged and were **not** reaped. A high value with empty `reaped`
+    /// signals the controller's LIST wire shape drifted.
+    pub skipped_unageable: usize,
+}
+
 /// `POST /v1/sandboxes` request body — fork `n` children (we use 1) copy-on-write
 /// from a warmed snapshot, each in its own network namespace.
 #[derive(serde::Serialize)]
@@ -76,6 +92,18 @@ struct ForkReq<'a> {
 #[derive(serde::Deserialize)]
 struct SandboxInfo {
     id: String,
+}
+
+/// One sandbox in the `GET /v1/sandboxes` list response. Same item shape as the fork
+/// response (SMA-416 spike §7) — we read only what reconcile needs and ignore the
+/// rest. `created_at_unix` is `Option` so one odd entry can't fail the whole decode;
+/// a missing/unparseable timestamp is counted `skipped_unageable` (never reaped).
+#[derive(serde::Deserialize)]
+struct SandboxListEntry {
+    id: String,
+    snapshot_tag: String,
+    #[serde(default)]
+    created_at_unix: Option<u64>,
 }
 
 /// `POST /v1/sandboxes/{id}/exec` request body. `args` runs verbatim in the guest
@@ -240,8 +268,6 @@ pub struct ForkdBackend {
     max_output_bytes: usize,
     egress: EgressPolicy,
     egress_enforced: bool,
-    // Task 2 reads this inside `reconcile()`; suppress the dead-code lint until then.
-    #[allow(dead_code)]
     reap_age: Duration,
 }
 
@@ -254,6 +280,7 @@ impl std::fmt::Debug for ForkdBackend {
             .field("timeout", &self.timeout)
             .field("max_output_bytes", &self.max_output_bytes)
             .field("egress", &self.egress)
+            .field("reap_age", &self.reap_age)
             .finish_non_exhaustive()
     }
 }
@@ -309,6 +336,27 @@ impl ForkdBackend {
             .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd response decode failed: {e}")))
     }
 
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, ToolError> {
+        // Mirrors post_json: bearer in the header only; error text carries the URL,
+        // never the token.
+        let resp = self
+            .client
+            .get(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd request failed: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(ToolError::Other(anyhow::anyhow!(
+                "forkd controller returned HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        resp.json::<T>()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd response decode failed: {e}")))
+    }
+
     async fn fork(&self) -> Result<String, ToolError> {
         let url = format!("{}/v1/sandboxes", self.base);
         let body = ForkReq {
@@ -340,15 +388,89 @@ impl ForkdBackend {
         .await
     }
 
-    async fn destroy(&self, id: &str) {
-        // Best-effort teardown; failures here are not surfaced to the model.
+    /// DELETE a sandbox, returning the outcome. A `404` is treated as success
+    /// (already gone — idempotent under concurrent/repeat sweeps).
+    async fn try_destroy(&self, id: &str) -> Result<(), ToolError> {
         let url = format!("{}/v1/sandboxes/{id}", self.base);
-        let _ = self
+        let resp = self
             .client
             .delete(&url)
             .bearer_auth(&self.token)
             .send()
+            .await
+            .map_err(|e| ToolError::Other(anyhow::anyhow!("forkd request failed: {e}")))?;
+        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(())
+        } else {
+            Err(ToolError::Other(anyhow::anyhow!(
+                "forkd controller returned HTTP {}",
+                resp.status().as_u16()
+            )))
+        }
+    }
+
+    async fn destroy(&self, id: &str) {
+        // Best-effort teardown; failures here are not surfaced to the model.
+        let _ = self.try_destroy(id).await;
+    }
+
+    /// List the controller's sandboxes and reap orphans of this backend's snapshot
+    /// tag that are strictly older than [`reap_age`](ForkdBackendBuilder::reap_age).
+    ///
+    /// Best-effort per sandbox: only a failed LIST returns `Err`; per-sandbox DELETE
+    /// failures (non-404) land in [`ReconcileReport::failed`]. Deletes run with
+    /// bounded concurrency, so worst-case latency on a degraded controller is about
+    /// `CONTROL_TIMEOUT + ceil(N / REAP_CONCURRENCY) * CONTROL_TIMEOUT` for `N`
+    /// candidates. Safe under the operator invariant `reap_age > longest run + skew`.
+    pub async fn reconcile(&self) -> Result<ReconcileReport, ToolError> {
+        let url = format!("{}/v1/sandboxes", self.base);
+        let list: Vec<SandboxListEntry> =
+            tokio::time::timeout(CONTROL_TIMEOUT, self.get_json(&url))
+                .await
+                .map_err(|_| ToolError::Other(anyhow::anyhow!("forkd: list timed out")))??;
+        let scanned = list.len();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let reap_age_secs = self.reap_age.as_secs();
+
+        let mut skipped_unageable = 0usize;
+        let mut candidates: Vec<String> = Vec::new();
+        for entry in list {
+            if entry.snapshot_tag != self.snapshot {
+                continue; // other tag — counts only toward `scanned`
+            }
+            match entry.created_at_unix {
+                None => skipped_unageable += 1,
+                Some(t) if now.saturating_sub(t) > reap_age_secs => candidates.push(entry.id),
+                Some(_) => {} // young enough — protected
+            }
+        }
+
+        let mut reaped = Vec::new();
+        let mut failed = Vec::new();
+        for chunk in candidates.chunks(REAP_CONCURRENCY) {
+            let outcomes = futures_util::future::join_all(chunk.iter().map(|id| async move {
+                let res = tokio::time::timeout(CONTROL_TIMEOUT, self.try_destroy(id)).await;
+                (id.clone(), matches!(res, Ok(Ok(()))))
+            }))
             .await;
+            for (id, ok) in outcomes {
+                if ok {
+                    reaped.push(id);
+                } else {
+                    failed.push(id);
+                }
+            }
+        }
+
+        Ok(ReconcileReport {
+            scanned,
+            reaped,
+            failed,
+            skipped_unageable,
+        })
     }
 }
 
@@ -415,9 +537,11 @@ fn truncate(mut s: String, cap: usize) -> (String, bool) {
 #[async_trait]
 impl ExecutionBackend for ForkdBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
-        // Accepted skeleton gap: if the controller commits a fork but we fail to
-        // read its id (decode error / client timeout after commit), that sandbox
-        // is orphaned — we have no id to DELETE. SMA-437 adds GC/reconciliation.
+        // Accepted gap: if the controller commits a fork but we fail to read its id
+        // (decode error / client timeout after commit), that sandbox is orphaned — we
+        // have no id to DELETE here. It is reaped by the age-based `reconcile()` sweep
+        // (SMA-447) once it ages past `reap_age`, provided the controller stamps a
+        // parseable `created_at_unix` (otherwise it surfaces as `skipped_unageable`).
         let id = self.fork().await?;
         // The wall-clock command timeout governs exec; teardown always runs.
         let exec_result = tokio::time::timeout(self.timeout, self.exec(&id, &req.command)).await;
@@ -463,6 +587,21 @@ impl ExecutionBackend for ForkdBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_list_entry_deserializes() {
+        // Extra fields (guest_addr, pid, …) are ignored; created_at_unix may be absent.
+        let with_ts: SandboxListEntry = serde_json::from_str(
+            r#"{"id":"sb-1","snapshot_tag":"t","guest_addr":"10.0.0.2","created_at_unix":1718000000}"#,
+        )
+        .unwrap();
+        assert_eq!(with_ts.id, "sb-1");
+        assert_eq!(with_ts.snapshot_tag, "t");
+        assert_eq!(with_ts.created_at_unix, Some(1718000000));
+        let no_ts: SandboxListEntry =
+            serde_json::from_str(r#"{"id":"sb-2","snapshot_tag":"t"}"#).unwrap();
+        assert_eq!(no_ts.created_at_unix, None);
+    }
 
     #[test]
     fn fork_and_exec_responses_deserialize() {
