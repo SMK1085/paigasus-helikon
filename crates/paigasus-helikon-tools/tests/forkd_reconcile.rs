@@ -76,6 +76,34 @@ async fn reconcile_list_failure_is_error() {
 }
 
 #[tokio::test]
+async fn reconcile_list_decode_error_is_error() {
+    // A 200 LIST whose body is not the expected array (e.g. the wire contract
+    // drifted to a wrapped `{"sandboxes": …}` object) must surface as a decode
+    // Err — not a silent empty sweep — and must not leak the bearer token.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/sandboxes"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"sandboxes": []})),
+        )
+        .mount(&server)
+        .await;
+
+    let backend = ForkdBackend::builder(server.uri())
+        .bearer_token("test-token")
+        .snapshot("snap-1")
+        .build_backend()
+        .unwrap();
+    let err = backend.reconcile().await.unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("decode"),
+        "expected a decode error, got: {msg}"
+    );
+    assert!(!msg.contains("test-token"), "token leaked: {msg}");
+}
+
+#[tokio::test]
 async fn reconcile_delete_failure_is_nonfatal() {
     let server = MockServer::start().await;
     let old = now_secs() - 600;
