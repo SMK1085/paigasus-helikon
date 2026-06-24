@@ -10,7 +10,9 @@
 
 ---
 
-## 0. ⚠️ Blocking decision — MSRV (resolve at GATE 1 before planning)
+## 0. ⚠️ MSRV — RESOLVED at GATE 1 (option A: raise workspace MSRV to 1.91)
+
+> **RESOLVED (GATE 1, 2026-06-24): option (A) — raise the workspace MSRV from 1.85 → 1.91**, landed as a clearly-scoped `chore` commit within this PR (root `Cargo.toml` `rust-version`, `ci.yml` `test` matrix `1.85`→`1.91` rows, `msrv.yml`, README/CLAUDE.md MSRV text). Also at GATE 1: **R1 release path = manual name-claim pre-publish** of `bedrock 0.1.0` (§11/R1). The options analysis below is retained for the record.
 
 `aws-sdk-bedrockruntime` (latest 1.135.0) and `aws-config` (1.8.18) both declare **`rust-version = 1.91.1`**. The workspace MSRV is **1.85** (`[workspace.package] rust-version`), and the **required** CI gate `test (…, 1.85)` builds `--all-features`, which pulls the facade's whole graph — so the AWS SDK would fail that gate. This was unknown when the transport was chosen (D1) and is the gating decision for the whole crate. Options (see §11/R2 for detail):
 
@@ -245,8 +247,8 @@ Content-filter / guardrail outcomes are **not** errors — they arrive via `Mess
 
 ## 11. Risks & assumptions
 
-- **R2 — MSRV 1.91 vs 1.85 (BLOCKER; see §0).** Verified: `aws-sdk-bedrockruntime` 1.135.0 and `aws-config` 1.8.18 require **1.91.1**; the highest `aws-sdk-bedrockruntime` with MSRV ≤ 1.85 is ~1.86.0 (MSRV 1.81, May 2025). **Decision required at GATE 1** (options A–D in §0). Whatever is chosen, the plan verifies with the CI command (`cargo +<msrv> build -p paigasus-helikon-providers-bedrock`, lib-only per the prior MSRV lesson), not `cargo metadata`/`--no-run`.
-- **R1 — brand-new crate, never name-claimed.** `paigasus-helikon-providers-bedrock` was never pre-published at `0.0.0` (unlike the SMA-385 stubs), and `release-plz.toml` has **no** net-new-member handling — the workspace's only precedent is *stub-ascend* (pre-claimed at 0.0.0). **Assumption:** release-plz publishes a net-new member in dependency order (bedrock before the facade, so the facade's `cargo publish --verify` finds `bedrock 0.1.0`). **Given the lack of precedent, the safer path may be a one-time manual name-claim pre-publish** (`cargo publish` for the bedrock crate; interactive `cargo login` only). **Decide at GATE 1.**
+- **R2 — MSRV 1.91 vs 1.85 (BLOCKER; see §0).** Verified: `aws-sdk-bedrockruntime` 1.135.0 and `aws-config` 1.8.18 require **1.91.1**; the highest `aws-sdk-bedrockruntime` with MSRV ≤ 1.85 is ~1.86.0 (MSRV 1.81, May 2025). **Decision (GATE 1): option A — raise the workspace MSRV to 1.91** (scoped `chore` commit in this PR). The plan verifies with the CI command (`cargo +1.91 build -p paigasus-helikon-providers-bedrock`, lib-only per the prior MSRV lesson), not `cargo metadata`/`--no-run`, and updates the `ci.yml` `test` matrix, `msrv.yml`, and README/CLAUDE.md MSRV statements in the same PR.
+- **R1 — brand-new crate, never name-claimed.** `paigasus-helikon-providers-bedrock` was never pre-published at `0.0.0` (unlike the SMA-385 stubs), and `release-plz.toml` has **no** net-new-member handling — the workspace's only precedent is *stub-ascend* (pre-claimed at 0.0.0). **Decision (GATE 1): manual name-claim pre-publish.** Before/with merge, publish `paigasus-helikon-providers-bedrock 0.1.0` to crates.io (interactive `cargo login` only — never token-as-arg) so the facade's `cargo publish --verify` is guaranteed to find it and we don't bet the release on release-plz's untested net-new-member path. The plan sequences this pre-publish and notes the crate ships at `0.1.0` (not a `0.0.0` placeholder), so its own release thereafter follows the normal release-plz flow.
 - **R3 — cargo-deny / licenses / SBOM.** AWS SDK is Apache-2.0 but the default `aws-lc-sys` TLS backend brings ISC/OpenSSL-flavored licenses → use rustls (§10). Resolved as an early-plan `cargo deny check licenses` gate.
 - **R4 — capability table is best-effort.** Hand-maintained `(family) → ModelCapabilities`; unknown models fall back to `streaming + tools`. Documented, not a correctness guarantee.
 - **R5 — RESOLVED.** `aws-smithy-mocks` has no event-stream support; response mapping is tested by unit-testing the pure translator (§8.3), removing the dependency on transport mocking entirely.
