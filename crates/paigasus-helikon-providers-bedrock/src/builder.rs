@@ -177,7 +177,17 @@ impl BedrockModelBuilder {
             }
             c
         } else if let Some(ref sdk_cfg) = self.sdk_config {
-            Client::new(sdk_cfg)
+            if let Some(region) = self.region {
+                // Region override: build a per-client config that layers the
+                // override on top of the caller's SdkConfig, then construct
+                // the client from that config.
+                let client_cfg = aws_sdk_bedrockruntime::config::Builder::from(sdk_cfg)
+                    .region(region)
+                    .build();
+                aws_sdk_bedrockruntime::Client::from_conf(client_cfg)
+            } else {
+                Client::new(sdk_cfg)
+            }
         } else {
             return Err(BuildError::MissingClient);
         };
@@ -393,6 +403,31 @@ mod tests {
             .build()
             .expect("build should succeed even when region is set with injected client");
         assert_eq!(model.model(), "anthropic.claude-3-5-sonnet-20241022-v2:0");
+    }
+
+    /// Passing `.sdk_config()` + `.region()` should succeed and cover the
+    /// region-override code path (we cannot inspect the baked-in region on a
+    /// `Client` without a live endpoint, but we verify `build()` is `Ok`).
+    #[test]
+    fn sdk_config_with_region_override_succeeds() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        rt.block_on(async {
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+                .region(Region::new("eu-west-1"))
+                .test_credentials()
+                .load()
+                .await;
+            // Override to a different region via .region() on the sdk_config path.
+            let model = crate::BedrockModel::converse("amazon.nova-pro-v1:0")
+                .sdk_config(&sdk_cfg)
+                .region(Region::new("ap-southeast-1"))
+                .build()
+                .expect("should build with region override on sdk_config path");
+            assert_eq!(model.model(), "amazon.nova-pro-v1:0");
+        });
     }
 
     #[test]
