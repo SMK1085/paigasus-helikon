@@ -5,7 +5,7 @@
 //! The synchronous [`BedrockModelBuilder::build`] only validates the model-id
 //! and assembles a Bedrock SDK [`Client`]; it **does not** make any network
 //! call and **does not** verify your AWS credentials.  Credential/auth
-//! failures surface later, at [`crate::BedrockModel::invoke`] time, as a
+//! failures surface later, at invoke time, as a
 //! [`paigasus_helikon_core::ModelError`].
 //!
 //! [`BedrockModel::from_env`] loads the SDK config from the environment (an
@@ -77,7 +77,7 @@ pub(crate) struct Config {
 ///
 /// `build()` is **synchronous** and **does not** contact any AWS endpoint.
 /// Credential resolution happens inside the SDK client at the first
-/// [`crate::BedrockModel::invoke`] call.
+/// invoke call.
 pub struct BedrockModelBuilder {
     model_id: String,
     /// Caller-supplied, fully-initialized client (highest precedence).
@@ -223,7 +223,7 @@ impl crate::BedrockModel {
     ///
     /// The AWS credential chain is **lazy** — loading the config does not prove
     /// that your credentials will be accepted by Bedrock.  Auth/permission
-    /// failures surface at [`crate::BedrockModel::invoke`] time as a
+    /// failures surface at invoke time as a
     /// [`paigasus_helikon_core::ModelError`].
     ///
     /// ## BehaviorVersion

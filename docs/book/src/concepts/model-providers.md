@@ -79,10 +79,11 @@ let caps = ModelCapabilities::empty()
     .with_structured_output();
 ```
 
-## The two shipped adapters
+## The shipped adapters
 
-Both crates are published on crates.io and reached through the facade behind a
-feature flag. Each exposes a `Model` implementation plus a builder.
+Three provider adapters ship today. All are published on crates.io and reached
+through the facade behind a feature flag. Each exposes a `Model` implementation
+plus a builder.
 
 ### OpenAI — `paigasus-helikon-providers-openai`
 
@@ -115,24 +116,116 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 `AnthropicModel::messages(id)` returns an `AnthropicModelBuilder`; `build()`
 yields a `Result<AnthropicModel, BuildError>`.
 
-> Model ids (`gpt-5-mini`, `claude-sonnet-4-6`) are illustrative — swap them for
-> any model your account can reach if the provider rejects the id.
+### Bedrock — `paigasus-helikon-providers-bedrock`
+
+Reached as `paigasus_helikon::bedrock::BedrockModel` behind the `bedrock`
+feature. Covers the **Converse streaming API** — tool use, multi-turn
+conversations, and structured output across Anthropic Claude, Amazon Nova,
+Amazon Titan, Meta Llama, Mistral, and Cohere model families hosted on AWS
+Bedrock.
+
+> **Disambiguation:** this is the Bedrock *Converse model provider*. It is
+> distinct from `paigasus-helikon-runtime-agentcore`, which is the Bedrock
+> *AgentCore runtime* host (a separate not-yet-implemented crate).
+
+#### Construction
+
+The simplest path loads AWS configuration from the standard credential chain:
+
+```rust,ignore
+use paigasus_helikon::bedrock::BedrockModel;
+
+let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
+```
+
+`from_env` is `async` because it may fetch IMDS or SSO tokens. The credential
+chain is **lazy** — auth failures surface at `invoke()` time, not here.
+
+For explicit configuration, use the synchronous builder:
+
+```rust,ignore
+use aws_config::BehaviorVersion;
+use paigasus_helikon::bedrock::BedrockModel;
+
+let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_01_12())
+    .region(aws_config::Region::new("us-east-1"))
+    .load()
+    .await;
+
+let model = BedrockModel::converse("amazon.nova-pro-v1:0")
+    .sdk_config(&sdk_cfg)
+    .build()?;
+```
+
+`BedrockModel::converse(id)` returns a `BedrockModelBuilder`; `build()` yields a
+`Result<BedrockModel, BuildError>`. You can also inject a pre-constructed
+`aws_sdk_bedrockruntime::Client` via `.client(c)` for full control.
+
+#### Family-gated structured output
+
+The `bedrock` provider detects the model family from the Bedrock model ID. For
+families that support Bedrock's forced-tool-choice — `Anthropic`, `AmazonNova`,
+and `Mistral` — `ResponseFormat::JsonSchema` is synthesized as a hidden tool
+call: the model is forced to invoke an internal reserved tool whose input schema
+is the user-supplied JSON Schema, and the result is returned as a structured
+JSON response. For other families (`AmazonTitan`, `Llama`, `Cohere`, `Unknown`)
+a `JsonSchema` format degrades silently to a text response.
+
+Cross-region inference profile prefixes (`us.`, `eu.`, `ap.`, `apac.`) are
+stripped before family detection, so model IDs such as
+`us.anthropic.claude-3-7-sonnet-20250219-v1:0` are correctly identified as
+`Anthropic`.
+
+Reasoning content surfaced by the model (e.g. extended-thinking responses from
+Claude) is delivered as `ModelEvent::ReasoningDelta` in the stream — no extra
+configuration is required on this provider.
+
+#### Tool-input schema rewriter
+
+Bedrock's Converse API validator rejects JSON Schemas containing `$ref`/`$defs`,
+`oneOf`/`anyOf`/`allOf`, or meta-keywords such as `$schema`, `format`, and
+`examples`. The crate exposes `rewrite_tool_schema(schema, Ruleset::Strict)`,
+which runs automatically on every tool spec before the request is sent:
+
+- `$ref` references are inlined recursively (cycles and excessive depth are
+  terminated with a permissive `{"type": "object"}`).
+- `oneOf`/`anyOf`/`allOf` combinators (e.g. serde-generated tagged enums) are
+  collapsed into a flat `object` whose `properties` union the variants' fields
+  and whose shared tag key becomes an `enum` of variant names.
+- Unsupported meta-keywords are stripped.
+
+This means schemars-derived schemas for tagged enums and generic structs pass
+Bedrock's validator without any manual schema adjustment.
+
+#### Credentials and TLS
+
+The provider uses the standard AWS credential chain via `aws-config`
+(environment variables, `~/.aws/credentials`, SSO, IMDS, ECS task role, …) and
+the `aws-lc-rs` TLS backend — the same crypto provider the workspace already
+uses via `reqwest`/`async-openai`. Do not enable the AWS SDK `ring` feature
+alongside this crate; a second `CryptoProvider` panics.
+
+> Model ids are illustrative — swap them for any model your account can reach
+> if the provider rejects the id.
 
 ## Switching providers is one line
 
-Because both adapters implement the same `Model` trait, the *only* code that
+Because all adapters implement the same `Model` trait, the *only* code that
 changes between providers is the construction line. Everything downstream — the
 agent, its tools, the run context, the streamed result — is identical. Compare
 the two budgeting-assistant examples (`budget_assistant_openai.rs` and
 `budget_assistant_anthropic.rs`); the agent, the `#[tool]` functions, and the
 run are byte-for-byte the same, and the diff is one line:
 
-```rust
+```rust,ignore
 // OpenAI
 let model = OpenAiModel::chat("gpt-5-mini").build()?;
 
 // Anthropic — same agent, same tools, same run
 let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
+
+// Bedrock (async construction — loads the AWS credential chain)
+let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
 ```
 
 ```rust
@@ -155,6 +248,8 @@ loop will drive it.
 paigasus-helikon = { version = "0.3", features = ["openai", "macros"] }
 # or, for Anthropic:
 # paigasus-helikon = { version = "0.3", features = ["anthropic", "macros"] }
+# or, for Bedrock:
+# paigasus-helikon = { version = "0.3", features = ["bedrock", "macros"] }
 ```
 
 Feature names are kebab-case (`openai`, `anthropic`); the `pub use` aliases are
