@@ -25,8 +25,6 @@ use paigasus_helikon_core::ModelError;
 /// | `ValidationException` + message contains "too long"/"maximum context" | `ContextLengthExceeded` |
 /// | `ValidationException` (other)| `Other`                            |
 /// | unknown / `None`             | `Other`                            |
-// Used by model.rs (Task 12) — allow dead_code until that task lands.
-#[allow(dead_code)]
 pub(crate) fn classify(
     code: Option<&str>,
     _status: Option<u16>,
@@ -66,8 +64,6 @@ pub(crate) fn classify(
 /// [`ProvideErrorMetadata`] and delegated to [`classify`]. Transport-level
 /// failures (`DispatchFailure`, `TimeoutError`, `ConstructionFailure`,
 /// `ResponseError`) map to [`ModelError::Transport`].
-// Used by model.rs (Task 12) — allow dead_code until that task lands.
-#[allow(dead_code)]
 pub(crate) fn map_sdk_error<E, R>(err: SdkError<E, R>) -> ModelError
 where
     E: ProvideErrorMetadata + std::fmt::Debug,

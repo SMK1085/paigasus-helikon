@@ -12,8 +12,6 @@ use paigasus_helikon_core::ModelCapabilities;
 /// tool-choice (the mechanism used to synthesize structured output on Bedrock).
 /// The `max_output` value is a conservative default; the builder lets callers
 /// override it.
-// Used by builder.rs (Task 11) — allow dead_code until that task lands.
-#[allow(dead_code)]
 pub(crate) fn caps_for(family: ModelFamily) -> (ModelCapabilities, u32) {
     match family {
         ModelFamily::Anthropic => (

@@ -13,7 +13,7 @@ use aws_sdk_bedrockruntime::types::{
 use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
 
 use crate::builder::Config;
-use crate::family::ModelFamily;
+use crate::family::ModelFamily; // used by translate_tool_choice
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
@@ -24,8 +24,6 @@ use crate::translate::tools::tool_specs;
 /// The fields map onto the Bedrock SDK `converse` / `converse_stream` input
 /// parameters. Callers should inspect `synthesizing` to decide how to route
 /// stream events (synthesized structured output → `TokenDelta` remapping).
-// Used by model.rs (Task 11/12) — allow dead_code until that task lands.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct PreparedConverse {
     /// Bedrock model identifier (may include cross-region profile prefix).
@@ -50,13 +48,11 @@ pub(crate) struct PreparedConverse {
 /// - `ResponseFormat::JsonSchema`/`JsonObject` combined with `ToolChoice::Tool` (conflict).
 /// - `ResponseFormat::JsonSchema`/`JsonObject` combined with `ToolChoice::None` (conflict).
 /// - Empty conversation (no non-system messages).
-// Used by model.rs (Task 11/12) — allow dead_code until that task lands.
-#[allow(dead_code)]
 pub(crate) fn build_request(
     cfg: &Config,
     req: &ModelRequest,
 ) -> Result<PreparedConverse, ModelError> {
-    let family = ModelFamily::from_model_id(&cfg.model_id);
+    let family = cfg.family;
     let ruleset = Ruleset::for_family(family);
 
     // Guard: ResponseFormat::JsonSchema / JsonObject + ToolChoice::Tool → conflict.
@@ -93,10 +89,7 @@ pub(crate) fn build_request(
     // Omit toolConfig entirely (do not send user tools either).
     if none_choice {
         let translated = items_to_messages(&req.messages)?;
-        let has_inference = req.model_settings.temperature.is_some()
-            || req.model_settings.top_p.is_some()
-            || req.model_settings.max_output_tokens.is_some();
-        let inference_config = if has_inference {
+        let inference_config = {
             let mut b = InferenceConfiguration::builder();
             if let Some(t) = req.model_settings.temperature {
                 b = b.temperature(t);
@@ -104,12 +97,12 @@ pub(crate) fn build_request(
             if let Some(p) = req.model_settings.top_p {
                 b = b.top_p(p);
             }
-            if let Some(m) = req.model_settings.max_output_tokens {
-                b = b.max_tokens(m as i32);
-            }
+            let max_tokens = req
+                .model_settings
+                .max_output_tokens
+                .unwrap_or(cfg.max_output_default);
+            b = b.max_tokens(max_tokens as i32);
             Some(b.build())
-        } else {
-            None
         };
         return Ok(PreparedConverse {
             model_id: cfg.model_id.clone(),
@@ -179,11 +172,7 @@ pub(crate) fn build_request(
     };
 
     // Build InferenceConfiguration.
-    let has_inference = req.model_settings.temperature.is_some()
-        || req.model_settings.top_p.is_some()
-        || req.model_settings.max_output_tokens.is_some();
-
-    let inference_config = if has_inference {
+    let inference_config = {
         let mut b = InferenceConfiguration::builder();
         if let Some(t) = req.model_settings.temperature {
             b = b.temperature(t);
@@ -191,12 +180,12 @@ pub(crate) fn build_request(
         if let Some(p) = req.model_settings.top_p {
             b = b.top_p(p);
         }
-        if let Some(m) = req.model_settings.max_output_tokens {
-            b = b.max_tokens(m as i32);
-        }
+        let max_tokens = req
+            .model_settings
+            .max_output_tokens
+            .unwrap_or(cfg.max_output_default);
+        b = b.max_tokens(max_tokens as i32);
         Some(b.build())
-    } else {
-        None
     };
 
     Ok(PreparedConverse {
@@ -404,18 +393,42 @@ mod tests {
     };
     use serde_json::json;
 
+    use crate::capabilities::caps_for;
+    use crate::family::ModelFamily;
+
+    fn make_cfg(model_id: &str) -> Config {
+        let family = ModelFamily::from_model_id(model_id);
+        let (capabilities, max_output_default) = caps_for(family);
+        // Build an offline Bedrock client for test configs.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio rt");
+        let client = rt.block_on(async {
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+                .region(aws_config::Region::new("us-east-1"))
+                .test_credentials()
+                .load()
+                .await;
+            aws_sdk_bedrockruntime::Client::new(&sdk_cfg)
+        });
+        Config {
+            client,
+            model_id: model_id.to_owned(),
+            family,
+            capabilities,
+            max_output_default,
+        }
+    }
+
     /// A minimal Config for tests — uses a Claude model so synthesis works.
     fn claude_cfg() -> Config {
-        Config {
-            model_id: "anthropic.claude-3-5-sonnet-20241022-v2:0".to_owned(),
-        }
+        make_cfg("anthropic.claude-3-5-sonnet-20241022-v2:0")
     }
 
     /// A Llama config for testing unsupported-family degradation.
     fn llama_cfg() -> Config {
-        Config {
-            model_id: "meta.llama3-1-70b-instruct-v1:0".to_owned(),
-        }
+        make_cfg("meta.llama3-1-70b-instruct-v1:0")
     }
 
     fn user_text(s: &str) -> Item {
