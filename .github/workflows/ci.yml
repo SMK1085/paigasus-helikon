@@ -52,11 +52,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        toolchain: [stable, "1.85"]
+        toolchain: [stable, "1.91"]
         include:
           - toolchain: stable
             test_args: --workspace --all-features
-          - toolchain: "1.85"
+          - toolchain: "1.91"
             test_args: --workspace --all-features -- --skip trybuild_ui
     runs-on: ${{ matrix.os }}
     env:

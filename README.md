@@ -3,7 +3,7 @@
 Paigasus AI SDK — codename **Helikon**. A Rust SDK for building AI agents with pluggable providers, runtimes, and tools.
 
 [![CI](https://github.com/SMK1085/paigasus-helikon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/SMK1085/paigasus-helikon/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![MSRV](https://img.shields.io/badge/rust-1.91%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 [![crates.io](https://img.shields.io/crates/v/paigasus-helikon.svg)](https://crates.io/crates/paigasus-helikon)
 [![docs.rs](https://docs.rs/paigasus-helikon/badge.svg)](https://docs.rs/paigasus-helikon)
