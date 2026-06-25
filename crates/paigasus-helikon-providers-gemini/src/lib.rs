@@ -11,5 +11,6 @@
 //! # Ok(()) }
 //! ```
 
+mod capabilities;
 mod error;
 mod translate;
