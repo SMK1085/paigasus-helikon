@@ -66,13 +66,23 @@ impl Model for BedrockModel {
 
         let s = stream! {
             // Send the ConverseStream request and obtain the event receiver.
-            // Use map_sdk_http_error here: fluent.send() returns
-            // SdkError<_, HttpResponse>, so we can extract Retry-After headers.
-            let output = match fluent.send().await {
-                Ok(o) => o,
-                Err(e) => {
-                    yield Err(map_sdk_http_error(e));
-                    return;
+            // Guard with a cancellation check (biased: cancel arm wins) so that
+            // a token already fired — or one that fires during the HTTP send —
+            // aborts cleanly without opening a dangling Bedrock stream and
+            // without emitting Finish (per the Model::invoke cancellation contract).
+            let output = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => { return; }
+                result = fluent.send() => {
+                    // map_sdk_http_error: fluent.send() returns
+                    // SdkError<_, HttpResponse>, so we can extract Retry-After headers.
+                    match result {
+                        Ok(o) => o,
+                        Err(e) => {
+                            yield Err(map_sdk_http_error(e));
+                            return;
+                        }
+                    }
                 }
             };
 
@@ -90,8 +100,16 @@ impl Model for BedrockModel {
                 };
 
                 match next {
-                    // Stream exhausted normally.
-                    Ok(None) => return,
+                    // Stream exhausted normally (EOF).
+                    // Flush any buffered stop reason that arrived without a
+                    // subsequent Metadata event so the consumer always sees
+                    // a terminal Finish.
+                    Ok(None) => {
+                        if let Some(terminal) = translator.finish() {
+                            yield terminal;
+                        }
+                        return;
+                    }
                     // Good event — feed through translator and yield results.
                     Ok(Some(event)) => {
                         for result in translator.consume(event) {
