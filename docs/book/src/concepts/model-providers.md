@@ -119,10 +119,11 @@ yields a `Result<AnthropicModel, BuildError>`.
 ### Bedrock — `paigasus-helikon-providers-bedrock`
 
 Reached as `paigasus_helikon::bedrock::BedrockModel` behind the `bedrock`
-feature. Covers the **Converse streaming API** — tool use, multi-turn
-conversations, and structured output across Anthropic Claude, Amazon Nova,
-Amazon Titan, Meta Llama, Mistral, and Cohere model families hosted on AWS
-Bedrock.
+feature. Covers the **Converse streaming API** — tool use and multi-turn
+conversations across Anthropic Claude, Amazon Nova, Amazon Titan, Meta Llama,
+Mistral, and Cohere model families hosted on AWS Bedrock. Structured output
+(forced-tool synthesis) is supported on Anthropic Claude, Amazon Nova, and
+Mistral; Titan, Llama, and Cohere degrade to plain text responses.
 
 > **Disambiguation:** this is the Bedrock *Converse model provider*. It is
 > distinct from `paigasus-helikon-runtime-agentcore`, which is the Bedrock

@@ -72,7 +72,7 @@ Modify: root `Cargo.toml`, `crates/paigasus-helikon/Cargo.toml`, `crates/paigasu
 - Modify: `crates/paigasus-helikon/Cargo.toml` (optional dep + `bedrock` feature), `crates/paigasus-helikon/src/lib.rs` (re-export)
 - Modify: `deny.toml` (only if license check requires)
 
-**Interfaces — Produces:** a workspace that builds on 1.91 with an empty `paigasus-helikon-providers-bedrock` behind the `bedrock` feature; the verified `ConverseStreamOutput` taxonomy (recorded into the spec §6 and this plan's Task 10).
+**Interfaces — Produces:** a workspace that builds on 1.94 with an empty `paigasus-helikon-providers-bedrock` behind the `bedrock` feature; the verified `ConverseStreamOutput` taxonomy (recorded into the spec §6 and this plan's Task 10).
 
 - [ ] **Step 1: Bump MSRV.** In root `Cargo.toml` set `[workspace.package] rust-version = "1.94"`. In `.github/workflows/ci.yml`, change every `1.85` in the `test` job matrix to `"1.94"` (keep the `stable` entries). Grep `1.85` across `.github/` + `CLAUDE.md` + `README.md` and update each MSRV mention to `1.94`. Verify `msrv.yml` runs `cargo msrv --path crates/paigasus-helikon-core verify` (no `--workspace`) and needs no version edit (it reads `rust-version`).
 
@@ -161,16 +161,16 @@ Create minimal empty module files so it compiles (each with a `//!` doc line). C
 pub use paigasus_helikon_providers_bedrock as bedrock;
 ```
 
-- [ ] **Step 6: Spike — build on MSRV + record the real SDK taxonomy.** Run `cargo +1.91 build -p paigasus-helikon-providers-bedrock` and `cargo +1.91 build -p paigasus-helikon --features bedrock`. Then capture the **actual** `ConverseStreamOutput` enum + its event structs and the `TokenUsage` struct from the resolved SDK (`cargo doc -p aws-sdk-bedrockruntime --open`, or read `~/.cargo/registry/.../aws-sdk-bedrockruntime-*/src/types/`). Paste the real variant names, the location of `content_block_index`, the tool-use start id/name accessors, the delta `tool_use().input()` accessor, the reasoning-content delta shape, and whether `TokenUsage` has `cache_read_input_tokens` into Task 10's reference block (and correct spec §6 if it differs).
+- [ ] **Step 6: Spike — build on MSRV + record the real SDK taxonomy.** Run `cargo +1.94 build -p paigasus-helikon-providers-bedrock` and `cargo +1.94 build -p paigasus-helikon --features bedrock`. Then capture the **actual** `ConverseStreamOutput` enum + its event structs and the `TokenUsage` struct from the resolved SDK (`cargo doc -p aws-sdk-bedrockruntime --open`, or read `~/.cargo/registry/.../aws-sdk-bedrockruntime-*/src/types/`). Paste the real variant names, the location of `content_block_index`, the tool-use start id/name accessors, the delta `tool_use().input()` accessor, the reasoning-content delta shape, and whether `TokenUsage` has `cache_read_input_tokens` into Task 10's reference block (and correct spec §6 if it differs).
 
 - [ ] **Step 7: License/deny gate.** Run `cargo deny check licenses` and `cargo deny check bans`. If a transitive AWS crate carries a non-allowlisted license, add it to `deny.toml`'s `[licenses] allow` with a one-line justification comment (matching the existing style). Confirm no `aws-lc-sys` in the tree (`cargo tree -p paigasus-helikon-providers-bedrock | grep -i aws-lc` returns nothing); if present, fix the rustls feature flags. Run `cargo deny check` clean across targets.
 
-- [ ] **Step 8: Verify + commit.** Run `cargo +1.91 build --workspace --all-features`, `cargo fmt --all`, `cargo clippy --workspace --all-features --all-targets -- -D warnings`.
+- [ ] **Step 8: Verify + commit.** Run `cargo +1.94 build --workspace --all-features`, `cargo fmt --all`, `cargo clippy --workspace --all-features --all-targets -- -D warnings`.
 ```bash
 git add Cargo.toml Cargo.lock .github/ CLAUDE.md README.md deny.toml crates/paigasus-helikon-providers-bedrock crates/paigasus-helikon/Cargo.toml crates/paigasus-helikon/src/lib.rs
-git commit -m "chore(workspace): SMA-329 raise MSRV to 1.91 and scaffold bedrock provider crate"
+git commit -m "chore(workspace): SMA-329 raise MSRV to 1.94 and scaffold bedrock provider crate"
 ```
-> Split note: if you prefer, commit the MSRV bump (`chore(workspace): SMA-329 raise MSRV to 1.91`) separately from the scaffold (`feat(providers-bedrock): SMA-329 scaffold crate + facade wiring`). Two commits are fine.
+> Split note: if you prefer, commit the MSRV bump (`chore(workspace): SMA-329 raise MSRV to 1.94`) separately from the scaffold (`feat(providers-bedrock): SMA-329 scaffold crate + facade wiring`). Two commits are fine.
 
 ---
 
@@ -577,7 +577,7 @@ impl crate::BedrockModel {
 
 ## Task 14: Full-gate verification
 
-- [ ] **Step 1:** `cargo +1.91 build --workspace --all-features`
+- [ ] **Step 1:** `cargo +1.94 build --workspace --all-features`
 - [ ] **Step 2:** `cargo fmt --all -- --check`
 - [ ] **Step 3:** `cargo clippy --workspace --all-features --all-targets -- -D warnings`
 - [ ] **Step 4:** `cargo test --workspace --all-features` (live tests loud-skip)
