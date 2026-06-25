@@ -24,6 +24,7 @@ paigasus-helikon-runtime-temporal    = { workspace = true, optional = true }
 paigasus-helikon-runtime-agentcore   = { workspace = true, optional = true }
 paigasus-helikon-sessions-sqlite     = { workspace = true, optional = true }
 paigasus-helikon-evals               = { workspace = true, optional = true }
+paigasus-helikon-providers-bedrock   = { workspace = true, optional = true }
 
 [features]
 default            = []
@@ -42,6 +43,7 @@ runtime-axum       = ["dep:paigasus-helikon-runtime-axum"]
 runtime-temporal   = ["dep:paigasus-helikon-runtime-temporal"]
 runtime-agentcore  = ["dep:paigasus-helikon-runtime-agentcore"]
 sessions-sqlite    = ["dep:paigasus-helikon-sessions-sqlite"]
+bedrock            = ["dep:paigasus-helikon-providers-bedrock"]
 
 [dev-dependencies]
 # Installs git hooks from .cargo-husky/hooks/ when this crate's
