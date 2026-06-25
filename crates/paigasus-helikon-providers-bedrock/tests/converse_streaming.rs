@@ -429,10 +429,9 @@ fn both_tools_fired_produces_error() {
     );
 }
 
-// NOTE: `ConverseStreamOutput::Unknown` is `#[non_exhaustive]` and cannot be
-// constructed outside the AWS SDK crate.  The Unknown arm is exercised by the
-// unit test `stream::tests::unknown_event_no_output` inside `src/stream.rs`,
-// which has access to the private constructor via the `#[cfg(test)]` helper.
+// NOTE: ConverseStreamOutput::Unknown is #[non_exhaustive] and cannot be
+// constructed outside the AWS SDK crate, so it cannot be exercised by a test
+// here; the translator handles it via the match's catch-all arm (no output).
 
 /// MessageStart → no events emitted.
 #[test]

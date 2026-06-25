@@ -227,9 +227,11 @@ impl StreamTranslator {
                 self.metadata_seen = true;
                 if let Some(usage) = e.usage() {
                     out.push(Ok(ModelEvent::Usage {
-                        input_tokens: usage.input_tokens() as u32,
-                        output_tokens: usage.output_tokens() as u32,
-                        cached_input_tokens: usage.cache_read_input_tokens().map(|n| n as u32),
+                        input_tokens: usage.input_tokens().max(0) as u32,
+                        output_tokens: usage.output_tokens().max(0) as u32,
+                        cached_input_tokens: usage
+                            .cache_read_input_tokens()
+                            .map(|n| n.max(0) as u32),
                         reasoning_tokens: None,
                     }));
                 }
