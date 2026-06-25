@@ -78,9 +78,6 @@ impl ModelFamily {
     ///
     /// Families that do not support it will have the `tool_choice` field
     /// omitted and a `debug!` log emitted instead.
-    // Used by capabilities.rs, translate/mod.rs (Tasks 5, 9) — allow dead_code
-    // until those tasks land.
-    #[allow(dead_code)]
     pub(crate) fn supports_forced_tool_choice(self) -> bool {
         matches!(self, Self::Anthropic | Self::Mistral | Self::AmazonNova)
     }

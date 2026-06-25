@@ -26,8 +26,6 @@ impl Ruleset {
     /// Return the appropriate [`Ruleset`] for the given [`crate::ModelFamily`].
     ///
     /// All Bedrock model families currently use [`Ruleset::Strict`].
-    // Called by Task 8 (translate/request.rs) — allow dead_code until then.
-    #[allow(dead_code)]
     pub fn for_family(_f: crate::ModelFamily) -> Self {
         Ruleset::Strict
     }
