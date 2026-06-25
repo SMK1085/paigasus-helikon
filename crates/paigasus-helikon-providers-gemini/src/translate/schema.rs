@@ -75,7 +75,8 @@ fn rewrite(node: &Value, defs: &Map<String, Value>, depth: usize, seen: &mut Vec
             "const" => {
                 out.insert("enum".into(), json!([v.clone()]));
             }
-            // type: [T, "null"] -> T + nullable:true
+            // type: [T, "null"] -> T + nullable:true;
+            // type: [A, B, ...] (multiple non-null) -> anyOf to preserve every type.
             "type" if v.is_array() => {
                 let arr = v.as_array().unwrap();
                 let non_null: Vec<&Value> =
@@ -85,9 +86,12 @@ fn rewrite(node: &Value, defs: &Map<String, Value>, depth: usize, seen: &mut Vec
                 }
                 if let [single] = non_null.as_slice() {
                     out.insert("type".into(), (*single).clone());
-                } else if let Some(first) = non_null.first() {
-                    out.insert("type".into(), (*first).clone());
+                } else if non_null.len() > 1 {
+                    let members: Vec<Value> =
+                        non_null.iter().map(|t| json!({ "type": t })).collect();
+                    out.insert("anyOf".into(), Value::Array(members));
                 }
+                // no else: a type array with zero non-null entries emits no `type` key
             }
             // oneOf -> anyOf (recursing members)
             "oneOf" | "anyOf" => {
@@ -182,6 +186,28 @@ mod tests {
         let out = sanitize_schema(&input);
         assert_eq!(out["type"], "string");
         assert_eq!(out["nullable"], true);
+    }
+
+    #[test]
+    fn multi_type_array_becomes_anyof() {
+        let input = json!({ "type": ["string", "integer"] });
+        let out = sanitize_schema(&input);
+        assert!(out.get("type").is_none());
+        assert_eq!(
+            out["anyOf"],
+            json!([{ "type": "string" }, { "type": "integer" }])
+        );
+    }
+
+    #[test]
+    fn multi_type_array_with_null_becomes_anyof_and_nullable() {
+        let input = json!({ "type": ["string", "integer", "null"] });
+        let out = sanitize_schema(&input);
+        assert_eq!(out["nullable"], true);
+        assert_eq!(
+            out["anyOf"],
+            json!([{ "type": "string" }, { "type": "integer" }])
+        );
     }
 
     #[test]
