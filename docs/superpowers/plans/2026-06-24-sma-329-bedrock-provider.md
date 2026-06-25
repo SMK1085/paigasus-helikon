@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- **MSRV = 1.91** (raised from 1.85 this PR — Task 1). Every crate inherits `rust-version.workspace`.
+- **MSRV = 1.94** (raised from 1.85 this PR — Task 1). The AWS SDK floor is 1.91, but pre-existing `sqlx 0.9.0` (used by `sessions-sqlite`) forces 1.94; the combined real floor is 1.94. Every crate inherits `rust-version.workspace`.
+- **TLS = `aws-lc-rs`** (the provider the workspace already uses via `reqwest`/`async-openai`; already deny-allowed). The AWS SDK's HTTPS connector is wired onto `aws-lc-rs` — NOT ring/rustls (that would add a second `CryptoProvider` and panic). No `deny.toml` license changes needed.
 - **Workspace inheritance mandatory:** the new crate's `Cargo.toml` sets only `name`, `description`, `version = "0.1.0"`; everything else `*.workspace = true`. `[lints] workspace = true`.
 - **`publish = true`, `version = "0.1.0"`** — a real crate, **not** a `0.0.0` stub. No `release = false` block. Name-claim pre-publish is a pre-merge step (see Release Checklist), not a code change.
 - **Third-party deps pinned in root `[workspace.dependencies]`** (exact/caret — `deny.toml` has `wildcards = "deny"` for registry deps). Members reference via `dep.workspace = true`.
@@ -73,18 +74,11 @@ Modify: root `Cargo.toml`, `crates/paigasus-helikon/Cargo.toml`, `crates/paigasu
 
 **Interfaces — Produces:** a workspace that builds on 1.91 with an empty `paigasus-helikon-providers-bedrock` behind the `bedrock` feature; the verified `ConverseStreamOutput` taxonomy (recorded into the spec §6 and this plan's Task 10).
 
-- [ ] **Step 1: Bump MSRV.** In root `Cargo.toml` set `[workspace.package] rust-version = "1.91"`. In `.github/workflows/ci.yml`, change every `1.85` in the `test` job matrix to `"1.91"` (keep the `stable` entries). Grep `1.85` across `.github/` + `CLAUDE.md` + `README.md` and update each MSRV mention to `1.91`. Verify `msrv.yml` runs `cargo msrv --path crates/paigasus-helikon-core verify` (no `--workspace`) and needs no version edit (it reads `rust-version`).
+- [ ] **Step 1: Bump MSRV.** In root `Cargo.toml` set `[workspace.package] rust-version = "1.94"`. In `.github/workflows/ci.yml`, change every `1.85` in the `test` job matrix to `"1.94"` (keep the `stable` entries). Grep `1.85` across `.github/` + `CLAUDE.md` + `README.md` and update each MSRV mention to `1.94`. Verify `msrv.yml` runs `cargo msrv --path crates/paigasus-helikon-core verify` (no `--workspace`) and needs no version edit (it reads `rust-version`).
 
-- [ ] **Step 2: Confirm local toolchain ≥ 1.91.** Run `rustc --version`. If < 1.91: `rustup toolchain install 1.91` and use `cargo +1.91` for all build/test commands in this plan. Record which toolchain is the default.
+- [ ] **Step 2: Confirm local toolchain ≥ 1.94.** Run `rustc --version`. If < 1.94: `rustup toolchain install 1.94` and use `cargo +1.94` for the MSRV-verification commands. (The active stable, if ≥ 1.94, is fine for general builds.)
 
-- [ ] **Step 3: Add AWS deps to `[workspace.dependencies]` (rustls).** Resolve the latest compatible versions (`cargo info aws-sdk-bedrockruntime` etc.) and add, configured onto rustls with default features off:
-```toml
-aws-config             = { version = "1", default-features = false, features = ["rustls", "rt-tokio", "credentials-process", "sso"] }
-aws-sdk-bedrockruntime = { version = "1", default-features = false, features = ["rt-tokio"] }
-aws-smithy-types       = "1"
-aws-smithy-runtime-api = "1"          # for SdkError / event-stream types in error.rs + stream.rs
-```
-Pin the exact resolved versions (replace `"1"` with the concrete `"1.x"` after `cargo update`). **Note:** confirm the rustls feature names against the resolved crates (`aws-config` exposes a `rustls` / `client-hyper-rustls`-style feature — use whatever the resolved version names it; the goal is no `aws-lc-sys`). Add the new crate to `[workspace] members` and `[workspace.dependencies]`:
+- [ ] **Step 3: Add AWS deps to `[workspace.dependencies]` — TLS via `aws-lc-rs`.** Resolve the latest compatible versions (`cargo info aws-sdk-bedrockruntime` etc.) and add with default features OFF, selecting the **aws-lc-rs**-backed rustls HTTPS connector (NOT ring — the workspace already registers an `aws-lc-rs` `CryptoProvider` via `reqwest`/`async-openai`; a second provider panics). Use whatever feature the resolved `aws-config`/`aws-smithy-http-client` names for the aws-lc-rs rustls connector (e.g. a `rustls-aws-lc`/`default-https-client` style feature — verify against the resolved crate). Pin exact resolved versions (no `"1"` wildcards — `deny.toml` `wildcards = "deny"`). After building, assert ONE provider: `cargo tree -p paigasus-helikon-providers-bedrock` shows `aws-lc-rs` (reused) and the `forkd_tls` tests do not panic. Add the new crate to `[workspace] members` and `[workspace.dependencies]`:
 ```toml
 paigasus-helikon-providers-bedrock = { path = "crates/paigasus-helikon-providers-bedrock", version = "0.1.0" }
 ```
