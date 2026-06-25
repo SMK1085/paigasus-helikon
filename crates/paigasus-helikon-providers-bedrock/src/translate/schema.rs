@@ -13,9 +13,6 @@
 ///
 /// The `#[non_exhaustive]` attribute allows future variants without a
 /// breaking change.
-// `for_family` has no callers until Task 8; suppress dead_code until that
-// task lands.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Ruleset {
