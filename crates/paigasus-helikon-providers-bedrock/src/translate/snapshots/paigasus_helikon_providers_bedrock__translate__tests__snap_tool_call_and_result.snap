@@ -1,0 +1,60 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
+expression: to_wire_json(&p)
+---
+{
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What's my balance?"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "toolUse": {
+            "name": "get_balance",
+            "toolUseId": "tu_1"
+          }
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "toolResult": {
+            "content": [
+              {
+                "text": "$1,234.56"
+              }
+            ],
+            "toolUseId": "tu_1"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": {
+    "toolChoice": null,
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Get account balance",
+          "inputSchema": {
+            "json": "<Document>"
+          },
+          "name": "get_balance"
+        }
+      }
+    ]
+  }
+}

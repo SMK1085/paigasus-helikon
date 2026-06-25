@@ -1,6 +1,6 @@
 # Crate overview
 
-The workspace is **14 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
+The workspace is **15 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
 
 For orientation — how to pick crates and add them to your `Cargo.toml` — see [workspace layout](../getting-started/workspace-layout.md). For the rendered rustdoc, see [API docs](./api-docs.md).
 
@@ -23,6 +23,7 @@ Versions below are **current as of 2026-06-16** and move every release — read 
 | [`paigasus-helikon-macros`](https://docs.rs/paigasus-helikon-macros) | `#[tool]` attribute and `tools!` proc macros | published | `0.2.2` |
 | [`paigasus-helikon-providers-openai`](https://docs.rs/paigasus-helikon-providers-openai) | OpenAI model adapter (`OpenAiModel`) | published | `0.2.9` |
 | [`paigasus-helikon-providers-anthropic`](https://docs.rs/paigasus-helikon-providers-anthropic) | Anthropic model adapter (`AnthropicModel`) | published | `0.1.10` |
+| [`paigasus-helikon-providers-bedrock`](https://docs.rs/paigasus-helikon-providers-bedrock) | Amazon Bedrock Converse API model adapter (`BedrockModel`) | published | `0.1.0` |
 | [`paigasus-helikon-sessions-sqlite`](https://docs.rs/paigasus-helikon-sessions-sqlite) | SQLite-backed `Session` backend | published | `0.1.11` |
 | [`paigasus-helikon-runtime-tokio`](https://docs.rs/paigasus-helikon-runtime-tokio) | Default ephemeral Tokio runner | published | `0.1.9` |
 | [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) | MCP integration — `rmcp` client and server wrappers | published | `0.1.3` |
@@ -45,6 +46,7 @@ Add the facade and turn on the features you need. Each feature gates one sibling
 | `macros` | `paigasus_helikon::macros`, `paigasus_helikon::tool`, `paigasus_helikon::tools` | `paigasus-helikon-macros` |
 | `openai` *(alias `providers-openai`)* | `paigasus_helikon::openai` | `paigasus-helikon-providers-openai` |
 | `anthropic` | `paigasus_helikon::anthropic` | `paigasus-helikon-providers-anthropic` |
+| `bedrock` | `paigasus_helikon::bedrock` | `paigasus-helikon-providers-bedrock` |
 | `mcp` | `paigasus_helikon::mcp` | `paigasus-helikon-mcp` |
 | `tools` | `paigasus_helikon::tools` | `paigasus-helikon-tools` |
 | `tools-web` | adds `WebFetch`/`WebSearch` | enables `paigasus-helikon-tools/web` |

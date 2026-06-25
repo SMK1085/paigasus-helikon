@@ -3,7 +3,7 @@
 Paigasus AI SDK — codename **Helikon**. A Rust SDK for building AI agents with pluggable providers, runtimes, and tools.
 
 [![CI](https://github.com/SMK1085/paigasus-helikon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/SMK1085/paigasus-helikon/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![MSRV](https://img.shields.io/badge/rust-1.94%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 [![crates.io](https://img.shields.io/crates/v/paigasus-helikon.svg)](https://crates.io/crates/paigasus-helikon)
 [![docs.rs](https://docs.rs/paigasus-helikon/badge.svg)](https://docs.rs/paigasus-helikon)
@@ -26,16 +26,16 @@ Paigasus is the umbrella; Helikon is the spring. The SDK is the artifact you dra
 cargo add paigasus-helikon --features openai,macros
 ```
 
-Turn on the features you need — `openai`, `anthropic`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `runtime-tokio`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
+Turn on the features you need — `openai`, `anthropic`, `bedrock`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `runtime-tokio`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
 
 ## Workspace at a glance
 
-Fourteen crates under `crates/`. Nine are published to crates.io; four are not-yet-implemented stubs; the CLI is binary-only.
+Fourteen crates under `crates/`. Ten are published to crates.io; four are not-yet-implemented stubs; the CLI is binary-only.
 
 - **`paigasus-helikon`** — facade re-exporting `core` plus opt-in sibling crates by feature flag.
 - **`paigasus-helikon-core`** — type system, traits, the agent loop, runtime-agnostic primitives.
 - **`paigasus-helikon-macros`** — the `#[tool]` attribute and `tools!` proc macros.
-- **`paigasus-helikon-providers-openai`**, **`-anthropic`** — LLM provider adapters.
+- **`paigasus-helikon-providers-openai`**, **`-anthropic`**, **`-bedrock`** — LLM provider adapters.
 - **`paigasus-helikon-sessions-sqlite`** — SQLite-backed session persistence.
 - **`paigasus-helikon-runtime-tokio`** — the default ephemeral Tokio runner.
 - **`paigasus-helikon-tools`** — sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`; OS-enforced containment behind `os-sandbox`; microVM containment via forkd/Firecracker behind `microvm`, experimental — SMA-437: includes `EgressProxy`, `EgressPolicy`, and `Isolation::Proxied` for domain-filtered egress enforcement).

@@ -60,6 +60,11 @@ pub use paigasus_helikon_runtime_agentcore as runtime_agentcore;
 #[cfg(feature = "sessions-sqlite")]
 pub use paigasus_helikon_sessions_sqlite as sessions_sqlite;
 
+/// Bedrock provider (Converse model). Enabled via the `bedrock` feature.
+/// Distinct from `runtime-agentcore` (the Bedrock AgentCore runtime).
+#[cfg(feature = "bedrock")]
+pub use paigasus_helikon_providers_bedrock as bedrock;
+
 /// JSON Schema helpers.
 pub mod schema {
     /// OpenAI/JSON-Schema strict-mode normalizer — see

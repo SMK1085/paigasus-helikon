@@ -18,6 +18,7 @@ Each feature gates one sibling crate behind a module on `paigasus_helikon::`:
 | `macros` | `macros` module + `tool` / `tools` macros | `paigasus-helikon-macros` |
 | `openai` *(alias `providers-openai`)* | `openai` | `paigasus-helikon-providers-openai` |
 | `anthropic` | `anthropic` | `paigasus-helikon-providers-anthropic` |
+| `bedrock` | `bedrock` | `paigasus-helikon-providers-bedrock` |
 | `mcp` | `mcp` | `paigasus-helikon-mcp` |
 | `tools` | `tools` | `paigasus-helikon-tools` |
 | `tools-web` | adds `WebFetch` / `WebSearch` | `paigasus-helikon-tools/web` |
@@ -26,7 +27,7 @@ Each feature gates one sibling crate behind a module on `paigasus_helikon::`:
 | `sessions-sqlite` | `sessions_sqlite` | `paigasus-helikon-sessions-sqlite` |
 | `runtime-tokio` | `runtime_tokio` | `paigasus-helikon-runtime-tokio` |
 
-Feature names are kebab-case; the module aliases are snake-case. The `evals`, `runtime-axum`, `runtime-temporal`, and `runtime-agentcore` features exist but gate not-yet-implemented stub crates — don't enable them yet. The `paigasus_helikon::schema::strict()` JSON-Schema normalizer is available regardless of features.
+Feature names are kebab-case; the module aliases are snake-case. The `evals`, `runtime-axum`, `runtime-temporal`, and `runtime-agentcore` features exist but gate not-yet-implemented stub crates — don't enable them yet. **Note:** the `bedrock` feature gates `paigasus-helikon-providers-bedrock`, which is distinct from `runtime-agentcore` (the Bedrock AgentCore runtime host). The `paigasus_helikon::schema::strict()` JSON-Schema normalizer is available regardless of features.
 
 When using the `mcp` feature, `McpServerHandle` (from `paigasus_helikon::mcp`) implements `ToolSource<Ctx>` from core. Register MCP server handles directly on the builder with `.mcp_servers([...])` and finalize with `.build_resolved().await?` — no need to convert to a `Vec<Arc<dyn Tool<Ctx>>>` manually. See the [MCP integration guide](https://smk1085.github.io/paigasus-helikon/concepts/mcp-integration.html) for details.
 
