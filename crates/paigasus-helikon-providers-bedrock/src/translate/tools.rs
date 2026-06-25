@@ -12,7 +12,7 @@ use crate::translate::schema::{rewrite_tool_schema, Ruleset};
 /// Reserved tool name used internally for structured-output synthesis.
 ///
 /// User-provided tools with this name are rejected to avoid collisions.
-pub(crate) const SYNTHESIZED_TOOL_NAME: &str = "__paigasus_structured_output__";
+pub const SYNTHESIZED_TOOL_NAME: &str = "__paigasus_structured_output__";
 
 /// Translate a slice of [`ToolDef`]s into Bedrock [`ToolSpecification`]s.
 ///

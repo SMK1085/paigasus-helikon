@@ -54,7 +54,7 @@ const UNSUPPORTED_KEYS: &[&str] = &[
 /// 2. Collapse `oneOf`/`anyOf`/`allOf` into one relaxed object.
 /// 3. Strip unsupported keywords: `$schema`, `$id`, `$anchor`, `format`,
 ///    `examples`, `default`, `$comment`.
-/// 4. Cycles or nodes exceeding depth [`MAX_DEPTH`] become `{"type":"object"}`.
+/// 4. Cycles or nodes exceeding the internal depth limit (64) become `{"type":"object"}`.
 pub fn rewrite_tool_schema(schema: &serde_json::Value, ruleset: Ruleset) -> serde_json::Value {
     match ruleset {
         Ruleset::Strict => {
