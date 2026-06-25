@@ -86,7 +86,7 @@ aws-smithy-runtime     = { version = "1.11.3", default-features = false, feature
 aws-smithy-http-client = { version = "1.1.13", default-features = false, features = ["rustls-aws-lc"] }
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.9" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.10" }
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.11" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.3" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.15" }
