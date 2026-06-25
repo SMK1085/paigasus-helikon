@@ -121,47 +121,44 @@ impl Model for BedrockModel {
     }
 }
 
-// ── Cancellation-wrapper helper (extracted for tests) ────────────────────────
-
-/// Wrap any `Stream<Item = Result<ModelEvent, ModelError>>` with a
-/// `CancellationToken` guard.
-///
-/// When `cancel` fires, the returned stream ends immediately **without**
-/// emitting a `Finish` event — matching the `Model::invoke` cancellation
-/// contract.
-///
-/// This function is `pub(crate)` and re-exported via `crate::testing` so that
-/// `tests/cancellation.rs` can exercise the contract without a live AWS
-/// endpoint.
-pub fn drive_stream_with_token<S>(
-    source: S,
-    cancel: CancellationToken,
-) -> BoxStream<'static, Result<ModelEvent, ModelError>>
-where
-    S: futures_core::Stream<Item = Result<ModelEvent, ModelError>> + Send + 'static,
-{
-    Box::pin(stream! {
-        tokio::pin!(source);
-        loop {
-            let next = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => return,
-                r = futures_util::StreamExt::next(&mut source) => r,
-            };
-            match next {
-                None => return,
-                Some(v) => yield v,
-            }
-        }
-    })
-}
-
-// ── Unit tests (descriptor + capability) ─────────────────────────────────────
+// ── Unit tests (descriptor + capability + cancellation contract) ──────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use aws_config::{BehaviorVersion, Region};
+    use futures_core::stream::BoxStream;
+
+    // ── Cancellation-wrapper helper (test-only) ───────────────────────────────
+
+    /// Wrap any `Stream<Item = Result<ModelEvent, ModelError>>` with a
+    /// `CancellationToken` guard.
+    ///
+    /// When `cancel` fires, the returned stream ends immediately **without**
+    /// emitting a `Finish` event — matching the `Model::invoke` cancellation
+    /// contract.
+    fn drive_stream_with_token<S>(
+        source: S,
+        cancel: CancellationToken,
+    ) -> BoxStream<'static, Result<ModelEvent, ModelError>>
+    where
+        S: futures_core::Stream<Item = Result<ModelEvent, ModelError>> + Send + 'static,
+    {
+        Box::pin(stream! {
+            tokio::pin!(source);
+            loop {
+                let next = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return,
+                    r = futures_util::StreamExt::next(&mut source) => r,
+                };
+                match next {
+                    None => return,
+                    Some(v) => yield v,
+                }
+            }
+        })
+    }
 
     fn offline_model(model_id: &str) -> BedrockModel {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -209,5 +206,116 @@ mod tests {
         let m = offline_model("amazon.nova-pro-v1:0");
         let m2 = m.clone();
         assert_eq!(m.model(), m2.model());
+    }
+
+    // ── Cancellation contract tests ───────────────────────────────────────────
+
+    use futures_core::Stream;
+    use futures_util::StreamExt;
+
+    /// Build a stream that yields `n` `TokenDelta` events then ends.
+    fn token_stream(
+        n: usize,
+    ) -> impl Stream<Item = Result<ModelEvent, ModelError>> + Send + 'static {
+        let events: Vec<Result<ModelEvent, ModelError>> = (0..n)
+            .map(|i| {
+                Ok(ModelEvent::TokenDelta {
+                    text: format!("chunk-{i}"),
+                })
+            })
+            .collect();
+        futures_util::stream::iter(events)
+    }
+
+    /// Build a stream that yields `n` `TokenDelta` events then a `Finish` event.
+    fn token_stream_with_finish(
+        n: usize,
+    ) -> impl Stream<Item = Result<ModelEvent, ModelError>> + Send + 'static {
+        use paigasus_helikon_core::FinishReason;
+        let mut events: Vec<Result<ModelEvent, ModelError>> = (0..n)
+            .map(|i| {
+                Ok(ModelEvent::TokenDelta {
+                    text: format!("chunk-{i}"),
+                })
+            })
+            .collect();
+        events.push(Ok(ModelEvent::Finish {
+            reason: FinishReason::Stop,
+        }));
+        futures_util::stream::iter(events)
+    }
+
+    #[tokio::test]
+    async fn cancel_before_stream_ends_no_finish() {
+        let cancel = CancellationToken::new();
+        let source = token_stream(10);
+
+        // Cancel immediately — the stream should yield 0 events and no Finish.
+        cancel.cancel();
+        let events: Vec<_> = drive_stream_with_token(source, cancel).collect().await;
+
+        let has_finish = events
+            .iter()
+            .any(|r| matches!(r, Ok(ModelEvent::Finish { .. })));
+        assert!(!has_finish, "cancelled stream must not emit Finish");
+    }
+
+    #[tokio::test]
+    async fn cancel_mid_stream_no_finish() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        // A stream that cancels itself after yielding the first token.
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_clone = cancelled.clone();
+
+        let source = async_stream::stream! {
+            yield Ok::<ModelEvent, ModelError>(ModelEvent::TokenDelta { text: "first".to_owned() });
+            // Signal cancellation after the first token.
+            if !cancelled_clone.swap(true, Ordering::SeqCst) {
+                cancel_clone.cancel();
+            }
+            // `biased;` in drive_stream_with_token's tokio::select! checks the
+            // cancel arm first on every iteration, so once cancel() fires the
+            // driver exits before polling the source again — making this
+            // single-threaded ordering deterministic and guaranteeing no Finish
+            // is emitted after cancel.
+            yield Ok(ModelEvent::TokenDelta { text: "second".to_owned() });
+            yield Ok(ModelEvent::Finish { reason: paigasus_helikon_core::FinishReason::Stop });
+        };
+
+        let events: Vec<_> = drive_stream_with_token(source, cancel).collect().await;
+
+        let has_finish = events
+            .iter()
+            .any(|r| matches!(r, Ok(ModelEvent::Finish { .. })));
+        assert!(!has_finish, "mid-stream cancel must not emit Finish");
+    }
+
+    #[tokio::test]
+    async fn uncancelled_stream_emits_finish() {
+        let cancel = CancellationToken::new();
+        let source = token_stream_with_finish(3);
+
+        let events: Vec<_> = drive_stream_with_token(source, cancel).collect().await;
+
+        let has_finish = events
+            .iter()
+            .any(|r| matches!(r, Ok(ModelEvent::Finish { .. })));
+        assert!(has_finish, "uncancelled stream must emit Finish");
+        // All 3 token deltas + finish = 4 events.
+        assert_eq!(events.len(), 4, "expected 3 tokens + 1 finish");
+    }
+
+    #[tokio::test]
+    async fn cancel_does_not_drop_events_already_yielded() {
+        let cancel = CancellationToken::new();
+        // 5 events, no finish.  Don't cancel — all should arrive.
+        let source = token_stream(5);
+        let events: Vec<_> = drive_stream_with_token(source, cancel).collect().await;
+        assert_eq!(events.len(), 5, "all events must arrive when not cancelled");
     }
 }
