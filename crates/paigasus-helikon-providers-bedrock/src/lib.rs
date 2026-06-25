@@ -24,15 +24,3 @@ pub use builder::{BedrockModelBuilder, BuildError};
 pub use family::ModelFamily;
 pub use model::BedrockModel;
 pub use translate::schema::{rewrite_tool_schema, Ruleset};
-
-/// Re-exports for integration tests.
-///
-/// This module exposes internal types that are not part of the public library
-/// API but are required by the crate's own integration tests in `tests/`.
-/// Consumers should not depend on this module — it is subject to change
-/// without a semver bump.
-#[doc(hidden)]
-pub mod testing {
-    pub use crate::stream::StreamTranslator;
-    pub use crate::translate::tools::SYNTHESIZED_TOOL_NAME;
-}
