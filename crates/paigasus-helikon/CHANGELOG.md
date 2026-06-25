@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.10](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.9...paigasus-helikon-v0.4.10) - 2026-06-25
+
+### Added
+
+- *(providers)* SMA-329 add Amazon Bedrock Converse provider ([#120](https://github.com/SMK1085/paigasus-helikon/pull/120))
+
 ## [0.4.9](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.8...paigasus-helikon-v0.4.9) - 2026-06-24
 
 ### Other
