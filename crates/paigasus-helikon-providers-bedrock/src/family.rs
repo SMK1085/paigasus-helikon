@@ -89,7 +89,7 @@ impl ModelFamily {
 /// Strip a leading cross-region inference profile prefix such as `us.`,
 /// `eu.`, `ap.`, or `apac.`.
 fn strip_region_prefix(id: &str) -> &str {
-    for prefix in ["us.", "eu.", "ap.", "apac."] {
+    for prefix in ["us.", "eu.", "apac.", "ap."] {
         if let Some(rest) = id.strip_prefix(prefix) {
             return rest;
         }
@@ -107,6 +107,7 @@ mod tests {
         for (id, want) in [
             ("anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic),
             ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", Anthropic), // cross-region inference profile prefix
+            ("apac.anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic), // apac prefix
             ("amazon.nova-pro-v1:0", AmazonNova),
             ("amazon.titan-text-express-v1", AmazonTitan),
             ("meta.llama3-1-70b-instruct-v1:0", Llama),
