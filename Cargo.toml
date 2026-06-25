@@ -15,6 +15,7 @@ categories    = ["api-bindings", "asynchronous"]
 
 [workspace.dependencies]
 anyhow                = "1"
+gcp_auth              = "0.12"
 async-openai          = "0.41"
 cap-std               = "4"
 axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
@@ -100,6 +101,7 @@ paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
 paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.17" }
 paigasus-helikon-providers-bedrock   = { path = "crates/paigasus-helikon-providers-bedrock", version = "0.1.0" }
+paigasus-helikon-providers-gemini    = { path = "crates/paigasus-helikon-providers-gemini", version = "0.1.0" }
 
 [workspace.lints.rust]
 missing_docs = "warn"
