@@ -33,6 +33,7 @@ pub use translate::schema::{rewrite_tool_schema, Ruleset};
 /// without a semver bump.
 #[doc(hidden)]
 pub mod testing {
+    pub use crate::model::drive_stream_with_token;
     pub use crate::stream::StreamTranslator;
     pub use crate::translate::tools::SYNTHESIZED_TOOL_NAME;
 }
