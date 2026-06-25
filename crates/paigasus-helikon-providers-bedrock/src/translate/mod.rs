@@ -104,7 +104,7 @@ pub(crate) fn build_request(
         req.model_settings.tool_choice.as_ref(),
         Some(ToolChoice::Tool { .. }),
     );
-    if synthesizing_rf && forced_tool {
+    if synthesizing_rf && family.supports_forced_tool_choice() && forced_tool {
         return Err(ModelError::Other(anyhow::anyhow!(
             "ResponseFormat::JsonSchema/JsonObject and ToolChoice::Tool are mutually \
              exclusive on Bedrock — use one or the other",
@@ -117,7 +117,7 @@ pub(crate) fn build_request(
         req.model_settings.tool_choice.as_ref(),
         Some(ToolChoice::None),
     );
-    if synthesizing_rf && none_choice {
+    if synthesizing_rf && family.supports_forced_tool_choice() && none_choice {
         return Err(ModelError::Other(anyhow::anyhow!(
             "ResponseFormat::JsonSchema/JsonObject and ToolChoice::None are mutually \
              exclusive on Bedrock — structured-output synthesis requires a tool call",
@@ -169,6 +169,39 @@ pub(crate) fn build_request(
     // synth_tool.is_some() always pushes to all_tools above, so a synthesized tool_choice is never silently dropped here.
     let effective_tc = synth_tc.or(caller_tc);
 
+    // Validate forced tool choices on supported families.
+    // (On unsupported families, forced choices were already omitted by translate_tool_choice.)
+    if family.supports_forced_tool_choice() {
+        match req.model_settings.tool_choice.as_ref() {
+            Some(ToolChoice::Required) if !synthesizing => {
+                if all_tools.is_empty() {
+                    return Err(ModelError::Other(anyhow::anyhow!(
+                        "ToolChoice::Required requires at least one tool to be defined",
+                    )));
+                }
+            }
+            Some(ToolChoice::Tool { name }) => {
+                let tool_names: Vec<&str> = all_tools
+                    .iter()
+                    .filter_map(|t| {
+                        if let Tool::ToolSpec(spec) = t {
+                            Some(spec.name())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !tool_names.contains(&name.as_str()) {
+                    return Err(ModelError::Other(anyhow::anyhow!(
+                        "ToolChoice::Tool references tool {:?} which is not defined in the tool list",
+                        name,
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+
     let tool_config = if !all_tools.is_empty() {
         let mut builder = ToolConfiguration::builder();
         for t in all_tools {
@@ -213,7 +246,17 @@ pub(crate) fn build_request(
 fn translate_tool_choice(tc: &ToolChoice, family: ModelFamily) -> Option<BedrockToolChoice> {
     match tc {
         ToolChoice::Auto => Some(BedrockToolChoice::Auto(AutoToolChoice::builder().build())),
-        ToolChoice::Required => Some(BedrockToolChoice::Any(AnyToolChoice::builder().build())),
+        ToolChoice::Required => {
+            if !family.supports_forced_tool_choice() {
+                tracing::debug!(
+                    target: "paigasus::bedrock::translate",
+                    ?family,
+                    "ToolChoice::Required requested but family does not support forced tool choice; omitting",
+                );
+                return None;
+            }
+            Some(BedrockToolChoice::Any(AnyToolChoice::builder().build()))
+        }
         ToolChoice::None => {
             // ToolChoice::None is handled early in build_request; unreachable here.
             None
@@ -879,6 +922,110 @@ mod tests {
         assert_eq!(ic.max_tokens(), Some(2048));
         let w = to_wire_json(&p);
         assert_eq!(w["inferenceConfig"]["maxTokens"], 2048);
+    }
+
+    // ── Fix A tests: family-gated conflict guards + ToolChoice::Required ─────
+
+    #[test]
+    fn json_schema_plus_tool_choice_tool_on_unsupported_family_is_ok() {
+        // On a family that doesn't support synthesis, JsonSchema + ToolChoice::Tool must NOT error
+        // (the format degrades to text, so there's no real conflict).
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "X".to_owned(),
+            schema: json!({}),
+            strict: false,
+        });
+        req.tools = vec![ToolDef {
+            name: "search".to_owned(),
+            description: "search".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "search".to_owned(),
+        });
+        // Must succeed: on Llama there's no synthesis, so no conflict
+        let p = build_request(&llama_cfg(), &req).unwrap();
+        assert!(!p.synthesizing);
+    }
+
+    #[test]
+    fn json_schema_plus_tool_choice_none_on_unsupported_family_is_ok() {
+        // On a family that doesn't support synthesis, JsonSchema + ToolChoice::None must NOT error.
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "X".to_owned(),
+            schema: json!({}),
+            strict: false,
+        });
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let p = build_request(&llama_cfg(), &req).unwrap();
+        assert!(!p.synthesizing);
+        assert!(p.tool_config.is_none()); // None suppresses tool_config
+    }
+
+    #[test]
+    fn tool_choice_required_on_unsupported_family_omits_tool_choice() {
+        // ToolChoice::Required on Llama must NOT produce toolChoice: {any:{}}
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        let p = build_request(&llama_cfg(), &req).unwrap();
+        // tool_config should still be present (tools exist) but toolChoice should be omitted
+        let tc = p.tool_config.as_ref().unwrap();
+        // toolChoice absent (None) because family doesn't support it
+        assert!(tc.tool_choice().is_none());
+    }
+
+    #[test]
+    fn tool_choice_required_on_supported_family_maps_to_any() {
+        // Sanity check: Required still works on Claude
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        let tc = p.tool_config.as_ref().unwrap();
+        assert!(tc.tool_choice().unwrap().is_any());
+    }
+
+    // ── Fix B tests: validate forced tool choices ─────────────────────────────
+
+    #[test]
+    fn forced_tool_choice_tool_missing_tool_name_returns_error() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "nonexistent".to_owned(),
+        });
+        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+    }
+
+    #[test]
+    fn forced_tool_choice_required_no_tools_returns_error() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        // No tools added, ToolChoice::Required on supported family
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
     }
 
     #[test]
