@@ -17,8 +17,6 @@ use std::collections::HashMap;
 /// - Unsigned integers use [`Number::PosInt`].
 /// - Signed negative integers use [`Number::NegInt`].
 /// - Floating-point numbers use [`Number::Float`].
-// Used by translate/request.rs (Task 7) — allow dead_code until that task lands.
-#[allow(dead_code)]
 pub(crate) fn value_to_document(v: &Value) -> Document {
     match v {
         Value::Null => Document::Null,
