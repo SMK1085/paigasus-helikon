@@ -1,0 +1,37 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/tests/schema_rewriter.rs
+expression: result
+---
+{
+  "properties": {
+    "payload": {
+      "properties": {
+        "amount": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "amount"
+      ],
+      "type": "object"
+    },
+    "type": {
+      "enum": [
+        "transfer",
+        "deposit",
+        "withdrawal"
+      ],
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

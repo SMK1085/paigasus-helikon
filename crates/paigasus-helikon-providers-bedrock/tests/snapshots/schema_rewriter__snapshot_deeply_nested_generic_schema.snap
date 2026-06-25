@@ -1,0 +1,95 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/tests/schema_rewriter.rs
+expression: result
+---
+{
+  "properties": {
+    "accounts": {
+      "items": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "properties": {
+              "interest_rate": {
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "checking",
+                  "savings"
+                ],
+                "type": "string"
+              },
+              "overdraft_limit": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "transactions": {
+            "items": {
+              "properties": {
+                "amount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "notes": {
+                  "type": "string"
+                },
+                "timestamp": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "metadata": {
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "owner": {
+      "properties": {
+        "contact": {
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "phone": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "Portfolio",
+  "type": "object"
+}

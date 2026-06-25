@@ -18,7 +18,7 @@ mod error;
 mod family;
 mod model;
 mod stream;
-mod translate;
+pub mod translate;
 
 pub use builder::{BedrockModelBuilder, BuildError};
 pub use family::ModelFamily;
