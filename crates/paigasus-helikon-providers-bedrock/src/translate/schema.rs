@@ -229,7 +229,10 @@ impl<'a> Rewriter<'a> {
     /// 3. Detect a "shared tag key": a property present in **all** variants
     ///    whose schema is a `const` string or a single-value `enum` string.
     /// 4. Emit `{"type":"string","enum":[tags…]}` for the tag key.
-    /// 5. Union the remaining properties (first-wins on collision).
+    /// 5. Union the remaining properties: if a key appears in multiple variants
+    ///    and both are object schemas with `properties`, merge their properties
+    ///    (all optional — do NOT add `required`); otherwise fall back to
+    ///    `{"type":"object"}`. This ensures variant-1-only payload fields survive.
     /// 6. Return `{"type":"object","properties":<union>}` (drop `required` and
     ///    `additionalProperties` — the Strict ruleset must not inject these).
     ///    If the union is empty, return `{"type":"object"}` with no `properties`.
@@ -281,7 +284,7 @@ impl<'a> Rewriter<'a> {
             );
         }
 
-        // Union all other properties from every variant.
+        // Union all other properties from every variant (deep-merge object schemas).
         for props in &props_maps {
             for (key, val) in *props {
                 if let Some((ref tag_name, _)) = tag_key {
@@ -291,6 +294,9 @@ impl<'a> Rewriter<'a> {
                 }
                 union_props
                     .entry(key.clone())
+                    .and_modify(|existing| {
+                        *existing = merge_object_schemas(existing, val);
+                    })
                     .or_insert_with(|| val.clone());
             }
         }
@@ -343,6 +349,34 @@ impl<'a> Rewriter<'a> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Merge two object schemas for the same shared payload key.
+///
+/// If both schemas are objects with `properties`, union their properties (all
+/// keys, all optional — no `required` added). If either schema is non-object
+/// or cannot be merged, fall back to `{"type":"object"}` (permissive).
+fn merge_object_schemas(a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Value {
+    let (Some(a_obj), Some(b_obj)) = (a.as_object(), b.as_object()) else {
+        return serde_json::json!({"type": "object"});
+    };
+
+    let a_props = a_obj.get("properties").and_then(|p| p.as_object());
+    let b_props = b_obj.get("properties").and_then(|p| p.as_object());
+
+    match (a_props, b_props) {
+        (Some(ap), Some(bp)) => {
+            let mut merged = ap.clone();
+            for (key, val) in bp {
+                merged.entry(key.clone()).or_insert_with(|| val.clone());
+            }
+            serde_json::json!({"type": "object", "properties": merged})
+        }
+        _ => {
+            // At least one schema has no properties; fall back to permissive object.
+            serde_json::json!({"type": "object"})
+        }
+    }
+}
 
 /// Extract the definition name from a local `$ref` string.
 ///
@@ -544,6 +578,32 @@ mod tests {
         assert!(
             out.get("additionalProperties").is_none(),
             "Strict must not inject additionalProperties"
+        );
+    }
+
+    #[test]
+    fn tagged_enum_variant1_only_field_survives_in_union() {
+        // Verify that a field present ONLY in variant 1 (not variant 0) appears
+        // in the merged output.
+        let input = json!({
+            "oneOf": [
+                {"type":"object","properties":{"t":{"const":"A"},"payload":{"type":"object","properties":{"x":{"type":"string"}}}}},
+                {"type":"object","properties":{"t":{"const":"B"},"payload":{"type":"object","properties":{"y":{"type":"integer"}}}}}
+            ]
+        });
+        let out = strict(input);
+        // "x" is variant 0's field, "y" is variant 1's field — both must survive.
+        assert!(
+            out["properties"]["payload"]["properties"]
+                .get("x")
+                .is_some(),
+            "variant 0 field 'x' must survive"
+        );
+        assert!(
+            out["properties"]["payload"]["properties"]
+                .get("y")
+                .is_some(),
+            "variant 1 field 'y' must survive in merged payload"
         );
     }
 

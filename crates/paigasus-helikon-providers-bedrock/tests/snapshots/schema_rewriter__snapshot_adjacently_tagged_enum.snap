@@ -6,6 +6,9 @@ expression: result
   "properties": {
     "payload": {
       "properties": {
+        "account": {
+          "type": "string"
+        },
         "amount": {
           "minimum": 0,
           "type": "number"
@@ -17,11 +20,6 @@ expression: result
           "type": "string"
         }
       },
-      "required": [
-        "from",
-        "to",
-        "amount"
-      ],
       "type": "object"
     },
     "type": {

@@ -21,14 +21,12 @@ pub(crate) fn caps_for(family: ModelFamily) -> ModelCapabilities {
             .with_streaming()
             .with_tools()
             .with_parallel_tool_calls()
-            .with_structured_output()
-            .with_vision(),
+            .with_structured_output(),
         ModelFamily::AmazonNova => ModelCapabilities::empty()
             .with_streaming()
             .with_tools()
             .with_parallel_tool_calls()
-            .with_structured_output()
-            .with_vision(),
+            .with_structured_output(),
         ModelFamily::AmazonTitan => ModelCapabilities::empty().with_streaming().with_tools(),
         ModelFamily::Llama => ModelCapabilities::empty().with_streaming().with_tools(),
         ModelFamily::Mistral => ModelCapabilities::empty()
@@ -53,7 +51,10 @@ mod tests {
         assert!(caps.tools, "anthropic: tools");
         assert!(caps.parallel_tool_calls, "anthropic: parallel");
         assert!(caps.structured_output, "anthropic: structured_output");
-        assert!(caps.vision, "anthropic: vision");
+        assert!(
+            !caps.vision,
+            "anthropic: vision not advertised (no image-block mapping)"
+        );
     }
 
     #[test]
@@ -78,7 +79,10 @@ mod tests {
         let caps = caps_for(ModelFamily::AmazonNova);
         assert!(caps.structured_output, "nova: structured_output");
         assert!(caps.parallel_tool_calls, "nova: parallel");
-        assert!(caps.vision, "nova: vision");
+        assert!(
+            !caps.vision,
+            "nova: vision not advertised (no image-block mapping)"
+        );
     }
 
     #[test]

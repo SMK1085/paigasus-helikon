@@ -200,7 +200,10 @@ mod tests {
         assert!(caps.streaming);
         assert!(caps.tools);
         assert!(caps.structured_output);
-        assert!(caps.vision);
+        assert!(
+            !caps.vision,
+            "vision not advertised (no image-block mapping)"
+        );
     }
 
     #[test]
