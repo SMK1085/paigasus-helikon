@@ -46,16 +46,29 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
     // Pending ToolResult blocks to prepend to the next user turn.
     let mut pending_tool_results: Vec<ContentBlock> = Vec::new();
 
-    /// Flush `pending_assistant` into a new assistant Message on `messages`.
+    /// Flush `pending_assistant` into an assistant Message on `messages`.
+    ///
+    /// If the last message is already an assistant turn, the pending content
+    /// blocks are appended to it (coalescing) rather than creating a new turn.
     fn flush_assistant(messages: &mut Vec<Message>, pending: &mut Vec<ContentBlock>) {
         if !pending.is_empty() {
             let content = std::mem::take(pending);
-            let msg = Message::builder()
-                .role(ConversationRole::Assistant)
-                .set_content(Some(content))
-                .build()
-                .expect("role + non-empty content always valid");
-            messages.push(msg);
+            if messages
+                .last()
+                .map(|m| m.role == ConversationRole::Assistant)
+                .unwrap_or(false)
+            {
+                // Coalesce: append to the existing assistant turn.
+                let last = messages.last_mut().unwrap();
+                last.content.extend(content);
+            } else {
+                let msg = Message::builder()
+                    .role(ConversationRole::Assistant)
+                    .set_content(Some(content))
+                    .build()
+                    .expect("role + non-empty content always valid");
+                messages.push(msg);
+            }
         }
     }
 
@@ -106,12 +119,22 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                     }
                 }
                 if !blocks.is_empty() {
-                    let msg = Message::builder()
-                        .role(ConversationRole::User)
-                        .set_content(Some(blocks))
-                        .build()
-                        .expect("role + non-empty content always valid");
-                    messages.push(msg);
+                    if messages
+                        .last()
+                        .map(|m| m.role == ConversationRole::User)
+                        .unwrap_or(false)
+                    {
+                        // Coalesce: append to the existing user turn.
+                        let last = messages.last_mut().unwrap();
+                        last.content.extend(blocks);
+                    } else {
+                        let msg = Message::builder()
+                            .role(ConversationRole::User)
+                            .set_content(Some(blocks))
+                            .build()
+                            .expect("role + non-empty content always valid");
+                        messages.push(msg);
+                    }
                 }
             }
 
@@ -152,12 +175,22 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                     }
                 }
                 if !blocks.is_empty() {
-                    let msg = Message::builder()
-                        .role(ConversationRole::Assistant)
-                        .set_content(Some(blocks))
-                        .build()
-                        .expect("role + non-empty content always valid");
-                    messages.push(msg);
+                    if messages
+                        .last()
+                        .map(|m| m.role == ConversationRole::Assistant)
+                        .unwrap_or(false)
+                    {
+                        // Coalesce: append to the existing assistant turn.
+                        let last = messages.last_mut().unwrap();
+                        last.content.extend(blocks);
+                    } else {
+                        let msg = Message::builder()
+                            .role(ConversationRole::Assistant)
+                            .set_content(Some(blocks))
+                            .build()
+                            .expect("role + non-empty content always valid");
+                        messages.push(msg);
+                    }
                 }
             }
 
@@ -479,6 +512,60 @@ mod tests {
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[1]["type"], "tool_use");
         assert_eq!(content[1]["name"], "search");
+    }
+
+    // ── Fix C tests: coalesce adjacent same-role turns ────────────────────────
+
+    #[test]
+    fn adjacent_user_messages_coalesce_into_one_turn() {
+        let items = vec![user(vec![text("first")]), user(vec![text("second")])];
+        let w = wire(&items).unwrap();
+        let msgs = w["messages"].as_array().unwrap();
+        assert_eq!(
+            msgs.len(),
+            1,
+            "two adjacent user messages must merge into one turn"
+        );
+        assert_eq!(msgs[0]["role"], "user");
+        let content = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["text"], "first");
+        assert_eq!(content[1]["text"], "second");
+    }
+
+    #[test]
+    fn assistant_message_followed_by_tool_call_stays_on_same_assistant_turn() {
+        // Item::AssistantMessage + Item::ToolCall → single assistant message with both blocks.
+        // AssistantMessage is pushed as an assistant turn, then ToolCall queues to
+        // pending_assistant, which at end-of-input is flushed and coalesced into the
+        // existing assistant turn.
+        let items = vec![
+            user(vec![text("do it")]),
+            assistant(vec![text("ok, calling tool")]),
+            Item::ToolCall {
+                call_id: "tu_1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            },
+        ];
+        let w = wire(&items).unwrap();
+        let msgs = w["messages"].as_array().unwrap();
+        // user + one assistant turn (text + tool_use coalesced)
+        assert_eq!(
+            msgs.len(),
+            2,
+            "assistant text + tool_call must be one assistant turn"
+        );
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[1]["role"], "assistant");
+        let content = msgs[1]["content"].as_array().unwrap();
+        assert_eq!(
+            content.len(),
+            2,
+            "assistant turn has text block + tool_use block"
+        );
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "tool_use");
     }
 
     #[test]
