@@ -9,6 +9,7 @@
 //! by extracting the code/status from the real [`SdkError`] variants.
 
 use aws_smithy_runtime_api::client::result::SdkError;
+use aws_smithy_runtime_api::http::Headers;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use paigasus_helikon_core::ModelError;
 
@@ -58,12 +59,29 @@ pub(crate) fn classify(
     }
 }
 
+/// Parse the `Retry-After` header (integer seconds) from Bedrock response headers into milliseconds.
+///
+/// Returns `None` when the header is absent or its value is not a non-negative integer
+/// (HTTP-date retry-after values are not supported — `None` is the safe fallback).
+pub(crate) fn parse_retry_after_ms(headers: &Headers) -> Option<u64> {
+    headers
+        .get("retry-after")
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|seconds| seconds.saturating_mul(1000))
+}
+
 /// Map a Bedrock SDK [`SdkError`] to a [`ModelError`].
 ///
 /// For `ServiceError`, the modeled error code and message are extracted via
 /// [`ProvideErrorMetadata`] and delegated to [`classify`]. Transport-level
 /// failures (`DispatchFailure`, `TimeoutError`, `ConstructionFailure`,
 /// `ResponseError`) map to [`ModelError::Transport`].
+///
+/// This generic variant does **not** inspect HTTP headers (the response type `R`
+/// may not be an HTTP response — e.g. the event-stream `recv()` path produces
+/// `SdkError<_, RawMessage>`). Call [`map_sdk_http_error`] when `R` is known to
+/// be [`aws_smithy_runtime_api::http::Response`] and you want `Retry-After`
+/// header extraction.
 pub(crate) fn map_sdk_error<E, R>(err: SdkError<E, R>) -> ModelError
 where
     E: ProvideErrorMetadata + std::fmt::Debug,
@@ -84,9 +102,77 @@ where
     }
 }
 
+/// Map a Bedrock SDK [`SdkError`] whose response type is the concrete HTTP
+/// response to a [`ModelError`], extracting `Retry-After` header and HTTP
+/// status from the raw response.
+///
+/// This is the preferred variant for the initial `fluent.send()` call on a
+/// Bedrock operation, where the SDK returns
+/// `SdkError<E, aws_smithy_runtime_api::client::orchestrator::HttpResponse>`.
+pub(crate) fn map_sdk_http_error<E>(
+    err: SdkError<E, aws_smithy_runtime_api::http::Response>,
+) -> ModelError
+where
+    E: ProvideErrorMetadata + std::fmt::Debug,
+{
+    match &err {
+        SdkError::ServiceError(svc) => {
+            let code = svc.err().code();
+            let message = svc.err().message().unwrap_or("");
+            let raw = svc.raw();
+            let status = Some(raw.status().as_u16());
+            let retry_after_ms = parse_retry_after_ms(raw.headers());
+            classify(code, status, message, retry_after_ms)
+        }
+        SdkError::DispatchFailure(_)
+        | SdkError::TimeoutError(_)
+        | SdkError::ConstructionFailure(_)
+        | SdkError::ResponseError(_) => ModelError::Transport(format!("{err:?}")),
+        // Non-exhaustive: treat any future variant as transport.
+        _ => ModelError::Transport(format!("{err:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── parse_retry_after_ms tests ────────────────────────────────────────────
+
+    fn make_headers(pairs: &[(&str, &str)]) -> Headers {
+        let mut h = Headers::new();
+        for (k, v) in pairs {
+            h.insert(k.to_string(), v.to_string());
+        }
+        h
+    }
+
+    #[test]
+    fn parse_retry_after_integer_seconds_to_ms() {
+        let h = make_headers(&[("retry-after", "30")]);
+        assert_eq!(parse_retry_after_ms(&h), Some(30_000));
+    }
+
+    #[test]
+    fn parse_retry_after_missing_returns_none() {
+        let h = make_headers(&[]);
+        assert_eq!(parse_retry_after_ms(&h), None);
+    }
+
+    #[test]
+    fn parse_retry_after_http_date_returns_none() {
+        // HTTP-date format is not supported; return None rather than panic.
+        let h = make_headers(&[("retry-after", "Wed, 21 Oct 2015 07:28:00 GMT")]);
+        assert_eq!(parse_retry_after_ms(&h), None);
+    }
+
+    #[test]
+    fn parse_retry_after_non_numeric_returns_none() {
+        let h = make_headers(&[("retry-after", "soon")]);
+        assert_eq!(parse_retry_after_ms(&h), None);
+    }
+
+    // ── classify tests ────────────────────────────────────────────────────────
 
     #[test]
     fn throttling_maps_to_rate_limited() {

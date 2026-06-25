@@ -180,17 +180,13 @@ pub(crate) fn build_request(
         Some(builder.build().map_err(|e| {
             ModelError::Other(anyhow::anyhow!("failed to build ToolConfiguration: {e}"))
         })?)
-    } else if let Some(tc) = effective_tc {
-        // tool_choice without tools (unusual but pass through)
-        let mut builder = ToolConfiguration::builder();
-        builder = builder.tool_choice(tc);
+    } else if effective_tc.is_some() {
         // ToolConfiguration requires at least one tool — skip tool_choice when
         // no tools are present to avoid a build error.
         tracing::debug!(
             target: "paigasus::bedrock::translate",
             "tool_choice requested but no tools provided; omitting ToolConfiguration",
         );
-        let _ = builder; // suppress unused warning
         None
     } else {
         None

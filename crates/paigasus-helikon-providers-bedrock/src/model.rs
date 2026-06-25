@@ -13,7 +13,7 @@ use paigasus_helikon_core::{
 };
 
 use crate::builder::Config;
-use crate::error::map_sdk_error;
+use crate::error::{map_sdk_error, map_sdk_http_error};
 use crate::stream::StreamTranslator;
 use crate::translate::build_request;
 
@@ -66,10 +66,12 @@ impl Model for BedrockModel {
 
         let s = stream! {
             // Send the ConverseStream request and obtain the event receiver.
+            // Use map_sdk_http_error here: fluent.send() returns
+            // SdkError<_, HttpResponse>, so we can extract Retry-After headers.
             let output = match fluent.send().await {
                 Ok(o) => o,
                 Err(e) => {
-                    yield Err(map_sdk_error(e));
+                    yield Err(map_sdk_http_error(e));
                     return;
                 }
             };
