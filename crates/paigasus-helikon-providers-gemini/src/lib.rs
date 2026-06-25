@@ -1,7 +1,7 @@
 //! Google Gemini provider for the Paigasus Helikon SDK.
 //!
-//! The public surface is [`GeminiModel`] (a [`paigasus_helikon_core::Model`])
-//! and its [`GeminiModelBuilder`]. Supports both the Gemini **Developer API**
+//! The public surface is `GeminiModel` (a [`paigasus_helikon_core::Model`])
+//! and its `GeminiModelBuilder`. Supports both the Gemini **Developer API**
 //! (API key) and **Vertex AI** (OAuth bearer / `TokenProvider`).
 //!
 //! ```ignore

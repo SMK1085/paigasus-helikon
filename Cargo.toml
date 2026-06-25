@@ -15,7 +15,6 @@ categories    = ["api-bindings", "asynchronous"]
 
 [workspace.dependencies]
 anyhow                = "1"
-gcp_auth              = "0.12"
 async-openai          = "0.41"
 cap-std               = "4"
 axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
@@ -26,6 +25,7 @@ eventsource-stream    = "0.2"
 fastrand              = "2"
 futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
+gcp_auth              = "0.12"
 insta                 = "1"
 globset               = "0.4"
 # Pinned to 0.2.28: jiff 0.2.29 activates a `defmt` integration that pulls the
