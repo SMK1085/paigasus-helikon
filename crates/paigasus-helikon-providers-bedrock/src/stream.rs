@@ -249,6 +249,22 @@ impl StreamTranslator {
         out
     }
 
+    /// Flush any buffered stop reason when the Bedrock stream ends normally
+    /// (EOF) without having emitted a `Metadata` event.
+    ///
+    /// Returns the terminal `Finish` event (or a `ModelError::Other` for the
+    /// both-tools-fired error condition) if a stop reason is still pending,
+    /// or `None` if the stream already emitted its terminal event through the
+    /// normal `Metadata`→`Finish` path.
+    ///
+    /// **Call this only on the EOF path, not on the cancellation path.**
+    /// Cancellation must end the stream without emitting `Finish`.
+    pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
+        self.pending_stop_reason
+            .take()
+            .map(|reason| self.finish_events(reason).remove(0))
+    }
+
     // ── private helpers ───────────────────────────────────────────────────────
 
     /// Translate a `StopReason` into the terminal event(s).
@@ -741,5 +757,74 @@ mod tests {
     fn content_block_stop_produces_no_events() {
         let out = run(false, vec![content_block_stop(0)]);
         assert!(out.is_empty());
+    }
+
+    // ── finish() flush tests (Fix 3) ──────────────────────────────────────────
+
+    /// `MessageStop(EndTurn)` with NO subsequent `Metadata` event:
+    /// `finish()` must yield `Finish(Stop)` — the consumer must see the
+    /// terminal event even when Bedrock closes the stream without metadata.
+    #[test]
+    fn finish_flushes_pending_stop_reason_without_metadata() {
+        let mut t = StreamTranslator::new(false);
+
+        // Feed only MessageStop — no Metadata.
+        let out = t.consume(message_stop(StopReason::EndTurn));
+        assert!(
+            out.is_empty(),
+            "MessageStop alone must buffer, not emit immediately"
+        );
+
+        // EOF path: call finish() and expect the terminal Finish(Stop).
+        let terminal = t
+            .finish()
+            .expect("finish() must return Some when stop reason is buffered");
+        assert!(
+            matches!(terminal, Ok(ModelEvent::Finish { ref reason }) if *reason == FinishReason::Stop),
+            "expected Finish(Stop), got {terminal:?}"
+        );
+
+        // A second call must return None (idempotent drain).
+        assert!(
+            t.finish().is_none(),
+            "finish() must return None after the pending reason was drained"
+        );
+    }
+
+    /// When the normal `Metadata`→`Finish` path has already fired,
+    /// `finish()` must return `None` (nothing left to flush).
+    #[test]
+    fn finish_returns_none_after_normal_metadata_path() {
+        let mut t = StreamTranslator::new(false);
+        t.consume(message_stop(StopReason::EndTurn));
+        // Metadata arrives — translator drains pending_stop_reason internally.
+        let out = t.consume(metadata(10, 5, None));
+        // out should contain Usage + Finish.
+        assert_eq!(out.len(), 2);
+
+        // finish() must now return None — nothing is pending.
+        assert!(
+            t.finish().is_none(),
+            "finish() must return None when Metadata already drained the pending reason"
+        );
+    }
+
+    /// `finish()` on the both-tools-fired error path (synthesizing mode):
+    /// must surface `ModelError::Other` rather than `Finish`.
+    #[test]
+    fn finish_surfaces_both_tools_error_without_metadata() {
+        let mut t = StreamTranslator::new(true);
+        // Both synthesized and real tool fire.
+        t.consume(tool_use_start(0, "tu_synth", SYNTHESIZED_TOOL_NAME));
+        t.consume(tool_use_start(1, "tu_real", "search"));
+        // MessageStop with ToolUse — but no Metadata follows.
+        let out = t.consume(message_stop(StopReason::ToolUse));
+        assert!(out.is_empty(), "MessageStop alone must buffer");
+
+        let terminal = t.finish().expect("finish() must return Some");
+        assert!(
+            matches!(terminal, Err(ModelError::Other(_))),
+            "expected Err(Other) for both-tools-fired; got {terminal:?}"
+        );
     }
 }
