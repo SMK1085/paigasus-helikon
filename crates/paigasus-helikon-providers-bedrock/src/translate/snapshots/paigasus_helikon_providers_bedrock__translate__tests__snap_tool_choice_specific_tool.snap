@@ -1,6 +1,6 @@
 ---
-source: crates/paigasus-helikon-providers-bedrock/tests/converse_request.rs
-expression: to_wire_json_test(&p)
+source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
+expression: to_wire_json(&p)
 ---
 {
   "inferenceConfig": null,
@@ -19,7 +19,9 @@ expression: to_wire_json_test(&p)
   "system": [],
   "toolConfig": {
     "toolChoice": {
-      "any": {}
+      "tool": {
+        "name": "ping"
+      }
     },
     "tools": [
       {

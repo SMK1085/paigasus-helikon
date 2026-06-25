@@ -24,16 +24,3 @@ pub use builder::{BedrockModelBuilder, BuildError};
 pub use family::ModelFamily;
 pub use model::BedrockModel;
 pub use translate::schema::{rewrite_tool_schema, Ruleset};
-
-/// Test helpers for integration tests in `tests/`.
-///
-/// These re-export internal types and functions that are not part of the public
-/// API but are needed for snapshot-testing the request translation layer without
-/// requiring a live AWS connection.
-#[doc(hidden)]
-pub mod internal_test_helpers {
-    pub use crate::builder::Config;
-    pub use crate::translate::{
-        build_request as build_request_test, to_wire_json as to_wire_json_test,
-    };
-}

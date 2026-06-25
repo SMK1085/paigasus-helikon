@@ -1,0 +1,21 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
+expression: to_wire_json(&p)
+---
+{
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "hi"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": null
+}

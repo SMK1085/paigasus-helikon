@@ -1,5 +1,5 @@
 ---
-source: crates/paigasus-helikon-providers-bedrock/tests/converse_request.rs
+source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
 expression: wire
 ---
 {

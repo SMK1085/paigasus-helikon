@@ -1,6 +1,6 @@
 ---
-source: crates/paigasus-helikon-providers-bedrock/tests/converse_request.rs
-expression: to_wire_json_test(&p)
+source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
+expression: to_wire_json(&p)
 ---
 {
   "inferenceConfig": null,
@@ -8,29 +8,29 @@ expression: to_wire_json_test(&p)
     {
       "content": [
         {
-          "text": "hi"
+          "text": "Extract the transaction data."
         }
       ],
       "role": "user"
     }
   ],
   "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-  "synthesizing": false,
+  "synthesizing": true,
   "system": [],
   "toolConfig": {
     "toolChoice": {
       "tool": {
-        "name": "ping"
+        "name": "__paigasus_structured_output__"
       }
     },
     "tools": [
       {
         "toolSpec": {
-          "description": "Ping",
+          "description": "Return data matching the Transaction schema.",
           "inputSchema": {
             "json": "<Document>"
           },
-          "name": "ping"
+          "name": "__paigasus_structured_output__"
         }
       }
     ]

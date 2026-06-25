@@ -11,7 +11,6 @@ use aws_sdk_bedrockruntime::types::{
     SystemContentBlock, Tool, ToolChoice as BedrockToolChoice, ToolConfiguration,
 };
 use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
-use serde_json::{json, Value};
 
 use crate::builder::Config;
 use crate::family::ModelFamily;
@@ -25,12 +24,10 @@ use crate::translate::tools::tool_specs;
 /// The fields map onto the Bedrock SDK `converse` / `converse_stream` input
 /// parameters. Callers should inspect `synthesizing` to decide how to route
 /// stream events (synthesized structured output → `TokenDelta` remapping).
-///
-/// `pub` so integration tests can use it via `internal_test_helpers`.
-/// Not part of the stable public API.
-#[doc(hidden)]
+// Used by model.rs (Task 11/12) — allow dead_code until that task lands.
+#[allow(dead_code)]
 #[derive(Debug)]
-pub struct PreparedConverse {
+pub(crate) struct PreparedConverse {
     /// Bedrock model identifier (may include cross-region profile prefix).
     pub(crate) model_id: String,
     /// System prompt blocks.
@@ -50,13 +47,15 @@ pub struct PreparedConverse {
 ///
 /// # Errors
 /// - Reserved tool name (`__paigasus_structured_output__` used by the caller).
-/// - `ResponseFormat::JsonSchema` combined with `ToolChoice::Tool` (conflict).
+/// - `ResponseFormat::JsonSchema`/`JsonObject` combined with `ToolChoice::Tool` (conflict).
+/// - `ResponseFormat::JsonSchema`/`JsonObject` combined with `ToolChoice::None` (conflict).
 /// - Empty conversation (no non-system messages).
-///
-/// `pub` (not `pub(crate)`) so integration tests can use it via
-/// `internal_test_helpers`. Not part of the stable public API.
-#[doc(hidden)]
-pub fn build_request(cfg: &Config, req: &ModelRequest) -> Result<PreparedConverse, ModelError> {
+// Used by model.rs (Task 11/12) — allow dead_code until that task lands.
+#[allow(dead_code)]
+pub(crate) fn build_request(
+    cfg: &Config,
+    req: &ModelRequest,
+) -> Result<PreparedConverse, ModelError> {
     let family = ModelFamily::from_model_id(&cfg.model_id);
     let ruleset = Ruleset::for_family(family);
 
@@ -75,6 +74,51 @@ pub fn build_request(cfg: &Config, req: &ModelRequest) -> Result<PreparedConvers
             "ResponseFormat::JsonSchema/JsonObject and ToolChoice::Tool are mutually \
              exclusive on Bedrock — use one or the other",
         )));
+    }
+
+    // Guard: ResponseFormat::JsonSchema / JsonObject + ToolChoice::None → conflict.
+    // Synthesis requires injecting a tool; ToolChoice::None suppresses toolConfig entirely.
+    let none_choice = matches!(
+        req.model_settings.tool_choice.as_ref(),
+        Some(ToolChoice::None),
+    );
+    if synthesizing_rf && none_choice {
+        return Err(ModelError::Other(anyhow::anyhow!(
+            "ResponseFormat::JsonSchema/JsonObject and ToolChoice::None are mutually \
+             exclusive on Bedrock — structured-output synthesis requires a tool call",
+        )));
+    }
+
+    // ToolChoice::None means the model MUST NOT call any tool this turn.
+    // Omit toolConfig entirely (do not send user tools either).
+    if none_choice {
+        let translated = items_to_messages(&req.messages)?;
+        let has_inference = req.model_settings.temperature.is_some()
+            || req.model_settings.top_p.is_some()
+            || req.model_settings.max_output_tokens.is_some();
+        let inference_config = if has_inference {
+            let mut b = InferenceConfiguration::builder();
+            if let Some(t) = req.model_settings.temperature {
+                b = b.temperature(t);
+            }
+            if let Some(p) = req.model_settings.top_p {
+                b = b.top_p(p);
+            }
+            if let Some(m) = req.model_settings.max_output_tokens {
+                b = b.max_tokens(m as i32);
+            }
+            Some(b.build())
+        } else {
+            None
+        };
+        return Ok(PreparedConverse {
+            model_id: cfg.model_id.clone(),
+            system: translated.system,
+            messages: translated.messages,
+            tool_config: None,
+            inference_config,
+            synthesizing: false,
+        });
     }
 
     // Translate messages.
@@ -104,6 +148,7 @@ pub fn build_request(cfg: &Config, req: &ModelRequest) -> Result<PreparedConvers
         .and_then(|tc| translate_tool_choice(tc, family));
 
     // Synthesis overrides caller tool_choice.
+    // synth_tool.is_some() always pushes to all_tools above, so a synthesized tool_choice is never silently dropped here.
     let effective_tc = synth_tc.or(caller_tc);
 
     let tool_config = if !all_tools.is_empty() {
@@ -167,13 +212,14 @@ pub fn build_request(cfg: &Config, req: &ModelRequest) -> Result<PreparedConvers
 /// Translate a core [`ToolChoice`] into a Bedrock [`BedrockToolChoice`].
 ///
 /// Returns `None` when the family does not support forced tool choice (the
-/// `tool_choice` field is omitted from the request).
+/// `tool_choice` field is omitted from the request). `ToolChoice::None` is
+/// handled before this function is called (it suppresses `toolConfig` entirely).
 fn translate_tool_choice(tc: &ToolChoice, family: ModelFamily) -> Option<BedrockToolChoice> {
     match tc {
         ToolChoice::Auto => Some(BedrockToolChoice::Auto(AutoToolChoice::builder().build())),
         ToolChoice::Required => Some(BedrockToolChoice::Any(AnyToolChoice::builder().build())),
         ToolChoice::None => {
-            // Bedrock does not have a "none" tool choice — omit the field.
+            // ToolChoice::None is handled early in build_request; unreachable here.
             None
         }
         ToolChoice::Tool { name } => {
@@ -199,7 +245,7 @@ fn translate_tool_choice(tc: &ToolChoice, family: ModelFamily) -> Option<Bedrock
             }
         }
         _ => {
-            tracing::warn!(
+            tracing::debug!(
                 target: "paigasus::bedrock::translate",
                 "unknown ToolChoice variant; omitting",
             );
@@ -216,10 +262,12 @@ fn translate_tool_choice(tc: &ToolChoice, family: ModelFamily) -> Option<Bedrock
 /// This projection is deliberately **not** based on `Debug` output of the SDK
 /// types, which can change across SDK version bumps. Instead, it is a hand-written
 /// extraction of the semantically relevant fields.
-pub fn to_wire_json(p: &PreparedConverse) -> Value {
+#[cfg(test)]
+pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
     use aws_sdk_bedrockruntime::types::{
         ContentBlock, SystemContentBlock, ToolChoice as SdkToolChoice, ToolResultContentBlock,
     };
+    use serde_json::{json, Value};
 
     // System blocks
     let system: Vec<Value> = p
@@ -350,6 +398,7 @@ pub fn to_wire_json(p: &PreparedConverse) -> Value {
 mod tests {
     use super::*;
     use crate::translate::tools::SYNTHESIZED_TOOL_NAME;
+    use insta::assert_json_snapshot;
     use paigasus_helikon_core::{
         ContentPart, Item, ModelRequest, ResponseFormat, ToolChoice, ToolDef,
     };
@@ -461,6 +510,46 @@ mod tests {
     }
 
     #[test]
+    fn json_schema_plus_tool_choice_none_is_conflict() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "X".to_owned(),
+            schema: json!({}),
+            strict: false,
+        });
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+    }
+
+    #[test]
+    fn json_object_plus_tool_choice_none_is_conflict() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonObject);
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+    }
+
+    #[test]
+    fn tool_choice_none_with_user_tools_omits_tool_config() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "Ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        // toolConfig must be absent — None suppresses tool calls entirely.
+        assert!(p.tool_config.is_none());
+        assert!(!p.synthesizing);
+    }
+
+    #[test]
     fn tool_choice_auto_maps_to_bedrock_auto() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
@@ -532,5 +621,165 @@ mod tests {
         assert_eq!(w["messages"][0]["role"], "user");
         assert_eq!(w["messages"][0]["content"][0]["text"], "hello");
         assert!(!w["synthesizing"].as_bool().unwrap());
+    }
+
+    // ── Snapshot tests (migrated from tests/converse_request.rs) ─────────────
+
+    #[test]
+    fn snap_plain_text_turn() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hello")];
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    #[test]
+    fn snap_tool_call_and_result() {
+        let mut req = ModelRequest::new();
+        req.tools = vec![ToolDef {
+            name: "get_balance".to_owned(),
+            description: "Get account balance".to_owned(),
+            schema: json!({"type": "object", "properties": {"account_id": {"type": "string"}}}),
+        }];
+        req.messages = vec![
+            user_text("What's my balance?"),
+            Item::AssistantMessage {
+                content: vec![ContentPart::ToolUse {
+                    call_id: "tu_1".to_owned(),
+                    name: "get_balance".to_owned(),
+                    args: json!({"account_id": "acc_123"}),
+                }],
+                agent: None,
+            },
+            Item::ToolResult {
+                call_id: "tu_1".to_owned(),
+                content: vec![ContentPart::Text {
+                    text: "$1,234.56".to_owned(),
+                }],
+            },
+        ];
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    #[test]
+    fn snap_structured_output_json_schema_on_claude_synthesizes() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Extract the transaction data.")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Transaction".to_owned(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "number"},
+                    "currency": {"type": "string"},
+                },
+                "required": ["amount", "currency"]
+            }),
+            strict: false,
+        });
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    #[test]
+    fn snap_tool_choice_auto() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "Ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::Auto);
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    #[test]
+    fn snap_tool_choice_required() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "Ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    #[test]
+    fn snap_tool_choice_specific_tool() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "Ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "ping".to_owned(),
+        });
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    #[test]
+    fn snap_inference_config_temperature_top_p_max_tokens() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.temperature = Some(0.7);
+        req.model_settings.top_p = Some(0.9);
+        req.model_settings.max_output_tokens = Some(256);
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    #[test]
+    fn snap_unsupported_family_json_schema_degrades_to_no_synthesis() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("classify this")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Category".to_owned(),
+            schema: json!({"type": "object", "properties": {"label": {"type": "string"}}}),
+            strict: false,
+        });
+        let p = build_request(&llama_cfg(), &req).unwrap();
+        let wire = to_wire_json(&p);
+        assert_eq!(wire["synthesizing"], false);
+        assert_json_snapshot!(wire);
+    }
+
+    #[test]
+    fn snap_conflict_json_schema_plus_tool_choice_tool_returns_err() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "X".to_owned(),
+            schema: json!({}),
+            strict: false,
+        });
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "some_tool".to_owned(),
+        });
+        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+    }
+
+    #[test]
+    fn snap_tool_choice_none_with_user_tools_omits_tool_config() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef {
+            name: "ping".to_owned(),
+            description: "Ping".to_owned(),
+            schema: json!({"type": "object"}),
+        }];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        // toolConfig must be null in wire representation
+        assert_json_snapshot!(to_wire_json(&p));
     }
 }
