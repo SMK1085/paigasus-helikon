@@ -59,8 +59,12 @@ pub(crate) struct Config {
     pub(crate) family: ModelFamily,
     /// Resolved capability flags for this model instance.
     pub(crate) capabilities: ModelCapabilities,
-    /// Conservative default for `max_tokens` when the caller does not set it.
-    pub(crate) max_output_default: u32,
+    /// Optional default for `max_tokens` when the caller does not set it.
+    ///
+    /// When `None` (the default), `inferenceConfig.maxTokens` is omitted from
+    /// the Bedrock request so that each model applies its own correct limit.
+    /// Set via [`BedrockModelBuilder::max_output_tokens_default`].
+    pub(crate) max_output_default: Option<u32>,
 }
 
 // ── BedrockModelBuilder ───────────────────────────────────────────────────────
@@ -180,9 +184,9 @@ impl BedrockModelBuilder {
 
         // 3. Detect family and resolve capabilities.
         let family = ModelFamily::from_model_id(&self.model_id);
-        let (default_caps, default_max) = caps_for(family);
+        let default_caps = caps_for(family);
         let capabilities = self.capabilities_override.unwrap_or(default_caps);
-        let max_output_default = self.max_output_override.unwrap_or(default_max);
+        let max_output_default = self.max_output_override;
 
         Ok(crate::BedrockModel(Arc::new(Config {
             client,
@@ -367,7 +371,16 @@ mod tests {
             .max_output_tokens_default(1234)
             .build()
             .expect("build");
-        assert_eq!(model.0.max_output_default, 1234);
+        assert_eq!(model.0.max_output_default, Some(1234));
+    }
+
+    #[test]
+    fn max_output_default_is_none_when_not_set() {
+        let model = crate::BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+            .client(offline_client())
+            .build()
+            .expect("build");
+        assert_eq!(model.0.max_output_default, None);
     }
 
     #[test]

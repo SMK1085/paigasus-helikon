@@ -41,6 +41,45 @@ pub(crate) struct PreparedConverse {
     pub(crate) synthesizing: bool,
 }
 
+/// Build an [`InferenceConfiguration`] from per-request settings and the builder config.
+///
+/// `maxTokens` is set only when the caller explicitly provided
+/// `max_output_tokens` on the request or the builder was configured with
+/// [`crate::BedrockModelBuilder::max_output_tokens_default`]. Omitting
+/// `maxTokens` lets each Bedrock model apply its own correct default, which
+/// avoids `ValidationException` on models whose limit is below any hardcoded
+/// value.
+///
+/// Returns `None` when all three fields (temperature, top_p, max_tokens) are
+/// absent — Bedrock accepts a missing `inferenceConfig` and all its fields are
+/// individually optional.
+fn build_inference_config(req: &ModelRequest, cfg: &Config) -> Option<InferenceConfiguration> {
+    let max_tokens = req
+        .model_settings
+        .max_output_tokens
+        .or(cfg.max_output_default);
+
+    // When no inference field is set, omit the config block entirely.
+    if req.model_settings.temperature.is_none()
+        && req.model_settings.top_p.is_none()
+        && max_tokens.is_none()
+    {
+        return None;
+    }
+
+    let mut b = InferenceConfiguration::builder();
+    if let Some(t) = req.model_settings.temperature {
+        b = b.temperature(t);
+    }
+    if let Some(p) = req.model_settings.top_p {
+        b = b.top_p(p);
+    }
+    if let Some(mt) = max_tokens {
+        b = b.max_tokens(mt as i32);
+    }
+    Some(b.build())
+}
+
 /// Assemble a [`PreparedConverse`] from the builder `Config` and a [`ModelRequest`].
 ///
 /// # Errors
@@ -89,21 +128,7 @@ pub(crate) fn build_request(
     // Omit toolConfig entirely (do not send user tools either).
     if none_choice {
         let translated = items_to_messages(&req.messages)?;
-        let inference_config = {
-            let mut b = InferenceConfiguration::builder();
-            if let Some(t) = req.model_settings.temperature {
-                b = b.temperature(t);
-            }
-            if let Some(p) = req.model_settings.top_p {
-                b = b.top_p(p);
-            }
-            let max_tokens = req
-                .model_settings
-                .max_output_tokens
-                .unwrap_or(cfg.max_output_default);
-            b = b.max_tokens(max_tokens as i32);
-            Some(b.build())
-        };
+        let inference_config = build_inference_config(req, cfg);
         return Ok(PreparedConverse {
             model_id: cfg.model_id.clone(),
             system: translated.system,
@@ -172,21 +197,7 @@ pub(crate) fn build_request(
     };
 
     // Build InferenceConfiguration.
-    let inference_config = {
-        let mut b = InferenceConfiguration::builder();
-        if let Some(t) = req.model_settings.temperature {
-            b = b.temperature(t);
-        }
-        if let Some(p) = req.model_settings.top_p {
-            b = b.top_p(p);
-        }
-        let max_tokens = req
-            .model_settings
-            .max_output_tokens
-            .unwrap_or(cfg.max_output_default);
-        b = b.max_tokens(max_tokens as i32);
-        Some(b.build())
-    };
+    let inference_config = build_inference_config(req, cfg);
 
     Ok(PreparedConverse {
         model_id: cfg.model_id.clone(),
@@ -398,7 +409,7 @@ mod tests {
 
     fn make_cfg(model_id: &str) -> Config {
         let family = ModelFamily::from_model_id(model_id);
-        let (capabilities, max_output_default) = caps_for(family);
+        let capabilities = caps_for(family);
         // Build an offline Bedrock client for test configs.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -417,7 +428,7 @@ mod tests {
             model_id: model_id.to_owned(),
             family,
             capabilities,
-            max_output_default,
+            max_output_default: None,
         }
     }
 
@@ -794,5 +805,119 @@ mod tests {
         let p = build_request(&claude_cfg(), &req).unwrap();
         // toolConfig must be null in wire representation
         assert_json_snapshot!(to_wire_json(&p));
+    }
+
+    // ── maxTokens omission tests ──────────────────────────────────────────────
+
+    #[test]
+    fn no_max_output_tokens_omits_max_tokens_from_wire() {
+        // When the caller sets neither max_output_tokens nor builder default,
+        // inferenceConfig must be absent (no maxTokens, no temperature, no topP).
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hello")];
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        // inferenceConfig should be None — no fields to populate.
+        assert!(
+            p.inference_config.is_none(),
+            "inferenceConfig should be absent when no inference fields are set",
+        );
+        // Wire JSON must not contain maxTokens.
+        let w = to_wire_json(&p);
+        assert_eq!(
+            w["inferenceConfig"],
+            serde_json::Value::Null,
+            "wire inferenceConfig should be null when nothing is set",
+        );
+    }
+
+    #[test]
+    fn explicit_max_output_tokens_sets_max_tokens_on_wire() {
+        // When the caller sets max_output_tokens the wire must carry maxTokens.
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hello")];
+        req.model_settings.max_output_tokens = Some(512);
+        let p = build_request(&claude_cfg(), &req).unwrap();
+        let ic = p
+            .inference_config
+            .as_ref()
+            .expect("inferenceConfig present");
+        assert_eq!(ic.max_tokens(), Some(512));
+        let w = to_wire_json(&p);
+        assert_eq!(w["inferenceConfig"]["maxTokens"], 512);
+    }
+
+    #[test]
+    fn builder_default_max_output_tokens_sets_max_tokens_on_wire() {
+        // When only the builder default is set (no per-request value), the wire
+        // must carry that default as maxTokens.
+        let family = ModelFamily::from_model_id("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let capabilities = caps_for(family);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio rt");
+        let client = rt.block_on(async {
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+                .region(aws_config::Region::new("us-east-1"))
+                .test_credentials()
+                .load()
+                .await;
+            aws_sdk_bedrockruntime::Client::new(&sdk_cfg)
+        });
+        let cfg_with_default = Config {
+            client,
+            model_id: "anthropic.claude-3-5-sonnet-20241022-v2:0".to_owned(),
+            family,
+            capabilities,
+            max_output_default: Some(2048),
+        };
+
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hello")];
+        // No per-request max_output_tokens — builder default should apply.
+        let p = build_request(&cfg_with_default, &req).unwrap();
+        let ic = p
+            .inference_config
+            .as_ref()
+            .expect("inferenceConfig present");
+        assert_eq!(ic.max_tokens(), Some(2048));
+        let w = to_wire_json(&p);
+        assert_eq!(w["inferenceConfig"]["maxTokens"], 2048);
+    }
+
+    #[test]
+    fn per_request_max_output_overrides_builder_default() {
+        // Per-request value takes precedence over builder default.
+        let family = ModelFamily::from_model_id("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let capabilities = caps_for(family);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio rt");
+        let client = rt.block_on(async {
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+                .region(aws_config::Region::new("us-east-1"))
+                .test_credentials()
+                .load()
+                .await;
+            aws_sdk_bedrockruntime::Client::new(&sdk_cfg)
+        });
+        let cfg_with_default = Config {
+            client,
+            model_id: "anthropic.claude-3-5-sonnet-20241022-v2:0".to_owned(),
+            family,
+            capabilities,
+            max_output_default: Some(2048),
+        };
+
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hello")];
+        req.model_settings.max_output_tokens = Some(256);
+        let p = build_request(&cfg_with_default, &req).unwrap();
+        let ic = p
+            .inference_config
+            .as_ref()
+            .expect("inferenceConfig present");
+        assert_eq!(ic.max_tokens(), Some(256));
     }
 }

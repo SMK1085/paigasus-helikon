@@ -3,9 +3,7 @@ source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
 expression: wire
 ---
 {
-  "inferenceConfig": {
-    "maxTokens": 8192
-  },
+  "inferenceConfig": null,
   "messages": [
     {
       "content": [
