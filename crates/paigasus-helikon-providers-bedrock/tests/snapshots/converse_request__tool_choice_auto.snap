@@ -1,0 +1,36 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/tests/converse_request.rs
+expression: to_wire_json_test(&p)
+---
+{
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "hi"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": {
+    "toolChoice": {
+      "auto": {}
+    },
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Ping",
+          "inputSchema": {
+            "json": "<Document>"
+          },
+          "name": "ping"
+        }
+      }
+    ]
+  }
+}
