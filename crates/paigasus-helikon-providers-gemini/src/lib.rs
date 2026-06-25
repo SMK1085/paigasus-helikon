@@ -12,3 +12,4 @@
 //! ```
 
 mod error;
+mod translate;
