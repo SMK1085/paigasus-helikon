@@ -30,7 +30,7 @@ Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `m
 
 ## Workspace at a glance
 
-Fourteen crates under `crates/`. Ten are published to crates.io; four are not-yet-implemented stubs; the CLI is binary-only.
+Sixteen crates under `crates/`. Eleven are published to crates.io; four are not-yet-implemented stubs; the CLI is binary-only.
 
 - **`paigasus-helikon`** — facade re-exporting `core` plus opt-in sibling crates by feature flag.
 - **`paigasus-helikon-core`** — type system, traits, the agent loop, runtime-agnostic primitives.

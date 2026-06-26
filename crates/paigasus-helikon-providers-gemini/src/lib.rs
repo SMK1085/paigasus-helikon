@@ -49,9 +49,9 @@
 //! sanitizer runs automatically to strip unsupported keywords and rewrite
 //! incompatible constructs before sending.
 //!
-//! Note: Gemini rejects requests that combine `responseSchema` with tool
-//! declarations; the provider returns a conflict error before sending if both
-//! are present.
+//! Note: Gemini rejects requests that combine `responseSchema` with active
+//! function calling. The provider returns a conflict error before sending if
+//! the request has non-empty tools OR a tool choice other than `None`.
 //!
 //! ## Limitations
 //!

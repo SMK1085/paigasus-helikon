@@ -58,7 +58,7 @@ fn build_model() -> Result<GeminiModel, paigasus_helikon_providers_gemini::Build
 
 The Gemini provider uses Gemini's **native `responseSchema`** field — it does not use forced-tool synthesis. When `ResponseFormat::JsonSchema` is set on a `ModelSettings`, the schema is passed directly to the Gemini API as `generationConfig.responseSchema`, and `responseMimeType` is set to `"application/json"`.
 
-> **Note:** Gemini rejects requests that combine `responseSchema` with tool declarations. If your `ModelRequest` includes both `response_format: Some(ResponseFormat::JsonSchema { .. })` and non-empty `tools`, the provider returns a `ModelError::Other` conflict error before sending the request.
+> **Note:** Gemini rejects requests that combine `responseSchema` with active function calling. The provider returns a `ModelError::Other` conflict error before sending if the request has non-empty `tools` OR a `tool_choice` other than `None` (including `ToolChoice::Auto`, `ToolChoice::Required`, or a specific named tool). Setting `response_format` alongside an empty `tools` list and no active `tool_choice` is fine.
 
 A JSON-Schema sanitizer runs on every schema passed to `responseSchema`: it inlines `$ref` references, converts `[T, "null"]` type arrays to `nullable: true`, replaces `const` with single-item `enum`, renames `oneOf` to `anyOf`, and strips unsupported keywords (`$schema`, `format`, `examples`, `default`, `title`, `description`, `$defs`, `definitions`).
 

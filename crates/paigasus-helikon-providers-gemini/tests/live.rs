@@ -11,7 +11,9 @@ use paigasus_helikon_core::{
 use paigasus_helikon_providers_gemini::GeminiModel;
 
 fn dev_model() -> Option<GeminiModel> {
-    let _ = std::env::var("GEMINI_API_KEY").ok()?;
+    let _ = std::env::var("GEMINI_API_KEY")
+        .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+        .ok()?;
     let id = std::env::var("GEMINI_MODEL_ID").unwrap_or_else(|_| "gemini-2.5-flash".into());
     GeminiModel::from_env(id).ok()
 }
