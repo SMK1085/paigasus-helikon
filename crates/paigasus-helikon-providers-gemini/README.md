@@ -60,7 +60,7 @@ The Gemini provider uses Gemini's **native `responseSchema`** field — it does 
 
 > **Note:** Gemini rejects requests that combine `responseSchema` with active function calling. The provider returns a `ModelError::Other` conflict error before sending if the request has non-empty `tools` OR a `tool_choice` other than `None` (including `ToolChoice::Auto`, `ToolChoice::Required`, or a specific named tool). Setting `response_format` alongside an empty `tools` list and no active `tool_choice` is fine.
 
-A JSON-Schema sanitizer runs on every schema passed to `responseSchema`: it inlines `$ref` references, converts `[T, "null"]` type arrays to `nullable: true`, replaces `const` with single-item `enum`, renames `oneOf` to `anyOf`, and strips unsupported keywords (`$schema`, `format`, `examples`, `default`, `title`, `description`, `$defs`, `definitions`).
+A JSON-Schema sanitizer runs on every schema passed to `responseSchema`: it inlines `$ref` references, converts `[T, "null"]` type arrays to `nullable: true`, replaces `const` with single-item `enum`, renames `oneOf` to `anyOf`, strips unsupported keywords (`$schema`, `additionalProperties`, `unevaluatedProperties`, `patternProperties`, `examples`, `default`, `$defs`/`definitions`), and drops `format` values Gemini doesn't recognize for their type (keeping e.g. `enum`/`date-time`).
 
 ## Vertex AI and `TokenProvider`
 

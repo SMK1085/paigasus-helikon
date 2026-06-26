@@ -277,8 +277,10 @@ paigasus-helikon-providers-gemini = { version = "0.1", features = ["vertex-adc"]
 A JSON-Schema sanitizer runs automatically on every schema passed to
 `responseSchema`. It inlines `$ref` references, converts `[T, "null"]` type
 arrays to `nullable: true`, replaces `const` with single-item `enum`, renames
-`oneOf` to `anyOf`, and strips unsupported keywords (`$schema`, `format`,
-`examples`, `default`, `title`, `description`, `$defs`, `definitions`). Schemars-
+`oneOf` to `anyOf`, strips unsupported keywords (`$schema`,
+`additionalProperties`, `unevaluatedProperties`, `patternProperties`,
+`examples`, `default`, `$defs`/`definitions`), and drops `format` values Gemini
+doesn't recognize for their type (keeping e.g. `enum`/`date-time`). Schemars-
 derived schemas for typical Rust structs and enums pass without manual adjustment.
 
 #### Limitations
