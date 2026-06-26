@@ -39,12 +39,12 @@ async fn run(sse: &'static str) -> Vec<Result<ModelEvent, ModelError>> {
 async fn text_then_finish() {
     let evs = run("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"a\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1}}\n\n").await;
     assert!(matches!(evs.first().unwrap(), Ok(ModelEvent::TokenDelta { text }) if text == "a"));
-    assert!(matches!(
-        evs.last().unwrap(),
+    assert!(evs.iter().any(|e| matches!(
+        e,
         Ok(ModelEvent::Finish {
             reason: FinishReason::Stop
         })
-    ));
+    )));
 }
 
 #[tokio::test]

@@ -61,6 +61,7 @@ async fn vertex_url_and_bearer_header() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/projects/proj/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent"))
+        .and(query_param("alt", "sse"))
         .and(header("authorization", "Bearer ya29.token"))
         .respond_with(sse_ok())
         .mount(&server)
@@ -71,11 +72,12 @@ async fn vertex_url_and_bearer_header() {
         .base_url(server.uri())
         .build()
         .unwrap();
-    let mut s = model
+    let s = model
         .invoke(user("hi"), CancellationToken::new())
         .await
         .unwrap();
-    while s.next().await.is_some() {}
+    let evs: Vec<_> = s.collect().await;
+    assert!(!evs.is_empty());
 }
 
 #[tokio::test]
