@@ -1,9 +1,5 @@
 //! Translate Gemini SSE chunks into core `ModelEvent`s.
 
-// `StreamTranslator` is exercised by this module's tests; it is wired into the
-// `Model::invoke` SSE loop by the transport in Task 10/11.
-#![allow(dead_code)]
-
 use paigasus_helikon_core::{FinishReason, ModelError, ModelEvent};
 
 use crate::sse::GeminiChunk;

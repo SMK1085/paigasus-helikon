@@ -16,11 +16,8 @@ pub trait TokenProvider: Send + Sync + std::fmt::Debug {
 /// via builder methods.
 #[derive(Clone)]
 pub(crate) enum Auth {
-    #[allow(dead_code)] // read by HTTP layer in later tasks
     ApiKey(String),
-    #[allow(dead_code)] // read by HTTP layer in later tasks
     Bearer(String),
-    #[allow(dead_code)] // read by HTTP layer in later tasks
     Token(Arc<dyn TokenProvider>),
 }
 

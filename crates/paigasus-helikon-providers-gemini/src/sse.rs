@@ -1,9 +1,5 @@
 //! Serde types for one Gemini `GenerateContentResponse` SSE chunk.
 
-// These wire types are deserialized by the stream tests; they are consumed by
-// the HTTP transport / `Model::invoke` SSE loop in Task 10/11.
-#![allow(dead_code)]
-
 use serde::Deserialize;
 use serde_json::Value;
 

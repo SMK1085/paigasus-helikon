@@ -6,7 +6,6 @@ use crate::auth::Auth;
 use crate::builder::{Config, Transport};
 
 /// Host for the selected transport, honoring `base_url`.
-#[allow(dead_code)] // consumed by model.rs invoke in Task 11
 fn host(cfg: &Config) -> String {
     if let Some(b) = &cfg.base_url {
         return b.trim_end_matches('/').to_owned();
@@ -23,7 +22,6 @@ fn host(cfg: &Config) -> String {
 }
 
 /// Streaming endpoint URL (`:streamGenerateContent?alt=sse`).
-#[allow(dead_code)] // consumed by model.rs invoke in Task 11
 pub(crate) fn stream_url(cfg: &Config) -> String {
     let host = host(cfg);
     match &cfg.transport {
@@ -39,7 +37,6 @@ pub(crate) fn stream_url(cfg: &Config) -> String {
 }
 
 /// Auth header for a non-async credential (`ApiKey`/`Bearer`).
-#[allow(dead_code)] // consumed by model.rs invoke in Task 11
 pub(crate) fn auth_header(
     auth: &Auth,
 ) -> Result<(reqwest::header::HeaderName, String), ModelError> {

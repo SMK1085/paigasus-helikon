@@ -6,7 +6,6 @@ use paigasus_helikon_core::ModelError;
 ///
 /// `status` is the HTTP status; `status_field` is the JSON `error.status`
 /// string (e.g. `RESOURCE_EXHAUSTED`); `message` is `error.message`.
-#[allow(dead_code)] // used in later tasks (model.rs, stream.rs)
 pub(crate) fn classify(
     status: u16,
     status_field: Option<&str>,
@@ -41,7 +40,6 @@ pub(crate) fn classify(
 }
 
 /// Parse an integer-seconds `Retry-After` header into milliseconds.
-#[allow(dead_code)] // used in later tasks (model.rs)
 pub(crate) fn parse_retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     headers
         .get(reqwest::header::RETRY_AFTER)?

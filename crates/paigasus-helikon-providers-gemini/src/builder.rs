@@ -46,16 +46,11 @@ pub enum BuildError {
 /// Builder-baked, immutable per-request config.
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
-    #[allow(dead_code)] // used by HTTP layer in later tasks
     pub(crate) http: reqwest::Client,
-    #[allow(dead_code)] // used by HTTP layer in later tasks
     pub(crate) base_url: Option<String>,
     pub(crate) model_id: String,
-    #[allow(dead_code)] // used by HTTP layer in later tasks
     pub(crate) transport: Transport,
-    #[allow(dead_code)] // used by HTTP layer in later tasks
     pub(crate) auth: Auth,
-    #[allow(dead_code)] // used by capability checks in later tasks
     pub(crate) capabilities: ModelCapabilities,
 }
 
@@ -176,6 +171,7 @@ impl GeminiModelBuilder {
 #[cfg(test)]
 mod tests {
     use crate::GeminiModel;
+    use paigasus_helikon_core::Model;
 
     #[test]
     fn developer_requires_api_key() {

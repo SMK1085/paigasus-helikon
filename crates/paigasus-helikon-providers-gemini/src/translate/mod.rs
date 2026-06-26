@@ -14,20 +14,12 @@ use response_format::{response_format_fields, validate_conflict};
 use tools::{function_calling_config, function_declarations};
 
 /// Fully-assembled Gemini request body.
-///
-/// # Dead-code note
-/// Consumed by the `Model` implementation (`model.rs`) in a later task.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct PreparedRequest {
     pub(crate) body: Value,
 }
 
 /// Assemble the Gemini `generateContent` request body, running all guards.
-///
-/// # Dead-code note
-/// Consumed by the `Model` implementation (`model.rs`) in a later task.
-#[allow(dead_code)]
 pub(crate) fn build_request(
     cfg: &Config,
     req: &ModelRequest,
