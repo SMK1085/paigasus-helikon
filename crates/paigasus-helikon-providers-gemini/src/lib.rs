@@ -21,6 +21,8 @@ mod stream;
 mod translate;
 mod transport;
 
+#[cfg(feature = "vertex-adc")]
+pub use auth::AdcTokenProvider;
 pub use auth::TokenProvider;
 pub use builder::{BuildError, GeminiModelBuilder};
 pub use model::GeminiModel;

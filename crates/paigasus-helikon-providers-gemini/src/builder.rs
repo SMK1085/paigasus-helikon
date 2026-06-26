@@ -41,6 +41,10 @@ pub enum BuildError {
     /// The model id is empty.
     #[error("model id is empty")]
     EmptyModelId,
+    /// Application Default Credentials discovery failed (feature `vertex-adc`).
+    #[cfg(feature = "vertex-adc")]
+    #[error("adc: {0}")]
+    Adc(String),
 }
 
 /// Builder-baked, immutable per-request config.

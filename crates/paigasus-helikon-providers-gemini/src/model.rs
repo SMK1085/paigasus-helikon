@@ -49,6 +49,26 @@ impl GeminiModel {
         Self::developer(model_id).api_key(key).build()
     }
 
+    /// Vertex AI from the ambient environment, authenticating via Application
+    /// Default Credentials (ADC).
+    ///
+    /// Reads `GOOGLE_CLOUD_PROJECT` (required) and `GOOGLE_CLOUD_LOCATION`
+    /// (defaults to `global`), then discovers ADC credentials through
+    /// [`crate::AdcTokenProvider`]. Enabled by the `vertex-adc` cargo feature.
+    #[cfg(feature = "vertex-adc")]
+    pub async fn vertex_from_env(model_id: impl Into<String>) -> Result<Self, BuildError> {
+        let project =
+            std::env::var("GOOGLE_CLOUD_PROJECT").map_err(|_| BuildError::MissingVertexProject)?;
+        let location =
+            std::env::var("GOOGLE_CLOUD_LOCATION").unwrap_or_else(|_| "global".to_owned());
+        let provider = crate::auth::AdcTokenProvider::from_env()
+            .await
+            .map_err(|e| BuildError::Adc(e.to_string()))?;
+        Self::vertex(model_id, project, location)
+            .token_provider(provider)
+            .build()
+    }
+
     pub(crate) fn from_config(cfg: Config) -> Self {
         Self(Arc::new(cfg))
     }
