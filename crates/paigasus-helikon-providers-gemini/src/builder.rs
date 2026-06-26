@@ -59,7 +59,6 @@ pub(crate) struct Config {
 }
 
 /// Fluent builder for [`crate::GeminiModel`].
-#[derive(Debug)]
 pub struct GeminiModelBuilder {
     model_id: String,
     transport: Transport,
@@ -69,6 +68,39 @@ pub struct GeminiModelBuilder {
     base_url: Option<String>,
     http: Option<reqwest::Client>,
     caps_override: Option<ModelCapabilities>,
+}
+
+// Hand-written so credential material (`api_key`, `bearer`, `token`) is never
+// rendered. The derived `Debug` would print the secrets verbatim; here we show
+// only their presence. Non-secret fields print normally.
+impl std::fmt::Debug for GeminiModelBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let present = |o: bool| if o { "<set>" } else { "<unset>" };
+        f.debug_struct("GeminiModelBuilder")
+            .field("model_id", &self.model_id)
+            .field("transport", &self.transport)
+            .field("api_key", &present(self.api_key.is_some()))
+            .field("bearer", &present(self.bearer.is_some()))
+            .field(
+                "token",
+                &if self.token.is_some() {
+                    "<provider>"
+                } else {
+                    "<none>"
+                },
+            )
+            .field("base_url", &self.base_url)
+            .field(
+                "http",
+                &if self.http.is_some() {
+                    "<custom>"
+                } else {
+                    "<default>"
+                },
+            )
+            .field("caps_override", &present(self.caps_override.is_some()))
+            .finish()
+    }
 }
 
 impl GeminiModelBuilder {
@@ -228,5 +260,24 @@ mod tests {
             .build()
             .unwrap_err();
         assert!(matches!(err, crate::BuildError::AuthTransportMismatch));
+    }
+
+    #[test]
+    fn debug_masks_credentials() {
+        let dev = GeminiModel::developer("gemini-2.5-flash").api_key("super-secret-key");
+        let s = format!("{dev:?}");
+        assert!(
+            !s.contains("super-secret-key"),
+            "api_key leaked into Debug: {s}"
+        );
+        assert!(s.contains("GeminiModelBuilder"));
+        assert!(s.contains("gemini-2.5-flash"));
+
+        let vtx = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+            .bearer_token("ya29.secret");
+        let s = format!("{vtx:?}");
+        assert!(!s.contains("ya29.secret"), "bearer leaked into Debug: {s}");
+        assert!(s.contains("GeminiModelBuilder"));
+        assert!(s.contains("gemini-2.5-pro"));
     }
 }
