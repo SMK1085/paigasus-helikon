@@ -21,10 +21,6 @@ const STRIP: &[&str] = &[
 ///
 /// Inlines `$ref`, strips unsupported keywords, and preserves combinator
 /// meaning (`oneOf`→`anyOf`, `[T,null]`→`nullable:true`, `const`→`enum:[v]`).
-///
-/// # Dead-code note
-/// Consumed by `translate/tools.rs` + `response_format.rs` in later tasks.
-#[allow(dead_code)]
 pub(crate) fn sanitize_schema(schema: &Value) -> Value {
     let defs = collect_defs(schema);
     rewrite(schema, &defs, 0, &mut Vec::new())

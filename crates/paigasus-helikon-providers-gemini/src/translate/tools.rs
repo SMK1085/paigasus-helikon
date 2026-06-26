@@ -6,10 +6,6 @@ use serde_json::{json, Value};
 use super::schema::sanitize_schema;
 
 /// Build the Gemini `tools` array (empty when there are no tool defs).
-///
-/// # Dead-code note
-/// Consumed by the request orchestrator in a later task.
-#[allow(dead_code)]
 pub(crate) fn function_declarations(defs: &[ToolDef]) -> Vec<Value> {
     if defs.is_empty() {
         return Vec::new();
@@ -28,10 +24,6 @@ pub(crate) fn function_declarations(defs: &[ToolDef]) -> Vec<Value> {
 }
 
 /// Build `toolConfig.functionCallingConfig`, or `None` when no choice is set.
-///
-/// # Dead-code note
-/// Consumed by the request orchestrator in a later task.
-#[allow(dead_code)]
 pub(crate) fn function_calling_config(
     choice: Option<&ToolChoice>,
     all_names: &[String],

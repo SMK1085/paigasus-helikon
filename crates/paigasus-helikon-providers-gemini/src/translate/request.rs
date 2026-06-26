@@ -4,8 +4,6 @@ use paigasus_helikon_core::{ContentPart, Item, MediaSource, ModelError};
 use serde_json::{json, Value};
 
 /// `contents` + optional `systemInstruction`.
-// Will be consumed by translate/mod.rs in the request-orchestration task.
-#[allow(dead_code)]
 pub(crate) struct TranslatedContents {
     pub(crate) system: Option<Value>,
     pub(crate) contents: Vec<Value>,
@@ -13,8 +11,6 @@ pub(crate) struct TranslatedContents {
 
 /// Translate core items into Gemini `contents`. Returns an error on an empty
 /// or system-only conversation (Gemini 400s on empty contents).
-// Will be called from translate/mod.rs in the request-orchestration task.
-#[allow(dead_code)]
 pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, ModelError> {
     // Build call_id -> name map from all tool calls (ToolResult has no name).
     let mut call_names: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
@@ -89,7 +85,6 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
     Ok(TranslatedContents { system, contents })
 }
 
-#[allow(dead_code)]
 fn text_parts(content: &[ContentPart]) -> Vec<Value> {
     content
         .iter()
@@ -100,7 +95,6 @@ fn text_parts(content: &[ContentPart]) -> Vec<Value> {
         .collect()
 }
 
-#[allow(dead_code)]
 fn content_parts(content: &[ContentPart]) -> Vec<Value> {
     let mut out = Vec::new();
     for p in content {
@@ -123,7 +117,6 @@ fn content_parts(content: &[ContentPart]) -> Vec<Value> {
     out
 }
 
-#[allow(dead_code)]
 fn assistant_parts(content: &[ContentPart]) -> Vec<Value> {
     let mut out = Vec::new();
     for p in content {
@@ -150,7 +143,6 @@ fn assistant_parts(content: &[ContentPart]) -> Vec<Value> {
 }
 
 /// Reduce a tool result's content parts to a JSON object for `functionResponse.response`.
-#[allow(dead_code)]
 fn tool_response_object(content: &[ContentPart]) -> Value {
     let text: String = content
         .iter()

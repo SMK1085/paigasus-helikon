@@ -9,10 +9,6 @@ use super::schema::sanitize_schema;
 ///
 /// Returns `None` for [`ResponseFormat::Text`] and for `None` input — callers
 /// omit the `responseMimeType`/`responseSchema` fields in the Gemini request.
-///
-/// # Dead-code note
-/// Consumed by `translate/mod.rs` in a later task.
-#[allow(dead_code)]
 pub(crate) fn response_format_fields(
     rf: Option<&ResponseFormat>,
 ) -> Option<(String, Option<Value>)> {
@@ -31,10 +27,6 @@ pub(crate) fn response_format_fields(
 /// Gemini does not support `responseSchema` together with tools. Inspects only
 /// the active request (not history) so the loop's finalize-after-tool-use case
 /// (tools empty, no active choice) is allowed.
-///
-/// # Dead-code note
-/// Consumed by `translate/mod.rs` in a later task.
-#[allow(dead_code)]
 pub(crate) fn validate_conflict(
     rf: Option<&ResponseFormat>,
     tools: &[ToolDef],

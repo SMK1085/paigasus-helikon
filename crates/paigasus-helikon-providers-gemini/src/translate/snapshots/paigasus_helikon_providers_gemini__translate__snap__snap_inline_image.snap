@@ -1,0 +1,22 @@
+---
+source: crates/paigasus-helikon-providers-gemini/src/translate/mod.rs
+expression: body(r)
+---
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "what is this"
+        },
+        {
+          "inlineData": {
+            "data": "AAAA",
+            "mimeType": "image/png"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}
