@@ -19,8 +19,10 @@ const STRIP: &[&str] = &[
 
 /// Rewrite `schema` into Gemini's OpenAPI-3.0 subset.
 ///
-/// Inlines `$ref`, strips unsupported keywords, and preserves combinator
-/// meaning (`oneOf`→`anyOf`, `[T,null]`→`nullable:true`, `const`→`enum:[v]`).
+/// Inlines `$ref`, strips unsupported keywords, drops `format` values Gemini
+/// doesn't recognize for their sibling `type` (see [`format_is_supported`]),
+/// and preserves combinator meaning (`oneOf`→`anyOf`, `[T,null]`→`nullable:true`,
+/// `const`→`enum:[v]`).
 pub(crate) fn sanitize_schema(schema: &Value) -> Value {
     let defs = collect_defs(schema);
     rewrite(schema, &defs, 0, &mut Vec::new())
@@ -132,12 +134,46 @@ fn rewrite(node: &Value, defs: &Map<String, Value>, depth: usize, seen: &mut Vec
             "items" => {
                 out.insert("items".into(), rewrite(v, defs, depth + 1, seen));
             }
+            // format: keep only values Gemini's OpenAPI-3.0 Schema subset
+            // recognizes for the sibling `type`; drop everything else. A forced
+            // `responseSchema` carrying an unrecognized format (e.g. `email`,
+            // `uri`, `uuid`) is rejected by Gemini with a 400.
+            "format" => {
+                let ty = obj.get("type").and_then(Value::as_str);
+                if v.as_str().is_some_and(|fmt| format_is_supported(ty, fmt)) {
+                    out.insert("format".into(), v.clone());
+                }
+                // else: dropped (omitted from the rewritten object)
+            }
             _ => {
                 out.insert(k.clone(), v.clone());
             }
         }
     }
     Value::Object(out)
+}
+
+/// Whether `fmt` is a `format` value Gemini's OpenAPI-3.0 Schema subset
+/// recognizes for the sibling `type` `ty`.
+///
+/// Any `format` outside this set is dropped during rewriting, because a forced
+/// `responseSchema` carrying an unrecognized format (e.g. the JSON-Schema
+/// string formats `email`, `uri`, `uuid`, `hostname`) is rejected by the Gemini
+/// API with a 400.
+///
+/// Kept set (everything else dropped, including formats on any other / missing
+/// `type`):
+///
+/// - `string`  → `enum`, `date-time`
+/// - `integer` → `int32`, `int64`
+/// - `number`  → `float`, `double`
+fn format_is_supported(ty: Option<&str>, fmt: &str) -> bool {
+    match ty {
+        Some("string") => matches!(fmt, "enum" | "date-time"),
+        Some("integer") => matches!(fmt, "int32" | "int64"),
+        Some("number") => matches!(fmt, "float" | "double"),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -216,6 +252,31 @@ mod tests {
         let any = out["anyOf"].as_array().unwrap();
         assert_eq!(any[0]["type"], "string");
         assert_eq!(any[1]["enum"], json!([5]));
+    }
+
+    #[test]
+    fn drops_unsupported_string_format() {
+        let input = json!({ "type": "string", "format": "email" });
+        let out = sanitize_schema(&input);
+        assert_eq!(out["type"], "string");
+        assert!(out.get("format").is_none());
+    }
+
+    #[test]
+    fn keeps_recognized_string_format() {
+        let input = json!({ "type": "string", "format": "date-time" });
+        let out = sanitize_schema(&input);
+        assert_eq!(out["type"], "string");
+        assert_eq!(out["format"], "date-time");
+    }
+
+    #[test]
+    fn integer_format_kept_or_dropped_by_type() {
+        let kept = sanitize_schema(&json!({ "type": "integer", "format": "int64" }));
+        assert_eq!(kept["format"], "int64");
+
+        let dropped = sanitize_schema(&json!({ "type": "integer", "format": "foo" }));
+        assert!(dropped.get("format").is_none());
     }
 
     #[test]
