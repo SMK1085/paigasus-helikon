@@ -19,6 +19,7 @@ mod model;
 mod sse;
 mod stream;
 mod translate;
+mod transport;
 
 pub use auth::TokenProvider;
 pub use builder::{BuildError, GeminiModelBuilder};
