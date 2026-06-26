@@ -16,6 +16,8 @@ mod builder;
 mod capabilities;
 mod error;
 mod model;
+mod sse;
+mod stream;
 mod translate;
 
 pub use auth::TokenProvider;
