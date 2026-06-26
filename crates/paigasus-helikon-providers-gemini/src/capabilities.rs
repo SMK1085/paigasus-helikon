@@ -4,20 +4,17 @@ use paigasus_helikon_core::ModelCapabilities;
 
 /// Capability snapshot for a model id.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // consumed by builder.rs in Task 4
 pub(crate) struct ModelEntry {
     pub(crate) caps: ModelCapabilities,
 }
 
 /// Conservative fallback for ids absent from [`KNOWN_MODELS`].
-#[allow(dead_code)] // consumed by builder.rs in Task 4
 pub(crate) const fn conservative_defaults() -> ModelEntry {
     ModelEntry {
         caps: ModelCapabilities::empty().with_streaming().with_tools(),
     }
 }
 
-#[allow(dead_code)] // used by KNOWN_MODELS init
 const fn full() -> ModelEntry {
     ModelEntry {
         caps: ModelCapabilities::empty()
@@ -31,7 +28,6 @@ const fn full() -> ModelEntry {
 
 /// Capability snapshot keyed by exact model id. Cross-check against Google's
 /// published model docs at implementation time; divergences are bugs.
-#[allow(dead_code)] // consumed by builder.rs in Task 4
 pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
     ("gemini-2.5-pro", full()),
     ("gemini-2.5-flash", full()),
@@ -40,7 +36,6 @@ pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
 ];
 
 /// Look up capabilities for `model_id`, falling back to conservative defaults.
-#[allow(dead_code)] // consumed by builder.rs in Task 4
 pub(crate) fn lookup(model_id: &str) -> ModelEntry {
     KNOWN_MODELS
         .iter()

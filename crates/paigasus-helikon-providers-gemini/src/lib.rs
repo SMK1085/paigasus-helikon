@@ -11,6 +11,13 @@
 //! # Ok(()) }
 //! ```
 
+mod auth;
+mod builder;
 mod capabilities;
 mod error;
+mod model;
 mod translate;
+
+pub use auth::TokenProvider;
+pub use builder::{BuildError, GeminiModelBuilder};
+pub use model::GeminiModel;
