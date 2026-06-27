@@ -81,5 +81,12 @@ async fn live_vertex_text_turn() {
         .invoke(user("Say hi."), CancellationToken::new())
         .await
         .unwrap();
-    while s.next().await.is_some() {}
+    let mut got_text = false;
+    while let Some(ev) = s.next().await {
+        // Unwrap each event so a streamed Err fails the test.
+        if let ModelEvent::TokenDelta { .. } = ev.unwrap() {
+            got_text = true;
+        }
+    }
+    assert!(got_text);
 }

@@ -152,7 +152,10 @@ impl Model for GeminiModel {
                     }
                     Some(Err(e)) => { yield Err(ModelError::Transport(e.to_string())); return; }
                     Some(Ok(event)) => {
-                        if event.data == "[DONE]" { continue; }
+                        if event.data == "[DONE]" {
+                            for ev in translator.finish() { yield ev; }
+                            return;
+                        }
                         let chunk: GeminiChunk = match serde_json::from_str(&event.data) {
                             Ok(c) => c,
                             Err(parse_err) => {

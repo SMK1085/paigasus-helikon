@@ -139,7 +139,25 @@ fn rewrite(node: &Value, defs: &Map<String, Value>, depth: usize, seen: &mut Vec
             // `responseSchema` carrying an unrecognized format (e.g. `email`,
             // `uri`, `uuid`) is rejected by Gemini with a 400.
             "format" => {
-                let ty = obj.get("type").and_then(Value::as_str);
+                // `type` may be a bare string or a `[T, "null"]` nullable
+                // array; recover the single non-null type in both cases so a
+                // valid `format` on a nullable field isn't dropped.
+                let ty = match obj.get("type") {
+                    Some(Value::String(s)) => Some(s.as_str()),
+                    Some(Value::Array(arr)) => {
+                        let mut non_null = arr
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .filter(|t| *t != "null");
+                        let first = non_null.next();
+                        if first.is_some() && non_null.next().is_none() {
+                            first
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
                 if v.as_str().is_some_and(|fmt| format_is_supported(ty, fmt)) {
                     out.insert("format".into(), v.clone());
                 }
@@ -268,6 +286,22 @@ mod tests {
         let out = sanitize_schema(&input);
         assert_eq!(out["type"], "string");
         assert_eq!(out["format"], "date-time");
+    }
+
+    #[test]
+    fn nullable_type_array_preserves_supported_format() {
+        let out = sanitize_schema(&json!({ "type": ["string", "null"], "format": "date-time" }));
+        assert_eq!(out["type"], "string");
+        assert_eq!(out["nullable"], true);
+        assert_eq!(out["format"], "date-time");
+    }
+
+    #[test]
+    fn nullable_type_array_drops_unsupported_format() {
+        let out = sanitize_schema(&json!({ "type": ["string", "null"], "format": "email" }));
+        assert_eq!(out["type"], "string");
+        assert_eq!(out["nullable"], true);
+        assert!(out.get("format").is_none());
     }
 
     #[test]

@@ -39,7 +39,14 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
                 system_parts.extend(text_parts(content));
             }
             Item::UserMessage { content } => {
-                contents.push(json!({ "role": "user", "parts": content_parts(content) }));
+                let parts = user_parts(content, &call_names)?;
+                // A UserMessage carrying only a ToolResult becomes one
+                // functionResponse part (non-empty); guard anyway so a
+                // genuinely empty turn is dropped rather than emitting
+                // `"parts": []`.
+                if !parts.is_empty() {
+                    contents.push(json!({ "role": "user", "parts": parts }));
+                }
             }
             Item::AssistantMessage { content, .. } => {
                 contents.push(json!({ "role": "model", "parts": assistant_parts(content) }));
@@ -95,7 +102,17 @@ fn text_parts(content: &[ContentPart]) -> Vec<Value> {
         .collect()
 }
 
-fn content_parts(content: &[ContentPart]) -> Vec<Value> {
+/// Translate the parts of an `Item::UserMessage`.
+///
+/// Handles the Anthropic-native [`ContentPart::ToolResult`] shape (a tool
+/// result carried inside a user turn) by emitting a `functionResponse` part,
+/// recovering the function name from `call_names` exactly like the top-level
+/// [`Item::ToolResult`] branch. Text and base64 images translate as usual;
+/// URL images and other parts are dropped with a discriminant warning.
+fn user_parts(
+    content: &[ContentPart],
+    call_names: &std::collections::HashMap<&str, &str>,
+) -> Result<Vec<Value>, ModelError> {
     let mut out = Vec::new();
     for p in content {
         match p {
@@ -104,6 +121,20 @@ fn content_parts(content: &[ContentPart]) -> Vec<Value> {
                 source: MediaSource::Base64 { mime_type, data },
             } => {
                 out.push(json!({ "inlineData": { "mimeType": mime_type, "data": data } }));
+            }
+            ContentPart::ToolResult { call_id, content } => {
+                let name = call_names.get(call_id.as_str()).ok_or_else(|| {
+                    ModelError::Other(anyhow::anyhow!(
+                        "tool result references unknown call_id {call_id}"
+                    ))
+                })?;
+                out.push(json!({
+                    "functionResponse": {
+                        "id": call_id,
+                        "name": name,
+                        "response": tool_response_object(content),
+                    }
+                }));
             }
             other => {
                 tracing::warn!(
@@ -114,7 +145,7 @@ fn content_parts(content: &[ContentPart]) -> Vec<Value> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 fn assistant_parts(content: &[ContentPart]) -> Vec<Value> {
@@ -286,6 +317,57 @@ mod tests {
         let part = &t.contents[0]["parts"][0]["inlineData"];
         assert_eq!(part["mimeType"], "image/png");
         assert_eq!(part["data"], "AAAA");
+    }
+
+    #[test]
+    fn nested_tool_result_in_user_message_becomes_function_response() {
+        // Anthropic-native shape: a ToolResult carried inside a UserMessage,
+        // with a prior ToolCall so the name resolves.
+        let items = vec![
+            user("search cats"),
+            Item::ToolCall {
+                call_id: "fc_0".into(),
+                name: "search".into(),
+                args: json!({"q":"cats"}),
+            },
+            Item::UserMessage {
+                content: vec![ContentPart::ToolResult {
+                    call_id: "fc_0".into(),
+                    content: vec![ContentPart::Text {
+                        text: "{\"hits\":3}".into(),
+                    }],
+                }],
+            },
+        ];
+        let t = items_to_contents(&items).unwrap();
+        let fr = &t.contents[2]["parts"][0]["functionResponse"];
+        assert_eq!(fr["id"], "fc_0");
+        assert_eq!(fr["name"], "search"); // recovered from call_id->name map
+        assert_eq!(fr["response"]["hits"], 3);
+    }
+
+    #[test]
+    fn user_message_of_only_tool_result_is_non_empty_user_turn() {
+        let items = vec![
+            Item::ToolCall {
+                call_id: "fc_0".into(),
+                name: "search".into(),
+                args: json!({}),
+            },
+            Item::UserMessage {
+                content: vec![ContentPart::ToolResult {
+                    call_id: "fc_0".into(),
+                    content: vec![ContentPart::Text { text: "{}".into() }],
+                }],
+            },
+        ];
+        let t = items_to_contents(&items).unwrap();
+        // The user turn must NOT degrade to "parts": []; it has one functionResponse.
+        let user_turn = &t.contents[1];
+        assert_eq!(user_turn["role"], "user");
+        let parts = user_turn["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].get("functionResponse").is_some());
     }
 
     #[test]

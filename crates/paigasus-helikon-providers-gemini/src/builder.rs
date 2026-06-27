@@ -123,13 +123,21 @@ impl GeminiModelBuilder {
         self
     }
     /// Set a static Vertex bearer token.
+    ///
+    /// Mutually exclusive with [`token_provider`](Self::token_provider) —
+    /// last call wins, so a prior `token_provider` is cleared.
     pub fn bearer_token(mut self, token: impl Into<String>) -> Self {
         self.bearer = Some(token.into());
+        self.token = None;
         self
     }
     /// Set a Vertex token provider (fresh token per request).
+    ///
+    /// Mutually exclusive with [`bearer_token`](Self::bearer_token) — last
+    /// call wins, so a prior `bearer_token` is cleared.
     pub fn token_provider(mut self, p: impl TokenProvider + 'static) -> Self {
         self.token = Some(Arc::new(p));
+        self.bearer = None;
         self
     }
     /// Override the API base URL (enables proxies / regional hosts).
@@ -206,8 +214,45 @@ impl GeminiModelBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::auth::TokenProvider;
     use crate::GeminiModel;
-    use paigasus_helikon_core::Model;
+    use async_trait::async_trait;
+    use paigasus_helikon_core::{Model, ModelError};
+
+    #[derive(Debug)]
+    struct DummyProvider;
+
+    #[async_trait]
+    impl TokenProvider for DummyProvider {
+        async fn token(&self) -> Result<String, ModelError> {
+            Ok("dummy-token".to_owned())
+        }
+    }
+
+    #[test]
+    fn vertex_auth_setters_are_last_call_wins() {
+        // token_provider then bearer_token -> Bearer (bearer cleared the provider).
+        let cfg = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+            .token_provider(DummyProvider)
+            .bearer_token("ya29")
+            .build_config()
+            .unwrap();
+        assert!(
+            matches!(cfg.auth, crate::auth::Auth::Bearer(_)),
+            "last-set bearer must win over a prior token_provider"
+        );
+
+        // bearer_token then token_provider -> Token (provider cleared the bearer).
+        let cfg = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+            .bearer_token("ya29")
+            .token_provider(DummyProvider)
+            .build_config()
+            .unwrap();
+        assert!(
+            matches!(cfg.auth, crate::auth::Auth::Token(_)),
+            "last-set token_provider must win over a prior bearer"
+        );
+    }
 
     #[test]
     fn developer_requires_api_key() {

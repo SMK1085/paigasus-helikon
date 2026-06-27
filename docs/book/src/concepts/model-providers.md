@@ -217,10 +217,11 @@ Covers the **Gemini streaming API** — tool use, structured output, and
 multi-turn conversations against Google's Gemini model family. Structured output
 is **native** (`responseSchema`) — the provider does not use forced-tool synthesis.
 
-> **Note:** Gemini rejects requests that combine `responseSchema` with tool
-> declarations simultaneously. If your `ModelRequest` has both a
-> `ResponseFormat::JsonSchema` and non-empty `tools`, the provider returns a
-> conflict error before sending.
+> **Note:** Gemini rejects requests that combine structured output with active
+> function calling. If your `ModelRequest` sets a `ResponseFormat::JsonObject`
+> or `ResponseFormat::JsonSchema` while `tools` is non-empty **or** `tool_choice`
+> is anything other than `None`, the provider returns a conflict error before
+> sending.
 
 #### Transports
 

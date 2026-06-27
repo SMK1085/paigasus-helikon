@@ -44,6 +44,15 @@ pub(crate) fn build_request(
         )));
     }
 
+    // tool_choice Tool{name} must reference a declared tool.
+    if let Some(paigasus_helikon_core::ToolChoice::Tool { name }) = &s.tool_choice {
+        if !req.tools.iter().any(|tool| tool.name == *name) {
+            return Err(ModelError::Other(anyhow::anyhow!(
+                "tool_choice references unknown tool `{name}`"
+            )));
+        }
+    }
+
     let translated = items_to_contents(&req.messages)?;
     let mut body = Map::new();
     body.insert("contents".into(), Value::Array(translated.contents));
@@ -300,6 +309,21 @@ mod snap {
     #[test]
     fn empty_conversation_errors() {
         let r = ModelRequest::new();
+        assert!(build_request(&cfg(), &r).is_err());
+    }
+
+    #[test]
+    fn tool_choice_naming_undeclared_tool_errors() {
+        let mut r = ModelRequest::new();
+        r.messages = vec![user("go")];
+        r.tools = vec![ToolDef {
+            name: "search".into(),
+            description: "search".into(),
+            schema: json!({ "type": "object", "properties": {} }),
+        }];
+        r.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "missing".into(),
+        });
         assert!(build_request(&cfg(), &r).is_err());
     }
 }

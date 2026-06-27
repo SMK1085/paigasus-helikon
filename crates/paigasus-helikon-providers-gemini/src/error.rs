@@ -14,7 +14,7 @@ pub(crate) fn classify(
 ) -> ModelError {
     match status {
         429 => ModelError::RateLimited { retry_after_ms },
-        500 | 503 | 504 => ModelError::Unavailable,
+        500 | 502 | 503 | 504 => ModelError::Unavailable,
         401 | 403 => ModelError::Refused {
             reason: message.to_owned(),
         },
@@ -67,8 +67,8 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_503_500_504() {
-        for s in [503u16, 500, 504] {
+    fn unavailable_500_502_503_504() {
+        for s in [500u16, 502, 503, 504] {
             assert!(
                 matches!(classify(s, None, "x", None), ModelError::Unavailable),
                 "status {s}"
