@@ -3,8 +3,9 @@
 Every LLM in Helikon sits behind one trait: `Model`, from `paigasus-helikon-core`.
 There are no per-provider traits. Capability differences (streaming, tool calling,
 structured output, vision, prompt caching, …) are surfaced through a flag struct,
-`ModelCapabilities`, rather than split interfaces. Two adapters ship today —
-`OpenAiModel` and `AnthropicModel` — and switching between them is a single line.
+`ModelCapabilities`, rather than split interfaces. Four adapters ship today —
+`OpenAiModel`, `AnthropicModel`, `BedrockModel`, and `GeminiModel` — and switching
+between them is a single line.
 
 ## The `Model` trait
 
@@ -81,7 +82,7 @@ let caps = ModelCapabilities::empty()
 
 ## The shipped adapters
 
-Three provider adapters ship today. All are published on crates.io and reached
+Four provider adapters ship today. All are published on crates.io and reached
 through the facade behind a feature flag. Each exposes a `Model` implementation
 plus a builder.
 
@@ -209,6 +210,88 @@ alongside this crate; a second `CryptoProvider` panics.
 > Model ids are illustrative — swap them for any model your account can reach
 > if the provider rejects the id.
 
+### Gemini — `paigasus-helikon-providers-gemini`
+
+Reached as `paigasus_helikon::gemini::GeminiModel` behind the `gemini` feature.
+Covers the **Gemini streaming API** — tool use, structured output, and
+multi-turn conversations against Google's Gemini model family. Structured output
+is **native** (`responseSchema`) — the provider does not use forced-tool synthesis.
+
+> **Note:** Gemini rejects requests that combine structured output with active
+> function calling. If your `ModelRequest` sets a `ResponseFormat::JsonObject`
+> or `ResponseFormat::JsonSchema` while `tools` is non-empty **or** `tool_choice`
+> is anything other than `None`, the provider returns a conflict error before
+> sending.
+
+#### Transports
+
+Two transports are available:
+
+**Developer API** — authenticates with an API key from the environment:
+
+```rust
+use paigasus_helikon::gemini::GeminiModel;
+
+// Reads GEMINI_API_KEY or GOOGLE_API_KEY.
+let model = GeminiModel::from_env("gemini-2.5-flash")?;
+```
+
+Or explicitly via the builder:
+
+```rust
+use paigasus_helikon::gemini::GeminiModel;
+
+let model = GeminiModel::developer("gemini-2.5-flash")
+    .api_key("your-api-key")
+    .build()?;
+```
+
+**Vertex AI** — authenticates with a bearer token or `TokenProvider`:
+
+```rust,ignore
+use paigasus_helikon::gemini::GeminiModel;
+
+// vertex-adc feature: reads GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION (default: "global").
+// ADC credentials are discovered from the gcloud credential chain.
+let model = GeminiModel::vertex_from_env("gemini-2.5-flash").await?;
+```
+
+Or with an explicit static bearer token:
+
+```rust
+use paigasus_helikon::gemini::GeminiModel;
+
+let model = GeminiModel::vertex("gemini-2.5-flash", "my-project", "us-central1")
+    .bearer_token("ya29.your-token")
+    .build()?;
+```
+
+Enable the `vertex-adc` feature for Application Default Credentials via `gcp_auth`:
+
+```toml
+[dependencies]
+paigasus-helikon-providers-gemini = { version = "0.1", features = ["vertex-adc"] }
+```
+
+#### JSON-Schema sanitizer
+
+A JSON-Schema sanitizer runs automatically on every schema passed to
+`responseSchema`. It inlines `$ref` references, converts `[T, "null"]` type
+arrays to `nullable: true`, replaces `const` with single-item `enum`, renames
+`oneOf` to `anyOf`, strips unsupported keywords (`$schema`,
+`additionalProperties`, `unevaluatedProperties`, `patternProperties`,
+`examples`, `default`, `$defs`/`definitions`), and drops `format` values Gemini
+doesn't recognize for their type (keeping e.g. `enum`/`date-time`). Schemars-
+derived schemas for typical Rust structs and enums pass without manual adjustment.
+
+#### Limitations
+
+Remote-URL images, audio parts, and non-text tool-result parts are silently
+dropped during request translation. Reasoning streaming (`ModelEvent::ReasoningDelta`)
+is not yet emitted by this provider.
+
+> Model ids are illustrative — swap them for any model your account can reach.
+
 ## Switching providers is one line
 
 Because all adapters implement the same `Model` trait, the *only* code that
@@ -227,6 +310,9 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 
 // Bedrock (async construction — loads the AWS credential chain)
 let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
+
+// Gemini Developer API
+let model = GeminiModel::from_env("gemini-2.5-flash")?;
 ```
 
 ```rust
@@ -251,6 +337,8 @@ paigasus-helikon = { version = "0.3", features = ["openai", "macros"] }
 # paigasus-helikon = { version = "0.3", features = ["anthropic", "macros"] }
 # or, for Bedrock:
 # paigasus-helikon = { version = "0.3", features = ["bedrock", "macros"] }
+# or, for Gemini:
+# paigasus-helikon = { version = "0.3", features = ["gemini", "macros"] }
 ```
 
 Feature names are kebab-case (`openai`, `anthropic`); the `pub use` aliases are

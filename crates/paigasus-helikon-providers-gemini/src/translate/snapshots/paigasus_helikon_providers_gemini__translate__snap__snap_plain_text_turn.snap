@@ -1,0 +1,16 @@
+---
+source: crates/paigasus-helikon-providers-gemini/src/translate/mod.rs
+expression: body(r)
+---
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "hello"
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ Each feature gates one sibling crate behind a module on `paigasus_helikon::`:
 | `openai` *(alias `providers-openai`)* | `openai` | `paigasus-helikon-providers-openai` |
 | `anthropic` | `anthropic` | `paigasus-helikon-providers-anthropic` |
 | `bedrock` | `bedrock` | `paigasus-helikon-providers-bedrock` |
+| `gemini` | `gemini` | `paigasus-helikon-providers-gemini` |
 | `mcp` | `mcp` | `paigasus-helikon-mcp` |
 | `tools` | `tools` | `paigasus-helikon-tools` |
 | `tools-web` | adds `WebFetch` / `WebSearch` | `paigasus-helikon-tools/web` |

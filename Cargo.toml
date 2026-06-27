@@ -25,6 +25,12 @@ eventsource-stream    = "0.2"
 fastrand              = "2"
 futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
+# default-features off + aws-lc-rs: gcp_auth's default `ring` feature enables
+# rustls/ring, but the rest of the workspace (AWS smithy, reqwest) uses
+# rustls/aws-lc-rs. Two rustls CryptoProvider features in one graph makes
+# CryptoProvider::install_default() ambiguous and panics any rustls auto-default
+# user (e.g. tools' forkd_tls test) under `cargo test --workspace --all-features`.
+gcp_auth              = { version = "0.12", default-features = false, features = ["aws-lc-rs"] }
 insta                 = "1"
 globset               = "0.4"
 # Pinned to 0.2.28: jiff 0.2.29 activates a `defmt` integration that pulls the
@@ -100,6 +106,7 @@ paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
 paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.17" }
 paigasus-helikon-providers-bedrock   = { path = "crates/paigasus-helikon-providers-bedrock", version = "0.1.0" }
+paigasus-helikon-providers-gemini    = { path = "crates/paigasus-helikon-providers-gemini", version = "0.1.0" }
 
 [workspace.lints.rust]
 missing_docs = "warn"

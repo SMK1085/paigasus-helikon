@@ -65,6 +65,10 @@ pub use paigasus_helikon_sessions_sqlite as sessions_sqlite;
 #[cfg(feature = "bedrock")]
 pub use paigasus_helikon_providers_bedrock as bedrock;
 
+/// Google Gemini provider (Developer API + Vertex). Enabled via the `gemini` feature.
+#[cfg(feature = "gemini")]
+pub use paigasus_helikon_providers_gemini as gemini;
+
 /// JSON Schema helpers.
 pub mod schema {
     /// OpenAI/JSON-Schema strict-mode normalizer — see

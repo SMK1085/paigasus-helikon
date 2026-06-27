@@ -1,0 +1,27 @@
+---
+source: crates/paigasus-helikon-providers-gemini/src/translate/mod.rs
+expression: body(r)
+---
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "extract"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "responseMimeType": "application/json",
+    "responseSchema": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  }
+}

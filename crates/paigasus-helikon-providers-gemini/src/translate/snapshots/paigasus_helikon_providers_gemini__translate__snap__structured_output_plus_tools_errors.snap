@@ -1,0 +1,5 @@
+---
+source: crates/paigasus-helikon-providers-gemini/src/translate/mod.rs
+expression: err.to_string()
+---
+gemini does not support structured output (responseSchema) together with function calling; omit tools / set ToolChoice::None

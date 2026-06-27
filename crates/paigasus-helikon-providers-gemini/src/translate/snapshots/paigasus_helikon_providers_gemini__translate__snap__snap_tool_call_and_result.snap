@@ -1,0 +1,44 @@
+---
+source: crates/paigasus-helikon-providers-gemini/src/translate/mod.rs
+expression: body(r)
+---
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "search cats"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "parts": [
+        {
+          "functionCall": {
+            "args": {
+              "q": "cats"
+            },
+            "id": "fc_0",
+            "name": "search"
+          }
+        }
+      ],
+      "role": "model"
+    },
+    {
+      "parts": [
+        {
+          "functionResponse": {
+            "id": "fc_0",
+            "name": "search",
+            "response": {
+              "hits": 3
+            }
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}
