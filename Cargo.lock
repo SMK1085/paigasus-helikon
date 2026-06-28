@@ -2782,6 +2782,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "paigasus-helikon-sessions-testkit"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "jiff",
+ "paigasus-helikon-core",
+ "tokio",
+]
+
+[[package]]
 name = "paigasus-helikon-tools"
 version = "0.2.8"
 dependencies = [
