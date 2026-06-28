@@ -201,6 +201,42 @@ impl SessionEvent {
             ts: Timestamp::now(),
         }
     }
+
+    /// The serde tag for this variant (`"user_message"`, `"compacted"`, …).
+    /// Matches the `type` field written to the persisted log.
+    pub fn kind(&self) -> &'static str {
+        // No `_ =>` arm: a new #[non_exhaustive] variant must fail to compile
+        // here, in core, rather than silently mis-tagging in a backend.
+        match self {
+            SessionEvent::UserMessage { .. } => "user_message",
+            SessionEvent::AssistantMessage { .. } => "assistant_message",
+            SessionEvent::ToolCalled { .. } => "tool_called",
+            SessionEvent::ToolReturned { .. } => "tool_returned",
+            SessionEvent::HandoffOccurred { .. } => "handoff_occurred",
+            SessionEvent::Compacted { .. } => "compacted",
+        }
+    }
+
+    /// The wall-clock instant this event was recorded.
+    pub fn ts(&self) -> Timestamp {
+        match self {
+            SessionEvent::UserMessage { ts, .. }
+            | SessionEvent::AssistantMessage { ts, .. }
+            | SessionEvent::ToolCalled { ts, .. }
+            | SessionEvent::ToolReturned { ts, .. }
+            | SessionEvent::HandoffOccurred { ts, .. }
+            | SessionEvent::Compacted { ts, .. } => *ts,
+        }
+    }
+
+    /// [`Self::ts`] as `i64` nanoseconds since the Unix epoch, saturating to
+    /// `i64::MIN`/`i64::MAX` outside ±292 years from 1970. For denormalized
+    /// audit-index columns; the canonical timestamp lives in the JSON payload.
+    pub fn ts_nanos_saturating(&self) -> i64 {
+        let nanos_i128 = self.ts().as_nanosecond();
+        let saturated = if nanos_i128 < 0 { i64::MIN } else { i64::MAX };
+        i64::try_from(nanos_i128).unwrap_or(saturated)
+    }
 }
 
 /// In-memory [`Session`] backend backed by a `std::sync::Mutex<Vec<_>>`.
@@ -743,5 +779,86 @@ mod recorder_tests {
         assert!(
             matches!(&out[0], SessionEvent::AssistantMessage { agent, .. } if agent == "starter")
         );
+    }
+}
+
+#[cfg(test)]
+mod accessor_tests {
+    use super::*;
+    use crate::ContentPart;
+    use jiff::Timestamp;
+
+    fn epoch() -> Timestamp {
+        Timestamp::from_second(0).unwrap()
+    }
+
+    #[test]
+    fn kind_matches_serde_tag_for_every_variant() {
+        let cases: Vec<(SessionEvent, &str)> = vec![
+            (
+                SessionEvent::UserMessage {
+                    content: vec![],
+                    ts: epoch(),
+                },
+                "user_message",
+            ),
+            (
+                SessionEvent::AssistantMessage {
+                    content: vec![],
+                    agent: "a".into(),
+                    ts: epoch(),
+                },
+                "assistant_message",
+            ),
+            (
+                SessionEvent::ToolCalled {
+                    call_id: "c".into(),
+                    name: "n".into(),
+                    args: serde_json::json!({}),
+                    ts: epoch(),
+                },
+                "tool_called",
+            ),
+            (
+                SessionEvent::ToolReturned {
+                    call_id: "c".into(),
+                    content: vec![],
+                    ts: epoch(),
+                },
+                "tool_returned",
+            ),
+            (
+                SessionEvent::HandoffOccurred {
+                    from: "a".into(),
+                    to: "b".into(),
+                    ts: epoch(),
+                },
+                "handoff_occurred",
+            ),
+            (
+                SessionEvent::Compacted {
+                    summary: "s".into(),
+                    original_count: 1,
+                    ts: epoch(),
+                },
+                "compacted",
+            ),
+        ];
+        for (ev, tag) in cases {
+            assert_eq!(ev.kind(), tag);
+            // kind() must equal the serde tag actually written to the wire.
+            let json = serde_json::to_value(&ev).unwrap();
+            assert_eq!(json["type"], tag);
+        }
+    }
+
+    #[test]
+    fn ts_returns_the_variant_timestamp_and_nanos_saturate() {
+        let ev = SessionEvent::UserMessage {
+            content: vec![ContentPart::Text { text: "x".into() }],
+            ts: Timestamp::from_second(1_700_000_000).unwrap(),
+        };
+        assert_eq!(ev.ts(), Timestamp::from_second(1_700_000_000).unwrap());
+        assert_eq!(ev.ts_nanos_saturating(), 1_700_000_000_000_000_000);
     }
 }
