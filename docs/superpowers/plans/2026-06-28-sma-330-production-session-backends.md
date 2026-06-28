@@ -697,8 +697,12 @@ impl<S: Session> CompactingSession<S> {
                 .store(tokens.saturating_mul(4), Ordering::Relaxed);
             return Ok(());
         }
-        // 5. Nothing useful to collapse (lone running summary / empty).
-        if snap.messages.len() <= 1 {
+        // 5. Nothing useful to collapse: empty, or a lone running System summary.
+        //    (A single over-threshold non-summary message SHOULD still compact —
+        //    `len <= 1` alone would wrongly skip it.)
+        if snap.messages.is_empty()
+            || (snap.messages.len() == 1 && matches!(snap.messages[0], Item::System { .. }))
+        {
             return Ok(());
         }
         // 6. live = events since (and incl.) the last Compacted marker.
