@@ -121,6 +121,126 @@ Appends serialize through SQLite's database-level write lock (`BEGIN IMMEDIATE`
 plus a `(session_id, sequence)` primary key), so the backend is safe for
 concurrent writers.
 
+## Compaction
+
+Long-running conversations accumulate events; the growing projected context
+eventually exceeds the provider's context window. `CompactingSession<S>` (in
+`paigasus-helikon-core`, re-exported as
+`paigasus_helikon::core::CompactingSession`) is a transparent wrapper over any
+`Session` that fires automatic LLM-based summarisation when a token-count
+estimate exceeds a configurable threshold.
+
+### Token counting
+
+`TokenCounter` is a pluggable trait:
+
+```rust
+pub trait TokenCounter: Send + Sync {
+    fn count(&self, items: &[Item]) -> usize;
+}
+```
+
+The default implementation is `HeuristicTokenCounter` —
+`ceil(total_chars / 4)`, where `total_chars` is the count of Unicode scalar
+values (`str::chars().count()`) across every `ContentPart::Text` and
+`ContentPart::Reasoning` field, recursing into nested `ToolResult` content, and
+also counting `Item::System` running-summary text (necessary so the
+post-compaction count is measured correctly). `Item::ToolCall` name and args
+(compact JSON) also contribute. Image and audio source parts contribute zero.
+The heuristic is deterministic and dependency-free. Swap it with a
+model-specific tokenizer by passing a custom `impl TokenCounter` to the builder.
+
+### Building a `CompactingSession`
+
+```rust
+use std::sync::Arc;
+use paigasus_helikon::core::{CompactingSession, MemorySession};
+
+let inner = Arc::new(MemorySession::new());
+let session = CompactingSession::builder(inner, model)
+    .threshold(4096)   // fire compaction when estimated tokens exceed this
+    .build()?;
+```
+
+`builder` accepts any `Arc<S: Session>` and any `Arc<dyn Model>`. Optional
+setters: `.token_counter(Arc<dyn TokenCounter>)`, `.model_settings(...)`, and
+`.prompt(String)` to override the built-in summarisation instruction. The
+builder rejects `threshold == 0`.
+
+### How compaction fires
+
+On every `append`:
+
+1. The new events' character estimate is added to a running cheap counter.
+2. When the cheap estimate suggests the threshold may be exceeded, the wrapper
+   reads the inner session, projects it with `project`, and calls
+   `TokenCounter::count` for the authoritative figure.
+3. If `tokens > threshold`, the wrapper sends the current projected messages
+   plus a trailing `UserMessage(prompt)` to the model, collects the
+   `TokenDelta` stream into a summary string, and appends
+   `SessionEvent::Compacted { summary, original_count }` to the inner session.
+4. The user's events are always persisted first; any compaction error is logged
+   at `warn!` and swallowed — `append` always returns `Ok(())` if the inner
+   write succeeded.
+
+The cheap running counter is **initialised to `usize::MAX`**, so the very first
+`append` to a freshly constructed wrapper always runs the authoritative read.
+This is what makes resume correct: a `CompactingSession` wrapping an
+already-populated durable backend (the typical Postgres or Redis use-case)
+compacts the existing backlog on the first append, rather than silently treating
+the session as empty.
+
+### Compaction model: full-history running summary
+
+`CompactingSession` maintains a **full-history running summary**. When the
+projection reaches a `Compacted` marker it drops every message that preceded the
+marker and emits the summary as a single `Item::System`. A later compaction does
+the same against the messages that accumulated after the previous marker, so the
+conversation is always represented as one `System` summary followed by the most
+recent events.
+
+A **keep-recent-window** mode (summarise an older prefix while keeping the last
+*K* turns verbatim) is explicitly out of scope — it requires changes to
+`project()` and is deferred to a future ticket.
+
+**Convergence.** Compaction lowers the projected count below `threshold` only
+when the model's summary is itself shorter than `threshold`. If the summary is
+still over threshold, a guard that refuses to re-compact a snapshot whose only
+message is already an `Item::System` prevents an infinite loop. Two operational
+constraints documented on the type: set `threshold` comfortably below the
+summarisation model's context window (the wrapper sends the full projected
+history in the summarisation call), and choose a model that reliably produces
+summaries materially shorter than `threshold`.
+
+**Provider caveat.** The compaction summary projects to `Item::System` (see
+[Projection](#projection) above). Both shipped provider translators reshape
+system messages: Anthropic hoists them to the top-level `system` field; OpenAI
+concatenates them at the top of the conversation. The summary reaches the model
+as a top-level instruction, not as a positional cutover in the message stream.
+
+**Concurrency.** `CompactingSession` assumes a **single logical writer per
+session** — the normal runner model where one run owns the session and appends
+serially. The inner backend remains fully durable and concurrency-safe; the
+compaction bookkeeping is not atomic against a concurrent append through the
+same wrapper. Concurrent writers should share the same *inner* backend directly,
+not a single wrapper instance.
+
+## Backend conformance
+
+Every shipped `Session` backend passes the same conformance suite from the
+internal `paigasus-helikon-sessions-testkit` crate:
+
+| Test | What it verifies |
+| --- | --- |
+| `run_append_read` | Events written by `append` are returned by `events` in order |
+| `run_watermark_exclusive` | `events(Some(SequenceId(n)))` returns only positions strictly after `n` |
+| `run_projection` | `snapshot()` equals `project(&events(None))` |
+| `run_concurrent_writers` | 16 concurrent tasks × 10 appends each — every event present exactly once |
+
+`MemorySession`, `SqliteSession`, and the forthcoming Postgres and Redis
+backends all run `run_all`. Adding a new backend means passing this suite before
+it ships.
+
 ## Plugging a session into a run
 
 `RunContext` accepts any `Arc<dyn Session>` via the `.with_session(...)` setter.
