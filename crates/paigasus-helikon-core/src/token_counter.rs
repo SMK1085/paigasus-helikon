@@ -7,7 +7,7 @@ use crate::Item;
 ///
 /// Pluggable so callers can supply a model-accurate tokenizer; the default
 /// [`HeuristicTokenCounter`] is a cheap, deterministic approximation.
-pub trait TokenCounter: Send + Sync + std::fmt::Debug {
+pub trait TokenCounter: Send + Sync {
     /// Estimate the token count of `items`.
     fn count(&self, items: &[Item]) -> usize;
 }

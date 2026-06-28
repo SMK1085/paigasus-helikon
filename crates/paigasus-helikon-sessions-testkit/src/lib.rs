@@ -6,12 +6,35 @@ use std::future::Future;
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use paigasus_helikon_core::{ContentPart, SequenceId, Session, SessionEvent};
+use paigasus_helikon_core::{ContentPart, Item, SequenceId, Session, SessionEvent};
 
 fn user(text: &str) -> SessionEvent {
     SessionEvent::UserMessage {
         content: vec![ContentPart::Text { text: text.into() }],
         ts: Timestamp::from_second(1_700_000_000).unwrap(),
+    }
+}
+
+/// Extract the text of a `UserMessage` event, panicking on any other shape.
+/// Used by the assertions below to compare exact content and order.
+fn event_text(ev: &SessionEvent) -> &str {
+    match ev {
+        SessionEvent::UserMessage { content, .. } => match content.first() {
+            Some(ContentPart::Text { text }) => text.as_str(),
+            other => panic!("expected leading Text content, got {other:?}"),
+        },
+        other => panic!("expected UserMessage, got {other:?}"),
+    }
+}
+
+/// Extract the text of a projected `Item::UserMessage`, panicking otherwise.
+fn item_text(item: &Item) -> &str {
+    match item {
+        Item::UserMessage { content } => match content.first() {
+            Some(ContentPart::Text { text }) => text.as_str(),
+            other => panic!("expected leading Text content, got {other:?}"),
+        },
+        other => panic!("expected Item::UserMessage, got {other:?}"),
     }
 }
 
@@ -25,8 +48,14 @@ where
     s.append(&[user("a"), user("b"), user("c")]).await.unwrap();
     let got = s.events(None).await.unwrap();
     assert_eq!(got.len(), 3, "all appended events read back");
-    assert!(matches!(&got[0], SessionEvent::UserMessage { content, .. }
-        if matches!(&content[0], ContentPart::Text { text } if text == "a")));
+    // Assert exact content AND order, not just count: a backend that reordered
+    // or corrupted payloads must fail here.
+    let texts: Vec<&str> = got.iter().map(event_text).collect();
+    assert_eq!(
+        texts,
+        ["a", "b", "c"],
+        "events read back in exact append order with exact content"
+    );
 }
 
 /// `events(Some(SequenceId(n)))` is an exclusive watermark: returns positions > n.
@@ -40,7 +69,14 @@ where
         s.append(&[user(&format!("m{i}"))]).await.unwrap();
     }
     let after = s.events(Some(SequenceId(2))).await.unwrap();
-    assert_eq!(after.len(), 2, "positions 3 and 4 only (exclusive of 2)");
+    // Assert it returns exactly the right two events (positions 3 and 4) in
+    // order — not merely "two events": a backend returning the wrong rows must fail.
+    let texts: Vec<&str> = after.iter().map(event_text).collect();
+    assert_eq!(
+        texts,
+        ["m3", "m4"],
+        "exclusive watermark returns exactly positions 3 and 4, in order"
+    );
 }
 
 /// `snapshot()` equals `project(events())`.
@@ -50,12 +86,20 @@ where
     Fut: Future<Output = Arc<dyn Session>>,
 {
     let s = make().await;
-    s.append(&[user("hi")]).await.unwrap();
+    s.append(&[user("p1"), user("p2")]).await.unwrap();
     let snap = s.snapshot().await.unwrap();
     let events = s.events(None).await.unwrap();
     let expected = paigasus_helikon_core::project(&events);
     assert_eq!(snap.messages.len(), expected.messages.len());
-    assert_eq!(snap.messages.len(), 1);
+    assert_eq!(snap.messages.len(), 2);
+    // Assert the projected snapshot preserves exact content and order, not just
+    // length: a snapshot with the right count but wrong messages must fail.
+    let texts: Vec<&str> = snap.messages.iter().map(item_text).collect();
+    assert_eq!(
+        texts,
+        ["p1", "p2"],
+        "snapshot() projects messages with exact content in order"
+    );
 }
 
 /// N tasks append concurrently to the same session; every event survives once.

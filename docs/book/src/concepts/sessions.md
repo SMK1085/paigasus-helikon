@@ -183,9 +183,10 @@ On every `append`:
    `Compacted` marker is appended. Otherwise
    `SessionEvent::Compacted { summary, original_count }` is appended to the
    inner session.
-4. The user's events are always persisted first; any compaction error (including
-   model errors) is logged at `warn!` and swallowed — `append` always returns
-   `Ok(())` if the inner write succeeded.
+4. The user's events are always persisted first. Model/summary-generation
+   failures are logged at `warn!` and swallowed, but inner-session read/write
+   failures during compaction (reading the log, or appending the `Compacted`
+   marker) still propagate out of `append`.
 
 The cheap running counter is **initialised to `usize::MAX`**, so the very first
 `append` to a freshly constructed wrapper always runs the authoritative read.
