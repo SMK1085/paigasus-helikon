@@ -1,7 +1,7 @@
 # SMA-330 — Production session backends: Postgres, Redis, Compacting wrapper
 
 - **Linear:** SMA-330 (`feature/sma-330-production-session-backends-postgres-redis-compacting`)
-- **Status:** design
+- **Status:** design — spec-challenged 2026-06-28 (verdict: approve-with-changes; folded in)
 - **Date:** 2026-06-28
 - **Related:** SMA-392 (wire `Session` persistence into the run lifecycle) — consumes these backends; out of scope here.
 
@@ -48,6 +48,9 @@ pub trait Session: Send + Sync {
 
 - **Keep-recent-window compaction** (summarize an older prefix while keeping the last *K* turns verbatim). The current `project()` collapses events *preceding* the marker, so a running full-history summary is the only shape expressible without changing core. Window compaction is a future ticket touching `project()`, its tests, and the provider-translator caveat.
 - Redis `events(since)` cursor optimization (O(n) full-stream read for now).
+- CompactingSession snapshot-caching (the at-compaction O(total-events) replay is accepted; a cache is future work).
+- Concurrent appends *through* a single `CompactingSession` (single-writer-per-session by design — §4.2).
+- Redis stream trimming/retention (the contiguous-`seq` invariant assumes no trim — §7).
 - Run-lifecycle wiring (SMA-392).
 
 ## 3. Crate roster changes
@@ -80,7 +83,9 @@ pub trait TokenCounter: Send + Sync {
 pub struct HeuristicTokenCounter;
 ```
 
-- The heuristic walks each `Item`'s textual content (`ContentPart::Text`, `Reasoning`; tool-call args counted as their JSON string length) and returns `total_chars.div_ceil(4)`. Non-text parts (image/audio sources) contribute a small fixed constant or 0 — **decision: 0** (we only bound text growth; image bytes are not in the projected text).
+- The heuristic walks each `Item`'s textual content (`ContentPart::Text`, `Reasoning`; tool-call args counted as their JSON string length) and returns `total_chars.div_ceil(4)`, where **`total_chars` is the count of Unicode scalar values (`str::chars().count()`), not UTF-8 bytes** — fixed unit to avoid two implementers diverging on multibyte text. `div_ceil` is stable well before MSRV 1.94.
+- It **must** count `Item::System` content (the running summary), since CompactingSession's convergence depends on measuring the post-compaction snapshot.
+- Non-text parts (image/audio sources) contribute 0 — we only bound text growth; image bytes are not in the projected text.
 - Deterministic so the AC test can assert an exact below-threshold count.
 
 ### 4.2 `CompactingSession<S>`
@@ -90,33 +95,40 @@ pub struct CompactingSession<S: Session> {
     inner: S,
     model: Arc<dyn Model>,
     counter: Arc<dyn TokenCounter>,
-    threshold: usize,
+    threshold: usize,           // builder rejects 0 (a 0 threshold would never compact)
     settings: ModelSettings,
     prompt: String,             // summarization instruction text
+    cheap_estimate: AtomicUsize,// running char-count since last compaction (perf gate)
     compacting: AtomicBool,     // single-flight guard
 }
 ```
 
-Construction via a small builder (`CompactingSession::builder(inner, model).threshold(n)…build()`) with defaults: `HeuristicTokenCounter`, a built-in summarization prompt, `ModelSettings::default()`.
+Construction via a small builder (`CompactingSession::builder(inner, model).threshold(n)…build()`) with defaults: `HeuristicTokenCounter`, a built-in summarization prompt, `ModelSettings::default()`. The builder **rejects `threshold == 0`** (returns a build error / debug-panics) — `tokens <= 0` would never fire.
+
+**Concurrency contract (important):** `CompactingSession` assumes a **single logical writer per session** — the normal runner usage where one run owns the session and appends serially. The inner backend remains fully durable and concurrency-safe (so the data is never lost), but the compaction *bookkeeping* (read-count-then-append-marker, §steps below) is **not** atomic against another `append` interleaving through the same wrapper: an event slipped in between the count and the marker write would make `original_count` stale and cause `project()` to drop un-summarized events. Therefore `CompactingSession` is **not** claimed to pass `run_concurrent_writers` and is documented as single-writer. The `AtomicBool` guards only against a *re-entrant/overlapping compaction*, not against concurrent user appends. (Closing the race fully would require serializing every append through an async lock, which would defeat the inner backend's concurrency for no benefit in the single-owner runner model — deferred.)
 
 `Session` impl:
 
 - `append(events)`:
   1. `inner.append(events).await?` (propagate inner errors — the durable write must not be masked).
-  2. `self.maybe_compact().await` — **best-effort**: any error (LLM unavailable, summary read failure) is logged at `warn!` and swallowed. The user's events are already persisted; compaction is an optimization, and failing `append` after a successful inner write would be surprising. `append` returns `Ok(())`.
+  2. Add the new events' cheap char-estimate to `cheap_estimate`.
+  3. `self.maybe_compact().await` — **best-effort**: any error (LLM unavailable, summary read failure) is logged at `warn!` and swallowed. The user's events are already persisted; compaction is an optimization, and failing `append` after a successful inner write would be surprising. `append` returns `Ok(())`.
 - `events(since)` → `inner.events(since)`.
 - `snapshot()` → `inner.snapshot()` (already projects, collapsing `Compacted`).
 
 `maybe_compact()` (synchronous within `append`, so the AC is deterministic — no background race):
 
-1. **Single-flight:** `if self.compacting.swap(true, AcqRel) { return Ok(()) }`. Cleared with `store(false, Release)` on every exit path (RAII guard struct). No lock is held across the `await`; a concurrent append that finds the flag set simply skips its own compaction (the in-flight one will lower the count; if new events keep it high, the next append re-checks → converges).
-2. Read `let evs = self.inner.events(None).await?;` → `let snap = project(&evs);` → `let tokens = self.counter.count(&snap.messages);`.
-3. If `tokens <= self.threshold` → return.
-4. `live = evs.len() - last_compacted_index(&evs)` where `last_compacted_index` returns the index of the last `Compacted` event **inclusive** (`0` ⇒ none ⇒ `live = evs.len()`). **Guard:** if `live < 2`, return (a lone running summary can't be usefully shrunk; prevents re-summarization ping-pong).
-5. Build `ModelRequest { messages: snap.messages-plus-instruction, tools: vec![], model_settings: self.settings.clone() }`; drive `model.invoke(req, CancellationToken::new()).await?`, collecting `ModelEvent::TokenDelta { text }` into `summary` until `Finish`.
-6. `self.inner.append(&[SessionEvent::compacted(summary, live as u64)]).await?`.
+1. **Cheap perf gate:** if `cheap_estimate <= threshold * 4` (chars≈tokens·4), return without reading the log. This keeps the common-case append at O(new events) instead of O(total log); the expensive authoritative path runs only when the cheap estimate suggests we're near the threshold. (Inherent cost: when it *does* run, `events(None)` + `project` is O(total events), because event-sourced projection must replay from the start. Acceptable for an MVP; a snapshot-cache optimization is noted as future work.)
+2. **Single-flight:** `let guard = match self.compacting.compare_exchange(false, true, AcqRel, Acquire) { Ok(_) => Guard, Err(_) => return Ok(()) };` — the RAII `Guard` is constructed **only on the swap-won path** and resets the flag to `false` on drop (never resetting a flag we didn't set). No lock is held across the `await`.
+3. Read `let evs = self.inner.events(None).await?;` → `let snap = project(&evs);` → `let tokens = self.counter.count(&snap.messages);`.
+4. If `tokens <= self.threshold` → reset `cheap_estimate` to `tokens * 4` (re-sync the cheap estimate to reality) and return.
+5. **Guard on *messages*, not events:** if `snap.messages.len() <= 1` → return. A lone running summary (or empty snapshot) has nothing useful to collapse; keying this on the projected message count (rather than the raw event count) avoids the `[Compacted, handoff]` ping-pong where two raw events project to a single `System`.
+6. `live = evs.len() - last_compacted_index(&evs)` where `last_compacted_index` returns the index of the last `Compacted` event **inclusive** (returns `0` when there is none ⇒ `live = evs.len()`).
+7. Build `ModelRequest { messages: <snap.messages> ++ [Item::UserMessage(prompt)], tools: vec![], model_settings: self.settings.clone() }` — the instruction is a **trailing `Item::UserMessage`** carrying `self.prompt` (default: *"Summarize the conversation so far into a concise summary, preserving key facts, decisions, and open questions."*). Drive `model.invoke(req, CancellationToken::new()).await?`, collecting `ModelEvent::TokenDelta { text }` into `summary` until `Finish`.
+8. **Empty-summary guard:** if `summary` is empty/whitespace-only, log `warn!` and return without appending a marker (a `Compacted{summary:""}` would project to `[System("")]`, useless).
+9. `self.inner.append(&[SessionEvent::compacted(summary, live as u64)]).await?`; reset `cheap_estimate` to the new summary's char-estimate.
 
-**Correctness of `original_count = live`** (so the result is exactly `[System(summary)]` and `project` logs no warning): when `project` reaches the new marker, its `contributions.len()` equals `live` (one entry per event since the previous `Compacted`, whose entries were truncated). `drop_from_idx = len - live = 0` ⇒ every prior message dropped ⇒ `[System(summary)]`; and `live == contributions.len()` (not `>`), so the "references more events than seen" `warn!` does **not** fire. The summarization instruction is **not** an event (it's only in the `ModelRequest`), so it does not affect the count.
+**Correctness of `original_count = live`** (so the result is exactly `[System(summary)]`): when `project` reaches the new marker, its `contributions.len()` equals `live` (one entry per event since the previous `Compacted`, whose entries were truncated). `drop_from_idx = len - live = 0` ⇒ every prior message dropped ⇒ `[System(summary)]`; and `live == contributions.len()` (not `>`), so the "references more events than seen" `warn!` does **not** fire. The summarization instruction is **not** an event (it's only in the `ModelRequest`), so it does not affect the count. The dedicated test asserts the snapshot **equals** `[System(summary)]`; it does not assert on the absence of a log line (that property follows from the equality and is not separately observable without a tracing capture).
 
 ### 4.3 `SessionEvent` accessors (de-dup)
 
@@ -129,6 +141,8 @@ impl SessionEvent {
 ```
 
 `kind()`/`ts()` `match` all variants with **no `_ =>` arm**, so adding a future `#[non_exhaustive]` variant is a **single compile failure in core** (not three silent panics across backends). `SqliteSession::event_metadata` is refactored to `(ev.kind(), ev.ts_nanos_saturating())`; Postgres and Redis reuse the same accessors.
+
+**Release consequence (drives §10):** because the refactored sqlite crate *and* the new postgres/redis crates would consume core API added in **this same PR**, their `cargo publish --verify` builds against the *registry* core — which lacks the accessors until core itself publishes. This makes the same-PR core bump in §10 **mandatory** (not optional). If we wanted to avoid all manual bumps instead, the alternative is to **drop the accessor de-dup** and let each backend keep a private `event_metadata` (the §10 "Alternative A"). Recommendation: keep the accessors + do the documented manual bump.
 
 ## 5. Shared conformance harness (`-sessions-testkit`)
 
@@ -145,9 +159,11 @@ pub async fn run_all<F, Fut>(make: F) …;                   // the four above
 ```
 
 - `run_concurrent_writers` clones the returned `Arc<dyn Session>` across 16 tasks × 10 appends and asserts the read-back total and that every sent event is present exactly once — the existing sqlite invariant, lifted.
-- testkit's own `tests/memory.rs` runs `run_all` against `MemorySession`, anchoring "**the same** suite Memory passes."
+- **Factory contract:** `make` is `Fn() -> Fut` and is invoked **once per sub-test** inside `run_all`; each call must return a **fresh, empty** session. Backing resources (a `TempDir`+WAL pool for sqlite, a `PgPool` for postgres, a `ConnectionManager` for redis) are owned by the **caller's test scope** and captured by reference in the closure, so they outlive every `make()` call; the closure mints a **unique `session_id` per call** (a process-unique counter/uuid suffix) so runs against a shared CI server (postgres/redis) and a shared sqlite file never collide. Sqlite's concurrency sub-test specifically requires a **file-backed WAL pool** (an in-memory `max_connections=1` pool cannot model concurrent writers).
+- testkit's own `tests/memory.rs` runs `run_all` against `MemorySession`, anchoring "**the same** suite Memory passes." Memory's factory returns a brand-new `MemorySession` each call (no id needed).
 - **Consumption:** each backend crate adds a **path-only, version-less** dev-dependency `paigasus-helikon-sessions-testkit = { path = "../paigasus-helikon-sessions-testkit" }` (SMA-326 pattern → omitted from published manifests, no version-pin/publish-cycle trap) and a `tests/conformance.rs` calling `run_all(make)`.
 - **SQLite retrofit:** add `tests/conformance.rs` to the sqlite crate using the harness; keep its backend-specific tests (`persistence.rs`, `multi_session.rs`). The hand-rolled overlap in `roundtrip.rs`/`concurrent_writers.rs` may be slimmed to avoid duplication but is not required to be deleted.
+- **doc-coverage / missing_docs:** `scripts/check-doc-coverage.sh` discovers **all** workspace members via `cargo metadata` and excludes only the CLI by name, and testkit opts into `[lints] workspace = true` (so `missing_docs` applies). testkit's public `run_*` fns are few — **document all of them with `///`** so it passes both the required `doc-coverage` gate and `missing_docs` without a script change. (Fallback: add `paigasus-helikon-sessions-testkit` to `EXCLUDED_CRATES` in the script, a conscious choice if we'd rather not document internal test helpers.)
 
 ## 6. `PostgresSession` (`-sessions-postgres`)
 
@@ -170,30 +186,37 @@ CREATE INDEX IF NOT EXISTS idx_session_events_session_ts
 
 (`PRIMARY KEY (session_id, sequence)` is the `(session_id, sequence)` index the ticket asks for; the second index is the timestamp index.)
 
-`append` — contiguous sequence under concurrent writers via a **per-session advisory lock**:
+`append` — empty input is a no-op early return (like sqlite). Otherwise, all statements run **inside one `sqlx` transaction bound to a single pooled connection** (`let mut tx = pool.begin().await?; … execute(&mut *tx).await?; tx.commit().await?;`) — **never** as separate `pool`-level `query()` calls, or the advisory lock (held on one connection) would not cover the `INSERT` (issued on another), silently breaking concurrency. The transaction takes a **per-session advisory lock**:
 
-```sql
-BEGIN;
-SELECT pg_advisory_xact_lock(hashtext($1));               -- $1 = session_id; auto-released at COMMIT
-SELECT COALESCE(MAX(sequence), -1) + 1 FROM session_events WHERE session_id = $1;
-INSERT INTO session_events (session_id, sequence, ts_nanos, kind, payload)
-  VALUES ($1, $2, $3, $4, $5);                            -- one row per event; payload bound as JSONB
-COMMIT;
+```text
+let mut tx = pool.begin().await?;                                  // one connection for the whole txn
+// per-session lock, auto-released at COMMIT; all on &mut *tx:
+sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))").bind(&id)…
+let next: i64 = "SELECT COALESCE(MAX(sequence), -1) + 1 FROM session_events WHERE session_id = $1"…
+// one INSERT per event, sequence = next + offset, payload bound as JSONB:
+"INSERT INTO session_events (session_id, sequence, ts_nanos, kind, payload) VALUES ($1,$2,$3,$4,$5)"…
+tx.commit().await?;
 ```
 
-Finer-grained than sqlite's whole-DB `BEGIN IMMEDIATE` — writers to *different* sessions never contend.
+Finer-grained than sqlite's whole-DB `BEGIN IMMEDIATE` — writers to *different* sessions usually don't contend. Caveat: `hashtext` is a **32-bit** hash, so two distinct `session_id`s can collide into the same advisory-lock key, causing occasional false cross-session contention. Correctness is preserved (the lock still serializes); only throughput is affected. Use `hashtextextended($1, 0)` (64-bit) if collisions prove material.
 
 `events(since)`: `SELECT payload FROM session_events WHERE session_id = $1 AND sequence > $2 ORDER BY sequence`, watermark default `-1`, payload fetched as `sqlx::types::Json<SessionEvent>`.
 
 `snapshot()`: `project(&self.events(None).await?)`.
 
-**Dependencies:** `sqlx = { workspace = true, features = ["postgres", "<rustls-aws-lc-rs tls feature>"] }`. The TLS feature **must** be the aws-lc-rs rustls variant (not ring), to match the workspace `CryptoProvider` and avoid the dual-provider panic (the gcp_auth/aws-lc-rs memory). Exact sqlx-0.9 feature name verified at implementation time. Adding `postgres` to the (workspace-unified) sqlx build is benign for the sqlite crate.
+**Query API:** use **runtime** `sqlx::query()`/`query_as()` exclusively, mirroring sqlite — **never** the compile-checked `sqlx::query!`/`query_as!` macros, which require `DATABASE_URL` or an offline cache **at compile time on every matrix platform** (including the serverless macOS/Windows jobs) and would break the build everywhere.
+
+**Dependencies:** declared in the postgres crate's **own** Cargo.toml as `sqlx = { workspace = true, features = ["postgres", "<rustls-aws-lc-rs tls feature>"] }` (the workspace base pins `sqlite`+`macros`+`migrate`+`runtime-tokio`; cargo unions the extra `postgres`/tls features). The TLS feature **must** be the aws-lc-rs rustls variant (sqlx 0.8+ exposes `tls-rustls-aws-lc-rs`; verify the exact 0.9 name at impl time) — *not* a ring variant — to match the workspace `CryptoProvider` and avoid the dual-provider panic under the required `--all-features` test (the gcp_auth/aws-lc-rs memory). Feature unification means the sqlite crate's sqlx also compiles the postgres driver under `--all-features`; benign.
 
 ## 7. `RedisSession` (`-sessions-redis`) — one Redis Stream per session
 
-`redis` crate with tokio async (`ConnectionManager` — auto-reconnect, cheap clone, shareable) and the rustls-aws-lc TLS feature. Constructors: `RedisSession::connect(url, id)` (build a `ConnectionManager`) and `RedisSession::new(ConnectionManager, id)`. Stream key `helikon:session:{id}:events`.
+`redis` crate with tokio async (`ConnectionManager` — auto-reconnect, cheap clone, shareable). Constructors: `RedisSession::new(ConnectionManager, id)` (primary — the caller supplies a connection) and `RedisSession::connect(url, id)` (convenience, **plaintext**). Stream key `helikon:session:{id}:events`.
+
+**TLS / CryptoProvider:** the crate's `redis` dependency enables **no rustls TLS feature** — `redis`'s rustls features are historically ring-backed, and enabling one would register a second `CryptoProvider` and reproduce the dual-provider panic under the required `--all-features` test (same failure mode as the sqlx/gcp_auth memory). Managed-Redis (TLS) users build their own TLS-configured `ConnectionManager` with the workspace's aws-lc-rs provider and pass it to `RedisSession::new`. Pin in `[workspace.dependencies]` as `redis = { version = "<latest>", default-features = false, features = ["tokio-comp", "streams", "script"] }`. (Rationale for keeping TLS out of the crate's features: a crate feature is force-enabled by `--all-features`, so even an opt-in ring-backed TLS feature would trip the dual-provider panic in the required test job. The user-supplied-`ConnectionManager` path is therefore the *only* TLS story, regardless of whether `redis` ships an aws-lc-rs variant.)
 
 Entry fields per event: `seq` (contiguous int), `kind`, `payload` (JSON), `ts`.
+
+`append` empty input is a no-op early return (no EVALSHA round-trip).
 
 `append` — atomic contiguous sequence via a cached Lua script (`redis::Script`, EVALSHA):
 
@@ -212,6 +235,8 @@ Redis runs the whole script atomically (single-threaded), so `XLEN → XADD` can
 
 `snapshot()`: `project(&self.events(None).await?)`.
 
+**Retention caveat:** the `XLEN == max_seq + 1` invariant that makes `seq` contiguous holds **only if the stream is never trimmed**. The crate therefore does **not** call `XADD … MAXLEN`/`XTRIM`, so per-session memory grows with the log, and a Redis instance configured with a `maxmemory` + key-eviction policy that can evict the stream would both lose data **and** break the sequence invariant. Documented as an operational constraint (run the session keyspace with `noeviction`, or accept that compaction-via `CompactingSession` is the bound on growth). A trimming/retention strategy is future work.
+
 Backend-specific tests (env-gated): reconnect-persistence (new `ConnectionManager`, same key, read back), multi-key isolation.
 
 ## 8. Facade wiring
@@ -220,6 +245,8 @@ Backend-specific tests (env-gated): reconnect-persistence (new `ConnectionManage
 - `crates/paigasus-helikon/src/lib.rs`: `#[cfg(feature = "sessions-postgres")] pub use … as sessions_postgres;` and redis equivalent, each with a `///` doc comment (missing_docs is `-D warnings` in the docs job).
 - `CompactingSession`/`TokenCounter` live in core, reachable as `paigasus_helikon::core::CompactingSession` — no new facade feature.
 - Root `Cargo.toml` `[workspace.dependencies]`: add the two published crates (path + `version = "0.1.0"`). testkit is referenced only by backend dev-deps via direct relative path, not via `[workspace.dependencies]`.
+- **Third-party pins (mandatory per CLAUDE.md):** add `redis` to `[workspace.dependencies]` (features as in §7); the postgres `sqlx` driver/TLS feature is added on the postgres crate's own `sqlx` line (§6) but reuses the workspace `sqlx` pin. Members reference these via `dep.workspace = true`.
+- **Supply-chain vetting (required `audit` + `deny` gates):** the new dep graph (`redis`, `sqlx-postgres`'s transitives — e.g. `md-5`, `whoami`, `stringprep`) must pass `cargo deny check` and `cargo audit`. Pre-run both during implementation; if a new license appears (e.g. an MIT/BSD transitive not yet allow-listed) add it to `deny.toml`'s `licenses.allow` via a `chore(deps)`-style change, and note any advisory exposure. Do this **before** opening the PR so the gates are green on first push.
 
 ## 9. CI
 
@@ -241,18 +268,27 @@ sessions-it:
 - Action `uses:` pin to the **same commit SHAs** already in `ci.yml`.
 - Everywhere else (`test` matrix `--workspace --all-features` on ubuntu/macos/windows × {stable, 1.94}) the Postgres/Redis tests **loud-skip** when the envs are unset: each is a real `#[tokio::test]` that, with no URL, `eprintln!("SKIP: …")` and returns `Ok` (forkd `tests/forkd_live.rs` pattern). They still **compile** on every platform (both clients are cross-platform pure-Rust).
 - Image tags (`postgres:17`, `redis:7`) confirmed current at implementation time.
+- **Lib-only build verification:** also run `cargo build -p paigasus-helikon-sessions-postgres -p paigasus-helikon-sessions-redis` (no dev-deps, no `--all-features`) somewhere in CI or as a pre-PR check — per the reqwest-feature-gating memory, dev-deps (testkit, tokio) and `--all-targets` can mask a missing **lib** feature that downstream consumers would hit.
+
+**Open tension for GATE 1 — required vs. signal.** The brainstorm chose *non-required* for `sessions-it`. The spec-challenge correctly notes that the **concurrent-writers AC for Postgres/Redis is exercised nowhere else** (loud-skip everywhere else), so as a non-required check a Redis-Lua or advisory-lock regression could merge on a red, ignorable signal — which is inconsistent with the repo's own precedent of making the macOS job *required* "because it is the only gate that compiles and runs the Seatbelt backend." This is flagged for an explicit decision at GATE 1: keep non-required (per the brainstorm), or promote `sessions-it` to a required context in `main-protection-checks.json` (consistent with the Seatbelt rationale). The spec proceeds with **non-required** unless changed at the gate.
 
 ## 10. Release & versioning choreography
 
-New crates follow the `providers-gemini` (SMA-449) precedent: created at `version = "0.1.0"` with normal `publish`, **not** added to the release-plz stub list. testkit is added to the stub list (`publish=false` + `release=false`).
+New crates are created at `version = "0.1.0"` with normal `publish`, **not** added to the release-plz stub list (the `providers-gemini`/SMA-449 shape). testkit is added to the stub list (`publish=false` + `release=false`).
 
-Because core gains public API in the same PR and the new published crates depend on core, plan the **conservative same-PR bump** to dodge the `cargo publish --verify`-against-stale-registry-core trap (CLAUDE.md "Caveat" / SMA-321 / SMA-346):
+**The same-PR core + facade bump is MANDATORY here — not optional.** The spec-challenge verified *why* SMA-449 needed no manual bump: `providers-gemini` depends on core via `workspace = true` but uses **only pre-existing** core API, so its first-publish `cargo publish --verify` (which builds against the *registry* core) succeeds, and release-plz auto-cascades the facade (facade `CHANGELOG.md` shows the auto-bump to `0.4.11`). **This PR is different:** the refactored sqlite crate and the new postgres/redis crates consume core API **added in this same PR** (the §4.3 accessors). A brand-new `0.1.0` crate publishes on the *feature-PR* merge and verifies against the registry core, which lacks the accessors → publish fails (the CLAUDE.md "Caveat" / SMA-321 trap). So:
 
-1. Bump `paigasus-helikon-core` (patch) + its `[workspace.dependencies]` pin + CHANGELOG.
-2. Bump the `paigasus-helikon` facade (patch) + its self-pin + CHANGELOG (manual core bump otherwise defeats release-plz's facade cascade).
-3. New `-sessions-postgres` / `-sessions-redis` at `0.1.0`; add to `[workspace.dependencies]`.
+1. Bump `paigasus-helikon-core` (patch) + its `[workspace.dependencies]` pin + CHANGELOG. release-plz then publishes core **first** (dependency order).
+2. Bump the `paigasus-helikon` facade (patch) + its self-pin + CHANGELOG (a manual core bump otherwise defeats release-plz's facade cascade — the SMA-346 second-order caveat).
+3. New `-sessions-postgres` / `-sessions-redis` at `0.1.0`; add to `[workspace.dependencies]`. They verify against the now-fresh registry core (dependency-ordered publish: core → sqlite/postgres/redis → facade).
 
-**Verify-before-finalizing (planning task):** inspect how SMA-449 actually shipped `providers-gemini` (git log + the merged release/publish). If release-plz already publishes a brand-new crate and cascades the facade automatically without a stale-core verify failure, **drop the manual core/facade bumps** and let the normal flow run. After merge, watch the release-plz `chore: release` PR's CI (memory: cargo-update can redden `audit`/`deny` on the bot PR only).
+The earlier "drop the manual bumps if gemini auto-cascaded" hedge was a **false signal** (rightly flagged by the spec-challenge): the real criterion is *"do same-PR siblings use core API added in this PR?"* — here, **yes**. Do the bumps.
+
+**Two recorded alternatives** (a GATE-1 option if the manual choreography is unwanted):
+- **Alternative A — drop the §4.3 accessor de-dup.** Then no sibling uses same-PR core API: postgres/redis/sqlite each keep a private `event_metadata`, core adds only the self-contained `CompactingSession`/`TokenCounter`, and the *pure* gemini flow applies with **zero manual bumps** (release-plz auto-bumps core for `feat(core)` and cascades the facade). Cost: the variant→`kind` mapping is duplicated across three crates (three `_ => panic!` sites instead of one compile error).
+- **Alternative B — split into two PRs.** PR-1: core (accessors + `CompactingSession`) + testkit + sqlite retrofit → publishes core. PR-2 (branched after PR-1's release): the two backend crates against the now-published core → normal flow, no manual bump. Eliminates the trap *and* halves review surface, at the cost of two PRs / two pipeline passes.
+
+After merge, watch the release-plz/publish CI and the `chore: release` PR (memory: the bot PR's `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on the bot PR only).
 
 Bootstrap/release-plumbing edits use `chore(...)`/`docs(...)` commit types, never `feat`/`fix`.
 
@@ -261,9 +297,11 @@ Bootstrap/release-plumbing edits use `chore(...)`/`docs(...)` commit types, neve
 | Acceptance criterion | Covered by |
 |---|---|
 | All three pass the same conformance suite (append, read, projection, concurrent writers) as Memory/SQLite | `-sessions-testkit::run_all` invoked by Memory (in testkit), SQLite (retrofit), Postgres, Redis. Postgres/Redis runs are env-gated and executed by the `sessions-it` CI job. |
-| `CompactingSession` reduces input token count below the threshold after compaction fires | core test: deterministic `TokenCounter` + fake `Model` returning a short summary + threshold `T`; append past `T`; assert `counter.count(snapshot().messages) < T`. Plus: `Compacted` recorded with exact `original_count`; raw `events()` retains the full log; LLM-error path leaves the log untouched and `append` still `Ok`; lone-summary (`live < 2`) guard. |
+| `CompactingSession` reduces input token count below the threshold after compaction fires | core test (**sequential appends only** — CompactingSession is single-writer per §4.2, so it does **not** run `run_concurrent_writers`): deterministic `TokenCounter` + fake `Model` returning a short summary + threshold `T`; append past `T`; assert `counter.count(snapshot().messages) < T`, and that `snapshot()` equals `[System(summary)]`. Plus: `Compacted` recorded with exact `original_count`; raw `events()` retains the full log; LLM-error path leaves the log untouched and `append` still `Ok`; empty-summary path appends no marker; lone-summary guard (projected `messages.len() <= 1` ⇒ no re-fire). |
 
-All six existing CI gates stay green: `cargo fmt`, `clippy --workspace --all-features --all-targets -D warnings`, `test` matrix, `docs` (`RUSTDOCFLAGS=-D warnings`, so every new `pub` item needs `///`), `doc-coverage` (≥80%), `commits`/`pr-title`. New crates are added to the doc-coverage aggregator like other published crates.
+All six existing CI gates stay green: `cargo fmt`, `clippy --workspace --all-features --all-targets -D warnings`, `test` matrix, `docs` (`RUSTDOCFLAGS=-D warnings`, so every new `pub` item needs `///`), `doc-coverage` (≥80%), `commits`/`pr-title`. The two **published** crates are added to the doc-coverage aggregator like other published crates; **testkit** (unpublished, but auto-discovered by the script) is handled per §5 (document its public fns, or add to `EXCLUDED_CRATES`).
+
+**MSRV check:** verify the chosen `redis` + `sqlx`-postgres-tls graph does not raise the floor above `rust-version = 1.94`. If cargo demands higher, bump `[workspace.package].rust-version` to what it demands (per CLAUDE.md — raise the floor, don't downgrade the dep) and update the CI `1.94` matrix label.
 
 ## 12. Docs (same PR — mandatory)
 
@@ -271,12 +309,17 @@ All six existing CI gates stay green: `cargo fmt`, `clippy --workspace --all-fea
 - Update facade `crates/paigasus-helikon/README.md` and root `README.md` crate roster + feature→module map (add `sessions-postgres`, `sessions-redis`; mention `CompactingSession` in core).
 - Update the mdBook Sessions page(s) under `docs/book/src/` to document the three backends + compaction semantics (full-history running summary; provider-translator caveat). `mdbook build docs/book` must stay clean (`linkcheck` warning-policy = error).
 
-## 13. Risks / things the challenge should attack
+## 13. Residual risks (post spec-challenge)
 
-1. **Release choreography (§10)** — most error-prone; the manual-bump-vs-let-release-plz call hinges on the SMA-449 precedent, which must be verified, not assumed.
-2. **`original_count = live` exactness (§4.2)** — depends on the precise `project()` contribution-truncation behavior; covered by a dedicated test asserting the snapshot is exactly `[System(summary)]` with no warning.
-3. **Redis contiguous-sequence-under-concurrency (§7)** — relies on Redis Lua atomicity; the conformance concurrency test must run against a real server (the `sessions-it` job), since loud-skip would otherwise hide a regression.
-4. **`HeuristicTokenCounter` accuracy** — deliberately approximate; acceptable because the trait is pluggable and the AC only requires *a* deterministic measure to drop below threshold.
-5. **sqlx TLS feature name / dual-CryptoProvider** — must be the aws-lc-rs rustls variant; wrong choice reintroduces the `--all-features` panic.
-6. **`AtomicBool` single-flight vs. dropped compaction** — a compaction skipped due to the guard relies on a later append to re-fire; document that unbounded growth is bounded only by append frequency, acceptable for this ticket.
+The spec-challenge (2026-06-28, verdict *approve-with-changes*) is folded into §§4–11 above. Remaining risks to watch during implementation:
+
+1. **Release choreography (§10)** — most error-prone; resolved by the **mandatory** same-PR core+facade bump (the false "drop the bumps" hedge is removed). Watch the dependency-ordered publish on merge; Alternatives A/B remain if the gate prefers them.
+2. **CompactingSession concurrency (§4.2)** — accepted as **single-writer per session**; the inner backend stays durable, but concurrent appends *through the wrapper* are unsupported (would corrupt `original_count`). Documented, not engineered around.
+3. **CompactingSession per-append cost (§4.2)** — the cheap `AtomicUsize` estimate gates the O(total-events) authoritative read so the common-case append stays cheap; the at-compaction O(n) replay is inherent to event-sourced projection and accepted for the MVP (snapshot-cache deferred).
+4. **TLS / dual-CryptoProvider (§6, §7)** — sqlx must use the **aws-lc-rs** rustls variant; `redis` ships **no** rustls feature (TLS via user-supplied `ConnectionManager`). Both verified against the required `--all-features` test before PR.
+5. **Redis contiguous-sequence-under-concurrency (§7)** — relies on Redis Lua atomicity **and** never trimming the stream; only the `sessions-it` job exercises it for real, which is why §9 flags the required-vs-signal decision for GATE 1.
+6. **`original_count = live` exactness (§4.2)** — traced and confirmed by the spec-challenge; covered by the exact-`[System(summary)]` test.
+7. **New-dependency exposure (§8)** — `redis` + sqlx-postgres transitives must clear `audit`/`deny` and possibly `deny.toml` license additions; pre-vetted before PR.
+8. **MSRV (§11)** — verify the new graph stays at/under 1.94; bump the floor if cargo demands.
+9. **`HeuristicTokenCounter` accuracy** — deliberately approximate (chars/4); acceptable because the trait is pluggable and the AC only needs *a* deterministic measure to drop below threshold.
 ```
