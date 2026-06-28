@@ -314,7 +314,7 @@ git commit -m "feat(core): SMA-330 add TokenCounter trait and HeuristicTokenCoun
 
 **Interfaces:**
 - Consumes: `Session`, `SessionEvent`, `SessionError`, `SequenceId`, `ConversationSnapshot`, `project`, `Item`, `ContentPart`, `Model`, `ModelRequest`, `ModelEvent`, `ModelSettings`, `CancellationToken`, `TokenCounter`, `HeuristicTokenCounter` (all from core).
-- Produces: `pub struct CompactingSession<S>`, `CompactingSession::builder(inner: S, model: Arc<dyn Model>) -> CompactingSessionBuilder<S>`; builder methods `.threshold(usize)`, `.counter(Arc<dyn TokenCounter>)`, `.prompt(impl Into<String>)`, `.settings(ModelSettings)`, `.build() -> Result<CompactingSession<S>, CompactingSessionError>`. (Re-exported from facade as `core::CompactingSession`.)
+- Produces: `pub struct CompactingSession<S>`, `CompactingSession::builder(inner: S, model: Arc<dyn Model>) -> CompactingSessionBuilder<S>`; builder methods `.threshold(usize)`, `.token_counter(Arc<dyn TokenCounter>)`, `.prompt(impl Into<String>)`, `.model_settings(ModelSettings)`, `.build() -> Result<CompactingSession<S>, CompactingSessionError>`. (Re-exported from facade as `core::CompactingSession`.)
 
 Read spec §4.2 for the full algorithm before implementing.
 
@@ -413,7 +413,7 @@ impl paigasus_helikon_core::TokenCounter for CharCounter {
 async fn compacts_below_threshold_when_exceeded() {
     let model = FakeModel::new("S"); // 1-char summary
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(model.clone()))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(10)
         .build()
         .unwrap();
@@ -429,7 +429,7 @@ async fn compacts_below_threshold_when_exceeded() {
 #[tokio::test]
 async fn records_compacted_event_and_retains_raw_log() {
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(FakeModel::new("S")))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3)
         .build()
         .unwrap();
@@ -443,7 +443,7 @@ async fn records_compacted_event_and_retains_raw_log() {
 #[tokio::test]
 async fn llm_error_is_swallowed_and_no_marker_appended() {
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(ErrModel))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3)
         .build()
         .unwrap();
@@ -455,7 +455,7 @@ async fn llm_error_is_swallowed_and_no_marker_appended() {
 #[tokio::test]
 async fn empty_summary_appends_no_marker() {
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(FakeModel::new("   ")))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3)
         .build()
         .unwrap();
@@ -470,7 +470,7 @@ async fn resume_over_threshold_compacts_on_first_append() {
     let inner = MemorySession::new();
     inner.append(&[user("0123456789")]).await.unwrap(); // 10 chars
     let cs = CompactingSession::builder(inner, Arc::new(FakeModel::new("S")))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(5)
         .build()
         .unwrap();
@@ -497,7 +497,7 @@ async fn lone_summary_over_threshold_is_not_recompacted() {
         .unwrap();
     let model = FakeModel::new("X");
     let cs = CompactingSession::builder(inner, Arc::new(model.clone()))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3) // summary (26 chars) is far above threshold
         .build()
         .unwrap();
@@ -620,7 +620,7 @@ impl<S: Session> CompactingSessionBuilder<S> {
         self
     }
     /// Override the token counter (default [`HeuristicTokenCounter`]).
-    pub fn counter(mut self, c: Arc<dyn TokenCounter>) -> Self {
+    pub fn token_counter(mut self, c: Arc<dyn TokenCounter>) -> Self {
         self.counter = Some(c);
         self
     }
@@ -630,7 +630,7 @@ impl<S: Session> CompactingSessionBuilder<S> {
         self
     }
     /// Override the model settings used for the summarization call.
-    pub fn settings(mut self, s: ModelSettings) -> Self {
+    pub fn model_settings(mut self, s: ModelSettings) -> Self {
         self.settings = s;
         self
     }

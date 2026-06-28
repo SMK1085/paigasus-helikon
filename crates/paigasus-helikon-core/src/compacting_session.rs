@@ -96,7 +96,7 @@ impl<S: Session> CompactingSessionBuilder<S> {
         self
     }
     /// Override the token counter (default [`HeuristicTokenCounter`]).
-    pub fn counter(mut self, c: Arc<dyn TokenCounter>) -> Self {
+    pub fn token_counter(mut self, c: Arc<dyn TokenCounter>) -> Self {
         self.counter = Some(c);
         self
     }
@@ -106,7 +106,7 @@ impl<S: Session> CompactingSessionBuilder<S> {
         self
     }
     /// Override the model settings used for the summarization call.
-    pub fn settings(mut self, s: ModelSettings) -> Self {
+    pub fn model_settings(mut self, s: ModelSettings) -> Self {
         self.settings = s;
         self
     }

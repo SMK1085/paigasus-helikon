@@ -146,7 +146,9 @@ values (`str::chars().count()`) across every `ContentPart::Text` and
 `ContentPart::Reasoning` field, recursing into nested `ToolResult` content, and
 also counting `Item::System` running-summary text (necessary so the
 post-compaction count is measured correctly). `Item::ToolCall` name and args
-(compact JSON) also contribute. Image and audio source parts contribute zero.
+(compact JSON) also contribute, as does `ContentPart::ToolUse` `.name` + `.args`
+(the equivalent nested-in-content form emitted by Anthropic-style providers).
+Image and audio source parts contribute zero.
 The heuristic is deterministic and dependency-free. Swap it with a
 model-specific tokenizer by passing a custom `impl TokenCounter` to the builder.
 
@@ -156,13 +158,12 @@ model-specific tokenizer by passing a custom `impl TokenCounter` to the builder.
 use std::sync::Arc;
 use paigasus_helikon::core::{CompactingSession, MemorySession};
 
-let inner = Arc::new(MemorySession::new());
-let session = CompactingSession::builder(inner, model)
+let session = CompactingSession::builder(MemorySession::new(), model)
     .threshold(4096)   // fire compaction when estimated tokens exceed this
     .build()?;
 ```
 
-`builder` accepts any `Arc<S: Session>` and any `Arc<dyn Model>`. Optional
+`builder` accepts any `S: Session` by value and any `Arc<dyn Model>`. Optional
 setters: `.token_counter(Arc<dyn TokenCounter>)`, `.model_settings(...)`, and
 `.prompt(String)` to override the built-in summarisation instruction. The
 builder rejects `threshold == 0`.
@@ -177,11 +178,14 @@ On every `append`:
    `TokenCounter::count` for the authoritative figure.
 3. If `tokens > threshold`, the wrapper sends the current projected messages
    plus a trailing `UserMessage(prompt)` to the model, collects the
-   `TokenDelta` stream into a summary string, and appends
-   `SessionEvent::Compacted { summary, original_count }` to the inner session.
-4. The user's events are always persisted first; any compaction error is logged
-   at `warn!` and swallowed — `append` always returns `Ok(())` if the inner
-   write succeeded.
+   `TokenDelta` stream into a summary string. If the summary is
+   whitespace-only the result is logged at `warn!` and skipped — no
+   `Compacted` marker is appended. Otherwise
+   `SessionEvent::Compacted { summary, original_count }` is appended to the
+   inner session.
+4. The user's events are always persisted first; any compaction error (including
+   model errors) is logged at `warn!` and swallowed — `append` always returns
+   `Ok(())` if the inner write succeeded.
 
 The cheap running counter is **initialised to `usize::MAX`**, so the very first
 `append` to a freshly constructed wrapper always runs the authoritative read.
@@ -205,8 +209,10 @@ A **keep-recent-window** mode (summarise an older prefix while keeping the last
 
 **Convergence.** Compaction lowers the projected count below `threshold` only
 when the model's summary is itself shorter than `threshold`. If the summary is
-still over threshold, a guard that refuses to re-compact a snapshot whose only
-message is already an `Item::System` prevents an infinite loop. Two operational
+still over threshold, a guard prevents an infinite loop: compaction is skipped
+when the projected snapshot is empty (`messages.is_empty()`) or when its sole
+message is already an `Item::System` running summary — a lone `System` has
+nothing useful to collapse and re-compacting it would loop forever. Two operational
 constraints documented on the type: set `threshold` comfortably below the
 summarisation model's context window (the wrapper sends the full projected
 history in the summarisation call), and choose a model that reliably produces

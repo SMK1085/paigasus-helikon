@@ -94,7 +94,7 @@ impl paigasus_helikon_core::TokenCounter for CharCounter {
 async fn compacts_below_threshold_when_exceeded() {
     let model = FakeModel::new("S"); // 1-char summary
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(model.clone()))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(10)
         .build()
         .unwrap();
@@ -118,7 +118,7 @@ async fn compacts_below_threshold_when_exceeded() {
 #[tokio::test]
 async fn records_compacted_event_and_retains_raw_log() {
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(FakeModel::new("S")))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3)
         .build()
         .unwrap();
@@ -138,7 +138,7 @@ async fn records_compacted_event_and_retains_raw_log() {
 #[tokio::test]
 async fn llm_error_is_swallowed_and_no_marker_appended() {
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(ErrModel))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3)
         .build()
         .unwrap();
@@ -150,7 +150,7 @@ async fn llm_error_is_swallowed_and_no_marker_appended() {
 #[tokio::test]
 async fn empty_summary_appends_no_marker() {
     let cs = CompactingSession::builder(MemorySession::new(), Arc::new(FakeModel::new("   ")))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3)
         .build()
         .unwrap();
@@ -165,7 +165,7 @@ async fn resume_over_threshold_compacts_on_first_append() {
     let inner = MemorySession::new();
     inner.append(&[user("0123456789")]).await.unwrap(); // 10 chars
     let cs = CompactingSession::builder(inner, Arc::new(FakeModel::new("S")))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(5)
         .build()
         .unwrap();
@@ -196,7 +196,7 @@ async fn lone_summary_over_threshold_is_not_recompacted() {
         .unwrap();
     let model = FakeModel::new("X");
     let cs = CompactingSession::builder(inner, Arc::new(model.clone()))
-        .counter(Arc::new(CharCounter))
+        .token_counter(Arc::new(CharCounter))
         .threshold(3) // summary (26 chars) is far above threshold
         .build()
         .unwrap();
