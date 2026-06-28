@@ -1,7 +1,7 @@
 # SMA-330 — Production session backends: Postgres, Redis, Compacting wrapper
 
 - **Linear:** SMA-330 (`feature/sma-330-production-session-backends-postgres-redis-compacting`)
-- **Status:** design — spec-challenged 2026-06-28 (verdict: approve-with-changes; folded in). **GATE-1 decisions:** `sessions-it` is a **required** check; delivery is **two PRs** (Alternative B).
+- **Status:** design — spec-challenged **twice** 2026-06-28 (both verdicts: approve-with-changes; round-2 confirmed the two-PR release plan correct and folded in the resume-seed BLOCKER + required-gate hardening). **GATE-1 decisions:** `sessions-it` is a **required** check; delivery is **two PRs** (Alternative B).
 - **Date:** 2026-06-28
 - **Related:** SMA-392 (wire `Session` persistence into the run lifecycle) — consumes these backends; out of scope here.
 
@@ -41,7 +41,7 @@ pub trait Session: Send + Sync {
 
 1. `PostgresSession`, `RedisSession`, `CompactingSession<S>` implementing `core::Session`.
 2. A single shared conformance suite (append, read/watermark, projection, concurrent writers) run by Memory, SQLite, Postgres, and Redis.
-3. `CompactingSession` provably reduces the projected token count below the threshold after compaction fires.
+3. `CompactingSession` reduces the projected token count below the threshold after compaction fires **when the produced summary is shorter than the threshold** (see the convergence note in §4.2).
 4. Facade wiring, crate READMEs, mdBook Sessions page, CI, and release plumbing all updated in the same PR.
 
 **Non-goals (explicitly deferred)**
@@ -83,7 +83,7 @@ pub trait TokenCounter: Send + Sync {
 pub struct HeuristicTokenCounter;
 ```
 
-- The heuristic walks each `Item`'s textual content (`ContentPart::Text`, `Reasoning`; tool-call args counted as their JSON string length) and returns `total_chars.div_ceil(4)`, where **`total_chars` is the count of Unicode scalar values (`str::chars().count()`), not UTF-8 bytes** — fixed unit to avoid two implementers diverging on multibyte text. `div_ceil` is stable well before MSRV 1.94.
+- The heuristic returns `total_chars.div_ceil(4)`, where **`total_chars` is the count of Unicode scalar values (`str::chars().count()`), not UTF-8 bytes** — a fixed unit so implementers don't diverge on multibyte text (`div_ceil` is stable well before MSRV 1.94). **Exact enumeration** of what contributes (so the AC's exact-count assertion is reproducible): `ContentPart::Text.text`, `ContentPart::Reasoning.text`, `Item::ToolCall.name` + `Item::ToolCall.args` (compact JSON), `ContentPart::ToolUse.name` + `.args` (compact JSON), recursing into nested `ContentPart::ToolResult.content`. `ContentPart::Image`/`Audio` source parts contribute **0**.
 - It **must** count `Item::System` content (the running summary), since CompactingSession's convergence depends on measuring the post-compaction snapshot.
 - Non-text parts (image/audio sources) contribute 0 — we only bound text growth; image bytes are not in the projected text.
 - Deterministic so the AC test can assert an exact below-threshold count.
@@ -98,7 +98,7 @@ pub struct CompactingSession<S: Session> {
     threshold: usize,           // builder rejects 0 (a 0 threshold would never compact)
     settings: ModelSettings,
     prompt: String,             // summarization instruction text
-    cheap_estimate: AtomicUsize,// running char-count since last compaction (perf gate)
+    cheap_estimate: AtomicUsize,// running char-count since last compaction; init usize::MAX
     compacting: AtomicBool,     // single-flight guard
 }
 ```
@@ -118,7 +118,7 @@ Construction via a small builder (`CompactingSession::builder(inner, model).thre
 
 `maybe_compact()` (synchronous within `append`, so the AC is deterministic — no background race):
 
-1. **Cheap perf gate:** if `cheap_estimate <= threshold * 4` (chars≈tokens·4), return without reading the log. This keeps the common-case append at O(new events) instead of O(total log); the expensive authoritative path runs only when the cheap estimate suggests we're near the threshold. (Inherent cost: when it *does* run, `events(None)` + `project` is O(total events), because event-sourced projection must replay from the start. Acceptable for an MVP; a snapshot-cache optimization is noted as future work.)
+1. **Cheap perf gate:** if `cheap_estimate <= threshold * 4` (chars≈tokens·4), return without reading the log. `cheap_estimate` is **initialized to `usize::MAX`**, so the **first** `maybe_compact` after construction always fails this gate and runs the authoritative path — which seeds the estimate from the inner log's real size. **This is what makes resume correct:** a `CompactingSession` wrapping an already-populated durable backend (the primary Postgres/Redis use case) compacts its existing backlog on the first append, rather than silently treating the resumed session as empty. After seeding, the common-case append is O(new events) instead of O(total log); the authoritative path runs only when the cheap estimate suggests we're near the threshold. (Inherent cost: when it *does* run, `events(None)` + `project` is O(total events), because event-sourced projection must replay from the start. Acceptable for an MVP; a snapshot-cache optimization is noted as future work.)
 2. **Single-flight:** `let guard = match self.compacting.compare_exchange(false, true, AcqRel, Acquire) { Ok(_) => Guard, Err(_) => return Ok(()) };` — the RAII `Guard` is constructed **only on the swap-won path** and resets the flag to `false` on drop (never resetting a flag we didn't set). No lock is held across the `await`.
 3. Read `let evs = self.inner.events(None).await?;` → `let snap = project(&evs);` → `let tokens = self.counter.count(&snap.messages);`.
 4. If `tokens <= self.threshold` → reset `cheap_estimate` to `tokens * 4` (re-sync the cheap estimate to reality) and return.
@@ -129,6 +129,8 @@ Construction via a small builder (`CompactingSession::builder(inner, model).thre
 9. `self.inner.append(&[SessionEvent::compacted(summary, live as u64)]).await?`; reset `cheap_estimate` to the new summary's char-estimate.
 
 **Correctness of `original_count = live`** (so the result is exactly `[System(summary)]`): when `project` reaches the new marker, its `contributions.len()` equals `live` (one entry per event since the previous `Compacted`, whose entries were truncated). `drop_from_idx = len - live = 0` ⇒ every prior message dropped ⇒ `[System(summary)]`; and `live == contributions.len()` (not `>`), so the "references more events than seen" `warn!` does **not** fire. The summarization instruction is **not** an event (it's only in the `ModelRequest`), so it does not affect the count. The dedicated test asserts the snapshot **equals** `[System(summary)]`; it does not assert on the absence of a log line (that property follows from the equality and is not separately observable without a tracing capture).
+
+**Convergence & limits.** Compaction lowers the count below `threshold` only when the model's summary is itself shorter than `threshold`; the `messages.len() <= 1` guard deliberately refuses to re-compact a lone running summary, so an over-long summary is left as-is rather than ping-ponged (logged at `warn`). Two operational constraints follow and are **documented on the type**: (1) `threshold` must sit comfortably **below the summarization model's context window** (step 7 sends the *entire* projected history to the model, so a threshold at/above the model's limit makes the summarization call itself fail with a context-length error — swallowed best-effort — exactly when compaction is most needed); (2) the summarization model should reliably produce summaries materially shorter than `threshold`. The builder default `threshold` is chosen with headroom against common context windows.
 
 ### 4.3 `SessionEvent` accessors (de-dup)
 
@@ -161,9 +163,10 @@ pub async fn run_all<F, Fut>(make: F) …;                   // the four above
 - `run_concurrent_writers` clones the returned `Arc<dyn Session>` across 16 tasks × 10 appends and asserts the read-back total and that every sent event is present exactly once — the existing sqlite invariant, lifted.
 - **Factory contract:** `make` is `Fn() -> Fut` and is invoked **once per sub-test** inside `run_all`; each call must return a **fresh, empty** session. Backing resources (a `TempDir`+WAL pool for sqlite, a `PgPool` for postgres, a `ConnectionManager` for redis) are owned by the **caller's test scope** and captured by reference in the closure, so they outlive every `make()` call; the closure mints a **unique `session_id` per call** (a process-unique counter/uuid suffix) so runs against a shared CI server (postgres/redis) and a shared sqlite file never collide. Sqlite's concurrency sub-test specifically requires a **file-backed WAL pool** (an in-memory `max_connections=1` pool cannot model concurrent writers).
 - testkit's own `tests/memory.rs` runs `run_all` against `MemorySession`, anchoring "**the same** suite Memory passes." Memory's factory returns a brand-new `MemorySession` each call (no id needed).
+- **Migration under parallel tests (postgres):** `cargo test` runs the backend's `#[tokio::test]`s in parallel against one shared CI database, so the postgres harness must `migrate()` **once** before constructing factory sessions (or rely on sqlx's Postgres migrator advisory-lock, which serializes concurrent `migrate()` calls). Spec choice: migrate once at test-module setup; factory `make()` then only opens sessions with unique ids. (sqlite/redis have no shared-migration concern — sqlite migrates its own temp file; redis has no schema.)
 - **Consumption:** each backend crate adds a **path-only, version-less** dev-dependency `paigasus-helikon-sessions-testkit = { path = "../paigasus-helikon-sessions-testkit" }` (SMA-326 pattern → omitted from published manifests, no version-pin/publish-cycle trap) and a `tests/conformance.rs` calling `run_all(make)`.
 - **SQLite retrofit:** add `tests/conformance.rs` to the sqlite crate using the harness; keep its backend-specific tests (`persistence.rs`, `multi_session.rs`). The hand-rolled overlap in `roundtrip.rs`/`concurrent_writers.rs` may be slimmed to avoid duplication but is not required to be deleted.
-- **doc-coverage / missing_docs:** `scripts/check-doc-coverage.sh` discovers **all** workspace members via `cargo metadata` and excludes only the CLI by name, and testkit opts into `[lints] workspace = true` (so `missing_docs` applies). testkit's public `run_*` fns are few — **document all of them with `///`** so it passes both the required `doc-coverage` gate and `missing_docs` without a script change. (Fallback: add `paigasus-helikon-sessions-testkit` to `EXCLUDED_CRATES` in the script, a conscious choice if we'd rather not document internal test helpers.)
+- **doc-coverage / missing_docs:** `scripts/check-doc-coverage.sh` discovers **all** workspace members via `cargo metadata` and excludes only the CLI by name, and testkit opts into `[lints] workspace = true` (so `missing_docs` applies). testkit's public `run_*` fns are few — **document all of them with `///`** (the recommended path; satisfies both the required `doc-coverage` gate *and* the `docs` job's `missing_docs = warn` + `RUSTDOCFLAGS=-D warnings`). Note the `EXCLUDED_CRATES` route is **not sufficient alone**: it removes a crate from the doc-coverage aggregate only — to also pass the `docs` job, testkit would have to mirror the CLI exactly (`[lints.rust] missing_docs = "allow"`, dropping `[lints] workspace = true`). Just document the fns.
 
 ## 6. `PostgresSession` (`-sessions-postgres`)
 
@@ -206,13 +209,13 @@ Finer-grained than sqlite's whole-DB `BEGIN IMMEDIATE` — writers to *different
 
 **Query API:** use **runtime** `sqlx::query()`/`query_as()` exclusively, mirroring sqlite — **never** the compile-checked `sqlx::query!`/`query_as!` macros, which require `DATABASE_URL` or an offline cache **at compile time on every matrix platform** (including the serverless macOS/Windows jobs) and would break the build everywhere.
 
-**Dependencies:** declared in the postgres crate's **own** Cargo.toml as `sqlx = { workspace = true, features = ["postgres", "<rustls-aws-lc-rs tls feature>"] }` (the workspace base pins `sqlite`+`macros`+`migrate`+`runtime-tokio`; cargo unions the extra `postgres`/tls features). The TLS feature **must** be the aws-lc-rs rustls variant (sqlx 0.8+ exposes `tls-rustls-aws-lc-rs`; verify the exact 0.9 name at impl time) — *not* a ring variant — to match the workspace `CryptoProvider` and avoid the dual-provider panic under the required `--all-features` test (the gcp_auth/aws-lc-rs memory). Feature unification means the sqlite crate's sqlx also compiles the postgres driver under `--all-features`; benign.
+**Dependencies:** declared in the postgres crate's **own** Cargo.toml as `sqlx = { workspace = true, features = ["postgres", "<rustls-aws-lc-rs tls feature>"] }` (the workspace base pins `sqlite`+`macros`+`migrate`+`runtime-tokio`; cargo unions the extra `postgres`/tls features). The TLS feature **must** be the aws-lc-rs rustls variant (sqlx 0.8+ exposes `tls-rustls-aws-lc-rs`; verify the exact 0.9 name at impl time) — *not* a ring variant — to match the workspace `CryptoProvider` and avoid the dual-provider panic under the required `--all-features` test (the gcp_auth/aws-lc-rs memory). **Fallback if sqlx 0.9 ships no aws-lc-rs rustls feature** (unlikely — verify first): omit sqlx's TLS feature entirely and have `PostgresSession` accept a caller-built `PgPool`/`PgConnectOptions` (the same BYO-connection TLS story as redis), rather than introducing a ring or native-tls stack. Feature unification means the sqlite crate's sqlx also compiles the postgres driver under `--all-features`; benign.
 
 ## 7. `RedisSession` (`-sessions-redis`) — one Redis Stream per session
 
 `redis` crate with tokio async (`ConnectionManager` — auto-reconnect, cheap clone, shareable). Constructors: `RedisSession::new(ConnectionManager, id)` (primary — the caller supplies a connection) and `RedisSession::connect(url, id)` (convenience, **plaintext**). Stream key `helikon:session:{id}:events`.
 
-**TLS / CryptoProvider:** the crate's `redis` dependency enables **no rustls TLS feature** — `redis`'s rustls features are historically ring-backed, and enabling one would register a second `CryptoProvider` and reproduce the dual-provider panic under the required `--all-features` test (same failure mode as the sqlx/gcp_auth memory). Managed-Redis (TLS) users build their own TLS-configured `ConnectionManager` with the workspace's aws-lc-rs provider and pass it to `RedisSession::new`. Pin in `[workspace.dependencies]` as `redis = { version = "<latest>", default-features = false, features = ["tokio-comp", "streams", "script"] }`. (Rationale for keeping TLS out of the crate's features: a crate feature is force-enabled by `--all-features`, so even an opt-in ring-backed TLS feature would trip the dual-provider panic in the required test job. The user-supplied-`ConnectionManager` path is therefore the *only* TLS story, regardless of whether `redis` ships an aws-lc-rs variant.)
+**TLS / CryptoProvider:** the crate's `redis` dependency enables **no rustls TLS feature** — `redis`'s rustls features are historically ring-backed, and enabling one would register a second `CryptoProvider` and reproduce the dual-provider panic under the required `--all-features` test (same failure mode as the sqlx/gcp_auth memory). Managed-Redis (TLS) users build their own TLS-configured `ConnectionManager` with the workspace's aws-lc-rs provider and pass it to `RedisSession::new`. Pin in `[workspace.dependencies]` as `redis = { version = "<latest>", default-features = false, features = ["tokio-comp", "connection-manager", "streams", "script"] }` (`connection-manager` is required for `ConnectionManager`; `tokio-comp` alone does not enable it). (Rationale for keeping TLS out of the crate's features: a crate feature is force-enabled by `--all-features`, so even an opt-in ring-backed TLS feature would trip the dual-provider panic in the required test job. The user-supplied-`ConnectionManager` path is therefore the *only* TLS story, regardless of whether `redis` ships an aws-lc-rs variant.)
 
 Entry fields per event: `seq` (contiguous int), `kind`, `payload` (JSON), `ts`.
 
@@ -252,25 +255,32 @@ Backend-specific tests (env-gated): reconnect-persistence (new `ConnectionManage
 
 New job in `.github/workflows/ci.yml`, a **required** check (GATE-1 decision — it is the *only* gate that runs the Postgres/Redis concurrent-writers AC, mirroring the macOS/Seatbelt "only gate that exercises X ⇒ required" precedent). It is introduced in **PR-2** (alongside the postgres/redis crates) and added as a required context to `.github/rulesets/main-protection-checks.json`; it therefore reports on PR-2 itself (the workflow lives on PR-2's branch) and gates every PR thereafter. PR-1 (core/testkit/sqlite) does **not** include it — there are no postgres/redis crates to exercise yet, so PR-1's required set is the existing one.
 
+**Job shape (required ⇒ must always report, but must not drag Docker onto every PR).** A required context is only satisfied by a job that *runs to success on the head commit of every gated PR*. A job that is `if:`-skipped reports as skipped and **blocks** a required context; and job-level `services:` start unconditionally whenever the job runs — so a naive `services:`-based job would spin up Postgres+Redis (and depend on Docker Hub) on *every* PR, including docs and bot PRs. The design therefore is a single **always-running** `sessions-it` job with an **in-job path filter** that starts containers only when relevant:
+
 ```yaml
-sessions-it:
+sessions-it:                       # the required context name; runs on every PR (no job-level paths:)
   runs-on: ubuntu-latest
-  services:
-    postgres: { image: postgres:17, env: { POSTGRES_PASSWORD: postgres }, ports: ["5432:5432"], options: --health-cmd pg_isready … }
-    redis:    { image: redis:7, ports: ["6379:6379"], options: --health-cmd "redis-cli ping" … }
-  env:
-    HELIKON_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
-    HELIKON_TEST_REDIS_URL:    redis://localhost:6379
-  steps: [checkout (pinned SHA), rust-toolchain stable (pinned SHA), rust-cache (pinned SHA),
-          cargo test -p paigasus-helikon-sessions-postgres -p paigasus-helikon-sessions-redis]
+  steps:
+    - checkout (pinned SHA)
+    - id: filter  (dorny/paths-filter, pinned SHA)   # sessions = crates/*sessions-*/**, core/src/session.rs, this workflow, Cargo.lock
+    - if steps.filter.outputs.sessions == 'false':  echo "no session changes"; exit 0   # fast green, NO Docker
+    - if 'true':  rust-toolchain + rust-cache (pinned SHAs)
+    - if 'true':  start postgres + redis via `docker run` (pinned by DIGEST, pulled from a GHCR mirror to
+                  dodge Docker Hub anon rate limits), wait on health, set HELIKON_TEST_*_URL
+    - if 'true':  cargo test -p …-postgres -p …-redis   (wrapped in a bounded retry, e.g. nick-fields/retry pinned SHA)
 ```
+
+`HELIKON_TEST_POSTGRES_URL=postgres://postgres:postgres@localhost:5432/postgres`, `HELIKON_TEST_REDIS_URL=redis://localhost:6379`. Containers are pinned by **digest** (not just tag) and mirrored to GHCR; the `cargo test` is retry-wrapped so a transient pull/connection blip self-heals instead of blocking `main`. Non-session PRs hit the fast-green path and never touch Docker, so the required context reports in seconds without importing container flakiness.
 
 - Action `uses:` pin to the **same commit SHAs** already in `ci.yml`.
 - Everywhere else (`test` matrix `--workspace --all-features` on ubuntu/macos/windows × {stable, 1.94}) the Postgres/Redis tests **loud-skip** when the envs are unset: each is a real `#[tokio::test]` that, with no URL, `eprintln!("SKIP: …")` and returns `Ok` (forkd `tests/forkd_live.rs` pattern). They still **compile** on every platform (both clients are cross-platform pure-Rust).
 - Image tags (`postgres:17`, `redis:7`) confirmed current at implementation time.
 - **Lib-only build verification:** also run `cargo build -p paigasus-helikon-sessions-postgres -p paigasus-helikon-sessions-redis` (no dev-deps, no `--all-features`) somewhere in CI or as a pre-PR check — per the reqwest-feature-gating memory, dev-deps (testkit, tokio) and `--all-targets` can mask a missing **lib** feature that downstream consumers would hit.
 
-**Resolved at GATE 1 — required.** `sessions-it` is a **required** context (the concurrent-writers AC for Postgres/Redis is exercised nowhere else; loud-skip everywhere else would let a Redis-Lua or advisory-lock regression merge on an ignorable signal). Consequences to handle in PR-2: (a) add the bare job name `sessions-it` to `main-protection-checks.json` and apply the ruleset; (b) because a required check must *report* on every gated PR, the job must always post a status even when it has nothing new to run — it does, since it runs `cargo test` for the two crates unconditionally; (c) keep it green by pinning service-container image tags and health-checks so a flaky container does not block all merges (a known cost of requiring it).
+**Resolved at GATE 1 — required.** `sessions-it` is a **required** context (the concurrent-writers AC for Postgres/Redis is exercised nowhere else; loud-skip everywhere else would let a Redis-Lua or advisory-lock regression merge on an ignorable signal). Rollout steps in PR-2:
+- Add the bare job name `sessions-it` to `.github/rulesets/main-protection-checks.json`. **That file is a checked-in *mirror*, not auto-applied** — a maintainer with admin rights must apply the ruleset to the repo (`gh api`/settings) *after* PR-2's workflow exists. Sequence: merge PR-2 (so the `sessions-it` job is on `main`), then apply the ruleset.
+- **Transition hazard:** once required, any *already-open* PR whose head predates the `sessions-it` job will show "Expected — waiting for status" and be **unmergeable until rebased** (the dropped-context failure mode in the team's memory; `strict_required_status_checks_policy:false` does not waive *reporting*). After applying the ruleset, refresh/rebase open PRs (incl. the release-plz bot PR) through the transition window, or briefly bypass for them.
+- The always-run + in-job-path-filter shape above is what keeps the required context *reporting* on every PR while confining Docker to session PRs.
 
 ## 10. Delivery plan & release (two PRs)
 
@@ -298,6 +308,8 @@ Release: **no manual bumps.** release-plz publishes postgres/redis (verify again
 ### Watch-points
 - After each PR merges, watch the release-plz `chore: release` PR and the publish CI (memory: the bot PR's `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on the bot PR only; fix with a `chore(deps)` pin and release-plz regenerates it clean).
 - Confirm release-plz publishes **core before sqlite** in PR-1's release PR (topological order). If it ever doesn't, the fallback is a manual core bump in PR-1.
+- **Linear auto-close:** both PRs reference SMA-330, so **PR-1's merge will auto-transition SMA-330 to Done** while PR-2 (the riskier half) is still open. After PR-1 merges, move SMA-330 back to **In Progress** (or open a sub-issue, e.g. SMA-330b, to carry PR-2) so the tracker reflects the outstanding backend work. PR-1's body should avoid a hard "Closes" keyword; only PR-2 closes the issue.
+- **testkit & release-plz:** testkit is `publish = false` (Cargo) + `release = false` (release-plz) and is referenced only as a **path-only dev-dependency**, so it is never resolved against crates.io. Unlike the existing stubs it was never pre-published at `0.0.0`; confirm release-plz simply ignores a `release = false` member that is absent from the registry (expected — `release = false` removes it from the workspace release scan).
 - Both feature branches must match the `feature/**` ruleset; the current branch is renamed to PR-1's name at the start of implementation.
 - Bootstrap/release-plumbing edits (CI, `release-plz.toml`, ruleset) use `chore(...)`/`docs(...)` commit types, never `feat`/`fix`.
 
@@ -306,7 +318,7 @@ Release: **no manual bumps.** release-plz publishes postgres/redis (verify again
 | Acceptance criterion | Covered by |
 |---|---|
 | All three pass the same conformance suite (append, read, projection, concurrent writers) as Memory/SQLite | `-sessions-testkit::run_all` invoked by Memory (in testkit), SQLite (retrofit), Postgres, Redis. Postgres/Redis runs are env-gated and executed by the `sessions-it` CI job. |
-| `CompactingSession` reduces input token count below the threshold after compaction fires | core test (**sequential appends only** — CompactingSession is single-writer per §4.2, so it does **not** run `run_concurrent_writers`): deterministic `TokenCounter` + fake `Model` returning a short summary + threshold `T`; append past `T`; assert `counter.count(snapshot().messages) < T`, and that `snapshot()` equals `[System(summary)]`. Plus: `Compacted` recorded with exact `original_count`; raw `events()` retains the full log; LLM-error path leaves the log untouched and `append` still `Ok`; empty-summary path appends no marker; lone-summary guard (projected `messages.len() <= 1` ⇒ no re-fire). |
+| `CompactingSession` reduces input token count below the threshold after compaction fires | core test (**sequential appends only** — CompactingSession is single-writer per §4.2, so it does **not** run `run_concurrent_writers`): deterministic `TokenCounter` + fake `Model` returning a short summary + threshold `T`; append past `T`; assert `counter.count(snapshot().messages) < T`, and that `snapshot()` equals `[System(summary)]`. Plus: `Compacted` recorded with exact `original_count`; raw `events()` retains the full log; LLM-error path leaves the log untouched and `append` still `Ok`; empty-summary path appends no marker; lone-summary guard (projected `messages.len() <= 1` ⇒ no re-fire); **resume test** — wrap an *already-over-threshold* inner session (pre-seeded events) in a fresh `CompactingSession` and assert the **first** append compacts the backlog (guards the `cheap_estimate = usize::MAX` seeding, §4.2). |
 
 All six existing CI gates stay green: `cargo fmt`, `clippy --workspace --all-features --all-targets -D warnings`, `test` matrix, `docs` (`RUSTDOCFLAGS=-D warnings`, so every new `pub` item needs `///`), `doc-coverage` (≥80%), `commits`/`pr-title`. The two **published** crates are added to the doc-coverage aggregator like other published crates; **testkit** (unpublished, but auto-discovered by the script) is handled per §5 (document its public fns, or add to `EXCLUDED_CRATES`). **PR-2 also adds `sessions-it` as a new required gate** (§9), so PR-2 and all later PRs must show it green.
 
@@ -324,11 +336,13 @@ The spec-challenge (2026-06-28, verdict *approve-with-changes*) is folded into �
 
 1. **Release sequencing (§10)** — resolved by the **two-PR** split: no manual bumps, but PR-2 is **blocked on PR-1's core actually publishing to crates.io**. The one assumption to confirm is that release-plz publishes **core before sqlite** within PR-1's release PR (topological order); fallback is a manual core bump in PR-1.
 2. **CompactingSession concurrency (§4.2)** — accepted as **single-writer per session**; the inner backend stays durable, but concurrent appends *through the wrapper* are unsupported (would corrupt `original_count`). Documented, not engineered around.
-3. **CompactingSession per-append cost (§4.2)** — the cheap `AtomicUsize` estimate gates the O(total-events) authoritative read so the common-case append stays cheap; the at-compaction O(n) replay is inherent to event-sourced projection and accepted for the MVP (snapshot-cache deferred).
+3. **CompactingSession per-append cost & resume (§4.2)** — the cheap `AtomicUsize` estimate (init `usize::MAX`, so the **first** post-construction append always runs the authoritative read and seeds correctly even on a resumed/pre-populated backend) gates the O(total-events) replay so the common-case append stays cheap; the at-compaction O(n) replay is inherent to event-sourced projection and accepted for the MVP (snapshot-cache deferred). Convergence requires the summary to be shorter than `threshold` and `threshold` below the model's context window (documented on the type).
 4. **TLS / dual-CryptoProvider (§6, §7)** — sqlx must use the **aws-lc-rs** rustls variant; `redis` ships **no** rustls feature (TLS via user-supplied `ConnectionManager`). Both verified against the required `--all-features` test before PR.
 5. **Redis contiguous-sequence-under-concurrency (§7)** — relies on Redis Lua atomicity **and** never trimming the stream; only the `sessions-it` job exercises it for real, which is why §9 flags the required-vs-signal decision for GATE 1.
 6. **`original_count = live` exactness (§4.2)** — traced and confirmed by the spec-challenge; covered by the exact-`[System(summary)]` test.
 7. **New-dependency exposure (§8)** — `redis` + sqlx-postgres transitives must clear `audit`/`deny` and possibly `deny.toml` license additions; pre-vetted before PR.
 8. **MSRV (§11)** — verify the new graph stays at/under 1.94; bump the floor if cargo demands.
 9. **`HeuristicTokenCounter` accuracy** — deliberately approximate (chars/4); acceptable because the trait is pluggable and the AC only needs *a* deterministic measure to drop below threshold.
+10. **Required `sessions-it` rollout (§9)** — making it required imports a transition window (open PRs block until rebased after the ruleset is applied) and a Docker dependency; mitigated by the always-run + in-job-path-filter shape (non-session PRs report green without containers), digest-pinned GHCR-mirrored images, and a retry-wrapped test. The ruleset-apply is a manual admin step sequenced after PR-2 merges.
+11. **Linear premature close (§10)** — PR-1's merge auto-closes SMA-330; re-open / sub-issue handling is a manual step.
 ```
