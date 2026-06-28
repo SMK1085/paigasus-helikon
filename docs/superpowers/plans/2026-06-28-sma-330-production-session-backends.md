@@ -488,26 +488,29 @@ async fn threshold_zero_is_rejected() {
 }
 
 #[tokio::test]
-async fn lone_summary_is_not_recompacted() {
-    // After one compaction the snapshot is a single System summary; a further
-    // small append must NOT trigger a second summarization (messages.len() <= 1 guard).
-    let model = FakeModel::new("SUMMARY"); // 7-char summary
-    let cs = CompactingSession::builder(MemorySession::new(), Arc::new(model.clone()))
+async fn lone_summary_over_threshold_is_not_recompacted() {
+    // Inner already projects to a single, over-threshold System summary.
+    let inner = MemorySession::new();
+    inner
+        .append(&[SessionEvent::compacted("LONG SUMMARY OVER THRESHOLD", 1)])
+        .await
+        .unwrap();
+    let model = FakeModel::new("X");
+    let cs = CompactingSession::builder(inner, Arc::new(model.clone()))
         .counter(Arc::new(CharCounter))
-        .threshold(6) // summary (7) stays above threshold
+        .threshold(3) // summary (26 chars) is far above threshold
         .build()
         .unwrap();
-    cs.append(&[user("abcdefg")]).await.unwrap(); // compaction #1
-    let calls_after_first = model.calls.load(Ordering::SeqCst);
-    cs.append(&[user("z")]).await.unwrap(); // snapshot is [System, user("z")] -> messages.len()==2 -> may compact...
-    // To assert the GUARD specifically, drive to a lone-summary state:
-    // (the second append makes messages.len()==2, which is allowed; the guard
-    // only blocks when messages.len() <= 1). We assert no infinite growth instead:
-    assert!(model.calls.load(Ordering::SeqCst) >= calls_after_first);
+    // A handoff contributes 0 projected messages, so the snapshot stays a lone
+    // System summary (messages.len() == 1) -> the guard MUST skip compaction.
+    cs.append(&[SessionEvent::handoff_occurred("a", "b")]).await.unwrap();
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "lone summary must not be re-compacted");
+    let raw = cs.events(None).await.unwrap();
+    assert_eq!(raw.len(), 2, "only the pre-seeded Compacted + the handoff; no new marker appended");
 }
 ```
 
-> Note for implementer: the `lone_summary_is_not_recompacted` test documents the guard boundary; keep it as a regression anchor. The decisive guard behaviour (a single `System` never re-compacts) is also covered by the `messages.len() <= 1` early return in the impl.
+> Note for implementer: this test pins the `messages.len() <= 1` guard — a lone running summary that is itself over threshold must not trigger an endless re-summarization loop. The handoff (0 projected messages) is the vehicle for reaching `messages.len() == 1` on an append.
 
 - [ ] **Step 2: Run to verify it fails**
 
