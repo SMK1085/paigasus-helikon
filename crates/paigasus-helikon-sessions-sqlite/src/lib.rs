@@ -192,30 +192,9 @@ impl Session for SqliteSession {
 /// matches the serde tag of the variant; `ts_nanos` is the timestamp in
 /// i64 nanoseconds since the Unix epoch (covers ±292 years from 1970).
 ///
-/// `jiff::Timestamp::as_nanosecond` returns `i128` to fit jiff's wider
-/// supported range (±9999 years). `i64::try_from` clamps via `unwrap_or`
-/// to the saturating bounds — any timestamp outside ±292 years from 1970
-/// is well outside the SDK's lifetime and only the audit-index column
-/// suffers; the canonical timestamp lives in the JSON `payload`.
+/// Delegates to [`SessionEvent::kind`] and [`SessionEvent::ts_nanos_saturating`]
+/// so new variants added to core are handled automatically without requiring
+/// updates here.
 fn event_metadata(ev: &SessionEvent) -> (&'static str, i64) {
-    // `SessionEvent` is `#[non_exhaustive]`, so a cross-crate match must
-    // handle the open-world case. A new variant added in core without a
-    // corresponding update here is a programming error — panic so it is
-    // caught by tests rather than silently writing a corrupt `kind` row.
-    let (kind, ts) = match ev {
-        SessionEvent::UserMessage { ts, .. } => ("user_message", *ts),
-        SessionEvent::AssistantMessage { ts, .. } => ("assistant_message", *ts),
-        SessionEvent::ToolCalled { ts, .. } => ("tool_called", *ts),
-        SessionEvent::ToolReturned { ts, .. } => ("tool_returned", *ts),
-        SessionEvent::HandoffOccurred { ts, .. } => ("handoff_occurred", *ts),
-        SessionEvent::Compacted { ts, .. } => ("compacted", *ts),
-        _ => panic!(
-            "SqliteSession: unhandled SessionEvent variant {ev:?} — \
-             extend `event_metadata` when adding a new variant"
-        ),
-    };
-    let nanos_i128 = ts.as_nanosecond();
-    let saturated = if nanos_i128 < 0 { i64::MIN } else { i64::MAX };
-    let ts_nanos = i64::try_from(nanos_i128).unwrap_or(saturated);
-    (kind, ts_nanos)
+    (ev.kind(), ev.ts_nanos_saturating())
 }
