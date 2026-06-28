@@ -1,7 +1,7 @@
 # SMA-330 — Production session backends: Postgres, Redis, Compacting wrapper
 
 - **Linear:** SMA-330 (`feature/sma-330-production-session-backends-postgres-redis-compacting`)
-- **Status:** design — spec-challenged 2026-06-28 (verdict: approve-with-changes; folded in)
+- **Status:** design — spec-challenged 2026-06-28 (verdict: approve-with-changes; folded in). **GATE-1 decisions:** `sessions-it` is a **required** check; delivery is **two PRs** (Alternative B).
 - **Date:** 2026-06-28
 - **Related:** SMA-392 (wire `Session` persistence into the run lifecycle) — consumes these backends; out of scope here.
 
@@ -142,7 +142,7 @@ impl SessionEvent {
 
 `kind()`/`ts()` `match` all variants with **no `_ =>` arm**, so adding a future `#[non_exhaustive]` variant is a **single compile failure in core** (not three silent panics across backends). `SqliteSession::event_metadata` is refactored to `(ev.kind(), ev.ts_nanos_saturating())`; Postgres and Redis reuse the same accessors.
 
-**Release consequence (drives §10):** because the refactored sqlite crate *and* the new postgres/redis crates would consume core API added in **this same PR**, their `cargo publish --verify` builds against the *registry* core — which lacks the accessors until core itself publishes. This makes the same-PR core bump in §10 **mandatory** (not optional). If we wanted to avoid all manual bumps instead, the alternative is to **drop the accessor de-dup** and let each backend keep a private `event_metadata` (the §10 "Alternative A"). Recommendation: keep the accessors + do the documented manual bump.
+**Release consequence (drives §10):** the new accessors are consumed by the refactored sqlite crate (PR-1) and the new postgres/redis crates (PR-2). The **two-PR split** (GATE-1 decision) resolves the publish-verify-against-stale-registry-core trap *without* any manual version bumps: PR-1 ships core + sqlite together, and release-plz's release PR publishes them in **dependency order** (core first, then sqlite verifies against the just-published core); PR-2's new crates are authored *after* PR-1's core is on crates.io, so they verify against a registry core that already has the accessors. See §10.
 
 ## 5. Shared conformance harness (`-sessions-testkit`)
 
@@ -250,7 +250,7 @@ Backend-specific tests (env-gated): reconnect-persistence (new `ConnectionManage
 
 ## 9. CI
 
-New job in `.github/workflows/ci.yml`, **non-required signal** (not added to `.github/rulesets/main-protection-checks.json`):
+New job in `.github/workflows/ci.yml`, a **required** check (GATE-1 decision — it is the *only* gate that runs the Postgres/Redis concurrent-writers AC, mirroring the macOS/Seatbelt "only gate that exercises X ⇒ required" precedent). It is introduced in **PR-2** (alongside the postgres/redis crates) and added as a required context to `.github/rulesets/main-protection-checks.json`; it therefore reports on PR-2 itself (the workflow lives on PR-2's branch) and gates every PR thereafter. PR-1 (core/testkit/sqlite) does **not** include it — there are no postgres/redis crates to exercise yet, so PR-1's required set is the existing one.
 
 ```yaml
 sessions-it:
@@ -270,27 +270,36 @@ sessions-it:
 - Image tags (`postgres:17`, `redis:7`) confirmed current at implementation time.
 - **Lib-only build verification:** also run `cargo build -p paigasus-helikon-sessions-postgres -p paigasus-helikon-sessions-redis` (no dev-deps, no `--all-features`) somewhere in CI or as a pre-PR check — per the reqwest-feature-gating memory, dev-deps (testkit, tokio) and `--all-targets` can mask a missing **lib** feature that downstream consumers would hit.
 
-**Open tension for GATE 1 — required vs. signal.** The brainstorm chose *non-required* for `sessions-it`. The spec-challenge correctly notes that the **concurrent-writers AC for Postgres/Redis is exercised nowhere else** (loud-skip everywhere else), so as a non-required check a Redis-Lua or advisory-lock regression could merge on a red, ignorable signal — which is inconsistent with the repo's own precedent of making the macOS job *required* "because it is the only gate that compiles and runs the Seatbelt backend." This is flagged for an explicit decision at GATE 1: keep non-required (per the brainstorm), or promote `sessions-it` to a required context in `main-protection-checks.json` (consistent with the Seatbelt rationale). The spec proceeds with **non-required** unless changed at the gate.
+**Resolved at GATE 1 — required.** `sessions-it` is a **required** context (the concurrent-writers AC for Postgres/Redis is exercised nowhere else; loud-skip everywhere else would let a Redis-Lua or advisory-lock regression merge on an ignorable signal). Consequences to handle in PR-2: (a) add the bare job name `sessions-it` to `main-protection-checks.json` and apply the ruleset; (b) because a required check must *report* on every gated PR, the job must always post a status even when it has nothing new to run — it does, since it runs `cargo test` for the two crates unconditionally; (c) keep it green by pinning service-container image tags and health-checks so a flaky container does not block all merges (a known cost of requiring it).
 
-## 10. Release & versioning choreography
+## 10. Delivery plan & release (two PRs)
 
-New crates are created at `version = "0.1.0"` with normal `publish`, **not** added to the release-plz stub list (the `providers-gemini`/SMA-449 shape). testkit is added to the stub list (`publish=false` + `release=false`).
+GATE-1 decision: ship as **two sequential PRs** (Alternative B). This halves review surface and **eliminates the publish-verify-against-stale-core trap with no manual version bumps** — each PR uses release-plz's normal flow and relies on its dependency-ordered publish. New published crates are created at `version = "0.1.0"` with normal `publish` (the `providers-gemini`/SMA-449 shape), **not** in the release-plz stub list. `-sessions-testkit` is added to the stub list (`publish=false` + `release=false`).
 
-**The same-PR core + facade bump is MANDATORY here — not optional.** The spec-challenge verified *why* SMA-449 needed no manual bump: `providers-gemini` depends on core via `workspace = true` but uses **only pre-existing** core API, so its first-publish `cargo publish --verify` (which builds against the *registry* core) succeeds, and release-plz auto-cascades the facade (facade `CHANGELOG.md` shows the auto-bump to `0.4.11`). **This PR is different:** the refactored sqlite crate and the new postgres/redis crates consume core API **added in this same PR** (the §4.3 accessors). A brand-new `0.1.0` crate publishes on the *feature-PR* merge and verifies against the registry core, which lacks the accessors → publish fails (the CLAUDE.md "Caveat" / SMA-321 trap). So:
+### PR-1 — core + testkit + sqlite  (branch `feature/sma-330-sessions-core-compaction-testkit`)
+Scope:
+- core: `CompactingSession<S>`, `TokenCounter`, `HeuristicTokenCounter`, `SessionEvent::{kind,ts,ts_nanos_saturating}` (§4).
+- new `paigasus-helikon-sessions-testkit` (`publish=false`): the conformance harness + `tests/memory.rs` (§5).
+- `paigasus-helikon-sessions-sqlite`: refactor `event_metadata` onto the accessors + add `tests/conformance.rs` using testkit (§5).
+- docs: mdBook Sessions page (compaction concept); sqlite/testkit READMEs.
 
-1. Bump `paigasus-helikon-core` (patch) + its `[workspace.dependencies]` pin + CHANGELOG. release-plz then publishes core **first** (dependency order).
-2. Bump the `paigasus-helikon` facade (patch) + its self-pin + CHANGELOG (a manual core bump otherwise defeats release-plz's facade cascade — the SMA-346 second-order caveat).
-3. New `-sessions-postgres` / `-sessions-redis` at `0.1.0`; add to `[workspace.dependencies]`. They verify against the now-fresh registry core (dependency-ordered publish: core → sqlite/postgres/redis → facade).
+Release: **no manual bumps.** release-plz's release PR bumps core (`feat`) and sqlite (its source changed) and cascades the facade (patch), then **publishes in dependency order — core first, then sqlite verifies against the just-published core** ✓. testkit never publishes; the merged PR-1 itself publishes nothing (versions are unchanged until the release PR merges). **PR-1 must merge *and* its release PR must publish core to crates.io before PR-2 begins.**
 
-The earlier "drop the manual bumps if gemini auto-cascaded" hedge was a **false signal** (rightly flagged by the spec-challenge): the real criterion is *"do same-PR siblings use core API added in this PR?"* — here, **yes**. Do the bumps.
+### PR-2 — postgres + redis backends  (branch `feature/sma-330-sessions-postgres-redis`, off `main` after PR-1's release)
+Scope:
+- new `paigasus-helikon-sessions-postgres` + `-sessions-redis` @ `0.1.0` (§6, §7), consuming the **already-published** core accessors ⇒ their first-publish `cargo publish --verify` builds against a registry core that has them ✓.
+- facade: add `sessions-postgres`/`sessions-redis` optional deps + features + `///`-doc'd re-exports (§8).
+- root `[workspace.dependencies]`: add `redis` + the two new crates; supply-chain vetting (§8).
+- CI: add the **required** `sessions-it` job + the ruleset context (§9).
+- docs: facade/root README roster + feature→module map; mdBook backends pages.
 
-**Two recorded alternatives** (a GATE-1 option if the manual choreography is unwanted):
-- **Alternative A — drop the §4.3 accessor de-dup.** Then no sibling uses same-PR core API: postgres/redis/sqlite each keep a private `event_metadata`, core adds only the self-contained `CompactingSession`/`TokenCounter`, and the *pure* gemini flow applies with **zero manual bumps** (release-plz auto-bumps core for `feat(core)` and cascades the facade). Cost: the variant→`kind` mapping is duplicated across three crates (three `_ => panic!` sites instead of one compile error).
-- **Alternative B — split into two PRs.** PR-1: core (accessors + `CompactingSession`) + testkit + sqlite retrofit → publishes core. PR-2 (branched after PR-1's release): the two backend crates against the now-published core → normal flow, no manual bump. Eliminates the trap *and* halves review surface, at the cost of two PRs / two pipeline passes.
+Release: **no manual bumps.** release-plz publishes postgres/redis (verify against published core ✓) and bumps the facade for its new features (cascade), in dependency order.
 
-After merge, watch the release-plz/publish CI and the `chore: release` PR (memory: the bot PR's `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on the bot PR only).
-
-Bootstrap/release-plumbing edits use `chore(...)`/`docs(...)` commit types, never `feat`/`fix`.
+### Watch-points
+- After each PR merges, watch the release-plz `chore: release` PR and the publish CI (memory: the bot PR's `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on the bot PR only; fix with a `chore(deps)` pin and release-plz regenerates it clean).
+- Confirm release-plz publishes **core before sqlite** in PR-1's release PR (topological order). If it ever doesn't, the fallback is a manual core bump in PR-1.
+- Both feature branches must match the `feature/**` ruleset; the current branch is renamed to PR-1's name at the start of implementation.
+- Bootstrap/release-plumbing edits (CI, `release-plz.toml`, ruleset) use `chore(...)`/`docs(...)` commit types, never `feat`/`fix`.
 
 ## 11. Testing strategy → AC mapping
 
@@ -299,7 +308,7 @@ Bootstrap/release-plumbing edits use `chore(...)`/`docs(...)` commit types, neve
 | All three pass the same conformance suite (append, read, projection, concurrent writers) as Memory/SQLite | `-sessions-testkit::run_all` invoked by Memory (in testkit), SQLite (retrofit), Postgres, Redis. Postgres/Redis runs are env-gated and executed by the `sessions-it` CI job. |
 | `CompactingSession` reduces input token count below the threshold after compaction fires | core test (**sequential appends only** — CompactingSession is single-writer per §4.2, so it does **not** run `run_concurrent_writers`): deterministic `TokenCounter` + fake `Model` returning a short summary + threshold `T`; append past `T`; assert `counter.count(snapshot().messages) < T`, and that `snapshot()` equals `[System(summary)]`. Plus: `Compacted` recorded with exact `original_count`; raw `events()` retains the full log; LLM-error path leaves the log untouched and `append` still `Ok`; empty-summary path appends no marker; lone-summary guard (projected `messages.len() <= 1` ⇒ no re-fire). |
 
-All six existing CI gates stay green: `cargo fmt`, `clippy --workspace --all-features --all-targets -D warnings`, `test` matrix, `docs` (`RUSTDOCFLAGS=-D warnings`, so every new `pub` item needs `///`), `doc-coverage` (≥80%), `commits`/`pr-title`. The two **published** crates are added to the doc-coverage aggregator like other published crates; **testkit** (unpublished, but auto-discovered by the script) is handled per §5 (document its public fns, or add to `EXCLUDED_CRATES`).
+All six existing CI gates stay green: `cargo fmt`, `clippy --workspace --all-features --all-targets -D warnings`, `test` matrix, `docs` (`RUSTDOCFLAGS=-D warnings`, so every new `pub` item needs `///`), `doc-coverage` (≥80%), `commits`/`pr-title`. The two **published** crates are added to the doc-coverage aggregator like other published crates; **testkit** (unpublished, but auto-discovered by the script) is handled per §5 (document its public fns, or add to `EXCLUDED_CRATES`). **PR-2 also adds `sessions-it` as a new required gate** (§9), so PR-2 and all later PRs must show it green.
 
 **MSRV check:** verify the chosen `redis` + `sqlx`-postgres-tls graph does not raise the floor above `rust-version = 1.94`. If cargo demands higher, bump `[workspace.package].rust-version` to what it demands (per CLAUDE.md — raise the floor, don't downgrade the dep) and update the CI `1.94` matrix label.
 
@@ -313,7 +322,7 @@ All six existing CI gates stay green: `cargo fmt`, `clippy --workspace --all-fea
 
 The spec-challenge (2026-06-28, verdict *approve-with-changes*) is folded into §§4–11 above. Remaining risks to watch during implementation:
 
-1. **Release choreography (§10)** — most error-prone; resolved by the **mandatory** same-PR core+facade bump (the false "drop the bumps" hedge is removed). Watch the dependency-ordered publish on merge; Alternatives A/B remain if the gate prefers them.
+1. **Release sequencing (§10)** — resolved by the **two-PR** split: no manual bumps, but PR-2 is **blocked on PR-1's core actually publishing to crates.io**. The one assumption to confirm is that release-plz publishes **core before sqlite** within PR-1's release PR (topological order); fallback is a manual core bump in PR-1.
 2. **CompactingSession concurrency (§4.2)** — accepted as **single-writer per session**; the inner backend stays durable, but concurrent appends *through the wrapper* are unsupported (would corrupt `original_count`). Documented, not engineered around.
 3. **CompactingSession per-append cost (§4.2)** — the cheap `AtomicUsize` estimate gates the O(total-events) authoritative read so the common-case append stays cheap; the at-compaction O(n) replay is inherent to event-sourced projection and accepted for the MVP (snapshot-cache deferred).
 4. **TLS / dual-CryptoProvider (§6, §7)** — sqlx must use the **aws-lc-rs** rustls variant; `redis` ships **no** rustls feature (TLS via user-supplied `ConnectionManager`). Both verified against the required `--all-features` test before PR.
