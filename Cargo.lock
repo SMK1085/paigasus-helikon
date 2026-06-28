@@ -2774,6 +2774,7 @@ dependencies = [
  "async-trait",
  "jiff",
  "paigasus-helikon-core",
+ "paigasus-helikon-sessions-testkit",
  "serde_json",
  "sqlx",
  "tempfile",
