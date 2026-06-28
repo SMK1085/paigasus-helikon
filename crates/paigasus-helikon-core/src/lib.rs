@@ -33,6 +33,7 @@ pub mod runner;
 pub mod schema;
 pub mod session;
 pub mod state;
+pub mod token_counter;
 pub mod tool;
 pub mod workflow;
 
@@ -53,5 +54,6 @@ pub use permission::*;
 pub use runner::*;
 pub use session::*;
 pub use state::*;
+pub use token_counter::*;
 pub use tool::*;
 pub use workflow::*;
