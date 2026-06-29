@@ -140,18 +140,27 @@ impl RunRegistry {
         let mut inner = self.inner.write().expect("RunRegistry RwLock poisoned");
         let ttl = self.ttl;
 
-        // Pass 1: TTL eviction.
-        inner.runs.retain(|_id, handle| {
+        // Pass 1: TTL eviction. Track evicted ids so we can also clean them from
+        // `completion_order`, preventing unbounded deque growth across long uptimes.
+        let mut evicted: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+        inner.runs.retain(|id, handle| {
             let t = handle
                 .terminal_at
                 .lock()
                 .expect("terminal_at mutex poisoned");
             match *t {
                 // Keep if still within the TTL window or non-terminal.
-                Some(terminal_at) => terminal_at + ttl > now,
-                None => true,
+                Some(terminal_at) if terminal_at + ttl <= now => {
+                    evicted.insert(*id);
+                    false
+                }
+                _ => true,
             }
         });
+        // Remove TTL-evicted ids from the completion queue to prevent memory leaks.
+        if !evicted.is_empty() {
+            inner.completion_order.retain(|id| !evicted.contains(id));
+        }
 
         // Pass 2: count-cap eviction (FIFO by completion order).
         let mut terminal_count = inner
@@ -207,6 +216,16 @@ impl RunRegistry {
     }
 }
 
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+impl RunRegistry {
+    /// Returns the current length of `completion_order` for leak-regression tests.
+    fn completion_queue_len(&self) -> usize {
+        self.inner.read().unwrap().completion_order.len()
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -242,6 +261,31 @@ mod tests {
             .collect();
         reg.sweep(t0 + Duration::from_secs(3));
         assert!(reg.get(ids[0]).is_none()); // oldest-completed evicted
+        assert!(reg.get(ids[1]).is_some()); // middle run survives (exactly one evicted)
         assert!(reg.get(ids[2]).is_some());
+    }
+
+    /// TTL eviction must also remove the evicted ids from `completion_order` so that the
+    /// deque does not grow without bound across long server uptimes (regression for the
+    /// completion-queue leak found in review).
+    #[test]
+    fn ttl_eviction_cleans_completion_queue() {
+        let reg = RunRegistry::new(Duration::from_secs(60), 1024, 1024);
+        let t0 = Instant::now();
+
+        // Create and terminate three runs.
+        for _ in 0..3 {
+            let (id, _h) = reg.create("a".into(), CancellationToken::new());
+            reg.note_terminal(id, t0);
+        }
+        assert_eq!(reg.completion_queue_len(), 3);
+
+        // Sweep before TTL — nothing evicted, queue unchanged.
+        reg.sweep(t0 + Duration::from_secs(59));
+        assert_eq!(reg.completion_queue_len(), 3);
+
+        // Sweep past TTL — all three runs evicted and queue must be empty.
+        reg.sweep(t0 + Duration::from_secs(61));
+        assert_eq!(reg.completion_queue_len(), 0);
     }
 }
