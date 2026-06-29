@@ -50,6 +50,8 @@ allow = [
   "Unicode-3.0",
   "Zlib",                          # foldhash (via sqlx-core → hashbrown → hashlink); permissive OSI/FSF-approved license
   "Apache-2.0 WITH LLVM-exception", # winx (via cap-std → cap-primitives, pulled by paigasus-helikon-tools); not OR-licensed, so the Apache/MIT fallback doesn't apply
+  "BSL-1.0",                        # Boost Software License 1.0 (OSI/FSF approved, permissive); xxhash-rust (via redis → paigasus-helikon-sessions-redis)
+  "CDLA-Permissive-2.0",            # Community Data License Agreement Permissive 2.0 (Linux Foundation); webpki-roots Mozilla root CA certs (via sqlx-core → paigasus-helikon-sessions-postgres)
 ]
 exceptions = []
 
