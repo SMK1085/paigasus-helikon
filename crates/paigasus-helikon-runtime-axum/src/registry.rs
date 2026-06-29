@@ -95,8 +95,6 @@ impl RunRegistry {
     }
 
     /// Look up a run by id. Returns `None` if it has been evicted or never existed.
-    // Consumed by the run-status / replay handlers added in a later task.
-    #[allow(dead_code)]
     pub fn get(&self, id: Uuid) -> Option<Arc<RunHandle>> {
         let inner = self.inner.read().expect("RunRegistry RwLock poisoned");
         inner.runs.get(&id).cloned()

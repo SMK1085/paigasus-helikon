@@ -4,12 +4,17 @@
 //! is used by every binary, so dead-code is allowed module-wide.
 #![allow(dead_code)]
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use futures_util::stream::{self, BoxStream, StreamExt as _};
 use paigasus_helikon_core::{
-    Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext, TokenUsage,
+    Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunConfig, RunContext, RunError,
+    RunResult, RunResultStreaming, Runner, TokenUsage,
 };
 use paigasus_helikon_runtime_axum::AgentServer;
 
@@ -120,4 +125,85 @@ pub async fn create_async_run(addr: std::net::SocketAddr, agent_name: &str) -> S
 /// Parse a JSON text string (received from a WebSocket frame) into an [`AgentEvent`].
 pub fn parse_event(text: &str) -> AgentEvent {
     serde_json::from_str(text).expect("valid AgentEvent JSON")
+}
+
+// ── FailingRunner ──────────────────────────────────────────────────────────────
+
+/// A test [`Runner`] whose `run_streamed` returns `Err` immediately, simulating
+/// an agent that fails before emitting any event.
+pub struct FailingRunner;
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> Runner<Ctx> for FailingRunner {
+    async fn run(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResult, RunError> {
+        Err(RunError::MaxIterations)
+    }
+
+    async fn run_streamed(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResultStreaming, RunError> {
+        Err(RunError::MaxIterations)
+    }
+}
+
+// ── OrderingAgent ─────────────────────────────────────────────────────────────
+
+/// Tick byte pushed by [`OrderingAgent`] when a run **starts** (before the first
+/// event is returned).
+pub const TICK_START: u8 = 0;
+
+/// Tick byte pushed by [`OrderingAgent`] when a run **ends** (just before the
+/// terminal event is returned).
+pub const TICK_END: u8 = 1;
+
+/// A test [`Agent`] that records start/end tick bytes into a shared buffer and
+/// sleeps briefly between them.
+///
+/// Used by `concurrent_same_session_serialize` to verify that two concurrent
+/// one-shot requests with the same `X-Session-Id` are fully serialized: the
+/// expected tick sequence is `[TICK_START, TICK_END, TICK_START, TICK_END]`.
+pub struct OrderingAgent {
+    /// Agent name returned by [`Agent::name`].
+    pub name: String,
+    /// Shared tick log; each run appends `[TICK_START, TICK_END]`.
+    pub ticks: Arc<Mutex<Vec<u8>>>,
+}
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> Agent<Ctx> for OrderingAgent {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        "ordering test agent"
+    }
+
+    async fn run(
+        &self,
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        // Record start tick — happens in the writer task, under the session lock.
+        self.ticks.lock().unwrap().push(TICK_START);
+        // Sleep briefly so the writer task holds the session lock long enough
+        // for a concurrent same-session request to block on it before we finish.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Record end tick — still inside the writer task, still under the session lock.
+        self.ticks.lock().unwrap().push(TICK_END);
+        Ok(stream::iter(vec![AgentEvent::RunCompleted {
+            usage: TokenUsage::default(),
+        }])
+        .boxed())
+    }
 }

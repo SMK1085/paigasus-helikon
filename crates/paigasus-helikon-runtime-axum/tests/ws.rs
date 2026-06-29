@@ -48,3 +48,18 @@ async fn ws_unknown_id_404_before_upgrade() {
         "handshake should fail: server returns 404, not 101"
     );
 }
+
+/// A WebSocket connection that targets the correct run id but the wrong agent
+/// name must fail the upgrade (server returns 404 before the 101 handshake).
+#[tokio::test]
+async fn ws_name_mismatch_404_before_upgrade() {
+    let addr = support::spawn_echo_server().await;
+    let run_id = support::create_async_run(addr, "echo").await;
+    // The run exists (agent "echo"), but the URL references a different agent.
+    let url = format!("ws://{addr}/agents/other/runs/{run_id}/events");
+    let result = tokio_tungstenite::connect_async(url).await;
+    assert!(
+        result.is_err(),
+        "agent-name mismatch should fail the WS handshake (server returns 404, not 101)"
+    );
+}

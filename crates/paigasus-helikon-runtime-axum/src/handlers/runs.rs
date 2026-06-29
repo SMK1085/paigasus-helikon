@@ -172,8 +172,8 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
 
 /// Read and validate the JSON request body into a [`RunRequest`].
 ///
-/// Performs a lightweight, 415-aware content-type check: an *explicit* non-JSON
-/// content type is rejected, while a missing content type is tolerated and the
+/// Performs a lightweight content-type check: returns 400 on an explicit
+/// non-JSON content type, while a missing content type is tolerated and the
 /// bytes are parsed optimistically.
 async fn read_run_request(parts: &Parts, body: Body) -> Result<RunRequest, ServerError> {
     if let Some(ct) = parts
@@ -290,6 +290,8 @@ async fn oneshot_response(run_id: Uuid, handle: &Arc<RunHandle>) -> Result<Respo
     // Cancel the run if the client disconnects while we await the result.
     let _disconnect = handle.cancel.clone().drop_guard();
 
+    // NOTE: the event log is capped at `max_events_per_run` events; `output`
+    // in the response reflects only the events retained by the ring buffer.
     let events: Vec<AgentEvent> = handle.log.subscribe(0).collect().await;
 
     // If the run failed to *start*, surface a 500 rather than a 200 envelope.
@@ -323,7 +325,7 @@ fn to_sse_event(ev: &AgentEvent) -> Event {
 
 /// Insert the `X-Run-Id` response header.
 fn insert_run_id(headers: &mut HeaderMap, run_id: Uuid) {
-    if let Ok(value) = HeaderValue::from_str(&run_id.to_string()) {
-        headers.insert("x-run-id", value);
-    }
+    let value =
+        HeaderValue::from_str(&run_id.to_string()).expect("uuid is always a valid header value");
+    headers.insert("x-run-id", value);
 }
