@@ -1,6 +1,6 @@
 # Crate overview
 
-The workspace is **16 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
+The workspace is **18 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
 
 For orientation — how to pick crates and add them to your `Cargo.toml` — see [workspace layout](../getting-started/workspace-layout.md). For the rendered rustdoc, see [API docs](./api-docs.md).
 
@@ -26,6 +26,8 @@ Versions below are **current as of 2026-06-16** and move every release — read 
 | [`paigasus-helikon-providers-bedrock`](https://docs.rs/paigasus-helikon-providers-bedrock) | Amazon Bedrock Converse API model adapter (`BedrockModel`) | published | `0.1.0` |
 | [`paigasus-helikon-providers-gemini`](https://docs.rs/paigasus-helikon-providers-gemini) | Google Gemini model adapter (`GeminiModel`; Developer API + Vertex AI) | published | `0.1.0` |
 | [`paigasus-helikon-sessions-sqlite`](https://docs.rs/paigasus-helikon-sessions-sqlite) | SQLite-backed `Session` backend | published | `0.1.11` |
+| [`paigasus-helikon-sessions-postgres`](https://docs.rs/paigasus-helikon-sessions-postgres) | PostgreSQL-backed `Session` backend (`PostgresSession`) | published | `0.1.0` |
+| [`paigasus-helikon-sessions-redis`](https://docs.rs/paigasus-helikon-sessions-redis) | Redis Streams-backed `Session` backend (`RedisSession`) | published | `0.1.0` |
 | [`paigasus-helikon-runtime-tokio`](https://docs.rs/paigasus-helikon-runtime-tokio) | Default ephemeral Tokio runner | published | `0.1.9` |
 | [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) | MCP integration — `rmcp` client and server wrappers | published | `0.1.3` |
 | [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) | Sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`) | published | `0.1.5` |
@@ -53,6 +55,8 @@ Add the facade and turn on the features you need. Each feature gates one sibling
 | `tools` | `paigasus_helikon::tools` | `paigasus-helikon-tools` |
 | `tools-web` | adds `WebFetch`/`WebSearch` | enables `paigasus-helikon-tools/web` |
 | `sessions-sqlite` | `paigasus_helikon::sessions_sqlite` | `paigasus-helikon-sessions-sqlite` |
+| `sessions-postgres` | `paigasus_helikon::sessions_postgres` | `paigasus-helikon-sessions-postgres` |
+| `sessions-redis` | `paigasus_helikon::sessions_redis` | `paigasus-helikon-sessions-redis` |
 | `runtime-tokio` | `paigasus_helikon::runtime_tokio` | `paigasus-helikon-runtime-tokio` |
 | `evals`, `runtime-axum`, `runtime-temporal`, `runtime-agentcore` | re-export exists, crate empty | the four stubs |
 

@@ -121,6 +121,88 @@ Appends serialize through SQLite's database-level write lock (`BEGIN IMMEDIATE`
 plus a `(session_id, sequence)` primary key), so the backend is safe for
 concurrent writers.
 
+### `PostgresSession` (`paigasus-helikon-sessions-postgres`)
+
+For durable, production-grade storage, the `sessions-postgres` feature pulls in
+`paigasus-helikon-sessions-postgres` (re-exported as
+`paigasus_helikon::sessions_postgres`). `PostgresSession` stores each session's
+event log in a `session_events` table with a `JSONB` payload column. Many
+sessions share one `sqlx::PgPool` and are isolated by `session_id`. The
+constructors are `async` and return `Result<_, SessionError>`:
+
+```rust,ignore
+use std::sync::Arc;
+use paigasus_helikon::sessions_postgres::PostgresSession;
+
+let pool = sqlx::PgPool::connect("postgres://user:pass@localhost/mydb").await?;
+
+// Migrate once at process start (idempotent; serialized by advisory lock).
+PostgresSession::migrate(&pool).await?;
+
+// Hot path: skip the _sqlx_migrations round-trip.
+let session = Arc::new(PostgresSession::open_without_migrate(pool, "user-42"));
+```
+
+`PostgresSession::open` runs migrations and opens the session in one call.
+`PostgresSession::migrate(&pool)` + `open_without_migrate(pool, id)` separates
+the one-time migration from the per-session constructor for high-throughput paths.
+`PostgresSession::session_id()` returns the id the instance reads and writes.
+
+Concurrent writers are serialized per-session via `pg_advisory_xact_lock` —
+each `append` takes an advisory lock keyed on `hashtext(session_id)` inside a
+single transaction, then computes `COALESCE(MAX(sequence), -1) + 1` to allocate
+contiguous sequence numbers. Writers to **different** sessions never block each
+other.
+
+**TLS:** the crate's `sqlx` dependency uses `tls-rustls-aws-lc-rs`, matching the
+workspace-wide `CryptoProvider`. A ring-backed TLS variant would cause a
+dual-`CryptoProvider` panic under `cargo test --workspace --all-features` and is
+intentionally absent.
+
+### `RedisSession` (`paigasus-helikon-sessions-redis`)
+
+For low-latency shared storage, the `sessions-redis` feature pulls in
+`paigasus-helikon-sessions-redis` (re-exported as
+`paigasus_helikon::sessions_redis`). `RedisSession` stores each session's events
+in a Redis Stream at key `helikon:session:{id}:events`. Each entry carries `seq`
+(monotonic integer), `kind` (variant tag), `payload` (JSON), and `ts`
+(nanoseconds since Unix epoch).
+
+```rust,ignore
+use std::sync::Arc;
+use paigasus_helikon::sessions_redis::RedisSession;
+
+// Convenience constructor — plaintext connection.
+let session = Arc::new(RedisSession::connect("redis://127.0.0.1/", "user-42").await?);
+```
+
+For TLS or custom retry behaviour, supply a pre-built `ConnectionManager`:
+
+```rust,ignore
+use paigasus_helikon::sessions_redis::RedisSession;
+
+let client = redis::Client::open("rediss://user:pass@redis.example.com:6380/")?;
+let conn   = redis::aio::ConnectionManager::new(client).await?;
+let session = Arc::new(RedisSession::new(conn, "user-42"));
+```
+
+Each `append` call runs an atomic Lua script that reads `XLEN` to determine the
+next sequence number and issues one `XADD` per event. Because Redis executes Lua
+atomically (single-threaded command loop), two concurrent callers can never
+produce the same sequence number or leave gaps.
+
+**TLS:** the crate's `redis` dependency enables no rustls feature. Ring-backed
+rustls features in `redis` would register a second `CryptoProvider` and
+reproduce the dual-provider panic under `--all-features`. TLS is therefore
+**BYO-connection**: build a TLS-configured `ConnectionManager` with the
+workspace's aws-lc-rs provider and pass it to `RedisSession::new`.
+
+**Operational note:** `RedisSession` never calls `XADD … MAXLEN` or `XTRIM`, so
+the stream grows unboundedly. Run the session keyspace under
+`maxmemory-policy noeviction` — a key-eviction policy that silently drops stream
+entries would both lose event data and break the contiguous-sequence invariant.
+Use `CompactingSession<RedisSession>` to bound growth within the event log.
+
 ## Compaction
 
 Long-running conversations accumulate events; the growing projected context

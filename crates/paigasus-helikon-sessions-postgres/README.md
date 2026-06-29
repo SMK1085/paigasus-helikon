@@ -32,11 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Append and read events through the Session trait.
     use paigasus_helikon_core::{ContentPart, SessionEvent};
-    use jiff::Timestamp;
-    let event = SessionEvent::UserMessage {
-        content: vec![ContentPart::Text { text: "Hello".into() }],
-        ts: Timestamp::now(),
-    };
+    let event = SessionEvent::user_message(vec![ContentPart::Text { text: "Hello".into() }]);
     session.append(&[event]).await?;
     let events = session.events(None).await?;
     println!("stored {} event(s)", events.len());
