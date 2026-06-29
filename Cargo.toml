@@ -105,6 +105,7 @@ paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
 paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.18" }
+paigasus-helikon-sessions-postgres   = { path = "crates/paigasus-helikon-sessions-postgres", version = "0.1.0" }
 paigasus-helikon-providers-bedrock   = { path = "crates/paigasus-helikon-providers-bedrock", version = "0.1.1" }
 paigasus-helikon-providers-gemini    = { path = "crates/paigasus-helikon-providers-gemini", version = "0.1.1" }
 

@@ -2768,6 +2768,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "paigasus-helikon-sessions-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "paigasus-helikon-core",
+ "paigasus-helikon-sessions-testkit",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "paigasus-helikon-sessions-sqlite"
 version = "0.1.18"
 dependencies = [
@@ -3855,6 +3867,7 @@ dependencies = [
  "log",
  "memchr",
  "percent-encoding",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3864,6 +3877,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3896,6 +3910,8 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx-core",
+ "sqlx-mysql",
+ "sqlx-postgres",
  "sqlx-sqlite",
  "syn",
  "thiserror",
@@ -4745,6 +4761,15 @@ name = "webpki-root-certs"
 version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d46a5a140e6f7afeccd8eae97eff335163939eac8b929834875168b29b3d267"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf85cb06032201fa7c6f829d7db5a7e5aa45bcc0655327713065f6f0576731bf"
 dependencies = [
  "rustls-pki-types",
 ]
