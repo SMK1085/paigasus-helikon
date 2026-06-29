@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_default_context()
         .agent(Arc::new(EchoAgent))
         .build()?
-        .serve("0.0.0.0:8080")
+        .serve("127.0.0.1:8080")
         .await?;
     Ok(())
 }
@@ -72,7 +72,7 @@ See the [`curl_server`](https://github.com/SMK1085/paigasus-helikon/blob/main/cr
 | `POST` | `/agents/{name}/runs` | One-shot run — blocks until complete, returns all events |
 | `POST` | `/agents/{name}/runs?stream=sse` | SSE streaming run — one JSON event per `data:` line |
 | `POST` | `/agents/{name}/runs?mode=async` | Async run — returns `202 Accepted` with a `run_id` immediately |
-| `GET` | `/agents/{name}/runs/{id}/events` | Replay or stream events for a run (HTTP or WebSocket upgrade) |
+| `GET` | `/agents/{name}/runs/{id}/events` | Subscribe to a run's events over **WebSocket** — replays from the start, then live-tails until terminal |
 | `GET` | `/agents` | List all mounted agents |
 | `GET` | `/openapi.json` | OpenAPI 3.1 JSON spec (requires `openapi` feature, enabled by default) |
 
