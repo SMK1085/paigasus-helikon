@@ -8,3 +8,8 @@
 
 mod error;
 pub use error::{AuthRejection, ServerError};
+
+// `event_log` types are consumed by transport modules added in subsequent tasks (SSE, WebSocket,
+// one-shot handler). Until those callers land, suppress the dead_code lint on this module.
+#[allow(dead_code)]
+mod event_log;
