@@ -55,8 +55,9 @@ use crate::error::ServerError;
 ///
 /// - Call `.with_permission_mode(PermissionMode::Deny)` to prevent the agent
 ///   from escalating tool permissions at runtime.
-/// - Supply a custom `ApprovalHandler` that enforces the tenant's ACL instead
-///   of prompting a local operator.
+/// - Supply a custom `ApprovalHandler` that enforces the tenant's ACL. Without
+///   one, core resolves every `AskUser` approval as *deny* — the safe default
+///   for a network service, but it blocks any tool that requires approval.
 /// - Attach a `HookRegistry` to emit telemetry or enforce policies on every
 ///   tool invocation.
 ///
