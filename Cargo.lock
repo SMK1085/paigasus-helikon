@@ -2774,10 +2774,22 @@ dependencies = [
  "async-trait",
  "jiff",
  "paigasus-helikon-core",
+ "paigasus-helikon-sessions-testkit",
  "serde_json",
  "sqlx",
  "tempfile",
  "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "paigasus-helikon-sessions-testkit"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "jiff",
+ "paigasus-helikon-core",
  "tokio",
 ]
 

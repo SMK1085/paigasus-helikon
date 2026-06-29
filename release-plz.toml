@@ -55,3 +55,8 @@ release = false
 name = "paigasus-helikon-runtime-agentcore"
 publish = false
 release = false
+
+[[package]]
+name = "paigasus-helikon-sessions-testkit"
+publish = false
+release = false
