@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.14](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.13...paigasus-helikon-v0.4.14) - 2026-06-30
+
+### Added
+
+- *(runtime-axum)* SMA-331 lift stage-1 gates for runtime-axum; the `runtime-axum` feature now reaches the real HTTP/SSE/WebSocket AgentServer implementation (paigasus-helikon-runtime-axum 0.1.0)
+
 ## [0.4.13](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.12...paigasus-helikon-v0.4.13) - 2026-06-29
 
 ### Added
