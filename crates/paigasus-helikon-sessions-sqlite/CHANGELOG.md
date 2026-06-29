@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.18](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-sqlite-v0.1.17...paigasus-helikon-sessions-sqlite-v0.1.18) - 2026-06-29
+
+### Added
+
+- *(core)* SMA-330 add CompactingSession, token counting, and shared session conformance suite ([#124](https://github.com/SMK1085/paigasus-helikon/pull/124))
+
 ## [0.1.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-sqlite-v0.1.16...paigasus-helikon-sessions-sqlite-v0.1.17) - 2026-06-21
 
 ### Other
