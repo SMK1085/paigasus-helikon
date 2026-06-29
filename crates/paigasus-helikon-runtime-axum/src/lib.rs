@@ -18,3 +18,6 @@ mod event_log;
 // Until those callers land, suppress the dead_code lint on this module.
 #[allow(dead_code)]
 mod registry;
+
+mod session;
+pub use session::{InMemorySessionProvider, SessionProvider};
