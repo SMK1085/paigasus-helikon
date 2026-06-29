@@ -137,7 +137,9 @@ impl RunResponse {
                             text.push_str(t);
                         }
                     }
-                    output = Some(text);
+                    if !text.is_empty() {
+                        output = Some(text);
+                    }
                 }
                 AgentEvent::RunCompleted { usage: u } => {
                     status = RunStatus::Completed;
@@ -213,6 +215,33 @@ mod tests {
         .unwrap();
         assert_eq!(b.into_agent_input().messages.len(), 1);
         assert!(serde_json::from_str::<RunRequest>(r#"{"nope":1}"#).is_err());
+    }
+
+    #[test]
+    fn response_last_assistant_message_wins() {
+        let events = vec![
+            AgentEvent::MessageOutput {
+                item: assistant_text("first"),
+            },
+            AgentEvent::MessageOutput {
+                item: assistant_text("second"),
+            },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ];
+        let r = RunResponse::from_events(Uuid::nil(), events);
+        assert_eq!(r.output.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn response_run_failed_sets_status_and_error() {
+        let events = vec![AgentEvent::RunFailed {
+            error: "boom".into(),
+        }];
+        let r = RunResponse::from_events(Uuid::nil(), events);
+        assert_eq!(r.status, RunStatus::Failed);
+        assert_eq!(r.error.as_deref(), Some("boom"));
     }
 
     #[test]
