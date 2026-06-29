@@ -16,6 +16,10 @@ async fn postgres_passes_conformance() {
     };
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
     PostgresSession::migrate(&pool).await.expect("migrate"); // migrate ONCE up front
+
+    // Process-unique prefix so reruns against a reused database never collide
+    // with a prior run's rows for the same session id.
+    let pid = std::process::id();
     let counter = AtomicU64::new(0);
     run_all(|| {
         let pool = pool.clone();
@@ -23,7 +27,7 @@ async fn postgres_passes_conformance() {
         async move {
             Arc::new(PostgresSession::open_without_migrate(
                 pool,
-                format!("conf-{id}"),
+                format!("conf-{pid}-{id}"),
             )) as Arc<dyn Session>
         }
     })

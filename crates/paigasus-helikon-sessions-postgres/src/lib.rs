@@ -99,9 +99,12 @@ impl Session for PostgresSession {
             return Ok(());
         }
         // Single transaction on ONE pooled connection: the advisory lock must
-        // cover the INSERTs. Per-session lock (hashtext($1)) auto-releases at COMMIT.
+        // cover the INSERTs. Per-session lock auto-releases at COMMIT. The key is
+        // `hashtextextended($1, 0)` — a 64-bit hash, so the full advisory-lock key
+        // space is used and distinct sessions effectively never collide (unlike the
+        // 32-bit `hashtext`, which could occasionally serialize unrelated sessions).
         let mut tx = self.pool.begin().await.map_err(SessionError::backend)?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(&self.session_id)
             .execute(&mut *tx)
             .await

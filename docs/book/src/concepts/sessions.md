@@ -149,13 +149,12 @@ the one-time migration from the per-session constructor for high-throughput path
 `PostgresSession::session_id()` returns the id the instance reads and writes.
 
 Concurrent writers are serialized per-session via `pg_advisory_xact_lock` —
-each `append` takes an advisory lock keyed on `hashtext(session_id)` inside a
-single transaction, then computes `COALESCE(MAX(sequence), -1) + 1` to allocate
-contiguous sequence numbers. Writers to different sessions **usually** do not
-block each other; `hashtext` produces a 32-bit key, so two distinct session IDs
-can occasionally collide into the same advisory-lock slot — correctness is
-preserved, but throughput may be affected (`hashtextextended` is the migration
-path if collisions prove material in practice).
+each `append` takes an advisory lock keyed on `hashtextextended(session_id, 0)`
+inside a single transaction, then computes `COALESCE(MAX(sequence), -1) + 1` to
+allocate contiguous sequence numbers; the lock auto-releases at `COMMIT`. Because
+`hashtextextended` produces a **64-bit** key, the full advisory-lock key space is
+used and writers to different sessions effectively never collide — distinct from
+the 32-bit `hashtext`, which could occasionally serialize unrelated sessions.
 
 **TLS:** the crate's `sqlx` dependency uses `tls-rustls-aws-lc-rs`, matching the
 workspace-wide `CryptoProvider`. A ring-backed TLS variant would cause a
@@ -189,10 +188,12 @@ let conn   = redis::aio::ConnectionManager::new(client).await?;
 let session = Arc::new(RedisSession::new(conn, "user-42"));
 ```
 
-Each `append` call runs an atomic Lua script that reads `XLEN` to determine the
-next sequence number and issues one `XADD` per event. Because Redis executes Lua
-atomically (single-threaded command loop), two concurrent callers can never
-produce the same sequence number or leave gaps.
+Each `append` call runs an atomic Lua script that reserves the next sequence
+numbers from a per-session counter (`INCRBY` on `helikon:session:{id}:seq`) and
+issues one `XADD` per event. Because Redis executes Lua atomically (single-threaded
+command loop), two concurrent callers can never produce the same sequence number
+or leave gaps. Sourcing `seq` from a monotonic counter rather than `XLEN` keeps
+sequence numbers unique even if the stream is later trimmed.
 
 **TLS:** the crate's `redis` dependency enables no rustls feature. Ring-backed
 rustls features in `redis` would register a second `CryptoProvider` and
@@ -201,10 +202,12 @@ reproduce the dual-provider panic under `--all-features`. TLS is therefore
 workspace's aws-lc-rs provider and pass it to `RedisSession::new`.
 
 **Operational note:** `RedisSession` never calls `XADD … MAXLEN` or `XTRIM`, so
-the stream grows unboundedly. Run the session keyspace under
-`maxmemory-policy noeviction` — a key-eviction policy that silently drops stream
-entries would both lose event data and break the contiguous-sequence invariant.
-Use `CompactingSession<RedisSession>` to bound growth within the event log.
+the stream grows unboundedly. The per-session sequence counter keeps `seq` values
+monotonic and unique even across a trim, but trimming still **drops the trimmed
+events from history** (`events()` reads the stream itself). Run the session
+keyspace under `maxmemory-policy noeviction` — a key-eviction policy that silently
+dropped stream entries (or the counter key) would lose event data. Use
+`CompactingSession<RedisSession>` to bound growth within the event log.
 
 ## Compaction
 

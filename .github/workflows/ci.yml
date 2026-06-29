@@ -139,6 +139,7 @@ jobs:
         with:
           filters: |
             sessions:
+              - 'Cargo.toml'
               - 'crates/paigasus-helikon-sessions-**'
               - 'crates/paigasus-helikon-core/src/session.rs'
               - '.github/workflows/ci.yml'

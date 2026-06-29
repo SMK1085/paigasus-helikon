@@ -54,14 +54,22 @@ use redis::AsyncCommands;
 /// Lua script for atomic, contiguous-sequence append.
 ///
 /// Arguments come in groups of three: `kind`, `payload`, `ts`.
-/// Returns the starting sequence number (`n = XLEN` before the append).
+///
+/// `KEYS[1]` is the stream key, `KEYS[2]` the per-session sequence counter.
+/// Each batch atomically reserves `count` sequence numbers via `INCRBY` on the
+/// counter (which starts at 0, so the first append's base is 0), then `XADD`s
+/// each event with its reserved `seq`. Deriving `seq` from a monotonic counter
+/// rather than `XLEN` keeps sequence numbers gap-free **and** unique even if the
+/// stream is later trimmed (`XTRIM`/`XDEL`) — `XLEN` would reuse old `seq`s after
+/// a trim and corrupt `events(since)`. Returns the batch's starting `seq`.
 const APPEND_SCRIPT: &str = r#"
-local n = redis.call('XLEN', KEYS[1])
-for i = 0, (#ARGV / 3) - 1 do
+local count = #ARGV / 3
+local base = redis.call('INCRBY', KEYS[2], count) - count
+for i = 0, count - 1 do
   redis.call('XADD', KEYS[1], '*',
-    'seq', n + i, 'kind', ARGV[i*3 + 1], 'payload', ARGV[i*3 + 2], 'ts', ARGV[i*3 + 3])
+    'seq', base + i, 'kind', ARGV[i*3 + 1], 'payload', ARGV[i*3 + 2], 'ts', ARGV[i*3 + 3])
 end
-return n
+return base
 "#;
 
 /// Error returned when a required field is absent in a Redis Stream entry.
@@ -84,6 +92,8 @@ pub struct RedisSession {
     session_id: String,
     /// Redis stream key: `helikon:session:{session_id}:events`
     key: String,
+    /// Per-session monotonic sequence counter: `helikon:session:{session_id}:seq`
+    seq_key: String,
 }
 
 impl std::fmt::Debug for RedisSession {
@@ -91,6 +101,7 @@ impl std::fmt::Debug for RedisSession {
         f.debug_struct("RedisSession")
             .field("session_id", &self.session_id)
             .field("key", &self.key)
+            .field("seq_key", &self.seq_key)
             .field("conn", &"ConnectionManager { .. }")
             .finish()
     }
@@ -105,10 +116,12 @@ impl RedisSession {
     pub fn new(conn: ConnectionManager, session_id: impl Into<String>) -> Self {
         let session_id = session_id.into();
         let key = format!("helikon:session:{}:events", session_id);
+        let seq_key = format!("helikon:session:{}:seq", session_id);
         Self {
             conn,
             session_id,
             key,
+            seq_key,
         }
     }
 
@@ -145,14 +158,16 @@ impl Session for RedisSession {
         let mut conn = self.conn.clone();
         let script = redis::Script::new(APPEND_SCRIPT);
         let mut invocation = script.prepare_invoke();
+        // KEYS[1] = stream, KEYS[2] = sequence counter (order matters).
         invocation.key(&self.key);
+        invocation.key(&self.seq_key);
         for ev in events {
             let kind = ev.kind();
             let payload = serde_json::to_string(ev).map_err(SessionError::backend)?;
             let ts = ev.ts_nanos_saturating().to_string();
             invocation.arg(kind).arg(payload).arg(ts);
         }
-        // Return type i64 matches the Lua `return n` (XLEN result).
+        // Return type i64 matches the Lua `return base` (the batch's first seq).
         let _: i64 = invocation
             .invoke_async(&mut conn)
             .await
