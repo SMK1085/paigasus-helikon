@@ -11,6 +11,7 @@ Per-item Rust API documentation is published on [docs.rs](https://docs.rs). This
 - [`paigasus-helikon-providers-anthropic`](https://docs.rs/paigasus-helikon-providers-anthropic) — Anthropic model adapter.
 - [`paigasus-helikon-sessions-sqlite`](https://docs.rs/paigasus-helikon-sessions-sqlite) — SQLite `Session` backend.
 - [`paigasus-helikon-runtime-tokio`](https://docs.rs/paigasus-helikon-runtime-tokio) — ephemeral Tokio runner.
+- [`paigasus-helikon-runtime-axum`](https://docs.rs/paigasus-helikon-runtime-axum) — self-hosted HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints, replayable runs). See [Axum Server Runtime](../concepts/axum-server.md).
 - [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) — `rmcp`-based MCP client/server wrapper.
 - [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) — sandboxed `Read`/`Write`/`Edit`/`Bash` tools (plus `WebFetch`/`WebSearch` behind the `web` feature).
 
@@ -18,7 +19,7 @@ Most users depend only on the `paigasus-helikon` facade and enable the features 
 
 ## Not yet published
 
-`paigasus-helikon-evals`, `paigasus-helikon-runtime-axum`, `paigasus-helikon-runtime-temporal`, and `paigasus-helikon-runtime-agentcore` are `0.0.0` name-claim stubs with no implementation yet, so they have no live docs.rs pages. `paigasus-helikon-cli` is a binary and is never published as a library.
+`paigasus-helikon-evals`, `paigasus-helikon-runtime-temporal`, and `paigasus-helikon-runtime-agentcore` are `0.0.0` name-claim stubs with no implementation yet, so they have no live docs.rs pages. `paigasus-helikon-cli` is a binary and is never published as a library.
 
 ## Building locally
 

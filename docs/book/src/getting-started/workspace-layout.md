@@ -28,6 +28,7 @@ Feature names are kebab-case in `Cargo.toml`; the re-export module aliases are s
 | `tools` | `paigasus_helikon::tools` | sandboxed Read/Write/Edit/Bash tools |
 | `tools-web` | *(extends `tools`)* | adds the WebFetch / WebSearch network tools |
 | `runtime-tokio` | `paigasus_helikon::runtime_tokio` | ephemeral Tokio runner |
+| `runtime-axum` | `paigasus_helikon::runtime_axum` | self-hosted HTTP/SSE/WebSocket agent server — see [Axum Server Runtime](../concepts/axum-server.md) |
 | `sessions-sqlite` | `paigasus_helikon::sessions_sqlite` | SQLite `Session` backend |
 
 In addition, `paigasus_helikon::schema::strict` re-exports the JSON-Schema strict-mode normalizer
@@ -42,7 +43,7 @@ macro invocation `tools![...]` versus a path `tools::SomeTool`. Be explicit abou
 
 ## Published vs stub crates
 
-Nine crates carry real implementations and are published on crates.io / docs.rs:
+Ten crates carry real implementations and are published on crates.io / docs.rs:
 
 - `paigasus-helikon-core` — the dependency root (traits, agent loop, carrier types)
 - `paigasus-helikon` — the facade
@@ -51,12 +52,13 @@ Nine crates carry real implementations and are published on crates.io / docs.rs:
 - `paigasus-helikon-providers-anthropic`
 - `paigasus-helikon-sessions-sqlite`
 - `paigasus-helikon-runtime-tokio`
+- `paigasus-helikon-runtime-axum` — self-hosted HTTP/SSE/WebSocket agent server (see [Axum Server Runtime](../concepts/axum-server.md))
 - `paigasus-helikon-mcp`
 - `paigasus-helikon-tools`
 
-Four crates are **`0.0.0` name-claim stubs — not yet implemented**:
-`paigasus-helikon-evals`, `paigasus-helikon-runtime-axum`, `paigasus-helikon-runtime-temporal`,
-`paigasus-helikon-runtime-agentcore`. Their facade features (`evals`, `runtime-axum`,
+Three crates are **`0.0.0` name-claim stubs — not yet implemented**:
+`paigasus-helikon-evals`, `paigasus-helikon-runtime-temporal`,
+`paigasus-helikon-runtime-agentcore`. Their facade features (`evals`,
 `runtime-temporal`, `runtime-agentcore`) exist and the re-export module aliases resolve, but the
 crates are empty — enabling them gives you nothing usable yet.
 
