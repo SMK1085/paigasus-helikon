@@ -274,7 +274,7 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     /// Pure: spawns nothing.  Suitable for embedding into a larger router or for
     /// testing with axum's `Router::oneshot`.
     pub fn router(&self) -> Router {
-        Router::new()
+        let router = Router::new()
             .route("/agents", get(handlers::agents::list::<Ctx>))
             .route(
                 "/agents/{name}/runs",
@@ -283,8 +283,12 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
             .route(
                 "/agents/{name}/runs/{id}/events",
                 get(handlers::events::events::<Ctx>),
-            )
-            .with_state(self.state.clone())
+            );
+
+        #[cfg(feature = "openapi")]
+        let router = router.route("/openapi.json", get(handlers::openapi::openapi_json::<Ctx>));
+
+        router.with_state(self.state.clone())
     }
 
     /// Start serving on `listener`.
