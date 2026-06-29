@@ -141,6 +141,12 @@ impl SessionProvider for InMemorySessionProvider {
 ///
 /// Ensures that at most one request runs at a time for a given session id.
 /// Anonymous requests (`id = None`) get a fresh throwaway lock each time.
+///
+/// **Known limitation — unbounded growth.** The lock map for `Some(id)` is
+/// never evicted, so a server that observes many distinct session ids over
+/// its lifetime accumulates one entry per id indefinitely. Eviction/cleanup
+/// (e.g. dropping a lock when its session is evicted from the provider) is
+/// deferred to the Task 10 transport handlers that wire this in.
 // `SessionLocks` is consumed by the transport handlers added in subsequent
 // tasks (Task 10). Until those callers land, suppress the dead_code lint.
 #[allow(dead_code)]
