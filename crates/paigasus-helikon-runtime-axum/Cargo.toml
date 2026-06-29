@@ -29,7 +29,7 @@ utoipa       = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio             = { workspace = true }
-reqwest           = { workspace = true }
+reqwest           = { workspace = true, features = ["json", "rustls"] }
 tokio-tungstenite = { workspace = true }
 
 [features]
