@@ -17,10 +17,11 @@ use uuid::Uuid;
 // ── RunHandle ─────────────────────────────────────────────────────────────────
 
 /// Everything the server needs to track a single run.
-// Fields are populated by `create` and consumed by the run handlers added in Task 10.
-#[allow(dead_code)]
 pub(crate) struct RunHandle {
     /// Name of the agent that owns this run.
+    // Recorded for the run-status / replay handlers added in a later task; not
+    // yet read on the run-creation path.
+    #[allow(dead_code)]
     pub agent_name: String,
     /// Append-only, bounded event log for this run.
     pub log: Arc<EventLog>,
@@ -54,8 +55,6 @@ pub(crate) struct RunRegistry {
     /// Maximum number of *completed* runs to retain simultaneously.
     max_runs: usize,
     /// [`EventLog`] capacity for each newly-created run.
-    // Read by `create`, which is used in Task 10.
-    #[allow(dead_code)]
     max_events_per_run: usize,
     /// Guards [`RunRegistry::spawn_sweeper`] so at most one background task is spawned.
     sweeper_once: OnceCell<()>,
@@ -84,8 +83,6 @@ impl RunRegistry {
     ///
     /// The run starts as non-terminal. Call [`note_terminal`](RunRegistry::note_terminal) once
     /// the run ends.
-    // Used by run handlers added in Task 10.
-    #[allow(dead_code)]
     pub fn create(&self, agent_name: String, cancel: CancellationToken) -> (Uuid, Arc<RunHandle>) {
         let id = Uuid::new_v4();
         let handle = Arc::new(RunHandle {
@@ -101,7 +98,7 @@ impl RunRegistry {
     }
 
     /// Look up a run by id. Returns `None` if it has been evicted or never existed.
-    // Used by run handlers added in Task 10.
+    // Consumed by the run-status / replay handlers added in a later task.
     #[allow(dead_code)]
     pub fn get(&self, id: Uuid) -> Option<Arc<RunHandle>> {
         let inner = self.inner.read().expect("RunRegistry RwLock poisoned");
@@ -112,8 +109,6 @@ impl RunRegistry {
     ///
     /// Idempotent: calling more than once for the same id is a no-op after the first call.
     /// `now` is passed explicitly so callers can inject a deterministic clock in tests.
-    // Used by run handlers added in Task 10.
-    #[allow(dead_code)]
     pub fn note_terminal(&self, id: Uuid, now: Instant) {
         // Clone the Arc so we release the map borrow before mutating completion_order.
         let handle = {

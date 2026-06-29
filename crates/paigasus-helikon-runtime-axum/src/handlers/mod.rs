@@ -4,3 +4,4 @@
 //! Handlers are `pub(crate)` and wired into the router by [`crate::server`].
 
 pub(crate) mod agents;
+pub(crate) mod runs;

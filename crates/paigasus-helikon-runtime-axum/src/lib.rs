@@ -9,11 +9,6 @@
 mod error;
 pub use error::{AuthRejection, ServerError};
 
-// `event_log` types are consumed by transport modules added in subsequent tasks (SSE, WebSocket,
-// one-shot handler). The call sites that use EventLog::append / subscribe live in future run
-// handlers (Task 10 onwards); the module is transitively reachable but its methods are unused
-// until then.
-#[allow(dead_code)]
 mod event_log;
 
 mod registry;

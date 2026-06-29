@@ -56,6 +56,9 @@ pub(crate) struct ReadSlice {
     /// Events from `max(cursor, first_seq)` up to the current tail (exclusive).
     pub events: Vec<AgentEvent>,
     /// The sequence number the caller should pass on the next [`EventLog::read_from`] call.
+    // Consumed by the WebSocket cursor-resume transport added in a later task; the
+    // replay-then-tail `subscribe` path computes its own cursor and does not read it.
+    #[allow(dead_code)]
     pub next_cursor: u64,
     /// `true` once the run has ended (a terminal event was appended or `mark_terminal` called).
     pub terminal: bool,

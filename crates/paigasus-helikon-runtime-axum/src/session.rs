@@ -142,19 +142,15 @@ impl SessionProvider for InMemorySessionProvider {
 /// Ensures that at most one request runs at a time for a given session id.
 /// Anonymous requests (`id = None`) get a fresh throwaway lock each time.
 ///
-/// **Known limitation — unbounded growth.** The lock map for `Some(id)` is
-/// never evicted, so a server that observes many distinct session ids over
-/// its lifetime accumulates one entry per id indefinitely. Eviction/cleanup
-/// (e.g. dropping a lock when its session is evicted from the provider) is
-/// deferred to the Task 10 transport handlers that wire this in.
-// `SessionLocks` is consumed by the transport handlers added in subsequent
-// tasks (Task 10). Until those callers land, suppress the dead_code lint.
-#[allow(dead_code)]
+/// **Bounded growth.** Each [`lock_for`](SessionLocks::lock_for) call
+/// opportunistically prunes entries that are held *only* by the map
+/// (`Arc::strong_count == 1`, i.e. no in-flight run is holding the lock), so the
+/// map stays bounded by the number of concurrently-active sessions rather than
+/// by the number of distinct session ids observed over the server's lifetime.
 pub(crate) struct SessionLocks {
     map: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
-#[allow(dead_code)]
 impl SessionLocks {
     /// Create an empty lock map.
     pub(crate) fn new() -> Self {
@@ -166,19 +162,35 @@ impl SessionLocks {
     /// Return the per-session lock for `id`.
     ///
     /// - `Some(id)` — return the shared lock for `id`, creating it on the
-    ///   first call.  Two calls with the same `id` return pointer-equal `Arc`s.
+    ///   first call.  Two calls with the same `id` (while at least one caller
+    ///   still holds the returned `Arc`) return pointer-equal `Arc`s.
     /// - `None` — return a fresh throwaway lock that is not shared with any
     ///   other call.
+    ///
+    /// Before resolving `id`, every entry whose lock is no longer held by any
+    /// active run (`Arc::strong_count == 1`) is pruned, keeping the map bounded.
     pub(crate) fn lock_for(&self, id: Option<&str>) -> Arc<tokio::sync::Mutex<()>> {
         let Some(id) = id else {
             return Arc::new(tokio::sync::Mutex::new(()));
         };
 
         let mut map = self.map.lock().expect("SessionLocks mutex poisoned");
+        // Opportunistic cleanup: drop entries held only by the map (no active
+        // run is keeping the lock alive). An entry for `id` that is currently in
+        // use (count > 1) is preserved, so concurrent same-id requests keep
+        // serialising on a pointer-equal lock.
+        map.retain(|_, lock| Arc::strong_count(lock) > 1);
         Arc::clone(
             map.entry(id.to_owned())
                 .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
         )
+    }
+
+    /// Number of currently-tracked per-session locks. Test-only.
+    #[cfg(test)]
+    #[allow(clippy::len_without_is_empty)]
+    pub(crate) fn len(&self) -> usize {
+        self.map.lock().expect("SessionLocks mutex poisoned").len()
     }
 }
 
@@ -223,5 +235,28 @@ mod tests {
         let l1 = locks.lock_for(None);
         let l2 = locks.lock_for(None);
         assert!(!Arc::ptr_eq(&l1, &l2));
+    }
+
+    /// Once the only `Arc` to a session's lock is dropped, the next `lock_for`
+    /// call prunes the now-unheld entry, keeping the map bounded.
+    #[test]
+    fn session_locks_prune_drops_unheld_entries() {
+        let locks = SessionLocks::new();
+
+        // Take and release the lock Arc for "a": after the scope, only the map
+        // holds it (strong_count == 1).
+        {
+            let _la = locks.lock_for(Some("a"));
+            assert_eq!(locks.len(), 1);
+        }
+
+        // Acquiring a lock for a different id prunes the now-unheld "a" entry.
+        let _lb = locks.lock_for(Some("b"));
+        assert_eq!(locks.len(), 1); // only "b" remains; "a" was pruned
+
+        // Sanity: a still-held entry is NOT pruned by a later call.
+        let _lb_alias = locks.lock_for(Some("b"));
+        assert!(Arc::ptr_eq(&_lb, &_lb_alias));
+        assert_eq!(locks.len(), 1);
     }
 }

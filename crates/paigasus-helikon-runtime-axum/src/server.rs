@@ -2,7 +2,10 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use axum::{routing::get, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use paigasus_helikon_core::{Agent, RunConfig, Runner};
 use paigasus_helikon_runtime_tokio::TokioRunner;
 
@@ -22,29 +25,18 @@ pub(crate) struct AppStateInner<Ctx> {
     /// In-flight and recently-completed run registry.
     pub registry: Arc<RunRegistry>,
     /// Execution backend used by the run handlers.
-    // Used by run handlers added in Task 10.
-    #[allow(dead_code)]
     pub runner: Arc<dyn Runner<Ctx>>,
     /// Mounted agents, keyed by [`paigasus_helikon_core::Agent::name`].
     pub agents: HashMap<String, Arc<dyn Agent<Ctx>>>,
     /// Session store.
-    // Used by run handlers added in Task 10.
-    #[allow(dead_code)]
     pub sessions: Arc<dyn SessionProvider>,
     /// Per-request context builder.
-    // Used by run handlers added in Task 10.
-    #[allow(dead_code)]
     pub context: Arc<dyn ContextProvider<Ctx>>,
     /// Optional request authentication gate.
-    // Used by run handlers added in Task 10.
-    #[allow(dead_code)]
     pub auth: Option<Arc<dyn AuthLayer>>,
     /// Default run configuration applied to every run.
-    // Used by run handlers added in Task 10.
-    #[allow(dead_code)]
     pub run_config: RunConfig,
-    /// Per-session run serialisation locks (consumed by Task 10 transport handlers).
-    #[allow(dead_code)]
+    /// Per-session run serialisation locks.
     pub locks: SessionLocks,
 }
 
@@ -284,6 +276,10 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     pub fn router(&self) -> Router {
         Router::new()
             .route("/agents", get(handlers::agents::list::<Ctx>))
+            .route(
+                "/agents/{name}/runs",
+                post(handlers::runs::create_run::<Ctx>),
+            )
             .with_state(self.state.clone())
     }
 
