@@ -24,3 +24,6 @@ pub use session::{InMemorySessionProvider, SessionProvider};
 
 mod context;
 pub use context::{ContextProvider, DefaultContextProvider};
+
+mod auth;
+pub use auth::AuthLayer;
