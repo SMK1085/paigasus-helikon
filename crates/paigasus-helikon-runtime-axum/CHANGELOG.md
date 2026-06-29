@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- *(runtime-axum)* SMA-331 initial real implementation: HTTP/SSE/WebSocket AgentServer runtime ([#128](https://github.com/SMK1085/paigasus-helikon/pull/128))
+- *(runtime-axum)* SMA-331 initial real implementation: HTTP/SSE/WebSocket AgentServer runtime ([#129](https://github.com/SMK1085/paigasus-helikon/pull/129))
   - `AgentServer<Ctx>` builder mounting `Arc<dyn Agent<Ctx>>`s; default runner `TokioRunner`
   - `POST /agents/{name}/runs` — one-shot (blocks, returns aggregated `RunResponse` + `X-Run-Id` header)
   - `POST /agents/{name}/runs?stream=sse` — SSE live stream of `AgentEvent` frames
