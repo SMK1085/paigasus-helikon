@@ -6,4 +6,5 @@
 //! See the crate `README.md` for a runnable example.
 #![forbid(unsafe_code)]
 
-// Modules are added by subsequent tasks.
+mod error;
+pub use error::{AuthRejection, ServerError};
