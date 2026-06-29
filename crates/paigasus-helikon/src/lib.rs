@@ -60,6 +60,14 @@ pub use paigasus_helikon_runtime_agentcore as runtime_agentcore;
 #[cfg(feature = "sessions-sqlite")]
 pub use paigasus_helikon_sessions_sqlite as sessions_sqlite;
 
+/// PostgreSQL-backed `Session` backend. Enabled via the `sessions-postgres` feature.
+#[cfg(feature = "sessions-postgres")]
+pub use paigasus_helikon_sessions_postgres as sessions_postgres;
+
+/// Redis-backed `Session` backend. Enabled via the `sessions-redis` feature.
+#[cfg(feature = "sessions-redis")]
+pub use paigasus_helikon_sessions_redis as sessions_redis;
+
 /// Bedrock provider (Converse model). Enabled via the `bedrock` feature.
 /// Distinct from `runtime-agentcore` (the Bedrock AgentCore runtime).
 #[cfg(feature = "bedrock")]

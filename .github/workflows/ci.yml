@@ -125,3 +125,53 @@ jobs:
         with:
           tool: convco@0.6.3
       - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD
+
+  sessions-it:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      # dorny/paths-filter v4.0.1
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d
+        id: filter
+        with:
+          filters: |
+            sessions:
+              - 'Cargo.toml'
+              - 'crates/paigasus-helikon-sessions-**'
+              - 'crates/paigasus-helikon-core/src/session.rs'
+              - '.github/workflows/ci.yml'
+              - 'Cargo.lock'
+      - if: steps.filter.outputs.sessions == 'false'
+        run: echo "No session-related changes; nothing to run."
+      - if: steps.filter.outputs.sessions == 'true'
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
+        with:
+          toolchain: stable
+      - if: steps.filter.outputs.sessions == 'true'
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+      - if: steps.filter.outputs.sessions == 'true'
+        name: Start Postgres + Redis
+        run: |
+          # Digest-pinned for reproducibility (postgres:17 / redis:7 at resolve time).
+          docker run -d --name pg  -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17@sha256:5c855ad7b85e68e48a62f34662853f38b57c1c1d80f3a927ab58034fd6d31c5e
+          docker run -d --name rds -p 6379:6379 redis:7@sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50
+          # Probe inside the containers (their own clients) — redis-tools/postgres-client
+          # are not reliably preinstalled on the runner host.
+          for i in $(seq 1 30); do docker exec pg pg_isready -U postgres && break; sleep 2; done
+          docker exec pg pg_isready -U postgres || { echo "Postgres failed to start"; docker logs pg; exit 1; }
+          for i in $(seq 1 30); do docker exec rds redis-cli ping && break; sleep 2; done
+          docker exec rds redis-cli ping || { echo "Redis failed to start"; docker logs rds; exit 1; }
+      - if: steps.filter.outputs.sessions == 'true'
+        name: Run session integration suite (retry)
+        env:
+          HELIKON_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          HELIKON_TEST_REDIS_URL: redis://localhost:6379
+        run: |
+          for attempt in 1 2 3; do
+            cargo test -p paigasus-helikon-sessions-postgres -p paigasus-helikon-sessions-redis && exit 0
+            echo "attempt $attempt failed; retrying in 5s"; sleep 5
+          done
+          exit 1
