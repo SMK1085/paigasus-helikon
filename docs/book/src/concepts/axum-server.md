@@ -43,7 +43,7 @@ The server exposes four routes (six endpoint modes) under a flat prefix (no conf
 | `POST` | `/agents/{name}/runs` | Start a run — one-shot (default), SSE (`?stream=sse`), or async (`?mode=async`) |
 | `GET` | `/agents/{name}/runs/{id}/events` | Replay a run's event log over WebSocket |
 | `GET` | `/agents` | List all registered agents and their descriptions |
-| `GET` | `/openapi.json` | OpenAPI 3.0 schema (requires the `openapi` feature, enabled by default) |
+| `GET` | `/openapi.json` | OpenAPI 3.1 schema (requires the `openapi` feature, enabled by default) |
 
 ### Response shapes for `POST /agents/{name}/runs`
 
@@ -148,7 +148,7 @@ The `DefaultContextProvider` leaves all `RunContext` settings at their core defa
 
 ## The `openapi` feature
 
-The `openapi` feature (enabled by default) activates the `GET /openapi.json` endpoint, which serves an OpenAPI 3.0 schema generated with [utoipa](https://docs.rs/utoipa). Disable it if you do not need the schema endpoint:
+The `openapi` feature (enabled by default) activates the `GET /openapi.json` endpoint, which serves an OpenAPI 3.1 schema generated with [utoipa](https://docs.rs/utoipa). Disable it if you do not need the schema endpoint:
 
 ```sh
 cargo add paigasus-helikon-runtime-axum --no-default-features

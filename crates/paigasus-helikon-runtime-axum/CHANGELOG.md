@@ -12,12 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - *(runtime-axum)* SMA-331 initial real implementation: HTTP/SSE/WebSocket AgentServer runtime ([#128](https://github.com/SMK1085/paigasus-helikon/pull/128))
-  - One-shot POST `/agents/{id}/run`, SSE streaming `/agents/{id}/run/stream`, and async `/agents/{id}/run/async` endpoints
-  - WebSocket replay via `/agents/{id}/runs/{run_id}/ws`
-  - `GET /agents` registry listing
-  - OpenAPI schema generation behind the `openapi` feature (backed by utoipa)
-  - `SessionProvider`, `RunContextProvider`, and `AuthProvider` traits for pluggable backends
-  - Replayable runs with configurable TTL and retention count
+  - `AgentServer<Ctx>` builder mounting `Arc<dyn Agent<Ctx>>`s; default runner `TokioRunner`
+  - `POST /agents/{name}/runs` — one-shot (blocks, returns aggregated `RunResponse` + `X-Run-Id` header)
+  - `POST /agents/{name}/runs?stream=sse` — SSE live stream of `AgentEvent` frames
+  - `POST /agents/{name}/runs?mode=async` — `202 Accepted` + `run_id`, detached background run
+  - `GET /agents/{name}/runs/{id}/events` — WebSocket replay from start then live-tail
+  - `GET /agents` — list all mounted agents and their descriptions
+  - `GET /openapi.json` — OpenAPI 3.1 schema (behind the default-on `openapi` feature, backed by utoipa)
+  - Replayable runs: in-memory run registry with bounded per-run event log, configurable TTL and count-cap retention
+  - `X-Session-Id` session affinity with per-session run serialisation; pluggable `SessionProvider` (default bounded in-memory `InMemorySessionProvider` backed by `MemorySession`)
+  - Pluggable `ContextProvider` trait (convenience `.with_default_context()` for `Ctx: Default`; the security seam for permission mode and approval handler)
+  - Optional `AuthLayer` middleware trait (no built-in implementation; omitting it admits all requests)
+  - Cancellation: one-shot and SSE runs cancel on client disconnect; async runs are detached and outlive the connection
 
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-runtime-axum-v0.0.0) - 2026-05-17
 

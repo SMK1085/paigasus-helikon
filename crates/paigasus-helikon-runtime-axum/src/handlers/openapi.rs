@@ -61,7 +61,7 @@ async fn _create_run_doc() {}
         ("id" = String, Path, description = "Run identifier (UUID)")
     ),
     responses(
-        (status = 200, description = "Server-Sent Events stream of AgentEvents"),
+        (status = 101, description = "WebSocket upgrade — replays the run's event log from the start then live-tails new events until the run is terminal"),
         (status = 404, description = "Run not found"),
     ),
     tag = "runs"
