@@ -23,6 +23,8 @@ paigasus-helikon-runtime-axum        = { workspace = true, optional = true }
 paigasus-helikon-runtime-temporal    = { workspace = true, optional = true }
 paigasus-helikon-runtime-agentcore   = { workspace = true, optional = true }
 paigasus-helikon-sessions-sqlite     = { workspace = true, optional = true }
+paigasus-helikon-sessions-postgres   = { workspace = true, optional = true }
+paigasus-helikon-sessions-redis      = { workspace = true, optional = true }
 paigasus-helikon-evals               = { workspace = true, optional = true }
 paigasus-helikon-providers-bedrock   = { workspace = true, optional = true }
 paigasus-helikon-providers-gemini    = { workspace = true, optional = true }
@@ -44,6 +46,8 @@ runtime-axum       = ["dep:paigasus-helikon-runtime-axum"]
 runtime-temporal   = ["dep:paigasus-helikon-runtime-temporal"]
 runtime-agentcore  = ["dep:paigasus-helikon-runtime-agentcore"]
 sessions-sqlite    = ["dep:paigasus-helikon-sessions-sqlite"]
+sessions-postgres  = ["dep:paigasus-helikon-sessions-postgres"]
+sessions-redis     = ["dep:paigasus-helikon-sessions-redis"]
 bedrock            = ["dep:paigasus-helikon-providers-bedrock"]
 gemini             = ["dep:paigasus-helikon-providers-gemini"]
 
