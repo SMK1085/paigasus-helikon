@@ -157,10 +157,12 @@ jobs:
           # Digest-pinned for reproducibility (postgres:17 / redis:7 at resolve time).
           docker run -d --name pg  -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17@sha256:5c855ad7b85e68e48a62f34662853f38b57c1c1d80f3a927ab58034fd6d31c5e
           docker run -d --name rds -p 6379:6379 redis:7@sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50
-          for i in $(seq 1 30); do pg_isready -h localhost -p 5432 && break; sleep 2; done
-          pg_isready -h localhost -p 5432 || { echo "Postgres failed to start"; docker logs pg; exit 1; }
-          for i in $(seq 1 30); do redis-cli -h localhost ping && break; sleep 2; done
-          redis-cli -h localhost ping || { echo "Redis failed to start"; docker logs rds; exit 1; }
+          # Probe inside the containers (their own clients) — redis-tools/postgres-client
+          # are not reliably preinstalled on the runner host.
+          for i in $(seq 1 30); do docker exec pg pg_isready -U postgres && break; sleep 2; done
+          docker exec pg pg_isready -U postgres || { echo "Postgres failed to start"; docker logs pg; exit 1; }
+          for i in $(seq 1 30); do docker exec rds redis-cli ping && break; sleep 2; done
+          docker exec rds redis-cli ping || { echo "Redis failed to start"; docker logs rds; exit 1; }
       - if: steps.filter.outputs.sessions == 'true'
         name: Run session integration suite (retry)
         env:

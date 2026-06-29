@@ -5,7 +5,7 @@
 //! (variant tag), `payload` (JSON), and `ts` (nanoseconds since Unix epoch as
 //! a decimal string).
 //!
-//! Appends use an atomic Lua script ([`APPEND_SCRIPT`]) to compute contiguous
+//! Appends use an atomic Lua script (`APPEND_SCRIPT`) to compute contiguous
 //! sequence numbers and `XADD` all events in one round-trip. Concurrent writers
 //! on the same session key race through Redis's single-threaded command loop —
 //! no two batches can interleave, so sequences are gapless and duplicate-free.
