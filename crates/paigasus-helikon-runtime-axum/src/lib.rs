@@ -13,3 +13,8 @@ pub use error::{AuthRejection, ServerError};
 // one-shot handler). Until those callers land, suppress the dead_code lint on this module.
 #[allow(dead_code)]
 mod event_log;
+
+// `registry` types are consumed by route handlers added in subsequent tasks.
+// Until those callers land, suppress the dead_code lint on this module.
+#[allow(dead_code)]
+mod registry;
