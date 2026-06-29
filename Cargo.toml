@@ -92,21 +92,21 @@ aws-smithy-runtime     = { version = "1.11.3", default-features = false, feature
 aws-smithy-http-client = { version = "1.1.13", default-features = false, features = ["rustls-aws-lc"] }
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.11" }
-paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.11" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.12" }
+paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.12" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.3" }
-paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.15" }
-paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.1.16" }
-paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp", version = "0.1.11" }
-paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools", version = "0.2.8" }
-paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio", version = "0.1.15" }
+paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.16" }
+paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.1.17" }
+paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp", version = "0.1.12" }
+paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools", version = "0.2.9" }
+paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio", version = "0.1.16" }
 paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum",        version = "0.0.0" }
 paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.0.0" }
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
-paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.17" }
-paigasus-helikon-providers-bedrock   = { path = "crates/paigasus-helikon-providers-bedrock", version = "0.1.0" }
-paigasus-helikon-providers-gemini    = { path = "crates/paigasus-helikon-providers-gemini", version = "0.1.0" }
+paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.18" }
+paigasus-helikon-providers-bedrock   = { path = "crates/paigasus-helikon-providers-bedrock", version = "0.1.1" }
+paigasus-helikon-providers-gemini    = { path = "crates/paigasus-helikon-providers-gemini", version = "0.1.1" }
 
 [workspace.lints.rust]
 missing_docs = "warn"

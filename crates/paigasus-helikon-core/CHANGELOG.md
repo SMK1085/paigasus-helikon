@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.11...paigasus-helikon-core-v0.5.12) - 2026-06-29
+
+### Added
+
+- *(core)* SMA-330 add CompactingSession, token counting, and shared session conformance suite ([#124](https://github.com/SMK1085/paigasus-helikon/pull/124))
+
 ### Added
 
 - *(core)* SMA-410 add `ToolSource` trait and `ToolSourceError`; `LlmAgentBuilder` gains `tool_source` / `tool_sources` / `shared_tool_source` / `shared_tool_sources` / `mcp_servers` and an async `build_resolved` finalizer
