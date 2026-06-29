@@ -151,8 +151,11 @@ the one-time migration from the per-session constructor for high-throughput path
 Concurrent writers are serialized per-session via `pg_advisory_xact_lock` —
 each `append` takes an advisory lock keyed on `hashtext(session_id)` inside a
 single transaction, then computes `COALESCE(MAX(sequence), -1) + 1` to allocate
-contiguous sequence numbers. Writers to **different** sessions never block each
-other.
+contiguous sequence numbers. Writers to different sessions **usually** do not
+block each other; `hashtext` produces a 32-bit key, so two distinct session IDs
+can occasionally collide into the same advisory-lock slot — correctness is
+preserved, but throughput may be affected (`hashtextextended` is the migration
+path if collisions prove material in practice).
 
 **TLS:** the crate's `sqlx` dependency uses `tls-rustls-aws-lc-rs`, matching the
 workspace-wide `CryptoProvider`. A ring-backed TLS variant would cause a

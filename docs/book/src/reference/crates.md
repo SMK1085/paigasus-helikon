@@ -1,6 +1,6 @@
 # Crate overview
 
-The workspace is **18 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
+The workspace is **19 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
 
 For orientation — how to pick crates and add them to your `Cargo.toml` — see [workspace layout](../getting-started/workspace-layout.md). For the rendered rustdoc, see [API docs](./api-docs.md).
 
@@ -36,6 +36,7 @@ Versions below are **current as of 2026-06-16** and move every release — read 
 | `paigasus-helikon-runtime-temporal` | Temporal-hosted runtime | stub — not yet implemented | `0.0.0` |
 | `paigasus-helikon-runtime-agentcore` | AgentCore-hosted runtime | stub — not yet implemented | `0.0.0` |
 | `paigasus-helikon-cli` | `helikon` / `paigasus-helikon` CLI binaries | binary-only — never published | `0.0.0` |
+| `paigasus-helikon-sessions-testkit` | Shared `Session` conformance test harness (internal — never published) | internal — `publish = false` | `0.0.0` |
 
 The four stubs are pre-published name-claims at `0.0.0` with `publish = false`; their facade re-export exists but the crate is empty. Do not depend on them yet.
 
