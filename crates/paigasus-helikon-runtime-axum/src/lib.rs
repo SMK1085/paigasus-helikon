@@ -21,3 +21,6 @@ mod registry;
 
 mod session;
 pub use session::{InMemorySessionProvider, SessionProvider};
+
+mod context;
+pub use context::{ContextProvider, DefaultContextProvider};
