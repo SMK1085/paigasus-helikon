@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.13](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.12...paigasus-helikon-v0.4.13) - 2026-06-29
+
+### Added
+
+- *(sessions)* SMA-330 add Postgres and Redis production session backends ([#126](https://github.com/SMK1085/paigasus-helikon/pull/126))
+
 ## [0.4.12](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.11...paigasus-helikon-v0.4.12) - 2026-06-29
 
 ### Other
