@@ -98,3 +98,26 @@ pub fn parse_sse(text: &str) -> Vec<AgentEvent> {
         .map(|data| serde_json::from_str::<AgentEvent>(data).expect("valid AgentEvent JSON"))
         .collect()
 }
+
+/// Create an async run via `POST /agents/{name}/runs?mode=async` and return the
+/// run id as a `String`.
+pub async fn create_async_run(addr: std::net::SocketAddr, agent_name: &str) -> String {
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/agents/{agent_name}/runs?mode=async"))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"test"}"#)
+        .send()
+        .await
+        .expect("async run request");
+    assert_eq!(resp.status(), 202, "expected 202 Accepted");
+    let v: serde_json::Value = resp.json().await.expect("async run response body");
+    v["run_id"]
+        .as_str()
+        .expect("run_id field in response")
+        .to_owned()
+}
+
+/// Parse a JSON text string (received from a WebSocket frame) into an [`AgentEvent`].
+pub fn parse_event(text: &str) -> AgentEvent {
+    serde_json::from_str(text).expect("valid AgentEvent JSON")
+}

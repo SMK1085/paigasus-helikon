@@ -19,9 +19,6 @@ use uuid::Uuid;
 /// Everything the server needs to track a single run.
 pub(crate) struct RunHandle {
     /// Name of the agent that owns this run.
-    // Recorded for the run-status / replay handlers added in a later task; not
-    // yet read on the run-creation path.
-    #[allow(dead_code)]
     pub agent_name: String,
     /// Append-only, bounded event log for this run.
     pub log: Arc<EventLog>,

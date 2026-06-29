@@ -280,6 +280,10 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
                 "/agents/{name}/runs",
                 post(handlers::runs::create_run::<Ctx>),
             )
+            .route(
+                "/agents/{name}/runs/{id}/events",
+                get(handlers::events::events::<Ctx>),
+            )
             .with_state(self.state.clone())
     }
 
