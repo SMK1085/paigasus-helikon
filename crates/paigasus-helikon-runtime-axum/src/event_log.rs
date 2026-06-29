@@ -185,12 +185,19 @@ impl EventLog {
 
                         // Step 2: Try to drain one event at the current cursor.
                         let slice = log.read_from(cursor);
+                        // Capture first_seq before consuming slice.events via into_iter().
+                        let first_seq = slice.first_seq;
 
                         if let Some(ev) = slice.events.into_iter().next() {
                             // Fast path: event available. `log` drops when this async block
                             // exits; `notif` (which borrows `log.notify`) drops before `log`
                             // (LIFO) — no borrow conflict.
-                            let next_cursor = cursor + 1;
+                            //
+                            // Advance past any eviction gap in one step: if the ring evicted
+                            // events past `cursor`, `first_seq` > `cursor` and the naïve
+                            // `cursor + 1` would still be below `first_seq`, causing the same
+                            // event to be re-emitted until the cursor walked up to `first_seq`.
+                            let next_cursor = cursor.max(first_seq) + 1;
                             let terminal = is_terminal(&ev);
                             return Some((ev, (next_cursor, terminal)));
                         }
@@ -266,6 +273,25 @@ mod tests {
             got.push(ev);
         }
         assert_eq!(got.len(), 3); // a (replay) + b + done, then stream ends
+    }
+
+    /// Verify that `subscribe` skips the eviction gap in one step when the ring advances past the
+    /// subscriber's cursor.
+    ///
+    /// Without the `cursor.max(first_seq)` fix the subscriber would repeatedly re-read and
+    /// re-emit the first retained event (`c`) until its internal cursor walked up from 0 to
+    /// `first_seq`, producing duplicate emissions.
+    #[tokio::test]
+    async fn subscribe_skips_gap_on_ring_eviction() {
+        let log = Arc::new(EventLog::new(2));
+        log.append(delta("a"));
+        log.append(delta("b"));
+        log.append(delta("c")); // ring now [b, c], first_seq = 1
+        let sub = log.subscribe(0); // under-range cursor
+        log.append(done()); // ring now [c, done], first_seq = 2
+        let got: Vec<_> = sub.collect().await;
+        // c (first retained) + done — each exactly once, no duplicates
+        assert_eq!(got.len(), 2);
     }
 
     /// Verify that a fast append between subscribe creation and first poll is NOT lost.
