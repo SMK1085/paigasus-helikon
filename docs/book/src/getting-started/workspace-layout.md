@@ -43,14 +43,18 @@ macro invocation `tools![...]` versus a path `tools::SomeTool`. Be explicit abou
 
 ## Published vs stub crates
 
-Ten crates carry real implementations and are published on crates.io / docs.rs:
+Fourteen crates carry real implementations and are published on crates.io / docs.rs:
 
 - `paigasus-helikon-core` — the dependency root (traits, agent loop, carrier types)
 - `paigasus-helikon` — the facade
 - `paigasus-helikon-macros` — `#[tool]` + `tools!`
 - `paigasus-helikon-providers-openai`
 - `paigasus-helikon-providers-anthropic`
+- `paigasus-helikon-providers-bedrock`
+- `paigasus-helikon-providers-gemini`
 - `paigasus-helikon-sessions-sqlite`
+- `paigasus-helikon-sessions-postgres`
+- `paigasus-helikon-sessions-redis`
 - `paigasus-helikon-runtime-tokio`
 - `paigasus-helikon-runtime-axum` — self-hosted HTTP/SSE/WebSocket agent server (see [Axum Server Runtime](../concepts/axum-server.md))
 - `paigasus-helikon-mcp`

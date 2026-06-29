@@ -15,7 +15,7 @@ The single-facade crate `paigasus-helikon` re-exports `paigasus-helikon-core` un
 - **Runtime.** `paigasus_helikon::runtime_tokio` (feature `runtime-tokio`) is the default ephemeral Tokio runner. `paigasus_helikon::runtime_axum` (feature `runtime-axum`) is the self-hosted HTTP/SSE/WebSocket agent server built on axum — see [Axum Server Runtime](concepts/axum-server.md).
 - **Multi-agent and MCP.** `Handoff::to(..)` wires triage-style delegation between agents; `paigasus_helikon::mcp` (feature `mcp`) is an rmcp-based MCP client/server wrapper. Guardrails, hooks, and permissions hang off the `HookRegistry` carried in every `RunContext`.
 
-Ten crates are published to [crates.io](https://crates.io/crates/paigasus-helikon) with rustdoc on [docs.rs](https://docs.rs/paigasus-helikon).
+Fourteen crates are published to [crates.io](https://crates.io/crates/paigasus-helikon) with rustdoc on [docs.rs](https://docs.rs/paigasus-helikon).
 
 A minimal run:
 

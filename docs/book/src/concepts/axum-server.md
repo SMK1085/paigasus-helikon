@@ -4,16 +4,14 @@
 
 Enable it via the `runtime-axum` facade feature:
 
-```toml
-[dependencies]
-paigasus-helikon = { version = "0.1", features = ["openai", "runtime-axum"] }
+```sh
+cargo add paigasus-helikon --features openai,runtime-axum
 ```
 
 Or depend on the crate directly:
 
-```toml
-[dependencies]
-paigasus-helikon-runtime-axum = "0.1"
+```sh
+cargo add paigasus-helikon-runtime-axum
 ```
 
 ## Quick start
@@ -38,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## HTTP endpoints
 
-The server exposes six endpoints under a flat prefix (no configurable base path):
+The server exposes four routes (six endpoint modes) under a flat prefix (no configurable base path):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -152,8 +150,8 @@ The `DefaultContextProvider` leaves all `RunContext` settings at their core defa
 
 The `openapi` feature (enabled by default) activates the `GET /openapi.json` endpoint, which serves an OpenAPI 3.0 schema generated with [utoipa](https://docs.rs/utoipa). Disable it if you do not need the schema endpoint:
 
-```toml
-paigasus-helikon-runtime-axum = { version = "0.1", default-features = false }
+```sh
+cargo add paigasus-helikon-runtime-axum --no-default-features
 ```
 
 ## Embedding in a larger router
