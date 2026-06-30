@@ -3,6 +3,9 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use axum::{
+    extract::{Request, State},
+    middleware::Next,
+    response::Response,
     routing::{get, post},
     Router,
 };
@@ -195,6 +198,15 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             )));
         }
 
+        // Reject a zero-capacity in-memory session store *before* constructing
+        // it: `InMemorySessionProvider::new(0)` asserts and would panic. A
+        // custom session provider sidesteps this since `max_sessions` is unused.
+        if self.sessions.is_none() && self.max_sessions == 0 {
+            return Err(ServerError::BadRequest(
+                "max_sessions must be greater than 0".to_owned(),
+            ));
+        }
+
         let context = self.context.ok_or_else(|| {
             ServerError::Internal(
                 "no context provider set; call `.context_provider(…)` or \
@@ -273,6 +285,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     ///
     /// Pure: spawns nothing.  Suitable for embedding into a larger router or for
     /// testing with axum's `Router::oneshot`.
+    ///
+    /// When an [`AuthLayer`] is configured the whole router is wrapped in a
+    /// request-level authentication middleware, so **every** route — including
+    /// `GET /agents`, `GET /openapi.json`, and the WebSocket events endpoint —
+    /// is gated, not just the run-creation handler.
     pub fn router(&self) -> Router {
         let router = Router::new()
             .route("/agents", get(handlers::agents::list::<Ctx>))
@@ -288,7 +305,18 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
         #[cfg(feature = "openapi")]
         let router = router.route("/openapi.json", get(handlers::openapi::openapi_json::<Ctx>));
 
-        router.with_state(self.state.clone())
+        let router = router.with_state(self.state.clone());
+
+        // Gate every route behind the auth layer (if configured). The middleware
+        // carries its own state clone, so it is applied after `with_state`.
+        if self.state.auth.is_some() {
+            router.layer(axum::middleware::from_fn_with_state(
+                self.state.clone(),
+                auth_middleware::<Ctx>,
+            ))
+        } else {
+            router
+        }
     }
 
     /// Start serving on `listener`.
@@ -321,5 +349,30 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
             .await
             .map_err(|e| ServerError::Internal(e.to_string()))?;
         self.serve_with_listener(listener).await
+    }
+}
+
+// ── auth middleware ─────────────────────────────────────────────────────────────
+
+/// Router-level authentication gate.
+///
+/// Installed by [`AgentServer::router`] only when an [`AuthLayer`] is configured.
+/// Runs before any route handler, so every endpoint is authenticated uniformly.
+/// On success the request is reassembled from its parts so that any identity the
+/// auth layer inserted into `parts.extensions` flows downstream to the
+/// [`ContextProvider`].
+async fn auth_middleware<Ctx: Send + Sync + 'static>(
+    State(state): State<AppState<Ctx>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, ServerError> {
+    if let Some(auth) = &state.auth {
+        let (mut parts, body) = req.into_parts();
+        auth.authenticate(&mut parts).await?;
+        // Reassemble so identity values placed into `parts.extensions` survive.
+        let req = Request::from_parts(parts, body);
+        Ok(next.run(req).await)
+    } else {
+        Ok(next.run(req).await)
     }
 }

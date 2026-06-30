@@ -109,6 +109,9 @@ async fn handle_socket(mut socket: WebSocket, handle: Arc<RunHandle>) {
                 match msg {
                     // Client closed the connection or a network error occurred.
                     None | Some(Err(_)) => break,
+                    // A graceful WebSocket close frame: stop sending immediately
+                    // instead of waiting for the next send to fail.
+                    Some(Ok(Message::Close(_))) => break,
                     // Ignore inbound data, ping, and pong frames.
                     Some(Ok(_)) => {}
                 }

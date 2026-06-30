@@ -105,22 +105,20 @@ impl RunRegistry {
     /// Idempotent: calling more than once for the same id is a no-op after the first call.
     /// `now` is passed explicitly so callers can inject a deterministic clock in tests.
     pub fn note_terminal(&self, id: Uuid, now: Instant) {
-        // Clone the Arc so we release the map borrow before mutating completion_order.
-        let handle = {
-            let inner = self.inner.read().expect("RunRegistry RwLock poisoned");
-            inner.runs.get(&id).cloned()
+        // Stamp `terminal_at` and enqueue into `completion_order` in ONE critical
+        // section so a concurrent `sweep` cannot observe a half-applied state
+        // (stamped-but-not-enqueued, or vice versa). Lock order is `inner` →
+        // `terminal_at`, matching `sweep`, so the two never deadlock.
+        let mut inner = self.inner.write().expect("RunRegistry RwLock poisoned");
+        let Some(handle) = inner.runs.get(&id).cloned() else {
+            return;
         };
-        let Some(handle) = handle else { return };
-
         let mut t = handle
             .terminal_at
             .lock()
             .expect("terminal_at mutex poisoned");
         if t.is_none() {
             *t = Some(now);
-            drop(t);
-            // Now push into completion_order (requires write lock).
-            let mut inner = self.inner.write().expect("RunRegistry RwLock poisoned");
             inner.completion_order.push_back(id);
         }
     }

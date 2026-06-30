@@ -22,12 +22,19 @@ async fn ws_replays_completed_run_then_closes() {
         .await
         .expect("WS handshake should succeed for a known run");
 
-    let mut got = Vec::new();
-    while let Some(Ok(msg)) = ws.next().await {
-        if msg.is_text() {
-            got.push(support::parse_event(msg.to_text().unwrap()));
+    // Bound the collection so a regression (e.g. a missing Close frame) fails
+    // fast instead of hanging the test indefinitely.
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut got = Vec::new();
+        while let Some(Ok(msg)) = ws.next().await {
+            if msg.is_text() {
+                got.push(support::parse_event(msg.to_text().unwrap()));
+            }
         }
-    }
+        got
+    })
+    .await
+    .expect("WS stream must complete within 5s, not hang");
 
     // Full event sequence must be replayed, event-for-event.
     assert_eq!(
@@ -42,11 +49,21 @@ async fn ws_replays_completed_run_then_closes() {
 async fn ws_unknown_id_404_before_upgrade() {
     let addr = support::spawn_echo_server().await;
     let url = format!("ws://{addr}/agents/echo/runs/{}/events", uuid::Uuid::nil());
-    let result = tokio_tungstenite::connect_async(url).await;
-    assert!(
-        result.is_err(),
-        "handshake should fail: server returns 404, not 101"
-    );
+    let err = tokio_tungstenite::connect_async(url)
+        .await
+        .expect_err("handshake should fail: server returns 404, not 101");
+    assert_handshake_404(err);
+}
+
+/// Assert a failed WebSocket handshake was specifically an HTTP 404, not some
+/// other transport-level failure.
+fn assert_handshake_404(err: tokio_tungstenite::tungstenite::Error) {
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => {
+            assert_eq!(resp.status(), 404, "handshake must fail with HTTP 404");
+        }
+        other => panic!("expected an HTTP 404 handshake failure, got: {other:?}"),
+    }
 }
 
 /// A WebSocket connection that targets the correct run id but the wrong agent
@@ -57,9 +74,8 @@ async fn ws_name_mismatch_404_before_upgrade() {
     let run_id = support::create_async_run(addr, "echo").await;
     // The run exists (agent "echo"), but the URL references a different agent.
     let url = format!("ws://{addr}/agents/other/runs/{run_id}/events");
-    let result = tokio_tungstenite::connect_async(url).await;
-    assert!(
-        result.is_err(),
-        "agent-name mismatch should fail the WS handshake (server returns 404, not 101)"
-    );
+    let err = tokio_tungstenite::connect_async(url)
+        .await
+        .expect_err("agent-name mismatch should fail the WS handshake (404, not 101)");
+    assert_handshake_404(err);
 }

@@ -62,6 +62,49 @@ async fn start_error_returns_500_not_hang() {
     );
 }
 
+/// A writer task whose event stream panics mid-run must still record terminal
+/// state (via the `TerminalGuard` drop), so a one-shot request returns instead
+/// of hanging forever.
+#[tokio::test]
+async fn panicking_stream_still_returns_not_hangs() {
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .runner(Arc::new(support::PanicStreamRunner))
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "echo".into(),
+            events: vec![],
+        }))
+        .build()
+        .expect("server builds");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        server
+            .serve_with_listener(listener)
+            .await
+            .expect("serve loop");
+    });
+
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        reqwest::Client::new()
+            .post(format!("http://{addr}/agents/echo/runs"))
+            .header("content-type", "application/json")
+            .body(r#"{"input":"test"}"#)
+            .send(),
+    )
+    .await
+    .expect("request must complete within 5s, not hang on a panicking stream")
+    .expect("HTTP request succeeded");
+
+    // The run panicked before any terminal event, so the aggregated envelope
+    // defaults to a 200 with status=failed; the key property is that it RETURNED.
+    assert_eq!(resp.status(), 200);
+}
+
 /// Dropping the HTTP connection that created an async run must not cancel the
 /// run. The run continues independently and is fully replayable via WebSocket.
 #[tokio::test]
@@ -82,12 +125,18 @@ async fn async_run_survives_creator_disconnect() {
         .await
         .expect("WS handshake succeeds for a completed async run");
 
-    let mut got = Vec::new();
-    while let Some(Ok(msg)) = ws.next().await {
-        if msg.is_text() {
-            got.push(support::parse_event(msg.to_text().unwrap()));
+    // Bound the drain so a regression fails fast instead of hanging the suite.
+    let got = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut got = Vec::new();
+        while let Some(Ok(msg)) = ws.next().await {
+            if msg.is_text() {
+                got.push(support::parse_event(msg.to_text().unwrap()));
+            }
         }
-    }
+        got
+    })
+    .await
+    .expect("WS drain must complete within 5s, not hang");
 
     assert_eq!(
         serde_json::to_value(&got).unwrap(),
@@ -137,8 +186,13 @@ async fn concurrent_same_session_serialize() {
             .send()
     };
 
-    // Fire both requests truly concurrently and wait for both responses.
-    let (r1, r2) = tokio::join!(make_req(), make_req());
+    // Fire both requests truly concurrently and wait for both responses. The
+    // timeout fails fast if a serialization regression deadlocks the pair.
+    let (r1, r2) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(make_req(), make_req())
+    })
+    .await
+    .expect("both same-session requests must complete within 10s");
     assert_eq!(r1.unwrap().status(), 200, "first run should succeed");
     assert_eq!(r2.unwrap().status(), 200, "second run should succeed");
 

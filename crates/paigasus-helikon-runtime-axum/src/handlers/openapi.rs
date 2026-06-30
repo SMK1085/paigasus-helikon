@@ -40,12 +40,24 @@ async fn _list_agents_doc() {}
     post,
     path = "/agents/{name}/runs",
     params(
-        ("name" = String, Path, description = "Machine-readable name of the target agent")
+        ("name" = String, Path, description = "Machine-readable name of the target agent"),
+        ("stream" = Option<String>, Query,
+         description = "Set to `sse` to stream events as Server-Sent Events instead of \
+                        returning one aggregated result. Mutually exclusive with `mode=async`."),
+        ("mode" = Option<String>, Query,
+         description = "Set to `async` to detach the run and return `202 Accepted` immediately \
+                        with the run id. Mutually exclusive with `stream=sse`."),
     ),
     responses(
-        (status = 200, description = "Completed synchronous run"),
+        // `RunResponse` is intentionally not a `ToSchema`, so the 200 body is
+        // documented by description only (no `body = …`).
+        (status = 200, description = "Completed synchronous (one-shot) run — a `RunResponse` JSON envelope"),
         (status = 202, description = "Run accepted (async mode)", body = AsyncAccepted),
+        (status = 400, description = "Invalid or conflicting `stream`/`mode` selector, malformed JSON body, or a non-JSON content type"),
+        (status = 401, description = "Authentication required or credentials rejected"),
+        (status = 403, description = "Authenticated but not permitted"),
         (status = 404, description = "No agent with the given name is registered"),
+        (status = 500, description = "The run failed to start before emitting any event"),
     ),
     tag = "runs"
 )]
@@ -62,6 +74,7 @@ async fn _create_run_doc() {}
     ),
     responses(
         (status = 101, description = "WebSocket upgrade — replays the run's event log from the start then live-tails new events until the run is terminal"),
+        (status = 400, description = "The run id path segment is not a valid UUID"),
         (status = 404, description = "Run not found"),
     ),
     tag = "runs"

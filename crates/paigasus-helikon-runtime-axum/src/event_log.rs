@@ -68,7 +68,13 @@ impl EventLog {
     /// Create a new log that retains at most `max_events` events.
     ///
     /// When the log is full, the oldest event is evicted before each new append.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_events` is zero: a zero-capacity ring would evict every
+    /// event — including the terminal one — leaving subscribers waiting forever.
     pub fn new(max_events: usize) -> Self {
+        assert!(max_events > 0, "max_events must be > 0");
         Self {
             inner: Mutex::new(EventLogInner {
                 events: VecDeque::with_capacity(max_events.min(64)),
@@ -236,6 +242,12 @@ mod tests {
         AgentEvent::RunCompleted {
             usage: TokenUsage::default(),
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "max_events must be > 0")]
+    fn new_rejects_zero_capacity() {
+        let _ = EventLog::new(0);
     }
 
     #[test]

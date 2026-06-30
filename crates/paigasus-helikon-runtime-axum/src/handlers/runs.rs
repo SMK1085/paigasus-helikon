@@ -54,6 +54,7 @@ use uuid::Uuid;
 use crate::{
     dto::{AsyncAccepted, RunRequest, RunResponse},
     error::ServerError,
+    event_log::EventLog,
     registry::{RunHandle, RunRegistry},
     server::AppState,
 };
@@ -82,6 +83,40 @@ impl RunQuery {
     fn is_sse(&self) -> bool {
         self.stream.as_deref() == Some("sse")
     }
+
+    /// Reject unrecognised or mutually-exclusive transport selectors.
+    ///
+    /// Without this an unknown `?mode=`/`?stream=` value would silently fall
+    /// back to one-shot, and `?mode=async&stream=sse` would silently prefer
+    /// async — both surprising the caller. Each is surfaced as a 400 instead.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::BadRequest`] if `mode` is set to anything other than
+    /// `async`, if `stream` is set to anything other than `sse`, or if both the
+    /// async and SSE transports are requested together.
+    fn validate(&self) -> Result<(), ServerError> {
+        if let Some(mode) = self.mode.as_deref() {
+            if mode != "async" {
+                return Err(ServerError::BadRequest(format!(
+                    "invalid `mode` selector `{mode}`; the only supported value is `async`"
+                )));
+            }
+        }
+        if let Some(stream) = self.stream.as_deref() {
+            if stream != "sse" {
+                return Err(ServerError::BadRequest(format!(
+                    "invalid `stream` selector `{stream}`; the only supported value is `sse`"
+                )));
+            }
+        }
+        if self.is_async() && self.is_sse() {
+            return Err(ServerError::BadRequest(
+                "`mode=async` and `stream=sse` are mutually exclusive".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// `POST /agents/{name}/runs` — start a run of the named agent.
@@ -92,10 +127,12 @@ impl RunQuery {
 /// # Errors
 ///
 /// - [`ServerError::UnknownAgent`] (404) — no agent with `name` is registered.
-/// - [`ServerError::Unauthorized`] (401/403) — the configured auth layer rejected
-///   the request.
-/// - [`ServerError::BadRequest`] (400) — the body was not valid JSON for a
-///   [`RunRequest`], or an explicit non-JSON content type was supplied.
+/// - [`ServerError::Unauthorized`] (401/403) — the context provider rejected the
+///   request's credentials. (The configured [`AuthLayer`](crate::AuthLayer) runs
+///   earlier, as router-level middleware.)
+/// - [`ServerError::BadRequest`] (400) — an invalid or conflicting `?stream=` /
+///   `?mode=` selector, the body was not valid JSON for a [`RunRequest`], or an
+///   explicit non-JSON content type was supplied.
 /// - [`ServerError::RunStart`] (500) — the run failed before emitting any event
 ///   (one-shot mode only).
 pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
@@ -104,9 +141,14 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     Query(query): Query<RunQuery>,
     request: Request,
 ) -> Result<Response, ServerError> {
-    // Split into parts + body up front; the body is consumed last (after auth
-    // has had a chance to inspect/mutate the parts).
-    let (mut parts, body) = request.into_parts();
+    // 0. Reject invalid / conflicting transport selectors (400) before doing
+    //    any work.
+    query.validate()?;
+
+    // Split into parts + body up front; the body is consumed last. Auth has
+    // already run as router-level middleware, so any identity it inserted is
+    // present in `parts.extensions` for the context provider below.
+    let (parts, body) = request.into_parts();
 
     // 1. Resolve the agent (404 if unknown).
     let agent = state
@@ -115,15 +157,10 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
         .cloned()
         .ok_or_else(|| ServerError::UnknownAgent(name.clone()))?;
 
-    // 2. Authenticate (401/403) if an auth layer is configured.
-    if let Some(auth) = &state.auth {
-        auth.authenticate(&mut parts).await?;
-    }
-
-    // 3. Deserialize the JSON body (400 on a bad body / non-JSON content type).
+    // 2. Deserialize the JSON body (400 on a bad body / non-JSON content type).
     let input = read_run_request(&parts, body).await?.into_agent_input();
 
-    // 4. Resolve the session from the optional `X-Session-Id` header.
+    // 3. Resolve the session from the optional `X-Session-Id` header.
     let session_id: Option<String> = parts
         .headers
         .get("x-session-id")
@@ -131,7 +168,7 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
         .map(str::to_owned);
     let session = state.sessions.session(session_id.as_deref()).await?;
 
-    // 5. Acquire the per-session serialization lock BEFORE creating/spawning the
+    // 4. Acquire the per-session serialization lock BEFORE creating/spawning the
     //    run so that same-session requests queue. The owned guard is moved into
     //    the writer task and released when the run completes.
     let guard: OwnedMutexGuard<()> = state
@@ -140,14 +177,14 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
         .lock_owned()
         .await;
 
-    // 6. Build the run context, then register the run. Building the context
+    // 5. Build the run context, then register the run. Building the context
     //    before registering avoids leaking a never-terminal registry entry if
     //    the context provider fails.
     let cancel = CancellationToken::new();
     let ctx = state.context.build(&parts, session, cancel.clone()).await?;
     let (run_id, handle) = state.registry.create(name, cancel);
 
-    // 7. Spawn the writer task: drive the agent and drain its events into the log.
+    // 6. Spawn the writer task: drive the agent and drain its events into the log.
     spawn_writer(
         Arc::clone(&state.runner),
         agent,
@@ -160,7 +197,7 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
         guard,
     );
 
-    // 8. Respond per the requested transport.
+    // 7. Respond per the requested transport.
     if query.is_async() {
         return Ok(async_response(run_id));
     }
@@ -199,11 +236,32 @@ async fn read_run_request(parts: &Parts, body: Body) -> Result<RunRequest, Serve
         .map_err(|e| ServerError::BadRequest(format!("invalid run request body: {e}")))
 }
 
+/// Drop-guard that records a run's terminal bookkeeping exactly once — on the
+/// normal path **and** on a panic unwind of the writer task.
+///
+/// Both operations are idempotent: [`EventLog::mark_terminal`] just sets a flag,
+/// and [`RunRegistry::note_terminal`] only stamps when `terminal_at` is still
+/// `None`. Without this guard a panic mid-drain (e.g. a faulty agent stream)
+/// would strand every subscriber waiting forever.
+struct TerminalGuard {
+    log: Arc<EventLog>,
+    registry: Arc<RunRegistry>,
+    run_id: Uuid,
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        self.log.mark_terminal();
+        self.registry.note_terminal(self.run_id, Instant::now());
+    }
+}
+
 /// Spawn the detached writer task that drives one run to completion.
 ///
 /// Owns every input by value so the task satisfies `'static`. Holds the session
 /// lock `guard` for the whole run and drops it (releasing the lock) once the run
-/// is terminal and recorded in the registry.
+/// is terminal and recorded in the registry. Terminal bookkeeping is owned by a
+/// [`TerminalGuard`] so it still happens if the agent stream panics mid-drain.
 #[allow(clippy::too_many_arguments)]
 fn spawn_writer<Ctx: Send + Sync + 'static>(
     runner: Arc<dyn Runner<Ctx>>,
@@ -217,6 +275,17 @@ fn spawn_writer<Ctx: Send + Sync + 'static>(
     guard: OwnedMutexGuard<()>,
 ) {
     tokio::spawn(async move {
+        // Declared FIRST so it drops LAST: terminal bookkeeping (below) runs
+        // before the session lock is released, preserving the original ordering.
+        let _session_lock = guard;
+        // Declared AFTER the lock so it drops FIRST. Its `Drop` marks the log
+        // terminal and stamps the registry — even on a panic unwind.
+        let _terminal = TerminalGuard {
+            log: Arc::clone(&handle.log),
+            registry,
+            run_id,
+        };
+
         match runner
             .run_streamed(agent.as_ref(), ctx, input, run_config)
             .await
@@ -226,23 +295,20 @@ fn spawn_writer<Ctx: Send + Sync + 'static>(
                 while let Some(ev) = events.next().await {
                     handle.log.append(ev);
                 }
-                // Safety net: an agent stream that ends without a terminal event
-                // would otherwise leave subscribers waiting forever. Idempotent
-                // when a real `RunCompleted`/`RunFailed` already marked the log.
-                handle.log.mark_terminal();
+                // Terminal marking is handled by `_terminal` on scope exit; a
+                // real `RunCompleted`/`RunFailed` already set the flag, and the
+                // guard's `mark_terminal` is an idempotent safety net otherwise.
             }
             Err(e) => {
                 // The run failed to *start* (no events were ever emitted). Record
-                // the cause and mark the log terminal so subscribers unblock.
+                // the cause; `_terminal` marks the log terminal so subscribers
+                // unblock.
                 *handle
                     .start_error
                     .lock()
                     .expect("start_error mutex poisoned") = Some(e.to_string());
-                handle.log.mark_terminal();
             }
         }
-        registry.note_terminal(run_id, Instant::now());
-        drop(guard);
     });
 }
 

@@ -156,6 +156,45 @@ impl<Ctx: Send + Sync + 'static> Runner<Ctx> for FailingRunner {
     }
 }
 
+// ── PanicStreamRunner ───────────────────────────────────────────────────────────
+
+/// A test [`Runner`] whose `run_streamed` succeeds but returns an event stream
+/// that **panics** on the first poll, before any terminal event is emitted.
+///
+/// Exercises the writer task's panic-unwind path: the `TerminalGuard` drop must
+/// still mark the run terminal so a one-shot request returns instead of hanging.
+pub struct PanicStreamRunner;
+
+/// Diverging helper that pins the panicking stream's item type to [`AgentEvent`]
+/// without tripping the `unreachable_code` lint.
+fn panic_event() -> AgentEvent {
+    panic!("simulated stream panic before terminal event")
+}
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> Runner<Ctx> for PanicStreamRunner {
+    async fn run(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResult, RunError> {
+        unimplemented!("PanicStreamRunner is only used through run_streamed")
+    }
+
+    async fn run_streamed(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResultStreaming, RunError> {
+        let stream = stream::once(async { panic_event() }).boxed();
+        Ok(RunResultStreaming::new(stream))
+    }
+}
+
 // ── OrderingAgent ─────────────────────────────────────────────────────────────
 
 /// Tick byte pushed by [`OrderingAgent`] when a run **starts** (before the first

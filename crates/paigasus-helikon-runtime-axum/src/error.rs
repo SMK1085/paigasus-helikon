@@ -82,7 +82,12 @@ impl IntoResponse for ServerError {
         let status = match &self {
             ServerError::UnknownAgent(_) => StatusCode::NOT_FOUND,
             ServerError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            ServerError::Unauthorized(rej) => rej.status,
+            // Clamp to a real auth status: a buggy `AuthLayer` must never let a
+            // 2xx/3xx leak through as the response code for a rejected request.
+            ServerError::Unauthorized(rej) => match rej.status {
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => rej.status,
+                _ => StatusCode::UNAUTHORIZED,
+            },
             ServerError::RunStart(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ServerError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServerError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -124,5 +129,36 @@ mod tests {
                 .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
+        assert_eq!(
+            ServerError::Internal("x".into()).into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    /// An [`AuthRejection`] carrying a 401 or 403 passes through unchanged, but
+    /// any other status (a buggy auth layer) is clamped to `401 Unauthorized`.
+    #[test]
+    fn unauthorized_status_is_clamped() {
+        let unauthorized = ServerError::Unauthorized(AuthRejection {
+            status: StatusCode::UNAUTHORIZED,
+            message: "no creds".into(),
+        });
+        assert_eq!(
+            unauthorized.into_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let forbidden = ServerError::Unauthorized(AuthRejection {
+            status: StatusCode::FORBIDDEN,
+            message: "denied".into(),
+        });
+        assert_eq!(forbidden.into_response().status(), StatusCode::FORBIDDEN);
+
+        // A bogus 2xx from a misbehaving auth layer must not leak through.
+        let bogus = ServerError::Unauthorized(AuthRejection {
+            status: StatusCode::OK,
+            message: "oops".into(),
+        });
+        assert_eq!(bogus.into_response().status(), StatusCode::UNAUTHORIZED);
     }
 }

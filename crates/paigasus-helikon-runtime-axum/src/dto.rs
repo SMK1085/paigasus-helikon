@@ -20,24 +20,30 @@ enum RunRequestKind {
 
 /// HTTP request body for a synchronous or async agent run.
 ///
-/// Accepts **either** of these JSON shapes:
+/// Accepts **exactly one** of these JSON shapes:
 /// - `{ "input": "<text>" }` — shorthand for a single user text message.
 /// - `{ "messages": [ … ] }` — an explicit list of [`Item`]s (use when you
 ///   need multi-turn context or non-text content parts).
 ///
-/// Any other shape is rejected with a deserialization error.
+/// Supplying both keys, neither key, or any unknown field is rejected with a
+/// deserialization error.
 pub struct RunRequest(RunRequestKind);
 
-/// Private untagged helper enum used by `RunRequest`'s custom
-/// `Deserialize` implementation.
+/// Private raw helper struct used by `RunRequest`'s custom `Deserialize`
+/// implementation.
 ///
-/// `#[serde(untagged)]` tries each variant in order; if both fail
-/// (e.g. `{"nope": 1}`), serde returns a descriptive error.
+/// Unlike an `#[serde(untagged)]` enum — which silently drops a conflicting
+/// extra field and ignores unknown keys (and is incompatible with
+/// `deny_unknown_fields`) — this single struct with `deny_unknown_fields`
+/// rejects unknown keys. The "exactly one of `input`/`messages`" rule is then
+/// enforced by hand in [`RunRequest`]'s `Deserialize`.
 #[derive(Deserialize)]
-#[serde(untagged)]
-enum RunRequestHelper {
-    Input { input: String },
-    Messages { messages: Vec<Item> },
+#[serde(deny_unknown_fields)]
+struct RunRequestRaw {
+    #[serde(default)]
+    input: Option<String>,
+    #[serde(default)]
+    messages: Option<Vec<Item>>,
 }
 
 impl<'de> Deserialize<'de> for RunRequest {
@@ -45,11 +51,16 @@ impl<'de> Deserialize<'de> for RunRequest {
     where
         D: serde::Deserializer<'de>,
     {
-        match RunRequestHelper::deserialize(deserializer)? {
-            RunRequestHelper::Input { input } => Ok(RunRequest(RunRequestKind::Input(input))),
-            RunRequestHelper::Messages { messages } => {
-                Ok(RunRequest(RunRequestKind::Messages(messages)))
-            }
+        let raw = RunRequestRaw::deserialize(deserializer)?;
+        match (raw.input, raw.messages) {
+            (Some(input), None) => Ok(RunRequest(RunRequestKind::Input(input))),
+            (None, Some(messages)) => Ok(RunRequest(RunRequestKind::Messages(messages))),
+            (Some(_), Some(_)) => Err(serde::de::Error::custom(
+                "provide exactly one of `input` or `messages`, not both",
+            )),
+            (None, None) => Err(serde::de::Error::custom(
+                "provide exactly one of `input` or `messages`",
+            )),
         }
     }
 }
@@ -214,7 +225,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(b.into_agent_input().messages.len(), 1);
+    }
+
+    #[test]
+    fn request_rejects_mixed_empty_and_unknown_fields() {
+        // Unknown field only.
         assert!(serde_json::from_str::<RunRequest>(r#"{"nope":1}"#).is_err());
+        // Both `input` and `messages` supplied.
+        assert!(serde_json::from_str::<RunRequest>(
+            r#"{"input":"x","messages":[{"type":"user_message","content":[{"type":"text","text":"hi"}]}]}"#
+        )
+        .is_err());
+        // A valid field plus an unknown extra field.
+        assert!(serde_json::from_str::<RunRequest>(r#"{"input":"x","extra":1}"#).is_err());
+        // Neither field supplied.
+        assert!(serde_json::from_str::<RunRequest>(r#"{}"#).is_err());
     }
 
     #[test]

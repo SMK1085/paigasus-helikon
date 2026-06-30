@@ -19,7 +19,7 @@ Versions below are **current as of 2026-06-30** and move every release — read 
 | Crate | Concern | State | Version |
 | --- | --- | --- | --- |
 | [`paigasus-helikon-core`](https://docs.rs/paigasus-helikon-core) | Trait surface, agent loop, event stream, carrier types — the dependency root | published | `0.5.4` |
-| [`paigasus-helikon`](https://docs.rs/paigasus-helikon) | Facade — re-exports `core` always, siblings behind features | published | `0.3.12` |
+| [`paigasus-helikon`](https://docs.rs/paigasus-helikon) | Facade — re-exports `core` always, siblings behind features | published | `0.4.14` |
 | [`paigasus-helikon-macros`](https://docs.rs/paigasus-helikon-macros) | `#[tool]` attribute and `tools!` proc macros | published | `0.2.2` |
 | [`paigasus-helikon-providers-openai`](https://docs.rs/paigasus-helikon-providers-openai) | OpenAI model adapter (`OpenAiModel`) | published | `0.2.9` |
 | [`paigasus-helikon-providers-anthropic`](https://docs.rs/paigasus-helikon-providers-anthropic) | Anthropic model adapter (`AnthropicModel`) | published | `0.1.10` |

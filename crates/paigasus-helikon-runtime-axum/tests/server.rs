@@ -4,7 +4,7 @@ mod support;
 
 use std::sync::Arc;
 
-use paigasus_helikon_runtime_axum::AgentServer;
+use paigasus_helikon_runtime_axum::{AgentServer, ServerError};
 
 /// `GET /agents` returns the list of mounted agents as JSON.
 #[tokio::test]
@@ -35,7 +35,8 @@ async fn lists_mounted_agents() {
     assert_eq!(body[0]["name"], "echo");
 }
 
-/// Adding two agents with the same name must cause [`build`] to return `Err`.
+/// Adding two agents with the same name must cause [`build`] to return a
+/// [`ServerError::BadRequest`] naming the duplicate.
 #[test]
 fn duplicate_agent_name_is_build_error() {
     let b = AgentServer::<()>::builder()
@@ -48,15 +49,64 @@ fn duplicate_agent_name_is_build_error() {
             name: "x".into(),
             events: vec![],
         }));
-    assert!(b.build().is_err());
+    let err = b.build().err().expect("duplicate name must fail the build");
+    match err {
+        ServerError::BadRequest(msg) => {
+            assert!(
+                msg.contains("duplicate agent name"),
+                "expected a duplicate-name message, got: {msg}"
+            );
+        }
+        other => panic!("expected ServerError::BadRequest, got: {other}"),
+    }
 }
 
-/// Omitting a context provider must cause [`build`] to return `Err`, not panic.
+/// Omitting a context provider must cause [`build`] to return a
+/// [`ServerError::Internal`] explaining the missing provider, not panic.
 #[test]
 fn build_without_context_provider_errors() {
     let b = AgentServer::<String>::builder().agent(Arc::new(support::ScriptedAgent {
         name: "x".into(),
         events: vec![],
     }));
-    assert!(b.build().is_err());
+    let err = b
+        .build()
+        .err()
+        .expect("missing context must fail the build");
+    match err {
+        ServerError::Internal(msg) => {
+            assert!(
+                msg.contains("context provider"),
+                "expected a missing-context message, got: {msg}"
+            );
+        }
+        other => panic!("expected ServerError::Internal, got: {other}"),
+    }
+}
+
+/// Building the default in-memory session store with a zero session cap must
+/// return [`ServerError::BadRequest`] rather than panicking inside
+/// `InMemorySessionProvider::new(0)`.
+#[test]
+fn max_sessions_zero_is_build_error() {
+    let b = AgentServer::<()>::builder()
+        .with_default_context()
+        .max_sessions(0)
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "x".into(),
+            events: vec![],
+        }));
+    let err = b
+        .build()
+        .err()
+        .expect("max_sessions(0) must fail the build");
+    match err {
+        ServerError::BadRequest(msg) => {
+            assert!(
+                msg.contains("max_sessions"),
+                "expected a max_sessions message, got: {msg}"
+            );
+        }
+        other => panic!("expected ServerError::BadRequest, got: {other}"),
+    }
 }

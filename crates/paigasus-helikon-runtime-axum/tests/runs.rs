@@ -63,6 +63,52 @@ async fn async_mode_returns_202() {
     assert!(v["run_id"].is_string());
 }
 
+/// An unrecognised `?mode=` selector is rejected with `400 Bad Request` instead
+/// of silently falling back to one-shot.
+#[tokio::test]
+async fn invalid_mode_selector_is_400() {
+    let addr = support::spawn_echo_server().await;
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/agents/echo/runs?mode=bogus"))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"hi"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+/// An unrecognised `?stream=` selector is rejected with `400 Bad Request`.
+#[tokio::test]
+async fn invalid_stream_selector_is_400() {
+    let addr = support::spawn_echo_server().await;
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/agents/echo/runs?stream=foo"))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"hi"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+/// Requesting the async and SSE transports together is rejected with `400 Bad
+/// Request` rather than silently preferring one.
+#[tokio::test]
+async fn conflicting_async_and_sse_is_400() {
+    let addr = support::spawn_echo_server().await;
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "http://{addr}/agents/echo/runs?mode=async&stream=sse"
+        ))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"hi"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
 /// Posting to an unregistered agent name returns `404 Not Found`.
 #[tokio::test]
 async fn unknown_agent_404() {
