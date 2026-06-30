@@ -39,7 +39,7 @@ The frame flows through the *existing* serialization paths unchanged: SSE `to_ss
 
 - **Expose `is_terminal`.** `event_log::is_terminal(&AgentEvent) -> bool` is currently a private free function. Change it to `pub(crate)` so the two handlers can compute `saw_terminal` without duplicating the `matches!` pattern.
 
-- **Add the helper on `RunHandle`** (in `registry.rs`, which gains a `use paigasus_helikon_core::AgentEvent`):
+- **Add the helper on `RunHandle`** (in `registry.rs`, which gains a `use paigasus_helikon_core::AgentEvent`). It logs at `warn` when it synthesizes, so these otherwise-silent failures (especially the panic-mid-stream case, whose real cause is lost because the writer's `JoinHandle` is never awaited) are diagnosable server-side:
 
   ```rust
   impl RunHandle {
@@ -59,24 +59,36 @@ The frame flows through the *existing* serialization paths unchanged: SSE `to_ss
               .expect("start_error mutex poisoned")
               .clone()
               .unwrap_or_else(|| "run ended before producing a terminal event".to_owned());
+          tracing::warn!(
+              agent = %self.agent_name,
+              %error,
+              "run ended without a real terminal event; synthesizing a RunFailed frame for the stream subscriber"
+          );
           Some(AgentEvent::RunFailed { error })
       }
   }
   ```
 
-- **SSE (`sse_response`).** Carry `saw_terminal` and a `done` flag through the `unfold` state (alongside the existing event stream and the cancel `DropGuard`). Each real event is forwarded and updates `saw_terminal |= is_terminal(&ev)`. When the live stream returns `None`, call `handle.synthetic_terminal_frame(saw_terminal)`: if `Some(ev)`, yield `to_sse_event(&ev)` once and set `done = true`; the next poll returns `None`. The `DropGuard` is held in the state for the stream's whole lifetime, so client-disconnect cancellation is unaffected.
+- **SSE (`sse_response`).** The `unfold` state carries `saw_terminal`, a `done` flag, the live event stream, the cancel `DropGuard`, **and a cloned `Arc<RunHandle>`** (cloned before the closure so `synthetic_terminal_frame` is reachable from the stream-end branch — `sse_response` currently captures only the bare `handle.log`/`handle.cancel`, so this is a new capture). Each real event is forwarded and updates `saw_terminal |= is_terminal(&ev)`. When the live stream returns `None`, call `handle.synthetic_terminal_frame(saw_terminal)`: if `Some(ev)`, yield `to_sse_event(&ev)` once and set `done = true`; the next poll returns `None`. The `DropGuard` is held in the state for the stream's whole lifetime, so client-disconnect cancellation is unaffected.
 
-- **WebSocket (`handle_socket`).** Track `let mut saw_terminal = false;` in the select loop, setting it `true` when a delivered event `is_terminal`. In the stream-ended (`None`) arm, before sending `Message::Close(None)`, call `handle.synthetic_terminal_frame(saw_terminal)`; if `Some(frame)`, serialize and `socket.send(Message::text(..))` it (best-effort — ignore send error, then still send Close). Disconnect semantics are unchanged (WS observers never cancel the run).
+- **WebSocket (`handle_socket`).** Track `let mut saw_terminal = false;` in the select loop, setting it `true` when a delivered event `is_terminal`. In the stream-ended (`None`) arm, before sending `Message::Close(None)`, call `handle.synthetic_terminal_frame(saw_terminal)`; if `Some(frame)`, serialize and `socket.send(Message::text(..))` it (best-effort — ignore send error, then still send Close). `handle` is already an `Arc<RunHandle>` in scope. Disconnect semantics are unchanged (WS observers never cancel the run). The synthetic frame is emitted in the `sub.next() == None` arm, so it does not race the `socket.recv()` arm — a client close still wins via `break` without emitting the frame.
 
 ### Tests (Task 1)
 
-In `tests/` (using the existing `FailingRunner` from `tests/support/mod.rs`):
+Two failure shapes must be covered, because they exercise different branches of the new `saw_terminal` threading:
 
-- **SSE start-error frame:** a server built with `FailingRunner`, `POST …/runs?stream=sse`; assert the parsed SSE body is exactly one `RunFailed` event carrying the runner's error string, and the response is a clean 200 SSE stream (the HTTP status of an SSE response is 200; the failure is in-band).
-- **WS start-error frame:** create a run (the failing run is registered), connect WS to `…/runs/{id}/events`; assert the single text frame is `RunFailed`, followed by a Close. (Construction mirrors `async_run_survives_creator_disconnect`, but the run start-errors.)
-- Optionally a unit test on `RunHandle::synthetic_terminal_frame` covering the `saw_terminal=true → None`, `start_error=Some → RunFailed{that}`, and `start_error=None → RunFailed{generic}` branches.
+- **Start-error (zero events, `start_error = Some`)** — via the existing `FailingRunner`.
+- **Terminal-less stream after real events (`start_error = None`, generic message)** — the regression-prone branch. Add a new test runner to `tests/support/mod.rs`, e.g. `PartialThenEndRunner`, whose `run_streamed` returns `Ok(streaming)` with a stream that yields exactly one non-terminal event (`AgentEvent::TokenDelta { text: "hi" }`) and then ends with **no** terminal event. This deterministically exercises "≥1 real event delivered, `saw_terminal` stayed false, generic synthetic frame appended once at the end" without depending on `TokioRunner`'s end-of-stream behavior.
 
-> Note on the WS test: the WS endpoint validates the run id against the registry *before* upgrading. A start-errored run is still `create`d and registered (the writer task records `start_error` and marks terminal but the handle remains in the registry until TTL/cap eviction), so the WS handshake succeeds and the subscriber observes the synthetic frame. The test must obtain the run id — easiest via `?mode=async` against the `FailingRunner` server (returns 202 + `run_id`), then connect WS to that id.
+Tests (in `tests/`):
+
+- **SSE start-error frame:** server built with `FailingRunner` **and a registered agent** (mirror `start_error_returns_500_not_hang`: `ScriptedAgent { name: "echo", … }` + `.runner(FailingRunner)` — `create_run` resolves the agent at `runs.rs:154` *before* spawning the writer, so the URL's agent name must exist or it 404s before any run). `POST …/agents/echo/runs?stream=sse`; assert the parsed SSE body is exactly one event, that event is the `RunFailed` variant, and its `error` is non-empty (assert on the **variant tag**, not `RunError::MaxIterations`'s exact `Display` text, which is brittle). The HTTP response itself is a clean 200 SSE stream — the failure is in-band.
+- **SSE terminal-less frame:** server with `PartialThenEndRunner` + an echo agent; `POST …?stream=sse`; assert the body is exactly `[TokenDelta { text: "hi" }, RunFailed { error: <generic> }]` in that order.
+- **WS start-error frame:** server with `FailingRunner` + an echo agent. Obtain the run id via `?mode=async` (`create_async_run` returns 202 + `run_id` — the run is `create`d and registered at `runs.rs:185` before the writer start-errors, and stays in the registry until TTL/cap eviction, so the WS handshake's registry check at `events.rs:58` passes). Connect WS to `…/runs/{id}/events`; assert the single text frame is `RunFailed`, followed by a Close.
+- **WS terminal-less frame:** same pattern with `PartialThenEndRunner`; assert frames `[TokenDelta, RunFailed{generic}]` then Close.
+- **Unit test** on `RunHandle::synthetic_terminal_frame` covering all three branches: `saw_terminal=true → None`, `start_error=Some → RunFailed{that}`, `start_error=None → RunFailed{generic}`.
+
+The existing happy-path exact-equality tests (`tests/runs.rs` `sse_stream_matches_local_events`, `tests/ws.rs` `ws_replays_completed_run_then_closes`) double as guards that **no** spurious synthetic frame is appended to a normally-completed run.
 
 ---
 
@@ -110,9 +122,21 @@ Action SHAs are **reused from the existing `ci.yml`** (they were resolved-and-pi
 For the gate to actually block a feature-gating regression it must be a required status check. Add the bare job name `build-no-default-features` to:
 
 - `.github/rulesets/main-protection-checks.json` (the canonical required-check declaration), and
-- the required-status-check list in `CONTRIBUTING.md` and the matching list in `CLAUDE.md` ("CI" section), so the documented set stays in sync with the ruleset.
+- the required-status-check list in `CONTRIBUTING.md:276` and the matching list in `CLAUDE.md:103`, so the documented set stays in sync with the ruleset.
 
-This mirrors the precedent that the macOS test job is required because it is the *only* gate exercising the Seatbelt backend — `build-no-default-features` is the only gate exercising the no-default-features build.
+  **Also fix the pre-existing drift in `CLAUDE.md:103` in the same edit:** that list omits `sessions-it`, which *is* a required context (`main-protection-checks.json:28`, `CONTRIBUTING.md:276`, added in SMA-330/commit c680936) — so the CLAUDE.md list is already out of sync before this change. Add **both** `sessions-it` and `build-no-default-features`.
+
+This mirrors the precedent that the macOS test job is required because it is the *only* gate exercising the Seatbelt backend, and `sessions-it` is required because it is the *only* gate exercising the live session backends — `build-no-default-features` is the only gate exercising the no-default-features build.
+
+### Rollout sequence (the ruleset edit is inert until applied)
+
+Editing `main-protection-checks.json` does **not** by itself make the check required: there is no drift-check CI job (`CONTRIBUTING.md:287`); the ruleset only takes effect when a maintainer runs `scripts/apply-repo-config.sh` (which needs admin and resolves bot App IDs at apply time). And applying a *new* required context is order-sensitive — GitHub will then block **every** open PR that has no report for the new context, including the release-plz `chore: release` PR that publishes this crate's own bump and any in-flight Dependabot PRs whose branches predate the job. So the safe order is:
+
+1. Land this PR (the `ci.yml` job + the ruleset JSON + the CONTRIBUTING/CLAUDE.md edits). The new job runs on the PR itself and on `main` after merge — confirm it reports green in both.
+2. **(Maintainer / Sven, post-merge)** run `scripts/apply-repo-config.sh` to apply the updated ruleset. *I cannot run this — it needs repo-admin.* This is surfaced at GATE 2 as a required manual follow-up.
+3. After applying, rebase / re-run any open PRs so the new context reports — **notably the release-plz release PR for this very change** (otherwise it deadlocks: it can't merge without a context it never ran). This ties into the standing "watch the release-plz PR after merge" practice.
+
+Until step 2 runs, the job is a visible-but-non-blocking signal — which is acceptable as an interim state; it simply isn't yet enforcing.
 
 ### Tests (Task 2)
 
@@ -141,11 +165,17 @@ Per iteration:
 
 The `Box::pin` / `!Unpin` pinning rationale and the `Send + Unpin` return type are unchanged.
 
-### Ring capacity
+**Stale-doc cleanup.** `read_from`'s `next_cursor` field doc (`event_log.rs:58-62`) says the subscribe path "computes its own cursor and does not read it" and carries `#[allow(dead_code)]`. After this rewrite `subscribe` *does* read `slice.next_cursor`, so update that doc comment and remove the now-unnecessary `#[allow(dead_code)]`.
 
-Change `VecDeque::with_capacity(max_events.min(64))` → `VecDeque::with_capacity(max_events.min(1024))`.
+### Ring capacity — evaluated and **left at `min(64)`** (deviation from the ticket's literal text)
 
-Rationale: the ring never exceeds `max_events`, so `min(1024)` bounds the upfront allocation at ≤ 1024 slots (tens-to-low-hundreds of KB) while eliminating reallocation for the overwhelming majority of real runs (≤ 1024 events). A run that genuinely emits more pays only a handful of cheap amortized-O(1) reallocs up to its cap. We deliberately do **not** use `with_capacity(max_events)` directly: `max_events` is caller-configurable, and a pathological cap (e.g. 1,000,000) would force a large per-run upfront allocation even for runs that emit a few events.
+The ticket lists "`VecDeque::with_capacity(max_events.min(64))` reallocs ~4× for production-sized logs … size the initial capacity sensibly" as part of the fix. **On analysis we are not bumping it**, because a larger initial capacity is a net memory regression for negligible gain:
+
+- `EventLog::new` is called **per run** (`registry.rs:87`), and the registry retains up to `max_runs` *completed* runs (default **1024**, `server.rs:104`) for the full `retention` window (default **300s**, `server.rs:103`). So the initial capacity is multiplied by ~1024 retained runs in steady state.
+- Bumping `min(64) → min(1024)` would make **every** run — including a 2-event one-shot echo — preallocate a 1024-slot `VecDeque<AgentEvent>` (and `AgentEvent`'s largest variants embed `Item`/`serde_json::Value`, so each slot is non-trivial). Steady-state worst case rises from a few MB to tens of MB of mostly-empty ring capacity — a ~16× regression — while helping only runs that emit 65–1024 events (saving a few cheap amortized-O(1) doublings). The common short run did **zero** reallocs at `min(64)` already.
+- The genuine perf win — eliminating the O(n²) replay — comes **entirely from the `subscribe` batch-drain rewrite above**, independent of capacity. The realloc cost the ticket cites is amortized O(1) and negligible (a handful of small-struct memcpys over a long-running stream).
+
+`with_capacity(max_events)` is also rejected: `max_events` is caller-configurable, so a pathological cap (e.g. 1,000,000) would force a huge per-run upfront allocation. **Conclusion: keep `min(64)`.** *This is the one place the implementation diverges from the ticket text — flagged for sign-off at GATE 1.* (If a small bump is still wanted, `min(128)` is the most that's defensible: it doubles the steady-state floor to ~12 MB worst case while halving medium-run reallocs.)
 
 ### Tests (Task 3)
 
@@ -156,9 +186,9 @@ Rationale: the ring never exceeds `max_events`, so `min(1024)` bounds the upfron
 
 ## Documentation & release
 
-- **mdBook (`docs/book/src/concepts/axum-server.md`):** if it documents the error/streaming model as "streams close cleanly on start-error," bring it into line with "streams emit a final synthetic `run_failed` frame, then close." Verify during implementation; update on the same branch if affected. `mdbook build` must stay clean.
-- **Crate `README.md` (`crates/paigasus-helikon-runtime-axum/README.md`):** if it documents the streaming error behavior, update the relevant line. No install/feature/API change, so the `cargo add` snippet is untouched.
-- **CONTRIBUTING.md / CLAUDE.md:** add `build-no-default-features` to the documented required-checks list (Task 2).
+- **mdBook (`docs/book/src/concepts/axum-server.md`):** the "Replayable runs" section currently documents the three transports but says **nothing** about start-error / terminal-less close behavior — so there is no stale line to patch; **add** a sentence/bullet describing the new invariant: a streaming transport (SSE/WS) whose run ends without a real terminal event emits a final synthetic `run_failed` frame, then closes. `mdbook build docs/book` must stay clean (linkcheck = error).
+- **Crate `README.md` (`crates/paigasus-helikon-runtime-axum/README.md`):** check whether it documents the streaming error behavior; add/adjust a line if so. No install/feature/API change, so the `cargo add` snippet is untouched.
+- **CONTRIBUTING.md:276 / CLAUDE.md:103:** add `build-no-default-features` to the documented required-checks list, and fix the pre-existing `sessions-it` omission in CLAUDE.md:103 (Task 2).
 - **Versioning / CHANGELOG:** `runtime-axum` is an already-released crate (0.1.0) that ships through release-plz's normal flow. Task 1 is an additive behavioral refinement (new terminal frame on a previously-silent path), Task 3 is internal, Task 2 is CI-only — none touch `paigasus-helikon-core` or any public API. **No manual version bump and no manual CHANGELOG edit**: release-plz will patch-bump `runtime-axum` and regenerate its CHANGELOG from the conventional commits on merge. (The same-PR-manual-bump cascade pitfalls do not apply here because nothing is bumped manually.)
 
 ## Commit / PR shape
@@ -175,3 +205,22 @@ PR title (gated by `pr-title.yml` — full Conventional Commits prefix + lowerca
 ## Risk / rollback
 
 Low risk, fully localized. Task 1 only adds a frame on a path that previously emitted nothing; no existing successful-run output changes. Task 3 is behavior-preserving (guarded by the existing subscribe tests + a new large-replay test). Task 2 is additive CI. Rollback is reverting the branch; no data migrations, no API surface.
+
+## Adversarial-challenge triage
+
+A fresh Opus spec-challenger attacked this design (verdict: **APPROVE WITH CHANGES**, no blockers). It confirmed the two hard-correctness pieces are sound: the `saw_terminal == false` detector is unreachable for a normally-completed run (the terminal event is always the final append and is never ring-evicted), and the batch-drain is arithmetically identical to the old cursor logic while preserving the lost-wakeup and eviction-gap guarantees. Findings folded in:
+
+| # | Severity | Finding | Action |
+|---|----------|---------|--------|
+| 1 | MAJOR | Capacity bump ignores the `max_runs` (×1024) multiplier → ~16× steady-state memory regression for marginal gain | **Folded — reversed the bump; keep `min(64)`.** The one deviation from the ticket text; flagged for GATE-1 sign-off. |
+| 2 | MAJOR | "Make it required" is inert without `apply-repo-config.sh`, and applying it can deadlock open PRs (incl. the release-plz PR) | **Folded** — added the explicit rollout sequence; the apply step is a maintainer follow-up surfaced at GATE 2. |
+| 3 | MAJOR | Tests only covered the zero-event start-error branch, not the regression-prone "real events then no terminal" path | **Folded** — added `PartialThenEndRunner` + SSE/WS tests asserting `[TokenDelta, RunFailed{generic}]`. |
+| 4 | MINOR | CLAUDE.md:103 required-check list already missing `sessions-it` | **Folded** — fix it in the same edit. |
+| 5 | MINOR | `read_from.next_cursor` doc + `#[allow(dead_code)]` go stale after Task 3 | **Folded** — update the doc, drop the allow. |
+| 6 | MINOR | No observability when synthesizing; panic cause is swallowed | **Folded** — `tracing::warn!` in the helper. |
+| 7 | MINOR | SSE unfold needs an `Arc<RunHandle>` capture, not just `saw_terminal` | **Folded** — spelled out in the SSE bullet. |
+| 8 | MINOR | WS test needs `FailingRunner` **and** a registered agent | **Folded** — corrected the test setup. |
+| 9 | MINOR | Book documents nothing to patch — must *add* the behavior | **Folded** — changed to an "add" directive. |
+| Q | QUESTION | Assert on the `RunFailed` variant, not `RunError::MaxIterations`'s brittle `Display` text | **Folded** — tests assert the variant tag + non-empty error. |
+
+Transport divergence on start-error (one-shot → 500; SSE → 200 + in-band `RunFailed`; WS → frame + Close) is intentional and matches SMA-331 §6 (failure-as-data for streams). `cargo build` (not `check`/`clippy`/`test`) is the right no-default-features gate — an un-gated `utoipa` reference is a compile error `build` catches.
