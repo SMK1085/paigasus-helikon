@@ -195,6 +195,42 @@ impl<Ctx: Send + Sync + 'static> Runner<Ctx> for PanicStreamRunner {
     }
 }
 
+// ── PartialThenEndRunner ────────────────────────────────────────────────────────
+
+/// A test [`Runner`] whose `run_streamed` succeeds and yields exactly one
+/// non-terminal event (`TokenDelta { "hi" }`), then ends the stream WITHOUT a
+/// terminal `RunCompleted`/`RunFailed`. Exercises the streaming transports'
+/// synthetic-terminal-frame path for a run that produced real events first, so
+/// `saw_terminal` must stay false and the generic message is used.
+pub struct PartialThenEndRunner;
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> Runner<Ctx> for PartialThenEndRunner {
+    async fn run(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResult, RunError> {
+        unimplemented!("PartialThenEndRunner is only used through run_streamed")
+    }
+
+    async fn run_streamed(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResultStreaming, RunError> {
+        let stream = stream::iter(vec![AgentEvent::TokenDelta {
+            text: "hi".to_owned(),
+        }])
+        .boxed();
+        Ok(RunResultStreaming::new(stream))
+    }
+}
+
 // ── OrderingAgent ─────────────────────────────────────────────────────────────
 
 /// Tick byte pushed by [`OrderingAgent`] when a run **starts** (before the first
