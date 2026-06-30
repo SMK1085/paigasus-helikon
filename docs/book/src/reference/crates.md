@@ -14,12 +14,12 @@ For orientation — how to pick crates and add them to your `Cargo.toml` — see
 
 ## Crate table
 
-Versions below are **current as of 2026-06-16** and move every release — read each crate's `Cargo.toml` (or the root `[workspace.dependencies]` pins) for the live numbers, and the [crates.io page](https://crates.io/crates/paigasus-helikon) / docs.rs for what is actually published.
+Versions below are **current as of 2026-06-30** and move every release — read each crate's `Cargo.toml` (or the root `[workspace.dependencies]` pins) for the live numbers, and the [crates.io page](https://crates.io/crates/paigasus-helikon) / docs.rs for what is actually published.
 
 | Crate | Concern | State | Version |
 | --- | --- | --- | --- |
 | [`paigasus-helikon-core`](https://docs.rs/paigasus-helikon-core) | Trait surface, agent loop, event stream, carrier types — the dependency root | published | `0.5.4` |
-| [`paigasus-helikon`](https://docs.rs/paigasus-helikon) | Facade — re-exports `core` always, siblings behind features | published | `0.3.12` |
+| [`paigasus-helikon`](https://docs.rs/paigasus-helikon) | Facade — re-exports `core` always, siblings behind features | published | `0.4.14` |
 | [`paigasus-helikon-macros`](https://docs.rs/paigasus-helikon-macros) | `#[tool]` attribute and `tools!` proc macros | published | `0.2.2` |
 | [`paigasus-helikon-providers-openai`](https://docs.rs/paigasus-helikon-providers-openai) | OpenAI model adapter (`OpenAiModel`) | published | `0.2.9` |
 | [`paigasus-helikon-providers-anthropic`](https://docs.rs/paigasus-helikon-providers-anthropic) | Anthropic model adapter (`AnthropicModel`) | published | `0.1.10` |
@@ -29,16 +29,16 @@ Versions below are **current as of 2026-06-16** and move every release — read 
 | [`paigasus-helikon-sessions-postgres`](https://docs.rs/paigasus-helikon-sessions-postgres) | PostgreSQL-backed `Session` backend (`PostgresSession`) | published | `0.1.0` |
 | [`paigasus-helikon-sessions-redis`](https://docs.rs/paigasus-helikon-sessions-redis) | Redis Streams-backed `Session` backend (`RedisSession`) | published | `0.1.0` |
 | [`paigasus-helikon-runtime-tokio`](https://docs.rs/paigasus-helikon-runtime-tokio) | Default ephemeral Tokio runner | published | `0.1.9` |
+| [`paigasus-helikon-runtime-axum`](https://docs.rs/paigasus-helikon-runtime-axum) | Self-hosted Axum HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints, replayable runs) | published | `0.1.0` |
 | [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) | MCP integration — `rmcp` client and server wrappers | published | `0.1.3` |
 | [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) | Sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`) | published | `0.1.5` |
 | `paigasus-helikon-evals` | Evaluation harness | stub — not yet implemented | `0.0.0` |
-| `paigasus-helikon-runtime-axum` | Axum-hosted runtime | stub — not yet implemented | `0.0.0` |
 | `paigasus-helikon-runtime-temporal` | Temporal-hosted runtime | stub — not yet implemented | `0.0.0` |
 | `paigasus-helikon-runtime-agentcore` | AgentCore-hosted runtime | stub — not yet implemented | `0.0.0` |
 | `paigasus-helikon-cli` | `helikon` / `paigasus-helikon` CLI binaries | binary-only — never published | `0.0.0` |
 | `paigasus-helikon-sessions-testkit` | Shared `Session` conformance test harness (internal — never published) | internal — `publish = false` | `0.0.0` |
 
-The four stubs are pre-published name-claims at `0.0.0` with `publish = false`; their facade re-export exists but the crate is empty. Do not depend on them yet.
+Three crates remain pre-published name-claims at `0.0.0` with `publish = false`; their facade re-exports exist but the crates are empty. Do not depend on them yet.
 
 ## Facade feature → re-export map
 
@@ -59,7 +59,8 @@ Add the facade and turn on the features you need. Each feature gates one sibling
 | `sessions-postgres` | `paigasus_helikon::sessions_postgres` | `paigasus-helikon-sessions-postgres` |
 | `sessions-redis` | `paigasus_helikon::sessions_redis` | `paigasus-helikon-sessions-redis` |
 | `runtime-tokio` | `paigasus_helikon::runtime_tokio` | `paigasus-helikon-runtime-tokio` |
-| `evals`, `runtime-axum`, `runtime-temporal`, `runtime-agentcore` | re-export exists, crate empty | the four stubs |
+| `runtime-axum` | `paigasus_helikon::runtime_axum` | `paigasus-helikon-runtime-axum` |
+| `evals`, `runtime-temporal`, `runtime-agentcore` | re-export exists, crate empty | the three remaining stubs |
 
 Feature names are kebab-case (`tools-web`, `runtime-tokio`); the re-export module aliases are snake-case (`runtime_tokio`, `sessions_sqlite`).
 

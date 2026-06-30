@@ -19,6 +19,7 @@
 - [MCP Integration](./concepts/mcp-integration.md)
 - [Observability & Evaluation](./concepts/observability-evaluation.md)
 - [Structured Output & Builder](./concepts/structured-output-builder.md)
+- [Axum Server Runtime](./concepts/axum-server.md)
 
 # Reference
 

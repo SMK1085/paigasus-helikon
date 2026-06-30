@@ -42,11 +42,6 @@ publish = false
 release = false
 
 [[package]]
-name = "paigasus-helikon-runtime-axum"
-publish = false
-release = false
-
-[[package]]
 name = "paigasus-helikon-runtime-temporal"
 publish = false
 release = false
