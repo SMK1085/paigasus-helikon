@@ -83,7 +83,7 @@ single-agent app with OpenAI, the tool macros, and SQLite-backed sessions:
 
 ```toml
 [dependencies]
-paigasus-helikon = { version = "0.3", features = ["openai", "macros", "sessions-sqlite"] }
+paigasus-helikon = { version = "0.4", features = ["openai", "macros", "sessions-sqlite"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
