@@ -2,7 +2,11 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use futures_util::StreamExt;
+use paigasus_helikon_core::AgentEvent;
+use paigasus_helikon_runtime_axum::AgentServer;
 
 /// **AC1** — connecting to an existing, already-completed run replays the full
 /// event sequence and then closes the stream (server sends a Close frame once
@@ -78,4 +82,96 @@ async fn ws_name_mismatch_404_before_upgrade() {
         .await
         .expect_err("agent-name mismatch should fail the WS handshake (404, not 101)");
     assert_handshake_404(err);
+}
+
+/// A start-erroring run, reached over WebSocket, must surface a final synthetic
+/// `RunFailed` frame, then a Close.
+#[tokio::test]
+async fn ws_emits_synthetic_run_failed_on_start_error() {
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .runner(Arc::new(support::FailingRunner))
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "echo".into(),
+            events: support::echo_script(),
+        }))
+        .build()
+        .expect("server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { server.serve_with_listener(listener).await.unwrap() });
+
+    // Create the (start-erroring) run via async mode to obtain a run id; it stays
+    // registered (TTL 300s) so the WS handshake's registry check passes.
+    let run_id = support::create_async_run(addr, "echo").await;
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    let url = format!("ws://{addr}/agents/echo/runs/{run_id}/events");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .expect("WS handshake should succeed for a registered run");
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut got = Vec::new();
+        while let Some(Ok(msg)) = ws.next().await {
+            if msg.is_text() {
+                got.push(support::parse_event(msg.to_text().unwrap()));
+            }
+        }
+        got
+    })
+    .await
+    .expect("WS drain must complete within 5s, not hang");
+
+    assert_eq!(got.len(), 1, "exactly one synthetic terminal frame");
+    assert!(
+        matches!(&got[0], AgentEvent::RunFailed { error } if !error.is_empty()),
+        "expected a non-empty RunFailed, got {:?}",
+        got[0]
+    );
+}
+
+/// A run that yields real events then ends with no terminal must get a final
+/// synthetic `RunFailed` frame (generic message) over WebSocket, then a Close.
+#[tokio::test]
+async fn ws_emits_synthetic_run_failed_after_terminalless_stream() {
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .runner(Arc::new(support::PartialThenEndRunner))
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "echo".into(),
+            events: vec![],
+        }))
+        .build()
+        .expect("server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { server.serve_with_listener(listener).await.unwrap() });
+
+    let run_id = support::create_async_run(addr, "echo").await;
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    let url = format!("ws://{addr}/agents/echo/runs/{run_id}/events");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .expect("WS handshake");
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut got = Vec::new();
+        while let Some(Ok(msg)) = ws.next().await {
+            if msg.is_text() {
+                got.push(support::parse_event(msg.to_text().unwrap()));
+            }
+        }
+        got
+    })
+    .await
+    .expect("WS drain must complete within 5s, not hang");
+
+    assert_eq!(got.len(), 2);
+    assert!(matches!(&got[0], AgentEvent::TokenDelta { text } if text == "hi"));
+    assert!(
+        matches!(&got[1], AgentEvent::RunFailed { error }
+            if error == "run ended before producing a terminal event"),
+        "expected generic RunFailed last, got {:?}",
+        got[1]
+    );
 }
