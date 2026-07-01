@@ -25,7 +25,8 @@
           { "context": "pr-title" },
           { "context": "audit" },
           { "context": "deny" },
-          { "context": "sessions-it" }
+          { "context": "sessions-it" },
+          { "context": "build-no-default-features" }
         ],
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false

@@ -17,7 +17,7 @@ use tokio::sync::Notify;
 ///
 /// Only [`AgentEvent::RunCompleted`] and [`AgentEvent::RunFailed`] are terminal;
 /// all other variants are non-terminal.
-fn is_terminal(ev: &AgentEvent) -> bool {
+pub(crate) fn is_terminal(ev: &AgentEvent) -> bool {
     matches!(
         ev,
         AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
@@ -52,16 +52,28 @@ pub(crate) struct ReadSlice {
     ///
     /// If the requested cursor was evicted by ring truncation, this will be greater than
     /// the cursor the caller passed; the returned events start at `first_seq`.
+    // Exposes the eviction-gap boundary for callers that detect truncation; the
+    // batch-drain `subscribe` path relies on `read_from`'s already-clamped
+    // `next_cursor` and does not read this field directly.
+    #[allow(dead_code)]
     pub first_seq: u64,
     /// Events from `max(cursor, first_seq)` up to the current tail (exclusive).
     pub events: Vec<AgentEvent>,
     /// The sequence number the caller should pass on the next [`EventLog::read_from`] call.
-    // Consumed by the WebSocket cursor-resume transport added in a later task; the
-    // replay-then-tail `subscribe` path computes its own cursor and does not read it.
-    #[allow(dead_code)]
+    ///
+    /// The replay-then-tail [`EventLog::subscribe`] path advances its cursor to this
+    /// value after each batch read.
     pub next_cursor: u64,
     /// `true` once the run has ended (a terminal event was appended or `mark_terminal` called).
     pub terminal: bool,
+}
+
+/// Unfold state for [`EventLog::subscribe`]: the resume cursor, a once-cloned
+/// batch buffer drained in order, and the terminal flag.
+struct SubscribeState {
+    cursor: u64,
+    pending: std::vec::IntoIter<AgentEvent>,
+    done: bool,
 }
 
 impl EventLog {
@@ -171,55 +183,49 @@ impl EventLog {
     pub fn subscribe(self: &Arc<Self>, from: u64) -> impl Stream<Item = AgentEvent> + Send + Unpin {
         let log = Arc::clone(self);
 
-        // The unfold state carries only the cursor and the done-flag. `log` is captured by
-        // the closure and cloned fresh for each iteration's async block, so that the async
-        // block OWNS its Arc<EventLog> and can borrow `log.notify` for the `notified()` future
-        // without the state tuple also owning `log` (which would require moving it in the return
-        // statement while it is still borrowed).
+        // Each `read_from` clones the available tail ONCE into `pending`; we drain
+        // `pending` one event at a time without re-reading, so replaying N retained
+        // events is O(n), not O(n²). The notify-before-read ordering is preserved:
+        // the wakeup future is still registered (and `enable()`d) before each read
+        // that may need to wait.
         Box::pin(futures_util::stream::unfold(
-            (from, false),
-            move |(cursor, done)| {
+            SubscribeState {
+                cursor: from,
+                pending: Vec::new().into_iter(),
+                done: false,
+            },
+            move |mut state| {
                 let log = Arc::clone(&log);
                 async move {
-                    if done {
+                    if state.done {
                         return None;
                     }
+                    // Fast path: drain the previously-read batch first.
+                    if let Some(ev) = state.pending.next() {
+                        state.done = is_terminal(&ev);
+                        return Some((ev, state));
+                    }
                     loop {
-                        // Step 1: Register the wakeup future BEFORE reading (lost-wakeup
-                        // avoidance). `notified()` + `enable()` must precede `read_from` so that
-                        // any `notify_waiters()` fired between them and the await is not missed.
+                        // Register the wakeup BEFORE reading (lost-wakeup avoidance).
                         let notif = log.notify.notified();
                         tokio::pin!(notif);
                         notif.as_mut().enable();
 
-                        // Step 2: Try to drain one event at the current cursor.
-                        let slice = log.read_from(cursor);
-                        // Capture first_seq before consuming slice.events via into_iter().
-                        let first_seq = slice.first_seq;
-
-                        if let Some(ev) = slice.events.into_iter().next() {
-                            // Fast path: event available. `log` drops when this async block
-                            // exits; `notif` (which borrows `log.notify`) drops before `log`
-                            // (LIFO) — no borrow conflict.
-                            //
-                            // Advance past any eviction gap in one step: if the ring evicted
-                            // events past `cursor`, `first_seq` > `cursor` and the naïve
-                            // `cursor + 1` would still be below `first_seq`, causing the same
-                            // event to be re-emitted until the cursor walked up to `first_seq`.
-                            let next_cursor = cursor.max(first_seq) + 1;
-                            let terminal = is_terminal(&ev);
-                            return Some((ev, (next_cursor, terminal)));
+                        let slice = log.read_from(state.cursor);
+                        if !slice.events.is_empty() {
+                            // Advance past the whole batch (and past any eviction gap:
+                            // `read_from` clamps `next_cursor` up from `first_seq`).
+                            state.cursor = slice.next_cursor;
+                            state.pending = slice.events.into_iter();
+                            let ev = state.pending.next().expect("slice.events non-empty");
+                            state.done = is_terminal(&ev);
+                            return Some((ev, state));
                         }
-
-                        // No events available yet.
                         if slice.terminal {
-                            // Terminal with an empty slice: the run ended before we could observe
-                            // it (all events evicted past our cursor, or mark_terminal with no
-                            // events).
+                            // No retained events at/after the cursor and the run ended
+                            // (mark_terminal with no events, or everything evicted).
                             return None;
                         }
-
-                        // Step 3: Await the pre-registered wakeup, then loop to re-check.
                         notif.await;
                     }
                 }
@@ -326,5 +332,21 @@ mod tests {
             got.push(ev);
         }
         assert_eq!(got.len(), 2);
+    }
+
+    /// A large replay must drain in one batch, in order, with no duplicates or
+    /// drops — guards the O(n) batch-drain rewrite of `subscribe`.
+    #[tokio::test]
+    async fn subscribe_replays_large_log_in_order() {
+        let log = Arc::new(EventLog::new(8192));
+        for i in 0..5000u32 {
+            log.append(delta(&i.to_string()));
+        }
+        log.append(done());
+        let got: Vec<_> = log.subscribe(0).collect().await;
+        assert_eq!(got.len(), 5001);
+        assert!(matches!(&got[0], AgentEvent::TokenDelta { text } if text == "0"));
+        assert!(matches!(&got[4999], AgentEvent::TokenDelta { text } if text == "4999"));
+        assert!(matches!(&got[5000], AgentEvent::RunCompleted { .. }));
     }
 }

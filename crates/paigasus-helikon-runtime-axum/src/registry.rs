@@ -5,6 +5,7 @@
 //! (FIFO-by-completion eviction). Live (non-terminal) runs are **never** evicted.
 
 use crate::event_log::EventLog;
+use paigasus_helikon_core::AgentEvent;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, RwLock},
@@ -28,6 +29,34 @@ pub(crate) struct RunHandle {
     pub start_error: Mutex<Option<String>>,
     /// Set once the run enters a terminal state (via [`RunRegistry::note_terminal`]).
     pub terminal_at: Mutex<Option<Instant>>,
+}
+
+impl RunHandle {
+    /// The synthetic terminal frame a streaming transport must emit when its
+    /// subscribe stream ended without delivering a real `RunCompleted`/`RunFailed`.
+    ///
+    /// Returns `None` when a real terminal was already delivered (`saw_terminal`
+    /// is `true`). Otherwise returns an [`AgentEvent::RunFailed`], sourced from
+    /// [`start_error`](RunHandle#structfield.start_error) if the run failed to
+    /// start, or a generic message (e.g. a stream that panicked or ended mid-run
+    /// before any terminal event).
+    pub(crate) fn synthetic_terminal_frame(&self, saw_terminal: bool) -> Option<AgentEvent> {
+        if saw_terminal {
+            return None;
+        }
+        let error = self
+            .start_error
+            .lock()
+            .expect("start_error mutex poisoned")
+            .clone()
+            .unwrap_or_else(|| "run ended before producing a terminal event".to_owned());
+        tracing::warn!(
+            agent = %self.agent_name,
+            %error,
+            "run ended without a real terminal event; synthesizing a RunFailed frame for the stream subscriber"
+        );
+        Some(AgentEvent::RunFailed { error })
+    }
 }
 
 // ── RegistryInner ─────────────────────────────────────────────────────────────
@@ -285,5 +314,28 @@ mod tests {
         // Sweep past TTL — all three runs evicted and queue must be empty.
         reg.sweep(t0 + Duration::from_secs(61));
         assert_eq!(reg.completion_queue_len(), 0);
+    }
+
+    /// `synthetic_terminal_frame` returns `None` once a real terminal was seen,
+    /// the captured `start_error` when present, and a generic message otherwise.
+    #[test]
+    fn synthetic_terminal_frame_branches() {
+        let reg = RunRegistry::new(Duration::from_secs(60), 16, 16);
+        let (_id, h) = reg.create("a".into(), CancellationToken::new());
+
+        assert!(h.synthetic_terminal_frame(true).is_none());
+
+        match h.synthetic_terminal_frame(false) {
+            Some(AgentEvent::RunFailed { error }) => {
+                assert_eq!(error, "run ended before producing a terminal event");
+            }
+            other => panic!("expected generic RunFailed, got {other:?}"),
+        }
+
+        *h.start_error.lock().unwrap() = Some("boom".to_owned());
+        match h.synthetic_terminal_frame(false) {
+            Some(AgentEvent::RunFailed { error }) => assert_eq!(error, "boom"),
+            other => panic!("expected RunFailed(boom), got {other:?}"),
+        }
     }
 }

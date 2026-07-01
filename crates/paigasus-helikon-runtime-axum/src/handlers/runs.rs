@@ -48,13 +48,13 @@ use futures_util::StreamExt;
 use paigasus_helikon_core::{Agent, AgentEvent, AgentInput, RunConfig, RunContext, Runner};
 use serde::Deserialize;
 use tokio::sync::OwnedMutexGuard;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use uuid::Uuid;
 
 use crate::{
     dto::{AsyncAccepted, RunRequest, RunResponse},
     error::ServerError,
-    event_log::EventLog,
+    event_log::{is_terminal, EventLog},
     registry::{RunHandle, RunRegistry},
     server::AppState,
 };
@@ -323,25 +323,61 @@ fn async_response(run_id: Uuid) -> Response {
         .into_response()
 }
 
+/// Unfold state for the SSE response stream: the live event stream, the cancel
+/// drop-guard (held for the stream's whole lifetime so a client disconnect
+/// cancels the run), a clone of the run handle (to synthesize a terminal frame
+/// on a terminal-less close), and the `saw_terminal` / `done` flags.
+struct SseState<S> {
+    events: S,
+    // Held only for its `Drop` side effect (cancels the run when the SSE
+    // response — and with it this state — is dropped); never read directly.
+    #[allow(dead_code)]
+    disconnect: DropGuard,
+    handle: Arc<RunHandle>,
+    saw_terminal: bool,
+    done: bool,
+}
+
 /// Build the SSE streaming response.
 ///
 /// The run's cancel `DropGuard` is folded into the stream state so that dropping
-/// the response (a client disconnect) cancels the run.
+/// the response (a client disconnect) cancels the run. If the live event stream
+/// ends without delivering a real terminal event (a start-error, or a stream
+/// that ended/panicked mid-run), exactly one synthetic `run_failed` frame is
+/// appended before the SSE stream closes — see
+/// [`RunHandle::synthetic_terminal_frame`].
 fn sse_response(run_id: Uuid, handle: &Arc<RunHandle>) -> Response {
     let disconnect = handle.cancel.clone().drop_guard();
     let events = handle.log.subscribe(0);
+    let handle = Arc::clone(handle);
 
-    // Carry both the event stream and the cancel guard through the unfold state.
-    // When the SSE response is dropped, the state — and with it the guard — is
-    // dropped, cancelling the run.
     let stream = futures_util::stream::unfold(
-        (events, disconnect),
-        |(mut events, disconnect)| async move {
-            let ev = events.next().await?;
-            Some((
-                Ok::<Event, Infallible>(to_sse_event(&ev)),
-                (events, disconnect),
-            ))
+        SseState {
+            events,
+            disconnect,
+            handle,
+            saw_terminal: false,
+            done: false,
+        },
+        |mut state| async move {
+            if state.done {
+                return None;
+            }
+            match state.events.next().await {
+                Some(ev) => {
+                    state.saw_terminal |= is_terminal(&ev);
+                    let frame = to_sse_event(&ev);
+                    Some((Ok::<Event, Infallible>(frame), state))
+                }
+                None => {
+                    // Live stream ended. If no real terminal was delivered, emit
+                    // exactly one synthetic `run_failed` frame, then finish.
+                    let synthetic = state.handle.synthetic_terminal_frame(state.saw_terminal)?;
+                    let frame = to_sse_event(&synthetic);
+                    state.done = true;
+                    Some((Ok::<Event, Infallible>(frame), state))
+                }
+            }
         },
     );
 

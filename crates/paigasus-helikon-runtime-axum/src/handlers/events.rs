@@ -23,7 +23,7 @@ use axum::{
 use futures_util::StreamExt;
 use uuid::Uuid;
 
-use crate::{error::ServerError, registry::RunHandle, server::AppState};
+use crate::{error::ServerError, event_log::is_terminal, registry::RunHandle, server::AppState};
 
 /// `GET /agents/{name}/runs/{id}/events` — subscribe to run events via WebSocket.
 ///
@@ -75,11 +75,17 @@ pub(crate) async fn events<Ctx: Send + Sync + 'static>(
 /// - The client closes the connection (`socket.recv()` returns `None` or an
 ///   error).
 ///
+/// If the stream ends without a real terminal event having been delivered (a
+/// start-error or otherwise terminal-less run), a synthetic `run_failed` frame
+/// is sent before the Close, so the client always observes a terminal frame —
+/// mirroring the SSE transport.
+///
 /// Both halves of the socket are polled concurrently so that a client
 /// disconnect is detected promptly even while events are still being replayed.
 /// Disconnect does **not** cancel the run.
 async fn handle_socket(mut socket: WebSocket, handle: Arc<RunHandle>) {
     let mut sub = handle.log.subscribe(0);
+    let mut saw_terminal = false;
 
     loop {
         tokio::select! {
@@ -87,6 +93,9 @@ async fn handle_socket(mut socket: WebSocket, handle: Arc<RunHandle>) {
             ev = sub.next() => {
                 match ev {
                     Some(ev) => {
+                        if is_terminal(&ev) {
+                            saw_terminal = true;
+                        }
                         let text = match serde_json::to_string(&ev) {
                             Ok(t) => t,
                             Err(_) => break,
@@ -95,10 +104,16 @@ async fn handle_socket(mut socket: WebSocket, handle: Arc<RunHandle>) {
                             break;
                         }
                     }
-                    // Log stream ended — terminal event was already delivered.
+                    // Log stream ended. If no real terminal was delivered (start
+                    // error / terminal-less stream), send a final synthetic
+                    // `RunFailed` frame before the Close so the client always sees
+                    // a terminal frame.
                     None => {
-                        // Send a proper Close frame so the client knows the
-                        // stream is complete.
+                        if let Some(frame) = handle.synthetic_terminal_frame(saw_terminal) {
+                            if let Ok(text) = serde_json::to_string(&frame) {
+                                let _ = socket.send(Message::text(text)).await;
+                            }
+                        }
                         let _ = socket.send(Message::Close(None)).await;
                         break;
                     }

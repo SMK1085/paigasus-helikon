@@ -2,6 +2,11 @@
 
 mod support;
 
+use std::sync::Arc;
+
+use paigasus_helikon_core::AgentEvent;
+use paigasus_helikon_runtime_axum::AgentServer;
+
 /// **AC1** — a one-shot `POST /agents/{name}/runs` returns the aggregated run
 /// result as JSON, with an `x-run-id` response header.
 #[tokio::test]
@@ -121,4 +126,78 @@ async fn unknown_agent_404() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+/// A run whose runner start-errors must still surface a final synthetic
+/// `run_failed` frame on the SSE stream (the stream is HTTP 200; the failure
+/// is in-band), then close.
+#[tokio::test]
+async fn sse_emits_synthetic_run_failed_on_start_error() {
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .runner(Arc::new(support::FailingRunner))
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "echo".into(),
+            events: support::echo_script(),
+        }))
+        .build()
+        .expect("server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { server.serve_with_listener(listener).await.unwrap() });
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/agents/echo/runs?stream=sse"))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"x"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "SSE responses are 200; failure is in-band"
+    );
+    let events = support::parse_sse(&resp.text().await.unwrap());
+    assert_eq!(events.len(), 1, "exactly one synthetic terminal frame");
+    assert!(
+        matches!(&events[0], AgentEvent::RunFailed { error } if !error.is_empty()),
+        "expected a non-empty RunFailed, got {:?}",
+        events[0]
+    );
+}
+
+/// A run that yields real events then ends with no terminal must get a final
+/// synthetic `run_failed` frame (generic message) appended AFTER the real events.
+#[tokio::test]
+async fn sse_emits_synthetic_run_failed_after_terminalless_stream() {
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .runner(Arc::new(support::PartialThenEndRunner))
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "echo".into(),
+            events: vec![],
+        }))
+        .build()
+        .expect("server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { server.serve_with_listener(listener).await.unwrap() });
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/agents/echo/runs?stream=sse"))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"x"}"#)
+        .send()
+        .await
+        .unwrap();
+    let events = support::parse_sse(&resp.text().await.unwrap());
+    assert_eq!(events.len(), 2);
+    assert!(matches!(&events[0], AgentEvent::TokenDelta { text } if text == "hi"));
+    assert!(
+        matches!(&events[1], AgentEvent::RunFailed { error }
+            if error == "run ended before producing a terminal event"),
+        "expected generic RunFailed last, got {:?}",
+        events[1]
+    );
 }
