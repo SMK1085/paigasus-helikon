@@ -75,6 +75,11 @@ pub(crate) async fn events<Ctx: Send + Sync + 'static>(
 /// - The client closes the connection (`socket.recv()` returns `None` or an
 ///   error).
 ///
+/// If the stream ends without a real terminal event having been delivered (a
+/// start-error or otherwise terminal-less run), a synthetic `run_failed` frame
+/// is sent before the Close, so the client always observes a terminal frame —
+/// mirroring the SSE transport.
+///
 /// Both halves of the socket are polled concurrently so that a client
 /// disconnect is detected promptly even while events are still being replayed.
 /// Disconnect does **not** cancel the run.

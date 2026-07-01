@@ -85,7 +85,7 @@ Every run — regardless of the transport used to start it — drains into an in
 - **SSE mode** subscribes and streams events as they arrive; a client reconnect to `GET /agents/{name}/runs/{id}/events` (WebSocket) replays already-emitted events before tailing live ones.
 - **Async mode** returns `202` immediately and the run continues in a background task. The log survives connection close.
 - **Cancellation**: one-shot and SSE responses hold a `CancellationToken` drop-guard so a client disconnect cancels the run. The async mode deliberately does not, so the run outlives the connection.
-- **Stream error frames**: if a run ends without a real terminal event — e.g. its session backend fails to start, or its stream ends early — the SSE and WebSocket transports emit a final synthetic `run_failed` event before closing, so a streaming client always observes a terminal frame. (One-shot mode instead returns HTTP `500`.)
+- **Stream error frames**: if a run ends without a real terminal event — e.g. its session backend fails to start, or its stream ends early — the SSE and WebSocket transports emit a final synthetic `run_failed` event before closing, so a streaming client always observes a terminal frame. (One-shot mode instead returns HTTP `500` on a start error, or `200` with a partial result when a started run ends without a terminal event.)
 
 Completed runs are retained for a configurable period and count:
 
