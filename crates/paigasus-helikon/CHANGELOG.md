@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.15](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.14...paigasus-helikon-v0.4.15) - 2026-07-01
+
+### Other
+
+- updated the following local packages: paigasus-helikon-runtime-axum
+
 ## [0.4.14](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.13...paigasus-helikon-v0.4.14) - 2026-06-30
 
 ### Added
