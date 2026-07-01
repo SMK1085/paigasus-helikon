@@ -76,6 +76,8 @@ See the [`curl_server`](https://github.com/SMK1085/paigasus-helikon/blob/main/cr
 | `GET` | `/agents` | List all mounted agents |
 | `GET` | `/openapi.json` | OpenAPI 3.1 JSON spec (requires `openapi` feature, enabled by default) |
 
+On a start error — or any run that ends without a terminal event — the streaming transports (SSE and WebSocket) emit a final synthetic `run_failed` event before closing, so a streaming client always sees a terminal frame; one-shot runs instead return `500`.
+
 ## Features
 
 | Feature | Default | Description |
