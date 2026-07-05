@@ -5,9 +5,16 @@
 //! **Why not loom:** loom models pure-Rust concurrency primitives and
 //! can't reason about SQLite's lock state machine. Using a real
 //! `tokio::test` with a file-backed pool exercises the actual write-lock
-//! path. The 30-second busy timeout absorbs slow CI runners where 160
-//! sequential `BEGIN IMMEDIATE` transactions can approach the default 5
-//! seconds.
+//! path.
+//!
+//! **Pool sizing (SMA-431):** `busy_timeout` caps each writer's wait for
+//! SQLite's single write lock, and the worst-placed writer waits out the
+//! whole backlog — all 160 transactions here. A healthy Windows runner
+//! finishes that backlog in ~1.3s, but a degraded one (CI run 27703633580)
+//! was still incomplete at 33.6s and blew through the previous 30s timeout.
+//! 120s plus `synchronous=NORMAL` (no per-commit fsync) gives a ≥3.5×
+//! guaranteed floor over the worst observed backlog, ~40× if fsync
+//! dominates. See docs/superpowers/specs/2026-07-05-sma-431-sqlite-busy-flake-design.md.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,7 +22,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use paigasus_helikon_core::{ContentPart, Session, SessionEvent};
 use paigasus_helikon_sessions_sqlite::SqliteSession;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 const N_TASKS: usize = 16;
 const M_EVENTS_PER_TASK: usize = 10;
@@ -29,7 +36,8 @@ async fn concurrent_appends_produce_contiguous_sequence() {
         .filename(&path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(Duration::from_secs(30));
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(120));
     let pool = SqlitePoolOptions::new()
         .max_connections(8)
         .connect_with(opts)

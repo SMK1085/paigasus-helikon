@@ -96,13 +96,16 @@ SQLite database; many sessions share one `sqlx::SqlitePool` and are isolated by
 ```rust
 use std::sync::Arc;
 use paigasus_helikon::sessions_sqlite::SqliteSession;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteJournalMode};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use std::time::Duration;
 
 let opts = SqliteConnectOptions::new()
     .filename("sessions.db")
     .create_if_missing(true)
     .journal_mode(SqliteJournalMode::Wal)
+    .synchronous(SqliteSynchronous::Normal)
     .busy_timeout(Duration::from_secs(30));
 let pool = SqlitePoolOptions::new().connect_with(opts).await?;
 
@@ -119,7 +122,15 @@ instance reads and writes.
 
 Appends serialize through SQLite's database-level write lock (`BEGIN IMMEDIATE`
 plus a `(session_id, sequence)` primary key), so the backend is safe for
-concurrent writers.
+concurrent writers. `synchronous = NORMAL` is the recommended pairing with WAL
+for multi-writer workloads (durability-for-throughput trade: a power loss may
+drop the newest commits, never corrupt). `busy_timeout` caps how long one
+append waits for the write lock — under sustained contention the worst-placed
+writer waits out the entire backlog ahead of it, so size the timeout against
+`writers × appends × worst-case transaction latency`, not a single
+transaction. An append that exhausts it fails cleanly with
+`SessionError::Backend` ("database is locked"), persisting nothing; the
+session stays usable.
 
 ### `PostgresSession` (`paigasus-helikon-sessions-postgres`)
 

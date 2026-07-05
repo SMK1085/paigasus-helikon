@@ -9,7 +9,9 @@
 //! ## Recommended pool configuration
 //!
 //! ```no_run
-//! use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteJournalMode};
+//! use sqlx::sqlite::{
+//!     SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+//! };
 //! use std::time::Duration;
 //!
 //! # async fn build() -> Result<sqlx::SqlitePool, sqlx::Error> {
@@ -17,15 +19,34 @@
 //!     .filename("sessions.db")
 //!     .create_if_missing(true)
 //!     .journal_mode(SqliteJournalMode::Wal)
+//!     .synchronous(SqliteSynchronous::Normal)
 //!     .busy_timeout(Duration::from_secs(30));
 //! SqlitePoolOptions::new().connect_with(opts).await
 //! # }
 //! ```
 //!
-//! `busy_timeout` is a write-contention parameter; 30 seconds is the value
-//! exercised by this crate's `concurrent_writers` test against a real WAL
-//! pool on CI. Tune downward if you know your workload is single-writer or
-//! upward if you expect heavy multi-writer contention.
+//! `synchronous = NORMAL` is the recommended pairing with WAL for
+//! multi-writer workloads: commits stop fsyncing individually (the WAL is
+//! synced at checkpoints instead), which multiplies write throughput under
+//! contention. The trade-off is durability, not integrity — after a power
+//! loss the most recent commits may be missing, but the database cannot
+//! corrupt. Keep sqlx's default `FULL` if losing any acknowledged append is
+//! unacceptable.
+//!
+//! ## Concurrent appends under contention
+//!
+//! Writers serialize on SQLite's single database-level write lock.
+//! `busy_timeout` caps how long one `append` waits for that lock, and under
+//! sustained contention the worst-placed writer waits out the *entire
+//! backlog* ahead of it — so size the timeout against
+//! `(concurrent writers) × (appends per writer) × (worst-case transaction
+//! latency)`, not against a single transaction. An `append` that exhausts
+//! the timeout fails with [`SessionError::Backend`] wrapping `SQLITE_BUSY`
+//! ("database is locked"). The failure is clean: nothing from the failed
+//! call is persisted, no stored data is lost or corrupted, and the session
+//! remains usable (pinned by this crate's `busy_timeout` integration test).
+//! 30 seconds is a sane starting point; tune upward for heavy multi-writer
+//! contention.
 //!
 //! ## Provider-translator caveat
 //!
@@ -36,6 +57,7 @@
 //! top-level instructions, not positional cutovers.
 //!
 //! [`Session`]: paigasus_helikon_core::Session
+//! [`SessionError::Backend`]: paigasus_helikon_core::SessionError::Backend
 //! [`project`]: paigasus_helikon_core::project
 //! [`Compacted`]: paigasus_helikon_core::SessionEvent::Compacted
 
