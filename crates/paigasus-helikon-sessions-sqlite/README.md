@@ -14,13 +14,16 @@ Most users enable the `sessions-sqlite` feature on the [`paigasus-helikon`](http
 
 ```rust
 use paigasus_helikon_sessions_sqlite::SqliteSession;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use std::time::Duration;
 
 let opts = SqliteConnectOptions::new()
     .filename("sessions.db")
     .create_if_missing(true)
     .journal_mode(SqliteJournalMode::Wal)
+    .synchronous(SqliteSynchronous::Normal)
     .busy_timeout(Duration::from_secs(30));
 let pool = SqlitePoolOptions::new().connect_with(opts).await?;
 
@@ -28,7 +31,7 @@ let pool = SqlitePoolOptions::new().connect_with(opts).await?;
 let session = SqliteSession::open(pool, "user-123").await?;
 ```
 
-Wrap the session in `Arc` and pass it into `RunContext::new(...)` (whose session parameter is `Arc<dyn Session>`) in place of `Arc::new(MemorySession::new())` to persist transcripts across runs. WAL journal mode plus a `busy_timeout` are recommended for concurrent writers — see the crate docs for the rationale and the `open_without_migrate` fast path.
+Wrap the session in `Arc` and pass it into `RunContext::new(...)` (whose session parameter is `Arc<dyn Session>`) in place of `Arc::new(MemorySession::new())` to persist transcripts across runs. WAL journal mode plus `synchronous = NORMAL` are recommended for concurrent writers. `busy_timeout` caps how long one append waits for SQLite's single write lock — under sustained contention the worst-placed writer waits out the entire backlog ahead of it, so size the timeout against total backlog duration, not a single transaction; an append that exhausts it fails cleanly with `SessionError::Backend` ("database is locked"), persisting nothing. See the crate docs for the full sizing rule and the `open_without_migrate` fast path.
 
 ## Links
 
