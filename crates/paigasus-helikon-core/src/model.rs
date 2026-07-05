@@ -95,7 +95,7 @@ pub trait Model: Send + Sync {
 /// invoke, and provider-tuning knobs. Field shape is the minimum SMA-314
 /// needs to drive the loop; SMA-316 / SMA-317 add `tool_choice`,
 /// `response_format`, `temperature`, and `previous_response_id`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ModelRequest {
     /// The full accumulated conversation so far.
@@ -115,7 +115,7 @@ impl ModelRequest {
 
 /// Owned snapshot of a [`crate::Tool`] for cross-async-boundary use
 /// inside [`ModelRequest`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolDef {
     /// Identifier the model uses when emitting a tool call.
     pub name: String,
@@ -129,7 +129,7 @@ pub struct ToolDef {
 ///
 /// Field shape grew in SMA-316 to cover the surface OpenAI needs;
 /// SMA-317 (Anthropic) may reshape if Anthropic's protocol demands it.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ModelSettings {
     /// Sampling temperature. Provider-defined default when unset.
@@ -224,7 +224,7 @@ pub enum ModelEvent {
 }
 
 /// Why a single model response stopped emitting tokens.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum FinishReason {
     /// Natural stop.
@@ -343,7 +343,7 @@ impl ModelCapabilities {
 /// do not accept a `tool_choice` (older Anthropic builds, some
 /// OpenAI-compatible proxies) treat any non-`None` setting as
 /// best-effort.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ToolChoice {
     /// Default — the model decides whether to call a tool.
@@ -364,7 +364,7 @@ pub enum ToolChoice {
 /// Maps onto each provider's native `response_format` (OpenAI),
 /// `response_format`/`tool` (Anthropic), or structured-output equivalent.
 /// Providers that lack native support degrade to `Text`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ResponseFormat {
     /// Default — assistant text is unconstrained.
