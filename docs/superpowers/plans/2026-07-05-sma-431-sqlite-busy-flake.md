@@ -548,7 +548,7 @@ done; echo "stress loop done"
 
 Expected: prints only `stress loop done` (no `FAIL at iteration N`). If any iteration fails, STOP and report — do not retry-until-green.
 
-- [ ] **Step 4: Confirm working tree is clean and branch is 6 commits ahead of main**
+- [ ] **Step 4: Confirm working tree is clean and branch is 7 commits ahead of main**
 
 ```bash
 git status --short
