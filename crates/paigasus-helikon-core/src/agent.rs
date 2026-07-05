@@ -441,50 +441,6 @@ pub enum AgentEvent {
 
 // ── Private helpers for the LlmAgent driver ─────────────────────────────────
 
-/// Accumulates the in-progress tool call across `ModelEvent::ToolCallDelta` chunks.
-#[derive(Default)]
-struct ToolCallAccum {
-    name: Option<String>,
-    args_str: String,
-}
-
-/// Reassemble streamed model output into [`Item`]s.
-fn build_items(
-    agent_name: &str,
-    text: String,
-    reasoning: String,
-    tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
-) -> Result<Vec<crate::Item>, String> {
-    let mut items = Vec::new();
-    if !text.is_empty() || !reasoning.is_empty() {
-        let mut content = Vec::new();
-        if !reasoning.is_empty() {
-            content.push(crate::ContentPart::Reasoning { text: reasoning });
-        }
-        if !text.is_empty() {
-            content.push(crate::ContentPart::Text { text });
-        }
-        items.push(crate::Item::AssistantMessage {
-            content,
-            agent: Some(agent_name.to_owned()),
-        });
-    }
-    for (call_id, accum) in tool_accum {
-        let args = serde_json::from_str(&accum.args_str).map_err(|e| {
-            format!(
-                "invalid tool args for call_id={call_id} (name={}): {e}",
-                accum.name.as_deref().unwrap_or("?")
-            )
-        })?;
-        items.push(crate::Item::ToolCall {
-            call_id,
-            name: accum.name.unwrap_or_default(),
-            args,
-        });
-    }
-    Ok(items)
-}
-
 /// Concatenate the text of all `Item::UserMessage` parts in the seed
 /// conversation — the text input guardrails inspect.
 fn user_text_of(conversation: &[crate::Item]) -> String {
@@ -936,62 +892,33 @@ where
                             }
                         };
 
-                        let mut text = String::new();
-                        let mut reasoning = String::new();
-                        let mut tool_accum: std::collections::BTreeMap<String, ToolCallAccum> =
-                            std::collections::BTreeMap::new();
-                        let mut finish_reason = crate::FinishReason::Stop;
-                        let mut latest_usage: Option<crate::TokenUsage> = None;
+                        let mut acc = crate::ModelTurnAccumulator::new(agent_name.clone());
 
                         while let Some(evt) = model_stream.next().await {
                             match evt {
-                                Ok(crate::ModelEvent::TokenDelta { text: t }) => {
-                                    text.push_str(&t);
-                                    yield crate::AgentEvent::TokenDelta { text: t };
-                                }
-                                Ok(crate::ModelEvent::ReasoningDelta { text: t }) => {
-                                    reasoning.push_str(&t);
-                                    yield crate::AgentEvent::ReasoningDelta { text: t };
-                                }
-                                Ok(crate::ModelEvent::ToolCallDelta {
-                                    call_id,
-                                    name,
-                                    args_delta,
-                                }) => {
-                                    let a = tool_accum.entry(call_id.clone()).or_default();
-                                    if a.name.is_none() {
-                                        if let Some(n) = name.as_deref() {
-                                            a.name = Some(n.into());
+                                Ok(ev) => {
+                                    acc.observe(&ev);
+                                    match ev {
+                                        crate::ModelEvent::TokenDelta { text } => {
+                                            yield crate::AgentEvent::TokenDelta { text };
                                         }
+                                        crate::ModelEvent::ReasoningDelta { text } => {
+                                            yield crate::AgentEvent::ReasoningDelta { text };
+                                        }
+                                        crate::ModelEvent::ToolCallDelta {
+                                            call_id,
+                                            name,
+                                            args_delta,
+                                        } => {
+                                            yield crate::AgentEvent::ToolCallDelta {
+                                                call_id,
+                                                name,
+                                                args_delta,
+                                            };
+                                        }
+                                        crate::ModelEvent::Usage { .. }
+                                        | crate::ModelEvent::Finish { .. } => {}
                                     }
-                                    a.args_str.push_str(&args_delta);
-                                    yield crate::AgentEvent::ToolCallDelta {
-                                        call_id,
-                                        name,
-                                        args_delta,
-                                    };
-                                }
-                                Ok(crate::ModelEvent::Usage {
-                                    input_tokens,
-                                    output_tokens,
-                                    cached_input_tokens,
-                                    reasoning_tokens,
-                                }) => {
-                                    latest_usage = Some(crate::TokenUsage {
-                                        input_tokens: u64::from(input_tokens),
-                                        output_tokens: u64::from(output_tokens),
-                                        cached_input_tokens: cached_input_tokens
-                                            .map(u64::from)
-                                            .unwrap_or(0),
-                                        reasoning_tokens: reasoning_tokens
-                                            .map(u64::from)
-                                            .unwrap_or(0),
-                                        total_tokens: u64::from(input_tokens)
-                                            + u64::from(output_tokens),
-                                    });
-                                }
-                                Ok(crate::ModelEvent::Finish { reason }) => {
-                                    finish_reason = reason;
                                 }
                                 Err(e) => {
                                     let msg = e.to_string();
@@ -1004,8 +931,8 @@ where
                             }
                         }
 
-                        let items = match build_items(&agent_name, text, reasoning, tool_accum) {
-                            Ok(items) => items,
+                        let crate::ModelTurn { items, usage, finish_reason } = match acc.finish() {
+                            Ok(turn) => turn,
                             Err(e) => {
                                 chat_span.record("otel.status_code", "ERROR");
                                 run_span.record("otel.status_code", "ERROR");
@@ -1015,7 +942,6 @@ where
                             }
                         };
                         conversation.extend(items.iter().cloned());
-                        let usage = latest_usage.unwrap_or_default();
                         // Per-turn chat span records the FINAL retained Usage snapshot
                         // (Anthropic emits incremental updates; retain the LAST, never sum
                         // within a turn). Cross-turn run totals now accumulate inside the

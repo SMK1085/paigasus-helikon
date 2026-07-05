@@ -431,6 +431,224 @@ pub enum ModelError {
     Other(#[from] anyhow::Error),
 }
 
+// ── Model-turn accumulation ─────────────────────────────────────────────────
+
+/// One fully-aggregated model turn.
+///
+/// Reassembled from a [`ModelEvent`] stream by [`ModelTurnAccumulator`]: the
+/// concatenated text/reasoning deltas become at most one
+/// [`crate::Item::AssistantMessage`], each distinct `ToolCallDelta` `call_id`
+/// becomes one [`crate::Item::ToolCall`], `usage` is the last `Usage`
+/// snapshot observed, and `finish_reason` is the terminal `Finish` reason.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ModelTurn {
+    /// Reconstructed items: an optional leading `AssistantMessage` (text
+    /// and/or reasoning content) followed by zero or more `ToolCall`s, in
+    /// deterministic `call_id`-sorted order.
+    pub items: Vec<crate::Item>,
+    /// The last [`ModelEvent::Usage`] snapshot observed (last-wins; usage
+    /// snapshots are never summed within a turn), or the zero default if
+    /// the stream never emitted one.
+    pub usage: crate::TokenUsage,
+    /// Why the response ended.
+    pub finish_reason: FinishReason,
+}
+
+/// Accumulates the in-progress tool call across `ModelEvent::ToolCallDelta`
+/// chunks for one `call_id`.
+#[derive(Debug, Default)]
+struct ToolCallAccum {
+    name: Option<String>,
+    args_str: String,
+}
+
+/// Reassemble streamed model output into [`crate::Item`]s.
+fn build_items(
+    agent_name: &str,
+    text: String,
+    reasoning: String,
+    tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
+) -> Result<Vec<crate::Item>, String> {
+    let mut items = Vec::new();
+    if !text.is_empty() || !reasoning.is_empty() {
+        let mut content = Vec::new();
+        if !reasoning.is_empty() {
+            content.push(crate::ContentPart::Reasoning { text: reasoning });
+        }
+        if !text.is_empty() {
+            content.push(crate::ContentPart::Text { text });
+        }
+        items.push(crate::Item::AssistantMessage {
+            content,
+            agent: Some(agent_name.to_owned()),
+        });
+    }
+    for (call_id, accum) in tool_accum {
+        let args = serde_json::from_str(&accum.args_str).map_err(|e| {
+            format!(
+                "invalid tool args for call_id={call_id} (name={}): {e}",
+                accum.name.as_deref().unwrap_or("?")
+            )
+        })?;
+        items.push(crate::Item::ToolCall {
+            call_id,
+            name: accum.name.unwrap_or_default(),
+            args,
+        });
+    }
+    Ok(items)
+}
+
+/// Accumulates a streamed model response into a [`ModelTurn`].
+///
+/// Feed every successful [`ModelEvent`] from a [`Model::invoke`] stream via
+/// [`Self::observe`], then call [`Self::finish`] once the stream ends (after
+/// observing a `Finish` event) to reassemble the turn's [`crate::Item`]s.
+#[derive(Debug)]
+pub struct ModelTurnAccumulator {
+    agent_name: String,
+    text: String,
+    reasoning: String,
+    tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
+    finish_reason: FinishReason,
+    latest_usage: Option<crate::TokenUsage>,
+}
+
+impl ModelTurnAccumulator {
+    /// Start a new accumulator. `agent_name` is attributed to the
+    /// resulting turn's `AssistantMessage`, if any.
+    pub fn new(agent_name: impl Into<String>) -> Self {
+        Self {
+            agent_name: agent_name.into(),
+            text: String::new(),
+            reasoning: String::new(),
+            tool_accum: std::collections::BTreeMap::new(),
+            finish_reason: FinishReason::Stop,
+            latest_usage: None,
+        }
+    }
+
+    /// Feed one successful model event. `Err(ModelEvent)`s are the caller's
+    /// concern — this only observes `Ok` events from the stream.
+    pub fn observe(&mut self, event: &ModelEvent) {
+        match event {
+            ModelEvent::TokenDelta { text } => self.text.push_str(text),
+            ModelEvent::ReasoningDelta { text } => self.reasoning.push_str(text),
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                let a = self.tool_accum.entry(call_id.clone()).or_default();
+                if a.name.is_none() {
+                    if let Some(n) = name.as_deref() {
+                        a.name = Some(n.to_owned());
+                    }
+                }
+                a.args_str.push_str(args_delta);
+            }
+            ModelEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cached_input_tokens,
+                reasoning_tokens,
+            } => {
+                self.latest_usage = Some(crate::TokenUsage {
+                    input_tokens: u64::from(*input_tokens),
+                    output_tokens: u64::from(*output_tokens),
+                    cached_input_tokens: cached_input_tokens.map(u64::from).unwrap_or(0),
+                    reasoning_tokens: reasoning_tokens.map(u64::from).unwrap_or(0),
+                    total_tokens: u64::from(*input_tokens) + u64::from(*output_tokens),
+                });
+            }
+            ModelEvent::Finish { reason } => {
+                self.finish_reason = reason.clone();
+            }
+        }
+    }
+
+    /// Reassemble. `Err(String)` = invalid JSON in accumulated tool-call
+    /// args.
+    pub fn finish(self) -> Result<ModelTurn, String> {
+        let items = build_items(&self.agent_name, self.text, self.reasoning, self.tool_accum)?;
+        Ok(ModelTurn {
+            items,
+            usage: self.latest_usage.unwrap_or_default(),
+            finish_reason: self.finish_reason,
+        })
+    }
+}
+
+#[cfg(test)]
+mod model_turn_tests {
+    use super::*;
+
+    #[test]
+    fn accumulates_text_reasoning_and_tool_calls() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&ModelEvent::ReasoningDelta {
+            text: "think".into(),
+        });
+        acc.observe(&ModelEvent::TokenDelta { text: "hel".into() });
+        acc.observe(&ModelEvent::TokenDelta { text: "lo".into() });
+        acc.observe(&ModelEvent::ToolCallDelta {
+            call_id: "c1".into(),
+            name: Some("echo".into()),
+            args_delta: "{\"x\"".into(),
+        });
+        acc.observe(&ModelEvent::ToolCallDelta {
+            call_id: "c1".into(),
+            name: None,
+            args_delta: ":1}".into(),
+        });
+        acc.observe(&ModelEvent::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+        });
+        acc.observe(&ModelEvent::Finish {
+            reason: crate::FinishReason::ToolCalls,
+        });
+        let turn = acc.finish().unwrap();
+        assert_eq!(turn.items.len(), 2); // AssistantMessage(reasoning+text) + ToolCall
+        assert_eq!(turn.usage.input_tokens, 10);
+        assert_eq!(turn.usage.total_tokens, 15);
+        assert_eq!(turn.finish_reason, crate::FinishReason::ToolCalls);
+    }
+
+    #[test]
+    fn usage_is_last_wins() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&ModelEvent::Usage {
+            input_tokens: 1,
+            output_tokens: 1,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+        });
+        acc.observe(&ModelEvent::Usage {
+            input_tokens: 7,
+            output_tokens: 3,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+        });
+        let turn = acc.finish().unwrap();
+        assert_eq!(turn.usage.input_tokens, 7); // retained last snapshot, never summed
+    }
+
+    #[test]
+    fn invalid_tool_args_error() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&ModelEvent::ToolCallDelta {
+            call_id: "c1".into(),
+            name: Some("t".into()),
+            args_delta: "{not json".into(),
+        });
+        assert!(acc.finish().is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
