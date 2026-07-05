@@ -457,18 +457,6 @@ fn user_text_of(conversation: &[crate::Item]) -> String {
     s
 }
 
-/// Conversion convention: `ToolOutput.content` (SMA-313's
-/// `serde_json::Value`) becomes one `ContentPart::Text`.
-/// `Value::String(s) -> ContentPart::Text { text: s }`; other JSON
-/// values are stringified via `Value::to_string()`.
-fn tool_output_to_content_parts(output: &crate::ToolOutput) -> Vec<crate::ContentPart> {
-    let text = match &output.content {
-        serde_json::Value::String(s) => s.clone(),
-        v => v.to_string(),
-    };
-    vec![crate::ContentPart::Text { text }]
-}
-
 async fn run_tools_concurrent<Ctx>(
     tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
     calls: &[crate::ToolCallRequest],
@@ -521,7 +509,9 @@ where
             }
             let mut args = pre.replacement.unwrap_or(orig_args);
 
-            // Permission authorize on the effective args.
+            // Permission authorize on the effective args. `Interceptors::authorize`
+            // delegates to `RunContext::authorize_tool` — the same primitive a
+            // durable runner calls directly via `execute_tool_call`.
             match interceptors.authorize(&name, effect, &args).await {
                 crate::PermissionDecision::Allow => {}
                 crate::PermissionDecision::Replace { args: sanitized } => {
@@ -576,14 +566,12 @@ where
                         let final_json = post.replacement.unwrap_or(output_json);
                         // Redaction is the FINAL transform — after user PostToolUse
                         // hooks — so a hook cannot reintroduce an unredacted secret.
-                        let final_json = if redact_output {
-                            crate::redaction::redact(&final_json, secrets)
-                        } else {
-                            final_json
-                        };
-                        Ok(tool_output_to_content_parts(&crate::ToolOutput::new(
+                        // Shared with the durable-runner pipeline in `tool_exec.rs`.
+                        Ok(crate::finalize_tool_output(
                             final_json,
-                        )))
+                            redact_output,
+                            secrets,
+                        ))
                     }
                 }
                 Err(e) => Err(e),

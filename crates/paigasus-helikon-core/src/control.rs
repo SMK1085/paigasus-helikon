@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use crate::{
-    ApprovalOutcome, Guardrail, Hook, HookDecision, HookEvent, HookRegistry, PermissionDecision,
-    PermissionMode, RunContext, ToolEffect,
+    Guardrail, Hook, HookDecision, HookEvent, HookRegistry, PermissionDecision, RunContext,
+    ToolEffect,
 };
 
 /// Borrows everything the control seams need for one run.
@@ -111,99 +111,15 @@ where
     /// Authorize one tool call on its effective args: `deny rules › guard rules ›
     /// allow rules › mode › policy › AskUser`. Returns the resolved decision
     /// (never `AskUser` — that is resolved here via the approval handler, default
-    /// Deny).
+    /// Deny). Delegates to `RunContext::authorize_tool` — the primitive a
+    /// durable runner calls directly without needing this loop-private borrow.
     pub(crate) async fn authorize(
         &self,
         tool: &str,
         effect: ToolEffect,
         args: &serde_json::Value,
     ) -> PermissionDecision {
-        // 1. Deny rules — absolute, override even Bypass.
-        if self.ctx.deny_rules().iter().any(|r| r.matches(tool, args)) {
-            return PermissionDecision::Deny {
-                reason: format!("denied by deny rule: {tool}"),
-            };
-        }
-        // 2. Guard rules — built-in destructive defaults (unless opted out)
-        // then user guard rules. Run before mode, so they beat Bypass; may Ask.
-        let builtin = if self.ctx.default_guards() {
-            crate::GuardRule::destructive_defaults()
-        } else {
-            Vec::new()
-        };
-        for guard in builtin.iter().chain(self.ctx.guard_rules()) {
-            if guard.matches(tool, args) {
-                match guard.action() {
-                    crate::GuardAction::Deny { reason } => {
-                        return PermissionDecision::Deny {
-                            reason: reason.clone(),
-                        };
-                    }
-                    crate::GuardAction::Ask { prompt } => {
-                        let Some(handler) = self.ctx.approval_handler() else {
-                            return PermissionDecision::Deny {
-                                reason: format!("destructive command requires approval: {prompt}"),
-                            };
-                        };
-                        // Approval clears THIS guard only — continue the pipeline
-                        // so later guards and the allow/mode/policy steps still
-                        // apply. A matching allow rule may still short-circuit
-                        // before mode/policy; approval itself is not a blanket
-                        // authorization.
-                        match handler.decide(tool, prompt, args).await {
-                            ApprovalOutcome::Allow => continue,
-                            ApprovalOutcome::Deny { reason } => {
-                                return PermissionDecision::Deny { reason };
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // 3. Allow rules — positive short-circuit in ANY mode (after deny+guard,
-        // before mode). A global per-tool/per-command pre-approval that skips
-        // the policy AND any mode restriction (including Plan's read-only gate).
-        // Deny and guard already ran, so this cannot resurrect a denied/guarded
-        // call.
-        if self.ctx.allow_rules().iter().any(|r| r.matches(tool, args)) {
-            return PermissionDecision::Allow;
-        }
-        // 4. Mode.
-        match self.ctx.permission_mode() {
-            PermissionMode::Bypass => return PermissionDecision::Allow,
-            PermissionMode::Plan if effect != ToolEffect::ReadOnly => {
-                return PermissionDecision::Deny {
-                    reason: format!("Plan mode forbids the side-effecting tool `{tool}`"),
-                };
-            }
-            PermissionMode::AcceptEdits if effect == ToolEffect::Write => {
-                return PermissionDecision::Allow;
-            }
-            PermissionMode::DontAsk => {
-                return PermissionDecision::Deny {
-                    reason: format!("DontAsk mode: no allow rule matched `{tool}`"),
-                };
-            }
-            _ => {}
-        }
-        // 5. Policy (canUseTool). None ⇒ permissive.
-        let decision = match self.ctx.permission_policy() {
-            None => return PermissionDecision::Allow,
-            Some(policy) => policy.check(self.ctx, tool, args).await,
-        };
-        // 6. AskUser ⇒ approval handler; None ⇒ Deny.
-        match decision {
-            PermissionDecision::AskUser { prompt } => match self.ctx.approval_handler() {
-                None => PermissionDecision::Deny {
-                    reason: "no approval handler installed".to_owned(),
-                },
-                Some(handler) => match handler.decide(tool, &prompt, args).await {
-                    ApprovalOutcome::Allow => PermissionDecision::Allow,
-                    ApprovalOutcome::Deny { reason } => PermissionDecision::Deny { reason },
-                },
-            },
-            other => other,
-        }
+        self.ctx.authorize_tool(tool, effect, args).await
     }
 }
 
@@ -361,8 +277,8 @@ mod fire_tests {
 mod authorize_tests {
     use super::*;
     use crate::{
-        ApprovalHandler, CancellationToken, DenyRule, HookRegistry, MemorySession,
-        PermissionPolicy, Session, TracerHandle,
+        ApprovalHandler, ApprovalOutcome, CancellationToken, DenyRule, HookRegistry, MemorySession,
+        PermissionMode, PermissionPolicy, Session, TracerHandle,
     };
     use async_trait::async_trait;
     use serde_json::json;

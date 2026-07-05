@@ -36,6 +36,7 @@ pub mod session;
 pub mod state;
 pub mod token_counter;
 pub mod tool;
+pub mod tool_exec;
 pub mod workflow;
 
 #[doc(hidden)]
@@ -58,4 +59,5 @@ pub use session::*;
 pub use state::*;
 pub use token_counter::*;
 pub use tool::*;
+pub use tool_exec::*;
 pub use workflow::*;
