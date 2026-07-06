@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.13](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.12...paigasus-helikon-core-v0.5.13) - 2026-07-06
+
+### Added
+
+- *(core)* SMA-332 derive `Serialize`/`Deserialize` on `ModelRequest`, `ToolDef`, `ModelSettings`, `FinishReason`, `ToolChoice`, `ResponseFormat`, `ToolCallRequest`, and `ToolCallOutcome`, for durable-runtime checkpointing
+- *(core)* SMA-332 add `ModelTurnAccumulator` (with `ModelTurn::new`), hoisting the streaming model-turn accumulation logic out of `LlmAgent::run` so durable runners can drive it activity-by-activity
+- *(core)* SMA-332 expose `execute_tool_call` / `RunContext::authorize_tool` as standalone entry points into the tool-call authorize-and-redact pipeline, previously private to `LlmAgent::run`
+- *(core)* SMA-332 derive `Serialize`/`Deserialize` on `OutputType` (validator field skipped; deserializes to a fail-closed stand-in)
+
 ## [0.5.12](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.11...paigasus-helikon-core-v0.5.12) - 2026-06-29
 
 ### Added
