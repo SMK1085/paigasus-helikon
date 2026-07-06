@@ -25,7 +25,9 @@ use crate::sidecar::EvalSection;
 ///
 /// Returns an error if the sidecar or dataset fails to load, the `[eval]`
 /// section is missing/empty, an evaluator's config (schema file, judge
-/// model) fails to resolve, or an unknown `--trace` scheme is given.
+/// model) fails to resolve, the agent fails its pre-flight build (missing
+/// or broken tool scripts, instructions files, or mock scripts), or an
+/// unknown `--trace` scheme is given.
 pub async fn run(args: EvalRunArgs) -> anyhow::Result<ExitCode> {
     let registry = Arc::new(AgentRegistry::load(&args.agents)?);
     let dataset = EvalDataset::from_jsonl_path(&args.dataset)?;
@@ -39,6 +41,22 @@ pub async fn run(args: EvalRunArgs) -> anyhow::Result<ExitCode> {
     }
     let evaluators = build_evaluators(&section, &base_dir)?;
 
+    // Pre-flight: sidecar validation is filesystem-blind, so a typo'd tool
+    // script path, missing instructions file, or malformed mock script only
+    // surfaces when the agent is built. Build (and discard) the agent once
+    // here — exercising the same file reads as the per-case factory below —
+    // so those failures take the CLI's normal error path instead of
+    // panicking inside `EvalRun`'s infallible agent factory. The fake case
+    // id just selects the mock script file's default scripts.
+    registry
+        .build_agent_for_case(&args.agent, "__preflight__")
+        .with_context(|| {
+            format!(
+                "agent '{}' failed to build — check tool scripts, instructions files, and mock script paths",
+                args.agent
+            )
+        })?;
+
     let agent_name = args.agent.clone();
     let factory_registry = Arc::clone(&registry);
     let mut builder = EvalRun::builder::<()>()
@@ -47,7 +65,7 @@ pub async fn run(args: EvalRunArgs) -> anyhow::Result<ExitCode> {
             Arc::new(
                 factory_registry
                     .build_agent_for_case(&agent_name, &case.id)
-                    .expect("sidecar validated at load"),
+                    .expect("agent built successfully in pre-flight"),
             ) as Arc<dyn Agent<()>>
         })
         .default_ctx();

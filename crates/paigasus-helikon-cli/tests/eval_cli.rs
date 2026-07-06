@@ -54,6 +54,60 @@ fn eval_run_wrong_expectation_exits_nonzero() {
 }
 
 #[test]
+fn eval_run_missing_tool_script_fails_cleanly_without_panic() {
+    // Sidecar validation is filesystem-blind: a tool `script` pointing at a
+    // missing .rhai file passes load-time validation and only surfaces when
+    // the agent is built. The pre-flight build must turn that into the
+    // CLI's normal `error: ...` path, not a mid-run panic.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("agents.toml"),
+        r#"
+[agents.broken]
+instructions = "Test."
+model        = { provider = "mock", script = "script.json" }
+tools        = ["missing_tool"]
+
+[tools.missing_tool]
+description = "A tool whose script file does not exist"
+params      = { type = "object" }
+script      = "does_not_exist.rhai"
+
+[eval]
+evaluators = ["exact_match"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("script.json"),
+        r#"{"default":[[{"type":"token_delta","text":"hi"},{"type":"finish","reason":"stop"}]]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("dataset.jsonl"),
+        r#"{"id":"c1","input":"Hi!","expected":"hi"}"#,
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_helikon"))
+        .current_dir(dir.path())
+        .args(["eval", "run", "dataset.jsonl", "--agent", "broken"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "stderr:\n{stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "must fail via the error path, not a panic:\n{stderr}"
+    );
+    assert!(stderr.contains("error:"), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("broken"),
+        "error names the agent:\n{stderr}"
+    );
+}
+
+#[test]
 fn eval_run_json_output_parses() {
     let out = Command::new(env!("CARGO_BIN_EXE_helikon"))
         .current_dir(fixtures())
