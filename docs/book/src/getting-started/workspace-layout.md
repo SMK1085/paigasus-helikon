@@ -1,6 +1,6 @@
 # Workspace layout
 
-Paigasus Helikon is a Cargo workspace of **14 crates** under the `paigasus-helikon-*`
+Paigasus Helikon is a Cargo workspace of **19 crates** under the `paigasus-helikon-*`
 namespace. As a consumer you rarely depend on more than two of them directly: the
 `paigasus-helikon-core` trait crate, or — more commonly — the `paigasus-helikon` **facade**,
 which re-exports `core` plus the optional sibling crates behind Cargo features.
@@ -29,6 +29,8 @@ Feature names are kebab-case in `Cargo.toml`; the re-export module aliases are s
 | `tools-web` | *(extends `tools`)* | adds the WebFetch / WebSearch network tools |
 | `runtime-tokio` | `paigasus_helikon::runtime_tokio` | ephemeral Tokio runner |
 | `runtime-axum` | `paigasus_helikon::runtime_axum` | self-hosted HTTP/SSE/WebSocket agent server — see [Axum Server Runtime](../concepts/axum-server.md) |
+| `runtime-temporal` | `paigasus_helikon::runtime_temporal` | durable Temporal-backed runner — see [Runtimes](../concepts/runtimes.md) |
+| `runtime-agentcore` | `paigasus_helikon::runtime_agentcore` | AWS Bedrock AgentCore container shim — see [Runtimes](../concepts/runtimes.md) |
 | `sessions-sqlite` | `paigasus_helikon::sessions_sqlite` | SQLite `Session` backend |
 
 In addition, `paigasus_helikon::schema::strict` re-exports the JSON-Schema strict-mode normalizer
@@ -43,7 +45,7 @@ macro invocation `tools![...]` versus a path `tools::SomeTool`. Be explicit abou
 
 ## Published vs stub crates
 
-Fourteen crates carry real implementations and are published on crates.io / docs.rs:
+Sixteen crates carry real implementations and are published on crates.io / docs.rs:
 
 - `paigasus-helikon-core` — the dependency root (traits, agent loop, carrier types)
 - `paigasus-helikon` — the facade
@@ -57,16 +59,18 @@ Fourteen crates carry real implementations and are published on crates.io / docs
 - `paigasus-helikon-sessions-redis`
 - `paigasus-helikon-runtime-tokio`
 - `paigasus-helikon-runtime-axum` — self-hosted HTTP/SSE/WebSocket agent server (see [Axum Server Runtime](../concepts/axum-server.md))
+- `paigasus-helikon-runtime-temporal` — durable Temporal-backed runner (see [Runtimes](../concepts/runtimes.md))
+- `paigasus-helikon-runtime-agentcore` — AWS Bedrock AgentCore container shim (see [Runtimes](../concepts/runtimes.md))
 - `paigasus-helikon-mcp`
 - `paigasus-helikon-tools`
 
-Three crates are **`0.0.0` name-claim stubs — not yet implemented**:
-`paigasus-helikon-evals`, `paigasus-helikon-runtime-temporal`,
-`paigasus-helikon-runtime-agentcore`. Their facade features (`evals`,
-`runtime-temporal`, `runtime-agentcore`) exist and the re-export module aliases resolve, but the
-crates are empty — enabling them gives you nothing usable yet.
+One crate remains a **`0.0.0` name-claim stub — not yet implemented**:
+`paigasus-helikon-evals`. Its facade feature (`evals`) exists and the re-export module
+alias resolves, but the crate is empty — enabling it gives you nothing usable yet.
 
-The remaining crate, `paigasus-helikon-cli`, is a binary and is never published as a library.
+Two more crates round out the workspace's 19: `paigasus-helikon-cli` is a binary and is
+never published as a library, and `paigasus-helikon-sessions-testkit` is an internal
+`Session` conformance test harness (`publish = false`) never published either.
 
 ## Picking your surface
 
