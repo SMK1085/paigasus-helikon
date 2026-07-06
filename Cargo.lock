@@ -3111,6 +3111,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "async-trait",
+ "futures-core",
  "futures-util",
  "jiff",
  "jsonschema",

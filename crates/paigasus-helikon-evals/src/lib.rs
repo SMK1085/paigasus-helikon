@@ -7,10 +7,14 @@
 
 mod dataset;
 mod error;
+mod evaluator;
+mod evaluators;
 mod mock;
 mod script;
 
 pub use dataset::{EvalCase, EvalDataset};
 pub use error::EvalError;
+pub use evaluator::{CaseOutcome, Evaluator, Score, ScoreOutcome};
+pub use evaluators::{ExactMatch, JsonSchemaConformance};
 pub use mock::MockModel;
 pub use script::{ScriptEvent, ScriptFile, ScriptFinishReason};
