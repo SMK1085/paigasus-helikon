@@ -25,6 +25,7 @@
 
 - [Crate overview](./reference/crates.md)
 - [API docs](./reference/api-docs.md)
+- [CLI](./reference/cli.md)
 
 # Decisions
 

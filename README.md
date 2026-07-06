@@ -26,11 +26,11 @@ Paigasus is the umbrella; Helikon is the spring. The SDK is the artifact you dra
 cargo add paigasus-helikon --features openai,macros
 ```
 
-Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `sessions-postgres`, `sessions-redis`, `runtime-tokio`, `runtime-axum`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
+Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `sessions-postgres`, `sessions-redis`, `runtime-tokio`, `runtime-axum`, `evals`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
 
 ## Workspace at a glance
 
-Nineteen crates under `crates/`. Fourteen are published to crates.io; three are not-yet-implemented stubs; one is an internal test harness (`publish = false`); the CLI is binary-only.
+Nineteen crates under `crates/`. Sixteen are published to crates.io; two are not-yet-implemented stubs; one is an internal test harness (`publish = false`); one of the published crates (the CLI) is binary-only.
 
 - **`paigasus-helikon`** — facade re-exporting `core` plus opt-in sibling crates by feature flag.
 - **`paigasus-helikon-core`** — type system, traits, the agent loop, runtime-agnostic primitives.
@@ -43,8 +43,9 @@ Nineteen crates under `crates/`. Fourteen are published to crates.io; three are 
 - **`paigasus-helikon-runtime-axum`** — self-hosted HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints: one-shot JSON, SSE streaming, async detached, WebSocket event replay, agent list, OpenAPI schema; replayable runs with TTL+count retention).
 - **`paigasus-helikon-tools`** — sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`; OS-enforced containment behind `os-sandbox`; microVM containment via forkd/Firecracker behind `microvm`, experimental — SMA-437: includes `EgressProxy`, `EgressPolicy`, and `Isolation::Proxied` for domain-filtered egress enforcement).
 - **`paigasus-helikon-mcp`** — Model Context Protocol client and server integration.
-- **`paigasus-helikon-cli`** — `helikon` and `paigasus-helikon` binaries (binary-only, not published as a library).
-- **`paigasus-helikon-evals`**, **`-runtime-temporal`**, **`-runtime-agentcore`** — pre-published `0.0.0` name-claim stubs; not yet implemented.
+- **`paigasus-helikon-cli`** — published binary crate: `helikon` and `paigasus-helikon` binaries (`cargo install paigasus-helikon-cli`) with `repl`, `eval run`, and `mcp serve` subcommands driven by an `agents.toml` sidecar; its lib target publishes only so `cargo install` works, and carries no stability guarantee.
+- **`paigasus-helikon-evals`** — evaluation harness: JSONL datasets, an `Evaluator` trait with four built-ins (`ExactMatch`, `JsonSchemaConformance`, `LlmJudge`, `ToolUseTrajectory`), a `MockModel` for deterministic replay, and SQLite/Parquet trace sinks.
+- **`paigasus-helikon-runtime-temporal`**, **`-runtime-agentcore`** — pre-published `0.0.0` name-claim stubs; not yet implemented.
 
 See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for each crate's concern, published state, and current version.
 
