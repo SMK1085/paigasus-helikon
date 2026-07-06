@@ -4,6 +4,8 @@
 //! the two binaries can share code; its API may change in any release.
 
 pub mod cli;
+pub mod model;
+pub mod rhai_tool;
 pub mod sidecar;
 
 use clap::Parser as _;
