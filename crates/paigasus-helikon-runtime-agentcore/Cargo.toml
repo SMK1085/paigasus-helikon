@@ -13,22 +13,46 @@ categories.workspace   = true
 publish                = false
 
 [dependencies]
-paigasus-helikon-core          = { workspace = true }
-paigasus-helikon-runtime-tokio = { workspace = true }
-paigasus-helikon-runtime-axum  = { workspace = true }
-axum                           = { workspace = true, features = ["json"] }
-tokio                          = { workspace = true }
-tokio-util                     = { workspace = true }
-serde                          = { workspace = true }
-serde_json                     = { workspace = true }
-thiserror                      = { workspace = true }
-tracing                        = { workspace = true }
-futures-util                   = { workspace = true }
+paigasus-helikon-core                = { workspace = true }
+paigasus-helikon-runtime-tokio       = { workspace = true }
+paigasus-helikon-runtime-axum        = { workspace = true }
+paigasus-helikon-mcp                 = { workspace = true, optional = true }
+paigasus-helikon-providers-anthropic = { workspace = true, optional = true }
+axum                                 = { workspace = true, features = ["json"] }
+tokio                                = { workspace = true }
+tokio-util                           = { workspace = true }
+serde                                = { workspace = true }
+serde_json                           = { workspace = true }
+thiserror                            = { workspace = true }
+tracing                              = { workspace = true }
+futures-util                         = { workspace = true }
+async-trait                          = { workspace = true, optional = true }
+rmcp                                 = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio        = { workspace = true }
-async-trait  = { workspace = true }
-tower        = { workspace = true }
+tokio              = { workspace = true }
+async-trait        = { workspace = true }
+tower              = { workspace = true }
+anyhow             = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+default           = ["mcp"]
+# rmcp's streamable-HTTP server transport, used to expose the configured agent
+# as an MCP tool (`AgentCoreServer::serve_mcp`, `src/mcp.rs`) instead of the
+# AgentCore HTTP-protocol contract.
+mcp               = ["dep:paigasus-helikon-mcp", "dep:rmcp", "dep:async-trait"]
+# Pulls in the Anthropic provider for `examples/agent_http.rs` only; there is
+# no non-example code behind it, so library consumers never need it.
+example-anthropic = ["dep:paigasus-helikon-providers-anthropic"]
+
+[[example]]
+name              = "agent_http"
+required-features = ["example-anthropic"]
+
+[[example]]
+name              = "mcp_server"
+required-features = ["mcp"]
 
 [lints]
 workspace = true

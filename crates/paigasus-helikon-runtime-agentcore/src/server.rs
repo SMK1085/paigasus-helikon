@@ -262,6 +262,17 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
         Arc::clone(&self.state.ping)
     }
 
+    /// Return a clone of the configured [`Agent`] handle.
+    ///
+    /// `pub(crate)`: an internal wiring seam for [`crate::mcp`]'s MCP-protocol mode
+    /// (feature `mcp`), which needs the shared agent to build its own
+    /// `McpAgentServer`. Not public API — callers configure the agent via
+    /// [`AgentCoreServerBuilder::agent`] and never need it handed back.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn agent(&self) -> Arc<dyn Agent<Ctx>> {
+        Arc::clone(&self.state.agent)
+    }
+
     /// Bind `0.0.0.0:8080` — the fixed port AgentCore's HTTP-protocol contract expects —
     /// and serve until the process is terminated.
     ///

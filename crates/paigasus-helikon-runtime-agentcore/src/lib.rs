@@ -34,6 +34,16 @@
 //! Session and per-request context handling reuse `paigasus-helikon-runtime-axum`'s
 //! provider traits (`SessionProvider`/`ContextProvider`), so a self-hosted deployment
 //! and an AgentCore deployment of the same agent share one provider vocabulary.
+//!
+//! # MCP-protocol mode (feature `mcp`, default on)
+//!
+//! [`AgentCoreServer::serve_mcp`] serves the same configured agent as a single MCP
+//! tool over rmcp's streamable-HTTP transport instead of the HTTP-protocol contract
+//! above — for AgentCore's MCP runtime type rather than its default HTTP runtime
+//! type. It binds a separate port (`0.0.0.0:8000`) and mounts the MCP endpoint at
+//! `/mcp` plus a trivial `/ping` (not part of MCP; cheap insurance). See
+//! [`AgentCoreServer::mcp_router`] for the stateless/allowed-hosts configuration this
+//! requires and why.
 #![forbid(unsafe_code)]
 
 mod error;
@@ -41,6 +51,9 @@ pub use error::AgentCoreError;
 
 mod invoke;
 pub use invoke::InvocationRequest;
+
+#[cfg(feature = "mcp")]
+mod mcp;
 
 mod ping;
 pub use ping::PingState;

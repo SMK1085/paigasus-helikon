@@ -3104,12 +3104,16 @@ dependencies = [
 name = "paigasus-helikon-runtime-agentcore"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "axum",
  "futures-util",
  "paigasus-helikon-core",
+ "paigasus-helikon-mcp",
+ "paigasus-helikon-providers-anthropic",
  "paigasus-helikon-runtime-axum",
  "paigasus-helikon-runtime-tokio",
+ "rmcp",
  "serde",
  "serde_json",
  "thiserror",
@@ -3117,6 +3121,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
