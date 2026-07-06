@@ -231,7 +231,7 @@ let refine = LoopAgent::new("draft-and-critique", "Iterate until the critic is s
 ## SwarmAgent — a pool with full-mesh handoffs
 
 `SwarmAgent<Ctx>` wires a pool of `LlmAgent` members together with a
-`Handoff` to every other member auto-injected (a `transfer_to_<name>` tool
+`Handoff` to every other member auto-injected (a `transfer_to_<slug>` tool
 per pair). Execution is the ordinary handoff-driven `LlmAgent` loop — the
 swarm doesn't run a second driver — and it **ends the moment the active
 member produces a final output instead of handing off**: first to answer

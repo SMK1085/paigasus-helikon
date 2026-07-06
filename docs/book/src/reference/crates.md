@@ -14,7 +14,7 @@ For orientation — how to pick crates and add them to your `Cargo.toml` — see
 
 ## Crate table
 
-Versions below are **current as of 2026-06-30** and move every release — read each crate's `Cargo.toml` (or the root `[workspace.dependencies]` pins) for the live numbers, and the [crates.io page](https://crates.io/crates/paigasus-helikon) / docs.rs for what is actually published.
+Versions below are **current as of 2026-07-06** and move every release — read each crate's `Cargo.toml` (or the root `[workspace.dependencies]` pins) for the live numbers, and the [crates.io page](https://crates.io/crates/paigasus-helikon) / docs.rs for what is actually published.
 
 | Crate | Concern | State | Version |
 | --- | --- | --- | --- |
@@ -32,13 +32,13 @@ Versions below are **current as of 2026-06-30** and move every release — read 
 | [`paigasus-helikon-runtime-axum`](https://docs.rs/paigasus-helikon-runtime-axum) | Self-hosted Axum HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints, replayable runs) | published | `0.1.0` |
 | [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) | MCP integration — `rmcp` client and server wrappers | published | `0.1.3` |
 | [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) | Sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`) | published | `0.1.5` |
-| `paigasus-helikon-evals` | Evaluation harness | stub — not yet implemented | `0.0.0` |
+| [`paigasus-helikon-evals`](https://docs.rs/paigasus-helikon-evals) | Evaluation harness — datasets, evaluators, `MockModel`, SQLite/Parquet trace sinks | published | `0.1.0` |
 | `paigasus-helikon-runtime-temporal` | Temporal-hosted runtime | stub — not yet implemented | `0.0.0` |
 | `paigasus-helikon-runtime-agentcore` | AgentCore-hosted runtime | stub — not yet implemented | `0.0.0` |
-| `paigasus-helikon-cli` | `helikon` / `paigasus-helikon` CLI binaries | binary-only — never published | `0.0.0` |
+| `paigasus-helikon-cli` | `helikon` / `paigasus-helikon` CLI binaries | binary-only — never published as a library | `0.1.0` |
 | `paigasus-helikon-sessions-testkit` | Shared `Session` conformance test harness (internal — never published) | internal — `publish = false` | `0.0.0` |
 
-Three crates remain pre-published name-claims at `0.0.0` with `publish = false`; their facade re-exports exist but the crates are empty. Do not depend on them yet.
+Two crates remain pre-published name-claims at `0.0.0` with `publish = false`; their facade re-exports exist but the crates are empty. Do not depend on them yet.
 
 ## Facade feature → re-export map
 
@@ -60,7 +60,8 @@ Add the facade and turn on the features you need. Each feature gates one sibling
 | `sessions-redis` | `paigasus_helikon::sessions_redis` | `paigasus-helikon-sessions-redis` |
 | `runtime-tokio` | `paigasus_helikon::runtime_tokio` | `paigasus-helikon-runtime-tokio` |
 | `runtime-axum` | `paigasus_helikon::runtime_axum` | `paigasus-helikon-runtime-axum` |
-| `evals`, `runtime-temporal`, `runtime-agentcore` | re-export exists, crate empty | the three remaining stubs |
+| `evals` | `paigasus_helikon::evals` | `paigasus-helikon-evals` |
+| `runtime-temporal`, `runtime-agentcore` | re-export exists, crate empty | the two remaining stubs |
 
 Feature names are kebab-case (`tools-web`, `runtime-tokio`); the re-export module aliases are snake-case (`runtime_tokio`, `sessions_sqlite`).
 

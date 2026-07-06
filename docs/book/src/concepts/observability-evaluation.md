@@ -174,7 +174,8 @@ execution backend). Results come back **in dataset order regardless of
 `concurrency`** — `EvalRun` re-sorts by original index after the concurrent
 buffer drains. `EvalReport` is `Serialize` (for `--json` output) and has a
 plain-text `render_table()` for terminals; `EvalReport::passed()` is true iff
-no evaluator on any case yielded `Failed`.
+no case failed, where a case fails on any evaluator yielding `Failed` **or**
+a run-level error (the agent run itself failed before evaluators ran).
 
 ### Trace sinks
 
