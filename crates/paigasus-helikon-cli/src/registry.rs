@@ -203,7 +203,8 @@ fn build_agent_recursive(
         tools.push(build_tool(&sidecar.base_dir, tool_name, tool_def)?);
     }
 
-    let instructions = resolve_instructions(&sidecar.base_dir, &def.instructions)?;
+    let instructions = resolve_instructions(&sidecar.base_dir, &def.instructions)
+        .with_context(|| format!("resolving instructions for agent '{name}'"))?;
     let model = match case_id {
         Some(case_id) => build_model_for_case(&def.model, &sidecar.base_dir, case_id)?,
         None => build_model(&def.model, &sidecar.base_dir)?,

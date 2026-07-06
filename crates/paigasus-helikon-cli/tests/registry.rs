@@ -117,6 +117,31 @@ fn reload_with_broken_toml_keeps_old_defs() {
 }
 
 #[test]
+fn missing_instructions_file_error_names_agent_and_path() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("triage.json"), MOCK_SCRIPT).unwrap();
+    let path = dir.path().join("agents.toml");
+    std::fs::write(
+        &path,
+        r#"
+[agents.triage]
+instructions = { file = "missing_instructions.md" }
+model        = { provider = "mock", script = "triage.json" }
+"#,
+    )
+    .unwrap();
+
+    let registry = AgentRegistry::load(&path).expect("load must succeed");
+    let err = match registry.build_agent("triage") {
+        Err(e) => e,
+        Ok(_) => panic!("missing instructions file must error"),
+    };
+    let chain = format!("{err:#}");
+    assert!(chain.contains("agent 'triage'"), "{chain}");
+    assert!(chain.contains("missing_instructions.md"), "{chain}");
+}
+
+#[test]
 fn watch_notifies_on_file_change() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_sidecar(dir.path(), SIDECAR_ROUTE);
