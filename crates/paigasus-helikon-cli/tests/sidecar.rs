@@ -74,6 +74,9 @@ fn fixture_parses_correctly() {
         .expect("lookup_spending tool present");
     assert_eq!(tool.description, "Look up spending for a month");
     assert!(tool.params.is_object());
+    assert_eq!(tool.params["type"], "object");
+    assert_eq!(tool.params["properties"]["month"]["type"], "string");
+    assert_eq!(tool.params["required"][0], "month");
     assert!(tool.script.is_none());
     assert!(tool.inline.is_some());
 
@@ -81,6 +84,28 @@ fn fixture_parses_correctly() {
     assert_eq!(eval.evaluators, vec!["exact_match", "tool_trajectory"]);
     assert!(eval.json_schema.is_none());
     assert!(eval.llm_judge.is_none());
+}
+
+#[test]
+fn file_instructions_parse_to_file_variant() {
+    let toml = r#"
+[agents.triage]
+instructions = { file = "instructions.md" }
+model        = { provider = "anthropic", id = "claude-sonnet-4-5" }
+"#;
+    let sidecar = Sidecar::parse(toml, base_dir()).expect("file-instructions fixture must parse");
+    let triage = sidecar.agents.get("triage").expect("triage agent present");
+    match &triage.instructions {
+        InstructionsDef::File { file } => {
+            // Stored exactly as declared — resolution against base_dir happens at use time.
+            assert_eq!(file, Path::new("instructions.md"));
+        }
+        other => panic!("expected file instructions, got {other:?}"),
+    }
+    match &triage.model {
+        ModelDef::Anthropic { id } => assert_eq!(id, "claude-sonnet-4-5"),
+        other => panic!("expected anthropic model, got {other:?}"),
+    }
 }
 
 #[test]
@@ -144,6 +169,56 @@ handoffs     = ["a"]
             && msg.contains("declare one-way handoff chains"),
         "{msg}"
     );
+}
+
+#[test]
+fn three_node_handoff_cycle_errors() {
+    let toml = r#"
+[agents.a]
+instructions = "A."
+model        = { provider = "mock", script = "s.json" }
+handoffs     = ["b"]
+
+[agents.b]
+instructions = "B."
+model        = { provider = "mock", script = "s.json" }
+handoffs     = ["c"]
+
+[agents.c]
+instructions = "C."
+model        = { provider = "mock", script = "s.json" }
+handoffs     = ["a"]
+"#;
+    let err = Sidecar::parse(toml, base_dir()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("handoff cycle detected involving")
+            && msg.contains("declare one-way handoff chains"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn diamond_handoffs_without_cycle_validate_ok() {
+    // c is reachable from both a and b; the shared sink must not be
+    // misreported as a cycle (pins the DFS visited-vs-stack interplay).
+    let toml = r#"
+[agents.a]
+instructions = "A."
+model        = { provider = "mock", script = "s.json" }
+handoffs     = ["c"]
+
+[agents.b]
+instructions = "B."
+model        = { provider = "mock", script = "s.json" }
+handoffs     = ["c"]
+
+[agents.c]
+instructions = "C."
+model        = { provider = "mock", script = "s.json" }
+"#;
+    let sidecar = Sidecar::parse(toml, base_dir()).expect("acyclic diamond must validate");
+    assert_eq!(sidecar.agents.len(), 3);
 }
 
 #[test]
