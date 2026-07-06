@@ -73,6 +73,17 @@ impl AgentRegistry {
             .contains_key(name)
     }
 
+    /// Name of the alphabetically-first agent in the sidecar (used as the
+    /// REPL/MCP default when no `--agent` is given). `None` if the sidecar
+    /// declares no agents.
+    pub fn first_agent(&self) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .first_agent()
+            .map(str::to_owned)
+    }
+
     /// Builds a live [`LlmAgent`] for the named agent, recursively building
     /// any handoff targets first.
     pub fn build_agent(&self, name: &str) -> anyhow::Result<LlmAgent<(), CliModel>> {

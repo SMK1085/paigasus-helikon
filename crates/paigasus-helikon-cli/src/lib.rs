@@ -5,8 +5,10 @@
 
 pub mod cli;
 pub mod eval_cmd;
+pub mod mcp_cmd;
 pub mod model;
 pub mod registry;
+pub mod repl;
 pub mod rhai_tool;
 pub mod sidecar;
 
@@ -34,10 +36,12 @@ pub fn main() -> ExitCode {
 
 async fn run(cli: cli::Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
-        cli::Command::Repl(_args) => anyhow::bail!("repl: implemented in a later task"),
+        cli::Command::Repl(args) => repl::run(args).await,
         cli::Command::Eval { command } => match command {
             cli::EvalCommand::Run(args) => eval_cmd::run(args).await,
         },
-        cli::Command::Mcp { .. } => anyhow::bail!("mcp: implemented in a later task"),
+        cli::Command::Mcp { command } => match command {
+            cli::McpCommand::Serve(args) => mcp_cmd::serve(args).await,
+        },
     }
 }
