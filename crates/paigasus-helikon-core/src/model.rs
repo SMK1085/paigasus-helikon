@@ -455,6 +455,29 @@ pub struct ModelTurn {
     pub finish_reason: FinishReason,
 }
 
+impl ModelTurn {
+    /// Construct a `ModelTurn` directly from its parts.
+    ///
+    /// The normal path is [`ModelTurnAccumulator::finish`], which reassembles
+    /// a turn from a live [`ModelEvent`] stream. This constructor is for
+    /// callers that already have `items`/`usage`/`finish_reason` in hand —
+    /// durable-runner activities that reconstruct a turn from a stored
+    /// result, and tests — and would otherwise be unable to build one at all
+    /// (`#[non_exhaustive]` blocks struct-literal construction outside this
+    /// crate).
+    pub fn new(
+        items: Vec<crate::Item>,
+        usage: crate::TokenUsage,
+        finish_reason: FinishReason,
+    ) -> Self {
+        Self {
+            items,
+            usage,
+            finish_reason,
+        }
+    }
+}
+
 /// Accumulates the in-progress tool call across `ModelEvent::ToolCallDelta`
 /// chunks for one `call_id`.
 #[derive(Debug, Default)]

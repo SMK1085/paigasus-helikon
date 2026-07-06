@@ -116,7 +116,13 @@ impl AgentInput {
 /// time (where `T: DeserializeOwned` is in scope). It is the authoritative
 /// gate the agent loop uses to decide success vs. repair; the typed value
 /// itself is materialized later by `RunResultStreaming::collect_typed`.
-#[derive(Clone)]
+///
+/// `Serialize`/`Deserialize` (added in SMA-332 for durable runners that plan
+/// against a serialized `AgentPlan`) only carry `name` and `schema` — the
+/// captured `validate` closure cannot cross a serialization boundary, so a
+/// deserialized `OutputType` installs a fail-closed stand-in validator
+/// instead (every call returns `Err`).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutputType {
     /// The schema name (the `T` identifier / schema title). Echoed into the
     /// provider `response_format` name and into the repair instruction.
@@ -125,7 +131,43 @@ pub struct OutputType {
     pub schema: schemars::Schema,
     /// Authoritative validator: `Ok(())` iff the value deserializes into the
     /// original `T`; `Err` carries one or more human-readable error strings.
+    ///
+    /// Not `Serialize`/`Deserialize` (it's a captured function pointer), so
+    /// it is skipped on the wire and reinstalled as a fail-closed stand-in
+    /// (`unavailable_output_validate`) after deserialization.
+    #[serde(skip, default = "default_output_validate")]
     validate: fn(&serde_json::Value) -> Result<(), Vec<String>>,
+}
+
+/// `#[serde(default = "...")]` provider for [`OutputType::validate`]: returns
+/// the fail-closed [`unavailable_output_validate`] function pointer.
+///
+/// Serde's `default` attribute calls a zero-argument function that returns
+/// the field's type — this is that function; [`unavailable_output_validate`]
+/// is the actual validator it hands back.
+fn default_output_validate() -> fn(&serde_json::Value) -> Result<(), Vec<String>> {
+    unavailable_output_validate
+}
+
+/// Fallback validator installed on [`OutputType::validate`] after a serde
+/// round-trip.
+///
+/// The original validator captured at [`OutputType::from_schema`] time is a
+/// function pointer closing over `T`'s `DeserializeOwned` impl; it cannot be
+/// serialized, so `#[serde(skip)]` drops it and deserialization needs a
+/// stand-in. This fails **closed** (every call is an `Err`) rather than
+/// open, so a durable runner that accidentally validates against a
+/// deserialized `OutputType` gets a loud repair/failure loop instead of
+/// silently accepting non-conformant output. Callers that need authoritative
+/// validation on the far side of a serialization boundary must reconstruct a
+/// fresh `OutputType` via [`OutputType::from_schema`] rather than trust a
+/// deserialized copy.
+fn unavailable_output_validate(_value: &serde_json::Value) -> Result<(), Vec<String>> {
+    Err(vec![
+        "OutputType::validate is unavailable on a deserialized OutputType; \
+         reconstruct via OutputType::from_schema::<T>() instead"
+            .to_owned(),
+    ])
 }
 
 impl std::fmt::Debug for OutputType {

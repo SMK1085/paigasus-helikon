@@ -3133,6 +3133,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "paigasus-helikon-core",
+ "schemars",
  "serde",
  "serde_json",
  "temporalio-client",
