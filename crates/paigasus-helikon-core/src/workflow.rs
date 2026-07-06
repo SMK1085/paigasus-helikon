@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// Concatenate the `ContentPart::Text` of an `Item::AssistantMessage`.
-fn assistant_text(item: &Item) -> Option<String> {
+pub(crate) fn assistant_text(item: &Item) -> Option<String> {
     match item {
         Item::AssistantMessage { content, .. } => Some(
             content
@@ -39,7 +39,7 @@ fn assistant_text(item: &Item) -> Option<String> {
 }
 
 /// The effective `max_agent_depth` for a (sub-)run.
-fn max_depth(run_config: Option<&RunConfig>) -> u32 {
+pub(crate) fn max_depth(run_config: Option<&RunConfig>) -> u32 {
     run_config
         .map(|c| c.max_agent_depth)
         .unwrap_or_else(|| RunConfig::default().max_agent_depth)
@@ -47,7 +47,7 @@ fn max_depth(run_config: Option<&RunConfig>) -> u32 {
 
 /// Build the `invoke_agent` tracing span for a workflow agent's run, mirroring
 /// the `LlmAgent` run span (operation, agent name, Langfuse trace attributes).
-fn workflow_run_span(agent_name: &str, tracer: &TracerHandle) -> tracing::Span {
+pub(crate) fn workflow_run_span(agent_name: &str, tracer: &TracerHandle) -> tracing::Span {
     let span = tracing::info_span!(
         "agent.run",
         otel.name = tracing::field::Empty,
