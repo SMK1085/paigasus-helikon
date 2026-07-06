@@ -4,6 +4,7 @@
 //! the two binaries can share code; its API may change in any release.
 
 pub mod cli;
+pub mod sidecar;
 
 use clap::Parser as _;
 use std::process::ExitCode;
