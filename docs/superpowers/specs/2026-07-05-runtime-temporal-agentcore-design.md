@@ -265,6 +265,9 @@ as configured on the worker context). This is documented loudly in the crate doc
 Temporal history should be treated as a persistence boundary (redaction applies before
 recording). A serializable-`Ctx`-seed mechanism is future work.
 
+[As built (v0): fixed safe defaults; the optional worker-side configuration moved to
+follow-up work.]
+
 ### 5.9 Outcome, error, cancellation, timeout, retry semantics
 
 - **Workflow result is total:** `DurableRunOutcome { status, events, usage }` where
