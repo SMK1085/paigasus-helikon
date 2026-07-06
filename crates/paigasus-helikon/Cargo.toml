@@ -19,7 +19,7 @@ paigasus-helikon-providers-anthropic = { workspace = true, optional = true }
 paigasus-helikon-mcp                 = { workspace = true, optional = true }
 paigasus-helikon-tools               = { workspace = true, optional = true }
 paigasus-helikon-runtime-tokio       = { workspace = true, optional = true }
-paigasus-helikon-runtime-axum        = { workspace = true, optional = true }
+paigasus-helikon-runtime-axum        = { workspace = true, optional = true, features = ["openapi"] }
 paigasus-helikon-runtime-temporal    = { workspace = true, optional = true }
 paigasus-helikon-runtime-agentcore   = { workspace = true, optional = true }
 paigasus-helikon-sessions-sqlite     = { workspace = true, optional = true }

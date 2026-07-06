@@ -71,6 +71,7 @@ thiserror             = "2"
 tokio                 = { version = "1", features = ["full"] }
 tokio-tungstenite     = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
 tokio-util            = { version = "0.7", default-features = false, features = ["rt"] }
+tower                 = { version = "0.5", default-features = false, features = ["util"] }
 tracing               = "0.1"
 tracing-subscriber    = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-opentelemetry = "0.33"
@@ -136,7 +137,7 @@ paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-provide
 paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp", version = "0.1.12" }
 paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools", version = "0.2.9" }
 paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio", version = "0.1.16" }
-paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum", version = "0.1.1" }
+paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum", version = "0.1.1", default-features = false }
 paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.0.0" }
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }

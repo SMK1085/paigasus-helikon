@@ -3103,6 +3103,20 @@ dependencies = [
 [[package]]
 name = "paigasus-helikon-runtime-agentcore"
 version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "futures-util",
+ "paigasus-helikon-core",
+ "paigasus-helikon-runtime-axum",
+ "paigasus-helikon-runtime-tokio",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+]
 
 [[package]]
 name = "paigasus-helikon-runtime-axum"
