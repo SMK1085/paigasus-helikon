@@ -5,6 +5,7 @@
 
 pub mod cli;
 pub mod model;
+pub mod registry;
 pub mod rhai_tool;
 pub mod sidecar;
 
