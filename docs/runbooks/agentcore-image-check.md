@@ -135,7 +135,7 @@ unnecessary weight (~220 KB, well within the size budget either way).
 ## ECR push + CDK
 
 Publishing the image to Amazon ECR and wiring it into an
-`aws-cdk-lib/aws_bedrockagentcore` `Runtime` construct (including the MCP-mode
+`aws-cdk-lib/aws-bedrockagentcore` `Runtime` construct (including the MCP-mode
 `protocolConfiguration: ProtocolType.MCP` variant) is documented in the crate's
 own README (`crates/paigasus-helikon-runtime-agentcore/README.md`) rather than
 duplicated here — that README is this crate's crates.io/docs.rs landing page and
