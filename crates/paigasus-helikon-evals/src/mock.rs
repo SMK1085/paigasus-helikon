@@ -33,7 +33,10 @@ impl MockModel {
         })
     }
 
-    /// Load the `default` scripts from a JSON script file.
+    /// Load the `default` scripts from a JSON script file. Files with
+    /// only per-case entries yield an exhausted mock — use
+    /// [`ScriptFile::load`] + [`ScriptFile::scripts_for`] for per-case
+    /// selection.
     pub fn from_script_file(path: &Path) -> Result<Arc<Self>, EvalError> {
         let file = ScriptFile::load(path)?;
         Ok(Self::with_scripts(file.scripts_for("")))

@@ -128,7 +128,12 @@ impl ScriptFile {
     /// Load a script file from JSON.
     pub fn load(path: &Path) -> Result<Self, EvalError> {
         let text = std::fs::read_to_string(path)?;
-        serde_json::from_str(&text).map_err(|source| EvalError::Parse { line: 0, source })
+        serde_json::from_str(&text).map_err(|e| {
+            EvalError::Other(anyhow::anyhow!(
+                "invalid script file {}: {e}",
+                path.display()
+            ))
+        })
     }
 
     /// Scripts for `case_id` (falling back to `default`), converted to

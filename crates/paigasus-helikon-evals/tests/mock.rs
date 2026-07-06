@@ -32,6 +32,37 @@ async fn replays_script_and_exhausts() {
         .is_err());
 }
 
+#[tokio::test]
+async fn from_script_file_replays_default_scripts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("script.json");
+    std::fs::write(&path, SCRIPT_JSON).unwrap();
+    let model = MockModel::from_script_file(&path).unwrap();
+    let mut s = model
+        .invoke(ModelRequest::new(), CancellationToken::new())
+        .await
+        .unwrap();
+    let first = s.next().await.unwrap().unwrap();
+    assert!(matches!(first, ModelEvent::TokenDelta { text } if text == "hi"));
+}
+
+#[tokio::test]
+async fn from_script_file_cases_only_yields_exhausted_mock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cases-only.json");
+    std::fs::write(
+        &path,
+        r#"{"cases":{"tools":[[{"type":"finish","reason":"stop"}]]}}"#,
+    )
+    .unwrap();
+    let model = MockModel::from_script_file(&path).unwrap();
+    // No `default` key -> empty default scripts -> first invoke errors.
+    assert!(model
+        .invoke(ModelRequest::new(), CancellationToken::new())
+        .await
+        .is_err());
+}
+
 #[test]
 fn script_file_selects_per_case_with_default_fallback() {
     let f: ScriptFile = serde_json::from_str(SCRIPT_JSON).unwrap();
