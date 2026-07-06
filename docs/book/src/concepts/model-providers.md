@@ -128,7 +128,8 @@ Mistral; Titan, Llama, and Cohere degrade to plain text responses.
 
 > **Disambiguation:** this is the Bedrock *Converse model provider*. It is
 > distinct from `paigasus-helikon-runtime-agentcore`, which is the Bedrock
-> *AgentCore runtime* host (a separate not-yet-implemented crate).
+> *AgentCore runtime* host — a separate crate implementing the AgentCore
+> container contract; see [Runtimes](./runtimes.md).
 
 #### Construction
 

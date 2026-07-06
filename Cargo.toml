@@ -25,6 +25,12 @@ eventsource-stream    = "0.2"
 fastrand              = "2"
 futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
+# temporalio-macros' `#[activities]`-generated code references `::futures::FutureExt`/
+# `::futures::future::BoxFuture` by absolute path (verified by reading
+# temporalio-macros-0.5.0/src/activities_definitions.rs) — the umbrella `futures` crate
+# must be a direct dependency of any crate using that macro, distinct from the
+# `futures-core`/`futures-util` sub-crates pinned above.
+futures               = { version = "0.3", default-features = false, features = ["std"] }
 # default-features off + aws-lc-rs: gcp_auth's default `ring` feature enables
 # rustls/ring, but the rest of the workspace (AWS smithy, reqwest) uses
 # rustls/aws-lc-rs. Two rustls CryptoProvider features in one graph makes
@@ -65,6 +71,7 @@ thiserror             = "2"
 tokio                 = { version = "1", features = ["full"] }
 tokio-tungstenite     = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
 tokio-util            = { version = "0.7", default-features = false, features = ["rt"] }
+tower                 = { version = "0.5", default-features = false, features = ["util"] }
 tracing               = "0.1"
 tracing-subscriber    = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-opentelemetry = "0.33"
@@ -79,6 +86,33 @@ htmd                  = "0.5"
 wiremock              = "0.6"
 rcgen                 = "0.14"
 tokio-rustls          = "0.26"
+
+# Temporal Rust SDK (Public Preview; crates.io since 2026-02-19). TLS risk (requires
+# verification on every temporalio-* bump): temporalio-common → opentelemetry-otlp
+# unconditionally pulls a second reqwest (0.12 via hyper-rustls) into the graph. This is
+# safe ONLY because all consumers unify on the single shared rustls 0.23 instance, which
+# resolves to aws-lc-rs for every consumer — verify `cargo tree -i ring` stays empty.
+# The `ephemeral-server` feature (temporalio-sdk-core) additionally pulls its own
+# reqwest+TLS stack and must stay unenabled; runtime-temporal's integration tests use
+# the external-server env gate instead.
+temporalio-sdk      = { version = "0.5", default-features = false }
+temporalio-client   = { version = "0.5", default-features = false, features = ["tls-aws-lc"] }
+temporalio-sdk-core = { version = "0.5", default-features = false, features = ["tls-aws-lc"] }
+temporalio-common   = { version = "0.5", default-features = false }
+# temporalio-sdk does NOT re-export the `#[activities]`/`#[activity]` attribute
+# macros (verified by reading temporalio-sdk-0.5.0/src/lib.rs: its own doctest
+# imports them from `temporalio_macros` directly) — a direct dependency is
+# required to invoke them, even though temporalio-macros was already pulled in
+# transitively as a proc-macro dep of temporalio-sdk/temporalio-workflow.
+temporalio-macros   = { version = "0.5", default-features = false }
+# temporalio-workflow: the `#[workflow]`/`#[workflow_methods]` macro-generated
+# code references `::temporalio_workflow::…` (verified in
+# temporalio-macros-0.5.0/src/workflow_definitions.rs), and it exports the
+# workflow-authoring types (`WorkflowContext`, `ActivityOptions`, `join_all`,
+# `select!`, …) that `temporalio-sdk` re-exports. A direct dependency is
+# required to invoke the workflow macros, mirroring the temporalio-macros note
+# above.
+temporalio-workflow = { version = "0.5", default-features = false }
 
 # AWS SDK — rustls + aws-lc-rs TLS connector.
 # aws-config "default-https-client" → aws-smithy-runtime/default-https-client
@@ -95,17 +129,17 @@ aws-smithy-runtime     = { version = "1.11.3", default-features = false, feature
 aws-smithy-http-client = { version = "1.1.13", default-features = false, features = ["rustls-aws-lc"] }
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.16" }
-paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.12" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.17" }
+paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.13" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.3" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.16" }
 paigasus-helikon-providers-anthropic = { path = "crates/paigasus-helikon-providers-anthropic", version = "0.1.17" }
-paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp", version = "0.1.12" }
+paigasus-helikon-mcp                 = { path = "crates/paigasus-helikon-mcp", version = "0.1.13" }
 paigasus-helikon-tools               = { path = "crates/paigasus-helikon-tools", version = "0.2.9" }
 paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime-tokio", version = "0.1.16" }
-paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum", version = "0.1.1" }
-paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.0.0" }
-paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.0.0" }
+paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum", version = "0.1.1", default-features = false }
+paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.1.0" }
+paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.1.0" }
 paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
 paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.19" }
 paigasus-helikon-sessions-postgres   = { path = "crates/paigasus-helikon-sessions-postgres", version = "0.1.0" }

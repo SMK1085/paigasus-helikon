@@ -6,8 +6,9 @@
 use std::sync::Arc;
 
 use crate::{
-    ActionsHandle, AllowRule, ApprovalHandler, DenyRule, FailureSlot, Hook, PermissionMode,
-    PermissionPolicy, RunConfig, Session, SessionState, ToolContext,
+    ActionsHandle, AllowRule, ApprovalHandler, ApprovalOutcome, DenyRule, FailureSlot, Hook,
+    PermissionDecision, PermissionMode, PermissionPolicy, RunConfig, Session, SessionState,
+    ToolContext, ToolEffect,
 };
 
 /// Carries the per-run state shared across the agent loop, tools,
@@ -456,6 +457,107 @@ where
     /// Extra secret values to redact.
     pub fn extra_secrets(&self) -> &[String] {
         &self.extra_secrets
+    }
+
+    /// Authorize one tool call on its effective args: deny rules › guard
+    /// rules › allow rules › mode › policy › approval handler (`AskUser`
+    /// resolved here, default Deny). Extracted from the loop driver so a
+    /// durable runner (e.g. a Temporal activity) can authorize a tool call
+    /// with exactly the same pipeline the ephemeral agent loop applies
+    /// inline, without needing a borrow of the loop's private control-layer
+    /// type.
+    pub async fn authorize_tool(
+        &self,
+        tool: &str,
+        effect: ToolEffect,
+        args: &serde_json::Value,
+    ) -> PermissionDecision {
+        // 1. Deny rules — absolute, override even Bypass.
+        if self.deny_rules().iter().any(|r| r.matches(tool, args)) {
+            return PermissionDecision::Deny {
+                reason: format!("denied by deny rule: {tool}"),
+            };
+        }
+        // 2. Guard rules — built-in destructive defaults (unless opted out)
+        // then user guard rules. Run before mode, so they beat Bypass; may Ask.
+        let builtin = if self.default_guards() {
+            crate::GuardRule::destructive_defaults()
+        } else {
+            Vec::new()
+        };
+        for guard in builtin.iter().chain(self.guard_rules()) {
+            if guard.matches(tool, args) {
+                match guard.action() {
+                    crate::GuardAction::Deny { reason } => {
+                        return PermissionDecision::Deny {
+                            reason: reason.clone(),
+                        };
+                    }
+                    crate::GuardAction::Ask { prompt } => {
+                        let Some(handler) = self.approval_handler() else {
+                            return PermissionDecision::Deny {
+                                reason: format!("destructive command requires approval: {prompt}"),
+                            };
+                        };
+                        // Approval clears THIS guard only — continue the pipeline
+                        // so later guards and the allow/mode/policy steps still
+                        // apply. A matching allow rule may still short-circuit
+                        // before mode/policy; approval itself is not a blanket
+                        // authorization.
+                        match handler.decide(tool, prompt, args).await {
+                            ApprovalOutcome::Allow => continue,
+                            ApprovalOutcome::Deny { reason } => {
+                                return PermissionDecision::Deny { reason };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 3. Allow rules — positive short-circuit in ANY mode (after deny+guard,
+        // before mode). A global per-tool/per-command pre-approval that skips
+        // the policy AND any mode restriction (including Plan's read-only gate).
+        // Deny and guard already ran, so this cannot resurrect a denied/guarded
+        // call.
+        if self.allow_rules().iter().any(|r| r.matches(tool, args)) {
+            return PermissionDecision::Allow;
+        }
+        // 4. Mode.
+        match self.permission_mode() {
+            PermissionMode::Bypass => return PermissionDecision::Allow,
+            PermissionMode::Plan if effect != ToolEffect::ReadOnly => {
+                return PermissionDecision::Deny {
+                    reason: format!("Plan mode forbids the side-effecting tool `{tool}`"),
+                };
+            }
+            PermissionMode::AcceptEdits if effect == ToolEffect::Write => {
+                return PermissionDecision::Allow;
+            }
+            PermissionMode::DontAsk => {
+                return PermissionDecision::Deny {
+                    reason: format!("DontAsk mode: no allow rule matched `{tool}`"),
+                };
+            }
+            _ => {}
+        }
+        // 5. Policy (canUseTool). None ⇒ permissive.
+        let decision = match self.permission_policy() {
+            None => return PermissionDecision::Allow,
+            Some(policy) => policy.check(self, tool, args).await,
+        };
+        // 6. AskUser ⇒ approval handler; None ⇒ Deny.
+        match decision {
+            PermissionDecision::AskUser { prompt } => match self.approval_handler() {
+                None => PermissionDecision::Deny {
+                    reason: "no approval handler installed".to_owned(),
+                },
+                Some(handler) => match handler.decide(tool, &prompt, args).await {
+                    ApprovalOutcome::Allow => PermissionDecision::Allow,
+                    ApprovalOutcome::Deny { reason } => PermissionDecision::Deny { reason },
+                },
+            },
+            other => other,
+        }
     }
 
     /// Clone the permission/guard/redaction config into a [`crate::tool::PermissionFields`]

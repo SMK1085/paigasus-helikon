@@ -43,6 +43,11 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332).
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Swatinem/rust-cache v2.9.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
@@ -71,6 +76,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
         with:
           toolchain: ${{ matrix.toolchain }}
+      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332).
+      # Cross-platform: downloads prebuilt protoc for ubuntu/macos/windows.
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Swatinem/rust-cache v2.9.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
       - run: cargo test ${{ matrix.test_args }}
@@ -86,6 +97,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
         with:
           toolchain: stable
+      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332).
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Swatinem/rust-cache v2.9.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
       - run: cargo build -p paigasus-helikon-runtime-axum --no-default-features
@@ -101,6 +117,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
         with:
           toolchain: stable
+      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332).
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Swatinem/rust-cache v2.9.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
       - run: cargo doc --workspace --all-features --no-deps
@@ -120,6 +141,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332).
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Swatinem/rust-cache v2.9.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
       - run: bash scripts/check-doc-coverage.sh
@@ -165,6 +191,12 @@ jobs:
         uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
         with:
           toolchain: stable
+      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332).
+      - if: steps.filter.outputs.sessions == 'true'
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - if: steps.filter.outputs.sessions == 'true'
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
       - if: steps.filter.outputs.sessions == 'true'

@@ -144,6 +144,18 @@ No bot bypass is configured. If a future bot's output violates the
 allowlist, amend the spec and the allowlist *before* enabling the
 bot — not after.
 
+## Build prerequisites
+
+Besides the Rust toolchain (rustup; see [MSRV](#msrv) below), building the workspace requires a system **`protoc`** (Protocol Buffers compiler): the `temporalio-protos` crate (pulled in by `paigasus-helikon-runtime-temporal`'s `temporalio-*` dependencies) compiles its `.proto` definitions at build time via `prost-build`, which has no vendored `protoc` fallback.
+
+```bash
+brew install protobuf                 # macOS
+sudo apt-get install protobuf-compiler  # Debian/Ubuntu
+choco install protoc                  # Windows
+```
+
+If `protoc` is installed somewhere non-standard, point the `PROTOC` environment variable at the binary. CI installs it via `arduino/setup-protoc` in every job that compiles the workspace.
+
 ## MSRV
 
 The workspace MSRV is **1.94** (declared in `[workspace.package].rust-version`). If a dependency raises the floor, bump `rust-version` to the version cargo demands — do **not** downgrade the dependency.

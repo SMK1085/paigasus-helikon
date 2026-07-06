@@ -116,7 +116,13 @@ impl AgentInput {
 /// time (where `T: DeserializeOwned` is in scope). It is the authoritative
 /// gate the agent loop uses to decide success vs. repair; the typed value
 /// itself is materialized later by `RunResultStreaming::collect_typed`.
-#[derive(Clone)]
+///
+/// `Serialize`/`Deserialize` (added in SMA-332 for durable runners that plan
+/// against a serialized `AgentPlan`) only carry `name` and `schema` — the
+/// captured `validate` closure cannot cross a serialization boundary, so a
+/// deserialized `OutputType` installs a fail-closed stand-in validator
+/// instead (every call returns `Err`).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutputType {
     /// The schema name (the `T` identifier / schema title). Echoed into the
     /// provider `response_format` name and into the repair instruction.
@@ -125,7 +131,43 @@ pub struct OutputType {
     pub schema: schemars::Schema,
     /// Authoritative validator: `Ok(())` iff the value deserializes into the
     /// original `T`; `Err` carries one or more human-readable error strings.
+    ///
+    /// Not `Serialize`/`Deserialize` (it's a captured function pointer), so
+    /// it is skipped on the wire and reinstalled as a fail-closed stand-in
+    /// (`unavailable_output_validate`) after deserialization.
+    #[serde(skip, default = "default_output_validate")]
     validate: fn(&serde_json::Value) -> Result<(), Vec<String>>,
+}
+
+/// `#[serde(default = "...")]` provider for [`OutputType::validate`]: returns
+/// the fail-closed [`unavailable_output_validate`] function pointer.
+///
+/// Serde's `default` attribute calls a zero-argument function that returns
+/// the field's type — this is that function; [`unavailable_output_validate`]
+/// is the actual validator it hands back.
+fn default_output_validate() -> fn(&serde_json::Value) -> Result<(), Vec<String>> {
+    unavailable_output_validate
+}
+
+/// Fallback validator installed on [`OutputType::validate`] after a serde
+/// round-trip.
+///
+/// The original validator captured at [`OutputType::from_schema`] time is a
+/// function pointer closing over `T`'s `DeserializeOwned` impl; it cannot be
+/// serialized, so `#[serde(skip)]` drops it and deserialization needs a
+/// stand-in. This fails **closed** (every call is an `Err`) rather than
+/// open, so a durable runner that accidentally validates against a
+/// deserialized `OutputType` gets a loud repair/failure loop instead of
+/// silently accepting non-conformant output. Callers that need authoritative
+/// validation on the far side of a serialization boundary must reconstruct a
+/// fresh `OutputType` via [`OutputType::from_schema`] rather than trust a
+/// deserialized copy.
+fn unavailable_output_validate(_value: &serde_json::Value) -> Result<(), Vec<String>> {
+    Err(vec![
+        "OutputType::validate is unavailable on a deserialized OutputType; \
+         reconstruct via OutputType::from_schema::<T>() instead"
+            .to_owned(),
+    ])
 }
 
 impl std::fmt::Debug for OutputType {
@@ -441,50 +483,6 @@ pub enum AgentEvent {
 
 // ── Private helpers for the LlmAgent driver ─────────────────────────────────
 
-/// Accumulates the in-progress tool call across `ModelEvent::ToolCallDelta` chunks.
-#[derive(Default)]
-struct ToolCallAccum {
-    name: Option<String>,
-    args_str: String,
-}
-
-/// Reassemble streamed model output into [`Item`]s.
-fn build_items(
-    agent_name: &str,
-    text: String,
-    reasoning: String,
-    tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
-) -> Result<Vec<crate::Item>, String> {
-    let mut items = Vec::new();
-    if !text.is_empty() || !reasoning.is_empty() {
-        let mut content = Vec::new();
-        if !reasoning.is_empty() {
-            content.push(crate::ContentPart::Reasoning { text: reasoning });
-        }
-        if !text.is_empty() {
-            content.push(crate::ContentPart::Text { text });
-        }
-        items.push(crate::Item::AssistantMessage {
-            content,
-            agent: Some(agent_name.to_owned()),
-        });
-    }
-    for (call_id, accum) in tool_accum {
-        let args = serde_json::from_str(&accum.args_str).map_err(|e| {
-            format!(
-                "invalid tool args for call_id={call_id} (name={}): {e}",
-                accum.name.as_deref().unwrap_or("?")
-            )
-        })?;
-        items.push(crate::Item::ToolCall {
-            call_id,
-            name: accum.name.unwrap_or_default(),
-            args,
-        });
-    }
-    Ok(items)
-}
-
 /// Concatenate the text of all `Item::UserMessage` parts in the seed
 /// conversation — the text input guardrails inspect.
 fn user_text_of(conversation: &[crate::Item]) -> String {
@@ -499,18 +497,6 @@ fn user_text_of(conversation: &[crate::Item]) -> String {
         }
     }
     s
-}
-
-/// Conversion convention: `ToolOutput.content` (SMA-313's
-/// `serde_json::Value`) becomes one `ContentPart::Text`.
-/// `Value::String(s) -> ContentPart::Text { text: s }`; other JSON
-/// values are stringified via `Value::to_string()`.
-fn tool_output_to_content_parts(output: &crate::ToolOutput) -> Vec<crate::ContentPart> {
-    let text = match &output.content {
-        serde_json::Value::String(s) => s.clone(),
-        v => v.to_string(),
-    };
-    vec![crate::ContentPart::Text { text }]
 }
 
 async fn run_tools_concurrent<Ctx>(
@@ -565,7 +551,9 @@ where
             }
             let mut args = pre.replacement.unwrap_or(orig_args);
 
-            // Permission authorize on the effective args.
+            // Permission authorize on the effective args. `Interceptors::authorize`
+            // delegates to `RunContext::authorize_tool` — the same primitive a
+            // durable runner calls directly via `execute_tool_call`.
             match interceptors.authorize(&name, effect, &args).await {
                 crate::PermissionDecision::Allow => {}
                 crate::PermissionDecision::Replace { args: sanitized } => {
@@ -620,14 +608,12 @@ where
                         let final_json = post.replacement.unwrap_or(output_json);
                         // Redaction is the FINAL transform — after user PostToolUse
                         // hooks — so a hook cannot reintroduce an unredacted secret.
-                        let final_json = if redact_output {
-                            crate::redaction::redact(&final_json, secrets)
-                        } else {
-                            final_json
-                        };
-                        Ok(tool_output_to_content_parts(&crate::ToolOutput::new(
+                        // Shared with the durable-runner pipeline in `tool_exec.rs`.
+                        Ok(crate::finalize_tool_output(
                             final_json,
-                        )))
+                            redact_output,
+                            secrets,
+                        ))
                     }
                 }
                 Err(e) => Err(e),
@@ -936,62 +922,33 @@ where
                             }
                         };
 
-                        let mut text = String::new();
-                        let mut reasoning = String::new();
-                        let mut tool_accum: std::collections::BTreeMap<String, ToolCallAccum> =
-                            std::collections::BTreeMap::new();
-                        let mut finish_reason = crate::FinishReason::Stop;
-                        let mut latest_usage: Option<crate::TokenUsage> = None;
+                        let mut acc = crate::ModelTurnAccumulator::new(agent_name.clone());
 
                         while let Some(evt) = model_stream.next().await {
                             match evt {
-                                Ok(crate::ModelEvent::TokenDelta { text: t }) => {
-                                    text.push_str(&t);
-                                    yield crate::AgentEvent::TokenDelta { text: t };
-                                }
-                                Ok(crate::ModelEvent::ReasoningDelta { text: t }) => {
-                                    reasoning.push_str(&t);
-                                    yield crate::AgentEvent::ReasoningDelta { text: t };
-                                }
-                                Ok(crate::ModelEvent::ToolCallDelta {
-                                    call_id,
-                                    name,
-                                    args_delta,
-                                }) => {
-                                    let a = tool_accum.entry(call_id.clone()).or_default();
-                                    if a.name.is_none() {
-                                        if let Some(n) = name.as_deref() {
-                                            a.name = Some(n.into());
+                                Ok(ev) => {
+                                    acc.observe(&ev);
+                                    match ev {
+                                        crate::ModelEvent::TokenDelta { text } => {
+                                            yield crate::AgentEvent::TokenDelta { text };
                                         }
+                                        crate::ModelEvent::ReasoningDelta { text } => {
+                                            yield crate::AgentEvent::ReasoningDelta { text };
+                                        }
+                                        crate::ModelEvent::ToolCallDelta {
+                                            call_id,
+                                            name,
+                                            args_delta,
+                                        } => {
+                                            yield crate::AgentEvent::ToolCallDelta {
+                                                call_id,
+                                                name,
+                                                args_delta,
+                                            };
+                                        }
+                                        crate::ModelEvent::Usage { .. }
+                                        | crate::ModelEvent::Finish { .. } => {}
                                     }
-                                    a.args_str.push_str(&args_delta);
-                                    yield crate::AgentEvent::ToolCallDelta {
-                                        call_id,
-                                        name,
-                                        args_delta,
-                                    };
-                                }
-                                Ok(crate::ModelEvent::Usage {
-                                    input_tokens,
-                                    output_tokens,
-                                    cached_input_tokens,
-                                    reasoning_tokens,
-                                }) => {
-                                    latest_usage = Some(crate::TokenUsage {
-                                        input_tokens: u64::from(input_tokens),
-                                        output_tokens: u64::from(output_tokens),
-                                        cached_input_tokens: cached_input_tokens
-                                            .map(u64::from)
-                                            .unwrap_or(0),
-                                        reasoning_tokens: reasoning_tokens
-                                            .map(u64::from)
-                                            .unwrap_or(0),
-                                        total_tokens: u64::from(input_tokens)
-                                            + u64::from(output_tokens),
-                                    });
-                                }
-                                Ok(crate::ModelEvent::Finish { reason }) => {
-                                    finish_reason = reason;
                                 }
                                 Err(e) => {
                                     let msg = e.to_string();
@@ -1004,8 +961,8 @@ where
                             }
                         }
 
-                        let items = match build_items(&agent_name, text, reasoning, tool_accum) {
-                            Ok(items) => items,
+                        let crate::ModelTurn { items, usage, finish_reason } = match acc.finish() {
+                            Ok(turn) => turn,
                             Err(e) => {
                                 chat_span.record("otel.status_code", "ERROR");
                                 run_span.record("otel.status_code", "ERROR");
@@ -1015,7 +972,6 @@ where
                             }
                         };
                         conversation.extend(items.iter().cloned());
-                        let usage = latest_usage.unwrap_or_default();
                         // Per-turn chat span records the FINAL retained Usage snapshot
                         // (Anthropic emits incremental updates; retain the LAST, never sum
                         // within a turn). Cross-turn run totals now accumulate inside the
