@@ -7,6 +7,10 @@
 
 mod dataset;
 mod error;
+mod mock;
+mod script;
 
 pub use dataset::{EvalCase, EvalDataset};
 pub use error::EvalError;
+pub use mock::MockModel;
+pub use script::{ScriptEvent, ScriptFile, ScriptFinishReason};

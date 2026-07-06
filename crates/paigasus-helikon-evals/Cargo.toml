@@ -22,6 +22,7 @@ paigasus-helikon-core          = { workspace = true }
 paigasus-helikon-runtime-tokio = { workspace = true }
 anyhow      = { workspace = true }
 async-trait = { workspace = true }
+futures-core = { workspace = true }
 futures-util = { workspace = true }
 jiff        = { workspace = true }
 jsonschema  = { workspace = true }
