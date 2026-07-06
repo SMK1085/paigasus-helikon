@@ -4,6 +4,7 @@
 //! the two binaries can share code; its API may change in any release.
 
 pub mod cli;
+pub mod eval_cmd;
 pub mod model;
 pub mod registry;
 pub mod rhai_tool;
@@ -34,7 +35,9 @@ pub fn main() -> ExitCode {
 async fn run(cli: cli::Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         cli::Command::Repl(_args) => anyhow::bail!("repl: implemented in a later task"),
-        cli::Command::Eval { .. } => anyhow::bail!("eval: implemented in a later task"),
+        cli::Command::Eval { command } => match command {
+            cli::EvalCommand::Run(args) => eval_cmd::run(args).await,
+        },
         cli::Command::Mcp { .. } => anyhow::bail!("mcp: implemented in a later task"),
     }
 }

@@ -100,6 +100,16 @@ impl AgentRegistry {
             .clone()
     }
 
+    /// Directory that the sidecar's relative paths (tool scripts, model
+    /// scripts, JSON schemas, instruction files) resolve against.
+    pub fn base_dir(&self) -> PathBuf {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .base_dir
+            .clone()
+    }
+
     /// Watches the sidecar's directory and calls `on_reload` with the
     /// outcome of [`AgentRegistry::reload`] every time a change settles
     /// (debounced by 300ms).

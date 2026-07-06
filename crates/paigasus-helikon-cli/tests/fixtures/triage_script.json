@@ -1,0 +1,22 @@
+{
+  "default": [],
+  "cases": {
+    "spending-question": [
+      [
+        {"type":"tool_call_delta","call_id":"call-1","name":"lookup_spending","args_delta":"{\"month\":\"June\"}"},
+        {"type":"finish","reason":"tool_calls"}
+      ],
+      [
+        {"type":"token_delta","text":"You spent $1,250 in June."},
+        {"type":"usage","input_tokens":10,"output_tokens":8},
+        {"type":"finish","reason":"stop"}
+      ]
+    ],
+    "greeting": [
+      [
+        {"type":"token_delta","text":"Hello! Ask me about your spending."},
+        {"type":"finish","reason":"stop"}
+      ]
+    ]
+  }
+}
