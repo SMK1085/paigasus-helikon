@@ -27,20 +27,10 @@ pr_name = "chore: release"
 [changelog]
 sort_commits = "newest"
 
-# Binary-only — never published as a library.
-[[package]]
-name = "paigasus-helikon-cli"
-publish = false
-
 # Stubs: pre-published at 0.0.0 as name-claim placeholders. publish=false
 # in each Cargo.toml keeps cargo from re-publishing them; release=false
 # here keeps release-plz from proposing bumps or CHANGELOG churn. The two
 # flags MUST move together — see CLAUDE.md for the 4-step ascend recipe.
-[[package]]
-name = "paigasus-helikon-evals"
-publish = false
-release = false
-
 [[package]]
 name = "paigasus-helikon-runtime-temporal"
 publish = false

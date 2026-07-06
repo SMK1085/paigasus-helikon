@@ -26,10 +26,12 @@ db-path = "~/.cargo/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
-  # No active advisory ignores needed — the stale rsa (RUSTSEC-2023-0071) and
-  # async-std (RUSTSEC-2025-0052) entries covered crates that left the
-  # lockfile in an earlier dependency update; noticed and removed during the
-  # SMA-327 deny/audit reconciliation.
+  # paste is unmaintained (archived by dtolnay; no vulnerability), pulled by
+  # parquet — the latest stable parquet (59.0.0, via paigasus-helikon-evals'
+  # trace-parquet feature) still depends on it and no paste-free release
+  # exists yet. Compile-time proc-macro only; revisit when arrow-rs drops it
+  # upstream. Accepted at SMA-333.
+  "RUSTSEC-2024-0436",
 ]
 
 # ---------------------------------------------------------------------------
@@ -52,6 +54,8 @@ allow = [
   "Apache-2.0 WITH LLVM-exception", # winx (via cap-std → cap-primitives, pulled by paigasus-helikon-tools); not OR-licensed, so the Apache/MIT fallback doesn't apply
   "BSL-1.0",                        # Boost Software License 1.0 (OSI/FSF approved, permissive); xxhash-rust (via redis → paigasus-helikon-sessions-redis)
   "CDLA-Permissive-2.0",            # Community Data License Agreement Permissive 2.0 (Linux Foundation); webpki-roots Mozilla root CA certs (via sqlx-core → paigasus-helikon-sessions-postgres)
+  "CC0-1.0",                        # notify + notify-debouncer-mini (CLI file watching); public-domain dedication, patent non-grant noted — accepted at SMA-333 GATE 1
+  "MIT-0",                          # borrow-or-share (via jsonschema → referencing → fluent-uri); MIT No Attribution, OSI approved
 ]
 exceptions = []
 

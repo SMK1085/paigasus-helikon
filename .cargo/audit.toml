@@ -7,8 +7,10 @@
 
 [advisories]
 ignore = [
-    # No active advisory ignores needed — the stale rsa (RUSTSEC-2023-0071) and
-    # async-std (RUSTSEC-2025-0052) entries covered crates that left the
-    # lockfile in an earlier dependency update; noticed and removed during the
-    # SMA-327 deny/audit reconciliation.
+    # paste is unmaintained (archived by dtolnay; no vulnerability), pulled by
+    # parquet — the latest stable parquet (59.0.0, via paigasus-helikon-evals'
+    # trace-parquet feature) still depends on it and no paste-free release
+    # exists yet. Compile-time proc-macro only; revisit when arrow-rs drops it
+    # upstream. Accepted at SMA-333. Mirrored in /deny.toml.
+    "RUSTSEC-2024-0436",
 ]
