@@ -58,8 +58,38 @@ use crate::worker::RetryPolicyConfig;
 /// v0 uses one generous default so a slow model or tool call does not fail its
 /// attempt spuriously; a crashed worker's in-flight attempt still times out
 /// after this bound and is re-dispatched per the activity's retry policy.
-/// Per-agent activity-timeout tuning is future work.
+/// Override per activity via [`crate::worker::TemporalAgentWorkerBuilder::model_start_to_close`]
+/// / [`crate::worker::TemporalAgentWorkerBuilder::tool_start_to_close`].
 const DEFAULT_ACTIVITY_START_TO_CLOSE: Duration = Duration::from_secs(300);
+
+/// Per-activity start-to-close timeout overrides.
+///
+/// Each field bounds a **single execution attempt** of the corresponding
+/// activity (`render_instructions` / `call_model` / `invoke_tool`). Temporal
+/// detects a dead worker only by an activity attempt overrunning its
+/// start-to-close bound, so a shorter `tool`/`model` timeout is what makes a
+/// crashed worker's in-flight attempt re-dispatch promptly — the knob a
+/// crash-resume-sensitive deployment (or the crash-resume test) tunes down.
+/// Defaults to [`DEFAULT_ACTIVITY_START_TO_CLOSE`] for all three.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ActivityTimeouts {
+    /// Start-to-close for the `render_instructions` activity.
+    pub instructions: Duration,
+    /// Start-to-close for the `call_model` activity.
+    pub model: Duration,
+    /// Start-to-close for the `invoke_tool` activity.
+    pub tool: Duration,
+}
+
+impl Default for ActivityTimeouts {
+    fn default() -> Self {
+        Self {
+            instructions: DEFAULT_ACTIVITY_START_TO_CLOSE,
+            model: DEFAULT_ACTIVITY_START_TO_CLOSE,
+            tool: DEFAULT_ACTIVITY_START_TO_CLOSE,
+        }
+    }
+}
 
 /// Process-local, `Ctx`-free durable-run configuration the workflow factory
 /// closes over.
@@ -92,24 +122,25 @@ pub(crate) struct WorkflowActivityConfig {
 /// (`name → AgentPlan`); `model_retry`/`tool_retry` are the builder's
 /// [`RetryPolicyConfig`]s, converted here into the proto retry policy attached
 /// to the corresponding activity options (un-inerting the fields Task 7
-/// stored).
+/// stored); `timeouts` supplies the per-activity start-to-close bound.
 pub(crate) fn build_activity_config(
     plans: HashMap<String, AgentPlan>,
     model_retry: &RetryPolicyConfig,
     tool_retry: &RetryPolicyConfig,
+    timeouts: &ActivityTimeouts,
 ) -> WorkflowActivityConfig {
     WorkflowActivityConfig {
         plans,
-        instructions_activity_opts: activity_opts(None),
-        model_activity_opts: activity_opts(to_proto_retry_policy(model_retry)),
-        tool_activity_opts: activity_opts(to_proto_retry_policy(tool_retry)),
+        instructions_activity_opts: activity_opts(timeouts.instructions, None),
+        model_activity_opts: activity_opts(timeouts.model, to_proto_retry_policy(model_retry)),
+        tool_activity_opts: activity_opts(timeouts.tool, to_proto_retry_policy(tool_retry)),
     }
 }
 
-/// Build [`ActivityOptions`] with the shared default start-to-close timeout
-/// and an optional retry policy.
-fn activity_opts(retry_policy: Option<RetryPolicy>) -> ActivityOptions {
-    ActivityOptions::with_start_to_close_timeout(DEFAULT_ACTIVITY_START_TO_CLOSE)
+/// Build [`ActivityOptions`] with the given start-to-close timeout and an
+/// optional retry policy.
+fn activity_opts(start_to_close: Duration, retry_policy: Option<RetryPolicy>) -> ActivityOptions {
+    ActivityOptions::with_start_to_close_timeout(start_to_close)
         .maybe_retry_policy(retry_policy)
         .build()
 }
@@ -440,7 +471,12 @@ mod tests {
     fn build_activity_config_attaches_retry_policies() {
         let model_retry = cfg(None, None, None, Some(3), Vec::new());
         let tool_retry = cfg(None, None, None, Some(1), Vec::new());
-        let config = build_activity_config(HashMap::new(), &model_retry, &tool_retry);
+        let config = build_activity_config(
+            HashMap::new(),
+            &model_retry,
+            &tool_retry,
+            &ActivityTimeouts::default(),
+        );
 
         assert_eq!(
             config
@@ -462,5 +498,35 @@ mod tests {
         );
         // The instructions activity gets no explicit retry policy (server default).
         assert!(config.instructions_activity_opts.retry_policy.is_none());
+    }
+
+    #[test]
+    fn build_activity_config_applies_timeout_overrides() {
+        use temporalio_sdk::ActivityCloseTimeouts;
+
+        let timeouts = ActivityTimeouts {
+            instructions: Duration::from_secs(30),
+            model: Duration::from_secs(10),
+            tool: Duration::from_secs(5),
+        };
+        let config = build_activity_config(
+            HashMap::new(),
+            &RetryPolicyConfig::default(),
+            &RetryPolicyConfig::default(),
+            &timeouts,
+        );
+
+        assert_eq!(
+            config.tool_activity_opts.close_timeouts,
+            ActivityCloseTimeouts::StartToClose(Duration::from_secs(5))
+        );
+        assert_eq!(
+            config.model_activity_opts.close_timeouts,
+            ActivityCloseTimeouts::StartToClose(Duration::from_secs(10))
+        );
+        assert_eq!(
+            config.instructions_activity_opts.close_timeouts,
+            ActivityCloseTimeouts::StartToClose(Duration::from_secs(30))
+        );
     }
 }

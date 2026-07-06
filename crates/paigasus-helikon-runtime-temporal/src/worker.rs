@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use paigasus_helikon_core::{LlmAgent, Model, ToolDef};
 
@@ -110,6 +111,8 @@ pub struct TemporalAgentWorkerBuilder<Ctx> {
     registry: HashMap<String, Arc<DurableAgentDef<Ctx>>>,
     model_retry_policy: RetryPolicyConfig,
     tool_retry_policy: RetryPolicyConfig,
+    model_start_to_close: Option<Duration>,
+    tool_start_to_close: Option<Duration>,
 }
 
 /// A Temporal worker configured to serve one or more durable [`LlmAgent`]s'
@@ -139,6 +142,8 @@ impl TemporalAgentWorker {
             registry: HashMap::new(),
             model_retry_policy: RetryPolicyConfig::default(),
             tool_retry_policy: RetryPolicyConfig::default(),
+            model_start_to_close: None,
+            tool_start_to_close: None,
         }
     }
 
@@ -252,6 +257,30 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         self
     }
 
+    /// Override the per-attempt start-to-close timeout for the `call_model`
+    /// activity (default 300s).
+    ///
+    /// This bounds a **single** model-call attempt. Temporal detects a dead
+    /// worker only when an in-flight attempt overruns this bound, so a shorter
+    /// value shortens the window before a crashed run's model call is
+    /// re-dispatched to a healthy worker (subject to the model retry policy).
+    pub fn model_start_to_close(mut self, d: Duration) -> Self {
+        self.model_start_to_close = Some(d);
+        self
+    }
+
+    /// Override the per-attempt start-to-close timeout for the `invoke_tool`
+    /// activity (default 300s).
+    ///
+    /// This bounds a **single** tool-call attempt. A shorter value shortens the
+    /// window before a crashed run's in-flight tool call is re-dispatched to a
+    /// healthy worker (subject to the tool retry policy) — the knob a
+    /// crash-resume-sensitive deployment tunes down for a fast-failing tool.
+    pub fn tool_start_to_close(mut self, d: Duration) -> Self {
+        self.tool_start_to_close = Some(d);
+        self
+    }
+
     /// Assemble the Temporal worker.
     ///
     /// Requires [`Self::task_queue`], [`Self::client`], [`Self::with_ctx`],
@@ -296,10 +325,18 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
             .iter()
             .map(|(name, def)| (name.clone(), def.plan.clone()))
             .collect();
+        let mut timeouts = crate::workflow::ActivityTimeouts::default();
+        if let Some(d) = self.model_start_to_close {
+            timeouts.model = d;
+        }
+        if let Some(d) = self.tool_start_to_close {
+            timeouts.tool = d;
+        }
         let workflow_config = Arc::new(crate::workflow::build_activity_config(
             plans,
             &self.model_retry_policy,
             &self.tool_retry_policy,
+            &timeouts,
         ));
 
         let telemetry_options = temporalio_common::telemetry::TelemetryOptions::builder().build();
