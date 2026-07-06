@@ -12,10 +12,10 @@
 >
 > | Metric | Value | Gate |
 > | --- | ---: | --- |
-> | `helikon-agentcore-echo` image size (informational) | 1.31 MB | n/a |
+> | `helikon-agentcore-echo` image size (AC gate) | 1.31 MB | < 30 MB |
 > | `helikon-agentcore-agent` image size (AC gate) | 3.27 MB | < 30 MB |
 > | echo `exec`→`/ping`-200 (AC gate) | 11 ms | < 50 ms |
-> | agent `exec`→`/ping`-200 (informational) | 9 ms | n/a |
+> | agent `exec`→`/ping`-200 (AC gate) | 9 ms | < 50 ms |
 > | echo app-side log | `ready in 0ms` | — |
 > | agent app-side log | `ready in 0ms` | — |
 >
@@ -52,10 +52,11 @@ bash scripts/agentcore-image-check.sh
 
 This builds `helikon-agentcore-echo` (`EXAMPLE=echo_http`) and
 `helikon-agentcore-agent` (`EXAMPLE=agent_http FEATURES=example-anthropic`) via
-`crates/paigasus-helikon-runtime-agentcore/docker/Dockerfile`, asserts the agent
-image is under the 30 MB size gate, runs the echo container and asserts its
-`docker run`→first-`/ping`-200 latency is under 50 ms, and prints a summary table.
-It exits non-zero (with the measured numbers on stderr) if either gate fails.
+`crates/paigasus-helikon-runtime-agentcore/docker/Dockerfile`, asserts both
+images are under the 30 MB size gate, runs both containers and asserts each
+one's `docker run`→first-`/ping`-200 latency is under 50 ms, and prints a
+summary table. It exits non-zero (with the measured numbers on stderr) if any
+of the four gates fails.
 
 To build either image by hand — e.g. to `docker run` one interactively — see the
 exact commands documented at the top of the Dockerfile itself.
@@ -69,10 +70,10 @@ table above captures one real validated run):
 == Summary ==
 | Metric                           |          Value |       Gate |
 | -------------------------------- | -------------- | ---------- |
-| echo image size (informational)  |        1.31 MB |        n/a |
+| echo image size (AC gate)        |        1.31 MB |    < 30 MB |
 | agent image size (AC gate)       |        3.27 MB |    < 30 MB |
 | echo exec->200 (AC gate)         |           11 ms |    < 50 ms |
-| agent exec->200 (informational)  |            9 ms |        n/a |
+| agent exec->200 (AC gate)        |            9 ms |    < 50 ms |
 
 echo image app-side log:  ...INFO paigasus_helikon_runtime_agentcore::server: ready in 0ms elapsed_ms=0
 agent image app-side log: ...INFO paigasus_helikon_runtime_agentcore::server: ready in 0ms elapsed_ms=0

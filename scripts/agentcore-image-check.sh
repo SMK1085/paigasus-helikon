@@ -19,8 +19,11 @@
 # decide the recorded fallback; it does not silently substitute the echo image's
 # size for the agent image's.
 #
-# The echo image's size is printed for information only (it demonstrates the
-# framework's own minimal-overhead footprint) and is not gated.
+# All four measured metrics are AC-gated (see the SIZE_LIMIT_BYTES/
+# COLD_START_LIMIT_MS checks below): both images' size and both images'
+# exec->/ping cold start. The echo image also demonstrates the framework's own
+# minimal-overhead footprint, but that is in addition to — not instead of —
+# being checked against the same gates as the agent image.
 #
 # Cold start: runs the container and measures wall-clock time from container
 # start (after `docker run -d` returns) to the first successful `GET /ping` 200,
@@ -48,9 +51,8 @@ AGENT_CONTAINER="agentcore-image-check-agent"
 HOST_PORT_ECHO="18080"
 HOST_PORT_AGENT="18081"
 
-# The AC gate (spec §6.4 / task brief): the model-backed image must stay under
-# this many bytes. The echo image's size is informational only — see the module
-# doc comment above.
+# The AC gate (spec §6.4 / task brief): both the model-backed image and the
+# echo image must stay under this many bytes — see the module doc comment above.
 SIZE_LIMIT_BYTES=$((30 * 1024 * 1024))
 # Cold-start gate: exec (docker run) → first `/ping` 200, in milliseconds.
 COLD_START_LIMIT_MS=50
@@ -113,7 +115,7 @@ echo_cold_start_ms=$(measure_cold_start_ms "${ECHO_IMAGE}" "${ECHO_CONTAINER}" "
 echo_ready_log=$(docker logs "${ECHO_CONTAINER}" 2>&1 | grep -m1 "ready in" || echo "(not found in container logs)")
 
 echo
-echo "== Measuring cold start (agent image, informational) =="
+echo "== Measuring cold start (agent image, AC gate) =="
 agent_cold_start_ms=$(measure_cold_start_ms "${AGENT_IMAGE}" "${AGENT_CONTAINER}" "${HOST_PORT_AGENT}" \
   -e ANTHROPIC_API_KEY=sk-agentcore-image-check-placeholder)
 agent_ready_log=$(docker logs "${AGENT_CONTAINER}" 2>&1 | grep -m1 "ready in" || echo "(not found in container logs)")

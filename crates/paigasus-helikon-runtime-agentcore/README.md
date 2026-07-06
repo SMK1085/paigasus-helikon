@@ -127,10 +127,10 @@ Measured on Docker Desktop 29.5.3, native arm64 macOS (`scripts/agentcore-image-
 
 | Metric | Value | Gate |
 | --- | ---: | --- |
-| `helikon-agentcore-echo` image size (informational) | 1.31 MB | n/a |
+| `helikon-agentcore-echo` image size (AC gate) | 1.31 MB | < 30 MB |
 | `helikon-agentcore-agent` image size (AC gate) | 3.27 MB | < 30 MB |
 | echo `exec`→`/ping`-200 (AC gate) | 11 ms | < 50 ms |
-| agent `exec`→`/ping`-200 (informational) | 9 ms | n/a |
+| agent `exec`→`/ping`-200 (AC gate) | 9 ms | < 50 ms |
 
 Both gates passed with wide margin. Neither number includes AWS's own microVM provisioning latency (documented by AWS as roughly 2–5 seconds) — that happens entirely platform-side, before AgentCore ever execs the container's entrypoint, and is outside this crate's control.
 

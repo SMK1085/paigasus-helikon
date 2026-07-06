@@ -17,7 +17,7 @@ The first two are covered in their own chapters — see [Axum Server Runtime](./
 
 ### Architecture in one paragraph
 
-The client-side `TemporalRunner::run()` starts an `AgentLoopWorkflow` on a configured task queue and awaits its outcome. The workflow is a thin, deterministic adapter over a pure `DurableDriver` (SDK-free, unit-testable) that drives `core::transition` exactly like the ephemeral loop does, but requests a `call_model` activity per model turn and one `invoke_tool` activity per tool call (started concurrently, bounded by `parallel_tool_call_limit`) instead of calling `Model::invoke`/`Tool::invoke` directly. A `TemporalAgentWorker` process registers the agent's tools/model/settings and serves those activities.
+The client-side `TemporalRunner::run()` starts an internal agent-loop workflow on a configured task queue and awaits its outcome. The workflow is a thin, deterministic adapter over a pure `DurableDriver` (SDK-free, unit-testable) that drives `core::transition` exactly like the ephemeral loop does, but requests a `call_model` activity per model turn and one `invoke_tool` activity per tool call (started concurrently, bounded by `parallel_tool_call_limit`) instead of calling `Model::invoke`/`Tool::invoke` directly. A `TemporalAgentWorker` process registers the agent's tools/model/settings and serves those activities.
 
 ### v0 constraint set (rejected at registration, fail-fast)
 
