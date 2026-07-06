@@ -26,10 +26,19 @@ db-path = "~/.cargo/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
-  # No active advisory ignores needed — the stale rsa (RUSTSEC-2023-0071) and
-  # async-std (RUSTSEC-2025-0052) entries covered crates that left the
-  # lockfile in an earlier dependency update; noticed and removed during the
-  # SMA-327 deny/audit reconciliation.
+  # Historical note: the stale rsa (RUSTSEC-2023-0071) and async-std
+  # (RUSTSEC-2025-0052) entries covered crates that left the lockfile in an
+  # earlier dependency update; noticed and removed during the SMA-327
+  # deny/audit reconciliation.
+  #
+  # backoff is unmaintained; transitive via temporalio-client/temporalio-sdk-core
+  # 0.5 (Temporal Rust SDK, Public Preview). No fixed upgrade exists ("No safe
+  # upgrade is available"). Revisit on every temporalio-* bump (SMA-332).
+  "RUSTSEC-2025-0012",
+  # instant is unmaintained; transitive via backoff (above) from the same
+  # temporalio-* 0.5 stack. No fixed upgrade exists. Revisit on every
+  # temporalio-* bump (SMA-332).
+  "RUSTSEC-2024-0384",
 ]
 
 # ---------------------------------------------------------------------------
@@ -52,8 +61,22 @@ allow = [
   "Apache-2.0 WITH LLVM-exception", # winx (via cap-std → cap-primitives, pulled by paigasus-helikon-tools); not OR-licensed, so the Apache/MIT fallback doesn't apply
   "BSL-1.0",                        # Boost Software License 1.0 (OSI/FSF approved, permissive); xxhash-rust (via redis → paigasus-helikon-sessions-redis)
   "CDLA-Permissive-2.0",            # Community Data License Agreement Permissive 2.0 (Linux Foundation); webpki-roots Mozilla root CA certs (via sqlx-core → paigasus-helikon-sessions-postgres)
+  "0BSD",                           # BSD Zero Clause License (OSI approved, permissive); enum-iterator/enum-iterator-derive (via temporalio-sdk-core → paigasus-helikon-runtime-temporal)
 ]
 exceptions = []
+
+# NOTE (SMA-332 Task 4 calibration): the design spec assumed the temporalio-*
+# crates' `license-file`-only manifests would need [[licenses.clarify]]
+# blocks (crates.io reports "non-standard" for license-file declarations).
+# Empirically (cargo-deny 0.19.6) that is NOT the case: cargo-deny's built-in
+# license-file text scanner already recognizes all 8 temporalio-* crates'
+# LICENSE.txt as MIT with high confidence, and "MIT" is already in the allow
+# list above, so `cargo deny check licenses` passes with only informational
+# `warning[no-license-field]` noise (the crates lack an SPDX `license =`
+# field; this is cosmetic, not gating). Tested: adding [[licenses.clarify]]
+# blocks with placeholder `hash = 0` for all 8 crates changed nothing (no
+# hash-mismatch error, no warning suppressed), so they were not added here —
+# they would be inert config. The one real, gating finding is `0BSD` above.
 
 # ---------------------------------------------------------------------------
 # Bans — empty allow/deny lists; `wildcards = "deny"` enforces precise

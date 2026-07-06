@@ -12,5 +12,26 @@ keywords.workspace     = true
 categories.workspace   = true
 publish                = false
 
+[dependencies]
+paigasus-helikon-core = { workspace = true }
+temporalio-sdk         = { workspace = true }
+temporalio-client      = { workspace = true }
+temporalio-sdk-core    = { workspace = true }
+temporalio-common      = { workspace = true }
+async-trait            = { workspace = true }
+tokio                  = { workspace = true }
+futures-core           = { workspace = true }
+futures-util           = { workspace = true }
+serde                  = { workspace = true }
+serde_json             = { workspace = true }
+thiserror              = { workspace = true }
+tracing                = { workspace = true }
+uuid                   = { workspace = true }
+anyhow                 = { workspace = true }
+
+[dev-dependencies]
+tokio        = { workspace = true, features = ["macros"] }
+futures-util = { workspace = true }
+
 [lints]
 workspace = true
