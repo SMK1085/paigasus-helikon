@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-runtime-agentcore-v0.1.0) - 2026-07-06
+
+### Added
+
+- *(runtime-agentcore)* SMA-332 initial real implementation: AWS Bedrock AgentCore HTTP runtime
+  - `AgentCoreServer<Ctx>` — an axum app implementing the AgentCore contract: `GET /ping` health check, `POST /invocations` for agent runs
+  - `/invocations` supports both a buffered JSON response and an SSE streaming mode, selected per-request
+  - Session handling matched to AgentCore's platform-injected session id/header conventions
+  - Runs finalize and cancel cleanly on client disconnect for SSE mode
+  - Optional `mcp` feature (on by default): exposes the configured agent as an MCP server over rmcp's stateless streamable-HTTP transport (`paigasus-helikon-mcp`'s `streamable_http_service_with`), for AgentCore's MCP-protocol mode
+  - `examples/agent_http.rs` (behind `example-anthropic`) and `examples/mcp_server.rs` (behind `mcp`)
+  - `docker/` — an arm64 Dockerfile building a deployable AgentCore container image, plus `scripts/agentcore-image-check.sh` gating image size and cold-start latency for both the plain-HTTP and MCP images
+
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-runtime-agentcore-v0.0.0) - 2026-05-17
 
 ### Added

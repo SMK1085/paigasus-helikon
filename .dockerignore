@@ -1,0 +1,24 @@
+# Docker build context excludes (SMA-332: crates/paigasus-helikon-runtime-agentcore/docker/Dockerfile,
+# built from the workspace root — see the crate's docker/Dockerfile header for the
+# exact build command).
+#
+# A `cargo build -p paigasus-helikon-runtime-agentcore --example ...` build only
+# needs the workspace's Cargo.toml/Cargo.lock plus every member crate's Cargo.toml
+# and src/ tree. Everything below is either huge (a local `target/` directory can
+# reach tens of GB) or irrelevant to compilation, and would otherwise be tar'd into
+# the build context on every `docker build` invocation.
+/target
+.git
+.superpowers
+/docs
+*.md
+
+# Deliberately NOT copied into the build context: this repo's `rust-toolchain.toml`
+# pins `channel = "stable"` (no exact version). If it were present in the builder
+# image's working directory, rustup would try to resolve/fetch "stable" itself
+# rather than using the version already baked into the `rust:<tag>-alpine` base
+# image, adding a redundant network fetch and potentially a version mismatch
+# against the tag pinned in the Dockerfile. Excluding it means the Dockerfile's
+# base-image tag is the single source of truth for the toolchain version used to
+# build the container image.
+/rust-toolchain.toml

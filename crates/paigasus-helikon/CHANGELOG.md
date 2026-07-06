@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.16...paigasus-helikon-v0.4.17) - 2026-07-06
+## [0.4.18](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.17...paigasus-helikon-v0.4.18) - 2026-07-06
 
 ### Other
 
@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `evals` feature resolves the real crate instead of the 0.0.0 name-claim stub
   (same-PR manual sibling bump defeats the release-plz dependency cascade;
   see CLAUDE.md's second-order ascend caveat)
+
+## [0.4.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.16...paigasus-helikon-v0.4.17) - 2026-07-06
+
+### Added
+
+- *(facade)* SMA-332 lift stage-1 gates for runtime-temporal and runtime-agentcore; the `runtime-temporal` and `runtime-agentcore` features now reach real implementations (paigasus-helikon-runtime-temporal 0.1.0, paigasus-helikon-runtime-agentcore 0.1.0)
+
+### Other
+
+- updated the following local packages: paigasus-helikon-core, paigasus-helikon-mcp
 
 ## [0.4.16](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.15...paigasus-helikon-v0.4.16) - 2026-07-05
 

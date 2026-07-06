@@ -85,7 +85,7 @@ pub enum LoopState {
 }
 
 /// One tool call the model has requested. Pure data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolCallRequest {
     /// The provider-assigned call id (echoed back in `Item::ToolResult`).
     pub call_id: String,
@@ -98,7 +98,7 @@ pub struct ToolCallRequest {
 /// Outcome of one tool execution. Errors are stringified so the
 /// outcome implements `Clone` — `ToolError` carries `anyhow::Error`,
 /// which is not `Clone`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolCallOutcome {
     /// The call id this outcome corresponds to.
     pub call_id: String,
