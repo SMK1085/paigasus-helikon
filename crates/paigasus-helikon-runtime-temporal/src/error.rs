@@ -163,6 +163,8 @@ mod tests {
         match reconstructed {
             paigasus_helikon_core::AgentError::Other(_) => {
                 // Expected: ModelError became Other(anyhow::Error)
+                // Verify message survived roundtrip
+                assert!(reconstructed.to_string().contains("connection lost"));
             }
             _ => panic!("Expected Other variant after roundtrip"),
         }
@@ -184,6 +186,8 @@ mod tests {
         match reconstructed {
             paigasus_helikon_core::AgentError::Other(_) => {
                 // Expected
+                // Verify message survived roundtrip
+                assert_eq!(reconstructed.to_string(), "test error");
             }
             _ => panic!("Expected Other variant after roundtrip"),
         }
