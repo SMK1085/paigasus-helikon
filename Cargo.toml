@@ -80,14 +80,14 @@ wiremock              = "0.6"
 rcgen                 = "0.14"
 tokio-rustls          = "0.26"
 
-# Temporal Rust SDK (Public Preview; crates.io since 2026-02-19). Both
-# temporalio-client and temporalio-sdk-core default to `tls-ring`; we pin
-# `default-features = false` + `tls-aws-lc` so no second rustls
-# CryptoProvider enters the graph alongside reqwest/async-openai/aws-smithy's
-# aws-lc-rs (the same dual-CryptoProvider panic risk as the gcp_auth comment
-# above). `ephemeral-server` (temporalio-sdk-core) is deliberately never
-# enabled — it pulls its own reqwest+TLS stack; runtime-temporal's
-# integration tests use the external-server env gate instead.
+# Temporal Rust SDK (Public Preview; crates.io since 2026-02-19). TLS risk (requires
+# verification on every temporalio-* bump): temporalio-common → opentelemetry-otlp
+# unconditionally pulls a second reqwest (0.12 via hyper-rustls) into the graph. This is
+# safe ONLY because all consumers unify on the single shared rustls 0.23 instance, which
+# resolves to aws-lc-rs for every consumer — verify `cargo tree -i ring` stays empty.
+# The `ephemeral-server` feature (temporalio-sdk-core) additionally pulls its own
+# reqwest+TLS stack and must stay unenabled; runtime-temporal's integration tests use
+# the external-server env gate instead.
 temporalio-sdk      = { version = "0.5", default-features = false }
 temporalio-client   = { version = "0.5", default-features = false, features = ["tls-aws-lc"] }
 temporalio-sdk-core = { version = "0.5", default-features = false, features = ["tls-aws-lc"] }
