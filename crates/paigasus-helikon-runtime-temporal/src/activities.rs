@@ -59,11 +59,10 @@ pub(crate) struct DurableAgentDef<Ctx> {
     /// Snapshot of tool/model/output configuration the durable driver plans
     /// against.
     ///
-    /// Not read by anything in this crate yet — SMA-332 Task 8's workflow
-    /// resolves it (`def.plan.clone()`) to construct `DurableDriver::new`.
-    /// Written by [`crate::worker::TemporalAgentWorkerBuilder::register`]
-    /// and asserted by its tests today; consumed for real once Task 8 lands.
-    #[allow(dead_code)]
+    /// Written by [`crate::worker::TemporalAgentWorkerBuilder::register`] and
+    /// read by [`crate::worker::TemporalAgentWorkerBuilder::build`], which
+    /// clones it (`def.plan.clone()`) into the `Ctx`-free `AgentPlan` map the
+    /// durable workflow plans against via `DurableDriver::new`.
     pub plan: AgentPlan,
 }
 
@@ -364,10 +363,8 @@ mod activity_marker_tests {
 
     /// `#[activities]` generates one associated const per `#[activity]`
     /// method (e.g. `AgentActivities::call_model`) as the typed marker
-    /// Task 8's workflow will pass to `WorkflowContext::start_activity`.
-    /// Nothing in this crate references them yet since no workflow exists
-    /// to call `start_activity` from; this test both keeps them from being
-    /// flagged as dead code before Task 8 lands and doubles as a
+    /// `crate::workflow::DurableAgentWorkflow`'s `run_effects` passes to
+    /// `WorkflowContext::start_activity`. This test doubles as a
     /// compile-time check that the marker names match what this module's
     /// docs promise.
     #[test]

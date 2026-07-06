@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Pure durable loop driver decoupling agent-loop decisions from Temporal's workflow-context APIs, enabling deterministic replay
   - Per-activity timeout overrides on the worker builder
   - Registration fails fast (`RegistrationError`) on hooks, guardrails, and handoffs — not supported by the v0 constraint set; nested agent-as-tool is permitted but runs non-durably inside its tool activity
-  - Worker-side posture: the worker fabricates its own `RunContext` rather than accepting one from the client, making its permission/redaction settings authoritative for tool execution
+  - Worker-side posture: the worker fabricates its own `RunContext` rather than accepting one from the client, and applies fixed safe defaults (redaction on, destructive-effect guards on); worker-side posture configuration is future work
   - Env-gated live integration suite (`TEMPORAL_TEST_SERVER`) covering crash-resume, cancellation with partial transcripts, session persistence, and model error handling
 
 ## [0.0.0](https://github.com/SMK1085/paigasus-helikon/releases/tag/paigasus-helikon-runtime-temporal-v0.0.0) - 2026-05-17

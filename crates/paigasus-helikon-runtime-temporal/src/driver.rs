@@ -1,8 +1,8 @@
 //! Pure step machine for the Temporal-backed durable agent loop.
 //!
 //! [`crate::driver::DurableDriver`] mirrors `paigasus-helikon-core`'s
-//! ephemeral `LlmAgent::run` driver (see
-//! `crates/paigasus-helikon-core/src/agent.rs` lines ~640-900), but instead
+//! ephemeral driver — the inline step loop inside `LlmAgent::run`
+//! (`crates/paigasus-helikon-core/src/agent.rs`) — but instead
 //! of directly calling a [`Model`] or [`Tool`](paigasus_helikon_core::Tool)
 //! it yields a [`crate::driver::DriverEffect`] the caller must satisfy
 //! out-of-band (a Temporal activity) and feed back via `apply_*`. This keeps
@@ -17,8 +17,9 @@
 //!
 //! [`paigasus_helikon_core::transition`] reads the driver's conversation but
 //! never appends to it — the driver owns all conversation mutation. Per
-//! `loop_state.rs`'s `ToolResults` arm (and the ephemeral driver's mirror at
-//! `agent.rs:1047`), the split is:
+//! `loop_state.rs`'s `ToolResults` arm (and the ephemeral driver's mirror —
+//! its `Item::ToolResult`-append site in the `NextAction::ExecuteTools` arm
+//! of `LlmAgent::run`), the split is:
 //! - The driver appends [`paigasus_helikon_core::Item::ToolResult`]/model-turn
 //!   items to its conversation directly, in
 //!   [`crate::driver::DurableDriver::apply_model`] and
@@ -158,6 +159,16 @@ impl DurableDriver {
     /// it always returns [`DriverEffect::RenderInstructions`]; called again
     /// after a terminal outcome it replays the same [`DriverEffect::Finished`]
     /// rather than re-driving a finished loop.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called with no pending transition input queued — i.e.
+    /// calling `next_effect` twice in a row without an intervening
+    /// `apply_instructions`/`apply_model`/`apply_model_failure`/`apply_tools`
+    /// call in between (outside the `RenderInstructions`/`Finished` idempotent
+    /// boundaries above, where no pending input is ever expected). The
+    /// workflow's own effect loop always alternates `next_effect`/`apply_*`
+    /// correctly by construction, so this should not fire in practice.
     pub fn next_effect(&mut self) -> DriverEffect {
         match &self.phase {
             Phase::AwaitingInstructions => return DriverEffect::RenderInstructions,

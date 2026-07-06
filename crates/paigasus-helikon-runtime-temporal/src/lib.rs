@@ -158,18 +158,36 @@
 //! # Worker-Side Posture and Security Boundary
 //!
 //! The agent's [`RunContext`](paigasus_helikon_core::RunContext) (`Ctx` generic type) is not
-//! serializable and does not cross the client→worker boundary. The **worker fabricates its own
-//! `RunContext<Ctx>` from its configured context factory**, plus optional permission and redaction
-//! settings configured on the worker itself. This is a key security boundary:
+//! serializable and does not cross the client→worker boundary. For every tool-call activity, the
+//! **worker fabricates a fresh `RunContext::ephemeral(ctx).with_cancel(...)`** from its configured
+//! context factory. v0 ships this with **fixed, non-configurable defaults**:
 //!
-//! - **Caller's permissions and hooks do not propagate to the worker.** The worker's context
-//!   factory and configuration are authoritative for every tool call executed in the activity.
-//! - **Temporal history is a persistence boundary.** Tool outputs are redacted *before* they are
-//!   recorded in the workflow history (Temporal's durable storage). Redaction is governed by the
-//!   worker-side `ToolContext::redact_output` setting, not the client's. Treat Temporal history
-//!   as a permanent external record and configure the worker's context accordingly.
+//! - `redact_output = true` — tool output is redacted before it re-enters the conversation, using
+//!   secrets sourced from the worker process's own environment (`_API_KEY`/`_TOKEN`/`_SECRET`/
+//!   `_PASSWORD`/`_CREDENTIAL`-suffixed variables) plus an empty `extra_secrets` list.
+//! - [`PermissionMode::Default`](paigasus_helikon_core::PermissionMode) with no `permission_policy`
+//!   installed — permissive by default, except for the always-on built-in destructive guards
+//!   (blocking `rm -rf /`/`~`, writes under protected system paths, and writes touching
+//!   `.git`/`.ssh`/`.env*`).
+//! - No `approval_handler` installed — a destructive guard's `Ask` therefore **degrades to
+//!   `Deny`**, since nothing is registered to resolve it.
+//! - No deny rules, no allow rules, no custom guard rules — the caller cannot install any of
+//!   these on the durable path.
 //!
-//! A serializable-`Ctx`-seed mechanism for finer-grained permission inheritance is future work.
+//! **None of the caller's `RunContext` configuration propagates to the worker.** Specifically,
+//! the following caller-side fields never cross the client→worker boundary: deny/allow rules, the
+//! permission mode and policy, the approval handler, and `extra_secrets`. The worker's fixed v0
+//! defaults above are authoritative for every tool call executed in the activity, regardless of
+//! what the caller configured on its own `RunContext`.
+//!
+//! **Temporal history is a persistence boundary.** Tool outputs are redacted *before* they are
+//! recorded in the workflow history (Temporal's durable storage), per the fixed `redact_output =
+//! true` default above. Treat Temporal history as a permanent external record.
+//!
+//! Worker-side posture configuration — letting a worker operator configure permission mode,
+//! deny/allow rules, an approval handler, or `extra_secrets` for its fabricated `RunContext` — is
+//! future work, alongside the serializable-`Ctx`-seed mechanism for finer-grained permission
+//! inheritance.
 //!
 //! # Retry Semantics and Tool Idempotency
 //!
@@ -177,7 +195,10 @@
 //!
 //! Per [ADR-10](https://smk1085.github.io/paigasus-helikon/contributing/adrs.html), the runtime
 //! never retries model errors (`ModelError` variants). Model failures are **non-retryable** at the
-//! activity level and cause the run to fail with [`RunError::Agent(...)`](paigasus_helikon_core::RunError).
+//! activity level and cause the run to fail with [`RunError::Agent(...)`](paigasus_helikon_core::RunError)
+//! carrying the provider's error message as a plain string. This differs from `TokioRunner`: the
+//! typed `AgentError::Model` variant is **not** reconstructed across the durable boundary — the
+//! activity failure payload carries only the message, not the original `ModelError`'s structure.
 //!
 //! If your application needs model retries, wrap your model in `RetryingModel` (from
 //! [`paigasus_helikon_runtime_tokio`](https://docs.rs/paigasus-helikon-runtime-tokio)) before
