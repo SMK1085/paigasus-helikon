@@ -103,6 +103,14 @@ required-features = ["runtime-tokio"]
 name              = "multi_agent_triage"
 required-features = ["openai"]
 
+[[example]]
+name              = "swarm_finance"
+required-features = ["openai"]
+
+[[example]]
+name              = "graph_report"
+required-features = ["openai"]
+
 [[bench]]
 name    = "tool_dispatch"
 harness = false
