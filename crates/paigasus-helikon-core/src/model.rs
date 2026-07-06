@@ -508,7 +508,15 @@ fn build_items(
         });
     }
     for (call_id, accum) in tool_accum {
-        let args = serde_json::from_str(&accum.args_str).map_err(|e| {
+        // OpenAI streaming legitimately emits an empty `arguments` delta for
+        // zero-parameter tool calls — normalize blank/whitespace-only args to
+        // `{}` rather than failing the whole turn on a `serde_json` EOF error.
+        let args_str = if accum.args_str.trim().is_empty() {
+            "{}"
+        } else {
+            accum.args_str.as_str()
+        };
+        let args = serde_json::from_str(args_str).map_err(|e| {
             format!(
                 "invalid tool args for call_id={call_id} (name={}): {e}",
                 accum.name.as_deref().unwrap_or("?")
@@ -669,6 +677,25 @@ mod model_turn_tests {
             args_delta: "{not json".into(),
         });
         assert!(acc.finish().is_err());
+    }
+
+    #[test]
+    fn blank_tool_args_become_empty_object() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&ModelEvent::ToolCallDelta {
+            call_id: "c1".into(),
+            name: Some("zero_arg_tool".into()),
+            args_delta: "".into(),
+        });
+        let turn = acc.finish().unwrap();
+        assert_eq!(turn.items.len(), 1);
+        match &turn.items[0] {
+            crate::Item::ToolCall { name, args, .. } => {
+                assert_eq!(name, "zero_arg_tool");
+                assert_eq!(*args, serde_json::json!({}));
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
     }
 }
 
