@@ -148,9 +148,12 @@
 //!   agent's run is opaque to Temporal's durability (not itself durable). The nested run may
 //!   complete but the outer run sees it as a black-box activity result, not as a durable workflow.
 //!
-//! All four are detected during agent registration (via [`worker::TemporalAgentWorkerBuilder::register`])
-//! and rejected with a [`worker::RegistrationError`], failing fast rather than silently skipping
-//! unsupported features.
+//! The first three — hooks, handoffs, and (input/output) guardrails — are detected during agent
+//! registration (via [`worker::TemporalAgentWorkerBuilder::register`]) and rejected with a
+//! descriptive [`worker::RegistrationError`], failing fast rather than silently skipping
+//! unsupported features. Nested agent-as-tool runs are **permitted** — registration succeeds —
+//! but the nested run executes non-durably inside its tool activity: a crash-retry of that
+//! activity re-executes the entire nested run from scratch.
 //!
 //! # Worker-Side Posture and Security Boundary
 //!

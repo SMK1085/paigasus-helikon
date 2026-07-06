@@ -111,7 +111,7 @@ The Temporal runtime v0 explicitly does **not** support:
 - Handoffs (agent-to-agent transfers)
 - Nested agents (agent-as-tool is opaque to Temporal)
 
-All four are rejected at registration time with a descriptive error. See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "v0 Constraint Set") for details.
+Hooks, handoffs, and guardrails are rejected at registration time with a descriptive `RegistrationError`. Nested agent-as-tool runs are permitted — registration succeeds — but the nested run executes non-durably inside its tool activity (a crash-retry re-executes the whole nested run). See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "v0 Constraint Set") for details.
 
 ### Worker-Side Posture
 
