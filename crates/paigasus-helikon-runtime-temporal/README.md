@@ -22,59 +22,71 @@ Start a local Temporal dev server:
 temporal server start-dev
 ```
 
-**Worker side** — register your agent(s) and serve activities:
+**Worker side** — register your agent(s) and serve activities (`my_model` is any `Model` impl, e.g. an OpenAI/Anthropic provider crate's model; compile-checked versions of both snippets live in the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal)):
 
-```rust
+```rust,ignore
 use std::sync::Arc;
+
 use paigasus_helikon_core::LlmAgent;
-use paigasus_helikon_runtime_temporal::TemporalAgentWorker;
-use temporalio_client::Client;
+use paigasus_helikon_runtime_temporal::worker::TemporalAgentWorker;
+use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::default().await?;
+    // Connect to the Temporal server (`temporal server start-dev` locally).
+    let target = url::Url::parse("http://localhost:7233")?;
+    let connection = Connection::connect(ConnectionOptions::new(target).build()).await?;
+    let client = Client::new(connection, ClientOptions::new("default").build())?;
 
-    // Build your agent(s)
-    let agent: Arc<LlmAgent<Ctx, M, T>> = Arc::new(/* ... */);
+    let agent = Arc::new(
+        LlmAgent::builder::<()>()
+            .name("assistant")
+            .model(my_model)
+            .build(),
+    );
 
-    // Build and run the worker
-    let worker = TemporalAgentWorker::builder::<Ctx>()
-        .task_queue("default")
+    // Registration fails fast on hooks/guardrails/handoffs (v0 constraint).
+    TemporalAgentWorker::builder::<()>()
+        .task_queue("helikon-agents")
         .client(client)
-        .with_ctx(Arc::new(|| your_context_factory()))
+        .with_ctx(|| ())
         .register(agent)?
-        .build()?;
-
-    // Serve the task queue until shutdown
-    worker.run().await?;
-
+        .build()?
+        .run() // serves the task queue until shutdown
+        .await?;
     Ok(())
 }
 ```
 
-**Client side** — run your agent through the durable runtime:
+**Client side** — run your agent through the durable runtime (the run executes on the worker; the runner needs the agent definition only for its name and session semantics):
 
-```rust
-use paigasus_helikon_core::{AgentInput, RunConfig, Runner};
-use paigasus_helikon_runtime_temporal::{TemporalRunner, TemporalRunnerConfig};
-use temporalio_client::Client;
+```rust,ignore
+use paigasus_helikon_core::{AgentInput, LlmAgent, RunConfig, RunContext, Runner};
+use paigasus_helikon_runtime_temporal::runner::{TemporalRunner, TemporalRunnerConfig};
+use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::default().await?;
-    let runner = TemporalRunner::new(client, TemporalRunnerConfig::new("default"));
+    let target = url::Url::parse("http://localhost:7233")?;
+    let connection = Connection::connect(ConnectionOptions::new(target).build()).await?;
+    let client = Client::new(connection, ClientOptions::new("default").build())?;
 
+    let agent = LlmAgent::builder::<()>()
+        .name("assistant")
+        .model(my_model)
+        .build();
+
+    let runner = TemporalRunner::new(client, TemporalRunnerConfig::new("helikon-agents"));
     let result = runner
         .run(
             &agent,
-            ctx,
+            RunContext::ephemeral(()),
             AgentInput::from_user_text("What can you help with?"),
             RunConfig::default(),
         )
         .await?;
 
     println!("Agent output: {}", result.final_output);
-
     Ok(())
 }
 ```
