@@ -88,7 +88,9 @@ pub async fn run(args: ReplArgs) -> anyhow::Result<ExitCode> {
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<(), String>>();
     let _debouncer = registry.watch(move |res| {
-        let _ = tx.send(res.map_err(|e| e.to_string()));
+        // `{e:#}` keeps the anyhow context chain, so auto-reload failures
+        // print the same detail as the manual `/reload` path.
+        let _ = tx.send(res.map_err(|e| format!("{e:#}")));
     })?;
 
     let session: Arc<dyn Session> = Arc::new(MemorySession::new());
