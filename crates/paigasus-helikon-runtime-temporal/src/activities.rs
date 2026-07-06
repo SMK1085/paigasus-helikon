@@ -172,9 +172,10 @@ trait DurableAgentRuntime: Send + Sync {
 /// The `Ctx`-generic [`DurableAgentRuntime`] implementer: the process-local
 /// registry of every agent this worker was built with, plus the per-run
 /// `Ctx` factory.
-struct TypedRuntime<Ctx> {
+struct TypedRuntime<Ctx: Send + Sync + 'static> {
     registry: Arc<HashMap<String, Arc<DurableAgentDef<Ctx>>>>,
     ctx_factory: Arc<dyn Fn() -> Ctx + Send + Sync>,
+    posture: crate::worker::WorkerPosture<Ctx>,
 }
 
 impl<Ctx: Send + Sync + 'static> TypedRuntime<Ctx> {
@@ -192,7 +193,8 @@ impl<Ctx: Send + Sync + 'static> TypedRuntime<Ctx> {
     /// A fresh ephemeral [`RunContext`] (in-memory session, no hooks) for one
     /// activity invocation, wired to `cancel`.
     fn run_context(&self, cancel: CancellationToken) -> RunContext<Ctx> {
-        RunContext::ephemeral((self.ctx_factory)()).with_cancel(cancel)
+        let ctx = RunContext::ephemeral((self.ctx_factory)()).with_cancel(cancel);
+        self.posture.apply(ctx)
     }
 }
 
@@ -282,11 +284,13 @@ pub(crate) struct AgentActivities {
 pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
     registry: Arc<HashMap<String, Arc<DurableAgentDef<Ctx>>>>,
     ctx_factory: Arc<dyn Fn() -> Ctx + Send + Sync>,
+    posture: crate::worker::WorkerPosture<Ctx>,
 ) -> AgentActivities {
     AgentActivities {
         runtime: Arc::new(TypedRuntime {
             registry,
             ctx_factory,
+            posture,
         }),
     }
 }
@@ -619,5 +623,23 @@ mod tests {
         let text = render_instructions_inner(&def, &run_ctx).await;
 
         assert_eq!(text, "system prompt");
+    }
+
+    // ---- TypedRuntime::run_context applies the worker posture ------------
+
+    #[test]
+    fn typed_runtime_run_context_applies_posture() {
+        use crate::worker::WorkerPosture;
+        use paigasus_helikon_core::{DenyRule, PermissionMode};
+        let rt = TypedRuntime::<()> {
+            registry: Arc::new(HashMap::new()),
+            ctx_factory: Arc::new(|| ()),
+            posture: WorkerPosture::default()
+                .with_permission_mode(PermissionMode::Plan)
+                .with_deny_rules(vec![DenyRule::tool("Bash")]),
+        };
+        let ctx = rt.run_context(CancellationToken::new());
+        assert_eq!(ctx.permission_mode(), PermissionMode::Plan);
+        assert_eq!(ctx.deny_rules().len(), 1);
     }
 }
