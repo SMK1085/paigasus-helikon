@@ -36,13 +36,6 @@ pub enum AgentCoreError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
-    /// The requested capability is not yet implemented by this server (HTTP 501).
-    ///
-    /// Used by the `/invocations` placeholder route until the full request/response
-    /// contract is implemented.
-    #[error("not implemented: {0}")]
-    NotImplemented(String),
-
     /// An unexpected internal error occurred — including a failure to bind the listener
     /// in [`crate::AgentCoreServer::serve`] or a misconfigured
     /// [`AgentCoreServerBuilder`](crate::AgentCoreServerBuilder) (HTTP 500).
@@ -75,7 +68,6 @@ impl IntoResponse for AgentCoreError {
     fn into_response(self) -> Response {
         let status = match &self {
             AgentCoreError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            AgentCoreError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
             AgentCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -98,12 +90,6 @@ mod tests {
                 .into_response()
                 .status(),
             StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            AgentCoreError::NotImplemented("x".into())
-                .into_response()
-                .status(),
-            StatusCode::NOT_IMPLEMENTED
         );
         assert_eq!(
             AgentCoreError::Internal("x".into())
