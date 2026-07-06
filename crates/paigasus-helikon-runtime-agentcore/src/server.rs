@@ -3,8 +3,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{FromRef, State},
-    response::{IntoResponse, Response},
+    extract::FromRef,
     routing::{get, post},
     Router,
 };
@@ -16,6 +15,7 @@ use paigasus_helikon_runtime_tokio::TokioRunner;
 
 use crate::{
     error::AgentCoreError,
+    invoke,
     ping::{self, PingState},
 };
 
@@ -29,22 +29,22 @@ const DEFAULT_MAX_SESSIONS: usize = 4096;
 /// Inner shared state; allocated once per [`AgentCoreServer`] and reference-counted.
 ///
 /// This is the shape a handler reaches for via `State<AppState<Ctx>>` (or, for `/ping`,
-/// via the [`FromRef`] substate below). The `/invocations` placeholder already reads
-/// `agent`; `runner`, `sessions`, `context`, and `run_config` are wired through by the
-/// builder now so that a follow-up revision's full `/invocations` handler has them
-/// ready — they go unread until then.
-#[allow(dead_code)]
-struct AppStateInner<Ctx> {
+/// via the [`FromRef`] substate below). `pub(crate)` (rather than private) so
+/// [`crate::invoke`]'s `/invocations` handler — in its own module, per the crate's
+/// one-file-per-route layout — can read every field without re-deriving the state
+/// layout; neither the type nor its fields are re-exported from the crate root, so
+/// this stays out of the public API.
+pub(crate) struct AppStateInner<Ctx> {
     /// The single agent this AgentCore container serves.
-    agent: Arc<dyn Agent<Ctx>>,
+    pub(crate) agent: Arc<dyn Agent<Ctx>>,
     /// Execution backend driving each invocation.
-    runner: Arc<dyn Runner<Ctx>>,
+    pub(crate) runner: Arc<dyn Runner<Ctx>>,
     /// Session store consulted for requests carrying the AgentCore session header.
-    sessions: Arc<dyn SessionProvider>,
+    pub(crate) sessions: Arc<dyn SessionProvider>,
     /// Per-request context builder.
-    context: Arc<dyn ContextProvider<Ctx>>,
+    pub(crate) context: Arc<dyn ContextProvider<Ctx>>,
     /// Default run configuration applied to every invocation.
-    run_config: RunConfig,
+    pub(crate) run_config: RunConfig,
     /// Shared health-check state backing `GET /ping`.
     ping: Arc<PingState>,
 }
@@ -52,8 +52,10 @@ struct AppStateInner<Ctx> {
 /// Cheaply-cloneable axum extraction state.
 ///
 /// All handler tasks share a single [`AppStateInner<Ctx>`] through this wrapper. Cloning
-/// is an [`Arc`] increment, not a deep copy.
-struct AppState<Ctx> {
+/// is an [`Arc`] increment, not a deep copy. `pub(crate)` for the same reason as
+/// [`AppStateInner`] — [`crate::invoke::invocations`] takes `State<AppState<Ctx>>`
+/// directly rather than a bespoke extractor.
+pub(crate) struct AppState<Ctx> {
     inner: Arc<AppStateInner<Ctx>>,
 }
 
@@ -239,14 +241,15 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
     /// Build the axum [`Router`].
     ///
     /// Pure: spawns nothing. Mounts `GET /ping` (see [`PingState`]; always resolves,
-    /// independent of the agent/runner/session state) and `POST /invocations` (a
-    /// placeholder that always returns HTTP 501 until the full request/response
-    /// contract is implemented). Suitable for embedding into a larger router or for
-    /// testing with `tower`'s `ServiceExt::oneshot`.
+    /// independent of the agent/runner/session state) and `POST /invocations` (accepts
+    /// [`InvocationRequest`](crate::InvocationRequest)'s three body shapes and serves
+    /// both the buffered-JSON and Server-Sent-Events response modes — see the crate's
+    /// top-level docs for the full request/response contract). Suitable for embedding
+    /// into a larger router or for testing with `tower`'s `ServiceExt::oneshot`.
     pub fn router(&self) -> Router {
         Router::new()
             .route("/ping", get(ping::ping))
-            .route("/invocations", post(invocations_placeholder::<Ctx>))
+            .route("/invocations", post(invoke::invocations::<Ctx>))
             .with_state(self.state.clone())
     }
 
@@ -282,22 +285,6 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
             .await
             .map_err(|e| AgentCoreError::Internal(e.to_string()))
     }
-}
-
-/// Placeholder `POST /invocations` handler.
-///
-/// The full request/response contract (JSON and SSE modes, session-header validation)
-/// is implemented in a follow-up revision of this crate; until then this always returns
-/// HTTP 501 so a real deployment fails loudly and unambiguously rather than 404ing on an
-/// unmounted route.
-async fn invocations_placeholder<Ctx: Send + Sync + 'static>(
-    State(state): State<AppState<Ctx>>,
-) -> Response {
-    AgentCoreError::NotImplemented(format!(
-        "POST /invocations is not yet implemented (agent: '{}')",
-        state.agent.name()
-    ))
-    .into_response()
 }
 
 #[cfg(test)]
@@ -355,8 +342,14 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// Router-level smoke test: `/invocations` is mounted and reachable. An empty
+    /// body is not valid JSON for [`crate::invoke::InvocationRequest`], so this
+    /// asserts `400 Bad Request` (proving the route dispatches into the real handler)
+    /// rather than `404 Not Found` (which a missing/unmounted route would return).
+    /// The full request/response contract (JSON/SSE modes, session handling) is
+    /// covered by `invoke.rs`'s own tests.
     #[tokio::test]
-    async fn invocations_placeholder_returns_501() {
+    async fn invocations_is_reachable_through_the_full_router() {
         let resp = test_server()
             .router()
             .oneshot(
@@ -368,7 +361,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

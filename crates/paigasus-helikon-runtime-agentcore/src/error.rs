@@ -50,6 +50,27 @@ pub enum AgentCoreError {
     Internal(String),
 }
 
+/// Adapts a [`paigasus_helikon_runtime_axum::ServerError`] — raised by the reused
+/// `SessionProvider`/`ContextProvider` seams — into an [`AgentCoreError`], so
+/// `/invocations` can propagate either error type with a single `?`.
+///
+/// `ServerError` is `#[non_exhaustive]`, so this match ends in a wildcard arm: every
+/// variant this crate does not special-case (`UnknownAgent`, `Unauthorized`, `RunStart`,
+/// `Unavailable`, and any future addition) becomes [`AgentCoreError::Internal`]. Only
+/// `BadRequest` is preserved as a client error — the session/context seams reused here
+/// never raise `ServerError`'s agent-registry or auth-layer variants, which are
+/// specific to `runtime-axum`'s multi-agent router.
+impl From<paigasus_helikon_runtime_axum::ServerError> for AgentCoreError {
+    fn from(err: paigasus_helikon_runtime_axum::ServerError) -> Self {
+        match err {
+            paigasus_helikon_runtime_axum::ServerError::BadRequest(msg) => {
+                AgentCoreError::BadRequest(msg)
+            }
+            other => AgentCoreError::Internal(other.to_string()),
+        }
+    }
+}
+
 impl IntoResponse for AgentCoreError {
     fn into_response(self) -> Response {
         let status = match &self {

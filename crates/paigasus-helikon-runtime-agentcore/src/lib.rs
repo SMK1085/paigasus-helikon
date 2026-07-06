@@ -13,9 +13,18 @@
 //!   occurred: never on the initial steady state, and never re-stamped by a repeated
 //!   call reporting the same status, since AgentCore uses an advancing timestamp to
 //!   judge whether the agent is still making progress. See [`PingState`].
-//! - **`POST /invocations`** — the endpoint AgentCore calls to run the agent. This
-//!   revision of the crate mounts a placeholder that always returns HTTP 501; the full
-//!   JSON/SSE request-response contract lands in a follow-up revision.
+//! - **`POST /invocations`** — the endpoint AgentCore calls to run the agent. Accepts
+//!   [`InvocationRequest`]'s three body shapes (`{"messages": [...]}`, `{"prompt": "..."}`,
+//!   `{"input": "..."}`). An optional
+//!   `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` request header (33-256 characters)
+//!   pins the invocation to a session via the configured
+//!   [`SessionProvider`](paigasus_helikon_runtime_axum::SessionProvider); an absent
+//!   header gets a fresh, unshared session (one microVM instance is, by AgentCore's
+//!   execution model, already one session). `Accept: application/json` selects a
+//!   buffered `200` response shaped `{"final_output": "...", "usage": {...}}`; any
+//!   other (or absent) `Accept` selects the default Server-Sent-Events transport,
+//!   emitting one `data: <AgentEvent JSON>` frame per event with a terminal
+//!   `RunCompleted`/`RunFailed` frame.
 //!
 //! [`AgentCoreServer::serve`] binds `0.0.0.0:8080` — the fixed port AgentCore's runtime
 //! contract expects — and logs the app-side cold-start latency (`"ready in {ms}ms"`)
@@ -30,8 +39,13 @@
 mod error;
 pub use error::AgentCoreError;
 
+mod invoke;
+pub use invoke::InvocationRequest;
+
 mod ping;
 pub use ping::PingState;
+
+mod session;
 
 mod server;
 pub use server::{AgentCoreServer, AgentCoreServerBuilder};
