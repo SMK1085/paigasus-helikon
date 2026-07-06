@@ -3,7 +3,7 @@
 **Status:** Draft (Stage 1 spec, pending GATE 1 approval)
 **Ticket:** [SMA-455](https://linear.app/smaschek/issue/SMA-455) — *runtime-temporal: worker-side permission/redaction configuration + serializable-Ctx seed*
 **Related:** SMA-332 (shipped the durable runner with fixed safe defaults)
-**Crate:** `paigasus-helikon-runtime-temporal` (with a small additive `paigasus-helikon-core` change — see §11)
+**Crate:** `paigasus-helikon-runtime-temporal` (self-contained; a `paigasus-helikon-core` change is likely **unnecessary** — see §11)
 
 ## 1. Context & problem
 
@@ -64,7 +64,8 @@ Two capabilities are missing:
 | D3 | Seed delivery is **config-level**: `TemporalRunnerConfig::with_ctx_seed(Value)`. | *(User decision.)* Smallest surface; works through the fixed `Runner` trait unchanged, incl. `dyn Runner`. Request-scope = construct a runner (or clone the config) per request; the client is cheaply cloneable. |
 | D4 | Posture knobs are grouped into a **`WorkerPosture<Ctx>`** builder, set via one `TemporalAgentWorkerBuilder::posture(...)` call. | 9 knobs would bloat the worker builder; grouping keeps the security surface one reviewable unit (mirrors core's internal `PermissionFields`). `WorkerPosture::default()` == exact v0 defaults. |
 | D5 | **Heartbeats included** (opt-in), default off. | *(User decision.)* Emits `record_heartbeat` during in-flight `call_model`/`invoke_tool` via a background ticker + `heartbeat_timeout` on the activity options. Off by default = current behavior preserved. |
-| D6 | This release is **replay-breaking** and must be flagged. | The activity arg tuples gain a `ctx_seed` element (arity change) and model/tool `ActivityOptions` gain `heartbeat_timeout`. In-flight histories won't replay against the new worker — the crate already documents drain-before-upgrade / blue-green queues. |
+| D6 | Wire-input additions are **backward-compatible-by-construction**; the upgrade posture is validated, not assumed. | *(Revised after challenge.)* `WorkflowInput.ctx_seed` is `#[serde(default)]` (old payloads deserialize; serde ignores unknown fields on rollback). Whether **re-scheduling** an activity with a changed input tuple (or added `heartbeat_timeout`) trips the Rust SDK's non-determinism checker is **validated during implementation** via the live test — completed activities replay from recorded results, so only newly-scheduled activities use the new shape. The crate's existing drain-before-upgrade / blue-green-queue discipline remains the conservative guidance regardless. **Do not assert "arity change → non-determinism" without SDK evidence.** |
+| D7 | The seeded factory is **fallible** at its core; a bad seed fails the run **loud and fast**, never silently defaults. | *(Added after challenge — fixes the BLOCKER.)* The internal factory slot is `Fn(Option<Value>) -> Result<Ctx, E>`. A seed-deserialize error maps to a **non-retryable** `ApplicationFailure`, so a hostile/malformed seed fails the run immediately instead of panicking into Temporal's default **unlimited retry** loop (verified: the SDK wraps activity bodies in `catch_unwind` → *retryable* failure, and `render_instructions` carries no retry policy). Silently substituting a default `Ctx` is rejected: it would authorize the run under the **wrong** caller identity. |
 
 ## 4. Architecture
 
@@ -73,7 +74,8 @@ All changes are in `paigasus-helikon-runtime-temporal` except a tiny additive co
 
 ### 4.1 `WorkerPosture<Ctx>` (new public type, `worker.rs`)
 
-A grouped, `Ctx`-generic builder bundling the posture core's `RunContext` already exposes:
+A grouped, `Ctx`-generic builder bundling the nine posture knobs core's `RunContext`
+already exposes:
 
 ```rust
 pub struct WorkerPosture<Ctx> {
@@ -103,6 +105,21 @@ pub struct WorkerPosture<Ctx> {
   invocation). Applying `with_permission_mode(mode)` onto a fresh `Default` context is a
   legal tighten in every case (`Default → X` is always allowed by core's tighten-only
   rule).
+  - **The boolean toggles are one-way.** Core exposes only `without_default_guards()` /
+    `without_output_redaction()` (no `with_*(true)` inverse). Because a fresh
+    `RunContext::ephemeral` already defaults both to `true`, `apply` calls each
+    *conditionally*: `if !self.default_guards { ctx = ctx.without_default_guards() }`,
+    likewise for redaction. It is not a symmetric setter chain.
+
+**Deliberate-tech-debt note (drift risk).** `WorkerPosture` is the **fifth** hand-copy of
+core's nine-field permission bundle (alongside `RunContext`'s fields, `PermissionFields`,
+and the two child-context copy sites the project memo already flags). `PermissionFields`
+is `pub(crate)` in core, so it cannot be reused across the crate boundary — hence the
+duplication. When core gains a tenth knob, the durable runtime will silently be unable to
+configure it. This is accepted for now and **called out in the code**; the real de-dup is
+a future public `PermissionConfig` value-type in core (out of scope here). The §7
+default-equivalence test guards against *today's* drift by asserting **every** field (see
+§7).
 
 ### 4.2 `TemporalAgentWorkerBuilder<Ctx>` additions (`worker.rs`)
 
@@ -110,11 +127,21 @@ New fields + builder methods (all optional; omitting them preserves v0):
 
 - `posture: WorkerPosture<Ctx>` (default `WorkerPosture::default()`), set via
   `.posture(WorkerPosture<Ctx>)`.
-- `ctx_factory: Arc<dyn Fn(Option<serde_json::Value>) -> Ctx + Send + Sync>` — the
-  existing `with_ctx(Fn() -> Ctx)` now wraps its nullary closure into this shape
-  (ignoring the seed); a new `with_seeded_ctx(Fn(Option<Value>) -> Ctx)` sets it
-  directly. Both satisfy the `MissingCtxFactory` build check; they set the same slot
-  (last-wins).
+- `ctx_factory: Arc<dyn Fn(Option<serde_json::Value>) -> Result<Ctx, CtxSeedError> + Send + Sync>`
+  — a **fallible** internal slot (D7). Three public setters feed it, last-wins, all
+  satisfying the `MissingCtxFactory` build check:
+  - `with_ctx(Fn() -> Ctx)` — existing signature, unchanged for callers; wrapped as
+    `move |_seed| Ok(f())`. Seed ignored.
+  - `with_seeded_ctx(Fn(Option<Value>) -> Ctx)` — infallible seeded factory; wrapped as
+    `move |seed| Ok(f(seed))`. **Totality contract:** this closure must never panic and
+    must be cheap (it runs once per `render_instructions` and per `invoke_tool` — see
+    §4.3); deserialize the seed defensively and fall back to a safe default only when a
+    default identity is genuinely acceptable.
+  - `try_with_seeded_ctx(Fn(Option<Value>) -> Result<Ctx, E>)` where `E: Display` —
+    the **security-sensitive** path: a seed-deserialize error is surfaced (mapped in the
+    activity to a **non-retryable** `ApplicationFailure`), so a bad seed **fails the run
+    loud and fast** rather than authorizing under a wrong/default identity. Recommended
+    whenever the seed drives authorization (§4.6). `CtxSeedError` wraps `E`'s `Display`.
 - `heartbeat_interval: Option<Duration>` (default `None` = off), set via
   `.heartbeat_interval(Duration)`.
 
@@ -127,21 +154,30 @@ New fields + builder methods (all optional; omitting them preserves v0):
 ### 4.3 Activity-side application (`activities.rs`)
 
 `TypedRuntime<Ctx>` gains a `posture: WorkerPosture<Ctx>` field and its `ctx_factory`
-becomes `Fn(Option<Value>) -> Ctx`. `run_context` takes the per-run seed:
+becomes the fallible `Fn(Option<Value>) -> Result<Ctx, CtxSeedError>`. `run_context` is
+therefore **fallible**, and a factory error becomes a **non-retryable** `ActivityError`:
 
 ```rust
 fn run_context(&self, seed: Option<serde_json::Value>, cancel: CancellationToken)
-    -> RunContext<Ctx>
+    -> Result<RunContext<Ctx>, ActivityError>
 {
-    let ctx = RunContext::ephemeral((self.ctx_factory)(seed)).with_cancel(cancel);
-    self.posture.apply(ctx)
+    let user_ctx = (self.ctx_factory)(seed).map_err(|e| {
+        ActivityError::application(ApplicationFailure::non_retryable(
+            format!("ctx seed rejected: {e}"),
+        ))
+    })?;
+    let ctx = RunContext::ephemeral(user_ctx).with_cancel(cancel);
+    Ok(self.posture.apply(ctx))
 }
 ```
 
 `DurableAgentRuntime::render_instructions` and `invoke_tool` gain a `ctx_seed:
-Option<Value>` parameter and pass it to `run_context`. `call_model` is **unchanged** — it
-never builds a `RunContext` (it calls `call_model_inner(def.model, …)` directly), so the
-seed does not reach it. The three inner functions (`*_inner`) are untouched.
+Option<Value>` parameter and `?`-propagate `run_context`'s error. Mapping to
+**non-retryable** is what defuses the BLOCKER: without it, a factory panic/error on the
+retry-policy-less `render_instructions` (or the tool activity) would retry-loop forever
+(§5). `call_model` is **unchanged** — it never builds a `RunContext` (it calls
+`call_model_inner(def.model, …)` directly), so the seed never reaches it. The three inner
+functions (`*_inner`) are untouched.
 
 `AgentActivities` gains a `heartbeat_interval: Option<Duration>` field (from
 `build_activities`). The `#[activity]` methods thread the seed and (for `call_model` /
@@ -156,9 +192,12 @@ seed does not reach it. The three inner functions (`*_inner`) are untouched.
   ```
   `#[serde(default)]` so any `WorkflowInput` serialized before this change still
   deserializes (defensive; drain-before-upgrade remains the real guarantee).
-- **`runner.rs`** — `TemporalRunnerConfig` gains `ctx_seed: Option<Value>` (default
-  `None`) + `with_ctx_seed(Value)`. `run_inner` sets `WorkflowInput.ctx_seed =
-  self.config.ctx_seed.clone()`. No `Runner` trait change.
+- **`runner.rs`** — `TemporalRunnerConfig` gains a **private** `ctx_seed: Option<Value>`
+  (default `None`) set only via the `with_ctx_seed(Value)` builder. Private, not `pub`
+  like the existing fields: the struct has no `#[non_exhaustive]`, so exposing another
+  public field is a struct-literal breaking change, and `new()` + `with_ctx_seed()`
+  already cover construction. `run_inner` (same module) reads it into
+  `WorkflowInput.ctx_seed = self.config.ctx_seed.clone()`. No `Runner` trait change.
 - **`workflow.rs`** — `drive` extracts `input.ctx_seed` and threads a clone into
   `run_effects` / `execute_tools`, which pass it in the `render_instructions` and
   `invoke_tool` `start_activity` argument tuples. The seed is deterministic (constant
@@ -171,22 +210,52 @@ bulk data — documented in the payload-budget section.
 
 ### 4.5 Heartbeats (`activities.rs` + `workflow.rs`)
 
+- **Interval floor:** `heartbeat_interval(iv)` floors `iv` to a documented minimum
+  (**1 s**) — a sub-second `iv` gives `heartbeat_timeout = 2 × iv` below the
+  heartbeat→server round-trip latency, guaranteeing a false timeout on a healthy worker.
+  Values below the floor are clamped (documented), not accepted verbatim.
 - **Workflow side:** when `heartbeat_interval` is `Some(iv)`, `build_activity_config`
-  sets `heartbeat_timeout = 2 × iv` (with a small floor) on the **model** and **tool**
-  `ActivityOptions` via `.maybe_heartbeat_timeout(...)`. `render_instructions` gets no
-  heartbeat (fast, no network). When `None`, no heartbeat_timeout is set (v0 behavior).
-- **Activity side:** `call_model` / `invoke_tool` add a heartbeat branch to the existing
-  `race_with_activity_cancellation` `tokio::select!`: a `tokio::time::interval(iv)` tick
-  calls `activity_ctx.record_heartbeat(Default::default())` and loops, running until the
-  work future completes. Because the ticker heartbeats while the process is alive, a
-  genuinely long single call never spuriously heartbeat-times-out; only a **dead worker**
-  (ticker stopped) trips `heartbeat_timeout`, letting Temporal reclaim/re-dispatch per
-  the activity's retry policy — the crash-reclamation win. The ticker interval (`iv`) is
-  strictly less than the timeout (`2 × iv`), giving margin.
+  sets `heartbeat_timeout = 2 × iv` on the **model** and **tool** `ActivityOptions` via
+  `.maybe_heartbeat_timeout(...)`. `render_instructions` gets **no** heartbeat (fast, no
+  network — it passes `None`). When `heartbeat_interval` is `None`, no `heartbeat_timeout`
+  is set (v0 behavior, byte-identical).
+- **Activity side — a real restructure, not a bolt-on branch.** The existing
+  `race_with_activity_cancellation` (`activities.rs:255-269`) is a single `tokio::select!`
+  returning `T`; a ticker branch yields `()`, not `T`, so it cannot simply be added. It
+  is rewritten to a `loop`:
+  ```rust
+  // heartbeat: Option<Duration>; None for render_instructions and when the knob is off.
+  let mut ticker = heartbeat.map(tokio::time::interval);
+  tokio::pin!(work);
+  loop {
+      tokio::select! {
+          biased;                                   // preserve: poll work/cancel first
+          result = &mut work => return result,
+          _ = activity_ctx.cancelled() => {         // preserve: after cancel, still
+              cancel.cancel();                      // await work to completion so no
+              return work.await;                    // detached task leaks (the
+          }                                         // original's load-bearing guarantee)
+          _ = tick(&mut ticker), if ticker.is_some() => {
+              activity_ctx.record_heartbeat(Vec::new()); // liveness-only, empty details
+          }
+      }
+  }
+  ```
+  `record_heartbeat(Vec::new())` sends empty details — we heartbeat purely for liveness,
+  not progress-checkpointing (no resume-from-checkpoint payload). The interval (`iv`) is
+  strictly below the timeout (`2 × iv`), giving margin.
 
-Safety: heartbeat timeout only fires when the worker is actually dead, so it never
-introduces a spurious retry that would violate tool idempotency expectations beyond what
-`start_to_close` already implies.
+**Honest safety caveat (not "dead worker only").** A heartbeat trips `heartbeat_timeout`
+whenever the ticker stops polling — which is a **crashed worker** (the intended win) **but
+also a live worker whose async executor is starved** by a blocking/CPU-bound tool `invoke`
+(e.g. a synchronous `std::process::Command`, heavy compute with no `.await`). In that case
+Temporal re-dispatches a possibly non-idempotent tool, narrowing the double-run window from
+`start_to_close` (default 300 s) to `~2 × iv`. This does **not** violate ADR-10 (that
+concerns `ModelError` → non-retryable, unrelated), but it *does* interact with the tool-
+idempotency contract already documented in `lib.rs`. The docs (§8) must: (a) recommend
+tools offload blocking work via `tokio::task::spawn_blocking`, and (b) cross-reference the
+existing "tool idempotency under crash-retry" warning. Enabling heartbeats is a latency/
+reclamation *tuning* choice with this trade-off, not a free win.
 
 ### 4.6 The elegant composition (why the seed needs no posture)
 
@@ -205,9 +274,22 @@ per-run authorization. This is the reason posture-in-the-seed is a non-goal (§2
   loosen (or set) mode/rules/policy/handler. This preserves SMA-332's security-boundary
   story.
 - **The seed is an explicit, opt-in trust hand-off.** A worker that calls
-  `with_seeded_ctx` chooses to trust seed contents from clients on its task queue; a
-  worker using `with_ctx` ignores any seed entirely. Document that the seed is
-  attacker-influenced iff untrusted clients can start workflows on the queue.
+  `with_seeded_ctx` / `try_with_seeded_ctx` chooses to trust seed contents from clients on
+  its task queue; a worker using `with_ctx` ignores any seed entirely. Document that the
+  seed is attacker-influenced iff untrusted clients can start workflows on the queue.
+- **A malformed/hostile seed must not wedge the run (DoS).** Because the SDK converts an
+  activity **panic** into a *retryable* failure and `render_instructions` carries no retry
+  policy (Temporal server-default = unlimited retries), a factory that panics on a bad
+  seed would retry-loop forever and hang a workflow with no `RunConfig.timeout`. Mitigations
+  (D7): the fallible `try_with_seeded_ctx` maps a seed error to a **non-retryable**
+  failure (fail fast); the infallible `with_seeded_ctx` carries a **totality contract**
+  (never panic). **For authorization-bearing seeds, prefer `try_with_seeded_ctx`** so a
+  bad seed fails the run *loud* rather than silently defaulting to the wrong identity.
+- **Per-run policy only runs in modes that reach it.** `authorize_tool` short-circuits
+  before the policy under `Bypass` (Allow) and `DontAsk` (Deny). The §4.6 seed-driven
+  per-tenant policy is therefore only consulted under `Default`/`AcceptEdits`/`Plan`; a
+  worker that also sets `Bypass`/`DontAsk` posture makes its own policy dead code for
+  those calls. Documented so operators don't combine them by accident.
 - **Temporal history is a persistence boundary.** The seed is recorded in history
   (per activity call). **Do not put secrets in the seed.** Tool outputs are still
   redacted *before* entering history when `redact_output = true`; a worker that calls
@@ -220,35 +302,53 @@ per-run authorization. This is the reason posture-in-the-seed is a non-goal (§2
 
 `paigasus-helikon-runtime-temporal`:
 - `worker::WorkerPosture<Ctx>` + its setters and `Default`.
+- `worker::CtxSeedError` (the error type wrapping a `try_with_seeded_ctx` failure).
 - `TemporalAgentWorkerBuilder::posture(WorkerPosture<Ctx>)`.
 - `TemporalAgentWorkerBuilder::with_seeded_ctx(Fn(Option<Value>) -> Ctx)`.
+- `TemporalAgentWorkerBuilder::try_with_seeded_ctx(Fn(Option<Value>) -> Result<Ctx, E>)`.
 - `TemporalAgentWorkerBuilder::heartbeat_interval(Duration)`.
-- `runner::TemporalRunnerConfig::with_ctx_seed(Value)` + public `ctx_seed` field.
+- `runner::TemporalRunnerConfig::with_ctx_seed(Value)` (the field itself stays **private**).
 - `payloads::WorkflowInput::ctx_seed` (public field, `#[serde(default)]`).
 
-Re-exports of core posture types (`PermissionMode`, `DenyRule`, `AllowRule`, `GuardRule`,
-`PermissionPolicy`, `ApprovalHandler`) as needed so users can build a `WorkerPosture`
-without a direct `paigasus-helikon-core` dependency (verify what's already re-exported;
-add only the gaps). Every new `pub` item carries a `///` doc comment (doc-coverage gate).
+**No new re-exports.** runtime-temporal currently re-exports none of core's posture types
+(`lib.rs` has only `pub mod`s), and worker setup already imports `paigasus_helikon_core`
+directly (the `lib.rs` doctests do). Users build a `WorkerPosture` by importing
+`PermissionMode` / `DenyRule` / `AllowRule` / `GuardRule` / `PermissionPolicy` /
+`ApprovalHandler` from `paigasus_helikon_core` (a public dependency). Adding six re-exports
+would only add six `///`-doc-comment obligations for no dependency-removal benefit — skip
+them. Every genuinely-new `pub` item above carries a `///` doc comment (doc-coverage gate).
 
 ## 7. Testing strategy (TDD)
 
 Unit (no Temporal server, fast):
-- `WorkerPosture::default()` applied to a fresh context reproduces v0 (`permission_mode ==
-  Default`, `default_guards`, `redact_output`, empty rules).
+- **Full default-equivalence (drift guard, MAJOR 3):** `WorkerPosture::default().apply(
+  RunContext::ephemeral(()))` matches a bare `RunContext::ephemeral(())` on **every**
+  posture field — `permission_mode`, `default_guards`, `redact_output`, `deny_rules`,
+  `allow_rules`, `guard_rules`, `extra_secrets`, and `permission_policy`/`approval_handler`
+  both `None`. Enumerating all nine is what catches a future core knob the bundle forgot.
 - `WorkerPosture::apply` installs each knob: a deny rule denies; `Plan` mode blocks a
-  write; `without_output_redaction` clears the flag; `extra_secrets` accumulate; an
-  approval handler + a guard `Ask` resolves to Allow.
+  write; `without_output_redaction` clears the flag; `without_default_guards` clears it;
+  `extra_secrets` accumulate; an approval handler + a guard `Ask` resolves to Allow.
 - `invoke_tool_inner` through a `TypedRuntime` with a posture denies a denied tool
   (outcome carries the denial string).
 - Seeded factory: `with_seeded_ctx` receives `Some(seed)`; `with_ctx` ignores the seed;
   a `None` seed (no `with_ctx_seed`) reaches the factory as `None`.
+- **Malformed-seed fail-fast (BLOCKER, D7):** a `try_with_seeded_ctx` factory that returns
+  `Err` makes `run_context` yield a **non-retryable** `ActivityError` (assert
+  `is_non_retryable()`), not a panic or a retryable failure. An infallible factory that
+  *panics* is out of contract — cover the sanctioned fallible path instead.
 - Request-scoped policy: a `PermissionPolicy` reading `ctx.user_ctx()` allows/denies by
-  seed content (the §4.6 composition).
+  seed content (the §4.6 composition), including that `Bypass` short-circuits the policy
+  (MINOR-3 caveat).
 - `WorkflowInput` round-trips with and without `ctx_seed`; a legacy JSON object lacking
   the field deserializes (`#[serde(default)]`).
 - `build_activity_config` sets `heartbeat_timeout` on model/tool opts when interval is
-  `Some`, and leaves it unset when `None`; `render_instructions` never gets one.
+  `Some`, and leaves it unset when `None`; `render_instructions` never gets one;
+  `heartbeat_interval` below the 1 s floor is clamped.
+- **Heartbeat ticker preserves the no-leak guarantee:** the rewritten
+  `race_with_activity_cancellation` still awaits `work` to completion after cancellation
+  (assert the work future is driven to done, not dropped) — the original's load-bearing
+  property (MAJOR 2).
 
 Live (env-gated `temporal_live.rs`, loud-skip without a server — mirrors SMA-332):
 - A run with a configured seed + a request-scoped policy denies/allows the expected tool.
@@ -261,8 +361,13 @@ Live (env-gated `temporal_live.rs`, loud-skip without a server — mirrors SMA-3
 
 - `runtime-temporal/src/lib.rs` — rewrite "Worker-Side Posture and Security Boundary":
   from "fixed defaults / future work" to "configurable via `WorkerPosture`; defaults
-  unchanged; seed mechanism; heartbeats". Add the seed to the payload-budget note and the
-  determinism/upgrade section (replay-breaking flag).
+  unchanged; seed mechanism; heartbeats". Add the seed to the payload-budget note (it's
+  serialized per `render_instructions`/`invoke_tool` call — keep it small). In the
+  heartbeat docs, recommend tools offload blocking work via `tokio::task::spawn_blocking`
+  and cross-reference the existing "tool idempotency under crash-retry" warning (§4.5
+  caveat). In the determinism/upgrade section, describe the wire additions honestly per
+  the revised D6 (additive `#[serde(default)]` field; validate the re-schedule case;
+  drain-before-upgrade remains the safe path) — **not** an unqualified "replay-breaking".
 - `runtime-temporal/README.md` — posture + seed usage snippet; note published-surface
   changes.
 - `docs/superpowers/specs/2026-07-05-runtime-temporal-agentcore-design.md` §5.8 as-built
@@ -270,7 +375,10 @@ Live (env-gated `temporal_live.rs`, loud-skip without a server — mirrors SMA-3
   the two lines that call them future work).
 - `docs/book/src/concepts/runtimes.md` — if it documents the fixed-defaults posture,
   bring it in line.
-- `CHANGELOG.md` (runtime-temporal) — features + **replay-breaking** flag (D6).
+- `CHANGELOG.md` (runtime-temporal) — the new features + an honest upgrade note per the
+  revised D6 (additive wire field; validate the activity-reschedule case on upgrade;
+  drain-before-upgrade remains the conservative path). Flag as replay-affecting **only**
+  if the live determinism check confirms it.
 
 ## 9. Release mechanics
 
