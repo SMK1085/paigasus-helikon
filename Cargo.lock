@@ -3142,6 +3142,7 @@ dependencies = [
  "temporalio-macros",
  "temporalio-sdk",
  "temporalio-sdk-core",
+ "temporalio-workflow",
  "thiserror",
  "tokio",
  "tracing",

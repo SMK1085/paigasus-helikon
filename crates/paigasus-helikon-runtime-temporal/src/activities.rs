@@ -296,15 +296,14 @@ pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
 impl AgentActivities {
     /// Render the named agent's system-prompt text.
     ///
-    /// `#[allow(dead_code)]`: `#[activities]` also generates an associated
-    /// const of this method's name (e.g. `AgentActivities::render_instructions`)
-    /// as the typed marker `WorkflowContext::start_activity` expects —
-    /// `extract_allow_attrs` (temporalio-macros) copies a method-level
-    /// `#[allow(...)]` onto that generated const, which is otherwise unused
-    /// until SMA-332 Task 8's workflow calls `start_activity` with it.
-    #[allow(dead_code)]
+    /// Render the named agent's system-prompt text.
+    ///
+    /// `pub(crate)` so `#[activities]` emits a `pub(crate)` associated const
+    /// (`AgentActivities::render_instructions`) — the typed activity marker
+    /// SMA-332 Task 8's workflow passes to `WorkflowContext::start_activity`
+    /// from the sibling `workflow` module.
     #[activity]
-    async fn render_instructions(
+    pub(crate) async fn render_instructions(
         self: Arc<Self>,
         ctx: ActivityContext,
         agent_name: String,
@@ -319,9 +318,11 @@ impl AgentActivities {
     }
 
     /// Invoke the named agent's model for one turn.
-    #[allow(dead_code)] // see render_instructions' doc comment above
+    ///
+    /// `pub(crate)` for the same marker-visibility reason as
+    /// [`AgentActivities::render_instructions`].
     #[activity]
-    async fn call_model(
+    pub(crate) async fn call_model(
         self: Arc<Self>,
         ctx: ActivityContext,
         agent_name: String,
@@ -337,9 +338,11 @@ impl AgentActivities {
     }
 
     /// Execute one tool call for the named agent.
-    #[allow(dead_code)] // see render_instructions' doc comment above
+    ///
+    /// `pub(crate)` for the same marker-visibility reason as
+    /// [`AgentActivities::render_instructions`].
     #[activity]
-    async fn invoke_tool(
+    pub(crate) async fn invoke_tool(
         self: Arc<Self>,
         ctx: ActivityContext,
         agent_name: String,
@@ -386,6 +389,28 @@ mod tests {
     use serde_json::json;
     use std::sync::Mutex;
     use std::sync::OnceLock;
+
+    // ---- error_kind_to_activity_error (ADR-10) ------------------------
+
+    /// ADR-10: a model failure must be a **non-retryable** application error
+    /// so Temporal's activity-retry machinery does not silently mask it — the
+    /// workflow's `DurableDriver` must observe it as terminal. This is the
+    /// embodiment of "the runner never retries model errors".
+    #[test]
+    fn error_kind_to_activity_error_model_is_non_retryable() {
+        let err = error_kind_to_activity_error(ErrorKindPayload::Model {
+            message: "connection lost".to_owned(),
+        });
+        match err {
+            ActivityError::Application(app) => {
+                assert!(
+                    app.is_non_retryable(),
+                    "ADR-10: model-failure activity errors must be non-retryable"
+                );
+            }
+            other => panic!("expected ActivityError::Application, got {other:?}"),
+        }
+    }
 
     // ---- call_model_inner ---------------------------------------------
 

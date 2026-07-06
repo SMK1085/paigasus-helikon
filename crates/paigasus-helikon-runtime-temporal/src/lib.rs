@@ -24,7 +24,17 @@ pub mod error;
 /// Wire-format payload types exchanged between the Temporal workflow and its
 /// activities.
 pub mod payloads;
+/// The client-side [`paigasus_helikon_core::Runner`] implementation:
+/// [`runner::TemporalRunner`] starts the durable workflow, awaits its outcome
+/// (with cooperative cancellation), and mirrors `TokioRunner`'s session
+/// semantics at the run boundary.
+pub mod runner;
 /// Temporal worker construction: builds a [`worker::TemporalAgentWorker`]
 /// that serves one or more registered [`paigasus_helikon_core::LlmAgent`]s'
 /// activities on a task queue.
 pub mod worker;
+/// The durable agent-loop workflow driven by a
+/// [`crate::worker::TemporalAgentWorker`]. Internal: the public entry points
+/// are [`worker::TemporalAgentWorker`] (worker side) and
+/// [`runner::TemporalRunner`] (client side).
+mod workflow;

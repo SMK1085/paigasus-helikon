@@ -5,22 +5,18 @@
 //! [`paigasus_helikon_core::LlmAgent`]s' activities on a task queue. Build
 //! one via [`crate::worker::TemporalAgentWorker::builder`].
 //!
-//! # Workflow registration seam (for SMA-332 Task 8)
+//! # Workflow registration (SMA-332 Task 8)
 //!
-//! No workflow type is registered here — that lands in Task 8, once
-//! `workflow.rs`'s `DurableAgentWorkflow` exists.
-//! [`crate::worker::TemporalAgentWorkerBuilder::build`] is the seam: it is
-//! the last point at which `Ctx` is still in scope (the constructed
-//! `temporalio_sdk::Worker`/`WorkerOptions` type-erase every registered
-//! activity/workflow internally, and
-//! [`crate::worker::TemporalAgentWorker`] itself carries no `Ctx`
-//! parameter). Task 8 should extend `build()` to also call
-//! `worker_options.register_workflow_with_factory(...)` (or the equivalent
-//! post-construction `Worker` method), reusing the same
-//! `agent_registry`/`ctx_factory` values already assembled there for the
-//! activities layer, and switch `task_types` back to its default
-//! (`WorkerTaskTypes::all()`) once a workflow exists to serve. See the
-//! inline comment at that call site for specifics.
+//! [`crate::worker::TemporalAgentWorkerBuilder::build`] registers the durable
+//! agent-loop workflow (the crate-internal `workflow` module) via
+//! `register_workflow_with_factory`, because `build()` is the last point at
+//! which `Ctx` is still in scope. The workflow itself is `Ctx`-free (it plans
+//! against a `Ctx`-free `HashMap<String, AgentPlan>` projected from the
+//! registry), so the factory closes over an
+//! `Arc<crate::workflow::WorkflowActivityConfig>` — never a serialized plan
+//! and never a `Ctx`-generic value. The constructed `temporalio_sdk::Worker`
+//! type-erases every registered activity/workflow, so
+//! [`crate::worker::TemporalAgentWorker`] carries no `Ctx` parameter.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -148,11 +144,10 @@ impl TemporalAgentWorker {
 
     /// Serve the task queue until shutdown.
     ///
-    /// Until SMA-332 Task 8 registers a workflow type, this worker polls
-    /// **activities only** (`build()` sets `WorkerTaskTypes::activity_only()`)
-    /// — there is no workflow yet for it to drive. Polling and executing
-    /// activities is otherwise fully functional today: `run()` is not a
-    /// stub.
+    /// Polls **both** workflow and activity tasks (`build()` registers the
+    /// durable agent-loop workflow and sets `WorkerTaskTypes::all()`): it
+    /// drives durable runs started by [`crate::runner::TemporalRunner`] and
+    /// executes their activities.
     pub async fn run(self) -> Result<(), WorkerRunError> {
         let mut worker = self;
         worker
@@ -281,26 +276,31 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
             "assembling durable-agent Temporal worker",
         );
 
-        // SMA-332 Task 8 seam: `agent_registry` and `ctx_factory` are the
-        // exact `Ctx`-generic values a later `register_workflow_with_factory`
-        // call needs, e.g.:
-        //
-        //   worker_options.register_workflow_with_factory::<DurableAgentWorkflow<Ctx>, _>(
-        //       move || DurableAgentWorkflow::new(Arc::clone(&agent_registry), Arc::clone(&ctx_factory)),
-        //   )?;
-        //
-        // They must be captured here, inside this generic `build()`,
-        // because `TemporalAgentWorker` itself carries no `Ctx` parameter:
-        // once `worker_options`/`worker` below are constructed, every
-        // registered activity/workflow is type-erased by the SDK and `Ctx`
-        // goes out of scope for good. Register the workflow on
-        // `worker_options` (builder method, before `.build()`) or on
-        // `worker` (post-`Worker::new` method) — both exist — and switch
-        // `task_types` back to its default (`WorkerTaskTypes::all()`) once a
-        // workflow exists to serve.
+        // SMA-332 Task 8: the durable workflow is registered here, inside this
+        // generic `build()`, because it is the last point at which `Ctx` is in
+        // scope. The workflow itself is `Ctx`-free — it plans against a
+        // `Ctx`-free `HashMap<String, AgentPlan>` derived from the registry —
+        // so the factory closure closes over an `Arc<WorkflowActivityConfig>`
+        // (plans + per-activity options), never a serialized plan and never a
+        // `Ctx`-generic value. `AgentPlan` must not be serialized (its
+        // `OutputType` validator fails closed after a round-trip), so the map
+        // is built in-process here and cloned into each workflow instance.
         let agent_registry = Arc::new(self.registry);
         let activities =
             activities::build_activities(Arc::clone(&agent_registry), Arc::clone(&ctx_factory));
+
+        // `Ctx`-free projection of the registry (`name → AgentPlan`). Iterating
+        // the registry here (worker-setup side) is fine; the workflow never
+        // iterates a map — it does a single keyed `get` by `agent_name`.
+        let plans: HashMap<String, AgentPlan> = agent_registry
+            .iter()
+            .map(|(name, def)| (name.clone(), def.plan.clone()))
+            .collect();
+        let workflow_config = Arc::new(crate::workflow::build_activity_config(
+            plans,
+            &self.model_retry_policy,
+            &self.tool_retry_policy,
+        ));
 
         let telemetry_options = temporalio_common::telemetry::TelemetryOptions::builder().build();
         let runtime_options = temporalio_sdk_core::RuntimeOptions::builder()
@@ -310,13 +310,17 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         let runtime = temporalio_sdk_core::CoreRuntime::new_assume_tokio(runtime_options)
             .map_err(|e| WorkerBuildError::Runtime(e.to_string()))?;
 
-        // No workflow is registered yet (see the Task 8 seam comment above)
-        // — restrict this worker to activity polling only. An `all()`
-        // worker with zero registered workflows would be, at best, inert;
-        // `activity_only()` documents today's real capability precisely.
+        // Serve both workflow and activity tasks: this worker now drives the
+        // durable `DurableAgentWorkflow` (registered via factory below) in
+        // addition to its activities. Registration is on the `WorkerOptions`
+        // builder (returns a `Result`, hence the mid-chain `?`).
         let worker_options = temporalio_sdk::WorkerOptions::new(task_queue)
-            .task_types(temporalio_common::worker::WorkerTaskTypes::activity_only())
+            .task_types(temporalio_common::worker::WorkerTaskTypes::all())
             .register_activities(activities)
+            .register_workflow_with_factory::<crate::workflow::DurableAgentWorkflow, _>(move || {
+                crate::workflow::DurableAgentWorkflow::new(Arc::clone(&workflow_config))
+            })
+            .map_err(|e| WorkerBuildError::Worker(e.to_string()))?
             .build();
 
         let worker = temporalio_sdk::Worker::new(&runtime, client, worker_options)

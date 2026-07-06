@@ -104,6 +104,14 @@ temporalio-common   = { version = "0.5", default-features = false }
 # required to invoke them, even though temporalio-macros was already pulled in
 # transitively as a proc-macro dep of temporalio-sdk/temporalio-workflow.
 temporalio-macros   = { version = "0.5", default-features = false }
+# temporalio-workflow: the `#[workflow]`/`#[workflow_methods]` macro-generated
+# code references `::temporalio_workflow::…` (verified in
+# temporalio-macros-0.5.0/src/workflow_definitions.rs), and it exports the
+# workflow-authoring types (`WorkflowContext`, `ActivityOptions`, `join_all`,
+# `select!`, …) that `temporalio-sdk` re-exports. A direct dependency is
+# required to invoke the workflow macros, mirroring the temporalio-macros note
+# above.
+temporalio-workflow = { version = "0.5", default-features = false }
 
 # AWS SDK — rustls + aws-lc-rs TLS connector.
 # aws-config "default-https-client" → aws-smithy-runtime/default-https-client

@@ -2,6 +2,63 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::payloads::{DurableRunOutcome, RunStatusPayload};
+
+/// Map a total [`DurableRunOutcome`] onto the [`crate::error`]-external
+/// [`paigasus_helikon_core::Runner`] boundary types.
+///
+/// This is the durable-runner mirror of `TokioRunner`'s terminal-outcome
+/// handling: the workflow always returns a `DurableRunOutcome` (finalize on
+/// every exit path), and this function projects its four terminal states onto
+/// the runner's `Result<RunResult, RunError>`:
+///
+/// - [`RunStatusPayload::Completed`] → `Ok(RunResult)` whose `final_output` is
+///   the concatenated [`paigasus_helikon_core::ContentPart::Text`] parts of the
+///   final output (the `FinalOutput::as_text` convention), carrying the run's
+///   events and cumulative usage.
+/// - [`RunStatusPayload::AgentFailed`] → `Err(RunError::Agent(..))`, the typed
+///   [`paigasus_helikon_core::AgentError`] reconstructed from the wire payload.
+/// - [`RunStatusPayload::Cancelled`] → `Err(RunError::Cancelled)`.
+/// - [`RunStatusPayload::TimedOut`] → `Err(RunError::Timeout)`.
+pub(crate) fn outcome_to_run_result(
+    outcome: DurableRunOutcome,
+) -> Result<paigasus_helikon_core::RunResult, paigasus_helikon_core::RunError> {
+    use paigasus_helikon_core::ContentPart;
+
+    let DurableRunOutcome {
+        status,
+        events,
+        usage,
+    } = outcome;
+
+    match status {
+        RunStatusPayload::Completed(final_output) => {
+            let final_text = final_output
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            // `RunResult` is `#[non_exhaustive]`, so it cannot be built with a
+            // struct literal from outside `paigasus-helikon-core`; construct
+            // via `Default` (which yields `RunResult<String>`) then assign.
+            let mut result = paigasus_helikon_core::RunResult::default();
+            result.final_output = final_text;
+            result.events = events;
+            result.usage = usage;
+            Ok(result)
+        }
+        RunStatusPayload::AgentFailed(kind) => Err(paigasus_helikon_core::RunError::Agent(
+            kind.into_agent_error(),
+        )),
+        RunStatusPayload::Cancelled => Err(paigasus_helikon_core::RunError::Cancelled),
+        RunStatusPayload::TimedOut => Err(paigasus_helikon_core::RunError::Timeout),
+    }
+}
+
 /// Serializable error payload for crossing Temporal boundaries.
 ///
 /// `AgentError` contains non-serializable variants (particularly `Other` with
@@ -92,6 +149,88 @@ impl ErrorKindPayload {
             Self::Other { message } => {
                 paigasus_helikon_core::AgentError::Other(anyhow::anyhow!(message))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod outcome_mapping_tests {
+    use super::*;
+    use crate::payloads::{DurableRunOutcome, FinalOutputPayload};
+    use paigasus_helikon_core::{AgentError, ContentPart, RunError, TokenUsage};
+
+    fn usage(input_tokens: u64, output_tokens: u64) -> TokenUsage {
+        // `TokenUsage` is `#[non_exhaustive]`: build via `Default`, assign
+        // the `pub` fields.
+        let mut u = TokenUsage::default();
+        u.input_tokens = input_tokens;
+        u.output_tokens = output_tokens;
+        u.total_tokens = input_tokens + output_tokens;
+        u
+    }
+
+    #[test]
+    fn completed_maps_to_ok_with_concatenated_text_and_usage() {
+        let outcome = DurableRunOutcome {
+            status: RunStatusPayload::Completed(FinalOutputPayload {
+                content: vec![
+                    ContentPart::Text {
+                        text: "Hello, ".to_owned(),
+                    },
+                    ContentPart::Text {
+                        text: "world".to_owned(),
+                    },
+                ],
+                usage: usage(3, 5),
+            }),
+            events: vec![paigasus_helikon_core::AgentEvent::RunCompleted { usage: usage(3, 5) }],
+            usage: usage(3, 5),
+        };
+
+        let result = outcome_to_run_result(outcome).expect("Completed maps to Ok");
+        assert_eq!(result.final_output, "Hello, world");
+        assert_eq!(result.usage.input_tokens, 3);
+        assert_eq!(result.usage.output_tokens, 5);
+        assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn agent_failed_max_turns_maps_to_typed_run_error() {
+        let outcome = DurableRunOutcome {
+            status: RunStatusPayload::AgentFailed(ErrorKindPayload::MaxTurnsExceeded(4)),
+            events: vec![],
+            usage: TokenUsage::default(),
+        };
+
+        match outcome_to_run_result(outcome) {
+            Err(RunError::Agent(AgentError::MaxTurnsExceeded(4))) => {}
+            other => panic!("expected RunError::Agent(MaxTurnsExceeded(4)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancelled_maps_to_run_error_cancelled() {
+        let outcome = DurableRunOutcome {
+            status: RunStatusPayload::Cancelled,
+            events: vec![],
+            usage: TokenUsage::default(),
+        };
+        match outcome_to_run_result(outcome) {
+            Err(RunError::Cancelled) => {}
+            other => panic!("expected RunError::Cancelled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timed_out_maps_to_run_error_timeout() {
+        let outcome = DurableRunOutcome {
+            status: RunStatusPayload::TimedOut,
+            events: vec![],
+            usage: TokenUsage::default(),
+        };
+        match outcome_to_run_result(outcome) {
+            Err(RunError::Timeout) => {}
+            other => panic!("expected RunError::Timeout, got {other:?}"),
         }
     }
 }
