@@ -91,14 +91,14 @@ Two different "cold start" numbers appear, and they measure different things:
   for both example binaries — process startup and listener bind are not where any
   real latency lives for a statically linked Rust binary.
 - **External (`exec`→`/ping`-200, measured by this script)** — wall-clock time
-  from `docker run` to the first successful health check, as an *external*
-  proxy/sanity-check for the same thing. This number is dominated by container
-  runtime overhead (process creation, network namespace setup, Docker Desktop's
-  host↔VM port forwarding on macOS) rather than anything the application
-  controls, which is why the script measures it with a single retrying `curl`
-  process rather than a shell polling loop — see the script's own comments for
-  why a naive polling loop inflated this number by roughly 10x in early testing
-  (measurement artifact, not real latency).
+  from container start (after `docker run -d` returns) to the first successful
+  /ping response, as an *external* proxy/sanity-check for the same thing. This
+  number is dominated by container runtime overhead (process creation, network
+  namespace setup, Docker Desktop's host↔VM port forwarding on macOS) rather than
+  anything the application controls, which is why the script measures it with a
+  single retrying `curl` process rather than a shell polling loop — see the
+  script's own comments for why a naive polling loop inflated this number by
+  roughly 10x in early testing (measurement artifact, not real latency).
 - **Neither number includes AWS's own microVM provisioning latency** (documented
   by AWS as roughly 2–5 seconds), which happens entirely on the platform side,
   before AgentCore ever execs the container's entrypoint. This script cannot

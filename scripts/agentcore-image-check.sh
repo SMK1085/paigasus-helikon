@@ -22,18 +22,18 @@
 # The echo image's size is printed for information only (it demonstrates the
 # framework's own minimal-overhead footprint) and is not gated.
 #
-# Cold start: runs the echo container and measures wall-clock time from
-# `docker run` to the first successful `GET /ping` 200, using a single `curl`
-# process with its own zero-delay retry loop (`--retry --retry-delay 0
-# --retry-connrefused`) rather than a shell polling loop — a bash loop that
-# spawns a fresh `curl` process per attempt adds tens of milliseconds of process-
-# spawn overhead per iteration on macOS, which would swamp the sub-50ms budget
-# with measurement noise rather than real latency (empirically: ~100ms via a
+# Cold start: runs the container and measures wall-clock time from container
+# start (after `docker run -d` returns) to the first successful `GET /ping` 200,
+# using a single `curl` process with its own zero-delay retry loop (`--retry
+# --retry-delay 0 --retry-connrefused`) rather than a shell polling loop — a bash
+# loop that spawns a fresh `curl` process per attempt adds tens of milliseconds of
+# process-spawn overhead per iteration on macOS, which would swamp the sub-50ms
+# budget with measurement noise rather than real latency (empirically: ~100ms via a
 # 5ms-interval spawn-per-attempt loop vs. ~10ms via this single-process retry
-# loop, for the exact same container). This is still an external, `docker run`-
-# to-first-response measurement — it is not the same as the binary's own
-# internal "ready in {ms}ms" log (see the runbook's AC-interpretation note for
-# why both numbers are reported and what each one means).
+# loop, for the exact same container). This is still an external, container-start-
+# to-first-response measurement — it is not the same as the binary's own internal
+# "ready in {ms}ms" log (see the runbook's AC-interpretation note for why both
+# numbers are reported and what each one means).
 
 set -euo pipefail
 
@@ -126,16 +126,21 @@ echo
 echo "== Summary =="
 printf '| %-32s | %14s | %10s |\n' "Metric" "Value" "Gate"
 printf '| %-32s | %14s | %10s |\n' "--------------------------------" "--------------" "----------"
-printf '| %-32s | %11s MB | %10s |\n' "echo image size (informational)" "$(to_mb "${echo_size}")" "n/a"
+printf '| %-32s | %11s MB | %10s |\n' "echo image size (AC gate)" "$(to_mb "${echo_size}")" "< 30 MB"
 printf '| %-32s | %11s MB | %10s |\n' "agent image size (AC gate)" "$(to_mb "${agent_size}")" "< 30 MB"
 printf '| %-32s | %12s ms | %10s |\n' "echo exec->200 (AC gate)" "${echo_cold_start_ms}" "< 50 ms"
-printf '| %-32s | %12s ms | %10s |\n' "agent exec->200 (informational)" "${agent_cold_start_ms}" "n/a"
+printf '| %-32s | %12s ms | %10s |\n' "agent exec->200 (AC gate)" "${agent_cold_start_ms}" "< 50 ms"
 echo
 echo "echo image app-side log:  ${echo_ready_log}"
 echo "agent image app-side log: ${agent_ready_log}"
 echo
 
 failed=0
+
+if [[ "${echo_size}" -ge "${SIZE_LIMIT_BYTES}" ]]; then
+  echo "FAILED: echo image is $(to_mb "${echo_size}") MB, >= the 30 MB AC gate." >&2
+  failed=1
+fi
 
 if [[ "${agent_size}" -ge "${SIZE_LIMIT_BYTES}" ]]; then
   echo "FAILED: agent image is $(to_mb "${agent_size}") MB, >= the 30 MB AC gate." >&2
@@ -146,6 +151,11 @@ fi
 
 if [[ "${echo_cold_start_ms}" -ge "${COLD_START_LIMIT_MS}" ]]; then
   echo "FAILED: echo image exec->200 cold start is ${echo_cold_start_ms}ms, >= the ${COLD_START_LIMIT_MS}ms gate." >&2
+  failed=1
+fi
+
+if [[ "${agent_cold_start_ms}" -ge "${COLD_START_LIMIT_MS}" ]]; then
+  echo "FAILED: agent image exec->200 cold start is ${agent_cold_start_ms}ms, >= the ${COLD_START_LIMIT_MS}ms gate." >&2
   failed=1
 fi
 
