@@ -38,7 +38,7 @@ pub struct ReplArgs {
     /// Path to the agents sidecar file.
     #[arg(long, default_value = "agents.toml")]
     pub agents: PathBuf,
-    /// Agent to talk to first (default: first agent in the file).
+    /// Agent to talk to first (default: alphabetically first agent in the file).
     #[arg(long)]
     pub agent: Option<String>,
 }

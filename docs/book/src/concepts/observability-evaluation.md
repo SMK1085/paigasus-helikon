@@ -179,8 +179,10 @@ a run-level error (the agent run itself failed before evaluators ran).
 
 ### Trace sinks
 
-`TraceSink` records each case's result as the run progresses — feature-gated
-so the crate stays lean by default:
+`TraceSink` records every case's result once the whole run completes, in
+dataset order (not progressively as each case finishes — cases run
+concurrently and `EvalRun` re-sorts by original index before any recording
+starts) — feature-gated so the crate stays lean by default:
 
 - **`SqliteTraceSink`** (feature `trace-sqlite`) writes `eval_runs` /
   `eval_cases` / `eval_events` tables via an embedded sqlx migration. Events

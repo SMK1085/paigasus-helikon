@@ -176,7 +176,9 @@ where
         self
     }
 
-    /// A sink that records each case's result as the run progresses.
+    /// A sink that records every case's result once the run completes, in
+    /// dataset order (not progressively as cases finish — cases run
+    /// concurrently and are re-sorted by original index first).
     #[must_use]
     pub fn trace(mut self, trace: Arc<dyn TraceSink>) -> Self {
         self.trace = Some(trace);

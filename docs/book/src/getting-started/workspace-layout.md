@@ -32,6 +32,7 @@ Feature names are kebab-case in `Cargo.toml`; the re-export module aliases are s
 | `runtime-temporal` | `paigasus_helikon::runtime_temporal` | durable Temporal-backed runner — see [Runtimes](../concepts/runtimes.md) |
 | `runtime-agentcore` | `paigasus_helikon::runtime_agentcore` | AWS Bedrock AgentCore container shim — see [Runtimes](../concepts/runtimes.md) |
 | `sessions-sqlite` | `paigasus_helikon::sessions_sqlite` | SQLite `Session` backend |
+| `evals` | `paigasus_helikon::evals` | evaluation harness — datasets, evaluators, `MockModel`, SQLite/Parquet trace sinks |
 
 In addition, `paigasus_helikon::schema::strict` re-exports the JSON-Schema strict-mode normalizer
 from `core`, regardless of features.
@@ -45,7 +46,7 @@ macro invocation `tools![...]` versus a path `tools::SomeTool`. Be explicit abou
 
 ## Published vs stub crates
 
-Sixteen crates carry real implementations and are published on crates.io / docs.rs:
+Eighteen crates carry real implementations and are published on crates.io / docs.rs:
 
 - `paigasus-helikon-core` — the dependency root (traits, agent loop, carrier types)
 - `paigasus-helikon` — the facade
@@ -63,14 +64,12 @@ Sixteen crates carry real implementations and are published on crates.io / docs.
 - `paigasus-helikon-runtime-agentcore` — AWS Bedrock AgentCore container shim (see [Runtimes](../concepts/runtimes.md))
 - `paigasus-helikon-mcp`
 - `paigasus-helikon-tools`
+- `paigasus-helikon-evals` — evaluation harness: datasets, evaluators, `MockModel`, SQLite/Parquet trace sinks
+- `paigasus-helikon-cli` — published binary crate (`helikon` / `paigasus-helikon` binaries); its lib target is internal and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves
 
-One crate remains a **`0.0.0` name-claim stub — not yet implemented**:
-`paigasus-helikon-evals`. Its facade feature (`evals`) exists and the re-export module
-alias resolves, but the crate is empty — enabling it gives you nothing usable yet.
-
-Two more crates round out the workspace's 19: `paigasus-helikon-cli` is a binary and is
-never published as a library, and `paigasus-helikon-sessions-testkit` is an internal
-`Session` conformance test harness (`publish = false`) never published either.
+Zero name-claim stubs remain in the workspace. The one crate that rounds out the
+workspace's 19 without publishing is `paigasus-helikon-sessions-testkit`, an internal
+`Session` conformance test harness (`publish = false` by design).
 
 ## Picking your surface
 

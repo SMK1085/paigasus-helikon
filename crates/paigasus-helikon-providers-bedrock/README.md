@@ -2,7 +2,7 @@
 
 The Amazon Bedrock **Converse API** model provider for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `BedrockModel` implements [`paigasus-helikon-core`](https://crates.io/crates/paigasus-helikon-core)'s `Model` trait against the Bedrock Converse streaming API, with support for tool use, streaming, structured output (family-gated via forced-tool synthesis), and a tool-input schema rewriter that makes serde/schemars schemas acceptable to Bedrock's validator.
 
-> **Disambiguation:** this crate is the **Converse model provider** — it lets you invoke Bedrock-hosted LLMs as a drop-in `Model`. It is distinct from [`paigasus-helikon-runtime-agentcore`](https://crates.io/crates/paigasus-helikon-runtime-agentcore), which is the **Bedrock AgentCore runtime** host (not yet implemented; `0.0.0` stub).
+> **Disambiguation:** this crate is the **Converse model provider** — it lets you invoke Bedrock-hosted LLMs as a drop-in `Model`. It is distinct from [`paigasus-helikon-runtime-agentcore`](https://crates.io/crates/paigasus-helikon-runtime-agentcore), which is the **Bedrock AgentCore runtime** host.
 
 ## Install
 
