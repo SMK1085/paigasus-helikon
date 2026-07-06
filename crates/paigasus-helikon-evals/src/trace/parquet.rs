@@ -41,6 +41,18 @@ struct ScoreRow {
 ///
 /// Rows are buffered in memory for the lifetime of the sink — suitable for
 /// eval runs whose full trace fits in memory, not for unbounded streaming.
+///
+/// # Persisted form
+///
+/// `<run_id>-events.parquet` is the normalized session-log form (see
+/// [`paigasus_helikon_core::SessionRecorder`]), not a raw agent-event
+/// stream: the case's original input is recorded first as a user-message
+/// row, then the run's outcome events are appended in order. Any tool
+/// call left without a matching result (a run cancelled or timed out
+/// mid-tool) gets a synthesized `ToolReturned` row appended at the end of
+/// the sequence — labeled "tool call did not complete (run
+/// cancelled/timed out)" — rather than interleaved chronologically where
+/// the call occurred.
 pub struct ParquetTraceSink {
     dir: PathBuf,
     run_id: Mutex<Option<String>>,
@@ -98,6 +110,9 @@ impl TraceSink for ParquetTraceSink {
 
         if let Some(outcome) = &case.outcome {
             let mut rec = SessionRecorder::new("eval");
+            rec.record_input(
+                &paigasus_helikon_core::AgentInput::from_user_text(case.input.clone()).messages,
+            );
             for ev in &outcome.events {
                 rec.observe(ev);
             }

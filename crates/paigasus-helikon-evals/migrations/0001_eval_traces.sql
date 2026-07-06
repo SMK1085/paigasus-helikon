@@ -7,6 +7,7 @@ CREATE TABLE eval_runs (
 CREATE TABLE eval_cases (
     run_id       TEXT NOT NULL,
     case_id      TEXT NOT NULL,
+    input        TEXT NOT NULL,
     final_output TEXT NOT NULL,
     error        TEXT,
     scores       TEXT NOT NULL, -- JSON: [{evaluator, score:{value, outcome, detail}}]

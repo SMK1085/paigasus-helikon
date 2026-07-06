@@ -17,6 +17,18 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// One instance is one pool; every [`TraceSink::record_case`] call for a
 /// given run should share the same [`RunMeta::run_id`], since `eval_runs`
 /// is keyed on it.
+///
+/// # Persisted form
+///
+/// `eval_events` is the normalized session-log form (see
+/// [`paigasus_helikon_core::SessionRecorder`]), not a raw agent-event
+/// stream: the case's original input is recorded first as a user-message
+/// event, then the run's outcome events are appended in order. Any tool
+/// call left without a matching result (a run cancelled or timed out
+/// mid-tool) gets a synthesized `ToolReturned` row appended at the end of
+/// the sequence — labeled "tool call did not complete (run
+/// cancelled/timed out)" — rather than interleaved chronologically where
+/// the call occurred.
 #[derive(Debug, Clone)]
 pub struct SqliteTraceSink {
     pool: SqlitePool,
@@ -64,11 +76,12 @@ impl TraceSink for SqliteTraceSink {
             serde_json::to_string(&case.scores).map_err(|e| TraceError::Backend(e.to_string()))?;
 
         sqlx::query(
-            "INSERT INTO eval_cases (run_id, case_id, final_output, error, scores) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO eval_cases (run_id, case_id, input, final_output, error, scores) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&run.run_id)
         .bind(&case.case_id)
+        .bind(&case.input)
         .bind(&final_output)
         .bind(&case.error)
         .bind(&scores)
@@ -78,6 +91,9 @@ impl TraceSink for SqliteTraceSink {
 
         if let Some(outcome) = &case.outcome {
             let mut rec = SessionRecorder::new("eval");
+            rec.record_input(
+                &paigasus_helikon_core::AgentInput::from_user_text(case.input.clone()).messages,
+            );
             for ev in &outcome.events {
                 rec.observe(ev);
             }

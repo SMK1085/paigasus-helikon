@@ -30,6 +30,7 @@ fn case_result() -> CaseResult {
 
     CaseResult {
         case_id: "c1".into(),
+        input: "the input".into(),
         outcome: Some(CaseOutcome {
             final_output: "hi".into(),
             events: vec![event],
@@ -59,11 +60,19 @@ async fn sqlite_sink_round_trips() {
         .await
         .unwrap();
     assert_eq!(n, 1);
+    let (input,): (String,) = sqlx::query_as("SELECT input FROM eval_cases WHERE case_id = 'c1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(input, "the input");
+    // The recorder is seeded with the input turn before observing the
+    // outcome's events, so eval_events carries one more row (the
+    // synthesized user-message row) than the case's raw outcome events.
     let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM eval_events")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert!(n >= 1);
+    assert_eq!(n, 2);
 }
 
 #[cfg(feature = "trace-parquet")]

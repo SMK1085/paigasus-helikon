@@ -221,6 +221,7 @@ where
                     let input = AgentInput::from_user_text(case.input.clone());
                     let mut result = CaseResult {
                         case_id: case.id.clone(),
+                        input: case.input.clone(),
                         outcome: None,
                         error: None,
                         scores: Vec::new(),
@@ -305,6 +306,9 @@ pub struct EvaluatorScore {
 pub struct CaseResult {
     /// The case's `id`.
     pub case_id: String,
+    /// The case's original input text ([`EvalCase::input`]), recorded
+    /// verbatim regardless of whether the agent run succeeded.
+    pub input: String,
     /// The run's outcome, `None` if the agent run itself failed.
     pub outcome: Option<CaseOutcome>,
     /// The agent run's error message, if it failed to complete.
