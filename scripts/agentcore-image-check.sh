@@ -96,7 +96,7 @@ measure_cold_start_ms() {
 
   local start_ns end_ns
   start_ns=$(date +%s%N)
-  if ! curl -s -o /dev/null \
+  if ! curl -s -o /dev/null --fail \
       --retry 400 --retry-delay 0 --retry-all-errors --retry-connrefused \
       --max-time 10 \
       "http://localhost:${host_port}/ping"; then

@@ -81,6 +81,13 @@ COPY --from=builder /agentcore-example /agentcore-example
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
+# Run as a non-root numeric UID:GID. `scratch` has no /etc/passwd, so a named
+# user isn't resolvable, but the kernel only needs a numeric UID/GID — no NSS
+# lookup happens. The copied binary and CA bundle are world-readable/executable
+# (preserved root:root ownership, default mode from the builder stage), and both
+# HTTP ports (8080/8000) are unprivileged, so no capability is lost by dropping root.
+USER 65532:65532
+
 # 8080: the AgentCore HTTP-protocol contract's fixed port (AgentCoreServer::serve).
 # 8000: MCP-protocol mode's fixed port (AgentCoreServer::serve_mcp, feature `mcp`).
 # A given example binary only ever listens on one of the two at a time; both are
