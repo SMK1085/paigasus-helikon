@@ -3130,6 +3130,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures",
  "futures-core",
  "futures-util",
  "paigasus-helikon-core",
@@ -3138,6 +3139,7 @@ dependencies = [
  "serde_json",
  "temporalio-client",
  "temporalio-common",
+ "temporalio-macros",
  "temporalio-sdk",
  "temporalio-sdk-core",
  "thiserror",

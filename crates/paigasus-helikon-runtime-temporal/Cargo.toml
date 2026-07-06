@@ -18,8 +18,10 @@ temporalio-sdk         = { workspace = true }
 temporalio-client      = { workspace = true }
 temporalio-sdk-core    = { workspace = true }
 temporalio-common      = { workspace = true }
+temporalio-macros      = { workspace = true }
 async-trait            = { workspace = true }
 tokio                  = { workspace = true }
+futures                = { workspace = true }
 futures-core           = { workspace = true }
 futures-util           = { workspace = true }
 serde                  = { workspace = true }
