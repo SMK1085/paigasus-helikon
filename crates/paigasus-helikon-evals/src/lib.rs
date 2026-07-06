@@ -24,4 +24,8 @@ pub use run::{
     RunMeta,
 };
 pub use script::{ScriptEvent, ScriptFile, ScriptFinishReason};
+#[cfg(feature = "trace-parquet")]
+pub use trace::ParquetTraceSink;
+#[cfg(feature = "trace-sqlite")]
+pub use trace::SqliteTraceSink;
 pub use trace::{TraceError, TraceSink};

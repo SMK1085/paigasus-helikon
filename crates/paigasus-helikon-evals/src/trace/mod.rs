@@ -4,6 +4,16 @@ use async_trait::async_trait;
 
 use crate::{CaseResult, RunMeta};
 
+#[cfg(feature = "trace-sqlite")]
+mod sqlite;
+#[cfg(feature = "trace-sqlite")]
+pub use sqlite::SqliteTraceSink;
+
+#[cfg(feature = "trace-parquet")]
+mod parquet;
+#[cfg(feature = "trace-parquet")]
+pub use parquet::ParquetTraceSink;
+
 /// Errors from trace sinks.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
