@@ -136,10 +136,12 @@ crates/paigasus-helikon-runtime-temporal/src/
 ### 5.2 Split of responsibilities
 
 - **`TemporalRunner` (client side, implements `Runner<Ctx>`):**
-  `run()` loads the session snapshot (same `load_and_record` semantics as `TokioRunner`),
-  renders the agent's instructions against the caller's `RunContext` (instructions render
-  once per run, as in `LlmAgent::run`), starts an `AgentLoopWorkflow` with a serialized
-  input payload `{agent_name, system_text, conversation, driver config, deadline}` on the
+  `run()` loads the session snapshot (same `load_and_record` semantics as `TokioRunner`)
+  [as built: `run()` itself never renders instructions — `Runner::run` has no instructions
+  access. Rendering happens inside the workflow, as the first activity (`render_instructions`),
+  against the *worker*-fabricated `RunContext` (§5.8), not the caller's], starts an
+  `AgentLoopWorkflow` with a serialized input payload
+  `{agent_name, system_text, conversation, driver config, deadline}` on the
   configured task queue, awaits the workflow result, maps it to `RunResult`/`RunError`,
   and appends the run's events to the session. **Finalize runs on every exit path**: the
   workflow returns a `DurableRunOutcome` for completed, agent-failed, cancelled, *and*
@@ -274,7 +276,8 @@ follow-up work.]
   `status ∈ {Completed(FinalOutputPayload), AgentFailed(ErrorKindPayload), Cancelled,
   TimedOut}`. `ErrorKindPayload` is a small serde enum carrying data for the typed cases
   (`MaxTurnsExceeded(u32)`, `InvalidStructuredOutput{schema_errors, final_text}`,
-  `Model{message, kind}` …) and degrading to a message otherwise; the runner reconstructs
+  `Model{message}` [as built: message only, no `kind`] …) and degrading to a message
+  otherwise; the runner reconstructs
   `RunError::Agent(...)` / `RunError::Cancelled` / `RunError::Timeout` from it, so events
   are returned (and finalized into the session) on **every** driver-level exit path —
   matching `TokioRunner`'s finalize-on-every-exit guarantee.
