@@ -147,15 +147,39 @@ where
     /// Build a tower [`StreamableHttpService`] for this agent, suitable for
     /// nesting into any hyper/axum router. Sessions are managed in-process
     /// by a [`LocalSessionManager`]; each session gets a clone of the
-    /// handler.
+    /// handler. Uses rmcp's default [`StreamableHttpServerConfig`] (stateful
+    /// mode); see [`McpAgentServer::streamable_http_service_with`] to pass an
+    /// explicit config, e.g. stateless mode for platforms such as AWS
+    /// Bedrock AgentCore that inject their own `Mcp-Session-Id` header.
     pub fn streamable_http_service(
         &self,
+    ) -> Result<StreamableHttpService<AgentMcpHandler<Ctx>, LocalSessionManager>, McpError> {
+        self.streamable_http_service_with(StreamableHttpServerConfig::default())
+    }
+
+    /// Like [`McpAgentServer::streamable_http_service`], but with an explicit
+    /// rmcp [`StreamableHttpServerConfig`].
+    ///
+    /// In particular, `StreamableHttpServerConfig::default().with_stateful_mode(false)`
+    /// (the config type is `#[non_exhaustive]`, so construct it via
+    /// `Default::default()` plus its `with_*` builder methods rather than
+    /// struct-literal syntax) puts the service in rmcp's stateless mode: each
+    /// request is served directly (no `initialize` handshake is required
+    /// first) and the `Mcp-Session-Id` request header — if present — is
+    /// never read or validated. This is required for AWS Bedrock AgentCore,
+    /// which injects its own platform-generated `Mcp-Session-Id` on every
+    /// request, an id this server has never issued; stateful mode would 404
+    /// on that unrecognized session, but stateless mode ignores the header
+    /// entirely and always succeeds.
+    pub fn streamable_http_service_with(
+        &self,
+        config: StreamableHttpServerConfig,
     ) -> Result<StreamableHttpService<AgentMcpHandler<Ctx>, LocalSessionManager>, McpError> {
         let handler = self.handler()?;
         Ok(StreamableHttpService::new(
             move || Ok(handler.clone()),
             LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
+            config,
         ))
     }
 
