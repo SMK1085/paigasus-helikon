@@ -1,3 +1,3 @@
-fn main() {
-    println!("paigasus-helikon-cli stub (SMA-304)");
+fn main() -> std::process::ExitCode {
+    paigasus_helikon_cli::main()
 }

@@ -21,5 +21,28 @@ path = "src/bin/helikon.rs"
 name = "paigasus-helikon"
 path = "src/bin/paigasus_helikon.rs"
 
+[dependencies]
+paigasus-helikon-core                = { workspace = true }
+paigasus-helikon-evals                = { workspace = true, features = ["trace-sqlite"] }
+paigasus-helikon-runtime-tokio        = { workspace = true }
+paigasus-helikon-providers-openai     = { workspace = true }
+paigasus-helikon-providers-anthropic  = { workspace = true }
+paigasus-helikon-mcp                  = { workspace = true }
+anyhow                = { workspace = true }
+async-trait            = { workspace = true }
+clap                   = { workspace = true }
+futures-util           = { workspace = true }
+futures-core           = { workspace = true }
+notify                 = { workspace = true }
+notify-debouncer-mini  = { workspace = true }
+rhai                   = { workspace = true }
+serde                  = { workspace = true }
+serde_json             = { workspace = true }
+tokio                  = { workspace = true }
+toml                   = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [lints.rust]
 missing_docs = "allow"  # SMA-305: CLI opts out until Stage 3 public API stabilizes
