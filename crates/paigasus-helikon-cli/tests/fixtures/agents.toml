@@ -1,0 +1,13 @@
+[agents.triage]
+description  = "Routes personal-finance questions"
+instructions = "Answer using the spending lookup tool when asked about spending."
+model        = { provider = "mock", script = "triage_script.json" }
+tools        = ["lookup_spending"]
+
+[tools.lookup_spending]
+description = "Look up spending for a month"
+params      = { type = "object", properties = { month = { type = "string" } }, required = ["month"] }
+script      = "tools/lookup_spending.rhai"
+
+[eval]
+evaluators = ["exact_match", "tool_trajectory"]

@@ -18,29 +18,18 @@ dependencies_update = true
 # the first facade-only release.)
 pr_name = "chore: release"
 
-# Stage 1 (SMA-385) is live: the six real crates (-core, facade, -macros,
-# -providers-openai, -providers-anthropic, -sessions-sqlite) publish to
-# crates.io. The seven stubs were pre-published once at 0.0.0 as name-claim
-# placeholders and carry per-package overrides below. See CLAUDE.md for
-# the 4-step recipe a stub follows when it ascends to real API.
+# All library crates publish to crates.io (Stage 1 SMA-385 onward; the last
+# stubs ascended in SMA-332/SMA-333). Remaining per-package overrides below
+# are the only exceptions. See CLAUDE.md for the 4-step recipe a stub
+# follows when it ascends.
 
 [changelog]
 sort_commits = "newest"
-
-# Binary-only — never published as a library.
-[[package]]
-name = "paigasus-helikon-cli"
-publish = false
 
 # Stubs: pre-published at 0.0.0 as name-claim placeholders. publish=false
 # in each Cargo.toml keeps cargo from re-publishing them; release=false
 # here keeps release-plz from proposing bumps or CHANGELOG churn. The two
 # flags MUST move together — see CLAUDE.md for the 4-step ascend recipe.
-[[package]]
-name = "paigasus-helikon-evals"
-publish = false
-release = false
-
 [[package]]
 name = "paigasus-helikon-sessions-testkit"
 publish = false

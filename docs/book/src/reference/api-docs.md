@@ -16,12 +16,14 @@ Per-item Rust API documentation is published on [docs.rs](https://docs.rs). This
 - [`paigasus-helikon-runtime-agentcore`](https://docs.rs/paigasus-helikon-runtime-agentcore) — AWS Bedrock AgentCore container shim (`AgentCoreServer`, HTTP + MCP protocol contract). See [Runtimes](../concepts/runtimes.md).
 - [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) — `rmcp`-based MCP client/server wrapper.
 - [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) — sandboxed `Read`/`Write`/`Edit`/`Bash` tools (plus `WebFetch`/`WebSearch` behind the `web` feature).
+- [`paigasus-helikon-evals`](https://docs.rs/paigasus-helikon-evals) — evaluation harness: JSONL datasets, the `Evaluator` trait with four built-ins, `MockModel`, and SQLite/Parquet trace sinks. See [Observability & Evaluation](../concepts/observability-evaluation.md).
+- [`paigasus-helikon-cli`](https://docs.rs/paigasus-helikon-cli) — `helikon` / `paigasus-helikon` CLI binaries; publishes a lib target purely so `cargo install paigasus-helikon-cli` resolves, but that lib is internal and carries no stability guarantee. The binaries are documented in the [CLI reference](./cli.md) rather than docs.rs.
 
 Most users depend only on the `paigasus-helikon` facade and enable the features they need; the facade docs link out to each sibling. Crate versions move every release — see [Crate overview](./crates.md) for the current numbers.
 
-## Not yet published
+## Publish status
 
-`paigasus-helikon-evals` is a `0.0.0` name-claim stub with no implementation yet, so it has no live docs.rs page. `paigasus-helikon-cli` is a binary and is never published as a library.
+All 18 non-internal crates now publish to crates.io — the last two stubs (`paigasus-helikon-evals`, `paigasus-helikon-cli`) ascended to real implementations in SMA-332/SMA-333, following `-runtime-axum`, `-runtime-temporal`, and `-runtime-agentcore` before them. The lone exception is `paigasus-helikon-sessions-testkit`, an internal `Session` conformance test harness that is `publish = false` by design, not a stub awaiting an ascend.
 
 ## Building locally
 

@@ -32,8 +32,9 @@ Each feature gates one sibling crate behind a module on `paigasus_helikon::`:
 | `runtime-axum` | `runtime_axum` | `paigasus-helikon-runtime-axum` |
 | `runtime-temporal` | `runtime_temporal` | `paigasus-helikon-runtime-temporal` |
 | `runtime-agentcore` | `runtime_agentcore` | `paigasus-helikon-runtime-agentcore` |
+| `evals` | `evals` | `paigasus-helikon-evals` |
 
-Feature names are kebab-case; the module aliases are snake-case. The `evals` feature exists but gates a not-yet-implemented stub crate — don't enable it yet. **Note:** the `bedrock` feature gates `paigasus-helikon-providers-bedrock`, which is distinct from `runtime-agentcore` (the Bedrock AgentCore runtime host — see the [Runtimes guide](https://smk1085.github.io/paigasus-helikon/concepts/runtimes.html)). The `paigasus_helikon::schema::strict()` JSON-Schema normalizer is available regardless of features.
+Feature names are kebab-case; the module aliases are snake-case. **Note:** the `bedrock` feature gates `paigasus-helikon-providers-bedrock`, which is distinct from `runtime-agentcore` (the Bedrock AgentCore runtime host — see the [Runtimes guide](https://smk1085.github.io/paigasus-helikon/concepts/runtimes.html)). The `paigasus_helikon::schema::strict()` JSON-Schema normalizer is available regardless of features.
 
 When using the `mcp` feature, `McpServerHandle` (from `paigasus_helikon::mcp`) implements `ToolSource<Ctx>` from core. Register MCP server handles directly on the builder with `.mcp_servers([...])` and finalize with `.build_resolved().await?` — no need to convert to a `Vec<Arc<dyn Tool<Ctx>>>` manually. See the [MCP integration guide](https://smk1085.github.io/paigasus-helikon/concepts/mcp-integration.html) for details.
 

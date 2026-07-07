@@ -14,8 +14,9 @@ The single-facade crate `paigasus-helikon` re-exports `paigasus-helikon-core` un
 - **Sessions.** `MemorySession` ships in `core`; `paigasus_helikon::sessions_sqlite` (feature `sessions-sqlite`) is a persistent SQLite `Session` backend.
 - **Runtime.** `paigasus_helikon::runtime_tokio` (feature `runtime-tokio`) is the default ephemeral Tokio runner. `paigasus_helikon::runtime_axum` (feature `runtime-axum`) is the self-hosted HTTP/SSE/WebSocket agent server built on axum — see [Axum Server Runtime](concepts/axum-server.md). `paigasus_helikon::runtime_temporal` (feature `runtime-temporal`) is a durable runner backed by the Temporal Rust SDK, and `paigasus_helikon::runtime_agentcore` (feature `runtime-agentcore`) is an AWS Bedrock AgentCore container shim — see [Runtimes](concepts/runtimes.md) for both.
 - **Multi-agent and MCP.** `Handoff::to(..)` wires triage-style delegation between agents; `paigasus_helikon::mcp` (feature `mcp`) is an rmcp-based MCP client/server wrapper. Guardrails, hooks, and permissions hang off the `HookRegistry` carried in every `RunContext`.
+- **Evals.** `paigasus_helikon::evals` (feature `evals`) is an evaluation harness: JSONL datasets, an `Evaluator` trait with four built-ins, a `MockModel` for deterministic replay, and SQLite/Parquet trace sinks — see [Observability & Evaluation](concepts/observability-evaluation.md).
 
-Sixteen crates are published to [crates.io](https://crates.io/crates/paigasus-helikon) with rustdoc on [docs.rs](https://docs.rs/paigasus-helikon).
+Eighteen crates are published to [crates.io](https://crates.io/crates/paigasus-helikon) with rustdoc on [docs.rs](https://docs.rs/paigasus-helikon).
 
 A minimal run:
 
@@ -48,9 +49,5 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 Start at [Quickstart](getting-started/quickstart.md), then read [Core primitives](concepts/core-primitives.md) for the trait surface.
-
-## What's not yet here
-
-One crate is still a `0.0.0` stub, not implemented: `paigasus-helikon-evals` (evaluation harness). Its facade feature exists but the crate is empty.
 
 Tracked work lives in Linear under the project **Paigasus Helikon** (issues are prefixed `SMA-`).

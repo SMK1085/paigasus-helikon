@@ -10,11 +10,11 @@ For orientation — how to pick crates and add them to your `Cargo.toml` — see
 - The provider, session, tool, MCP, and runtime crates each depend on `core` and on nothing else in the workspace (`-tools` carries a path-only dev-dep on `-providers-openai` for an example; it is stripped from the published manifest).
 - `paigasus-helikon-macros` is a proc-macro crate; its `#[tool]` expansion targets `core` types in the consumer's crate.
 - `paigasus-helikon` is the **facade**: it re-exports `core` unconditionally and the sibling crates behind Cargo features. Application crates normally depend on the facade alone and turn on the features they need.
-- `paigasus-helikon-cli` consumes the facade; it is binary-only and never published as a library.
+- `paigasus-helikon-cli` consumes `core` and the sibling crates it needs (`-evals`, `-runtime-tokio`, `-providers-openai`, `-providers-anthropic`, `-mcp`) directly — not the facade. It publishes to crates.io at `0.1.0` as a binary crate; its lib target is internal (`missing_docs` opted out) and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves.
 
 ## Crate table
 
-Versions below are **current as of 2026-06-30** and move every release — read each crate's `Cargo.toml` (or the root `[workspace.dependencies]` pins) for the live numbers, and the [crates.io page](https://crates.io/crates/paigasus-helikon) / docs.rs for what is actually published.
+Versions below are **current as of 2026-07-06** and move every release — read each crate's `Cargo.toml` (or the root `[workspace.dependencies]` pins) for the live numbers, and the [crates.io page](https://crates.io/crates/paigasus-helikon) / docs.rs for what is actually published.
 
 | Crate | Concern | State | Version |
 | --- | --- | --- | --- |
@@ -34,13 +34,11 @@ Versions below are **current as of 2026-06-30** and move every release — read 
 | [`paigasus-helikon-runtime-agentcore`](https://docs.rs/paigasus-helikon-runtime-agentcore) | AWS Bedrock AgentCore container shim (`AgentCoreServer`; HTTP + MCP protocol contract) | published | `0.1.0` |
 | [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) | MCP integration — `rmcp` client and server wrappers | published | `0.1.3` |
 | [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) | Sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`) | published | `0.1.5` |
-| `paigasus-helikon-evals` | Evaluation harness | stub — not yet implemented | `0.0.0` |
-| `paigasus-helikon-cli` | `helikon` / `paigasus-helikon` CLI binaries | binary-only — never published | `0.0.0` |
+| [`paigasus-helikon-evals`](https://docs.rs/paigasus-helikon-evals) | Evaluation harness — datasets, evaluators, `MockModel`, SQLite/Parquet trace sinks | published | `0.1.0` |
+| [`paigasus-helikon-cli`](https://docs.rs/paigasus-helikon-cli) | `helikon` / `paigasus-helikon` CLI binaries; lib target is internal, no stability guarantee | published (binary crate) | `0.1.0` |
 | `paigasus-helikon-sessions-testkit` | Shared `Session` conformance test harness (internal — never published) | internal — `publish = false` | `0.0.0` |
 
-One crate remains a pre-published name-claim at `0.0.0` with `publish = false`
-(`paigasus-helikon-evals`); its facade re-export exists but the crate is empty. Do not
-depend on it yet.
+Every crate above the `-sessions-testkit` row publishes to crates.io — the last two stubs (`-evals`, `-cli`) ascended to real implementations in SMA-332/SMA-333, following the four-remaining-crates ascend before them (`-runtime-axum`, `-runtime-temporal`, `-runtime-agentcore`). `paigasus-helikon-sessions-testkit` is the sole `publish = false` crate, and it is an intentional internal test harness rather than a stub awaiting an ascend.
 
 ## Facade feature → re-export map
 
@@ -64,7 +62,7 @@ Add the facade and turn on the features you need. Each feature gates one sibling
 | `runtime-axum` | `paigasus_helikon::runtime_axum` | `paigasus-helikon-runtime-axum` |
 | `runtime-temporal` | `paigasus_helikon::runtime_temporal` | `paigasus-helikon-runtime-temporal` |
 | `runtime-agentcore` | `paigasus_helikon::runtime_agentcore` | `paigasus-helikon-runtime-agentcore` |
-| `evals` | re-export exists, crate empty | the one remaining stub |
+| `evals` | `paigasus_helikon::evals` | `paigasus-helikon-evals` |
 
 Feature names are kebab-case (`tools-web`, `runtime-tokio`); the re-export module aliases are snake-case (`runtime_tokio`, `sessions_sqlite`).
 

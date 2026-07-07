@@ -1201,6 +1201,14 @@ pub enum AgentError {
         max: u32,
     },
 
+    /// A [`crate::SwarmAgent`] exceeded its configured handoff budget
+    /// before any member produced a final output.
+    #[error("max handoffs ({limit}) exceeded")]
+    MaxHandoffsExceeded {
+        /// The configured budget that was exceeded.
+        limit: u32,
+    },
+
     /// Escape hatch.
     #[error(transparent)]
     Other(#[from] anyhow::Error),

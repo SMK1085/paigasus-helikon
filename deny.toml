@@ -39,6 +39,12 @@ ignore = [
   # temporalio-* 0.5 stack. No fixed upgrade exists. Revisit on every
   # temporalio-* bump (SMA-332).
   "RUSTSEC-2024-0384",
+  # paste is unmaintained (archived by dtolnay; no vulnerability), pulled by
+  # parquet — the latest stable parquet (59.0.0, via paigasus-helikon-evals'
+  # trace-parquet feature) still depends on it and no paste-free release
+  # exists yet. Compile-time proc-macro only; revisit when arrow-rs drops it
+  # upstream. Accepted at SMA-333.
+  "RUSTSEC-2024-0436",
 ]
 
 # ---------------------------------------------------------------------------
@@ -62,6 +68,8 @@ allow = [
   "BSL-1.0",                        # Boost Software License 1.0 (OSI/FSF approved, permissive); xxhash-rust (via redis → paigasus-helikon-sessions-redis)
   "CDLA-Permissive-2.0",            # Community Data License Agreement Permissive 2.0 (Linux Foundation); webpki-roots Mozilla root CA certs (via sqlx-core → paigasus-helikon-sessions-postgres)
   "0BSD",                           # BSD Zero Clause License (OSI approved, permissive); enum-iterator/enum-iterator-derive (via temporalio-sdk-core → paigasus-helikon-runtime-temporal)
+  "CC0-1.0",                        # notify (CLI file watching; notify-debouncer-mini itself is MIT/Apache); public-domain dedication, patent non-grant noted — accepted at SMA-333 GATE 1
+  "MIT-0",                          # borrow-or-share (via jsonschema → referencing → fluent-uri); MIT No Attribution, OSI approved
 ]
 exceptions = []
 

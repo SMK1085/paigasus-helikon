@@ -20,4 +20,10 @@ ignore = [
     # temporalio-* 0.5 stack. No fixed upgrade exists. Revisit on every
     # temporalio-* bump (SMA-332).
     "RUSTSEC-2024-0384",
+    # paste is unmaintained (archived by dtolnay; no vulnerability), pulled by
+    # parquet — the latest stable parquet (59.0.0, via paigasus-helikon-evals'
+    # trace-parquet feature) still depends on it and no paste-free release
+    # exists yet. Compile-time proc-macro only; revisit when arrow-rs drops it
+    # upstream. Accepted at SMA-333. Mirrored in /deny.toml.
+    "RUSTSEC-2024-0436",
 ]

@@ -1,0 +1,2 @@
+{"id":"spending-question","input":"How much did I spend in June?","expected":"You spent $1,250 in June.","expected_tools":["lookup_spending"]}
+{"id":"greeting","input":"Hi!","expected":"Hello! Ask me about your spending.","expected_tools":[]}

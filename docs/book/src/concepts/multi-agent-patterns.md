@@ -1,21 +1,23 @@
 # Multi-Agent Patterns
 
-Four shipped composition primitives let you build systems out of more than one
-[`Agent`](./core-primitives.md). They split into two families:
+Seven shipped composition primitives let you build systems out of more than
+one [`Agent`](./core-primitives.md). They split into three families:
 
 - **Control transfer** — `Handoff`: hand the conversation to another agent and
-  let it finish the run.
+  let it finish the run. `SwarmAgent` builds on the same mechanism: a pool of
+  agents with handoffs auto-injected full-mesh, ending as soon as whichever
+  member answers instead of handing off further.
 - **Sub-agent invocation** — `AgentAsTool`: call another agent like a tool, get
   its result back, and keep going.
 - **Deterministic orchestration** — `SequentialAgent`, `ParallelAgent`,
-  `LoopAgent`: drive a fixed set of sub-agents in order, concurrently, or in a
-  bounded loop.
+  `LoopAgent`, `GraphAgent`: drive a fixed topology of sub-agents — in order,
+  concurrently, in a bounded loop, or across a dependency-gated DAG.
 
 All of these are in `paigasus-helikon-core` and re-exported through
-`paigasus_helikon::core`. `SequentialAgent`, `ParallelAgent`, and `LoopAgent`
-each implement the same `Agent<Ctx>` trait as `LlmAgent`, so they nest and
-compose freely — a `SequentialAgent` step can itself be a `ParallelAgent`, and
-so on.
+`paigasus_helikon::core`. `SequentialAgent`, `ParallelAgent`, `LoopAgent`,
+`SwarmAgent`, and `GraphAgent` each implement the same `Agent<Ctx>` trait as
+`LlmAgent`, so they nest and compose freely — a `SequentialAgent` step can
+itself be a `ParallelAgent`, and so on.
 
 ## Choosing a pattern
 
@@ -26,6 +28,8 @@ so on.
 | Run agents in a fixed order, each reading the last | `SequentialAgent` | Each step's final text lands in `state[key]` |
 | Fan out independent work concurrently | `ParallelAgent` | Each branch writes `state[key]`; outputs merge into one JSON object |
 | Refine until a sub-agent signals "done" | `LoopAgent` | Same as sequential, plus an escalate signal that stops the loop |
+| Let a pool of specialists hand off among themselves until one answers | `SwarmAgent` | `HandoffItem` events between members; the first member to answer (not hand off) produces the final output |
+| Run a fixed DAG where each node waits on specific predecessors | `GraphAgent` | Each node's final text lands in `state[key]`; sink node(s) deterministically merge into the final output |
 
 `Handoff` is one-way: control does not return to the routing agent.
 `AgentAsTool` is request/response: control always returns. The orchestration
@@ -224,8 +228,92 @@ let refine = LoopAgent::new("draft-and-critique", "Iterate until the critic is s
     .then(critic);
 ```
 
+## SwarmAgent — a pool with full-mesh handoffs
+
+`SwarmAgent<Ctx>` wires a pool of `LlmAgent` members together with a
+`Handoff` to every other member auto-injected (a `transfer_to_<slug>` tool
+per pair). Execution is the ordinary handoff-driven `LlmAgent` loop — the
+swarm doesn't run a second driver — and it **ends the moment the active
+member produces a final output instead of handing off**: first to answer
+wins.
+
+Members must be `LlmAgent`s — they're the only agent type that can call
+transfer tools (a `dyn Agent` "terminal member" that can receive but never
+initiate a handoff is a possible future extension, not shipped today).
+
+**Bounding convergence.** A handoff nests: the parent derives a child run
+with its own turn budget and an incremented `agent_depth`, checked against
+`RunConfig::max_agent_depth` (default 8). A ping-ponging swarm that never
+converges exhausts that depth and fails with
+`AgentError::MaxAgentDepthExceeded` — the underlying hard bound. On top of
+that, the swarm exposes its own **`.max_handoffs(n)`** budget: it counts
+`HandoffItem` events on its own returned stream and, on exceeding `n`,
+cancels the run and fails with `AgentError::MaxHandoffsExceeded { limit }`.
+Leave it unset and `max_agent_depth` is the only bound.
+
+```rust
+use paigasus_helikon::core::SwarmAgent;
+
+let swarm = SwarmAgent::builder()
+    .name("support_swarm")
+    .description("A personal-finance support swarm covering budgeting and investing.")
+    .member(triage)      // LlmAgent<Ctx, M1, T1> — heterogeneous per-member M/T
+    .member(budgeting)   // LlmAgent<Ctx, M2, T2>
+    .member(investing)
+    .entry("triage")     // optional; defaults to the first member added
+    .max_handoffs(6)     // optional convergence budget (see above)
+    .build()?;           // SwarmBuildError on empty/duplicate-name/unknown-entry
+```
+
+The runnable version of this example is
+`crates/paigasus-helikon/examples/swarm_finance.rs`.
+
+## GraphAgent — a declared DAG
+
+`GraphAgent<Ctx>` runs a declared directed acyclic graph of agents: nodes are
+agents, edges are dependencies, and a node runs only once **all** of its
+predecessors have completed. Ready nodes are scheduled and polled
+concurrently as their predecessors finish (a dynamic Kahn wavefront) —
+more bookkeeping than `ParallelAgent`'s static fan-out, but the same
+cooperative, non-tokio concurrency model. Each completed node's final text
+is written to `state[key]` (key = the node's name, mirroring
+`ParallelAgent`'s branch-key convention) and appended to each successor's
+input as a labeled context message.
+
+**Termination** is deterministic regardless of completion timing: once every
+node has run, the graph synthesizes one final assistant message from the
+**sink** nodes (nodes with no outgoing edges) — a single sink's text goes
+through verbatim; multiple sinks merge into a JSON object keyed by node name,
+the same convention `ParallelAgent` uses.
+
+**Failure** is collect-all, like `ParallelAgent`: a failed node marks its
+transitive descendants as skipped (independent branches still run to
+completion), then one aggregate `RunFailed` names both the failed and the
+skipped nodes. No new `AgentEvent` variant is added for a skip — it's
+surfaced only in that aggregate error.
+
+```rust
+use paigasus_helikon::core::GraphAgent;
+
+let graph = GraphAgent::builder()
+    .name("finance_report")
+    .description("Fans spending and income analysis into a combined summary.")
+    .node("spending", spending_agent)   // impl Agent<Ctx> + 'static (or via .shared_node)
+    .node("income", income_agent)
+    .node("summary", summary_agent)
+    .edge("spending", "summary")        // spending → summary
+    .edge("income", "summary")          // income → summary
+    .build()?;                          // GraphBuildError on cycle/unknown/duplicate/empty
+```
+
+The runnable version of this example (a spending/income → summary diamond) is
+`crates/paigasus-helikon/examples/graph_report.rs`.
+
 ## See also
 
 - [Core Primitives](./core-primitives.md) — the `Agent<Ctx>` trait these all share.
 - [The Agent Loop](./agent-loop.md) — how `LlmAgent` drives a single run and its events.
 - [Tools](./tools.md) — defining the `Tool<Ctx>` types `AgentAsTool` plugs into.
+- [CLI](../reference/cli.md) — the `agents.toml` sidecar's `handoffs` field
+  builds one-way `Handoff` chains (cycles rejected at validation, unlike a
+  full-mesh `SwarmAgent`).

@@ -15,12 +15,14 @@ categories    = ["api-bindings", "asynchronous"]
 
 [workspace.dependencies]
 anyhow                = "1"
+arrow                 = { version = "59", default-features = false }
 async-openai          = "0.41"
 cap-std               = "4"
 axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64                = "0.22"
 async-stream          = "0.3"
 async-trait           = "0.1"
+clap                  = { version = "4", features = ["derive"] }
 eventsource-stream    = "0.2"
 fastrand              = "2"
 futures-core          = "0.3"
@@ -43,13 +45,18 @@ globset               = "0.4"
 # unmaintained `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`.
 # Relax once jiff drops that transitive dep.
 jiff                  = { version = "=0.2.28", features = ["serde"] }
+jsonschema            = { version = "0.46", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"
+notify                = "8"
+notify-debouncer-mini = "0.7"
 opentelemetry         = "0.32"
+parquet               = { version = "59", default-features = false, features = ["arrow", "snap"] }
 proc-macro-crate      = "3"
 proc-macro2           = "1"
 quote                 = "1"
 reqwest               = { version = "0.13", default-features = false }
+rhai                  = { version = "1", features = ["sync", "serde"] }
 rmcp                  = { version = "1.7", default-features = false, features = [
   "client",
   "server",
@@ -71,6 +78,7 @@ thiserror             = "2"
 tokio                 = { version = "1", features = ["full"] }
 tokio-tungstenite     = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
 tokio-util            = { version = "0.7", default-features = false, features = ["rt"] }
+toml                  = "1"
 tower                 = { version = "0.5", default-features = false, features = ["util"] }
 tracing               = "0.1"
 tracing-subscriber    = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -129,7 +137,7 @@ aws-smithy-runtime     = { version = "1.11.3", default-features = false, feature
 aws-smithy-http-client = { version = "1.1.13", default-features = false, features = ["rustls-aws-lc"] }
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.17" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.4.18" }
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.13" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.3" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.16" }
@@ -140,7 +148,7 @@ paigasus-helikon-runtime-tokio       = { path = "crates/paigasus-helikon-runtime
 paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime-axum", version = "0.1.1", default-features = false }
 paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal",    version = "0.1.0" }
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore",   version = "0.1.0" }
-paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.0.0" }
+paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals",               version = "0.1.0" }
 paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.19" }
 paigasus-helikon-sessions-postgres   = { path = "crates/paigasus-helikon-sessions-postgres", version = "0.1.0" }
 paigasus-helikon-sessions-redis      = { path = "crates/paigasus-helikon-sessions-redis", version = "0.1.0" }
