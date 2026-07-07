@@ -160,34 +160,79 @@
 //! The agent's [`RunContext`](paigasus_helikon_core::RunContext) (`Ctx` generic type) is not
 //! serializable and does not cross the client→worker boundary. For every tool-call activity, the
 //! **worker fabricates a fresh `RunContext::ephemeral(ctx).with_cancel(...)`** from its configured
-//! context factory. v0 ships this with **fixed, non-configurable defaults**:
+//! context factory, then applies its configured [`worker::WorkerPosture`].
 //!
-//! - `redact_output = true` — tool output is redacted before it re-enters the conversation, using
-//!   secrets sourced from the worker process's own environment (`_API_KEY`/`_TOKEN`/`_SECRET`/
-//!   `_PASSWORD`/`_CREDENTIAL`-suffixed variables) plus an empty `extra_secrets` list.
-//! - [`PermissionMode::Default`](paigasus_helikon_core::PermissionMode) with no `permission_policy`
-//!   installed — permissive by default, except for the always-on built-in destructive guards
-//!   (blocking `rm -rf /`/`~`, writes under protected system paths, and writes touching
-//!   `.git`/`.ssh`/`.env*`).
-//! - No `approval_handler` installed — a destructive guard's `Ask` therefore **degrades to
-//!   `Deny`**, since nothing is registered to resolve it.
-//! - No deny rules, no allow rules, no custom guard rules — the caller cannot install any of
-//!   these on the durable path.
+//! ## Configuring the posture
 //!
-//! **None of the caller's `RunContext` configuration propagates to the worker.** Specifically,
-//! the following caller-side fields never cross the client→worker boundary: deny/allow rules, the
-//! permission mode and policy, the approval handler, and `extra_secrets`. The worker's fixed v0
-//! defaults above are authoritative for every tool call executed in the activity, regardless of
-//! what the caller configured on its own `RunContext`.
+//! [`worker::WorkerPosture`] groups the nine posture knobs
+//! [`RunContext`](paigasus_helikon_core::RunContext) already exposes — permission mode,
+//! deny/allow/guard rules, a permission policy, an approval handler, the built-in destructive
+//! guards, output redaction, and `extra_secrets` — into one value, set via
+//! [`worker::TemporalAgentWorkerBuilder::posture`]. **`WorkerPosture::default()` reproduces the
+//! v0 fixed defaults exactly**: [`PermissionMode::Default`](paigasus_helikon_core::PermissionMode)
+//! with no `permission_policy` installed (a destructive guard's `Ask` therefore degrades to
+//! `Deny` unless an `approval_handler` is also configured), the always-on built-in destructive
+//! guards (blocking `rm -rf /`/`~`, writes under protected system paths, and writes touching
+//! `.git`/`.ssh`/`.env*`), `redact_output = true` (secrets sourced from the worker process's own
+//! environment plus an empty `extra_secrets` list), and no deny/allow/guard rules. **A worker
+//! that never calls `.posture(...)` behaves byte-for-byte as before.** Loosen or extend that
+//! baseline via `with_permission_mode`, `with_deny_rules`, `with_allow_rules`, `with_guard_rules`,
+//! `with_permission_policy`, `with_approval_handler`, `without_default_guards`,
+//! `without_output_redaction`, and `with_extra_secrets`.
+//!
+//! **None of the caller's own `RunContext` configuration propagates to the worker.** The
+//! following caller-side fields never cross the client→worker boundary, regardless of the
+//! worker's posture configuration: deny/allow rules, the permission mode and policy, the approval
+//! handler, and `extra_secrets`. The worker's configured posture is authoritative for every tool
+//! call executed in the activity — a client cannot loosen it by configuring its own `RunContext`
+//! differently.
+//!
+//! ## The request-scoped `Ctx` seed
+//!
+//! A client may attach an explicit, opt-in seed — [`runner::TemporalRunnerConfig::with_ctx_seed`]
+//! — that crosses the client→worker boundary as a plain `serde_json::Value`, recorded in
+//! [`payloads::WorkflowInput::ctx_seed`]. On the worker side,
+//! [`worker::TemporalAgentWorkerBuilder::with_seeded_ctx`] /
+//! [`worker::TemporalAgentWorkerBuilder::try_with_seeded_ctx`] reconstitute the per-run `Ctx` from
+//! that seed (a worker that only calls `with_ctx` ignores any seed entirely). This is the
+//! mechanism for handing request-scoped caller data — tenant id, user id, auth subject — to the
+//! worker, **without** ever serializing posture itself: posture stays worker-static (above); the
+//! seed carries data, not policy.
+//!
+//! **Fail-fast contract.** The seeded factory slot is fallible internally: a
+//! [`worker::TemporalAgentWorkerBuilder::try_with_seeded_ctx`] factory that rejects a seed maps to
+//! a **non-retryable** activity failure, so a malformed or hostile seed fails the run immediately
+//! rather than retry-looping forever (`render_instructions` carries no retry policy of its own) or
+//! silently falling back to a default identity under the wrong caller. **Prefer
+//! `try_with_seeded_ctx` over the infallible `with_seeded_ctx` whenever the seed drives
+//! authorization** — `with_seeded_ctx`'s totality contract requires its closure never panic,
+//! which is the wrong tool for rejecting a bad seed.
+//!
+//! **The seed is recorded in Temporal history.** Keep it small (ids, claims) — never bulk data,
+//! and never put secrets in it. History is a permanent persistence boundary, same as tool output
+//! (below).
+//!
+//! ## Per-run authorization without a serializable policy
+//!
+//! A worker-registered [`PermissionPolicy`](paigasus_helikon_core::PermissionPolicy) is a trait
+//! object and stays worker-static — it is never serialized. Because the worker rebuilds `Ctx`
+//! from the per-run seed before applying posture, the policy's `check(ctx, tool, args)` can read
+//! `ctx.user_ctx()` (the seeded value) and make **request-scoped** decisions — e.g. "tenant `acme`
+//! may run `Bash`, others may not" — giving per-run authorization from a static policy plus a
+//! dynamic seed, with no policy ever crossing the wire.
+//!
+//! **The policy is only reachable in some modes.**
+//! [`PermissionMode::Bypass`](paigasus_helikon_core::PermissionMode) allows every call before the
+//! policy runs, and [`PermissionMode::DontAsk`](paigasus_helikon_core::PermissionMode) denies
+//! every call the same way (both short-circuit); a seed-driven per-tenant policy is therefore only
+//! consulted under `Default`, `AcceptEdits`, or `Plan`. A worker that combines `Bypass`/`DontAsk`
+//! posture with a permission policy makes that policy dead code for tool calls — by design, but
+//! easy to combine by accident.
 //!
 //! **Temporal history is a persistence boundary.** Tool outputs are redacted *before* they are
-//! recorded in the workflow history (Temporal's durable storage), per the fixed `redact_output =
-//! true` default above. Treat Temporal history as a permanent external record.
-//!
-//! Worker-side posture configuration — letting a worker operator configure permission mode,
-//! deny/allow rules, an approval handler, or `extra_secrets` for its fabricated `RunContext` — is
-//! future work, alongside the serializable-`Ctx`-seed mechanism for finer-grained permission
-//! inheritance.
+//! recorded in the workflow history (Temporal's durable storage), when `redact_output = true`
+//! (the default). A worker that calls `without_output_redaction()` writes **unredacted** tool
+//! output into permanent history — a posture choice made loudly, not a default.
 //!
 //! # Retry Semantics and Tool Idempotency
 //!
@@ -230,6 +275,27 @@
 //! instead of resuming), accepting the trade-off: the run is no longer durable against crashes
 //! mid-tool-call.
 //!
+//! # Heartbeats
+//!
+//! [`worker::TemporalAgentWorkerBuilder::heartbeat_interval`] is opt-in (off by default,
+//! preserving v0 behavior byte-for-byte when unset). When set, the worker's `call_model` and
+//! `invoke_tool` activities emit a liveness `record_heartbeat` on that interval (floored to 1s),
+//! and the workflow sets `heartbeat_timeout = 2 × interval` on those two activities'
+//! `ActivityOptions` (`render_instructions` never gets one — it is fast and does no network I/O).
+//! This **speeds reclamation of a crashed worker's in-flight attempt** well below the activity's
+//! full `start_to_close` bound.
+//!
+//! **Honest caveat — a starved live worker can trip the same timeout.** A `heartbeat_timeout`
+//! fires whenever the ticker stops polling, which happens both when the worker crashes (the
+//! intended win) *and* when a live worker's async executor is starved by a blocking/CPU-bound
+//! tool `invoke` (e.g. a synchronous `std::process::Command`, or heavy compute with no `.await`).
+//! In that case Temporal re-dispatches the tool call to another worker, narrowing the double-run
+//! window from the activity's full `start_to_close` timeout (default 300s) down to roughly
+//! `2 × interval`. **Recommendation: offload blocking or CPU-bound tool work via
+//! `tokio::task::spawn_blocking`** so the executor keeps polling the heartbeat ticker. This
+//! interacts directly with the **tool idempotency under crash-retry** warning above — enabling
+//! heartbeats is a latency/reclamation *tuning* choice with that trade-off, not a free win.
+//!
 //! # Payload Budget and Conversation Size
 //!
 //! The durable driver builds every `ModelRequest` from the **full conversation** — including all
@@ -246,6 +312,11 @@
 //! - Limit `max_turns` in [`RunConfig`](paigasus_helikon_core::RunConfig) to stay within the turn budget.
 //! - Monitor your actual payload sizes in Temporal's Web UI to verify your use case fits.
 //!
+//! **The `Ctx` seed adds to this budget too.** When a client sets
+//! [`runner::TemporalRunnerConfig::with_ctx_seed`], that seed is serialized into the activity
+//! input on **every** `render_instructions` and `invoke_tool` call (once per turn and once per
+//! tool call, not once per run) — keep it small (ids, claims), not bulk data.
+//!
 //! Payload codecs (custom serialization), claim-check blob offloading, and conversation
 //! compaction are named follow-up work, not silent gaps.
 //!
@@ -256,6 +327,18 @@
 //! **different version of `paigasus-helikon-core` or `paigasus-helikon-runtime-temporal`** can
 //! cause non-determinism errors (the workflow's replayed decisions don't match the new code's
 //! logic).
+//!
+//! **SMA-455 wire additions (additive, not an unqualified "replay-breaking" change).** The
+//! worker-posture, `Ctx`-seed, and heartbeat features added a `#[serde(default)] ctx_seed` field
+//! to [`payloads::WorkflowInput`] and an optional `heartbeat_timeout` to the model/tool
+//! `ActivityOptions`. Both are additive by construction: `#[serde(default)]` means a
+//! `WorkflowInput` serialized by an older worker still deserializes on a newer one (the field
+//! defaults to `None`), and the changed activity-input tuple only affects **newly-scheduled**
+//! `render_instructions`/`invoke_tool` activities — an activity that already completed replays
+//! its recorded result from history rather than re-executing against the new code. This is a
+//! reasoned, honest claim, not a guarantee proven against every upgrade path; **drain-before-
+//! upgrade / blue-green task queues (below) remain the conservative, recommended path** regardless
+//! of how additive a given change looks on paper.
 //!
 //! **Operational guidance for v0 (machinery deferred to a future release):**
 //!

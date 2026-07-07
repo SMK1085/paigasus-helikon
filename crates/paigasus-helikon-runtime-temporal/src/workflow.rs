@@ -123,6 +123,8 @@ pub(crate) struct WorkflowActivityConfig {
 /// [`RetryPolicyConfig`]s, converted here into the proto retry policy attached
 /// to the corresponding activity options (un-inerting the fields Task 7
 /// stored); `timeouts` supplies the per-activity start-to-close bound.
+/// `heartbeat_timeout` is applied to the model/tool activities only —
+/// `render_instructions` never gets one.
 pub(crate) fn build_activity_config(
     plans: HashMap<String, AgentPlan>,
     model_retry: &RetryPolicyConfig,

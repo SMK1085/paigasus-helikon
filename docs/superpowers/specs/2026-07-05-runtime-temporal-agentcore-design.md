@@ -265,10 +265,22 @@ executes, with the same safe defaults as core (`redact_output = true`, permissio
 as configured on the worker context). This is documented loudly in the crate docs:
 **worker-side posture, not caller posture, governs durable tool execution**, and
 Temporal history should be treated as a persistence boundary (redaction applies before
-recording). A serializable-`Ctx`-seed mechanism is future work.
+recording).
 
-[As built (v0): fixed safe defaults; the optional worker-side configuration moved to
-follow-up work.]
+**As-built (landed in SMA-455).** v0 shipped this section's posture as fixed and
+non-configurable, and named the serializable-`Ctx`-seed mechanism as future work. Both
+landed in SMA-455: the optional worker-side posture configuration described above is now
+`worker::WorkerPosture<Ctx>`, set via `TemporalAgentWorkerBuilder::posture(...)`
+(`WorkerPosture::default()` reproduces the v0 fixed defaults exactly); the serializable
+seed is `runner::TemporalRunnerConfig::with_ctx_seed(Value)` on the client side and
+`TemporalAgentWorkerBuilder::with_seeded_ctx` / `::try_with_seeded_ctx` on the worker
+side. See
+`docs/superpowers/specs/2026-07-06-runtime-temporal-worker-posture-design.md` for the
+full design (including the fail-fast contract on a malformed seed and the seed→policy
+composition that gives per-run authorization without ever serializing the policy).
+
+[As built (SMA-455): configurable via `WorkerPosture` +
+`with_ctx_seed`/`with_seeded_ctx`/`try_with_seeded_ctx`; see the as-built note above.]
 
 ### 5.9 Outcome, error, cancellation, timeout, retry semantics
 
@@ -519,10 +531,11 @@ touching its API after all, it joins the manual-bump list.
 
 - A2A (port 9000, GA) and AG-UI protocol shims — new tickets if wanted.
 - Live streaming from the Temporal workflow (queries/updates) — v0 is buffered.
-- Hooks/guardrails/handoffs in the durable driver; serializable-`Ctx` seed propagation;
-  incremental per-transition session persistence from inside the workflow (SMA-392's
-  "durable runners may persist incrementally" note) — v0 finalizes client-side from the
-  total `DurableRunOutcome`.
+- Hooks/guardrails/handoffs in the durable driver; incremental per-transition session
+  persistence from inside the workflow (SMA-392's "durable runners may persist
+  incrementally" note) — v0 finalizes client-side from the total `DurableRunOutcome`.
+  (Serializable-`Ctx` seed propagation, listed here at v0 time, landed in SMA-455 — see
+  §5.8's as-built note.)
 - Temporal payload codec / claim-check blob offloading; compaction integration (§5.11).
 - Temporal Worker Versioning (Build IDs) integration (§5.10).
 - `temporal-it` CI job (dev-server-in-CI); Docker-build CI job.
