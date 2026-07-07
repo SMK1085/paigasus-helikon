@@ -226,6 +226,7 @@ async fn drive(
     let agent_name = input.agent_name.clone();
     let timeout_ms = input.timeout_ms;
     let parallel_limit = input.config.parallel_tool_call_limit;
+    let ctx_seed = input.ctx_seed.clone();
 
     // Single keyed lookup — deterministic, not a `HashMap` iteration.
     let plan = match config.plans.get(&agent_name) {
@@ -241,7 +242,15 @@ async fn drive(
     // `driver.interrupt(..)` consumes the driver on an interruption. A natural
     // finish `return`s the outcome directly from inside the loop.
     let interrupt = {
-        let effects = run_effects(ctx, &config, &agent_name, parallel_limit, &mut driver).fuse();
+        let effects = run_effects(
+            ctx,
+            &config,
+            &agent_name,
+            &ctx_seed,
+            parallel_limit,
+            &mut driver,
+        )
+        .fuse();
         let deadline = run_deadline(ctx, timeout_ms).fuse();
         let cancelled = ctx.cancelled();
         futures_util::pin_mut!(effects, deadline, cancelled);
@@ -273,6 +282,7 @@ async fn run_effects(
     ctx: &WorkflowContext<DurableAgentWorkflow>,
     config: &WorkflowActivityConfig,
     agent_name: &str,
+    ctx_seed: &Option<serde_json::Value>,
     parallel_limit: Option<usize>,
     driver: &mut DurableDriver,
 ) -> DurableRunOutcome {
@@ -282,7 +292,7 @@ async fn run_effects(
                 match ctx
                     .start_activity(
                         AgentActivities::render_instructions,
-                        agent_name.to_owned(),
+                        (agent_name.to_owned(), ctx_seed.clone()),
                         config.instructions_activity_opts.clone(),
                     )
                     .await
@@ -311,7 +321,8 @@ async fn run_effects(
                 }
             }
             DriverEffect::ExecuteTools(calls) => {
-                let outcomes = execute_tools(ctx, config, agent_name, parallel_limit, calls).await;
+                let outcomes =
+                    execute_tools(ctx, config, agent_name, ctx_seed, parallel_limit, calls).await;
                 driver.apply_tools(outcomes);
             }
             DriverEffect::Finished(outcome) => return outcome,
@@ -326,6 +337,7 @@ async fn execute_tools(
     ctx: &WorkflowContext<DurableAgentWorkflow>,
     config: &WorkflowActivityConfig,
     agent_name: &str,
+    ctx_seed: &Option<serde_json::Value>,
     parallel_limit: Option<usize>,
     calls: Vec<ToolCallRequest>,
 ) -> Vec<ToolCallOutcome> {
@@ -341,9 +353,14 @@ async fn execute_tools(
             let call_id = call.call_id.clone();
             let opts = config.tool_activity_opts.clone();
             let agent_name = agent_name.to_owned();
+            let ctx_seed_cloned = ctx_seed.clone();
             async move {
                 match ctx
-                    .start_activity(AgentActivities::invoke_tool, (agent_name, call), opts)
+                    .start_activity(
+                        AgentActivities::invoke_tool,
+                        (agent_name, call, ctx_seed_cloned),
+                        opts,
+                    )
                     .await
                 {
                     Ok(outcome) => outcome,

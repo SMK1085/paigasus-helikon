@@ -425,6 +425,7 @@ mod tests {
                 parallel_tool_call_limit: None,
             },
             timeout_ms: None,
+            ctx_seed: None,
         }
     }
 

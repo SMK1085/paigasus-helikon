@@ -327,12 +327,14 @@ impl AgentActivities {
         self: Arc<Self>,
         ctx: ActivityContext,
         agent_name: String,
+        ctx_seed: Option<serde_json::Value>,
     ) -> Result<String, ActivityError> {
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
-            self.runtime.render_instructions(&agent_name, None, cancel),
+            self.runtime
+                .render_instructions(&agent_name, ctx_seed, cancel),
         )
         .await
     }
@@ -367,12 +369,14 @@ impl AgentActivities {
         ctx: ActivityContext,
         agent_name: String,
         call: ToolCallRequest,
+        ctx_seed: Option<serde_json::Value>,
     ) -> Result<ToolCallOutcome, ActivityError> {
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
-            self.runtime.invoke_tool(&agent_name, call, None, cancel),
+            self.runtime
+                .invoke_tool(&agent_name, call, ctx_seed, cancel),
         )
         .await
     }
