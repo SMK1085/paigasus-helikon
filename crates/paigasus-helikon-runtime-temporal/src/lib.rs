@@ -181,9 +181,10 @@
 //! `without_output_redaction`, and `with_extra_secrets`.
 //!
 //! **None of the caller's own `RunContext` configuration propagates to the worker.** The
-//! following caller-side fields never cross the client→worker boundary, regardless of the
-//! worker's posture configuration: deny/allow rules, the permission mode and policy, the approval
-//! handler, and `extra_secrets`. The worker's configured posture is authoritative for every tool
+//! following caller-side posture fields never cross the client→worker boundary, regardless of the
+//! worker's posture configuration: deny/allow/guard rules, `default_guards`, `redact_output`, the
+//! permission mode and policy, the approval handler, and `extra_secrets`. The worker's configured
+//! posture is authoritative for every tool
 //! call executed in the activity — a client cannot loosen it by configuring its own `RunContext`
 //! differently.
 //!
