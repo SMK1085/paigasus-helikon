@@ -38,7 +38,12 @@ use crate::error::outcome_to_run_result;
 use crate::payloads::{DriverConfig, DurableRunOutcome, WorkflowInput};
 
 /// Configuration for a [`TemporalRunner`].
+///
+/// `#[non_exhaustive]`: construct via [`TemporalRunnerConfig::new`] and the
+/// `with_*` builder methods, not a struct literal — this keeps adding a field
+/// (e.g. the private `ctx_seed`) a non-breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TemporalRunnerConfig {
     /// Task queue the durable workflow (and its worker) are served on. Must
     /// match the task queue the [`crate::worker::TemporalAgentWorker`] polls.

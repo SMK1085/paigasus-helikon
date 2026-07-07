@@ -285,6 +285,10 @@ async fn race_loop<T>(
             biased;
             result = &mut work => return result,
             () = &mut cancelled => {
+                // Stop heartbeating during wind-down: the workflow's cancellation
+                // branch is already tearing this attempt down, so a heartbeat
+                // timeout here is moot. Still await `work` to completion so no
+                // detached task leaks.
                 on_cancel();
                 return work.await;
             }

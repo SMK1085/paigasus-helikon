@@ -524,7 +524,9 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         if let Some(d) = self.tool_start_to_close {
             timeouts.tool = d;
         }
-        let heartbeat_timeout = self.heartbeat_interval.map(|iv| iv * 2);
+        let heartbeat_timeout = self
+            .heartbeat_interval
+            .map(|iv| iv.checked_mul(2).unwrap_or(Duration::MAX));
         let workflow_config = Arc::new(crate::workflow::build_activity_config(
             plans,
             &self.model_retry_policy,
@@ -574,6 +576,27 @@ mod tests {
         GuardrailInput, GuardrailVerdict, Hook, HookDecision, HookEvent, LlmAgent,
         ModelCapabilities, ModelError, ModelEvent, RunContext,
     };
+
+    #[test]
+    fn ctx_factory_setters_handle_seed() {
+        // with_ctx ignores the seed and never errors.
+        let b = TemporalAgentWorker::builder::<i32>().with_ctx(|| 7);
+        let f = b.ctx_factory.clone().expect("factory set");
+        assert_eq!(f(Some(serde_json::json!({"x": 1}))).expect("ok"), 7);
+        assert_eq!(f(None).expect("ok"), 7);
+
+        // with_seeded_ctx receives the seed (Some vs None).
+        let b = TemporalAgentWorker::builder::<bool>().with_seeded_ctx(|seed| seed.is_some());
+        let f = b.ctx_factory.clone().expect("factory set");
+        assert!(f(Some(serde_json::json!(1))).expect("ok"));
+        assert!(!f(None).expect("ok"));
+
+        // try_with_seeded_ctx surfaces a rejected seed as a non-retryable Err.
+        let b = TemporalAgentWorker::builder::<i32>()
+            .try_with_seeded_ctx(|_seed| Err::<i32, _>("nope"));
+        let f = b.ctx_factory.clone().expect("factory set");
+        assert!(f(None).is_err());
+    }
 
     struct StubModel;
 
