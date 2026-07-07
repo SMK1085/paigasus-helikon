@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.14](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.13...paigasus-helikon-core-v0.5.14) - 2026-07-07
+
+### Added
+
+- *(evals)* SMA-333 add evals crate, cli subcommands, and swarm/graph agents ([#138](https://github.com/SMK1085/paigasus-helikon/pull/138))
+
 ## [0.5.13](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.12...paigasus-helikon-core-v0.5.13) - 2026-07-06
 
 ### Added
