@@ -57,7 +57,7 @@ proc-macro2           = "1"
 quote                 = "1"
 reqwest               = { version = "0.13", default-features = false }
 rhai                  = { version = "1", features = ["sync", "serde"] }
-rmcp                  = { version = "1.7", default-features = false, features = [
+rmcp                  = { version = "2.1", default-features = false, features = [
   "client",
   "server",
   "transport-io",
