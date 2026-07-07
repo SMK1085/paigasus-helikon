@@ -30,6 +30,11 @@ use paigasus_helikon_core::{
 use crate::activities::{self, DurableAgentDef};
 use crate::driver::AgentPlan;
 
+/// Floor applied to [`TemporalAgentWorkerBuilder::heartbeat_interval`] so a
+/// caller can't configure a heartbeat interval so tight it turns into an
+/// activity-heartbeat storm.
+const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Worker-side security posture applied to every `RunContext` the durable
 /// activities fabricate. `Default` reproduces the crate's v0 fixed defaults
 /// (`PermissionMode::Default`, built-in destructive guards on, output redaction
@@ -248,6 +253,7 @@ pub struct TemporalAgentWorkerBuilder<Ctx: Send + Sync + 'static> {
     model_start_to_close: Option<Duration>,
     tool_start_to_close: Option<Duration>,
     posture: WorkerPosture<Ctx>,
+    heartbeat_interval: Option<Duration>,
 }
 
 /// A Temporal worker configured to serve one or more durable [`LlmAgent`]s'
@@ -280,6 +286,7 @@ impl TemporalAgentWorker {
             model_start_to_close: None,
             tool_start_to_close: None,
             posture: WorkerPosture::default(),
+            heartbeat_interval: None,
         }
     }
 
@@ -445,6 +452,16 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         self
     }
 
+    /// Enable liveness heartbeats on the `call_model`/`invoke_tool` activities,
+    /// ticking every `interval` (clamped to a 1 s minimum) and setting
+    /// `heartbeat_timeout = 2 × interval` on those activities so Temporal
+    /// reclaims a **crashed** worker's in-flight attempt promptly. Off by
+    /// default. See the crate docs for the executor-starvation caveat.
+    pub fn heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.heartbeat_interval = Some(interval.max(MIN_HEARTBEAT_INTERVAL));
+        self
+    }
+
     /// Set the worker-side security posture applied to every fabricated
     /// `RunContext`. Defaults to `WorkerPosture::default()` (v0 fixed defaults).
     pub fn posture(mut self, posture: WorkerPosture<Ctx>) -> Self {
@@ -490,6 +507,7 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
             Arc::clone(&agent_registry),
             Arc::clone(&ctx_factory),
             self.posture,
+            self.heartbeat_interval,
         );
 
         // `Ctx`-free projection of the registry (`name → AgentPlan`). Iterating
@@ -506,11 +524,13 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         if let Some(d) = self.tool_start_to_close {
             timeouts.tool = d;
         }
+        let heartbeat_timeout = self.heartbeat_interval.map(|iv| iv * 2);
         let workflow_config = Arc::new(crate::workflow::build_activity_config(
             plans,
             &self.model_retry_policy,
             &self.tool_retry_policy,
             &timeouts,
+            heartbeat_timeout,
         ));
 
         let telemetry_options = temporalio_common::telemetry::TelemetryOptions::builder().build();
@@ -768,6 +788,22 @@ mod tests {
         assert!(ctx.extra_secrets().is_empty());
         assert!(ctx.permission_policy().is_none());
         assert!(ctx.approval_handler().is_none());
+    }
+
+    #[test]
+    fn heartbeat_interval_is_floored_to_one_second() {
+        let b = TemporalAgentWorker::builder::<()>()
+            .heartbeat_interval(std::time::Duration::from_millis(100));
+        assert_eq!(
+            b.heartbeat_interval,
+            Some(std::time::Duration::from_secs(1))
+        );
+        let b = TemporalAgentWorker::builder::<()>()
+            .heartbeat_interval(std::time::Duration::from_secs(5));
+        assert_eq!(
+            b.heartbeat_interval,
+            Some(std::time::Duration::from_secs(5))
+        );
     }
 
     #[test]

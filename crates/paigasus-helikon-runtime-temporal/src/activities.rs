@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use paigasus_helikon_core::{
@@ -264,7 +265,43 @@ fn error_kind_to_activity_error(kind: ErrorKindPayload) -> ActivityError {
     ActivityError::application(ApplicationFailure::non_retryable(json))
 }
 
-/// Race `work` against the activity's own cancellation signal.
+/// Generic cancellation/heartbeat race, decoupled from `ActivityContext` so it
+/// is unit-testable. Polls `work` and `cancelled` before the heartbeat tick
+/// (`biased`). On cancellation it runs `on_cancel` then **awaits `work` to
+/// completion** (never drops it — no detached task leak). When
+/// `heartbeat_interval` is `Some`, `on_heartbeat` fires each tick until `work`
+/// completes.
+async fn race_loop<T>(
+    work: impl std::future::Future<Output = T>,
+    cancelled: impl std::future::Future<Output = ()>,
+    on_cancel: impl FnOnce(),
+    heartbeat_interval: Option<Duration>,
+    mut on_heartbeat: impl FnMut(),
+) -> T {
+    tokio::pin!(work, cancelled);
+    let mut ticker = heartbeat_interval.map(tokio::time::interval);
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut work => return result,
+            () = &mut cancelled => {
+                on_cancel();
+                return work.await;
+            }
+            _ = async {
+                match ticker.as_mut() {
+                    Some(t) => { t.tick().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                on_heartbeat();
+            }
+        }
+    }
+}
+
+/// Race `work` against the activity's cancellation signal, emitting liveness
+/// heartbeats every `heartbeat` while it runs (when configured).
 ///
 /// If the activity is cancelled first, propagate that into `cancel` (so the
 /// in-flight [`Model`]/[`Tool`] call can wind down per its own cancellation
@@ -274,17 +311,17 @@ fn error_kind_to_activity_error(kind: ErrorKindPayload) -> ActivityError {
 async fn race_with_activity_cancellation<T>(
     activity_ctx: &ActivityContext,
     cancel: CancellationToken,
+    heartbeat: Option<Duration>,
     work: impl std::future::Future<Output = T>,
 ) -> T {
-    tokio::pin!(work);
-    tokio::select! {
-        biased;
-        result = &mut work => result,
-        _ = activity_ctx.cancelled() => {
-            cancel.cancel();
-            work.await
-        }
-    }
+    race_loop(
+        work,
+        activity_ctx.cancelled(),
+        || cancel.cancel(),
+        heartbeat,
+        || activity_ctx.record_heartbeat(Vec::new()),
+    )
+    .await
 }
 
 /// The `Ctx`-erased, non-generic activities struct registered on the
@@ -292,6 +329,10 @@ async fn race_with_activity_cancellation<T>(
 /// rather than a `Ctx`-generic field directly.
 pub(crate) struct AgentActivities {
     runtime: Arc<dyn DurableAgentRuntime>,
+    /// Liveness heartbeat interval for the `call_model`/`invoke_tool`
+    /// activities (`None` disables heartbeating). Set via
+    /// [`crate::worker::TemporalAgentWorkerBuilder::heartbeat_interval`].
+    heartbeat_interval: Option<Duration>,
 }
 
 /// Build the [`AgentActivities`] instance a [`crate::worker::TemporalAgentWorker`]
@@ -302,6 +343,7 @@ pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
     registry: Arc<HashMap<String, Arc<DurableAgentDef<Ctx>>>>,
     ctx_factory: crate::worker::CtxFactory<Ctx>,
     posture: crate::worker::WorkerPosture<Ctx>,
+    heartbeat_interval: Option<Duration>,
 ) -> AgentActivities {
     AgentActivities {
         runtime: Arc::new(TypedRuntime {
@@ -309,6 +351,7 @@ pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
             ctx_factory,
             posture,
         }),
+        heartbeat_interval,
     }
 }
 
@@ -333,6 +376,7 @@ impl AgentActivities {
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
+            None,
             self.runtime
                 .render_instructions(&agent_name, ctx_seed, cancel),
         )
@@ -354,6 +398,7 @@ impl AgentActivities {
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
+            self.heartbeat_interval,
             self.runtime.call_model(&agent_name, request, cancel),
         )
         .await
@@ -375,6 +420,7 @@ impl AgentActivities {
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
+            self.heartbeat_interval,
             self.runtime
                 .invoke_tool(&agent_name, call, ctx_seed, cancel),
         )
@@ -688,6 +734,70 @@ mod tests {
             ),
             other => panic!("expected ActivityError::Application, got {other:?}"),
         }
+    }
+
+    // ---- race_loop (SMA-455 Task 4) --------------------------------------
+
+    #[tokio::test]
+    async fn race_loop_awaits_work_after_cancel() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc as StdArc;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let done = StdArc::new(AtomicBool::new(false));
+        let done2 = StdArc::clone(&done);
+        let cancelled_flag = StdArc::new(AtomicBool::new(false));
+        let cf = StdArc::clone(&cancelled_flag);
+
+        let work = async move {
+            let _ = rx.await; // completes only after on_cancel fires tx
+            done2.store(true, Ordering::SeqCst);
+            7u8
+        };
+        let result = race_loop(
+            work,
+            async { /* cancelled: immediately */ },
+            move || {
+                cf.store(true, Ordering::SeqCst);
+                let _ = tx.send(()); // let the work future wind down
+            },
+            None,
+            || {},
+        )
+        .await;
+
+        assert_eq!(result, 7);
+        assert!(cancelled_flag.load(Ordering::SeqCst), "on_cancel ran");
+        assert!(
+            done.load(Ordering::SeqCst),
+            "work was awaited to completion, not dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn race_loop_heartbeats_until_work_done() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc as StdArc;
+        let beats = StdArc::new(AtomicU32::new(0));
+        let b2 = StdArc::clone(&beats);
+        let work = async {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            1u8
+        };
+        let result = race_loop(
+            work,
+            std::future::pending::<()>(), // never cancelled
+            || {},
+            Some(std::time::Duration::from_millis(10)),
+            move || {
+                b2.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+        assert_eq!(result, 1);
+        assert!(
+            beats.load(Ordering::SeqCst) >= 1,
+            "at least one heartbeat fired"
+        );
     }
 
     #[tokio::test]

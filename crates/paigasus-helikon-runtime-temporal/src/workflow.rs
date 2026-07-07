@@ -128,20 +128,34 @@ pub(crate) fn build_activity_config(
     model_retry: &RetryPolicyConfig,
     tool_retry: &RetryPolicyConfig,
     timeouts: &ActivityTimeouts,
+    heartbeat_timeout: Option<Duration>,
 ) -> WorkflowActivityConfig {
     WorkflowActivityConfig {
         plans,
-        instructions_activity_opts: activity_opts(timeouts.instructions, None),
-        model_activity_opts: activity_opts(timeouts.model, to_proto_retry_policy(model_retry)),
-        tool_activity_opts: activity_opts(timeouts.tool, to_proto_retry_policy(tool_retry)),
+        instructions_activity_opts: activity_opts(timeouts.instructions, None, None),
+        model_activity_opts: activity_opts(
+            timeouts.model,
+            to_proto_retry_policy(model_retry),
+            heartbeat_timeout,
+        ),
+        tool_activity_opts: activity_opts(
+            timeouts.tool,
+            to_proto_retry_policy(tool_retry),
+            heartbeat_timeout,
+        ),
     }
 }
 
-/// Build [`ActivityOptions`] with the given start-to-close timeout and an
-/// optional retry policy.
-fn activity_opts(start_to_close: Duration, retry_policy: Option<RetryPolicy>) -> ActivityOptions {
+/// Build [`ActivityOptions`] with the given start-to-close timeout, an
+/// optional retry policy, and an optional heartbeat timeout.
+fn activity_opts(
+    start_to_close: Duration,
+    retry_policy: Option<RetryPolicy>,
+    heartbeat_timeout: Option<Duration>,
+) -> ActivityOptions {
     ActivityOptions::with_start_to_close_timeout(start_to_close)
         .maybe_retry_policy(retry_policy)
+        .maybe_heartbeat_timeout(heartbeat_timeout)
         .build()
 }
 
@@ -493,6 +507,7 @@ mod tests {
             &model_retry,
             &tool_retry,
             &ActivityTimeouts::default(),
+            None,
         );
 
         assert_eq!(
@@ -531,6 +546,7 @@ mod tests {
             &RetryPolicyConfig::default(),
             &RetryPolicyConfig::default(),
             &timeouts,
+            None,
         );
 
         assert_eq!(
@@ -545,5 +561,38 @@ mod tests {
             config.instructions_activity_opts.close_timeouts,
             ActivityCloseTimeouts::StartToClose(Duration::from_secs(30))
         );
+    }
+
+    #[test]
+    fn build_activity_config_sets_heartbeat_timeout_on_model_and_tool_only() {
+        let config = build_activity_config(
+            HashMap::new(),
+            &RetryPolicyConfig::default(),
+            &RetryPolicyConfig::default(),
+            &ActivityTimeouts::default(),
+            Some(Duration::from_secs(4)),
+        );
+        assert_eq!(
+            config.model_activity_opts.heartbeat_timeout,
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(
+            config.tool_activity_opts.heartbeat_timeout,
+            Some(Duration::from_secs(4))
+        );
+        assert_eq!(config.instructions_activity_opts.heartbeat_timeout, None);
+    }
+
+    #[test]
+    fn build_activity_config_no_heartbeat_when_none() {
+        let config = build_activity_config(
+            HashMap::new(),
+            &RetryPolicyConfig::default(),
+            &RetryPolicyConfig::default(),
+            &ActivityTimeouts::default(),
+            None,
+        );
+        assert_eq!(config.model_activity_opts.heartbeat_timeout, None);
+        assert_eq!(config.tool_activity_opts.heartbeat_timeout, None);
     }
 }
