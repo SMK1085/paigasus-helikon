@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.1...paigasus-helikon-providers-bedrock-v0.1.2) - 2026-07-07
+
+### Added
+
+- *(evals)* SMA-333 add evals crate, cli subcommands, and swarm/graph agents ([#138](https://github.com/SMK1085/paigasus-helikon/pull/138))
+
 ## [0.1.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.0...paigasus-helikon-providers-bedrock-v0.1.1) - 2026-06-29
 
 ### Other
