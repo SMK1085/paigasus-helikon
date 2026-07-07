@@ -151,6 +151,7 @@ trait DurableAgentRuntime: Send + Sync {
     async fn render_instructions(
         &self,
         agent_name: &str,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<String, ActivityError>;
     /// See [`call_model_inner`].
@@ -165,6 +166,7 @@ trait DurableAgentRuntime: Send + Sync {
         &self,
         agent_name: &str,
         call: ToolCallRequest,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<ToolCallOutcome, ActivityError>;
 }
@@ -174,7 +176,7 @@ trait DurableAgentRuntime: Send + Sync {
 /// `Ctx` factory.
 struct TypedRuntime<Ctx: Send + Sync + 'static> {
     registry: Arc<HashMap<String, Arc<DurableAgentDef<Ctx>>>>,
-    ctx_factory: Arc<dyn Fn() -> Ctx + Send + Sync>,
+    ctx_factory: crate::worker::CtxFactory<Ctx>,
     posture: crate::worker::WorkerPosture<Ctx>,
 }
 
@@ -191,10 +193,23 @@ impl<Ctx: Send + Sync + 'static> TypedRuntime<Ctx> {
     }
 
     /// A fresh ephemeral [`RunContext`] (in-memory session, no hooks) for one
-    /// activity invocation, wired to `cancel`.
-    fn run_context(&self, cancel: CancellationToken) -> RunContext<Ctx> {
-        let ctx = RunContext::ephemeral((self.ctx_factory)()).with_cancel(cancel);
-        self.posture.apply(ctx)
+    /// activity invocation, built from `seed` and wired to `cancel`.
+    ///
+    /// A seed the `ctx_factory` rejects becomes a **non-retryable**
+    /// [`ActivityError`] (the BLOCKER fix: a hostile/malformed seed must fail
+    /// the run fast rather than retry-looping forever).
+    fn run_context(
+        &self,
+        seed: Option<serde_json::Value>,
+        cancel: CancellationToken,
+    ) -> Result<RunContext<Ctx>, ActivityError> {
+        let user_ctx = (self.ctx_factory)(seed).map_err(|e| {
+            ActivityError::application(ApplicationFailure::non_retryable(format!(
+                "ctx seed rejected: {e}"
+            )))
+        })?;
+        let ctx = RunContext::ephemeral(user_ctx).with_cancel(cancel);
+        Ok(self.posture.apply(ctx))
     }
 }
 
@@ -203,10 +218,11 @@ impl<Ctx: Send + Sync + 'static> DurableAgentRuntime for TypedRuntime<Ctx> {
     async fn render_instructions(
         &self,
         agent_name: &str,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<String, ActivityError> {
         let def = self.resolve(agent_name)?;
-        let run_ctx = self.run_context(cancel);
+        let run_ctx = self.run_context(ctx_seed, cancel)?;
         Ok(render_instructions_inner(&def, &run_ctx).await)
     }
 
@@ -226,10 +242,11 @@ impl<Ctx: Send + Sync + 'static> DurableAgentRuntime for TypedRuntime<Ctx> {
         &self,
         agent_name: &str,
         call: ToolCallRequest,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<ToolCallOutcome, ActivityError> {
         let def = self.resolve(agent_name)?;
-        let run_ctx = self.run_context(cancel);
+        let run_ctx = self.run_context(ctx_seed, cancel)?;
         Ok(invoke_tool_inner(&def, &run_ctx, call).await)
     }
 }
@@ -283,7 +300,7 @@ pub(crate) struct AgentActivities {
 /// appears in any type the Temporal SDK holds onto.
 pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
     registry: Arc<HashMap<String, Arc<DurableAgentDef<Ctx>>>>,
-    ctx_factory: Arc<dyn Fn() -> Ctx + Send + Sync>,
+    ctx_factory: crate::worker::CtxFactory<Ctx>,
     posture: crate::worker::WorkerPosture<Ctx>,
 ) -> AgentActivities {
     AgentActivities {
@@ -315,7 +332,7 @@ impl AgentActivities {
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
-            self.runtime.render_instructions(&agent_name, cancel),
+            self.runtime.render_instructions(&agent_name, None, cancel),
         )
         .await
     }
@@ -355,7 +372,7 @@ impl AgentActivities {
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
-            self.runtime.invoke_tool(&agent_name, call, cancel),
+            self.runtime.invoke_tool(&agent_name, call, None, cancel),
         )
         .await
     }
@@ -633,13 +650,103 @@ mod tests {
         use paigasus_helikon_core::{DenyRule, PermissionMode};
         let rt = TypedRuntime::<()> {
             registry: Arc::new(HashMap::new()),
-            ctx_factory: Arc::new(|| ()),
+            ctx_factory: Arc::new(|_seed| Ok(())),
             posture: WorkerPosture::default()
                 .with_permission_mode(PermissionMode::Plan)
                 .with_deny_rules(vec![DenyRule::tool("Bash")]),
         };
-        let ctx = rt.run_context(CancellationToken::new());
+        let ctx = rt
+            .run_context(None, CancellationToken::new())
+            .expect("factory never rejects a seed here");
         assert_eq!(ctx.permission_mode(), PermissionMode::Plan);
         assert_eq!(ctx.deny_rules().len(), 1);
+    }
+
+    // ---- run_context: fallible seeded ctx factory (SMA-455) --------------
+
+    #[tokio::test]
+    async fn run_context_seed_error_is_non_retryable() {
+        use crate::worker::{CtxSeedError, WorkerPosture};
+        let rt = TypedRuntime::<()> {
+            registry: Arc::new(HashMap::new()),
+            ctx_factory: Arc::new(|_seed| Err(CtxSeedError::new("bad seed"))),
+            posture: WorkerPosture::default(),
+        };
+        let err = match rt.run_context(Some(serde_json::json!({"x": 1})), CancellationToken::new())
+        {
+            Ok(_) => panic!("a rejected seed must be an Err"),
+            Err(e) => e,
+        };
+        match err {
+            ActivityError::Application(app) => assert!(
+                app.is_non_retryable(),
+                "seed-rejection activity errors must be non-retryable"
+            ),
+            other => panic!("expected ActivityError::Application, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn seeded_ctx_feeds_request_scoped_policy() {
+        use crate::worker::WorkerPosture;
+        use paigasus_helikon_core::{PermissionDecision, PermissionPolicy, RunContext, ToolEffect};
+
+        struct Tenant {
+            name: String,
+        }
+        struct TenantPolicy;
+        #[async_trait]
+        impl PermissionPolicy<Tenant> for TenantPolicy {
+            async fn check(
+                &self,
+                ctx: &RunContext<Tenant>,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> PermissionDecision {
+                if ctx.user_ctx().name == "acme" {
+                    PermissionDecision::Allow
+                } else {
+                    PermissionDecision::Deny {
+                        reason: "not acme".to_owned(),
+                    }
+                }
+            }
+        }
+
+        let rt = TypedRuntime::<Tenant> {
+            registry: Arc::new(HashMap::new()),
+            ctx_factory: Arc::new(|seed| {
+                let name = seed
+                    .and_then(|v| v.get("tenant").and_then(|t| t.as_str()).map(str::to_owned))
+                    .unwrap_or_default();
+                Ok(Tenant { name })
+            }),
+            posture: WorkerPosture::default().with_permission_policy(Arc::new(TenantPolicy)),
+        };
+
+        let acme = rt
+            .run_context(
+                Some(serde_json::json!({"tenant": "acme"})),
+                CancellationToken::new(),
+            )
+            .expect("factory ok");
+        assert!(matches!(
+            acme.authorize_tool("AnyTool", ToolEffect::ReadOnly, &serde_json::json!({}))
+                .await,
+            PermissionDecision::Allow
+        ));
+
+        let other = rt
+            .run_context(
+                Some(serde_json::json!({"tenant": "evil"})),
+                CancellationToken::new(),
+            )
+            .expect("factory ok");
+        assert!(matches!(
+            other
+                .authorize_tool("AnyTool", ToolEffect::ReadOnly, &serde_json::json!({}))
+                .await,
+            PermissionDecision::Deny { .. }
+        ));
     }
 }

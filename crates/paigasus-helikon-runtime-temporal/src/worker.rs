@@ -166,6 +166,26 @@ pub struct RetryPolicyConfig {
     pub non_retryable_error_types: Vec<String>,
 }
 
+/// Why a seeded `Ctx` factory rejected a run's seed. Surfaced as a
+/// **non-retryable** activity failure so a malformed/hostile seed fails the run
+/// fast instead of retry-looping.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct CtxSeedError(String);
+
+impl CtxSeedError {
+    pub(crate) fn new(msg: impl Into<String>) -> Self {
+        Self(msg.into())
+    }
+}
+
+/// The fallible seeded `Ctx` factory slot type, shared by
+/// [`TemporalAgentWorkerBuilder`] and `crate::activities::TypedRuntime` —
+/// factored into an alias so clippy's `type_complexity` lint doesn't fire on
+/// every use site.
+pub(crate) type CtxFactory<Ctx> =
+    Arc<dyn Fn(Option<serde_json::Value>) -> Result<Ctx, CtxSeedError> + Send + Sync>;
+
 /// Why [`TemporalAgentWorkerBuilder::register`] rejected an agent.
 ///
 /// v0 durably executes only the "plain" `LlmAgent` shape: no lifecycle
@@ -221,7 +241,7 @@ pub struct WorkerRunError(String);
 pub struct TemporalAgentWorkerBuilder<Ctx: Send + Sync + 'static> {
     task_queue: Option<String>,
     client: Option<temporalio_client::Client>,
-    ctx_factory: Option<Arc<dyn Fn() -> Ctx + Send + Sync>>,
+    ctx_factory: Option<CtxFactory<Ctx>>,
     registry: HashMap<String, Arc<DurableAgentDef<Ctx>>>,
     model_retry_policy: RetryPolicyConfig,
     tool_retry_policy: RetryPolicyConfig,
@@ -292,13 +312,41 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         self
     }
 
-    /// Set the per-activity-invocation `Ctx` factory.
+    /// Set the per-activity-invocation `Ctx` factory (seed ignored).
     ///
     /// Called once per activity invocation (`render_instructions`,
     /// `call_model`, `invoke_tool`) to build a fresh [`paigasus_helikon_core::RunContext`]
     /// — mirroring how a fresh `Ctx` typically seeds one ephemeral run.
     pub fn with_ctx(mut self, factory: impl Fn() -> Ctx + Send + Sync + 'static) -> Self {
-        self.ctx_factory = Some(Arc::new(factory));
+        self.ctx_factory = Some(Arc::new(move |_seed| Ok(factory())));
+        self
+    }
+
+    /// Set a seeded `Ctx` factory that reconstitutes the per-run context from the
+    /// client's `serde_json::Value` seed (`None` when the client set none).
+    ///
+    /// **Totality contract:** this closure must never panic and should be cheap —
+    /// it runs once per `render_instructions` and per `invoke_tool` invocation. For
+    /// authorization-bearing seeds prefer [`Self::try_with_seeded_ctx`] so a bad
+    /// seed fails the run loudly instead of defaulting to the wrong identity.
+    pub fn with_seeded_ctx(
+        mut self,
+        factory: impl Fn(Option<serde_json::Value>) -> Ctx + Send + Sync + 'static,
+    ) -> Self {
+        self.ctx_factory = Some(Arc::new(move |seed| Ok(factory(seed))));
+        self
+    }
+
+    /// Like [`Self::with_seeded_ctx`], but fallible: a seed the factory rejects
+    /// fails the run with a **non-retryable** activity error instead of proceeding
+    /// under a default identity.
+    pub fn try_with_seeded_ctx<E: std::fmt::Display>(
+        mut self,
+        factory: impl Fn(Option<serde_json::Value>) -> Result<Ctx, E> + Send + Sync + 'static,
+    ) -> Self {
+        self.ctx_factory = Some(Arc::new(move |seed| {
+            factory(seed).map_err(|e| CtxSeedError::new(e.to_string()))
+        }));
         self
     }
 
