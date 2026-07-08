@@ -69,8 +69,10 @@ Two capabilities are missing:
 
 ## 4. Architecture
 
-All changes are in `paigasus-helikon-runtime-temporal` except a tiny additive core change
-(§11). No existing public signature is removed; `with_ctx` and the current defaults stay.
+All changes are expected to be contained in `paigasus-helikon-runtime-temporal`; a
+`paigasus-helikon-core` change is likely **unnecessary** (§11 states the one condition —
+a missing API/re-export — under which one would be needed). No existing public signature
+is removed; `with_ctx` and the current defaults stay.
 
 ### 4.1 `WorkerPosture<Ctx>` (new public type, `worker.rs`)
 
