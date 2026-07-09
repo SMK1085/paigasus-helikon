@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.1.1...paigasus-helikon-runtime-temporal-v0.2.0) - 2026-07-09
+
+### Added
+
+- *(runtime-temporal)* SMA-455 add worker-side posture, ctx seed, and heartbeats ([#139](https://github.com/SMK1085/paigasus-helikon/pull/139))
+
 ### Added
 
 - *(runtime-temporal)* SMA-455 worker-side posture configuration, request-scoped `Ctx` seed, and opt-in heartbeats
