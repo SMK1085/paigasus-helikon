@@ -22,10 +22,129 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use paigasus_helikon_core::{LlmAgent, Model, ToolDef};
+use paigasus_helikon_core::{
+    AllowRule, ApprovalHandler, DenyRule, GuardRule, LlmAgent, Model, PermissionMode,
+    PermissionPolicy, RunContext, ToolDef,
+};
 
 use crate::activities::{self, DurableAgentDef};
 use crate::driver::AgentPlan;
+
+/// Floor applied to [`TemporalAgentWorkerBuilder::heartbeat_interval`] so a
+/// caller can't configure a heartbeat interval so tight it turns into an
+/// activity-heartbeat storm.
+const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Worker-side security posture applied to every `RunContext` the durable
+/// activities fabricate. `Default` reproduces the crate's v0 fixed defaults
+/// (`PermissionMode::Default`, built-in destructive guards on, output redaction
+/// on, no custom rules / policy / approval handler / extra secrets).
+pub struct WorkerPosture<Ctx: Send + Sync + 'static> {
+    permission_mode: PermissionMode,
+    deny_rules: Vec<DenyRule>,
+    allow_rules: Vec<AllowRule>,
+    guard_rules: Vec<GuardRule>,
+    permission_policy: Option<Arc<dyn PermissionPolicy<Ctx>>>,
+    approval_handler: Option<Arc<dyn ApprovalHandler>>,
+    default_guards: bool,
+    redact_output: bool,
+    extra_secrets: Vec<String>,
+}
+
+impl<Ctx: Send + Sync + 'static> Default for WorkerPosture<Ctx> {
+    fn default() -> Self {
+        Self {
+            permission_mode: PermissionMode::default(),
+            deny_rules: Vec::new(),
+            allow_rules: Vec::new(),
+            guard_rules: Vec::new(),
+            permission_policy: None,
+            approval_handler: None,
+            default_guards: true,
+            redact_output: true,
+            extra_secrets: Vec::new(),
+        }
+    }
+}
+
+impl<Ctx: Send + Sync + 'static> WorkerPosture<Ctx> {
+    /// Set the permission mode the activities enforce (tighten-only from `Default`).
+    pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = mode;
+        self
+    }
+    /// Install deny rules (evaluated before mode; override even `Bypass`).
+    pub fn with_deny_rules(mut self, rules: Vec<DenyRule>) -> Self {
+        self.deny_rules = rules;
+        self
+    }
+    /// Install allow rules (positive short-circuit in any mode).
+    pub fn with_allow_rules(mut self, rules: Vec<AllowRule>) -> Self {
+        self.allow_rules = rules;
+        self
+    }
+    /// Install user guard rules (evaluated before mode; may ask or deny).
+    pub fn with_guard_rules(mut self, rules: Vec<GuardRule>) -> Self {
+        self.guard_rules = rules;
+        self
+    }
+    /// Install the `canUseTool` permission policy. It can read the per-run
+    /// (seeded) `RunContext::user_ctx` for request-scoped decisions.
+    pub fn with_permission_policy(mut self, policy: Arc<dyn PermissionPolicy<Ctx>>) -> Self {
+        self.permission_policy = Some(policy);
+        self
+    }
+    /// Install the approval handler that resolves `AskUser` / guard `Ask` decisions.
+    pub fn with_approval_handler(mut self, handler: Arc<dyn ApprovalHandler>) -> Self {
+        self.approval_handler = Some(handler);
+        self
+    }
+    /// Disable the always-on built-in destructive guard set (power-user opt-out).
+    pub fn without_default_guards(mut self) -> Self {
+        self.default_guards = false;
+        self
+    }
+    /// Disable automatic secret redaction of tool output. Note: unredacted tool
+    /// output then enters permanent Temporal history.
+    pub fn without_output_redaction(mut self) -> Self {
+        self.redact_output = false;
+        self
+    }
+    /// Add extra secret values to redact from tool output, beyond the env set.
+    pub fn with_extra_secrets(mut self, secrets: Vec<String>) -> Self {
+        self.extra_secrets = secrets;
+        self
+    }
+
+    /// Apply this posture onto a freshly fabricated `RunContext`.
+    ///
+    /// NB: this is the **fifth** hand-copy of core's nine-field permission
+    /// bundle (see `RunContext`'s fields and core's `pub(crate) PermissionFields`).
+    /// `PermissionFields` cannot be reused across the crate boundary. If core
+    /// gains a tenth posture knob, add it here too — the default-equivalence
+    /// unit test enumerates every field to catch the omission.
+    pub(crate) fn apply(&self, ctx: RunContext<Ctx>) -> RunContext<Ctx> {
+        let mut ctx = ctx
+            .with_permission_mode(self.permission_mode)
+            .with_deny_rules(self.deny_rules.clone())
+            .with_allow_rules(self.allow_rules.clone())
+            .with_guard_rules(self.guard_rules.clone())
+            .with_extra_secrets(self.extra_secrets.clone());
+        if let Some(p) = &self.permission_policy {
+            ctx = ctx.with_permission_policy(Arc::clone(p));
+        }
+        if let Some(h) = &self.approval_handler {
+            ctx = ctx.with_approval_handler(Arc::clone(h));
+        }
+        if !self.default_guards {
+            ctx = ctx.without_default_guards();
+        }
+        if !self.redact_output {
+            ctx = ctx.without_output_redaction();
+        }
+        ctx
+    }
+}
 
 /// Retry-policy knobs applied to a durable agent's `call_model`/`invoke_tool`
 /// activity invocations.
@@ -51,6 +170,26 @@ pub struct RetryPolicyConfig {
     /// Error type names that must not be retried.
     pub non_retryable_error_types: Vec<String>,
 }
+
+/// Why a seeded `Ctx` factory rejected a run's seed. Surfaced as a
+/// **non-retryable** activity failure so a malformed/hostile seed fails the run
+/// fast instead of retry-looping.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct CtxSeedError(String);
+
+impl CtxSeedError {
+    pub(crate) fn new(msg: impl Into<String>) -> Self {
+        Self(msg.into())
+    }
+}
+
+/// The fallible seeded `Ctx` factory slot type, shared by
+/// [`TemporalAgentWorkerBuilder`] and `crate::activities::TypedRuntime` —
+/// factored into an alias so clippy's `type_complexity` lint doesn't fire on
+/// every use site.
+pub(crate) type CtxFactory<Ctx> =
+    Arc<dyn Fn(Option<serde_json::Value>) -> Result<Ctx, CtxSeedError> + Send + Sync>;
 
 /// Why [`TemporalAgentWorkerBuilder::register`] rejected an agent.
 ///
@@ -104,15 +243,17 @@ pub struct WorkerRunError(String);
 
 /// Builder for [`TemporalAgentWorker`]. Construct via
 /// [`TemporalAgentWorker::builder`].
-pub struct TemporalAgentWorkerBuilder<Ctx> {
+pub struct TemporalAgentWorkerBuilder<Ctx: Send + Sync + 'static> {
     task_queue: Option<String>,
     client: Option<temporalio_client::Client>,
-    ctx_factory: Option<Arc<dyn Fn() -> Ctx + Send + Sync>>,
+    ctx_factory: Option<CtxFactory<Ctx>>,
     registry: HashMap<String, Arc<DurableAgentDef<Ctx>>>,
     model_retry_policy: RetryPolicyConfig,
     tool_retry_policy: RetryPolicyConfig,
     model_start_to_close: Option<Duration>,
     tool_start_to_close: Option<Duration>,
+    posture: WorkerPosture<Ctx>,
+    heartbeat_interval: Option<Duration>,
 }
 
 /// A Temporal worker configured to serve one or more durable [`LlmAgent`]s'
@@ -144,6 +285,8 @@ impl TemporalAgentWorker {
             tool_retry_policy: RetryPolicyConfig::default(),
             model_start_to_close: None,
             tool_start_to_close: None,
+            posture: WorkerPosture::default(),
+            heartbeat_interval: None,
         }
     }
 
@@ -176,13 +319,41 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         self
     }
 
-    /// Set the per-activity-invocation `Ctx` factory.
+    /// Set the per-activity-invocation `Ctx` factory (seed ignored).
     ///
     /// Called once per activity invocation (`render_instructions`,
     /// `call_model`, `invoke_tool`) to build a fresh [`paigasus_helikon_core::RunContext`]
     /// — mirroring how a fresh `Ctx` typically seeds one ephemeral run.
     pub fn with_ctx(mut self, factory: impl Fn() -> Ctx + Send + Sync + 'static) -> Self {
-        self.ctx_factory = Some(Arc::new(factory));
+        self.ctx_factory = Some(Arc::new(move |_seed| Ok(factory())));
+        self
+    }
+
+    /// Set a seeded `Ctx` factory that reconstitutes the per-run context from the
+    /// client's `serde_json::Value` seed (`None` when the client set none).
+    ///
+    /// **Totality contract:** this closure must never panic and should be cheap —
+    /// it runs once per `render_instructions` and per `invoke_tool` invocation. For
+    /// authorization-bearing seeds prefer [`Self::try_with_seeded_ctx`] so a bad
+    /// seed fails the run loudly instead of defaulting to the wrong identity.
+    pub fn with_seeded_ctx(
+        mut self,
+        factory: impl Fn(Option<serde_json::Value>) -> Ctx + Send + Sync + 'static,
+    ) -> Self {
+        self.ctx_factory = Some(Arc::new(move |seed| Ok(factory(seed))));
+        self
+    }
+
+    /// Like [`Self::with_seeded_ctx`], but fallible: a seed the factory rejects
+    /// fails the run with a **non-retryable** activity error instead of proceeding
+    /// under a default identity.
+    pub fn try_with_seeded_ctx<E: std::fmt::Display>(
+        mut self,
+        factory: impl Fn(Option<serde_json::Value>) -> Result<Ctx, E> + Send + Sync + 'static,
+    ) -> Self {
+        self.ctx_factory = Some(Arc::new(move |seed| {
+            factory(seed).map_err(|e| CtxSeedError::new(e.to_string()))
+        }));
         self
     }
 
@@ -281,6 +452,23 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         self
     }
 
+    /// Enable liveness heartbeats on the `call_model`/`invoke_tool` activities,
+    /// ticking every `interval` (clamped to a 1 s minimum) and setting
+    /// `heartbeat_timeout = 2 × interval` on those activities so Temporal
+    /// reclaims a **crashed** worker's in-flight attempt promptly. Off by
+    /// default. See the crate docs for the executor-starvation caveat.
+    pub fn heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.heartbeat_interval = Some(interval.max(MIN_HEARTBEAT_INTERVAL));
+        self
+    }
+
+    /// Set the worker-side security posture applied to every fabricated
+    /// `RunContext`. Defaults to `WorkerPosture::default()` (v0 fixed defaults).
+    pub fn posture(mut self, posture: WorkerPosture<Ctx>) -> Self {
+        self.posture = posture;
+        self
+    }
+
     /// Assemble the Temporal worker.
     ///
     /// Requires [`Self::task_queue`], [`Self::client`], [`Self::with_ctx`],
@@ -315,8 +503,12 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         // `OutputType` validator fails closed after a round-trip), so the map
         // is built in-process here and cloned into each workflow instance.
         let agent_registry = Arc::new(self.registry);
-        let activities =
-            activities::build_activities(Arc::clone(&agent_registry), Arc::clone(&ctx_factory));
+        let activities = activities::build_activities(
+            Arc::clone(&agent_registry),
+            Arc::clone(&ctx_factory),
+            self.posture,
+            self.heartbeat_interval,
+        );
 
         // `Ctx`-free projection of the registry (`name → AgentPlan`). Iterating
         // the registry here (worker-setup side) is fine; the workflow never
@@ -332,11 +524,15 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         if let Some(d) = self.tool_start_to_close {
             timeouts.tool = d;
         }
+        let heartbeat_timeout = self
+            .heartbeat_interval
+            .map(|iv| iv.checked_mul(2).unwrap_or(Duration::MAX));
         let workflow_config = Arc::new(crate::workflow::build_activity_config(
             plans,
             &self.model_retry_policy,
             &self.tool_retry_policy,
             &timeouts,
+            heartbeat_timeout,
         ));
 
         let telemetry_options = temporalio_common::telemetry::TelemetryOptions::builder().build();
@@ -380,6 +576,27 @@ mod tests {
         GuardrailInput, GuardrailVerdict, Hook, HookDecision, HookEvent, LlmAgent,
         ModelCapabilities, ModelError, ModelEvent, RunContext,
     };
+
+    #[test]
+    fn ctx_factory_setters_handle_seed() {
+        // with_ctx ignores the seed and never errors.
+        let b = TemporalAgentWorker::builder::<i32>().with_ctx(|| 7);
+        let f = b.ctx_factory.clone().expect("factory set");
+        assert_eq!(f(Some(serde_json::json!({"x": 1}))).expect("ok"), 7);
+        assert_eq!(f(None).expect("ok"), 7);
+
+        // with_seeded_ctx receives the seed (Some vs None).
+        let b = TemporalAgentWorker::builder::<bool>().with_seeded_ctx(|seed| seed.is_some());
+        let f = b.ctx_factory.clone().expect("factory set");
+        assert!(f(Some(serde_json::json!(1))).expect("ok"));
+        assert!(!f(None).expect("ok"));
+
+        // try_with_seeded_ctx surfaces a rejected seed as a non-retryable Err.
+        let b = TemporalAgentWorker::builder::<i32>()
+            .try_with_seeded_ctx(|_seed| Err::<i32, _>("nope"));
+        let f = b.ctx_factory.clone().expect("factory set");
+        assert!(f(None).is_err());
+    }
 
     struct StubModel;
 
@@ -578,5 +795,54 @@ mod tests {
         assert_eq!(def.plan.tool_defs.len(), 1);
         assert_eq!(def.plan.tool_defs[0].name, "noop");
         assert_eq!(def.tools.len(), 1);
+    }
+
+    #[test]
+    fn worker_posture_default_matches_ephemeral_defaults() {
+        use paigasus_helikon_core::RunContext;
+        let ctx = WorkerPosture::<()>::default().apply(RunContext::ephemeral(()));
+        let bare: RunContext<()> = RunContext::ephemeral(());
+        assert_eq!(ctx.permission_mode(), bare.permission_mode());
+        assert!(ctx.default_guards());
+        assert!(ctx.redact_output());
+        assert!(ctx.deny_rules().is_empty());
+        assert!(ctx.allow_rules().is_empty());
+        assert!(ctx.guard_rules().is_empty());
+        assert!(ctx.extra_secrets().is_empty());
+        assert!(ctx.permission_policy().is_none());
+        assert!(ctx.approval_handler().is_none());
+    }
+
+    #[test]
+    fn heartbeat_interval_is_floored_to_one_second() {
+        let b = TemporalAgentWorker::builder::<()>()
+            .heartbeat_interval(std::time::Duration::from_millis(100));
+        assert_eq!(
+            b.heartbeat_interval,
+            Some(std::time::Duration::from_secs(1))
+        );
+        let b = TemporalAgentWorker::builder::<()>()
+            .heartbeat_interval(std::time::Duration::from_secs(5));
+        assert_eq!(
+            b.heartbeat_interval,
+            Some(std::time::Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn worker_posture_applies_each_knob() {
+        use paigasus_helikon_core::{DenyRule, PermissionMode, RunContext};
+        let posture = WorkerPosture::<()>::default()
+            .with_permission_mode(PermissionMode::Plan)
+            .with_deny_rules(vec![DenyRule::tool("Bash")])
+            .with_extra_secrets(vec!["sk-123".to_owned()])
+            .without_default_guards()
+            .without_output_redaction();
+        let ctx = posture.apply(RunContext::ephemeral(()));
+        assert_eq!(ctx.permission_mode(), PermissionMode::Plan);
+        assert_eq!(ctx.deny_rules().len(), 1);
+        assert_eq!(ctx.extra_secrets(), ["sk-123".to_owned()]);
+        assert!(!ctx.default_guards());
+        assert!(!ctx.redact_output());
     }
 }

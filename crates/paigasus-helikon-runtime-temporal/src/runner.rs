@@ -38,7 +38,12 @@ use crate::error::outcome_to_run_result;
 use crate::payloads::{DriverConfig, DurableRunOutcome, WorkflowInput};
 
 /// Configuration for a [`TemporalRunner`].
+///
+/// `#[non_exhaustive]`: construct via [`TemporalRunnerConfig::new`] and the
+/// `with_*` builder methods, not a struct literal — this keeps adding a field
+/// (e.g. the private `ctx_seed`) a non-breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TemporalRunnerConfig {
     /// Task queue the durable workflow (and its worker) are served on. Must
     /// match the task queue the [`crate::worker::TemporalAgentWorker`] polls.
@@ -58,6 +63,9 @@ pub struct TemporalRunnerConfig {
     /// only a safety backstop above it and would discard the outcome, so it is
     /// set generously above the durable timer. Default 60s.
     pub execution_timeout_margin: Duration,
+    /// Optional request-scoped seed forwarded to the worker's seeded ctx
+    /// factory. Private: set via [`Self::with_ctx_seed`]. Default `None`.
+    ctx_seed: Option<serde_json::Value>,
 }
 
 impl TemporalRunnerConfig {
@@ -68,7 +76,16 @@ impl TemporalRunnerConfig {
             task_queue: task_queue.into(),
             workflow_id: None,
             execution_timeout_margin: Duration::from_secs(60),
+            ctx_seed: None,
         }
+    }
+
+    /// Attach a request-scoped seed forwarded (explicitly) to the worker's
+    /// seeded ctx factory for every run this config drives. Recorded in
+    /// Temporal history — keep it small and secret-free.
+    pub fn with_ctx_seed(mut self, seed: serde_json::Value) -> Self {
+        self.ctx_seed = Some(seed);
+        self
     }
 }
 
@@ -179,6 +196,7 @@ impl TemporalRunner {
                 parallel_tool_call_limit: parallel_tool_call_limit.map(|n| n.get()),
             },
             timeout_ms: timeout.map(|d| d.as_millis() as u64),
+            ctx_seed: self.config.ctx_seed.clone(),
         };
 
         match self.run_workflow(workflow_input, timeout, cancel).await {
@@ -303,5 +321,22 @@ async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecord
             error = %e,
             "session persistence failed during finalize; run outcome unaffected"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_ctx_seed_stores_seed() {
+        let cfg =
+            TemporalRunnerConfig::new("q").with_ctx_seed(serde_json::json!({"tenant": "acme"}));
+        assert_eq!(cfg.ctx_seed, Some(serde_json::json!({"tenant": "acme"})));
+    }
+
+    #[test]
+    fn ctx_seed_defaults_none() {
+        assert_eq!(TemporalRunnerConfig::new("q").ctx_seed, None);
     }
 }

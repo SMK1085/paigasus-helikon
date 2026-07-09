@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use paigasus_helikon_core::{
@@ -151,6 +152,7 @@ trait DurableAgentRuntime: Send + Sync {
     async fn render_instructions(
         &self,
         agent_name: &str,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<String, ActivityError>;
     /// See [`call_model_inner`].
@@ -165,6 +167,7 @@ trait DurableAgentRuntime: Send + Sync {
         &self,
         agent_name: &str,
         call: ToolCallRequest,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<ToolCallOutcome, ActivityError>;
 }
@@ -172,9 +175,10 @@ trait DurableAgentRuntime: Send + Sync {
 /// The `Ctx`-generic [`DurableAgentRuntime`] implementer: the process-local
 /// registry of every agent this worker was built with, plus the per-run
 /// `Ctx` factory.
-struct TypedRuntime<Ctx> {
+struct TypedRuntime<Ctx: Send + Sync + 'static> {
     registry: Arc<HashMap<String, Arc<DurableAgentDef<Ctx>>>>,
-    ctx_factory: Arc<dyn Fn() -> Ctx + Send + Sync>,
+    ctx_factory: crate::worker::CtxFactory<Ctx>,
+    posture: crate::worker::WorkerPosture<Ctx>,
 }
 
 impl<Ctx: Send + Sync + 'static> TypedRuntime<Ctx> {
@@ -190,9 +194,23 @@ impl<Ctx: Send + Sync + 'static> TypedRuntime<Ctx> {
     }
 
     /// A fresh ephemeral [`RunContext`] (in-memory session, no hooks) for one
-    /// activity invocation, wired to `cancel`.
-    fn run_context(&self, cancel: CancellationToken) -> RunContext<Ctx> {
-        RunContext::ephemeral((self.ctx_factory)()).with_cancel(cancel)
+    /// activity invocation, built from `seed` and wired to `cancel`.
+    ///
+    /// A seed the `ctx_factory` rejects becomes a **non-retryable**
+    /// [`ActivityError`] (the BLOCKER fix: a hostile/malformed seed must fail
+    /// the run fast rather than retry-looping forever).
+    fn run_context(
+        &self,
+        seed: Option<serde_json::Value>,
+        cancel: CancellationToken,
+    ) -> Result<RunContext<Ctx>, ActivityError> {
+        let user_ctx = (self.ctx_factory)(seed).map_err(|e| {
+            ActivityError::application(ApplicationFailure::non_retryable(format!(
+                "ctx seed rejected: {e}"
+            )))
+        })?;
+        let ctx = RunContext::ephemeral(user_ctx).with_cancel(cancel);
+        Ok(self.posture.apply(ctx))
     }
 }
 
@@ -201,10 +219,11 @@ impl<Ctx: Send + Sync + 'static> DurableAgentRuntime for TypedRuntime<Ctx> {
     async fn render_instructions(
         &self,
         agent_name: &str,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<String, ActivityError> {
         let def = self.resolve(agent_name)?;
-        let run_ctx = self.run_context(cancel);
+        let run_ctx = self.run_context(ctx_seed, cancel)?;
         Ok(render_instructions_inner(&def, &run_ctx).await)
     }
 
@@ -224,10 +243,11 @@ impl<Ctx: Send + Sync + 'static> DurableAgentRuntime for TypedRuntime<Ctx> {
         &self,
         agent_name: &str,
         call: ToolCallRequest,
+        ctx_seed: Option<serde_json::Value>,
         cancel: CancellationToken,
     ) -> Result<ToolCallOutcome, ActivityError> {
         let def = self.resolve(agent_name)?;
-        let run_ctx = self.run_context(cancel);
+        let run_ctx = self.run_context(ctx_seed, cancel)?;
         Ok(invoke_tool_inner(&def, &run_ctx, call).await)
     }
 }
@@ -245,7 +265,47 @@ fn error_kind_to_activity_error(kind: ErrorKindPayload) -> ActivityError {
     ActivityError::application(ApplicationFailure::non_retryable(json))
 }
 
-/// Race `work` against the activity's own cancellation signal.
+/// Generic cancellation/heartbeat race, decoupled from `ActivityContext` so it
+/// is unit-testable. Polls `work` and `cancelled` before the heartbeat tick
+/// (`biased`). On cancellation it runs `on_cancel` then **awaits `work` to
+/// completion** (never drops it — no detached task leak). When
+/// `heartbeat_interval` is `Some`, `on_heartbeat` fires each tick until `work`
+/// completes.
+async fn race_loop<T>(
+    work: impl std::future::Future<Output = T>,
+    cancelled: impl std::future::Future<Output = ()>,
+    on_cancel: impl FnOnce(),
+    heartbeat_interval: Option<Duration>,
+    mut on_heartbeat: impl FnMut(),
+) -> T {
+    tokio::pin!(work, cancelled);
+    let mut ticker = heartbeat_interval.map(tokio::time::interval);
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut work => return result,
+            () = &mut cancelled => {
+                // Stop heartbeating during wind-down: the workflow's cancellation
+                // branch is already tearing this attempt down, so a heartbeat
+                // timeout here is moot. Still await `work` to completion so no
+                // detached task leaks.
+                on_cancel();
+                return work.await;
+            }
+            _ = async {
+                match ticker.as_mut() {
+                    Some(t) => { t.tick().await; }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                on_heartbeat();
+            }
+        }
+    }
+}
+
+/// Race `work` against the activity's cancellation signal, emitting liveness
+/// heartbeats every `heartbeat` while it runs (when configured).
 ///
 /// If the activity is cancelled first, propagate that into `cancel` (so the
 /// in-flight [`Model`]/[`Tool`] call can wind down per its own cancellation
@@ -255,17 +315,17 @@ fn error_kind_to_activity_error(kind: ErrorKindPayload) -> ActivityError {
 async fn race_with_activity_cancellation<T>(
     activity_ctx: &ActivityContext,
     cancel: CancellationToken,
+    heartbeat: Option<Duration>,
     work: impl std::future::Future<Output = T>,
 ) -> T {
-    tokio::pin!(work);
-    tokio::select! {
-        biased;
-        result = &mut work => result,
-        _ = activity_ctx.cancelled() => {
-            cancel.cancel();
-            work.await
-        }
-    }
+    race_loop(
+        work,
+        activity_ctx.cancelled(),
+        || cancel.cancel(),
+        heartbeat,
+        || activity_ctx.record_heartbeat(Vec::new()),
+    )
+    .await
 }
 
 /// The `Ctx`-erased, non-generic activities struct registered on the
@@ -273,6 +333,10 @@ async fn race_with_activity_cancellation<T>(
 /// rather than a `Ctx`-generic field directly.
 pub(crate) struct AgentActivities {
     runtime: Arc<dyn DurableAgentRuntime>,
+    /// Liveness heartbeat interval for the `call_model`/`invoke_tool`
+    /// activities (`None` disables heartbeating). Set via
+    /// [`crate::worker::TemporalAgentWorkerBuilder::heartbeat_interval`].
+    heartbeat_interval: Option<Duration>,
 }
 
 /// Build the [`AgentActivities`] instance a [`crate::worker::TemporalAgentWorker`]
@@ -281,13 +345,17 @@ pub(crate) struct AgentActivities {
 /// appears in any type the Temporal SDK holds onto.
 pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
     registry: Arc<HashMap<String, Arc<DurableAgentDef<Ctx>>>>,
-    ctx_factory: Arc<dyn Fn() -> Ctx + Send + Sync>,
+    ctx_factory: crate::worker::CtxFactory<Ctx>,
+    posture: crate::worker::WorkerPosture<Ctx>,
+    heartbeat_interval: Option<Duration>,
 ) -> AgentActivities {
     AgentActivities {
         runtime: Arc::new(TypedRuntime {
             registry,
             ctx_factory,
+            posture,
         }),
+        heartbeat_interval,
     }
 }
 
@@ -306,12 +374,15 @@ impl AgentActivities {
         self: Arc<Self>,
         ctx: ActivityContext,
         agent_name: String,
+        ctx_seed: Option<serde_json::Value>,
     ) -> Result<String, ActivityError> {
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
-            self.runtime.render_instructions(&agent_name, cancel),
+            None,
+            self.runtime
+                .render_instructions(&agent_name, ctx_seed, cancel),
         )
         .await
     }
@@ -331,6 +402,7 @@ impl AgentActivities {
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
+            self.heartbeat_interval,
             self.runtime.call_model(&agent_name, request, cancel),
         )
         .await
@@ -346,12 +418,15 @@ impl AgentActivities {
         ctx: ActivityContext,
         agent_name: String,
         call: ToolCallRequest,
+        ctx_seed: Option<serde_json::Value>,
     ) -> Result<ToolCallOutcome, ActivityError> {
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,
             cancel.clone(),
-            self.runtime.invoke_tool(&agent_name, call, cancel),
+            self.heartbeat_interval,
+            self.runtime
+                .invoke_tool(&agent_name, call, ctx_seed, cancel),
         )
         .await
     }
@@ -619,5 +694,177 @@ mod tests {
         let text = render_instructions_inner(&def, &run_ctx).await;
 
         assert_eq!(text, "system prompt");
+    }
+
+    // ---- TypedRuntime::run_context applies the worker posture ------------
+
+    #[test]
+    fn typed_runtime_run_context_applies_posture() {
+        use crate::worker::WorkerPosture;
+        use paigasus_helikon_core::{DenyRule, PermissionMode};
+        let rt = TypedRuntime::<()> {
+            registry: Arc::new(HashMap::new()),
+            ctx_factory: Arc::new(|_seed| Ok(())),
+            posture: WorkerPosture::default()
+                .with_permission_mode(PermissionMode::Plan)
+                .with_deny_rules(vec![DenyRule::tool("Bash")]),
+        };
+        let ctx = rt
+            .run_context(None, CancellationToken::new())
+            .expect("factory never rejects a seed here");
+        assert_eq!(ctx.permission_mode(), PermissionMode::Plan);
+        assert_eq!(ctx.deny_rules().len(), 1);
+    }
+
+    // ---- run_context: fallible seeded ctx factory (SMA-455) --------------
+
+    #[tokio::test]
+    async fn run_context_seed_error_is_non_retryable() {
+        use crate::worker::{CtxSeedError, WorkerPosture};
+        let rt = TypedRuntime::<()> {
+            registry: Arc::new(HashMap::new()),
+            ctx_factory: Arc::new(|_seed| Err(CtxSeedError::new("bad seed"))),
+            posture: WorkerPosture::default(),
+        };
+        let err = match rt.run_context(Some(serde_json::json!({"x": 1})), CancellationToken::new())
+        {
+            Ok(_) => panic!("a rejected seed must be an Err"),
+            Err(e) => e,
+        };
+        match err {
+            ActivityError::Application(app) => assert!(
+                app.is_non_retryable(),
+                "seed-rejection activity errors must be non-retryable"
+            ),
+            other => panic!("expected ActivityError::Application, got {other:?}"),
+        }
+    }
+
+    // ---- race_loop (SMA-455 Task 4) --------------------------------------
+
+    #[tokio::test]
+    async fn race_loop_awaits_work_after_cancel() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc as StdArc;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let done = StdArc::new(AtomicBool::new(false));
+        let done2 = StdArc::clone(&done);
+        let cancelled_flag = StdArc::new(AtomicBool::new(false));
+        let cf = StdArc::clone(&cancelled_flag);
+
+        let work = async move {
+            let _ = rx.await; // completes only after on_cancel fires tx
+            done2.store(true, Ordering::SeqCst);
+            7u8
+        };
+        let result = race_loop(
+            work,
+            async { /* cancelled: immediately */ },
+            move || {
+                cf.store(true, Ordering::SeqCst);
+                let _ = tx.send(()); // let the work future wind down
+            },
+            None,
+            || {},
+        )
+        .await;
+
+        assert_eq!(result, 7);
+        assert!(cancelled_flag.load(Ordering::SeqCst), "on_cancel ran");
+        assert!(
+            done.load(Ordering::SeqCst),
+            "work was awaited to completion, not dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn race_loop_heartbeats_until_work_done() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc as StdArc;
+        let beats = StdArc::new(AtomicU32::new(0));
+        let b2 = StdArc::clone(&beats);
+        let work = async {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            1u8
+        };
+        let result = race_loop(
+            work,
+            std::future::pending::<()>(), // never cancelled
+            || {},
+            Some(std::time::Duration::from_millis(10)),
+            move || {
+                b2.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+        assert_eq!(result, 1);
+        assert!(
+            beats.load(Ordering::SeqCst) >= 1,
+            "at least one heartbeat fired"
+        );
+    }
+
+    #[tokio::test]
+    async fn seeded_ctx_feeds_request_scoped_policy() {
+        use crate::worker::WorkerPosture;
+        use paigasus_helikon_core::{PermissionDecision, PermissionPolicy, RunContext, ToolEffect};
+
+        struct Tenant {
+            name: String,
+        }
+        struct TenantPolicy;
+        #[async_trait]
+        impl PermissionPolicy<Tenant> for TenantPolicy {
+            async fn check(
+                &self,
+                ctx: &RunContext<Tenant>,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> PermissionDecision {
+                if ctx.user_ctx().name == "acme" {
+                    PermissionDecision::Allow
+                } else {
+                    PermissionDecision::Deny {
+                        reason: "not acme".to_owned(),
+                    }
+                }
+            }
+        }
+
+        let rt = TypedRuntime::<Tenant> {
+            registry: Arc::new(HashMap::new()),
+            ctx_factory: Arc::new(|seed| {
+                let name = seed
+                    .and_then(|v| v.get("tenant").and_then(|t| t.as_str()).map(str::to_owned))
+                    .unwrap_or_default();
+                Ok(Tenant { name })
+            }),
+            posture: WorkerPosture::default().with_permission_policy(Arc::new(TenantPolicy)),
+        };
+
+        let acme = rt
+            .run_context(
+                Some(serde_json::json!({"tenant": "acme"})),
+                CancellationToken::new(),
+            )
+            .expect("factory ok");
+        assert!(matches!(
+            acme.authorize_tool("AnyTool", ToolEffect::ReadOnly, &serde_json::json!({}))
+                .await,
+            PermissionDecision::Allow
+        ));
+
+        let other = rt
+            .run_context(
+                Some(serde_json::json!({"tenant": "evil"})),
+                CancellationToken::new(),
+            )
+            .expect("factory ok");
+        assert!(matches!(
+            other
+                .authorize_tool("AnyTool", ToolEffect::ReadOnly, &serde_json::json!({}))
+                .await,
+            PermissionDecision::Deny { .. }
+        ));
     }
 }

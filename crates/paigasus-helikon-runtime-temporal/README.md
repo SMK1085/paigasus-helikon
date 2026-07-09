@@ -115,7 +115,32 @@ Hooks, handoffs, and guardrails are rejected at registration time with a descrip
 
 ### Worker-Side Posture
 
-Your agent's `RunContext` (tenant data, auth claims, permission rules) does **not** cross to the worker — the worker fabricates its own context from its configuration. This is intentional: **the worker's permission and redaction settings are authoritative for tool execution**, and Temporal's durable history is a security boundary. See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Worker-Side Posture and Security Boundary").
+Your agent's `RunContext` (tenant data, auth claims, permission rules) does **not** cross to the worker — the worker fabricates its own context from its configuration. This is intentional: **the worker's permission and redaction settings are authoritative for tool execution**, and Temporal's durable history is a security boundary. Configure that posture via `WorkerPosture` on the worker builder (`.posture(...)` — `WorkerPosture::default()` reproduces the fixed v0 defaults exactly), and optionally hand the worker request-scoped caller data — tenant id, user id, auth subject — via a client-attached, serializable `Ctx` seed:
+
+```rust,ignore
+use paigasus_helikon_core::PermissionMode;
+use paigasus_helikon_runtime_temporal::worker::{TemporalAgentWorker, WorkerPosture};
+use paigasus_helikon_runtime_temporal::runner::TemporalRunnerConfig;
+use serde_json::json;
+
+// Worker side: tighten the posture and reconstitute `Ctx` from the client's seed.
+// Prefer `try_with_seeded_ctx` over `with_seeded_ctx` whenever the seed drives
+// authorization, so a malformed/hostile seed fails the run instead of silently
+// defaulting to the wrong identity.
+let worker = TemporalAgentWorker::builder::<MyCtx>()
+    .task_queue("helikon-agents")
+    .client(client)
+    .posture(WorkerPosture::default().with_permission_mode(PermissionMode::Plan))
+    .try_with_seeded_ctx(|seed| MyCtx::from_seed(seed))
+    .register(agent)?
+    .build()?;
+
+// Client side: attach a small, secret-free seed — it's recorded in Temporal history.
+let config = TemporalRunnerConfig::new("helikon-agents")
+    .with_ctx_seed(json!({ "tenant": "acme" }));
+```
+
+Heartbeats (`.heartbeat_interval(duration)`) are opt-in on the worker builder — they speed up crash reclamation on `call_model`/`invoke_tool`, at the cost of also tripping on a live worker whose executor is starved by a blocking tool call. See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Worker-Side Posture and Security Boundary", § "Heartbeats").
 
 ### Retry Semantics
 

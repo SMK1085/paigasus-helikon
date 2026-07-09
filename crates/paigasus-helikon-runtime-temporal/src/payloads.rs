@@ -32,6 +32,12 @@ pub struct WorkflowInput {
     pub config: DriverConfig,
     /// Run timeout as milliseconds; None = no deadline.
     pub timeout_ms: Option<u64>,
+    /// Optional, explicit request-scoped seed the worker's seeded ctx factory
+    /// reconstitutes into a `Ctx`. `#[serde(default)]` so pre-SMA-455 payloads
+    /// (which lack the field) still deserialize. Recorded in Temporal history —
+    /// keep it small and secret-free.
+    #[serde(default)]
+    pub ctx_seed: Option<serde_json::Value>,
 }
 
 /// A reassembled model turn, wrapped for Temporal serialization.
@@ -79,6 +85,29 @@ pub struct DurableRunOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_input_ctx_seed_roundtrips_and_defaults() {
+        // present
+        let input = WorkflowInput {
+            agent_name: "a".to_owned(),
+            conversation: vec![],
+            config: DriverConfig {
+                max_turns: 4,
+                parallel_tool_call_limit: None,
+            },
+            timeout_ms: None,
+            ctx_seed: Some(serde_json::json!({"tenant": "acme"})),
+        };
+        let json = serde_json::to_string(&input).expect("serialize");
+        let back: WorkflowInput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.ctx_seed, Some(serde_json::json!({"tenant": "acme"})));
+
+        // legacy payload without the field deserializes to None
+        let legacy = r#"{"agent_name":"a","conversation":[],"config":{"max_turns":4,"parallel_tool_call_limit":null},"timeout_ms":null}"#;
+        let back: WorkflowInput = serde_json::from_str(legacy).expect("legacy deserialize");
+        assert_eq!(back.ctx_seed, None);
+    }
 
     #[test]
     fn test_durable_run_outcome_completed_roundtrip() {
