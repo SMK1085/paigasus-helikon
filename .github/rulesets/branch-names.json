@@ -8,7 +8,8 @@
       "exclude": [
         "refs/heads/main",
         "refs/heads/feature/**",
-        "refs/heads/hotfix/**"
+        "refs/heads/hotfix/**",
+        "refs/heads/release-plz-**"
       ]
     }
   },
