@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.14...paigasus-helikon-mcp-v0.1.15) - 2026-07-12
+
+### Other
+
+- *(deps)* bump rmcp 1.8.0 → 2.1.0 and migrate mcp to the ContentBlock API ([#144](https://github.com/SMK1085/paigasus-helikon/pull/144))
+
 ## [0.1.14](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.13...paigasus-helikon-mcp-v0.1.14) - 2026-07-07
 
 ### Other
