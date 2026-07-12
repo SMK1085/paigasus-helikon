@@ -33,7 +33,7 @@ pub(crate) fn map_call_result(result: CallToolResult) -> Result<ToolOutput, Tool
     if content.len() == 1 && content[0].as_text().is_some() {
         let text = content.into_iter().next().unwrap();
         // SAFETY: guarded by `as_text().is_some()` above.
-        let rmcp::model::RawContent::Text(t) = text.raw else {
+        let rmcp::model::ContentBlock::Text(t) = text else {
             unreachable!()
         };
         return Ok(ToolOutput::new(serde_json::Value::String(t.text)));
@@ -44,7 +44,7 @@ pub(crate) fn map_call_result(result: CallToolResult) -> Result<ToolOutput, Tool
 }
 
 /// Concatenate the text parts of a content vec for error messages.
-fn content_text(content: &[rmcp::model::Content]) -> String {
+fn content_text(content: &[rmcp::model::ContentBlock]) -> String {
     let parts: Vec<&str> = content
         .iter()
         .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
@@ -184,7 +184,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::{CallToolResult, Content};
+    use rmcp::model::{CallToolResult, ContentBlock};
 
     #[test]
     fn structured_content_wins() {
@@ -195,14 +195,14 @@ mod tests {
 
     #[test]
     fn single_text_becomes_string() {
-        let r = CallToolResult::success(vec![Content::text("hello")]);
+        let r = CallToolResult::success(vec![ContentBlock::text("hello")]);
         let out = map_call_result(r).unwrap();
         assert_eq!(out.content, serde_json::json!("hello"));
     }
 
     #[test]
     fn multi_content_becomes_array() {
-        let r = CallToolResult::success(vec![Content::text("a"), Content::text("b")]);
+        let r = CallToolResult::success(vec![ContentBlock::text("a"), ContentBlock::text("b")]);
         let out = map_call_result(r).unwrap();
         assert!(out.content.is_array());
         assert_eq!(out.content.as_array().unwrap().len(), 2);
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn is_error_maps_to_tool_error() {
-        let r = CallToolResult::error(vec![Content::text("kaboom")]);
+        let r = CallToolResult::error(vec![ContentBlock::text("kaboom")]);
         let err = map_call_result(r).unwrap_err();
         assert!(err.to_string().contains("kaboom"));
     }

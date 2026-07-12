@@ -8,8 +8,8 @@ use paigasus_helikon_core::{
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, Implementation, JsonObject, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool as McpToolDef,
+    CallToolRequestParams, CallToolResult, ContentBlock, Implementation, JsonObject,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool as McpToolDef,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -348,7 +348,7 @@ impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
                 Ok(outcome) => outcome,
                 Err(_elapsed) => {
                     cancel.cancel();
-                    return Ok(CallToolResult::error(vec![Content::text(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
                         "agent run timed out",
                     )]));
                 }
@@ -357,10 +357,10 @@ impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
         };
 
         match outcome {
-            Ok(result) => Ok(CallToolResult::success(vec![Content::text(
+            Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(
                 result.final_output,
             )])),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "agent run failed: {e}"
             ))])),
         }

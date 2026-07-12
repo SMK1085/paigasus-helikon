@@ -4,7 +4,7 @@
 
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, ListToolsResult, PaginatedRequestParams,
+    CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
     ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::{RequestContext, RoleServer};
@@ -79,13 +79,13 @@ impl ServerHandler for FixtureServer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("<missing>")
                     .to_owned();
-                Ok(CallToolResult::success(vec![Content::text(msg)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
             }
-            "boom" => Ok(CallToolResult::error(vec![Content::text("kaboom")])),
+            "boom" => Ok(CallToolResult::error(vec![ContentBlock::text("kaboom")])),
             "shape" => Ok(CallToolResult::structured(serde_json::json!({"ok": true}))),
             "sleepy" => {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                Ok(CallToolResult::success(vec![Content::text("woke")]))
+                Ok(CallToolResult::success(vec![ContentBlock::text("woke")]))
             }
             other => Err(ErrorData::invalid_params(
                 format!("unknown tool {other}"),
