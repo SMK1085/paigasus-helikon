@@ -76,7 +76,7 @@ syn                   = { version = "2", features = ["full"] }
 tempfile              = "3"
 thiserror             = "2"
 tokio                 = { version = "1", features = ["full"] }
-tokio-tungstenite     = { version = "0.29", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite     = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 tokio-util            = { version = "0.7", default-features = false, features = ["rt"] }
 toml                  = "1"
 tower                 = { version = "0.5", default-features = false, features = ["util"] }
