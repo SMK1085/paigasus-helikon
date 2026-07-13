@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-axum-v0.1.2...paigasus-helikon-runtime-axum-v0.1.3) - 2026-07-13
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.1.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-axum-v0.1.1...paigasus-helikon-runtime-axum-v0.1.2) - 2026-07-07
 
 ### Other
