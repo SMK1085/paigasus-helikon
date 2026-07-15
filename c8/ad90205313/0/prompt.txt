@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>abb81a4a5894a0132</task-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/abb81a4a5894a0132.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review SMA-452" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That notification is just cleanup of a redundant waiter task (the results were already captured). No action needed — my review is complete and delivered above. All verification finished: the full runtime-axum test suite and the new `--no-default-features` gate are green, and the review conclusion stands (merge with the two low-cost documentation-accuracy fixes).</result>
+<usage><subagent_tokens>128067</subagent_tokens><tool_uses>28</tool_uses><duration_ms>4424843</duration_ms></usage>
+</task-notification>
