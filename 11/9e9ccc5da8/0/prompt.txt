@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bx41c2qxs</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/675514c0-c2aa-4241-99cb-b494bfa49759/tasks/bx41c2qxs.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for release-plz to open the release PR" completed (exit code 0)</summary>
+</task-notification>
