@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bigq6m5gt</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e8d62a5b-6965-4310-bfe5-439a2421c212/tasks/bigq6m5gt.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full local CI-gate suite" completed (exit code 0)</summary>
+</task-notification>
