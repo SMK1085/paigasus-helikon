@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b7c616fe9</task-id>
+<tool-use-id>toolu_01Th3rKS35rzN5jPDvq3Bs8u</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/f1524f9a-e8ab-47e9-be2a-3599d89136df/tasks/b7c616fe9.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for release run to complete (background)" completed (exit code 0)</summary>
+</task-notification>
