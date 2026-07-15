@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>brgzk75jp</task-id>
+<tool-use-id>toolu_01QSiTQRWeNWG9JBN2v5xSXo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/brgzk75jp.output</output-file>
+<status>completed</status>
+<summary>Background command "Verify no-default-features baseline build" completed (exit code 0)</summary>
+</task-notification>
