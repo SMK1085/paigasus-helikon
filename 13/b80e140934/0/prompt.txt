@@ -1,0 +1,43 @@
+<task-notification>
+<task-id>aaa52c7ce64344edc</task-id>
+<tool-use-id>toolu_01GVukTtjYvTwfyz9U6sVVij</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/aaa52c7ce64344edc.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 14 (example + README)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance — ✅ with ⚠️
+
+All five binding requirements are substantially met, but one route-table description materially misrepresents what is implemented.
+
+---
+
+### Strengths
+
+- The `//!` header in `curl_server.rs` contains all three required curl invocations (one-shot with `-H 'Content-Type: application/json'`, SSE with `?stream=sse`, and the list call) — AC1/AC2 are fully covered.
+- The example uses only real public API: `AgentServer::&lt;()&gt;::builder().with_default_context().agent(Arc::new(EchoAgent)).build()?.serve(...)`. No `ScriptedAgent` or private items.
+- Install snippets are drift-free — no hardcoded version in either `cargo add` line (check 2 ✅).
+- Repo URL `https://github.com/SMK1085/paigasus-helikon` matches root `Cargo.toml` `repository` exactly (check 3 ✅).
+- License note reads "Licensed under either of [Apache-2.0]… or [MIT]…, at your option" — correct dual-license statement (check 5 ✅).
+- `EchoAgent` extracts the last user message text via `find_map` over `Item`/`ContentPart` with proper `_ =&gt; None` wildcard arms for the `#[non_exhaustive]` variants — clippy-clean pattern.
+
+---
+
+### Issues
+
+**Important — `README.md`, route table row 4, description column**
+
+&gt; `README.md` line 94 (diff): `| GET | /agents/{name}/runs/{id}/events | Replay or stream events for a run (HTTP or WebSocket upgrade) |`
+
+The "HTTP or" part is wrong. `src/handlers/events.rs` (line 50) requires `ws: WebSocketUpgrade` as an extractor; there is no HTTP fallback. A plain `curl http://…/events` call will receive a 400/upgrade-required error from axum, not a streamed JSON response. The description should say "WebSocket only" or "subscribe to run events via WebSocket".
+
+**Minor — README inline usage example vs. `curl_server.rs` bind address**
+
+`README.md` line 79 (diff) shows `.serve("0.0.0.0:8080")`, while `examples/curl_server.rs` (line 218) uses `"127.0.0.1:8080"` and its `//!` curl snippets reference `localhost:8080`. Both addresses work for the curl examples (localhost resolves to either), but the two "canonical" code samples show different addresses. Aligning them (either direction) would reduce reader confusion.
+
+---
+
+### Assessment — Needs fixes (minor)
+
+The example file, install snippets, license note, and links all pass. One description in the route table (`GET /agents/{name}/runs/{id}/events`) incorrectly claims HTTP transport is supported when the handler is WebSocket-only; this should be corrected before the PR merges.</result>
+<usage><subagent_tokens>37253</subagent_tokens><tool_uses>10</tool_uses><duration_ms>110772</duration_ms></usage>
+</task-notification>
