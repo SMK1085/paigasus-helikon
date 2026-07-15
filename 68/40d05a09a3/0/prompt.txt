@@ -1,0 +1,69 @@
+<task-notification>
+<task-id>aeb8ec16c56f22f38</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/aeb8ec16c56f22f38.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review SMA-332" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've completed the whole-branch review. Everything below is based on direct reads of the branch at `df489c6` (no tree mutation; `convco check ceed070..df489c6` run read-only: clean).
+
+# Final Whole-Branch Review — SMA-332 (ceed070..df489c6, 29 commits)
+
+### Strengths
+
+1. **The security seam is single-pipeline by construction, not by convention.** `Interceptors::authorize` (crates/paigasus-helikon-core/src/control.rs) now *delegates* to the extracted `RunContext::authorize_tool` — the pipeline was moved, not duplicated, so ephemeral and durable callers cannot drift. `execute_tool_call` (crates/paigasus-helikon-core/src/tool_exec.rs) faithfully mirrors the loop's subtle orderings: unknown tools still authorize first (with `SideEffect` profile), and redaction is the final transform. `tests/tool_exec.rs` pins deny+event, redaction, and unknown-tool; `tests/wire_serde.rs` explicitly asserts the `OutputType` fail-**closed** validator after a round-trip — the single most important regression net on the branch.
+2. **The `ModelTurnAccumulator` hoist is a true refactor.** `LlmAgent::run` now consumes the exact accumulator the Temporal `call_model` activity consumes (agent.rs diff replaces the inline accumulation wholesale), preserving last-wins usage semantics with tests on both sides.
+3. **v0 boundary honesty.** Hooks/guardrails/handoffs fail fast at `register()` with tests per variant; `NextAction::Handoff` is defensively terminal in the driver; nested agent-as-tool non-durability, the ~1.5 MB payload budget, buffered-not-live `run_streamed`, and drain-before-redeploy determinism discipline are all documented loudly in runtime-temporal's lib.rs rather than papered over.
+4. **The agentcore SSE disconnect path is unusually rigorous** — detached driver + bounded channel + `DropGuard` cancel, validated with a real-TCP mid-stream disconnect test (invoke.rs `sse_client_disconnect_still_finalizes_the_session`), not `oneshot`.
+5. **Release engineering follows every house rule.** Both 4-step ascends complete (version bumps, `publish = false` removed, both `release-plz.toml` blocks deleted); same-PR `core` 0.5.13 **and** `mcp` 0.1.13 bumps cover the cargo-verify caveat (agentcore uses `streamable_http_service_with` added in this PR); facade 0.4.17 bump covers the cascade-defeat caveat; workspace pins all consistent; CHANGELOGs present and accurate for all five versions. `convco check` clean over all 29 commits, all scopes allowlisted. protoc is installed in every compiling job (clippy, test matrix, build-no-default-features, docs, doc-coverage, sessions-it, msrv.yml). deny.toml + .cargo/audit.toml ignore exactly the two advisories (RUSTSEC-2025-0012, RUSTSEC-2024-0384) with matching, revisit-conditioned comments; the inert-`[[licenses.clarify]]` finding is documented in place.
+6. **Docs sweep is coherent across documents** — root README, facade README, and six book pages all agree on the new 16-published/1-stub roster; stale "stub" language scrubbed everywhere it appeared.
+
+### Issues
+
+#### Critical (Must Fix)
+
+None.
+
+#### Important (Should Fix)
+
+1. **The security-boundary docs promise a worker-side posture knob that does not exist.** `crates/paigasus-helikon-runtime-temporal/src/lib.rs` ("Worker-Side Posture and Security Boundary"): *"The worker fabricates its own `RunContext&lt;Ctx&gt;` from its configured context factory, **plus optional permission and redaction settings configured on the worker itself**"* — and the spec (§5.8: "plus an optional worker-side permission/redaction configuration") and CHANGELOG ("making its permission/redaction settings authoritative") repeat it. As-built, `TemporalAgentWorkerBuilder` has **no** permission or redaction configuration whatsoever; every activity builds `RunContext::ephemeral(ctx).with_cancel(...)` (activities.rs `TypedRuntime::run_context`), i.e. fixed defaults: `PermissionMode::Default` + no policy → **allow**, built-in destructive guards on (Ask→Deny, no handler), `redact_output = true` with env-sourced secrets only, no way to add deny rules, `extra_secrets`, or a policy. The defaults fail safe, so this isn't Critical — but (a) docs.rs 0.1.0 will document a security-relevant setting a user cannot find, and (b) this is an unflagged deviation from the approved spec (the plan promised the option; the implementation dropped it silently). **Fix before PR:** either add the builder knob, or (cheaper, defensible for v0) reword lib.rs + CHANGELOG + spec §5.8's "as-built" posture to: *fixed v0 defaults — redaction on, destructive guards on, no custom rules; worker-side posture configuration is future work alongside the serializable-Ctx seed.* The same nuance applies client-side: a `RunContext` handed to `TemporalRunner` with deny rules/`DontAsk`/policy is silently ignored for tool execution — the "caller's permissions do not propagate" doc covers this, but a sentence naming those exact fields would prevent the worst misreading.
+
+2. **Intra-branch comment rot in activities.rs contradicts the shipped code.** `DurableAgentDef::plan` still carries `#[allow(dead_code)]` and *"Not read by anything in this crate yet … consumed for real once Task 8 lands"* — but Task 8 landed on this same branch and `worker.rs::build()` reads `def.plan.clone()` (line 326). Likewise `activity_marker_tests`' doc says *"no workflow exists to call `start_activity`"* while `workflow.rs` does exactly that. These ship to docs.rs-adjacent source and will actively mislead the next maintainer. Two-minute fix.
+
+#### Minor (Nice to Have)
+
+3. **Cross-runner typed-error drift:** `ErrorKindPayload::Model` reconstructs to `AgentError::Other(anyhow!(message))`, not `AgentError::Model` (crates/paigasus-helikon-runtime-temporal/src/error.rs `into_agent_error`). A caller matching `RunError::Agent(AgentError::Model(_))` behaves differently under `TemporalRunner` vs `TokioRunner`. Documented at the function and tested, and the spec's `Model{message, kind}` shape was quietly simplified to message-only — but lib.rs's "Retry Semantics" section says only "fail with `RunError::Agent(...)`". One clarifying sentence there would close it.
+4. **Book names a nonexistent type:** docs/book/src/concepts/runtimes.md says the runner starts an "`AgentLoopWorkflow`" — the actual (internal) type is `DurableAgentWorkflow`. Since it's `pub(crate)` this misleads only conceptually, but the book shouldn't invent identifiers.
+5. **Image-check gate labeling is internally inconsistent.** After fix 0d48599 the script gates **all four** metrics and prints "AC gate" on all four summary rows — but the script's own header comments (lines 16–23, 51–53, and the "`(agent image, informational)`" echo at line 116) still describe echo-size/agent-cold-start as informational, and the tables in docs/runbooks/agentcore-image-check.md and the crate README label them "(informational) / n/a". Align the three documents with the script's actual behavior.
+6. **`DurableDriver::next_effect` is public and can panic** (`expect("next_effect called without a pending transition input")`) with no `# Panics` section; the whole `driver`/`payloads` module surface is now a public API commitment of the 0.1.0 crate. Worth a deliberate one-line `# Panics` doc; also consider whether `payloads`/`driver` really need to be `pub` long-term (they're useful for advanced testing, but they freeze `AgentPlan`/`WorkflowInput` shapes at 0.1.0).
+7. **driver.rs module doc cites `agent.rs` by line number** ("lines ~640-900", "agent.rs:1047") — numbers this very branch already invalidated by refactoring agent.rs. Cite function names, not lines.
+
+### Deferred-Minors Triage
+
+- **T1 wire_serde assertion gaps** — ACCEPT: `tool_choice`/`response_format` are exercised through the round-trip (a deser failure fails the test); only post-trip equality asserts are missing. Cheap follow-up, not blocking.
+- **T2 ModelTurn not in wire_serde + `finish()` precondition unenforced** — ACCEPT: `ModelTurn` serde is exercised via `ModelTurnResult` in the live suite; a missing `Finish` event defaults to `FinishReason::Stop`, identical to the pre-hoist ephemeral behavior — no regression.
+- **T3 per-call `SecretSet` construction** — ACCEPT: perf-only, dwarfed by tool I/O; note as a future micro-opt.
+- **T4 setup-protoc no protoc version pin** — ACCEPT (action is SHA-pinned); recommend a follow-up `chore(workflows)` adding a `version:` input for reproducibility.
+- **T5 `HandoffUnsupported` unreachable from `from_agent_error`** — RESOLVED on-branch: driver.rs constructs it directly in the `NextAction::Handoff` arm. ACCEPT.
+- **T6 stale agent.rs citations + untested double-call panic** — FIX the citations (Minor #7 above, they're already wrong on this branch); ACCEPT the untested panic but add `# Panics` (Minor #6).
+- **T7 RetryPolicyConfig inert** — RESOLVED: `to_proto_retry_policy` + `build_activity_config` wire it, with attachment tests. The worker.rs doc note reads forward-looking but is still factually accurate. ACCEPT.
+- **T8 render-instructions infra failure labeled Model** — ACCEPT: `extract_error_kind`'s degrade default mislabels only the error *kind string* on a rare infra path; outcome totality is unaffected. `run_streamed` `last()` check — ACCEPT: `RunFailed` is only ever terminal in the durable log (driver pushes it last on every failure path). `execute_tools` double clone — ACCEPT: required by the `async move` closure; negligible.
+- **T9 asserts before `worker.stop` / dead `remove_file`** — ACCEPT both: env-gated live tests, leak only on assertion failure; the `remove_file` after a UUID-fresh path is dead but harmless. 6-vs-4 test count was disclosed.
+- **T12 `AgentCoreError::Internal` doubles config+runtime** — ACCEPT: `#[non_exhaustive]` leaves room to split a `Config` variant later without breakage.
+- **T13 `run_json` disconnect gap** — ACCEPT for this branch (pre-existing class shared with runtime-axum; SSE — the default mode — is fixed), but file a follow-up ticket to document or detach it; don't let it evaporate.
+- **T14 unconditional CA bundle + duplicated `EchoAgent`** — ACCEPT both: the bundle is documented in the Dockerfile and costs ~220 KB against a 30 MB gate; examples must be self-contained.
+
+### Recommendations
+
+1. Before opening the PR: fix Important #1 (docs rewording is sufficient for v0 — or the builder knob if you'd rather close the spec gap properly), Important #2, and Minors #4/#5 — all are sub-30-minute text changes with no test impact.
+2. File two follow-up tickets so the deliberate gaps stay tracked: (a) worker-side posture configuration + serializable-Ctx seed for runtime-temporal; (b) `run_json` disconnect finalize (shared with runtime-axum).
+3. Reserve PR title now to avoid the two pr-title gates: e.g. `feat(runtime): SMA-332 implement temporal and agentcore runtimes` (valid type(scope), lowercase subject — note `runtime` is an allowlisted scope).
+4. Post-merge, watch the release-plz PR closely: this release publishes **five** crates in dependency order (core → mcp → facade/temporal/agentcore) and pulls the temporalio-* stack into the published graph for the first time — the bot PR's `cargo update` is the likeliest place a fresh advisory surfaces.
+
+### Assessment
+
+**Ready to merge?** With fixes
+
+**Reasoning:** The cross-crate security seam, release engineering, and CI posture are genuinely sound — the one Important finding is that the shipped security-boundary documentation (and the approved spec) promise an "optional worker-side permission/redaction configuration" that was never built, which must be reconciled (reword or implement) before this publishes to docs.rs; everything else is comment rot and doc-label alignment, fixable in under an hour with no code-path changes.</result>
+<usage><subagent_tokens>237908</subagent_tokens><tool_uses>54</tool_uses><duration_ms>604507</duration_ms></usage>
+</task-notification>
