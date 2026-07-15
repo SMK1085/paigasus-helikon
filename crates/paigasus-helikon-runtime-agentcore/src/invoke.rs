@@ -40,7 +40,7 @@ use paigasus_helikon_core::{
     AgentEvent, AgentInput, CancellationToken, Item, RunContext, TokenUsage,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::DropGuard;
 
 use crate::{error::AgentCoreError, server::AppState, session::extract_session_id};
@@ -128,9 +128,10 @@ pub(crate) struct InvocationResponse {
 ///   body could not be read or was not valid JSON for an [`InvocationRequest`], or the
 ///   configured `SessionProvider`/`ContextProvider` reported a client-side problem.
 /// - [`AgentCoreError::Internal`] (500) — session resolution, context construction, or
-///   (JSON mode only) the run itself failed. In SSE mode a run failure is instead
-///   surfaced as the stream's terminal `RunFailed` frame — the response itself stays
-///   `200`, per SSE semantics.
+///   (JSON mode only) the run itself failed, or (JSON mode only) the detached run task
+///   ended without reporting a result because it panicked or the runtime shut down. In
+///   SSE mode a run failure is instead surfaced as the stream's terminal `RunFailed`
+///   frame — the response itself stays `200`, per SSE semantics.
 pub(crate) async fn invocations<Ctx: Send + Sync + 'static>(
     State(state): State<AppState<Ctx>>,
     request: Request,
@@ -149,15 +150,16 @@ pub(crate) async fn invocations<Ctx: Send + Sync + 'static>(
 
     let session = state.sessions.session(session_id).await?;
     let cancel = CancellationToken::new();
-    // Retain a clone before it is moved into `ctx`: `run_sse` needs its own handle
-    // on the token to cancel the run on client disconnect (see its doc comment).
-    let cancel_for_sse = cancel.clone();
+    // Retain a clone before it is moved into `ctx`: both transports need their own
+    // handle on the token to cancel the run on client disconnect (see each one's
+    // doc comment).
+    let cancel_for_run = cancel.clone();
     let ctx = state.context.build(&parts, session, cancel).await?;
 
     if json_mode {
-        run_json(&state, ctx, input).await
+        run_json(&state, ctx, cancel_for_run, input).await
     } else {
-        Ok(run_sse(&state, ctx, cancel_for_sse, input).await)
+        Ok(run_sse(&state, ctx, cancel_for_run, input).await)
     }
 }
 
@@ -178,15 +180,66 @@ fn wants_json(headers: &HeaderMap) -> bool {
 
 /// Buffered JSON-mode response: run to completion, then aggregate into an
 /// [`InvocationResponse`].
+///
+/// # Disconnect semantics
+///
+/// The run is driven by a **detached** [`tokio::spawn`] task rather than awaited
+/// inline in the handler future, mirroring [`run_sse`] (and
+/// `paigasus-helikon-runtime-axum`'s `spawn_writer`):
+///
+/// - [`paigasus_helikon_core::Runner::run`] performs its finalize step — which
+///   persists the turn to the session — inside the future it returns. Awaiting that
+///   future *in the handler* would mean a client disconnect drops it mid-run and the
+///   turn's session write is silently lost (SMA-456). Owning it in a detached task
+///   decouples the run's lifetime from the HTTP response's, so finalize always runs.
+/// - `cancel` (a clone of the token also embedded in `ctx`, retained by the caller —
+///   see [`invocations`]) is wrapped in a [`DropGuard`] bound for the handler
+///   future's lifetime. When that future is dropped — a client disconnecting mid-run
+///   — the guard fires [`CancellationToken::cancel`], so the runner aborts the
+///   in-flight run instead of running to its natural end. Dropping the guard after a
+///   clean completion is harmless (cancelling a finished run is a no-op).
+/// - Net effect: a disconnect cancels the run, the runner synthesizes its terminal
+///   and finalizes whatever events it had, and the detached task exits. The turn is
+///   persisted; nothing is leaked.
+///
+/// Because finalize runs *before* `Runner::run`'s future resolves, a received result
+/// implies the session write already landed — so the `200` is never returned ahead of
+/// the persisted turn.
 async fn run_json<Ctx: Send + Sync + 'static>(
     state: &AppState<Ctx>,
     ctx: RunContext<Ctx>,
+    cancel: CancellationToken,
     input: AgentInput,
 ) -> Result<Response, AgentCoreError> {
-    let result = state
-        .runner
-        .run(state.agent.as_ref(), ctx, input, state.run_config.clone())
+    let runner = Arc::clone(&state.runner);
+    let agent = Arc::clone(&state.agent);
+    let run_config = state.run_config.clone();
+
+    // Detached: its lifetime is independent of the handler future's, which is
+    // exactly why the runner's finalize step always runs — see the doc above.
+    let (tx, rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let result = runner.run(agent.as_ref(), ctx, input, run_config).await;
+        if tx.send(result).is_err() {
+            // The client disconnected, so nobody is left to receive the outcome.
+            // The session write has already happened (finalize runs before `run`
+            // resolves), so this is bookkeeping, not a lost turn.
+            tracing::debug!("invocation client disconnected; run outcome discarded");
+        }
+    });
+
+    // MUST bind to a name: `let _ = cancel.drop_guard()` would drop the guard
+    // immediately and cancel every run the instant it started.
+    let _disconnect = cancel.drop_guard();
+
+    let result = rx
         .await
+        .map_err(|_| {
+            tracing::error!(
+                "run task ended without reporting a result (panicked or runtime shut down)"
+            );
+            AgentCoreError::Internal("run task ended without a result".to_owned())
+        })?
         .map_err(|e| AgentCoreError::Internal(format!("run failed: {e}")))?;
 
     Ok(Json(InvocationResponse {
@@ -760,6 +813,137 @@ mod tests {
         })
         .await
         .expect("session was never finalized after the client disconnected");
+
+        let snapshot = session.snapshot().await.unwrap();
+        assert!(
+            matches!(&snapshot.messages[0], Item::UserMessage { .. }),
+            "expected the turn's user message to be persisted, got {:?}",
+            snapshot.messages[0]
+        );
+    }
+
+    // ── (g) JSON client disconnect cancels and finalizes the run ────────────
+
+    /// Signals on `started` from its FIRST stream element, then hangs for 30s
+    /// before it would emit `RunCompleted`.
+    ///
+    /// The signal exists because a JSON-mode client receives nothing until the
+    /// run ends — unlike SSE there is no frame to key a disconnect off, and a
+    /// fixed sleep would race the run's start.
+    struct SignallingSlowAgent {
+        started: mpsc::UnboundedSender<()>,
+    }
+
+    #[async_trait]
+    impl Agent<()> for SignallingSlowAgent {
+        fn name(&self) -> &str {
+            "signalling-slow"
+        }
+
+        fn description(&self) -> &str {
+            "test-only agent that signals run start then hangs"
+        }
+
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            let started = self.started.clone();
+            let first = stream::once(async move {
+                let _ = started.send(());
+                AgentEvent::RunStarted {
+                    agent: "signalling-slow".to_owned(),
+                }
+            });
+            let hangs = stream::once(async {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                }
+            });
+            Ok(first.chain(hangs).boxed())
+        }
+    }
+
+    /// A JSON-mode client that disconnects mid-run must still get its turn
+    /// persisted: the detached run task (see [`run_json`]'s doc comment) drives
+    /// the runner to its terminal — guaranteeing `TokioRunner::run`'s inline
+    /// finalize step executes — while the retained cancel token aborts the
+    /// now-orphaned run instead of leaking it for the agent's full 30s hang.
+    ///
+    /// The 30s hang against a 10s poll window is deliberate: a shorter hang
+    /// would let a NON-cancelling implementation pass, because the run would
+    /// finalize naturally inside the window. Do not shorten it.
+    ///
+    /// Drives a real TCP disconnect (rather than `Router::oneshot`, which
+    /// buffers the whole response and cannot model a client walking away).
+    #[tokio::test]
+    async fn json_client_disconnect_still_finalizes_the_session() {
+        use paigasus_helikon_runtime_axum::{InMemorySessionProvider, SessionProvider};
+        use tokio::io::AsyncWriteExt as _;
+
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let sessions = Arc::new(InMemorySessionProvider::new(16));
+        let server = AgentCoreServer::<()>::builder()
+            .agent(Arc::new(SignallingSlowAgent {
+                started: started_tx,
+            }))
+            .with_default_context()
+            .session_provider(Arc::clone(&sessions) as Arc<dyn SessionProvider>)
+            .build()
+            .expect("server builds");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let router = server.router();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let session_id = "e".repeat(40);
+        let body = r#"{"prompt":"hi"}"#;
+        let len = body.len();
+        let request = format!(
+            "POST /invocations HTTP/1.1\r\n\
+             Host: {addr}\r\n\
+             Content-Type: application/json\r\n\
+             Accept: application/json\r\n\
+             X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: {session_id}\r\n\
+             Content-Length: {len}\r\n\
+             Connection: close\r\n\
+             \r\n\
+             {body}"
+        );
+
+        {
+            let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+            client.write_all(request.as_bytes()).await.unwrap();
+
+            // Wait until the run has demonstrably started server-side, then let
+            // `client` drop at the end of this block — a real mid-run
+            // disconnect, not a graceful close.
+            tokio::time::timeout(std::time::Duration::from_secs(10), started_rx.recv())
+                .await
+                .expect("timed out waiting for the run to start")
+                .expect("agent signalled run start");
+        }
+
+        // The dropped connection must cancel the run, and the detached task must
+        // still drive it to a (synthetic) terminal, finalizing the session with
+        // the turn's input message.
+        let session = sessions.session(Some(&session_id)).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let snapshot = session.snapshot().await.unwrap();
+                if !snapshot.messages.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("session was never finalized after the JSON client disconnected");
 
         let snapshot = session.snapshot().await.unwrap();
         assert!(
