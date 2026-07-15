@@ -1,0 +1,24 @@
+<task-notification>
+<task-id>acf6a99d13b1cdc9c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/acf6a99d13b1cdc9c.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 6: DurableDriver" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 6 is complete. Final summary:
+
+Status: DONE — committed as `ec828f8` on the current feature branch.
+
+Test summary: All 9 brief-specified driver tests written RED-first (compiled, panicked on `unimplemented!()`), then GREEN after implementation. Full crate suites green (`paigasus-helikon-runtime-temporal`: 18 tests; `paigasus-helikon-core`: 169+ unit tests + all integration binaries), plus the exact CI gate `cargo test --workspace --all-features` ran clean (128 `test result: ok` blocks, 0 failures). `fmt`, `clippy --all-features --all-targets -D warnings`, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features` all clean.
+
+Two additive core touches were needed beyond the brief's anticipated one, both flagged in the commit body:
+- `OutputType` gained `Serialize`/`Deserialize`; its private `validate` fn-pointer field can't derive serde, so it's `#[serde(skip)]`ped and reinstalled as a **fail-closed** stand-in after deserialization (documented, and covered by a new `wire_serde.rs` round-trip test).
+- `ModelTurn::new(items, usage, finish_reason)` constructor added — `ModelTurn` is `#[non_exhaustive]` with no existing constructor, which blocked even the brief's own pseudocode from compiling outside `paigasus-helikon-core`.
+
+Concerns (also in the report): the fail-closed `OutputType::validate` degradation is a real correctness gap Task 7/8 must respect if `AgentPlan` ever crosses an actual serialization boundary (reconstruct via `from_schema::&lt;T&gt;()`, don't trust a deserialized copy); `Phase::Done`/idempotency-after-termination paths are implemented but not directly unit-tested.
+
+Files: `crates/paigasus-helikon-runtime-temporal/src/driver.rs` (new), `src/lib.rs`, `Cargo.toml`; `crates/paigasus-helikon-core/src/agent.rs`, `src/model.rs`, `tests/wire_serde.rs`; `Cargo.lock`.
+
+Full report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-6-report.md`</result>
+<usage><subagent_tokens>305109</subagent_tokens><tool_uses>125</tool_uses><duration_ms>2352080</duration_ms></usage>
+</task-notification>
