@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b2orb3u5r</task-id>
+<tool-use-id>toolu_01HZLHwCC9GP1zQdr1yEZ2ca</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/b2orb3u5r.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR #128 required checks until terminal" completed (exit code 0)</summary>
+</task-notification>
