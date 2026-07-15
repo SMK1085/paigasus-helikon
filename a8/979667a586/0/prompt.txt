@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bhavae0dw</task-id>
+<tool-use-id>toolu_01UdLWctwW7qUtTzoKyyes3y</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/c436ccdf-cdfd-494d-9715-9e329a393568/tasks/bhavae0dw.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch release-plz publish and main CI to completion" completed (exit code 0)</summary>
+</task-notification>
