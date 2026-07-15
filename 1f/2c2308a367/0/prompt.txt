@@ -1,0 +1,129 @@
+<task-notification>
+<task-id>ad09a9331e5415d78</task-id>
+<tool-use-id>toolu_01C4pBxDGowfAZ7BxZcu8bH4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/ad09a9331e5415d78.output</output-file>
+<status>completed</status>
+<summary>Agent "Research AgentCore runtime contract" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All questions are now answered from primary sources. Here is the full report.
+
+---
+
+# AWS Bedrock AgentCore Runtime — custom-container service contract (verified July 2026)
+
+## 1. HTTP protocol contract (`serverProtocol: HTTP`)
+
+Source: [HTTP protocol contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-http-protocol-contract.html), [service contract overview](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-service-contract.html), [Get started without the CLI](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/getting-started-custom.html)
+
+- **Bind**: host `0.0.0.0`, **port 8080**. Platform: ARM64 container (required).
+- **`POST /invocations`** (REQUIRED): JSON in, JSON or SSE out.
+  - Request: `Content-Type: application/json`, arbitrary JSON body — the InvokeAgentRuntime `payload` is passed through verbatim (the body shape like `{"prompt": ...}` or `{"input": {...}}` is your application's convention, not enforced by AWS).
+  - Non-streaming response: `Content-Type: application/json`, any JSON body.
+  - Streaming response: **SSE with `Content-Type: text/event-stream`**, standard `data: {...}\n\n` frames per the WHATWG SSE spec. This is the only documented streaming mechanism on `/invocations` (plus optional WebSocket, below). The service passes the stream through to the InvokeAgentRuntime caller (response Content-Type is propagated).
+- **`GET /ping`** (REQUIRED): `Content-Type: application/json`, HTTP 200 when healthy. Body:
+  - `{"status": "Healthy"}` — ready for new work, or
+  - `{"status": "HealthyBusy"}` — busy with async/background tasks; while `HealthyBusy`, the session is considered active and is kept alive past the idle timeout.
+  - Optional field `time_of_last_update` (Unix seconds): set **only when status actually changes**. AWS explicitly warns that advancing it on every ping prevents idle timeout from ever firing (sessions persist until maxLifetime and can exhaust session quota). Omitting it is fine — the platform tracks status changes itself. ([long-running agents doc](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-long-run.html); real-world gotcha history in [bedrock-agentcore-sdk-python#471](https://github.com/aws/bedrock-agentcore-sdk-python/issues/471))
+  - Value casing: the contract page uses `Healthy`/`HealthyBusy` (the getting-started page's `{"status": "healthy"}` example suggests plain-healthy lowercase is tolerated for the simple case, but `HealthyBusy` semantics are only documented in the exact casing — emit exact casing).
+  - The ping poll interval is **not documented** by AWS (community examples suggest ~30 s; unverified). An unhealthy/blocked ping gets the compute deemed unhealthy and terminated, so `/ping` must never be blocked by invocation work (AWS explicitly warns single-threaded servers get killed at 15 min when the ping handler is starved).
+- **`GET /ws`** (OPTIONAL, same port 8080): WebSocket upgrade endpoint for bidirectional streaming; text/binary frames, 64 KB max frame, 250 frames/s per connection, session bound via `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` header on the upgrade request.
+- **Auth responses**: OAuth-configured runtimes get 401 + `WWW-Authenticate: Bearer resource_metadata="..."` from the service when Authorization is missing; SigV4-configured runtimes get 403 `ACCESS_DENIED`. This is handled at the service edge, not by your container.
+
+## 2. MCP protocol contract (`serverProtocol: MCP`)
+
+Source: [MCP protocol contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp-protocol-contract.html), [Deploy MCP servers](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp.html), [Stateful MCP features](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/mcp-stateful-features.html)
+
+- **Bind**: host `0.0.0.0`, **port 8000**, path **`/mcp`** (POST). ARM64 required.
+- **Transport**: MCP **streamable-HTTP transport is required** (no stdio, no legacy HTTP+SSE dual-endpoint). JSON-RPC bodies; the server may respond with `application/json` or `text/event-stream` — both are supported/passed through.
+- **Statelessness**: stateless mode (`stateless_http=True` in FastMCP terms) is the **default recommendation**, not an absolute requirement — stateful MCP servers are also supported (needed for elicitation, sampling, progress notifications).
+- **`Mcp-Session-Id` handling** (critical for a Rust implementation):
+  - Stateless mode: **the platform generates `Mcp-Session-Id` and injects it into the request to your server**. Your server MUST accept an unknown, platform-provided `Mcp-Session-Id` without rejecting it (a spec-strict server that 404s unknown session IDs breaks). The platform echoes the ID to the client; the client must resend it for microVM affinity.
+  - Stateful mode: client initializes without the header; platform returns one; client must resend it — it carries both session state and microVM stickiness.
+  - In both modes the service always returns `Mcp-Session-Id` to the caller; requests without a consistent ID may each land on a fresh microVM (cold start each time).
+- `/ping` is **not** part of the MCP contract page's path requirements — only `/mcp` is specified for MCP runtimes. (Whether the platform still probes container health another way is undocumented; the bedrock-agentcore Python SDK's MCP mode serves only `/mcp`.)
+- InvokeAgentRuntime passes `Mcp-Session-Id` and `Mcp-Protocol-Version` headers through end-to-end ([InvokeAgentRuntime API](https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_InvokeAgentRuntime.html)).
+
+## 3. Sessions, headers, limits
+
+Source: [isolated sessions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html), [quotas](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html), [LifecycleConfiguration](https://docs.aws.amazon.com/bedrock-agentcore-control/latest/APIReference/API_LifecycleConfiguration.html), [InvokeAgentRuntime](https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_InvokeAgentRuntime.html)
+
+- **One dedicated microVM per session** (Firecracker-style; CPU/memory/filesystem isolated). MicroVM terminated + memory sanitized after session end. Session states: Active / Idle / Stopped; a Stopped session revives on next invoke with a fresh compute (same sessionId stays valid until the runtime ARN is deleted).
+- **Session header by protocol**: HTTP/A2A/AG-UI → `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id`; MCP → `Mcp-Session-Id`. `runtimeSessionId` must be **33–256 chars**.
+- **Other invoke headers passed through**: `X-Amzn-Bedrock-AgentCore-Runtime-User-Id` (needs `bedrock-agentcore:InvokeAgentRuntimeForUser` too), `X-Amzn-Trace-Id`, `traceparent`, `tracestate`, `baggage`, `Mcp-Protocol-Version`.
+- **Custom headers**: `requestHeaderConfiguration.requestHeaderAllowlist` on CreateAgentRuntime — up to **20 header names**, pattern `[A-Za-z][A-Za-z0-9_-]{0,255}`, passed through to the container ([RequestHeaderConfiguration](https://docs.aws.amazon.com/bedrock-agentcore-control/latest/APIReference/API_RequestHeaderConfiguration.html)).
+- **Lifecycle**: `idleRuntimeSessionTimeout` default **900 s (15 min)**, range 60–28800; `maxLifetime` default **28800 s (8 h)**, range 60–28800. `StopRuntimeSession` API for explicit termination.
+- **Hard limits** (quotas page, none adjustable): payload **100 MB** request/response (API constraint: payload 0–100,000,000 bytes); synchronous request timeout **15 min**; streaming connection max **60 min**; streaming chunk max **10 MB**; async job (HealthyBusy) max **8 h**; WebSocket frame 64 KB; session storage (optional persistent FS) 1 GB.
+- **Rates** (post-June-2026 increases, adjustable): 200 TPS InvokeAgentRuntime per agent; 400 new sessions/min per endpoint (container); 5,000 concurrent active sessions (us-east-1/us-west-2), 2,500 elsewhere ([release notes](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/release-notes.html), [whats-new](https://aws.amazon.com/about-aws/whats-new/2026/07/amazon-bedrock-agentcore-increases-default-runtime-quota-limits/)).
+
+## 4. Container requirements
+
+- **`linux/arm64` mandatory** (all protocols). Image must live in **ECR** (private ECR in same region). Max **Docker image size 2 GB**. Max hardware per session: **2 vCPU / 8 GB** (not adjustable, allocation is managed — you don't pick a size). Sources: [getting-started-custom](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/getting-started-custom.html), [quotas](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html).
+- **Cold start**: not stated as an SLA in AWS docs. AWS re:Post staff article ["Minimizing startup latency"](https://repost.aws/articles/ARCJIn3t7aRC2FxiRTV1SuCA/minimizing-startup-latency-with-amazon-bedrock-agentcore-runtime) + community sources put container cold starts at roughly **2–5 s** platform-side (microVM provision + image pull) plus your app init; warm same-session invokes are sub-second overhead. Treat the numbers as indicative, not contractual. (A Rust/axum image will be near the best case — tiny image, no interpreter startup.)
+- Since Nov 2025 there is also a **direct code deployment** path (ZIP, Python/Node managed runtimes, 250 MB compressed) — not applicable to a Rust shim; containers remain the Rust path.
+
+## 5. `protocolConfiguration` / A2A status
+
+- `ProtocolConfiguration.serverProtocol` valid values: **`MCP | HTTP | A2A | AGUI`** ([ProtocolConfiguration API](https://docs.aws.amazon.com/bedrock-agentcore-control/latest/APIReference/API_ProtocolConfiguration.html)). Default when omitted is HTTP.
+- **A2A is GA, not preview**: AgentCore went GA 2025-10-13 with A2A Runtime support in the same launch ([whats-new](https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-bedrock-agentcore-available/), [AWS ML blog A2A post](https://aws.amazon.com/blogs/machine-learning/introducing-agent-to-agent-protocol-support-in-amazon-bedrock-agentcore-runtime/)). A2A contract: **port 9000, mount path `/` (root)**, JSON-RPC 2.0, agent-card discovery ([A2A protocol contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-a2a-protocol-contract.html)).
+- **AG-UI** (`AGUI`) was added later (release-notes entry March 2026): port 8080, `/invocations` (SSE) + `/ws` ([AG-UI contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-agui-protocol-contract.html)).
+- CreateAgentRuntime also takes `environmentVariables` (max 50), `networkConfiguration` (`PUBLIC` or VPC mode with subnets/SGs), `lifecycleConfiguration`, `filesystemConfigurations` (up to 5 mounts, S3 Files/EFS — May 2026 feature), `authorizerConfiguration` (IAM/SigV4 default, or JWT/OAuth), `roleArn` (required). Response includes auto-provisioned `workloadIdentityDetails.workloadIdentityArn` ([CreateAgentRuntime](https://docs.aws.amazon.com/bedrock-agentcore-control/latest/APIReference/API_CreateAgentRuntime.html)).
+
+## 6. CDK support (as of mid-2026)
+
+**There is a stable L2 in `aws-cdk-lib` — not L1-only.** The constructs graduated from `@aws-cdk/aws-bedrock-agentcore-alpha` into **`aws-cdk-lib/aws-bedrockagentcore`** (all except Policy, per the alpha module's notice); L1 `CfnRuntime` also exists in the same module. Sources: [aws-cdk-lib.aws_bedrockagentcore module](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_bedrockagentcore-readme.html), [Runtime construct](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_bedrockagentcore.Runtime.html), [CfnRuntime](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_bedrockagentcore.CfnRuntime.html), [alpha npm](https://www.npmjs.com/package/@aws-cdk/aws-bedrock-agentcore-alpha).
+
+Minimal TypeScript (verbatim shape from the module README, imports corrected):
+
+```typescript
+import * as ecr from "aws-cdk-lib/aws-ecr";
+import * as agentcore from "aws-cdk-lib/aws-bedrockagentcore";
+
+const repository = ecr.Repository.fromRepositoryName(this, "Repo", "my-agent");
+
+const runtime = new agentcore.Runtime(this, "MyAgentRuntime", {
+  runtimeName: "myAgent",
+  agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromEcrRepository(repository, "v1.0.0"),
+  // defaults: ProtocolType.HTTP, public network, IAM (SigV4) auth, auto-created execution role
+});
+
+const prodEndpoint = runtime.addEndpoint("production", { version: "1" });
+```
+
+`RuntimeProps` verified: `agentRuntimeArtifact` (also `fromAsset`/`fromImageUri`/`fromCodeAsset`/`fromS3` factories), `protocolConfiguration?: ProtocolType` (default `ProtocolType.HTTP`), `networkConfiguration?` (`RuntimeNetworkConfiguration.usingPublicNetwork()` / `.usingVpc(...)`), `authorizerConfiguration?`, `lifecycleConfiguration?`, `environmentVariables?`, `executionRole?`, `tracingEnabled?`. **Caveat**: I verified the `protocolConfiguration` prop and its `ProtocolType` enum with HTTP default; that `ProtocolType.MCP` is the exact member name for MCP is high-confidence but I did not see it verbatim in a doc quote — check the enum before hardcoding.
+
+## 7. Observability / misc for a Rust shim
+
+Source: [observability-configure](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html)
+
+- Runtime-hosted agents are auto-instrumented **only** if they run the ADOT SDK (Python: `opentelemetry-instrument` + `aws-opentelemetry-distro`). The runtime **sets default ADOT OTEL environment variables in the container** — verified indirectly: setting `DISABLE_ADOT_OBSERVABILITY=true` "unsets the AgentCore runtime's default ADOT environment variables". The exact injected list is not enumerated for the hosted case; the documented outside-runtime equivalents (same pipeline) are: `AGENT_OBSERVABILITY_ENABLED=true`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, `OTEL_TRACES_EXPORTER=otlp`, `OTEL_RESOURCE_ATTRIBUTES=service.name=...,aws.log.group.names=/aws/bedrock-agentcore/runtimes/&lt;agent-id&gt;,cloud.resource_id=...`, `OTEL_EXPORTER_OTLP_LOGS_HEADERS=x-aws-log-group=...,x-aws-log-stream=runtime-logs,x-aws-metric-namespace=bedrock-agentcore`. A Rust shim wanting traces in CloudWatch GenAI Observability should read the standard `OTEL_*` env vars via `opentelemetry-otlp` (http/protobuf) and propagate `traceparent`/`baggage`/`X-Amzn-Trace-Id` from inbound requests; requires the one-time CloudWatch Transaction Search enablement. stdout/stderr go to the auto-created CloudWatch log group regardless.
+- **Workload identity**: each runtime automatically gets a workload identity (`workloadIdentityDetails` in Create/Get responses); container code exchanges it via AgentCore Identity (`GetWorkloadAccessToken*`) for OAuth/API-key egress. AWS credentials for `roleArn` are available in the container through the standard SDK credential chain (Rust: `aws-config` just works).
+- **Timing obligations**: no documented deadline for the first successful `/ping` after container start, and **no documented ping poll interval**; but an unresponsive `/ping` ⇒ compute deemed unhealthy ⇒ terminated. Keep `/ping` on a never-blocked path.
+- **Graceful shutdown**: AWS documents **no SIGTERM/grace-period contract** for session termination (idle timeout, maxLifetime, StopRuntimeSession, unhealthy). Treat termination as abrupt; handle SIGTERM defensively but don't rely on it. (Community reports describe the platform backing up session storage before kill; unverified.)
+
+## Verified vs inferred
+
+**Verified from AWS docs**: ports 8080/8000/9000 + paths per protocol; ARM64; ECR; `/invocations` + `/ping` shapes incl. Healthy/HealthyBusy and `time_of_last_update` semantics; SSE `text/event-stream` streaming; MCP streamable-HTTP + stateless-default + platform-injected `Mcp-Session-Id`; all headers; 33-char session ID; 100 MB payload / 15 min sync / 60 min stream / 8 h async / 2 GB image / 2 vCPU-8 GB; lifecycle defaults 15 min/8 h (60–28800 s range); `serverProtocol: MCP|HTTP|A2A|AGUI`; A2A GA Oct 2025; CDK L2 `Runtime` in `aws-cdk-lib/aws-bedrockagentcore`; `DISABLE_ADOT_OBSERVABILITY`; requestHeaderAllowlist (≤20).
+
+**Inferred/uncertain**: ping poll interval (~30 s, community); cold start 2–5 s (AWS re:Post article, not an SLA); exact injected OTEL env-var list for hosted containers; SIGTERM behavior; exact CDK `ProtocolType.MCP` member name; whether `/ping` is probed at all for MCP-protocol runtimes.
+
+## Contract checklist — Rust axum server
+
+**HTTP variant** (`serverProtocol: HTTP`):
+1. Bind `0.0.0.0:8080`; image built `--platform linux/arm64`, pushed to ECR (&lt; 2 GB).
+2. `POST /invocations`: accept arbitrary JSON up to 100 MB; reply `application/json` (complete ≤ 15 min) or `text/event-stream` SSE (`data: &lt;json&gt;\n\n`, chunks ≤ 10 MB, stream ≤ 60 min); flush frames eagerly (no buffering).
+3. `GET /ping`: always-responsive (own task, never blocked by invocation work); 200 + `{"status":"Healthy"}` or `{"status":"HealthyBusy"}` (exact casing); include `time_of_last_update` only on genuine status transitions, or omit entirely.
+4. Read `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` (and optional `X-Amzn-Bedrock-AgentCore-Runtime-User-Id`, `traceparent`, `baggage`, allowlisted custom headers) per request; one process instance == one session (microVM), so in-memory state is per-session by construction.
+5. Return `HealthyBusy` while background work runs (keeps session alive up to 8 h); revert to `Healthy` when done so idle timeout can reclaim the microVM.
+6. Tolerate abrupt kill (no SIGTERM guarantee); anything durable goes to external storage/AgentCore Memory/session storage mount.
+7. Optional: `GET /ws` WebSocket upgrade on the same port (64 KB frames, 250 fps).
+
+**MCP variant** (`serverProtocol: MCP`):
+1. Bind `0.0.0.0:8000`; serve MCP **streamable-HTTP** at `POST /mcp` (JSON-RPC 2.0; also handle `GET`/`DELETE /mcp` per the streamable-HTTP spec for SSE channel/session teardown if you implement them).
+2. Respond `application/json` or `text/event-stream` per request's `Accept`.
+3. Run **stateless**: accept any inbound `Mcp-Session-Id` (platform-generated, unknown to you) — never 400/404 an unrecognized session ID; don't require `initialize` before other calls to have happened on the same connection.
+4. Echo/emit `Mcp-Session-Id` per streamable-HTTP rules; the platform handles client-facing session affinity.
+5. Same container rules: arm64, ECR, ≤ 2 GB, 100 MB payload cap, abrupt-kill tolerance. `/ping` not part of the documented MCP contract (implementing a trivial one anyway is harmless and cheap insurance).
+
+Key sources: [runtime-service-contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-service-contract.html) · [runtime-http-protocol-contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-http-protocol-contract.html) · [runtime-mcp-protocol-contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp-protocol-contract.html) · [runtime-sessions](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-sessions.html) · [runtime-long-run](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-long-run.html) · [bedrock-agentcore-limits](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html) · [CreateAgentRuntime](https://docs.aws.amazon.com/bedrock-agentcore-control/latest/APIReference/API_CreateAgentRuntime.html) · [InvokeAgentRuntime](https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_InvokeAgentRuntime.html) · [getting-started-custom](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/getting-started-custom.html) · [CDK aws_bedrockagentcore](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_bedrockagentcore-readme.html) · [release-notes](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/release-notes.html) · [observability-configure](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html) · [A2A GA whats-new](https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-bedrock-agentcore-available/) · [startup-latency re:Post article](https://repost.aws/articles/ARCJIn3t7aRC2FxiRTV1SuCA/minimizing-startup-latency-with-amazon-bedrock-agentcore-runtime) · [sdk-python#471 ping gotcha](https://github.com/aws/bedrock-agentcore-sdk-python/issues/471)</result>
+<usage><subagent_tokens>126659</subagent_tokens><tool_uses>30</tool_uses><duration_ms>349983</duration_ms></usage>
+</task-notification>
