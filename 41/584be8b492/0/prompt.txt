@@ -1,0 +1,55 @@
+<task-notification>
+<task-id>a8a36f30ac7d10524</task-id>
+<tool-use-id>toolu_01ChuKcCJKgoY4HkfXKqobRC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a8a36f30ac7d10524.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 6 (context)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+### Spec Compliance — ✅
+
+All five global constraints are satisfied:
+
+1. **Trait signature**: `#[async_trait] pub trait ContextProvider&lt;Ctx&gt;: Send + Sync where Ctx: Send + Sync + 'static` with `async fn build(&amp;self, parts: &amp;axum::http::request::Parts, session: Arc&lt;dyn Session&gt;, cancel: CancellationToken) -&gt; Result&lt;RunContext&lt;Ctx&gt;, ServerError&gt;` — exact match (context.rs:70–98).
+
+2. **DefaultContextProvider `Default` bound**: `impl&lt;Ctx&gt; ContextProvider&lt;Ctx&gt; for DefaultContextProvider where Ctx: Default + Send + Sync + 'static` (context.rs:123–125). The concern flagged in the brief — an accidentally bound-free `impl&lt;Ctx&gt;` — is not present. The `Default` gate is correctly placed.
+
+3. **No separate `http` dep**: `Parts` accessed as `axum::http::request::Parts` everywhere; Cargo.toml has no `http` workspace dep entry.
+
+4. **Security-seam docs**: Both the module-level doc (lines 8–14) and the `ContextProvider` trait doc under `# Security seam` (lines 51–63 in the file) call out `PermissionMode`, `ApprovalHandler`, `HookRegistry`, and instruct operators to write their own provider.
+
+5. **Doc coverage + lib.rs wiring**: Every public item carries `///`; `mod context; pub use context::{ContextProvider, DefaultContextProvider};` added to lib.rs (lines 25–26). TDD step reported GREEN.
+
+---
+
+### Strengths
+
+- The `# Security seam` section in the trait doc is concise and actionable — exactly the right tone for an operator-facing API boundary.
+- `DefaultContextProvider` doc correctly scopes its safe use cases (tests, dev servers, trusted deployments) and cross-links to the trait for production advice.
+- `_parts` prefix on the unused parameter in the default impl is idiomatic and avoids a dead-code warning without suppression attributes.
+- No new workspace deps introduced; the `axum::http` re-export path is used throughout.
+
+---
+
+### Issues
+
+**Minor** — documentation inconsistency, context.rs lines 17–19 vs. lines 59–60
+
+The module-level doc states:
+
+&gt; "It leaves all optional settings at their core defaults — note that the **default approval handler is *deny***, which is the safe posture for a network service."
+
+The `ContextProvider` trait doc says (in the security seam section):
+
+&gt; "Supply a custom `ApprovalHandler` that enforces the tenant's ACL **instead of prompting a local operator**."
+
+"Instead of prompting a local operator" describes the core default as an interactive prompt, contradicting the module doc's claim that the default is deny. One of these is wrong. Verify what `RunContext::ephemeral` installs: if the core default is deny, remove "instead of prompting a local operator" from the trait doc; if it's an interactive prompt, remove the "default approval handler is *deny*" claim from the module doc.
+
+---
+
+### Assessment — Approved
+
+One minor documentation self-contradiction between the module doc and the trait doc regarding what the core's default approval handler actually does. The code itself is correct and complete; all spec requirements are met.</result>
+<usage><subagent_tokens>33317</subagent_tokens><tool_uses>6</tool_uses><duration_ms>93639</duration_ms></usage>
+</task-notification>
