@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>a786c32c12e228e25</task-id>
+<tool-use-id>toolu_018uF1P4nuefW9WsTS1krNjZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a786c32c12e228e25.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 8: workflow + runner" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 8 complete. Working tree clean, commit landed.
+
+**Status:** DONE — Temporal agent-loop workflow + `TemporalRunner` implemented and committed.
+
+**Commit:** `e02cef4` `feat(runtime-temporal): SMA-332 add agent loop workflow and TemporalRunner` (9 files, +1015/-54). Crate stays a `0.0.0` stub (not ascending).
+
+**Tests:** crate `40 passed / 0 failed` (incl. TDD RED→GREEN on the 4 `outcome_to_run_result` mappings + the inherited ADR-10 non-retryable test); `cargo test --workspace --all-features` 128 ok-blocks / 0 FAILED; clippy/fmt/doc/deny all clean.
+
+**Factory/registry outcome:** the workflow struct is `Ctx`-FREE (`AgentPlan` carries no `Ctx`), so `register_workflow_with_factory` worked cleanly with no global registry — `build()` projects the `Ctx`-generic registry into a `Ctx`-free `HashMap&lt;String, AgentPlan&gt;` + `ActivityOptions`, wraps it in `Arc&lt;WorkflowActivityConfig&gt;`, and the factory closure clones that Arc; the workflow resolves its plan with a single keyed `config.plans.get(&amp;agent_name)`, never serializing a plan.
+
+**Concerns:** (1) Temporal-wired paths are compile-and-wire only — live dispatch/timer/cancel/crash-resume and the exact activity-failure message extraction are Task 9's job (mis-parse degrades safely to `ErrorKindPayload::Model`, no panic); (2) default activity start-to-close is 300s — Task 9's crash-resume AC will want a short override (no per-activity-timeout knob on the builder yet); (3) `run_streamed` cancel/timeout collect as `RunError::Other`, matching `TokioRunner`; (4) key calibration fix vs task-4-report: `#[run]` takes **no `self`** (input is the param after ctx) and needs `temporalio-workflow` as a direct dep. Book/README untouched (crate still a stub).
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-8-report.md`</result>
+<usage><subagent_tokens>366661</subagent_tokens><tool_uses>115</tool_uses><duration_ms>2331895</duration_ms></usage>
+</task-notification>
