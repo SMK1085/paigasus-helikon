@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bugbnvtwi</task-id>
+<tool-use-id>toolu_01UUaZ2SyPi4NojhAEx2f2q1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/6811f5a3-8bd8-455e-ae27-de34962e1da8/tasks/bugbnvtwi.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll all three PRs until Windows signals settle (zsh-safe)" completed (exit code 0)</summary>
+</task-notification>
