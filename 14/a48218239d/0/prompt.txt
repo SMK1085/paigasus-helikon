@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bzwq37ipb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/675514c0-c2aa-4241-99cb-b494bfa49759/tasks/bzwq37ipb.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for all PR checks (JSON-based), print final states" completed (exit code 0)</summary>
+</task-notification>
