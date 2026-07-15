@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>ad7ea56ea1222609e</task-id>
+<tool-use-id>toolu_019tXwmVmfxe49tac5pz5wDa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/ad7ea56ea1222609e.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 13: invocations handler" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 13 complete.
+
+Status: Done — `/invocations` implemented with JSON and SSE modes, session-header validation, and continuity via the existing `SessionProvider`.
+
+Commit: `5b78756` — `feat(runtime-agentcore): SMA-332 add invocations handler with sse and json modes` (6 files changed: new `invoke.rs`/`session.rs`, updated `server.rs`/`error.rs`/`lib.rs`/`Cargo.toml`).
+
+Tests: 26/26 green in the crate (was 10 pre-task); full workspace `cargo test --workspace --all-features` 129/129 green; fmt/clippy clean; doc coverage 100% (workspace and crate).
+
+Concerns: none blocking — caught and fixed one `private_intra_doc_links` violation (`router()`'s doc linked a `pub(crate)` item) before it could redden the docs gate. README/mdBook updates and the `0.0.0`→`0.1.0` version-ascend are intentionally deferred to Tasks 15/16 per the plan, not missed scope.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-13-report.md`</result>
+<usage><subagent_tokens>236849</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1053694</duration_ms></usage>
+</task-notification>
