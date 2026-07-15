@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>a54d754c34fc4eed9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a54d754c34fc4eed9.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 4: temporal deps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: HEAD unchanged, nothing committed, working tree contains only the diagnostic/preparation edits described in the report.
+
+Status: **BLOCKED** at checkpoint (a) — no commits made.
+
+Checkpoint outcomes:
+- (a) protoc: **BLOCKED**. `temporalio-protos` (mandatory transitive dep of `temporalio-common`, pulled by all four `temporalio-*` crates) requires a system `protoc` with no vendored fallback — confirmed by rebuilding with `protoc` stripped from `PATH` (reproduced the exact `Could not find protoc` error). The initial clean-looking `cargo check` only passed because Homebrew's `protoc` happens to be on this dev machine's PATH.
+- (b) TLS/ring: clean (courtesy check, non-gating since (a) already blocks) — `ring`/`tls-ring` absent from the full graph; `ephemeral-server` correctly never enabled.
+
+Additional research completed regardless of the block: `cargo deny check licenses` needs `0BSD` added to the allow list (staged, tested); the spec's assumed `[[licenses.clarify]]` blocks for the temporalio-* crates were tested and found to be inert/unnecessary. A second independent gate was also found: `cargo deny check advisories`/`cargo audit` will go red on `backoff`/`instant` (RUSTSEC-2025-0012, RUSTSEC-2024-0384, no safe upgrade). Full source-verified temporalio-sdk 0.5 API calibration (macros, `start_activity`, `ActivityOptions`, timers, cancellation, `ApplicationFailure::non_retryable`, Client/WorkflowHandle) was completed and recorded for Tasks 5–9.
+
+Concerns: this is a scope/CI-infra decision (add `protoc` to every workflow + CONTRIBUTING.md, or reconsider the dependency) that needs a human call, not a silent workaround.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-4-report.md`</result>
+<usage><subagent_tokens>203611</subagent_tokens><tool_uses>108</tool_uses><duration_ms>1293972</duration_ms></usage>
+</task-notification>
