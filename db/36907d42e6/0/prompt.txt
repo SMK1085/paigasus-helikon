@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bgdeelf5y</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/bgdeelf5y.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR #139 required checks settle on rebased head" completed (exit code 0)</summary>
+</task-notification>
