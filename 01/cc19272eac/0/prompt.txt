@@ -1,0 +1,1 @@
+Check the dependabot PRs and merge them if they are green. If they fail, check the root cause and try to resolve it
