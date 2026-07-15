@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bc0dfiow1</task-id>
+<tool-use-id>toolu_01VoynfC3pq7rzny9snhpkAV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e8d62a5b-6965-4310-bfe5-439a2421c212/tasks/bc0dfiow1.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch publish run and verify crates.io" completed (exit code 0)</summary>
+</task-notification>
