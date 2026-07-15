@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>baqwlhhtk</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/c436ccdf-cdfd-494d-9715-9e329a393568/tasks/baqwlhhtk.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch release-plz and ci runs to completion" completed (exit code 0)</summary>
+</task-notification>
