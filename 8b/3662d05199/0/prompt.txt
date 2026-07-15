@@ -1,0 +1,40 @@
+<task-notification>
+<task-id>add33ed2fe2675b6c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/add33ed2fe2675b6c.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 13 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All checks reproduce cleanly. I have enough evidence for the report.
+
+### Spec Compliance
+⚠️
+
+### Strengths
+- `InvocationRequest` untagged enum declares variants `Messages → Prompt → Input` exactly per contract (`crates/paigasus-helikon-runtime-agentcore/src/invoke.rs:164-181`), with extra-key tolerance both documented (lines 156-161) and asserted by `extra_unknown_key_is_tolerated` (line 366-369).
+- Session-id validation (`session.rs:940-956`) is boundary-tested at all four values: 32/33 (`validate_session_id_rejects_out_of_range_lengths` / `_accepts_boundary_lengths`) and 256/257, plus a dedicated case-insensitivity test against the AWS mixed-case spelling (`session.rs:1019-1033`). The 400 response is genuinely contract-shaped JSON (`error.rs:82-87`, `ErrorBody { error }`), verified end-to-end by `short_session_id_is_rejected_with_json_error`.
+- JSON mode (`invoke.rs:268-284`) and SSE mode (`invoke.rs:292-313`) both implemented; SSE frames are forwarded lazily via `.map()` over the runner's live stream — no `.collect()`/buffering before the first frame — confirmed by reading the code path.
+- Ephemeral-session path verified against `InMemorySessionProvider::session(None)` (`crates/paigasus-helikon-runtime-axum/src/session.rs:100-102`): anonymous sessions are freshly allocated and never stored, so there is no cross-request leakage.
+- `RunContext` construction order (split parts/body → session → cancel token → `context.build`) genuinely mirrors `runtime-axum`'s `create_run` (`crates/paigasus-helikon-runtime-axum/src/handlers/runs.rs:151-184`) in relative sequencing.
+- Verified independently: `cargo fmt --all -- --check`, `cargo clippy -p paigasus-helikon-runtime-agentcore --all-features --all-targets -- -D warnings`, and `RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-runtime-agentcore --no-deps` all pass clean; `cargo test -p paigasus-helikon-runtime-agentcore` is 26/26 green.
+- Commit message matches the required `feat(runtime-agentcore): SMA-332 add invocations handler with sse and json modes` exactly.
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+- **SSE mode never drives the runner stream to terminal (or cancels) on early client disconnect — unlike `runtime-axum`, and in violation of a documented cross-crate contract.** `run_sse` (`invoke.rs:292-313`) wires the raw `runner.run_streamed(...).events` stream directly as the axum SSE response body via `.map()`, with no decoupling layer. `TokioRunner::run_streamed`'s `finalize(&amp;session, &amp;recorder)` call only fires *inside* the stream generator once a terminal event is reached while being polled (`crates/paigasus-helikon-runtime-tokio/src/lib.rs:221-232`); if the HTTP connection drops before that point, axum stops polling the body, the generator is dropped mid-flight, and `finalize` never runs — silently losing that turn's session persistence. `Runner::run_streamed`'s own doc is explicit about this risk (`crates/paigasus-helikon-core/src/runner.rs:95-98`: "a consumer that drops the stream early may skip the finalize step"). `runtime-axum` solves exactly this by spawning a detached writer task (`spawn_writer`, `runs.rs:266-313`) that drains the runner stream into an `EventLog` independent of the response's lifetime, plus an owned `DropGuard` over the cancel token (`SseState.disconnect`, `runs.rs:330-358`) so a disconnect cancels the run and still lets the writer observe a real terminal event. AgentCore's handler additionally never retains a clone of its `cancel` token (`invoke.rs:241`, `cancel` is moved straight into `ctx.build`), so it also fails to honor `ContextProvider::build`'s documented parameter contract: *"cancel — cancellation token tied to the lifetime of this run; **the server cancels it when the client disconnects**"* (`crates/paigasus-helikon-runtime-axum/src/context.rs:83-84`). Net effect: an AgentCore SSE client that disconnects mid-run (network blip, timeout, gateway restart) silently breaks the "same id ⇒ same session" continuity contract for that turn, with no test coverage or documentation of the trade-off. This was a named review risk and reproduces on inspection, not speculation.
+  - Fix options: mirror `runtime-axum`'s writer-task + `DropGuard` pattern (heavier, but full parity), or at minimum retain a `DropGuard` on `cancel` and document/accept the finalize-on-disconnect gap explicitly in `invoke.rs`'s module docs if the single-shot AgentCore model is judged to make it acceptable.
+
+#### Minor (Nice to Have)
+- `AgentCoreError::NotImplemented`'s doc comment is now stale: *"Used by the `/invocations` placeholder route until the full request/response contract is implemented"* (`error.rs:39-42`) — but this diff deletes that placeholder route, so the variant is no longer constructed anywhere in the crate. The comment describes machinery that no longer exists.
+- No explicit test for the genuinely ambiguous case — a body containing **both** `"messages"` and `"prompt"` keys — to pin down that `Messages` wins (relying instead on documented-but-untested serde ordered-match semantics). The brief's Step 1 list didn't strictly require this, and the doc comment (`invoke.rs:154-156`) correctly explains the guarantee, but a one-line test would remove any doubt for future maintainers.
+- Task report overstates `invoke.rs`'s test count ("14 tests") — actual count is 10 (confirmed via `grep -c` and the `cargo test` run, which lists 10 `invoke::tests::*` entries). The crate-wide total (26/26) is accurate; only the per-file breakdown in the report narrative is off.
+
+### Assessment
+**Task quality:** Needs fixes
+**Reasoning:** All explicit Step-1 acceptance criteria (DTO ordering/tolerance, JSON/SSE modes, session-header validation and continuity) are implemented and passing, and the construction-order mirror of `runtime-axum` is faithful — but the SSE path silently breaks session persistence on client disconnect and violates the documented `ContextProvider::build` cancel-on-disconnect contract, a real regression against the sibling crate's design that the task explicitly asked to be checked for parity.</result>
+<usage><subagent_tokens>107024</subagent_tokens><tool_uses>15</tool_uses><duration_ms>234835</duration_ms></usage>
+</task-notification>
