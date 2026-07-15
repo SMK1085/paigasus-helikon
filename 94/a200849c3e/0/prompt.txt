@@ -1,0 +1,74 @@
+<task-notification>
+<task-id>a8101a4592eb50fe0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a8101a4592eb50fe0.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 4 (registry)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+### Spec Compliance — ✅
+
+Every global constraint is met:
+
+| Constraint | Status |
+|---|---|
+| `RunRegistry::new(ttl, max_runs, max_events_per_run) -&gt; Arc&lt;Self&gt;` | ✅ registry.rs:66 |
+| `RunHandle` field set matches spec exactly | ✅ registry.rs:20-31 |
+| `sweep(now: Instant)` and `note_terminal(id, now: Instant)` take explicit clock | ✅ |
+| TTL semantics: evict when `terminal_at + ttl &lt;= now` | ✅ retain condition inverted correctly at :151 |
+| Count cap: evict when *exceeds* `max_runs` (`&gt;`, not `&gt;=`) | ✅ :168 |
+| Live (non-terminal) runs never evicted by either pass | ✅ retain keeps `None` at :152; completion_order never receives live ids |
+| `spawn_sweeper`: OnceCell-guarded, Weak ref, 30s interval | ✅ :194-206 |
+| All public-looking items documented | ✅ |
+
+---
+
+### Strengths
+
+- **Eviction correctness is solid.** Pass 1 uses `retain` with a single locked-and-released read of `terminal_at` per entry — no double-locking hazard. Pass 2 starts its count from `inner.runs.values()` (only entries present after Pass 1), so it never misuses the pre-eviction count.
+
+- **`note_terminal` idempotency is correctly designed.** The `terminal_at` Mutex is the exclusive gate: both the stamp and the queue-push sit inside the `if t.is_none()` guard, and the mutex is dropped before acquiring the write lock, so no lock-upgrade / deadlock risk on any platform.
+
+- **Sweeper lifetime is correct.** `Arc::downgrade(self)` on :195 is the only reference the task holds. `OnceCell::set()` returning `Err` on the second call is the correct idiom for the synchronous guard — it never panics.
+
+- **Pass 2 skip logic is robust.** The inner `loop` pops stale ids (already gone from `runs`) until it finds a live candidate or exhausts the deque; the safety `None =&gt; break` prevents an infinite loop if `completion_order` and `runs` diverge.
+
+- `tokio::sync::OnceCell::set(())` is synchronous in tokio 1.x and the `features = ["full"]` workspace pin (Cargo.toml) makes it unconditionally available — the implementer's claim about tokio-util `CancellationToken` being featureless in 0.7.18+ is also correct.
+
+---
+
+### Issues
+
+#### Important
+
+**`completion_order` grows proportional to total historical runs when TTL dominates**
+`registry.rs:40` (VecDeque field) and `:144-154` (Pass 1)
+
+Pass 1 removes evicted ids from `inner.runs` but leaves their UUIDs in `completion_order`. Pass 2 only cleans them lazily while `terminal_count &gt; max_runs`. In the common production scenario — generous `max_runs` (1 024) with a short TTL (60s) — Pass 2 rarely fires, so stale UUIDs accumulate permanently: 10 000 runs/day × 16 bytes = ~58 MB/year just in deque overhead, growing without bound across server uptime.
+
+The spec brief prescribes "pass 2 skips already-evicted ids" as the mechanism, but it does not prohibit eagerly cleaning `completion_order` in Pass 1. Fix: collect the evicted ids during Pass 1 and remove them from the deque (O(n) with a `HashSet`), or intersect with a retain pass after Pass 1. This should be resolved before the registry sees production traffic with long uptimes.
+
+---
+
+#### Minor
+
+**`count_cap_evicts_oldest_completed_first` test doesn't assert `ids[1]` survives** (`registry.rs:243-245`)
+
+The test asserts `ids[0]` is None and `ids[2]` is Some. With `max_runs=2` and 3 terminal runs, only one run should be evicted. Not asserting `ids[1].is_some()` means a bug that evicted two runs instead of one would pass. The omission mirrors the spec's minimal test skeleton, so it doesn't block approval but tightens confidence if added.
+
+**`count_cap` test uses `_` (immediate drop) vs `_h` (held to scope) inconsistently** (`registry.rs:237` vs `:221`)
+
+`_` drops the returned `Arc&lt;RunHandle&gt;` immediately; `_h` holds it to end of scope. No behavioral difference here because the registry stores its own Arc, but the inconsistency is confusing to readers comparing the two tests.
+
+**First `interval.tick()` fires immediately** (`registry.rs:199`)
+
+`tokio::time::interval` delivers the first tick at t=0, so a sweep runs the moment `spawn_sweeper` is called. The spec prescribes this exact loop form, so it's not a violation — but operators will see a no-op sweep at server start in logs. Not a bug.
+
+---
+
+### Assessment — Approved
+
+The implementation is correct and complete: eviction semantics are exact, live runs are safe from both passes, and the sweeper is properly lifetime-bounded via Weak + OnceCell. The stale-deque growth issue is a real long-term memory concern that should be fixed before this registry serves high-throughput traffic, but it does not violate the task spec and the two mandatory tests prove the core retention invariants.</result>
+<usage><subagent_tokens>42352</subagent_tokens><tool_uses>6</tool_uses><duration_ms>200156</duration_ms></usage>
+</task-notification>
