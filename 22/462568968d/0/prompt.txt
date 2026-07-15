@@ -1,0 +1,1 @@
+Look at Linear issue SMA-413, transition it to "In Progress" and let's brainstorm the implementation
