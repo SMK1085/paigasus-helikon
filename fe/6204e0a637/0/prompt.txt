@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bk1fra58w</task-id>
+<tool-use-id>toolu_01NVogejmcdfvGqBboLu162q</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/bk1fra58w.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until CodeRabbit's in-progress marker clears or threads appear" completed (exit code 0)</summary>
+</task-notification>
