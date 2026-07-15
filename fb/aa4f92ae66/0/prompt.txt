@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bwlvi4zin</task-id>
+<tool-use-id>toolu_01T8MtzmsVYRRP6wGU2woMpF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/f1524f9a-e8ab-47e9-be2a-3599d89136df/tasks/bwlvi4zin.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until required checks complete (background)" completed (exit code 0)</summary>
+</task-notification>
