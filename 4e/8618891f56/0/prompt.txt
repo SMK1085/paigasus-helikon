@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>ae9716d05e88133c3</task-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/5bdcf7d9-bffe-41f8-99e8-3f252ae7de91/tasks/ae9716d05e88133c3.output</output-file>
+<status>stopped</status>
+<summary>No completion record was found for background agent "Implement Task 13: CliModel+RhaiTool" after it was re-dispatched via SendMessage in the previous session. It may have been stopped (via the UI, an SDK interrupt, or agent teardown — these leave no transcript marker), or it may have been running when the previous Claude Code process exited. Check its worktree/output for partial work before assuming the task landed.</summary>
+</task-notification>
