@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bgmwu1m5t</task-id>
+<tool-use-id>toolu_01NtCAzpqTuuvkXKWnWessGo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/bgmwu1m5t.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until CodeRabbit review completes" completed (exit code 0)</summary>
+</task-notification>
