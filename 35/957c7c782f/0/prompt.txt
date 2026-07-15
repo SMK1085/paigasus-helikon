@@ -1,0 +1,56 @@
+<task-notification>
+<task-id>a17fbcbf2b77e9c4b</task-id>
+<tool-use-id>toolu_01TcLWwU6XsZyf9doTtYddbe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a17fbcbf2b77e9c4b.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 8 (dto)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+### Spec Compliance — ✅ (with two ⚠️ minor gaps)
+
+All three named risks are handled correctly. The implementation satisfies every mandatory interface in the brief. Two edge cases are not covered by tests and one has a subtle doc/behavior divergence.
+
+---
+
+### Strengths
+
+- **`RunRequest` untagged deserialization** (Risk 1): `RunRequestHelper` with `#[serde(untagged)]` is the right pattern. Both `Input { input: String }` and `Messages { messages: Vec&lt;Item&gt; }` have required fields with no `#[serde(default)]`, so `{"nope":1}` (neither field present) fails both variants → error returned. `{}` fails identically. The test at `dto.rs:215` asserts `is_err()` directly. ✅
+
+- **`from_events` picks the LAST `MessageOutput`** (Risk 2): The loop assigns (not appends) to `output` on each match of `MessageOutput { item: Item::AssistantMessage { content, .. } }`, so the last one wins. All `ContentPart::Text` blocks within a single `AssistantMessage` are concatenated via `push_str`. The no-terminal-event fallback (`status = RunStatus::Failed` before the loop) is correct. ✅
+
+- **ToSchema gating** (Risk 3): `RunStatus`, `AsyncAccepted`, and `AgentInfo` all carry `#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]`; `RunResponse` deliberately omits it because `Vec&lt;AgentEvent&gt;` and `Option&lt;TokenUsage&gt;` don't implement `ToSchema`. No code references a `ToSchema for RunResponse`. ✅
+
+- Pattern shapes match the actual core enum variants: `AgentEvent::RunCompleted { usage }`, `AgentEvent::RunFailed { error }`, `Item::AssistantMessage { content, .. }`, `ContentPart::Text { text }` all correspond exactly to the definitions in `agent.rs:431-439` and `item.rs:28-36, 69-72`. The `_ =&gt; {}` arm is correct because `AgentEvent` is `#[non_exhaustive]`. ✅
+
+- Every public item, field, and variant has a `///` doc comment. `RunStatus` derives `PartialEq` as required by the test assertion. ✅
+
+---
+
+### Issues
+
+**Minor — `dto.rs:140`: `output = Some("")` for a text-free `AssistantMessage`**
+
+When the last `MessageOutput` carries an `AssistantMessage` whose `content` contains only non-text parts (`Image`, `Audio`, `ToolUse`, etc.), the `text` accumulator stays empty and `output` is set to `Some("")`. The field-level doc at `dto.rs:98-99` says "`None` if the run produced no assistant output." An assistant message with no text is indistinguishable from "no assistant output" from the caller's perspective, so `Some("")` contradicts the stated contract. The fix is to only set `output = Some(text)` when `!text.is_empty()`, and otherwise leave `output` as it was (preserving whichever prior message had text, or staying `None`):
+
+```rust
+if !text.is_empty() {
+    output = Some(text);
+}
+```
+
+**Minor — `dto.rs:219-248`: test does not verify "last wins" semantics**
+
+`response_from_events_extracts_output_and_usage` uses a single `MessageOutput` before the terminal event. The implementation is correct (assigns, not appends), but the test does not demonstrate the distinguishing behavior: two `MessageOutput` events where only the second's text should appear in `output`. A second test (or an additional assertion) with `["first", "second"]` and `assert_eq!(r.output.as_deref(), Some("second"))` would give confidence.
+
+**Minor — `dto.rs:219-248`: `AgentEvent::RunFailed` path is untested**
+
+No test exercises the `RunFailed { error }` branch of `from_events`. The `status = Failed` / `error = Some(e)` path through `dto.rs:146-149` is correct by inspection, but a three-line test would close the gap.
+
+---
+
+### Assessment — Approved
+
+The implementation is correct for all spec-required behaviors and named risks; the issues are limited to an edge-case output/None divergence under text-free assistant messages and two missing test scenarios, none of which affect the happy path or the mandatory contract verified by the existing tests.</result>
+<usage><subagent_tokens>46063</subagent_tokens><tool_uses>14</tool_uses><duration_ms>179975</duration_ms></usage>
+</task-notification>
