@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bvidyosaz</task-id>
+<tool-use-id>toolu_01XLjCCTzq2gqQcuq2aWYcJ1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/bvidyosaz.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 144 checks until completion" completed (exit code 0)</summary>
+</task-notification>
