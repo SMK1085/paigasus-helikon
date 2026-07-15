@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bqvorvrnn</task-id>
+<tool-use-id>toolu_01TzG1MWpJWa85gt11W8DbfT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/675514c0-c2aa-4241-99cb-b494bfa49759/tasks/bqvorvrnn.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for all PR checks to finish, then print statuses" completed (exit code 0)</summary>
+</task-notification>
