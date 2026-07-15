@@ -1,0 +1,40 @@
+<task-notification>
+<task-id>acc639039295ad7cc</task-id>
+<tool-use-id>toolu_011VQQfqvqUoYQsfC2Db7VJ7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/acc639039295ad7cc.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 7 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed. I have now completed thorough verification against the diff and the calibration source. Here is the final report.
+
+### Spec Compliance
+- ✅
+
+### Strengths
+- Every named binding correction is honored precisely: `DurableAgentDef`/`AgentActivities`/`TypedRuntime` carry no `Serialize`/`Deserialize` derive and never leave the process; only `String`, `ModelRequest`, `ModelTurnResult`, `ToolCallRequest`, `ToolCallOutcome` cross the `#[activity]` boundary (`crates/paigasus-helikon-runtime-temporal/src/activities.rs:293-499`).
+- All four v0 fail-fast checks (`hooks`, `handoffs`, `input_guardrails`, `output_guardrails`) are present, each names its feature, and each has a dedicated test (`crates/paigasus-helikon-runtime-temporal/src/worker.rs:987-998`, tests at `:1208-1264`), plus extra tests for duplicate-name rejection and tool-def snapshotting beyond the brief's minimum.
+- `invoke_tool_inner` is a thin, faithful pass-through to `core::execute_tool_call(&amp;def.tools, run_ctx, &amp;tool_ctx, &amp;call).await.0` (`activities.rs:263-272`); independently verified against `crates/paigasus-helikon-core/src/tool_exec.rs:52-118` that this is genuinely the full authorize→invoke→redact→convert pipeline, and that the dropped `AgentEvent::PermissionDenied` is already folded into `outcome.result`'s `Err` string by that pipeline (not silently lost information).
+- `call_model_inner` correctly drains through `ModelTurnAccumulator`, and every `ModelError` (invoke- or stream-level) becomes `ErrorKindPayload::Model`; at the activity layer `error_kind_to_activity_error` (`activities.rs:385-390`) wires this into `ActivityError::application(ApplicationFailure::non_retryable(json))`. I independently pulled `~/.cargo/registry/…/temporalio-common-wasm-0.5.0/src/error.rs` and `…/temporalio-common-wasm-0.5.0/src/activity_definition.rs` and confirmed both constructors' exact signatures match what's used, byte for byte — this is the one spot task-4-report.md flagged as "glue not yet pulled," and the implementer correctly resolved it rather than guessing.
+- The flagged deviation is real, not a rationalization: I read `temporalio-macros-0.5.0/src/activities_definitions.rs:688-712` myself and confirmed `generate_activity_implementer_impl` emits a bare `impl Trait for #impl_type` with no generics binder — a literal `impl&lt;Ctx&gt; AgentActivities&lt;Ctx&gt; { #[activities] … }` would not compile. The `DurableAgentRuntime` trait-object erasure is a well-justified, minimal workaround, and it happens to satisfy the "process-local registry, `agent_name`-as-`String` key" binding correction almost exactly as worded.
+- Worker/runtime API usage (`WorkerOptions::new(...).task_types(...).register_activities(...).build()`, `CoreRuntime::new_assume_tokio`, `Worker::new(&amp;runtime, client, worker_options)`, `RuntimeOptions::builder()...build() -&gt; Result&lt;_, String&gt;`) all verified against the actual 0.5.0 sources to match exactly, including the easy-to-miss detail that `RuntimeOptions::build()`'s error type is literally `String` (so `.map_err(WorkerBuildError::Runtime)` type-checks without a `.to_string()`).
+- New deps (`temporalio-macros`, `futures`) are workspace-inherited, `default-features = false`, and the justification comments are verifiably correct — I confirmed `::futures::future::BoxFuture`/`::futures::FutureExt` really are referenced by absolute path in the macro codegen (`activities_definitions.rs:675,678`).
+- Docs are thorough even on `pub(crate)`/private items; the Task 8 seam comment (`worker.rs:1069-1085`) is concrete and actionable (names the exact call, the exact values already in scope, and the follow-up `task_types` flip).
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None. (See Minor for the one coverage gap I considered promoting — I did not, because current behavior is independently verified correct against SDK source, and the brief's Step 5 explicitly scopes the activity layer's bar to "compiles," not "unit tested.")
+
+#### Minor (Nice to Have)
+- The activity-layer wrapper glue (`TypedRuntime::{call_model,invoke_tool,render_instructions}`, `error_kind_to_activity_error`, `resolve`, `race_with_activity_cancellation`) has zero direct test coverage — only the SDK-free `*_inner` functions and `register()` are tested; `activity_markers_exist_with_expected_names` only takes function pointers to silence dead-code, it never calls anything. A cheap regression test exists for the taking: `error_kind_to_activity_error(ErrorKindPayload::Model{..})` can be called directly (no Temporal server needed) and asserted via `ApplicationFailure::is_non_retryable()`. Since this function is the concrete embodiment of the ADR-10 constraint, a future refactor that flips `non_retryable` to `new` (retryable) would go undetected until integration testing.
+- `RetryPolicyConfig` is accepted by `model_retry_policy`/`tool_retry_policy` on the builder but stored and never read anywhere in this diff (not even logged into the `tracing::debug!` beyond `?self.model_retry_policy` for observability) — correctly deferred to Task 8 per the report, but worth a one-line note in the field's doc that it's inert until Task 8 wires `ActivityOptions`, to save a future reader a search.
+- `TemporalAgentWorker::run`'s doc says "activities only" but doesn't cross-reference `WorkerBuildError`/the seam comment for where that changes — a reader hitting `run()` alone (without also reading `build()`'s seam comment) has to hunt for why. Very minor navigability nit given the seam is otherwise well-documented in `build()`.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** Every binding correction and global constraint (serialization boundary, fail-fast on all four vecs, full tool-exec pipeline, ADR-10 non-retryable model errors) is implemented correctly and I independently verified the calibration-critical API shapes (`ActivityError::application`, `ApplicationFailure::non_retryable`, `RuntimeOptions::build`'s `String` error, the macro's non-generic codegen) against the actual `~/.cargo/registry` sources rather than trusting the report. The one real design deviation (`Ctx`-erased trait object instead of a generic `#[activities]` impl) is independently confirmed necessary and is a clean, appropriately-scoped seam, not a god-trait. The only gap worth naming is missing unit coverage on the thin activity-wrapper glue, which is a coverage nicety, not a correctness defect.</result>
+<usage><subagent_tokens>137640</subagent_tokens><tool_uses>42</tool_uses><duration_ms>454669</duration_ms></usage>
+</task-notification>
