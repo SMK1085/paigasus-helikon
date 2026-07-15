@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>a456b1a3e83c56883</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a456b1a3e83c56883.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 2 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: `FinishReason` (line 227's derive precedes `enum FinishReason` at 229) derives `Clone, PartialEq, Eq` — so `.clone()` in `observe` and `assert_eq!` in the tests both compile validly, and `Model::invoke` at line 68 is a real public trait method the doc's intra-doc link resolves to. Both named risks check out. Now I have what I need to write the report.
+
+### Spec Compliance
+- ✅
+
+### Strengths
+- `ModelTurn` and `ModelTurnAccumulator` signatures match the brief verbatim, including `#[non_exhaustive]`, the serde derives, and the exact private field list (`agent_name, text, reasoning, tool_accum, finish_reason, latest_usage`) — verified at `crates/paigasus-helikon-core/src/model.rs:230-303`.
+- `ToolCallAccum` + `build_items` were moved wholesale (not duplicated) — deleted from `agent.rs:437-479` (old line numbers) and reappear byte-for-byte in `model.rs:248-288`, including the `BTreeMap&lt;String, ToolCallAccum&gt;` keying that gives deterministic `call_id`-sorted item order.
+- The refactored stream loop (`agent.rs:892-905`) preserves the exact live-yield behavior: each `Ok(ev)` arm calls `acc.observe(&amp;ev)` (a borrow) and then matches the owned `ev` a second time purely to re-emit the same `TokenDelta`/`ReasoningDelta`/`ToolCallDelta` `AgentEvent`s as before, with `Usage`/`Finish` yielding nothing — identical to pre-refactor behavior. The `Err(e)` arm is untouched at both the inner-stream and post-loop (`acc.finish()`) error sites, preserving span records / `failure.set` / `yield RunFailed` / `return`.
+- Usage plumbing is preserved end-to-end: `observe`'s `Usage` arm keeps `total_tokens = input + output` and last-wins semantics (`model.rs:338-351`), `finish()` defaults via `latest_usage.unwrap_or_default()` (`model.rs:364`) exactly as the old inline `let usage = latest_usage.unwrap_or_default();` did, and the post-loop `chat_span.record(...)` calls read `usage` destructured straight out of the returned `ModelTurn` (`agent.rs:184-201`) rather than a separately-computed local.
+- Every new `pub` item (`ModelTurn`, its three fields, `ModelTurnAccumulator`, `new`, `observe`, `finish`) carries a `///` doc comment satisfying the `missing_docs` gate.
+- Spot-checked the two risks worth independent verification: `FinishReason` derives `Clone, PartialEq, Eq` (`model.rs:227`), which the new `observe`'s `reason.clone()` and the unit tests' `assert_eq!` both depend on; and the doc comment's intra-doc link target `Model::invoke` is a real public trait method (`model.rs:68`) — both check out, so the reported clean `-D warnings` doc build and green test run are credible rather than merely asserted.
+- The three brief-mandated unit tests (`accumulates_text_reasoning_and_tool_calls`, `usage_is_last_wins`, `invalid_tool_args_error`) are present verbatim and exercise real accumulation logic (reasoning+text ordering, tool-call arg concatenation across two deltas, last-wins usage, and the JSON-parse error path), not just smoke checks.
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None.
+
+#### Minor (Nice to Have)
+- The report explicitly notes `ModelTurn` was not added to `tests/wire_serde.rs`'s serde round-trip suite, deferring it to whichever later task first serializes a `ModelTurn` over the wire. Since `ModelTurn` derives `Serialize`/`Deserialize` specifically for a Temporal-activity wire boundary this ticket is laying groundwork for, a round-trip test now would have been cheap and caught a serde-shape mistake earlier — but this is out of the brief's explicit scope (only the three `model_turn_tests` are prescribed), so deferring is a reasonable, disclosed call rather than a gap.
+- `ModelTurnAccumulator`'s doc comment says "after observing a `Finish` event" as a precondition for calling `finish()`, but nothing enforces this — a caller can call `finish()` at any point (e.g., mid-stream) and silently get `FinishReason::Stop` and partial content. This matches prior behavior exactly (the old inline loop had the same implicit contract), so it's not a regression, just an inherited soft spot now exposed as a public API rather than a private implementation detail.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** The diff matches the brief's prescribed signatures, file locations, and behavior-preservation constraints exactly — the move is verbatim (no duplication, BTreeMap ordering intact), the stream loop's live yields and usage/finish_reason plumbing are provably unchanged, docs satisfy the missing_docs gate, and the three prescribed unit tests exercise real accumulation semantics. No functional or spec gaps found.</result>
+<usage><subagent_tokens>62780</subagent_tokens><tool_uses>5</tool_uses><duration_ms>113297</duration_ms></usage>
+</task-notification>
