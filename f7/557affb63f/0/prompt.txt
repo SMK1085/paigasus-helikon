@@ -1,0 +1,23 @@
+<task-notification>
+<task-id>a0c28f5453289b610</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a0c28f5453289b610.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 10: run endpoints" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed (`G` = good signature) on the feature branch.
+
+**Status:** DONE — both ACs met, all gates green.
+
+**Commit:** `a80de0c feat(runtime-axum): SMA-331 add run endpoints with replay, SSE, and async modes` (signed, on feature branch).
+
+**Tests:** `tests/runs.rs` 4/4 (AC1 oneshot, AC2 SSE, async-202, unknown-404) went RED→GREEN; full crate suite green (21 unit incl. new `session_locks_prune_drops_unheld_entries` + 4 runs + 3 server). fmt/clippy(-D warnings)/rustdoc(-D warnings) clean.
+
+**Concerns:**
+- Core `AgentEvent` has no `PartialEq`, so AC2 compares `serde_json::to_value(got) == to_value(want)` instead of the brief's literal `assert_eq!(vec, vec)` (faithful event-for-event; avoids a core change).
+- 415-awareness returns 400 `BadRequest` for an explicit non-JSON content type (no 415 variant on `#[non_exhaustive] ServerError`).
+- Minor deviation: context is built *before* `registry.create` (not after) to avoid leaking a never-terminal registry entry on a context-provider failure; same cancel token shared.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/feature+sma-331-runtime-axum/.superpowers/sdd/task-10-report.md` (uncommitted — `.superpowers` is gitignored).</result>
+<usage><subagent_tokens>164489</subagent_tokens><tool_uses>63</tool_uses><duration_ms>892160</duration_ms></usage>
+</task-notification>
