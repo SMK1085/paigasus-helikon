@@ -1,0 +1,15 @@
+<task-notification>
+<task-id>adc2195bfeed58961</task-id>
+<tool-use-id>toolu_018iStf92n3tfupUif6iSdW7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/adc2195bfeed58961.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 15: book + facade/root docs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** Done  
+**Commit:** `5686cc4` — `docs(docs): SMA-331 document the axum server runtime and update crate rosters`  
+**mdBook build:** Ran locally, exit 0, clean (follow-web-links = false so docs.rs links are not checked by linkcheck)  
+**Summary:** Created `docs/book/src/concepts/axum-server.md` (new page covering AgentServer builder, 6-endpoint table, replayable-run model, provider traits, openapi feature). Updated SUMMARY.md, crates.md, api-docs.md, introduction.md, workspace-layout.md, facade README, and root README to move runtime-axum from stub to published across all rosters (14 published crates, 3 remaining stubs).  
+**Concern:** Scope `book` prescribed in the task brief is not in the `.versionrc` convco allowlist — used `docs` instead to avoid hook rejection.  
+**Report:** `.superpowers/sdd/task-15-report.md`</result>
+<usage><subagent_tokens>79735</subagent_tokens><tool_uses>47</tool_uses><duration_ms>366494</duration_ms></usage>
+</task-notification>
