@@ -1,0 +1,55 @@
+<task-notification>
+<task-id>ad07fd44a8b6428e0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/ad07fd44a8b6428e0.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 11 (WebSocket)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+### Spec Compliance — ✅
+
+All spec requirements are met. No violations found.
+
+---
+
+### Strengths
+
+- **404-before-upgrade is airtight.** `events.rs:53–62` uses two `?` early-returns (UUID parse → 400, registry miss/name mismatch → 404) before `ws.on_upgrade` is called at line 65. `ServerError::UnknownAgent` maps to `NOT_FOUND` and `ServerError::BadRequest` to `BAD_REQUEST` per `error.rs:83–84`. The `Result&lt;Response, ServerError&gt;` return type unifies HTTP errors and the 101 upgrade cleanly; axum dispatches both through `IntoResponse`.
+
+- **Name-mismatch path is one-liner correct.** `registry.rs:101` returns `Option&lt;Arc&lt;RunHandle&gt;&gt;`; `events.rs:61` applies `.filter(|h| h.agent_name == name)` before `ok_or_else` — both "absent" and "wrong owner" collapse to a single 404 with no code duplication.
+
+- **`handle_socket` termination is complete.** The `select!` covers both exit conditions exactly:
+  - `sub.next() =&gt; None` (`events.rs:120–125`): sends `Close(None)`, then `break`. The stream is an `impl Stream&lt;Item = AgentEvent&gt;` (no `Option` wrapping) per `event_log.rs:165`; `None` from `.next()` means the stream closed after the terminal event.
+  - `socket.recv() =&gt; None | Some(Err(_))` (`events.rs:131`): `break`. Client disconnect detected promptly.
+  - No `handle.cancel.cancel()` anywhere in the file. Observer semantics are correct.
+
+- **No spin.** Without `biased`, `select!` polls both futures and parks until one is ready. If after terminal the client briefly delays sending Close, the worst case is O(1) extra iterations (statistically) before `sub.next()` is selected — not a spin.
+
+- **Documentation.** Every public item (`events&lt;Ctx&gt;`, the module doc-comment) is documented. `handle_socket` is private; its doc comment is present for maintainability.
+
+---
+
+### Issues
+
+**Minor — `registry.rs:98–99`: stale comment and redundant `#[allow(dead_code)]` on `get`**
+
+```rust
+// Consumed by the run-status / replay handlers added in a later task.
+#[allow(dead_code)]
+pub fn get(&amp;self, id: Uuid) -&gt; Option&lt;Arc&lt;RunHandle&gt;&gt; {
+```
+
+`get` is now used by this task's handler. The comment ("in a later task") is stale, and `#[allow(dead_code)]` on a `pub fn` within a `pub(crate)` struct was already a no-op suppressor (rustc doesn't dead_code-warn `pub` items). Neither causes a correctness or CI problem — they were pre-existing before this diff — but the task removed the analogous attribute from `agent_name` and missed cleaning up the method. No action blocks merge.
+
+**Minor — `tests/ws.rs`: no explicit test for the agent-name mismatch case**
+
+`ws_unknown_id_404_before_upgrade` covers an absent UUID (`Uuid::nil()`). There is no test for `ws://{addr}/agents/wrong-name/runs/{valid_id}/events`. The production path (`.filter(|h| h.agent_name == name)`) handles it correctly; this is a coverage gap, not a logic bug.
+
+---
+
+### Assessment — Task quality: **Approved**
+
+The implementation is correct end-to-end. The 404-before-upgrade semantics, loop termination conditions, and observer-not-canceller semantics all match the spec precisely. The two minor nits are cosmetic and pre-existing; neither touches correctness or CI gate compliance.</result>
+<usage><subagent_tokens>46779</subagent_tokens><tool_uses>8</tool_uses><duration_ms>209523</duration_ms></usage>
+</task-notification>
