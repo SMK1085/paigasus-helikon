@@ -208,3 +208,62 @@ async fn concurrent_same_session_serialize() {
         "same-session runs must not interleave"
     );
 }
+
+/// A one-shot client that disconnects mid-run must still get its turn persisted.
+///
+/// `runtime-axum` already satisfies this: `create_run` calls `spawn_writer` for
+/// EVERY transport before it branches on the response shape, so the run is always
+/// driven by a detached task that drains to a terminal. This test is a lock-in —
+/// it fails loudly if a refactor ever sinks `spawn_writer` below the transport
+/// branch, which would reintroduce the class SMA-456 fixed in `runtime-agentcore`.
+///
+/// The 30s agent hang against a 10s poll window is deliberate: a shorter hang
+/// would let a NON-cancelling implementation pass, because the run would finalize
+/// naturally inside the window. Do not shorten it.
+#[tokio::test]
+async fn oneshot_client_disconnect_still_finalizes_the_session() {
+    use paigasus_helikon_runtime_axum::SessionProvider;
+    use tokio::io::AsyncWriteExt as _;
+
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (addr, sessions) = support::spawn_hanging_server(started_tx).await;
+
+    let session_id = "sma456-oneshot";
+    let body = r#"{"input":"hi"}"#;
+    let len = body.len();
+    let request = format!(
+        "POST /agents/hanging/runs HTTP/1.1\r\n\
+         Host: {addr}\r\n\
+         Content-Type: application/json\r\n\
+         X-Session-Id: {session_id}\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}"
+    );
+
+    {
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client.write_all(request.as_bytes()).await.unwrap();
+
+        // Wait until the run has demonstrably started server-side, then let
+        // `client` drop at the end of this block — a real mid-run disconnect.
+        tokio::time::timeout(Duration::from_secs(10), started_rx.recv())
+            .await
+            .expect("timed out waiting for the run to start")
+            .expect("agent signalled run start");
+    }
+
+    let session = sessions.session(Some(session_id)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let snapshot = session.snapshot().await.unwrap();
+            if !snapshot.messages.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("session was never finalized after the one-shot client disconnected");
+}
