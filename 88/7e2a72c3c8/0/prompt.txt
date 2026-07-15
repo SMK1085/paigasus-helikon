@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>abe5bfe2607d0233a</task-id>
+<tool-use-id>toolu_01228fCnoXkHi9KiujXzLoPf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/abe5bfe2607d0233a.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 16: docs sweep + CI parity" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 16 (final task of SMA-332) complete.
+
+**Status:** Done — docs sweep + full CI parity, all green, one commit (no fallout needed a second commit).
+
+**Commit:** `b823df2` `docs(repo): SMA-332 document runtime-temporal and runtime-agentcore` (scope changed from the brief's `book` to `repo` — `.versionrc` doesn't allow `book`; `repo` matches the SMA-423/424 precedent for book+README sweeps).
+
+**CI-parity:** 8/8 commands green — `fmt` clean, `clippy -D warnings` clean, `test --workspace --all-features` all pass, `cargo doc -D warnings` exit 0 (only the pre-existing documented CLI/facade filename-collision note), doc-coverage 100% (1046/1046, threshold 80%), `runtime-axum --no-default-features` builds, `mdbook build` zero warnings, `cargo deny check` clean (advisories/bans/licenses/sources all ok). No code fallout — pure docs task.
+
+**Deliverables:** replaced the `runtime-agentcore` README stub with full contract docs (HTTP+MCP tables, Dockerfile, measured 1.31/3.27 MB and 9–11 ms numbers, a CDK snippet verified live against current AWS CDK API docs, not just the spec's prose); updated facade + root README rosters; added a new book page `docs/book/src/concepts/runtimes.md` (this resolves a forward reference — `runtime-axum`/`runtime-temporal` already linked to `concepts/runtimes.html` before the page existed) plus updated `introduction.md`, `workspace-layout.md` (also fixed a pre-existing wrong "14 crates" total → 19), `reference/crates.md`, `reference/api-docs.md`, and `model-providers.md`.
+
+**Concerns:** none blocking. Noted in the report: recommend a human spot-check of the CDK snippet's exact `aws-cdk-lib` version boundary (stable vs. alpha module) before a consumer copy-pastes it.
+
+**Report path:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-16-report.md`</result>
+<usage><subagent_tokens>218579</subagent_tokens><tool_uses>95</tool_uses><duration_ms>869141</duration_ms></usage>
+</task-notification>
