@@ -1,0 +1,77 @@
+<task-notification>
+<task-id>a9b1892b38c44f2ea</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a9b1892b38c44f2ea.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 1 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance — ✅/❌/⚠️
+
+| Constraint | Status | Notes |
+|---|---|---|
+| `version = "0.0.0"`, `publish = false` kept | ✅ | Both present and unchanged |
+| `[lints] workspace = true` | ✅ | Present in crate Cargo.toml |
+| Feature naming: `default = ["openapi"]`, `openapi = ["dep:utoipa"]` | ✅ | Exact match |
+| `uuid` in workspace deps, `features = ["v4"]`, `default-features = false` | ✅ | `uuid = { version = "1.23.4", default-features = false, features = ["v4"] }` |
+| `utoipa` in workspace deps, `default-features = false`, `features = ["axum_extras"]` | ⚠️ | Added `"macros"` beyond spec — see Issues |
+| Workspace axum pin NOT mutated | ✅ | Pin stays `{ version = "0.8", default-features = false, features = ["http1", "tokio"] }` |
+| Per-crate axum features `json`, `query`, `ws` declared without touching workspace pin | ✅ | Correct pattern |
+| `reqwest` dev-dep: workspace TLS posture, not `ring` | ✅ | `{ workspace = true }` inherits `default-features = false`; no TLS at all — no ring |
+| `tokio-tungstenite` added as workspace dep when absent | ✅ | Added; lock shows no TLS transitive deps |
+| Workspace inheritance mandatory | ✅ | All non-crate-specific fields use `*.workspace = true` |
+| `lib.rs`: crate docs + `#![forbid(unsafe_code)]` + no public items | ✅ | Exact match to spec |
+| Intra-doc link `paigasus_helikon_core::Agent` valid | ✅ | `pub trait Agent&lt;Ctx&gt;` in `agent.rs`, re-exported via `pub use agent::*` in core's `lib.rs:44` |
+
+---
+
+### Strengths
+
+1. **Workspace axum pin untouched.** The per-crate `features = ["http1", "tokio", "json", "query", "ws"]` addendum is the correct pattern — the workspace entry at `Cargo.toml:20` is byte-for-byte unchanged, satisfying the constraint that other crates' builds are not altered at the manifest level.
+
+2. **tokio-tungstenite with no TLS.** The workspace pin uses `default-features = false, features = ["connect", "handshake"]`. The lock confirms no TLS transitive deps (`futures-util`, `log`, `tokio`, `tungstenite` only), which avoids any `ring`/`aws-lc-rs` conflict under `--all-features`.
+
+3. **utoipa `macros` gap caught and documented.** The implementer discovered that utoipa 5.5.0 gates `PartialSchema` impls behind `#[cfg(feature = "macros")]` — a build failure without it — and documented the root cause in the report. The fix is correct.
+
+4. **Cargo.lock is clean.** Five new packages: `uuid`, `utoipa`, `utoipa-gen`, `tokio-tungstenite`, `tungstenite`. No unexpected transitive additions (the `serde_path_to_error` and `sha1` entries follow from axum's newly enabled `json`/`ws` features, which is expected).
+
+5. **`paigasus_helikon_core::Agent` intra-doc link resolves.** `Agent&lt;Ctx&gt;` is `pub trait Agent` in `crates/paigasus-helikon-core/src/agent.rs:63`, glob-re-exported at `lib.rs:44`. The docs build will not trip `rustdoc::broken_intra_doc_links`.
+
+---
+
+### Issues
+
+#### Minor — `utoipa` workspace pin includes `"macros"` beyond spec
+
+**Location:** `Cargo.toml:294`
+
+```toml
+utoipa = { version = "5.5.0", default-features = false, features = ["macros", "axum_extras"] }
+```
+
+**What's wrong:** The spec prescribes `features = ["axum_extras"]` only. The implementer added `"macros"`.
+
+**Why it matters:** The workspace pin is shared — any future crate that does `utoipa = { workspace = true, optional = true }` silently gets `macros` pulled in too, even if that crate would prefer to opt in explicitly. The `macros` feature enables proc-macro derive impls (`ToSchema`, etc.) and is broadly additive and safe, but it's a deviation from the spec's stated pin.
+
+**Fix:** Leave as-is — the addition is justified (utoipa 5.5.0 requires it for `PartialSchema` resolution), documented, and harmless. However, the deviation from the spec's pin should be noted in the commit message or a follow-up comment so future maintainers understand why `macros` appears in the workspace pin.
+
+#### Minor — `reqwest` dev-dep carries no TLS features
+
+**Location:** `crates/paigasus-helikon-runtime-axum/Cargo.toml:32`
+
+```toml
+reqwest = { workspace = true }
+```
+
+**What's wrong:** The workspace pin is `{ version = "0.13", default-features = false }` with no TLS. The other consuming crates (anthropic, tools, gemini) each add `features = ["...", "rustls"]` per-crate so they have a TLS backend. The runtime-axum dev-dep does not.
+
+**Why it matters:** Running `cargo test -p paigasus-helikon-runtime-axum` in isolation means reqwest has no TLS backend; any test making HTTPS requests will fail at runtime. This task has no tests yet, so there is no immediate breakage. The workspace `--all-features` run sees other crates' `rustls` feature unified in, so TLS works there. No ring is introduced, so the CryptoProvider panic constraint is satisfied. This is a minor technical debt for future test authors.
+
+**Fix:** When the first test using reqwest for HTTPS is written, add `features = ["json", "rustls"]` to this dev-dep entry. Not a blocker for this task.
+
+---
+
+### Assessment — **Approved**
+
+The scaffold is correct and complete. The crate compiles cleanly with and without the `openapi` feature, the workspace axum pin is preserved, the `reqwest` TLS posture is safe, and the stub lifecycle constraints (`version = "0.0.0"`, `publish = false`) are intact. The only deviation from the spec (`utoipa` `macros` feature) is justified by an actual build failure and documented in the report — it is the right call.</result>
+<usage><subagent_tokens>41244</subagent_tokens><tool_uses>9</tool_uses><duration_ms>186087</duration_ms></usage>
+</task-notification>
