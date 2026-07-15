@@ -1,0 +1,18 @@
+<task-notification>
+<task-id>a99100306d2261f10</task-id>
+<tool-use-id>toolu_015tLbGNA8VpzjJTFbbwzMNN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a99100306d2261f10.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 14: mcp/examples/docker" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Implementation, testing, and Docker validation for Task 14 are complete and staged, but I could not create the final commit — git commit signing uses the 1Password SSH agent, which is locked (`op whoami` → "account is not signed in"; `git commit` → "1Password: failed to fill whole buffer"). Per hard rules I did not bypass signing. Please unlock 1Password and let me know — I'll immediately re-run the exact commit command (`git commit -m "feat(runtime-agentcore): SMA-332 add mcp mode, examples, dockerfile, and image checks"`).
+
+Status: BLOCKED on commit only (1Password locked); all code/tests/docs done and staged
+Commit: none yet — staged and ready
+Tests: `cargo test --workspace --all-features` all green (30/30 in runtime-agentcore, +2 new MCP tests); fmt/clippy clean workspace-wide including `--no-default-features`
+Image sizes: echo 1.31 MB (informational), agent 3.27 MB (AC gate, limit 30 MB) — both well under budget
+Cold start: echo 11 ms, agent 9 ms (informational) — both under the 50 ms gate; app-side `ready in 0ms` confirmed in both
+Concerns: found and fixed two real bugs during validation — (1) `tracing_subscriber::fmt::init()` silently suppressed the `ready in {ms}ms` log by default; (2) `agent_http`'s `scratch` image panicked on startup with no CA certs for outbound HTTPS (fixed via bundled `ca-certificates.crt` + `SSL_CERT_FILE`) — both documented in the Dockerfile/runbook
+Report path: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-14-report.md`</result>
+<usage><subagent_tokens>338631</subagent_tokens><tool_uses>206</tool_uses><duration_ms>3360518</duration_ms></usage>
+</task-notification>
