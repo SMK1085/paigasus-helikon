@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>ad0cdcbe23a5008c9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/ad0cdcbe23a5008c9.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: error.rs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+**Status:** DONE
+
+**Commit:** `a6bf3a0` — `feat(runtime-axum): SMA-331 add ServerError and AuthRejection with status mapping`
+
+**Test summary:** `error::tests::status_mapping` went RED (compile error: `ServerError` not found) then GREEN (`1 passed; 0 failed`) after implementation. All three gates (fmt, clippy `-D warnings`, rustdoc `-D warnings`) clean.
+
+**Concerns:** None. `AuthRejection` required manual `Display` + `Error` impls (it's a plain struct, not thiserror-derived) so `#[from]` on the `Unauthorized` variant could function — standard pattern, no issues.
+
+**Report path:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/feature+sma-331-runtime-axum/.superpowers/sdd/task-2-report.md`</result>
+<usage><subagent_tokens>35293</subagent_tokens><tool_uses>14</tool_uses><duration_ms>122806</duration_ms></usage>
+</task-notification>
