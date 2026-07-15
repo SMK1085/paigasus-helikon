@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bcx8wayg5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0cd19677-dcae-4167-9539-e310ae0372bf/tasks/bcx8wayg5.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll remaining required checks on PR #113" completed (exit code 0)</summary>
+</task-notification>
