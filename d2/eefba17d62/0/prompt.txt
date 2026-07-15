@@ -1,0 +1,39 @@
+<task-notification>
+<task-id>a46e24b97a38a2dde</task-id>
+<tool-use-id>toolu_01AsigJkZgxeXoHmivAgn6pj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a46e24b97a38a2dde.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 12 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: `paigasus-helikon-runtime-axum`'s existing `AgentServerBuilder::build()` uses `ServerError::Internal` for exactly the same "no context provider" / missing-config cases. The new crate's use of `AgentCoreError::Internal` for missing agent/context is a faithful mirror of established precedent, not a design slip. This closes out my verification. I now have everything needed for the report.
+
+### Spec Compliance
+✅
+
+### Strengths
+- `PingState` semantics are exactly right and independently verified: `crates/paigasus-helikon-runtime-agentcore/src/ping.rs:358-370` stamps `time_of_last_update` only on `previous != busy`; `serde(skip_serializing_if = "Option::is_none")` (ping.rs:326) omits the key entirely pre-transition. Test `initial_ping_is_healthy_with_no_stamp` (ping.rs:420-433) asserts via `serde_json::Value::get(...).is_none()`, not string matching, satisfying the brief's exact requirement. The no-restamp test crosses a real 1.1s wall-clock boundary (ping.rs:454-461) so a buggy always-restamp implementation would fail, not false-pass on same-second timestamps.
+- `/ping` is genuinely decoupled from invocation work: the handler (ping.rs:393) extracts `Arc&lt;PingState&gt;` as an axum `FromRef` substate (server.rs:560-564), touching only an `AtomicBool` + `Mutex&lt;Option&lt;u64&gt;&gt;` with no lock held across an `.await` and no dependency on `AppState`'s agent/runner/session fields.
+- Deviation 1 (workspace `default-features = false` + facade `features = ["openapi"]` compensation) verified correct, not just claimed: grepped every `Cargo.toml` in the repo — only the facade and the new agentcore crate depend on `paigasus-helikon-runtime-axum`; `runtime-axum`'s own `[features] default = ["openapi"]` (its `Cargo.toml`) confirms what's being compensated for; `cargo tree -p paigasus-helikon-runtime-agentcore` pulls no `utoipa`, while `cargo tree -p paigasus-helikon --features runtime-axum --no-default-features` still pulls `utoipa v5.5.0` — facade behavior is unchanged, agentcore stays lean. `runtime-axum`'s own crate/tests are untouched (empty diff).
+- Deviation 2 (`InMemorySessionProvider::new(4096)`) is real and documented: `DEFAULT_MAX_SESSIONS: usize = 4096` (server.rs:506) has its own doc comment, and cross-checked against `runtime-axum`'s `AgentServerBuilder` (`max_sessions: 4096` at `crates/paigasus-helikon-runtime-axum/src/server.rs:102`) — the claimed parity is accurate.
+- Builder validation is real `Result`-based error handling, not panics: `build()` returns `Err(AgentCoreError::Internal(...))` for both missing agent and missing context provider (server.rs:643-655), and this exactly mirrors the pre-existing `AgentServerBuilder::build()` / `ServerError::Internal` pattern in `runtime-axum` (`crates/paigasus-helikon-runtime-axum/src/server.rs:194-213`) — a faithful "copy that shape," not an invented convention.
+- `/invocations` is mounted (not omitted) returning 501 via `AgentCoreError::NotImplemented`, matching the brief's own router interface doc ("Router with POST /invocations + GET /ping") and clearly documented in both the handler doc comment and crate-level docs as a Task 13 placeholder.
+- Independently reran the full verification: `cargo test -p paigasus-helikon-runtime-agentcore` → 10/10 green; `cargo fmt --all -- --check` clean; `cargo clippy -p paigasus-helikon-runtime-agentcore --all-targets -- -D warnings` clean. All claims held up.
+- Crate metadata correctly frozen at stub state: `version = "0.0.0"`, `publish = false`, and `[lints] workspace = true` are all unchanged context lines in the Cargo.toml diff hunk (no ascend ritual triggered, as intended for this task).
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None.
+
+#### Minor (Nice to Have)
+- Report's test-count breakdown is internally inconsistent, though the total is right: `task-12-report.md` line 64-70 says "4 in ping.rs... 4 in server.rs... 2 in error.rs" but actually lists 5 named tests for `server.rs` and `error.rs` contains only 1 test function (`status_mapping`, which does 3 internal assertions). Verified actual breakdown by running the suite: ping.rs=4, server.rs=5, error.rs=1, total=10 — the "10/10 green" headline claim is accurate, just the per-file tally in the prose is off. No code impact, purely a reporting nit.
+- `AgentCoreError::Internal` doubles as both "misconfigured builder" (never reaches an HTTP response) and "runtime/bind failure" (500 via `IntoResponse`). This is inherited verbatim from `runtime-axum`'s `ServerError::Internal` precedent, so it's consistent with the codebase, but a future revision could consider a distinct `Config` variant if builder misuse needs to be distinguishable from a live 500 at the type level. Not a defect against this task's spec.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** Every contract-critical claim (ping stamp semantics, exact status casing, key-absence assertion, workspace-dep compensation, session-provider capacity parity, 501 placeholder) was independently traced in the diff and cross-verified with out-of-diff checks (`cargo tree`, `grep`, a live `cargo test`/`fmt`/`clippy` run) rather than taken on the implementer's word, and all held up exactly as described; the only findings are cosmetic inaccuracies in the report's test-count prose, not the code.</result>
+<usage><subagent_tokens>82209</subagent_tokens><tool_uses>16</tool_uses><duration_ms>313348</duration_ms></usage>
+</task-notification>
