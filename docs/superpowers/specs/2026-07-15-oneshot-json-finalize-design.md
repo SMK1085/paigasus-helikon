@@ -145,8 +145,12 @@ yielding stale history plus a duplicated or out-of-order user message.
 
 This is accepted for this ticket, and noted in the book alongside the disconnect line. It is not
 introduced here: SMA-332's SSE fix has the same property, and this fix brings JSON into line with
-it rather than creating a new class. `SessionLocks` parity for agentcore is a follow-up candidate,
-not in scope — filing it is left to the gate review.
+it rather than creating a new class.
+
+**Decided at the spec gate (2026-07-15): document only, no follow-up ticket.** AgentCore pins a
+session id to a container, which makes genuinely concurrent same-session invocations unrealistic
+enough in practice not to warrant `SessionLocks` machinery in agentcore. The overlap is recorded
+here and in the book so the reasoning is discoverable if that assumption ever breaks.
 
 ## Design
 
