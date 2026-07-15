@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>a360c471cd2808758</task-id>
+<tool-use-id>toolu_013e9w12K35vMYDXxPoojaqo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a360c471cd2808758.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 11 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: `EchoAgent::name()` returns `"echo"` (line 20), and the pre-existing test at line 76 already asserts `tools[0].name == "echo"` via the typed rmcp client — so the new test's `body.contains("\"echo\"")` substring check against the raw `tools/list` response body is validated against the same known tool registration, confirming the assertion is meaningful (not a false positive against unrelated content).
+
+### Spec Compliance
+✅
+
+### Strengths
+- The new test genuinely exercises the AgentCore scenario end-to-end: real TCP listener, real axum server, a raw `reqwest` client (not rmcp's typed client) POSTing `tools/list` with `Mcp-Session-Id: REDACTED` — a session id the server never issued — against a service built with `.with_stateful_mode(false)`, asserting both `response.status().is_success()` and that the body contains the registered `"echo"` tool name (`crates/paigasus-helikon-mcp/tests/http_server.rs:144-184`). Verified against rmcp 1.8.0 source (`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-1.8.0/src/transport/streamable_http_server/tower.rs:1055-1240`) that the stateless branch of `handle_post` never references `HEADER_SESSION_ID` at all — only `validate_protocol_version_header`/`validate_header_matches_init_body`, both of which treat an absent `MCP-Protocol-Version` header as a no-op — so the test is not relying on lucky defaults; it is exercising code that structurally cannot 404 on an unknown session id.
+- `streamable_http_service()` is untouched behaviorally: it now delegates to `streamable_http_service_with(StreamableHttpServerConfig::default())` (`crates/paigasus-helikon-mcp/src/server.rs:82`), which is byte-identical to the prior direct `StreamableHttpServerConfig::default()` call — no `.with_stateful_mode()` or other builder call is applied on the legacy path, confirmed by reading the diff hunk directly.
+- Docs on `streamable_http_service_with` clearly explain the AgentCore motivation and the non-obvious `#[non_exhaustive]` builder requirement (`crates/paigasus-helikon-mcp/src/server.rs:85-98`), and the existing `streamable_http_service` doc comment cross-references the new method (`server.rs:75-78`).
+- No version bump, no CHANGELOG/README changes — consistent with an escape-hatch config addition per CLAUDE.md's release-task-handles-it convention; confirmed the diff touches only `Cargo.lock`, the crate's `Cargo.toml` (dev-dep only), `src/server.rs`, and `tests/http_server.rs`.
+- Independently confirmed the `127.0.0.1:&lt;random-port&gt;` loopback host used by the test passes rmcp's default DNS-rebinding `allowed_hosts` check (`host_is_allowed` treats a portless allowlist entry as matching any port, `tower.rs:301-316`), so the test needed no extra `.with_allowed_hosts(...)` config to pass — a detail the implementer correctly did not need to work around.
+- The `"echo"` substring assertion is validated against the crate's own tool registration (`EchoAgent::name()` returns `"echo"`, `tests/http_server.rs:20`, already asserted via the typed client in the pre-existing `serves_streamable_http_end_to_end` test at line 76), so it's not a coincidental string match.
+
+### Issues
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None.
+
+#### Minor (Nice to Have)
+- The report's rmcp-1.7-vs-1.8 diff claim is plausible but only spot-checked against 1.8.0 directly in this review (both source trees exist locally at `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rmcp-{1.7.0,1.8.0}/`); the actually-resolved 1.8.0 behavior is what was verified and it fully supports the test's validity, so this is not a compliance blocker — flagging per the review brief's ⚠️-unless-contradicted instruction, and the diff does not contradict it.
+- The new test doesn't assert on the JSON-RPC envelope structure itself (e.g., parsing `id: 1` back out or checking absence of a `code`/`error` field) — it infers success from HTTP status plus a substring match. This is sufficient to prove the AgentCore scenario (no 4xx rejection, tool data actually returned) but a stricter assertion (`serde_json::from_str` + check `result.tools` is non-empty) would be marginally more robust against a hypothetical false-positive 200 with an embedded JSON-RPC error object. Not required given the specific pass/fail semantics the brief asked for.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** The diff is additive-only exactly as scoped, the legacy `streamable_http_service()` path is proven unchanged, the new test genuinely proves the AgentCore unknown-session-id scenario (verified directly against the resolved rmcp 1.8.0 source, not just taken on faith), and the new public API is documented with the specific AgentCore rationale.</result>
+<usage><subagent_tokens>71696</subagent_tokens><tool_uses>18</tool_uses><duration_ms>166165</duration_ms></usage>
+</task-notification>
