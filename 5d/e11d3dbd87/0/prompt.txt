@@ -1,0 +1,31 @@
+<task-notification>
+<task-id>aae465b539c81f061</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/aae465b539c81f061.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 4 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed — `book-build` lives in a separate workflow, unrelated to this task. All checks out. Scope, SHAs, JSON, and doc text all verified against the live files.
+
+**Spec compliance:** ✅ — all six brief steps (CI job, ruleset entry, CONTRIBUTING.md, CLAUDE.md, YAML/JSON validity, scope) are implemented exactly as prescribed, with no ⚠️ items.
+
+**Strengths**
+- All three action SHAs (`actions/checkout@9c091bb2...`, `dtolnay/rust-toolchain@67ef31d5...`, `Swatinem/rust-cache@c1937114...`) reused byte-for-byte with matching comment annotations (`.github/workflows/ci.yml:80,84,88`) — no drift, no re-resolution.
+- New `build-no-default-features` job (`.github/workflows/ci.yml:78-90`) has no `if:` gate, so it inherits the workflow's top-level `on: push:[main] / pull_request:` (`ci.yml:3-6`) exactly as required. Indentation and step structure (2/4/6-space nesting, `#`-comment style) match sibling jobs (`test:`, `docs:`) precisely — good stylistic consistency.
+- Confirmed the crate really does gate `utoipa` behind a default `openapi` feature (`crates/paigasus-helikon-runtime-axum/Cargo.toml`: `default = ["openapi"]`, `openapi = ["dep:utoipa"]`), so the CONTRIBUTING.md rationale parenthetical is factually accurate, not just plausible-sounding filler.
+- `.github/rulesets/main-protection-checks.json`: comma correctly added after `"sessions-it"` (line 29), no trailing comma after the new last entry `"build-no-default-features"` (line 31) — read the whole file, it parses as valid JSON by inspection.
+- Context name `build-no-default-features` matches the job key (`ci.yml:78`), the ruleset context (`main-protection-checks.json:31`), and the docs (CLAUDE.md, CONTRIBUTING.md) exactly — GitHub's bare-job-name matching will resolve correctly.
+- Scope is exactly the four files the brief named — no code, no `Cargo.lock`/version/CHANGELOG touched. Verified via `grep` that `book-build` (mentioned in CLAUDE.md's required-check list) correctly lives in a separate workflow (`docs.yml`), unrelated to this change.
+- CLAUDE.md and CONTRIBUTING.md both now list `sessions-it` and `build-no-default-features` with matching rationale clauses, fixing the pre-existing `sessions-it` omission the brief called out.
+
+**Issues**
+
+Minor:
+- `CLAUDE.md`'s "CI" section opening sentence ("`.github/workflows/ci.yml` runs six jobs on every PR...: `fmt`, `clippy`, `test`..., `docs`..., `doc-coverage`..., and `commits`") is a separate, still-stale sentence a few lines above the one this task fixed — it already undercounted before this diff (missing `sessions-it`, which predates this task) and is now off by one more (missing `build-no-default-features` too; actual job count in `ci.yml` is 8: `fmt`, `clippy`, `test`, `build-no-default-features`, `docs`, `doc-coverage`, `commits`, `sessions-it`). This is out of the brief's explicit scope (brief named only "CLAUDE.md:103," the required-status-check-contexts sentence, not this job-count sentence), so it's not a task-compliance failure — flagging only as a pre-existing/adjacent doc-drift note for a future ticket, not a defect introduced here.
+
+No Critical or Important issues found.
+
+**Task quality:** Approved
+**Reasoning:** Every focus area (SHA reuse, no `if:` gate, JSON validity, context-name matching across job/ruleset/docs, scope) checks out exactly against the brief with no drift; the one nit is a pre-existing, out-of-scope doc inconsistency the brief never asked this task to fix.</result>
+<usage><subagent_tokens>58559</subagent_tokens><tool_uses>8</tool_uses><duration_ms>84629</duration_ms></usage>
+</task-notification>
