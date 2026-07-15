@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bdxh3cx94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/bdxh3cx94.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch for and snapshot the release-plz PR CI" completed (exit code 0)</summary>
+</task-notification>
