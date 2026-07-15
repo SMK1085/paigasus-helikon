@@ -1,0 +1,1 @@
+Wait for Coderabbit on the PR to finish the review, if it hasn't already. Then go through the review comments from coderabbit. Turn the ones that are justified around. Comment on the unjustified ones with a reason. Resolve all conversations via the GH GraphQL API. Do this cycle for max 5 rounds. Use the coderabbit skill for this
