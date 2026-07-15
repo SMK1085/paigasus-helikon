@@ -1,0 +1,21 @@
+<task-notification>
+<task-id>a54d754c34fc4eed9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a54d754c34fc4eed9.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 4: temporal deps" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** COMPLETE — expanded Task 4 delivered per Option 1; tracked tree clean.
+
+**Commits:**
+1. `1cdece1` `feat(runtime-temporal): SMA-332 add temporal sdk dependencies and crate skeleton` — deps (features exactly as briefed: sdk/common `default-features=false`; client/sdk-core `default-features=false` + `tls-aws-lc`), crate manifest (kept `0.0.0` + `publish=false`), skeleton lib.rs, `0BSD` allow, RUSTSEC-2025-0012 + RUSTSEC-2024-0384 ignores in both `deny.toml` and `.cargo/audit.toml` (one file covers both audit.yml jobs — both run cargo-audit from the checkout root)
+2. `669615b` `ci(workflows): SMA-332 install protoc for temporal sdk builds` — `arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0` (latest release, annotated tag dereferenced) with `repo-token`, in ci.yml clippy/test/build-no-default-features/docs/doc-coverage/sessions-it + msrv.yml; fmt/commits/audit/deny/sbom untouched; YAML validated per-job
+3. `7a609ab` `docs(contributing): SMA-332 add protoc prerequisite` — new "Build prerequisites" section (brew/apt/choco + why + `PROTOC` env var)
+
+**Verification:** checkpoints (a) protoc now resolved via CI install + docs, (b) TLS clean (`ring`/`tls-ring` absent); `cargo deny check` all-green; `cargo audit --deny warnings` clean and confirmed the ignores silence exactly the two IDs (config-less run fires only those two); workspace all-features check + clippy `-D warnings` + fmt + convco (3 commits) all clean.
+
+**Concerns:** Windows test legs' protoc install is first proven on this branch's first CI run; scheduled `rustsec/audit-check@v2` honoring `.cargo/audit.toml` gets definitive confirmation on the next daily run; plan doc's `WorkerOptions::new(queue).register_workflow::&lt;W&gt;()` shape is wrong for Tasks 7/8 (it's a `Worker` method, not a builder method — calibration section has the verified shapes).
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-4-report.md` (addendum appended with all commands, SHA resolution, and outputs).</result>
+<usage><subagent_tokens>198222</subagent_tokens><tool_uses>40</tool_uses><duration_ms>428095</duration_ms></usage>
+</task-notification>
