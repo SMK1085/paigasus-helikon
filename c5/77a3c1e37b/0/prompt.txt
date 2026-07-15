@@ -1,0 +1,41 @@
+<task-notification>
+<task-id>a9abbd4555c37493b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a9abbd4555c37493b.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 6 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance
+✅
+
+### Strengths
+- **SDK-free and pure, verified.** `driver.rs` imports only `paigasus_helikon_core` and local `crate::{error, payloads}` items — no `temporalio-*` symbol appears in the module (confirmed by grepping the diff), and no `HashMap`, `Instant`/`SystemTime`, or randomness is used anywhere in the new code.
+- **Ephemeral-driver mirror independently verified line-for-line.** Cross-checked `crates/paigasus-helikon-core/src/agent.rs:974` (`conversation.extend(items.iter().cloned())` on `NextAction::CallModel`) and `agent.rs:1002-1010` (`conversation.push(Item::ToolResult{..})` per outcome on `NextAction::ExecuteTools`) against `driver.rs`'s `apply_model`/`apply_tools` — the tool-result construction is a near-verbatim copy (`o.call_id.clone()`, `o.result.clone().unwrap_or_else(|e| vec![ContentPart::Text{text:e}])`). Also confirmed `RunStarted` is yielded by the ephemeral driver at `agent.rs:742`, outside `transition` — exactly mirrored by `apply_instructions` pushing `RunStarted` itself.
+- **No double-append confirmed at the source.** Read `loop_state.rs:406-450` (`ToolResults` arm) and the `CallingModel`/`Finalizing` arms (`loop_state.rs:223-521`): every arm builds `ModelRequest.messages` from `ctx.conversation.to_vec()` and returns `conversation_appends: Vec::new()` except the repair-message case (`conversation_appends: vec![msg]`, `loop_state.rs:517`). `transition` never appends model/tool-result items — only the driver does, in `apply_model`/`apply_tools`. No double-append or double-emit.
+- **`apply_tools` correctly implements contractual trust, not driver-side reordering**, exactly as the brief specifies ("Outcomes MUST be passed in original call order") — and this is stated verbatim in the method's doc comment, so the design choice is honest and matches the brief precisely.
+- **`Finished` always carries the full log.** A single private `finish()` helper is the only path to `Phase::Done`/`DriverEffect::Finished`, cloning `self.events` in full every time (`driver.rs:611-619`) — used by `Terminate`, `Handoff`, the `NextAction` wildcard, and `apply_model_failure`.
+- **Usage correctly sourced from terminal state, not recomputed.** `Completed` uses `LoopState::Done(final_output).usage` directly; failures fall back to `self.usage`, updated only via `state_usage(&amp;next_state)` after each `transition` call (never re-summed), consistent with `LoopState::Failed` itself carrying no usage.
+- **`interrupt` loses no events** — it consumes `self` by value and moves the owned `self.events`/`self.usage` into the returned `DurableRunOutcome`; no clone, no partial slice, no early truncation.
+- **Fail-closed `OutputType` validator is honestly and safely documented.** Struct-level doc (derive site), field-level doc on `validate`, and the dedicated `wire_serde.rs` test (`output_type_round_trips_name_and_schema_but_validate_fails_closed`) assert the actual fail-closed behavior — a conformant value that validates before the round-trip is asserted to `is_err()` after it — not merely a name/schema round-trip.
+- Both core touches (`OutputType` serde, `ModelTurn::new`) are correctly flagged in the commit body per CLAUDE.md's "additive core touches" convention, and all nine brief-named tests are present and genuinely asserting (verified each individually against the brief's descriptions).
+- Produces-block signatures (`DriverEffect`, `AgentPlan`, `InterruptKind`, all seven `DurableDriver` methods) match the brief's contract exactly, including field lists and derive sets.
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None.
+
+#### Minor (Nice to Have)
+- **Stale line-number citation in the module doc.** `driver.rs`'s top-level `//!` doc says the ephemeral driver's `ToolResults` mirror lives at `agent.rs:1047`; that line is actually inside the handoff max-depth check, not the `ToolResult` append loop (which is at `agent.rs:1002-1010`). The underlying claim is correct (verified independently above), but the pointer would mislead a future reader trying to cross-reference. Same stale number is repeated in `task-6-report.md`.
+- `handoff_terminates_with_unsupported_error` doesn't assert the "`Failed` state → `AgentFailed`" half of its own docstring within the test body — it defers that assertion to `max_turns_exceeded_maps_to_typed_error`. The cross-reference is transparently commented, and the shared code path is genuinely the same (`NextAction::Terminate` matching `LoopState::Failed`), so this is a coverage-organization nit, not a gap.
+- `next_effect` panics via `.expect(...)` if called twice without an intervening `apply_*` call; this invariant (and idempotency-after-termination via `Phase::Done`) is implemented but not directly tested — self-disclosed by the implementer as an untested-but-implemented edge, and outside the brief's nine required tests.
+- Concern #3 in the report (a genuinely deserialized `AgentPlan` would have a permanently-broken `output.validate`) is a real forward-looking risk for Task 7/8, correctly flagged rather than silently deferred — worth carrying into that task's review, not a defect here.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** Every produces-block signature, the SDK-free/pure constraint, the exact ephemeral-driver append-split, and all nine brief tests check out against independent verification of `agent.rs` and `loop_state.rs`; the two flagged core touches are additive, honestly documented, fail-closed, and covered by a real behavioral test. Remaining findings are documentation/coverage nits with no correctness impact.</result>
+<usage><subagent_tokens>112051</subagent_tokens><tool_uses>15</tool_uses><duration_ms>351296</duration_ms></usage>
+</task-notification>
