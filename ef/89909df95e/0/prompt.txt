@@ -1,0 +1,22 @@
+<task-notification>
+<task-id>a4d9a6e884692d6d9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a4d9a6e884692d6d9.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 8: dto.rs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commit:** `fe21efa` — `feat(runtime-axum): SMA-331 add request and response DTOs`
+
+**Test summary:** 2/2 pass — `request_accepts_both_forms` and `response_from_events_extracts_output_and_usage` — both with default features and `--features openapi`.
+
+**ToSchema coverage:** `AgentInfo`, `AsyncAccepted`, `RunStatus` get `#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]`. `RunResponse` skipped — `Vec&lt;AgentEvent&gt;` and `Option&lt;TokenUsage&gt;` (from core) don't implement `ToSchema`, so forcing it would break the `--all-features` build.
+
+**Key implementation notes:**
+- `RunRequest` uses a private `#[serde(untagged)]` helper enum; `{"nope":1}` correctly returns a deserialize error because neither variant's required field (`input` or `messages`) is present.
+- `AgentInput` is `#[non_exhaustive]`, so the `messages` path uses `AgentInput::new()` + field mutation rather than struct literal construction.
+
+**Report path:** `.superpowers/sdd/task-8-report.md`</result>
+<usage><subagent_tokens>58557</subagent_tokens><tool_uses>25</tool_uses><duration_ms>272709</duration_ms></usage>
+</task-notification>
