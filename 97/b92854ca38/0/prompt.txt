@@ -1,0 +1,1 @@
+create the branch and commit the changes there, but before you do, transition SMA-423 to "In Progress"
