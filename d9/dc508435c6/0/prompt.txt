@@ -1,0 +1,59 @@
+<task-notification>
+<task-id>a38c28de301c125fc</task-id>
+<tool-use-id>toolu_01TVwzfQFsssLYtYedo62NXD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/a38c28de301c125fc.output</output-file>
+<status>completed</status>
+<summary>Agent "Challenge SMA-452 spec" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need. I traced the spec against the real implementation, the existing tests, the CI/ruleset config, and the server defaults (`retention = 300s`, `max_runs = 1024`, `max_events_per_run = 10_000`). Here is my review.
+
+## Verdict: APPROVE WITH CHANGES
+
+The two hard-correctness pieces hold up under scrutiny: the Task 1 `saw_terminal == false` detector is genuinely sound (the terminal event is never ring-evicted because it is always the last append, so a normal run never trips the synthetic path), and the Task 3 batch-drain is arithmetically equivalent to the old cursor logic and preserves both the eviction-gap and lost-wakeup guarantees. The remaining issues are a real (mis-analyzed) memory regression in the ring-capacity bump, an under-specified and hazardous "make it required" rollout, and test-coverage gaps for the broadened invariant. None are blockers, but they should be fixed before implementation.
+
+## Findings
+
+### BLOCKER
+None. I specifically tried to break Task 1's detector and Task 3's drain against the real code and the five existing `event_log` tests; both are correct.
+
+### MAJOR
+
+- **Ring-capacity bump mis-analyzes memory: single-run framing ignores the `max_runs` multiplier** — `src/event_log.rs:80`, `EventLog::new`. The spec justifies `min(64) → min(1024)` as "tens-to-low-hundreds of KB" for *one* run. But `EventLog::new` is called per run at `registry.rs:87`, and the registry retains up to `max_runs` completed runs (default **1024**, `server.rs:104`) for the full `retention` window (default **300s**, `server.rs:103`). Every run — including a 2-event one-shot echo — now preallocates a 1024-slot `VecDeque&lt;AgentEvent&gt;` and holds it until TTL eviction. `sizeof(AgentEvent)` is large (its biggest variants embed `Item`/`serde_json::Value`); even at a conservative ~50-90 bytes, steady-state worst case is ~50-90 MB of mostly-empty ring capacity vs ~3-6 MB under the old `min(64)` — a ~16x regression. Worse, the *benefit* is nil for the common short-run case (a 2-event run did zero reallocs at cap 64 already); it only helps runs emitting 65-1024 events (saving ~4 cheap amortized-O(1) doublings). | Why it matters: a "perf" change introduces a real, unbounded-by-design memory regression to a server runtime, for marginal gain on an uncommon run size. | Suggested fix: the actual O(n)-replay win comes entirely from the `subscribe` rewrite; keep that and either drop the capacity bump, keep `min(64)`, or use a smaller initial cap (e.g. `min(128)`) and let the cheap amortized growth handle the long tail. At minimum, re-do the memory math across `max_runs` and state the steady-state footprint.
+
+- **"Make it required" is under-specified and rollout-hazardous** — Task 2, `main-protection-checks.json` + CONTRIBUTING/CLAUDE.md. Editing `.github/rulesets/main-protection-checks.json` is *inert* on its own: CONTRIBUTING.md:287 states "There is no drift-check CI job" — the ruleset only takes effect when a maintainer runs `scripts/apply-repo-config.sh`. The spec never mentions running it, so as written the gate has no teeth (the stated purpose — "for the gate to actually block a regression it must be required" — silently fails). Separately, applying the new required context is order-sensitive: GitHub will block *every* open PR that lacks a report for the new context, including the release-plz `chore: release` PR that publishes this very crate's bump and any in-flight Dependabot PRs whose branches predate the job — exactly the "dropped context blocks merge" failure mode. | Why it matters: either the gate does nothing, or it deadlocks the crate's own release PR. | Suggested fix: spell out the sequence — (1) merge the `ci.yml` job and confirm it reports on `main` and on PRs, (2) then edit the ruleset JSON, (3) run `scripts/apply-repo-config.sh`, (4) rebase/re-run any open PRs (notably the release-plz PR) so the new context reports.
+
+- **Test coverage omits the most regression-prone branch of the broadened invariant** — Task 1 tests. The spec broadens the invariant to cover panic-mid-stream and "real events then no terminal," but every proposed test uses `FailingRunner` (zero events, `start_error = Some`). The branch most likely to regress — `saw_terminal` correctly threaded through the unfold/select state *after one or more real non-terminal events have been delivered* — is never exercised. A test that emits e.g. `[TokenDelta]` then ends without a terminal (or `PanicStreamRunner` after a delta) is what proves the synthetic frame fires with the *generic* message and only after the real events, and that `saw_terminal` isn't accidentally latched. | Why it matters: the zero-event tests would pass even if `saw_terminal` tracking were broken for the non-empty case. | Suggested fix: add an SSE and a WS test driving a runner that yields ≥1 non-terminal event and then ends/panics with no terminal; assert the body is `[&lt;real events…&gt;, RunFailed{generic}]`.
+
+### MINOR
+
+- **CLAUDE.md's required-check list is already out of sync (missing `sessions-it`)** — CLAUDE.md:103 lists `fmt, clippy, test (ubuntu-latest, stable), test (macos-latest, stable), docs, doc-coverage, book-build, commits, pr-title, audit, deny` but omits `sessions-it`, which *is* in the ruleset JSON (`main-protection-checks.json:28`) and CONTRIBUTING.md:276. The spec's stated goal ("keep the documented set in sync with the ruleset") is already violated. Fix `sessions-it` in the same edit that adds `build-no-default-features`, or the sync claim stays false.
+
+- **`read_from.next_cursor` doc + `#[allow(dead_code)]` go stale** — `src/event_log.rs:58-62`. The field's doc says the subscribe path "computes its own cursor and does not read it," and it carries `#[allow(dead_code)]`. After Task 3, `subscribe` reads `slice.next_cursor`, so both the comment and the allow are wrong/unnecessary. Update the comment and drop the allow.
+
+- **No observability on synthetic-frame emission; panic reason is swallowed** — Task 1. When a streaming transport synthesizes `RunFailed { error: "run ended before producing a terminal event" }` (the panic-mid-stream / terminal-less-stream case), nothing is logged server-side and the actual panic/cause is lost (the writer's `JoinHandle` is never awaited at `runs.rs:277`). A `tracing::warn!` at the synthesize point would make these otherwise-invisible failures diagnosable. Not required, but cheap and worthwhile.
+
+- **SSE mechanics under-specify the state** — Task 1 / `sse_response` (`runs.rs:330`). To call `handle.synthetic_terminal_frame(...)` in the stream-end branch, the unfold must also carry/capture an `Arc&lt;RunHandle&gt;` (or a clone of `start_error`); the spec lists only `saw_terminal` and `done` "alongside the event stream and the cancel DropGuard." Trivial, but call it out so the implementer doesn't try to reach a `handle` that isn't in scope.
+
+- **WS test setup is imprecise** — Task 1 WS test note (spec §"Tests (Task 1)" and the boxed note). A start-error WS test needs a server with *both* `FailingRunner` *and* a registered agent named in the URL (`create_run` resolves the agent at `runs.rs:154` before spawning the writer, so an unregistered name 404s before any run is created). The existing `start_error_returns_500_not_hang` shows the pattern (ScriptedAgent "echo" + FailingRunner); the spec's "a server built with FailingRunner" omits the agent.
+
+- **Book page doesn't document the streaming error model at all** — `docs/book/src/concepts/axum-server.md:84-86` describes one-shot/SSE/async but says nothing about start-error/terminal-less close behavior. The spec's conditional ("if it documents 'streams close cleanly'…") will find nothing to edit; the correct action is to *add* the new "streams emit a final `run_failed` frame, then close" behavior, not just patch an existing line.
+
+### QUESTIONS
+
+- Intentional transport divergence on start-error: one-shot → HTTP 500 with no event, SSE → 200 + in-band `RunFailed`, WS → frame + Close, async-then-replay → `RunFailed`. This is defensible (matches how in-stream timeout/cancel already surface), but confirm clients are expected to treat a 200 SSE stream whose only frame is `RunFailed` as a failure.
+
+- The SSE/WS start-error tests assert "the runner's error string." `FailingRunner` returns `RunError::MaxIterations` (`support/mod.rs:155`); what is its `Display` string, and is it stable enough to assert on exactly? Pin the expected text or assert on the variant tag rather than a brittle substring.
+
+- `cargo build` vs `cargo check` for the new job: build is correct here (an un-gated `utoipa` reference under `--no-default-features` is a compile error that `build` catches), but confirm there's no reason to also run `clippy`/`test` under `--no-default-features` — currently nothing exercises the no-default *runtime* behavior, only that it compiles.
+
+## What's good
+
+- **Task 1's detector is actually sound, not just plausible.** I verified that the terminal event can never be ring-evicted (it is always the final append; nothing appends after terminal), so a normally-completed run always replays its terminal and `saw_terminal` becomes true — the synthetic path is unreachable for success. The existing exact-equality happy-path tests (`tests/runs.rs:43` `sse_stream_matches_local_events`, `tests/ws.rs:40` `ws_replays_completed_run_then_closes`) double as regression guards against spurious frames. Reusing `AgentEvent::RunFailed` (no new variant, flows through existing serialization) is the right minimal choice.
+
+- **Task 3's batch-drain is genuinely behavior-preserving.** Advancing `cursor = slice.next_cursor` is arithmetically identical to the old per-event `cursor.max(first_seq) + 1` (verified by hand for the no-eviction and eviction-gap cases), it keeps the notify-before-read ordering for lost-wakeup avoidance, and the synchronous `pending` drain cannot interleave a ring eviction (no `.await` between buffered items). It checks out against all five existing `event_log` tests.
+
+- **Correctly scoped and low-blast-radius:** no core/public-API changes, the "no manual version bump — release-plz auto-handles it" claim is right for an already-released crate with no same-PR core dependency (the manual-bump cascade pitfalls genuinely don't apply), and the reuse of already-pinned action SHAs for the new CI job is consistent with the repo's pinning policy.
+
+Key files referenced: `/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-runtime-axum/src/event_log.rs`, `.../src/handlers/runs.rs`, `.../src/handlers/events.rs`, `.../src/registry.rs`, `.../src/server.rs` (defaults at lines 103-105), `.../tests/support/mod.rs`, `.../tests/ws.rs`, `.../tests/runs.rs`, `/Users/smaschek/dev/paigasus/paigasus-helikon/.github/rulesets/main-protection-checks.json`, `/Users/smaschek/dev/paigasus/paigasus-helikon/CLAUDE.md` (line 103), `/Users/smaschek/dev/paigasus/paigasus-helikon/CONTRIBUTING.md` (line 276), `/Users/smaschek/dev/paigasus/paigasus-helikon/docs/book/src/concepts/axum-server.md`.</result>
+<usage><subagent_tokens>94990</subagent_tokens><tool_uses>27</tool_uses><duration_ms>542054</duration_ms></usage>
+</task-notification>
