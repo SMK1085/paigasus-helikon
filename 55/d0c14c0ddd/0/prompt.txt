@@ -1,0 +1,41 @@
+<task-notification>
+<task-id>ad048423808df5efe</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/ad048423808df5efe.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 1 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've now read the full `event_log.rs` (the diff omitted `read_from`, which is load-bearing for correctness). I traced the batch-drain against the old per-event logic and the `read_from` sequence-number math. No unanswered doubts remain, so I won't re-run tests.
+
+---
+
+## Spec Compliance: ✅ (no ⚠️ items)
+
+All brief steps are present and faithful, verified against the diff and surrounding file:
+- **Step 1** — `subscribe_replays_large_log_in_order` added verbatim (event_log.rs:337-351).
+- **Step 3** — `is_terminal` widened to exactly `pub(crate)` (event_log.rs:20), not over-widened to `pub`.
+- **Step 4** — `next_cursor` doc rewritten + its `#[allow(dead_code)]` dropped (event_log.rs:62-66).
+- **Step 5** — `SubscribeState` at module scope (event_log.rs:71-77); `subscribe` body rewritten to batch-drain (event_log.rs:184-234). Existing `subscribe` doc block kept.
+- **Plus the necessary `first_seq` allow** (event_log.rs:55-58), the one reported deviation — see below; it is required, not scope creep.
+
+No extra or missing changes; the diff touches only `event_log.rs`.
+
+**Constraints (focus area 4):** Ring capacity `max_events.min(64)` intact (event_log.rs:92). `subscribe` signature byte-identical to the mandated one (event_log.rs:183). `Box::pin(...unfold...)` and `Send + Unpin` preserved (event_log.rs:191), and the `Notified` self-reference still justifies the heap-pin. New test asserts equality via `matches!` only (event_log.rs:348-350) — honors the no-`PartialEq` rule.
+
+## Strengths
+- **Batch-drain is provably equivalent to the old logic for every retained event.** I verified all three sub-cases (focus area 1). The invariant that makes it work: after draining a batch, `cursor = slice.next_cursor`, and `read_from` computes `next_cursor = max(cursor, first_seq) + events.len()` = total-appended-count at read time. The next read clamps `effective_cursor = max(cursor, first_seq) ≥ cursor`, so the next batch starts at or after the previous batch's end — **no overlap (no re-emit) and no skip of any still-retained event**. The only skipped seqs are `[cursor, first_seq)`, which are exactly the evicted ones — the documented eviction gap. The old `cursor.max(first_seq) + 1` per-event step produced the same seq progression, just one event at a time.
+- **Lost-wakeup ordering preserved correctly** (focus area 2). `notified()` + `enable()` still precede `read_from` *inside the loop* — i.e. on every path that can reach `notif.await`. The fast-path buffer drain (event_log.rs:204) skips registration, which is correct because it never awaits. The inter-poll window (notify fires while not registered) is harmless because the next poll's `read_from` re-snapshots live state and observes the appends — identical to the old guarantee. Empty initial `IntoIter` (event_log.rs:194) correctly routes the first poll into the loop.
+- **Terminal handling matches old semantics**, including the edge case of events after a terminal in one batch: `state.done` is set when the terminal event is emitted, and the next poll short-circuits to `None`, leaving the rest of `pending` undrained — exactly what the old per-event `done`-flag path did.
+- **The `first_seq` `#[allow(dead_code)]` is the right call** (focus area 3). After the rewrite, `first_seq` is read only by `bounded_ring_truncates_head` (cfg(test)) and the doc, so the `--lib` target under `-D warnings` would emit `field first_seq is never read` — a clippy-gate failure. Following the brief verbatim *without* this allow would have reddened the mandatory gate, so the deviation was required, not optional. The field stays meaningful: it's the documented eviction-detection signal of `ReadSlice` and is asserted in a test; removing it would break the documented contract and a future cursor-resume transport. The allow mirrors exactly what `next_cursor` carried before, and the implementer's note that a later consuming task can drop it is the correct analogue to how this task dropped `next_cursor`'s allow. No cleaner alternative exists that keeps the gate green and the contract intact.
+
+## Issues
+None at Critical/Important.
+
+**Minor (nit, no action required):** The comment at event_log.rs:216-217 says `read_from` "clamps `next_cursor` up from `first_seq`." Strictly, `read_from` clamps the *effective cursor* up to `first_seq` and derives `next_cursor` from it; `next_cursor` itself isn't clamped. The phrasing conveys the right intuition but is loosely worded.
+
+**Test-coverage observation (Minor):** `subscribe_replays_large_log_in_order` guards order/count of a single large batch but has no timing assertion, so it cannot fail on a still-O(n²) regression — only on a correctness regression. The brief explicitly framed it as a correctness regression guard (not a perf benchmark), so this is acceptable; the eviction-gap and lost-wakeup behaviors are covered by the two pre-existing tests, which I confirmed still hold under the new code path.
+
+**Task quality:** Approved
+**Reasoning:** The batch-drain is correct and behaviorally equivalent to the replaced per-event logic across the no-eviction, under-range-clamp, and mid-replay-eviction cases, with the lost-wakeup and eviction-gap guarantees intact; all constraints are met, and the single unprescribed change (`first_seq` allow) was necessary to keep the mandated clippy gate green and is well-justified.</result>
+<usage><subagent_tokens>52295</subagent_tokens><tool_uses>4</tool_uses><duration_ms>180307</duration_ms></usage>
+</task-notification>
