@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b03bjycyf</task-id>
+<tool-use-id>toolu_012aaydgxXsopiWDPmzsDjKa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/f1524f9a-e8ab-47e9-be2a-3599d89136df/tasks/b03bjycyf.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-monitor release-plz publish + ci runs" completed (exit code 0)</summary>
+</task-notification>
