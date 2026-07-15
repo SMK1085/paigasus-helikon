@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>biwr5j43t</task-id>
+<tool-use-id>toolu_01DQzMcr49opBgpAdDsBjGB3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e8d62a5b-6965-4310-bfe5-439a2421c212/tasks/biwr5j43t.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full workspace test suite (all features)" completed (exit code 0)</summary>
+</task-notification>
