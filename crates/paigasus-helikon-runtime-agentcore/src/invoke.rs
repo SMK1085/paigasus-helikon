@@ -198,9 +198,12 @@ fn wants_json(headers: &HeaderMap) -> bool {
 ///   — the guard fires [`CancellationToken::cancel`], so the runner aborts the
 ///   in-flight run instead of running to its natural end. Dropping the guard after a
 ///   clean completion is harmless (cancelling a finished run is a no-op).
-/// - Net effect: a disconnect cancels the run, the runner synthesizes its terminal
-///   and finalizes whatever events it had, and the detached task exits. The turn is
-///   persisted; nothing is leaked.
+/// - Net effect: a disconnect cancels the run; the runner's stream ends, `finalize`
+///   persists the recorder's events (the turn's user message plus any assistant/tool
+///   items observed before the cancel), and `run` returns `Err(RunError::Cancelled)`
+///   — which nobody is left to receive. The turn is persisted; nothing is leaked.
+///   Unlike [`run_sse`], no synthetic terminal event is produced: terminal synthesis
+///   lives in `run_streamed`, not in `Runner::run`.
 ///
 /// Because finalize runs *before* `Runner::run`'s future resolves, a received result
 /// implies the session write already landed — so the `200` is never returned ahead of
@@ -930,8 +933,10 @@ mod tests {
         }
 
         // The dropped connection must cancel the run, and the detached task must
-        // still drive it to a (synthetic) terminal, finalizing the session with
-        // the turn's input message.
+        // still run `finalize`, persisting the turn's input message. (`Runner::run`
+        // aborts on cancel without synthesizing a terminal — that behavior belongs
+        // to `run_streamed` — so the assertion below is on the persisted user
+        // message, not on a terminal event.)
         let session = sessions.session(Some(&session_id)).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
