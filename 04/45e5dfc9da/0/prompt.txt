@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>baprshde3</task-id>
+<tool-use-id>toolu_01W1vVQQgcrU2hJ1RoLiGWWa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/675514c0-c2aa-4241-99cb-b494bfa49759/tasks/baprshde3.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for Windows rerun attempt 3 to complete" completed (exit code 0)</summary>
+</task-notification>
