@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bwxge3ow3</task-id>
+<tool-use-id>toolu_01ThykwutxHdKfma5fTcv5d9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/bwxge3ow3.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 145 checks to completion" completed (exit code 0)</summary>
+</task-notification>
