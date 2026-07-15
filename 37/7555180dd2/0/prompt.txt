@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b9rpusiac</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/b9rpusiac.output</output-file>
+<status>failed</status>
+<summary>Background command "Verify Linear status; watch for release-plz PR to open" failed with exit code 1</summary>
+</task-notification>
