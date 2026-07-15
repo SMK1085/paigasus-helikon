@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bri6lq0ob</task-id>
+<tool-use-id>toolu_017nPWoG4QEMEsZd7k7tKj9q</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e8d62a5b-6965-4310-bfe5-439a2421c212/tasks/bri6lq0ob.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until CI completes and CodeRabbit posts" completed (exit code 0)</summary>
+</task-notification>
