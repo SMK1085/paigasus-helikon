@@ -1,0 +1,39 @@
+<task-notification>
+<task-id>a5695e1f3c296b9e8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a5695e1f3c296b9e8.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 4 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance
+- ✅
+
+All three expanded requirements are met precisely, verified line-by-line against the diff (not just the report's narrative):
+
+1. **Commit 1** (`1cdece1`, `feat(runtime-temporal)`): the four `temporalio-*` workspace deps in `Cargo.toml:2681-2684` match the expansion exactly — `temporalio-sdk`/`temporalio-common` at `default-features = false` with no feature list, `temporalio-client`/`temporalio-sdk-core` at `default-features = false, features = ["tls-aws-lc"]`. The crate manifest (`crates/paigasus-helikon-runtime-temporal/Cargo.toml`) keeps `version = "0.0.0"`, `publish = false`, and `[lints] workspace = true` unchanged (only a `[dependencies]`/`[dev-dependencies]` block was inserted). `0BSD` was added to `deny.toml`'s `[licenses] allow` (line 2820 of the diff). Advisory ignores for exactly `RUSTSEC-2025-0012` and `RUSTSEC-2024-0384` — no more, no fewer — appear in **both** `deny.toml` and `.cargo/audit.toml`, each with a comment stating the transitive path (temporalio-client/temporalio-sdk-core → backoff → instant), "no fixed upgrade exists," and "revisit on every temporalio-* bump."
+2. **Commit 2** (`669615b`, `ci(workflows)`): `arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b` (full 40-char SHA) with a `# arduino/setup-protoc v3.0.0` comment and `repo-token: ${{ secrets.GITHUB_TOKEN }}` was added in exactly 7 places — `clippy`, `test`, `build-no-default-features`, `docs`, `doc-coverage`, `sessions-it` (gated on the job's existing `steps.filter.outputs.sessions == 'true'` condition, matching that job's pattern) in `ci.yml`, plus `msrv.yml`'s `verify` job. Verified `fmt` and `commits` jobs are untouched (read directly from the post-patch `ci.yml`). `audit`/`deny`/`sbom` workflows were not touched (correct — none of them compile the workspace). In every job the step is placed after toolchain setup and before `Swatinem/rust-cache`/the compiling `run:` step.
+3. **Commit 3** (`7a609ab`, `docs(contributing)`): a `## Build prerequisites` section was inserted immediately before `## MSRV` in `CONTRIBUTING.md`, with `brew`/`apt-get`/`choco` commands, the `PROTOC` env-var escape hatch, and a note that CI uses `arduino/setup-protoc`.
+
+⚠️ Whether the scheduled `rustsec/audit-check@v2` job actually honors `.cargo/audit.toml` is a runtime-only confirmation that can't be verified from the diff (as flagged in the task instructions).
+
+### Strengths
+- The implementer correctly stopped at the original protoc checkpoint rather than silently routing around a CI-impacting decision, then cleanly resumed and completed all three expanded commits once the human decision came back — exactly the intended checkpoint discipline.
+- Feature-flag and RUSTSEC-ignore claims are independently verifiable and correct: I confirmed no `ring` package entry exists anywhere in the ~1100-line `Cargo.lock` diff, and separately confirmed (via the current `Cargo.lock`) that the single shared `rustls` v0.23.41 instance resolves to `aws-lc-rs` only — the dual-CryptoProvider risk this checkpoint exists to catch is genuinely absent.
+- Commit scopes (`runtime-temporal`, `workflows`, `contributing`) are all valid per `.versionrc`'s `scopeRegex`, and the exact `feat(runtime-temporal)`/`ci(workflows)`/`docs(contributing)` prefixes match the expansion's literal wording.
+- Deviated from the original brief's Step 5 (`[[licenses.clarify]]` blocks) only after empirically testing that they're inert with cargo-deny 0.19.6, and left a clear comment explaining the dead end — good rigor over blindly copying a stale plan assumption.
+
+### Issues
+
+#### Important (Should Fix)
+- **The TLS/checkpoint-b risk narrative is incomplete, though the outcome is safe.** The root `Cargo.toml` comment (`Cargo.toml:2673-2680`) and the report both frame the second-reqwest risk solely around `ephemeral-server` ("it pulls its own reqwest+TLS stack... never enabled... this reqwest+TLS path never enters the graph"). But `Cargo.lock` shows a **second, independent reqwest instance (`reqwest 0.12.28` via `hyper-rustls`) is already unconditionally pulled in** by `temporalio-common`'s mandatory `opentelemetry-otlp` dependency (`Cargo.lock` diff lines ~2006, ~2010) — nothing to do with `ephemeral-server`. It happens to be safe today only because Cargo unifies features on the single shared `rustls` v0.23.41 package instance, which every consumer (including this new reqwest 0.12.28 via `hyper-rustls`) resolves to `aws-lc-rs` (verified directly against `Cargo.lock:4113-4123`, `2067-2077`). This is exactly the kind of finding the task's "calibration checkpoint" step exists to surface accurately, since the RUSTSEC-ignore comments explicitly instruct "revisit on every temporalio-* bump" — a future bump that shifts `opentelemetry-otlp`'s reqwest feature or rustls version could reintroduce a dual-provider panic, and neither the code comment nor the report currently documents this actual (mandatory, non-`ephemeral-server`) source of the risk. Recommend correcting the `Cargo.toml` comment to name `temporalio-common → opentelemetry-otlp` as the actual reqwest source and note the safety depends on single-instance `rustls` feature unification, not on a feature simply being "never enabled."
+
+#### Minor (Nice to Have)
+- `arduino/setup-protoc` is added with no `version:` input pin (defaults to "latest" protoc release per the action), unlike the rest of the workspace's supply-chain-conscious pinning (SHA-pinned actions, digest-pinned Docker images). Not required by the expansion, but a future protoc release could introduce an unrelated CI break days/weeks later. Consider pinning a `version:` too.
+- Cosmetic: in `crates/paigasus-helikon-runtime-temporal/Cargo.toml`'s `[dependencies]` block, the `=` alignment is inconsistent by one column between `paigasus-helikon-core` (44-char line) and every other entry (all 45-char lines) — purely visual, not enforced by any formatter/CI gate in this repo.
+- The final verification only ran `RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-runtime-temporal --all-features --no-deps`, not the exact CI-gate command `cargo doc --workspace --all-features --no-deps`. Given the change is purely additive, risk is low, but it's a slightly narrower check than the actual required-status-check command.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** Every literal element of the expanded spec (exact dep features, preserved manifest fields, exact RUSTSEC-id set in both files, exact CI job list, SHA-pinned protoc action, CONTRIBUTING section) checks out precisely against the diff, and the safety property the checkpoint was designed to verify (no dual rustls CryptoProvider) is independently confirmed true. The one Important finding is a documentation/comment-accuracy gap in explaining *why* the checkpoint currently passes, not a functional or CI-breaking defect — worth a quick follow-up comment fix but not a reason to redo the task.</result>
+<usage><subagent_tokens>125371</subagent_tokens><tool_uses>23</tool_uses><duration_ms>463318</duration_ms></usage>
+</task-notification>
