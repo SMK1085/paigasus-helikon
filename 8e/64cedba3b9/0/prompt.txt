@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>ae997c99db48c7525</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/ae997c99db48c7525.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 2 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Spec Compliance Verdict
+
+✅ **Compliant.** All four required artifacts (`PartialThenEndRunner` test helper, `RunHandle::synthetic_terminal_frame`, the rewritten `sse_response`, and the two SSE integration tests + one unit test) are present, match the brief's prescribed code essentially verbatim, and satisfy every global constraint:
+- Generic message is byte-exact: `"run ended before producing a terminal event"` (`crates/paigasus-helikon-runtime-axum/src/registry.rs:52`, asserted in `registry.rs:330` and `tests/runs.rs:199`).
+- Start-error SSE test asserts `RunFailed { error } if !error.is_empty()` and HTTP 200, not `RunError::MaxIterations`'s Display string (`tests/runs.rs:156-167`).
+- All `AgentEvent` comparisons use `matches!`, never `==` (no `PartialEq` reliance).
+- `event_log.rs` is untouched — confirmed both by the diff's file list and by reading the file directly (only `is_terminal` is *imported*, not modified).
+- Diff touches exactly the four named files (verified via `git diff --stat 0ef700d..3368074`).
+
+⚠️ One unverified-by-me item: the report's RED→GREEN test transcripts and 9/9 suite pass were not re-run (per instructions, no specific doubt arose to justify it). I independently re-validated `cargo clippy -p paigasus-helikon-runtime-axum --all-features --all-targets -- -D warnings` on HEAD `3368074` — clean, zero warnings — which is the more load-bearing of the two claims given Focus Area #3.
+
+## Strengths
+
+- **Correct no-spurious-frame logic.** In the unfold closure (`handlers/runs.rs:362-381`), `state.handle.synthetic_terminal_frame(state.saw_terminal)?` short-circuits to `None` when a real terminal was already seen. Combined with `EventLog::subscribe`'s documented behavior (sets its own internal `done` once a terminal event is yielded, so the next poll returns `None`), a normal run gets exactly the real terminal frame and the subsequent extra poll produces no additional SSE data — `sse_stream_matches_local_events` is the existing regression guard for this.
+- **`RunHandle::synthetic_terminal_frame`** (`registry.rs:43-59`) implements all three branches correctly: `None` on `saw_terminal`, `start_error`-sourced `RunFailed` when present, generic message otherwise, with a `tracing::warn!` at the synthesize point. The new unit test (`registry.rs:322-340`) exercises all three.
+- **Tests target the right things**, not implementation details: variant+non-empty for the start-error path, exact string for the terminal-less generic path, correct event ordering (`[TokenDelta, RunFailed]`).
+- **Honest, well-documented deviation.** The implementer flagged the one departure from the brief's literal snippet (`#[allow(dead_code)]` on `SseState::disconnect`) rather than silently introducing it, and grounded it in an existing in-crate precedent (`event_log.rs:58`, `ReadSlice::first_seq`).
+
+## Issues
+
+**Minor**
+
+1. `crates/paigasus-helikon-runtime-axum/src/handlers/runs.rs:330-339` — `#[allow(dead_code)]` on `disconnect: DropGuard` is a correct fix (I independently reproduced the "field is never read" `dead_code` warning in an isolated repro to confirm the brief's literal code would not pass `-D warnings`), but it is not the only idiom available. Renaming the field to `_disconnect` suppresses the same lint without an explicit `#[allow]` — I verified this empirically (a leading-underscore struct field name suppresses `dead_code`'s "never read" check exactly as it does for local bindings). Since the codebase already has the `#[allow(dead_code)] + comment` pattern established at `event_log.rs:58`, matching that precedent for consistency is a reasonable call, not a defect — just worth a note for a future polish pass.
+2. `handlers/runs.rs:366-380` — after a real terminal event is forwarded, the unfold closure still performs one extra (no-op) poll of the now-exhausted stream before ending. Inherent to the brief's prescribed unfold shape, cheap, and produces no spurious frame — FYI only, not a defect.
+
+No Critical or Important findings.
+
+**Task quality:** Approved
+**Reasoning:** The implementation matches the brief's interfaces and code shape almost verbatim, satisfies every stated global constraint (exact generic string, variant-based SSE assertions, `event_log.rs` untouched, scope-limited diff), and the one deviation is necessary, transparently documented, and independently confirmed correct against the codebase's own precedent and a from-scratch lint repro.</result>
+<usage><subagent_tokens>104399</subagent_tokens><tool_uses>20</tool_uses><duration_ms>355068</duration_ms></usage>
+</task-notification>
