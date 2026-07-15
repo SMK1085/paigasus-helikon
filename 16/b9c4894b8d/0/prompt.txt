@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bj0zgyncu</task-id>
+<tool-use-id>toolu_01Wd4W5YV5qdDZR2JLZ1eAq3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e8d62a5b-6965-4310-bfe5-439a2421c212/tasks/bj0zgyncu.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until CodeRabbit finishes reviewing" completed (exit code 0)</summary>
+</task-notification>
