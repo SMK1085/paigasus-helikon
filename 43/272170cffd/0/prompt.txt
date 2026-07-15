@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b50o2puyj</task-id>
+<tool-use-id>toolu_01DA76wbpKavXqH87HH78Ssg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/b50o2puyj.output</output-file>
+<status>completed</status>
+<summary>Background command "Verify crate clippy + tests on the rebased base" completed (exit code 0)</summary>
+</task-notification>
