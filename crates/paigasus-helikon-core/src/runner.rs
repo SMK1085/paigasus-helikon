@@ -82,10 +82,14 @@ where
     /// drive the run on a detached task and await its result over a channel, rather
     /// than awaiting it inline.
     ///
-    /// **Conversely, this future performs the session write before it resolves**, so
-    /// callers may treat its resolution as a persistence barrier: once `run` returns,
-    /// the turn is durable in the `Session`. This is what makes "detach and await the
-    /// result over a channel" a sufficient remedy for the hazard above.
+    /// **Conversely, this future issues the session write before it resolves**, so
+    /// callers may treat its resolution as an ordering barrier: the finalize step is
+    /// ordered before `run` returns, not left in flight behind it. This is what makes
+    /// "detach and await the result over a channel" a sufficient remedy for the hazard
+    /// above. Note this is an ordering guarantee, not a durability one: persistence is
+    /// best-effort, so an implementation may log rather than propagate an append
+    /// failure, and a run that fails before the agent starts never reaches finalize at
+    /// all.
     ///
     /// **Cancellation/timeout is best-effort and loses to a genuine terminal
     /// event that already occurred.** If the run reaches a terminal

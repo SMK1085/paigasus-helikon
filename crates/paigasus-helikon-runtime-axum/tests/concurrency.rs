@@ -2,10 +2,14 @@
 //!
 //! - [`start_error_returns_500_not_hang`] — a runner whose `run_streamed` returns `Err`
 //!   immediately causes the one-shot handler to return 500, not hang.
+//! - [`panicking_stream_still_returns_not_hangs`] — a panicking agent stream still
+//!   yields a terminal response rather than hanging the client.
 //! - [`async_run_survives_creator_disconnect`] — an async run outlives its creator's
 //!   HTTP connection.
 //! - [`concurrent_same_session_serialize`] — two concurrent one-shot requests sharing
 //!   the same `X-Session-Id` serialize completely: ticks are `[start, end, start, end]`.
+//! - [`oneshot_client_disconnect_still_finalizes_the_session`] — a one-shot client that
+//!   disconnects mid-run still has its turn finalized into the session.
 
 mod support;
 

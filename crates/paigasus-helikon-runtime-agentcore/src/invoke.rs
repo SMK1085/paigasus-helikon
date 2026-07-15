@@ -206,8 +206,9 @@ fn wants_json(headers: &HeaderMap) -> bool {
 ///   lives in `run_streamed`, not in `Runner::run`.
 ///
 /// Because finalize runs *before* `Runner::run`'s future resolves, a received result
-/// implies the session write already landed — so the `200` is never returned ahead of
-/// the persisted turn.
+/// implies the session write was already issued — so the `200` is never returned ahead
+/// of the finalize step. (Ordering, not durability: persistence is best-effort, so a
+/// failed append is logged rather than propagated.)
 async fn run_json<Ctx: Send + Sync + 'static>(
     state: &AppState<Ctx>,
     ctx: RunContext<Ctx>,
