@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>btocg9kkv</task-id>
+<tool-use-id>toolu_01LdnnsbPiPAiHMxPuU7Tmf2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/5bdcf7d9-bffe-41f8-99e8-3f252ae7de91/tasks/btocg9kkv.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch for CodeRabbit review to land on PR 138" completed (exit code 0)</summary>
+</task-notification>
