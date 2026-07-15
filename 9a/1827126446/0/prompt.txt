@@ -1,0 +1,1 @@
+First, I need you to bring the book up to date as per SMA-423, do as much work as possible in parallel agents. Once done and you verified the changes, push and create a PR
