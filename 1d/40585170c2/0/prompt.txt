@@ -1,0 +1,180 @@
+Base directory for this skill: /Users/smaschek/dev/paigasus/paigasus-agora/feature-factory/skills/feature-pipeline
+
+# Feature Factory pipeline
+
+This skill defines the full pipeline for delivering a feature. It composes the
+`superpowers` plugin's skills and adds two things superpowers does not: an
+**adversarial spec-challenge** step (a fresh Opus subagent that attacks the spec)
+and explicit **human review gates** at the points where Sven wants to stay in the
+loop.
+
+## Prerequisites
+
+- The **superpowers** plugin must be installed (provides `superpowers:brainstorming`,
+  `superpowers:writing-plans`, `superpowers:subagent-driven-development`,
+  `superpowers:executing-plans`). If a superpowers skill is missing, say so and stop
+  rather than improvising a replacement.
+- Stage 6 uses the **`feature-factory:coderabbit-loop`** skill, which drives
+  CodeRabbit directly via `gh` - no separate CodeRabbit skill needs to be installed.
+- Linear access (the Linear MCP tools, `mcp__*linear*`) for fetching the issue.
+- `gh` CLI authenticated, for opening the PR.
+
+## Operating principles
+
+- **Stop at every GATE.** A gate means: present what you have, then wait for an
+  explicit human decision. Never cross a gate on your own initiative.
+- **One stage at a time.** Announce which stage you are entering and why.
+- **Defer, don't reinvent.** Inside a stage, invoke the named superpowers skill and
+  let it run. This skill only adds orchestration, the challenge step, and the gates.
+- **Persist artifacts.** Keep the spec and plan as files in the repo (the superpowers
+  skills already do this) so each stage has a durable input.
+- **Respect Sven's conventions** when you (or a subagent) write code: OOP with a
+  domain-driven design and dependency injection for Python / TypeScript / C# / Rust;
+  a more functional style in Next.js / React to match its design philosophy.
+
+---
+
+## Stage 0 - Intake
+
+1. Resolve the Linear issue from the argument (e.g. `LIN-123`). Use the Linear MCP
+   tools to fetch the issue: title, description, comments, labels, linked
+   issues/PRs, and acceptance criteria.
+2. Restate the issue in 2-4 sentences: the problem, the desired outcome, and any
+   constraints you found. Note open questions explicitly.
+3. **Move the issue to In Progress.** Use the Linear MCP to transition the issue to
+   the team's started / "in progress" workflow state - pick the state whose *type* is
+   `started` (commonly named "In Progress", but the exact name varies per team). If
+   it is already in that state, leave it. Note the transition in your intake summary.
+4. Confirm you are on (or create) an appropriate feature branch. Prefer a
+   git worktree (`superpowers:using-git-worktrees`) when one is available, so the
+   pipeline does not disturb the user's working tree.
+
+## Stage 1 - Spec (brainstorm)
+
+Invoke **`superpowers:brainstorming`** with the intake summary as the seed. Let it
+run its Socratic process and produce the design document / spec. Do not skip its
+questions - answer from the Linear context where you can, and surface to the human
+any question you cannot answer confidently.
+
+Output of this stage: a saved spec/design document.
+
+## Stage 2 - Adversarial challenge
+
+This replaces Sven's old manual "ask another Opus to challenge the spec" step.
+
+1. Dispatch the **`spec-challenger`** subagent (Opus) with the spec document as
+   input. It returns a structured critique with severity-tagged findings
+   (BLOCKER / MAJOR / MINOR / QUESTION) and an overall verdict.
+2. Triage the critique:
+   - **Justified findings** -> fold the fix into the spec. Edit the spec document
+     in place.
+   - **Unjustified or out-of-scope findings** -> note them with a one-line reason
+     for not acting, so the human can see what was considered and rejected.
+3. Produce a short changelog: what the challenge surfaced and what you changed.
+
+### >>> GATE 1: spec approval <<<
+
+Present: (a) the revised spec, (b) the challenger's verdict, (c) your changelog of
+folded-in vs rejected findings. Then **STOP** and ask Sven to approve, request
+further changes, or re-run the challenge (`/challenge-spec`). Do not proceed to
+planning until he approves.
+
+## Stage 3 - Implementation plan
+
+Once the spec is approved, invoke **`superpowers:writing-plans`** on the approved
+spec. It breaks the design into small, verifiable tasks with exact file paths and
+verification steps.
+
+Output: a saved implementation plan. Briefly report the task count and the files it
+expects to touch - this feeds the complexity decision next.
+
+## Stage 4 - Implementation
+
+Decide the execution mode from the plan's complexity:
+
+- **Default - subagent-driven.** Use **`superpowers:subagent-driven-development`**.
+  Choose this unless the change is clearly trivial.
+- **Inline (rare).** Use **`superpowers:executing-plans`** only when the change is
+  genuinely small: roughly 1-2 tasks, a single file or tightly scoped area, no new
+  abstractions, no cross-cutting concerns.
+
+State which mode you chose and the one-line reason. If it is a borderline call,
+ask before starting. Let the chosen superpowers skill drive TDD and per-task review.
+
+When implementation completes, run a final sanity check: tests pass, the diff
+matches the plan, no stray debug code.
+
+## Stage 5 - Open the PR
+
+1. Ensure all work is committed and the branch is pushed.
+2. Create the PR with `gh pr create`. The PR body should:
+   - Link the Linear issue (e.g. `Closes LIN-123` if your Linear<->GitHub link uses
+     that, otherwise reference the URL).
+   - Summarize the change, the spec decisions, and how it was tested.
+3. Report the PR URL.
+
+## Stage 6 - CodeRabbit resolution loop
+
+CodeRabbit reviews the PR automatically. Hand off to the
+**`feature-factory:coderabbit-loop`** skill, which runs a **bounded loop of at most
+5 rounds**: pull CodeRabbit's threads, fix and reply to justified ones, push back
+politely on unjustified ones, resolve all threads, and let CodeRabbit re-review -
+stopping when there are no actionable threads left or after 5 rounds.
+
+### >>> GATE 2: loop exit <<<
+
+When the loop ends, **STOP** and report: rounds used, what was changed, which
+threads were pushed back on and why, and any items still open (only possible if the
+5-round cap was hit). Let Sven decide whether to merge or continue manually.
+
+---
+
+## Quick reference
+
+| Stage | Skill / agent invoked | Gate |
+|-------|-----------------------|------|
+| 0 Intake | Linear MCP | - |
+| 1 Spec | `superpowers:brainstorming` | - |
+| 2 Challenge | `spec-challenger` (Opus subagent) | GATE 1: spec approval |
+| 3 Plan | `superpowers:writing-plans` | - |
+| 4 Implement | `superpowers:subagent-driven-development` (or `:executing-plans`) | - |
+| 5 PR | `gh pr create` | - |
+| 6 Review loop | `feature-factory:coderabbit-loop` | GATE 2: loop exit |
+
+---
+
+## Post-merge cleanup (run after you merge)
+
+This runs **after GATE 2**, once *you* have merged the PR - merging is always your
+decision and is never part of the automated `/ship-feature` run. The `/cleanup`
+command invokes this. Goal: get your local checkout back onto an up-to-date base
+branch and remove the now-merged branch (and any worktree), without ever touching
+unmerged work.
+
+1. **Confirm the PR is merged.** Resolve the PR (from the argument, or the current
+   branch's PR) and read its state and branches:
+   `gh pr view <pr> --json state,mergedAt,baseRefName,headRefName`. If it is **not**
+   merged, stop and say so - delete nothing.
+2. **Update the base branch.** Check out the PR's base - `baseRefName`, i.e. whatever
+   the PR was merged into (`develop`, `main`, a release branch, ...), not a hardcoded
+   default - and pull: `git checkout <base> && git pull`. Your local base now includes
+   the merged change.
+3. **Remove the worktree, if the pipeline used one.** Find it with `git worktree
+   list`, then `git worktree remove <path>` and `git worktree prune`. You must not be
+   standing inside the worktree when you remove it.
+4. **Delete the merged local branch.** `git branch -d <headRefName>`. If the PR was
+   squash- or rebase-merged, git won't recognize the branch as merged and `-d` will
+   refuse - because Step 1 already confirmed the PR is merged, use
+   `git branch -D <headRefName>` in that case. Never force-delete a branch whose PR
+   you have not confirmed merged.
+5. **Prune stale refs.** `git fetch --prune` to drop remote-tracking refs for branches
+   GitHub deleted on merge.
+6. **Report** what changed: base updated, worktree removed (if any), branch deleted,
+   refs pruned. If other local branches exist whose PRs are *also* merged, list them
+   and offer to clean those too - but only after confirming each one is merged.
+
+"Clean up any local branches" means the **merged** ones. Only ever delete a branch
+whose PR is confirmed merged; leave branches with unmerged work alone.
+
+
+ARGUMENTS: SMA-329
