@@ -1,0 +1,25 @@
+<task-notification>
+<task-id>a8916be482e252f80</task-id>
+<tool-use-id>toolu_01CwpugLsgKN5CyHdmz1Jwcc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a8916be482e252f80.output</output-file>
+<status>completed</status>
+<summary>Agent "Final fix wave for SMA-332" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean (the `.superpowers/` edit is confirmed excluded, `!!` = ignored). All three commits are landed at terminal status with all verification gates green.
+
+## Status: Complete
+
+All 7 fix-list items applied across the three planned commits; all verification gates green.
+
+**Commits:**
+- `45176dd` — `docs(runtime-temporal): SMA-332 align security-boundary docs with as-built v0 posture` (items 1a/1b, 2, 5, 6, 7)
+- `43dceb9` — `docs(specs): SMA-332 record as-built posture note in design spec` (item 1c)
+- `ad3e2b3` — `docs(repo): SMA-332 align image-check gate labels and book workflow name` (items 3, 4)
+
+**Verification:** `cargo fmt --all -- --check` clean · `cargo clippy --workspace --all-features --all-targets -- -D warnings` zero warnings (confirms the `#[allow(dead_code)]` removal on `DurableAgentDef::plan` was safe — it's genuinely read by `worker.rs::build()`) · `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` clean (only the pre-existing, documented facade/CLI filename-collision warning) · `cargo test -p paigasus-helikon-runtime-temporal` 41 unit + 6 integration + 2 doctests all passed · `mdbook build docs/book` clean, zero warnings.
+
+Appended a "Final fix wave" section to `.superpowers/sdd/task-16-report.md` (confirmed git-excluded via `.git/info/exclude`, not committed).
+
+**Concerns:** None blocking. Two judgment calls worth flagging: (1) the security-posture prose in `lib.rs` was verified against `paigasus-helikon-core`'s actual `context.rs`/`permission.rs`/`tool_exec.rs` source via a research subagent rather than taken on faith from the fix-list wording — confirmed `PermissionMode` has no `Ask` variant (Ask is a `GuardAction`/`PermissionDecision` outcome), so the "Ask degrades to Deny" language was written to describe the built-in destructive guards' behavior precisely; (2) the CHANGELOG edit modifies a note under an already-released `0.1.0` heading — done as instructed since it's the correct place to fix the stale claim, but flagging in case release-note immutability is a norm here.</result>
+<usage><subagent_tokens>208645</subagent_tokens><tool_uses>78</tool_uses><duration_ms>732967</duration_ms></usage>
+</task-notification>
