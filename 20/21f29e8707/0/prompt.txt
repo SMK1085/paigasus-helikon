@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>a6e5ad0efab4343f2</task-id>
+<tool-use-id>toolu_01Rov3TX2gRw7YXmzBRqupwC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a6e5ad0efab4343f2.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 7: worker + activities" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean, commit landed.
+
+**Status:** DONE. **Commit:** `f3b4b0c` — `feat(runtime-temporal): SMA-332 add worker builder, registration fail-fast, and activities`.
+
+**Tests:** RED (12 stubs panicking) → GREEN; 31/31 pass (`cargo test -p paigasus-helikon-runtime-temporal --all-features`); workspace-wide `cargo test --workspace --all-features` also 128/128 green; fmt/clippy/doc clean workspace-wide; `cargo deny check` clean.
+
+**Registry seam:** `Arc&lt;HashMap&lt;String, Arc&lt;DurableAgentDef&lt;Ctx&gt;&gt;&gt;&gt;` built and owned locally inside `TemporalAgentWorkerBuilder::build()` (no global/`OnceLock`) — it's the only point `Ctx` is still in scope before `temporalio_sdk` type-erases everything; Task 8 must extend `build()` itself at the marked `// SMA-332 Task 8 seam:` comment to add `register_workflow_with_factory`, reusing the already-assembled `agent_registry`/`ctx_factory`.
+
+**Concerns:** (1) Discovered via direct macro-source reading that `#[activities]` doesn't support generic `impl&lt;Ctx&gt;` blocks, so I deviated from the brief's literal "single `DurableAgentDef` per activities struct" to a `Ctx`-erased trait-object design (`DurableAgentRuntime`/`TypedRuntime&lt;Ctx&gt;`) supporting multiple agents keyed by an explicit `agent_name` activity argument — documented as a flagged design deviation, not invented silently. (2) `RetryPolicyConfig`→proto `RetryPolicy` conversion is intentionally left for Task 8/9 (exact module path unconfirmed). (3) Added `temporalio-macros` and `futures` as new direct workspace deps (both required, neither re-exported by `temporalio-sdk` — verified from source).
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-7-report.md`</result>
+<usage><subagent_tokens>402607</subagent_tokens><tool_uses>172</tool_uses><duration_ms>2227355</duration_ms></usage>
+</task-notification>
