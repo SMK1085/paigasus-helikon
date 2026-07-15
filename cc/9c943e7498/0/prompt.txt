@@ -1,0 +1,1 @@
+<bash-input> for pr in 146 147 148; do gh pr review $pr --approve; done</bash-input>
