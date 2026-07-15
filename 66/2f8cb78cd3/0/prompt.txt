@@ -1,0 +1,1 @@
+Wait for main CI, then merge the release PR, I already approved it. Once merged, do the usual post-merge steps
