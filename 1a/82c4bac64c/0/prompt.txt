@@ -1,0 +1,90 @@
+<task-notification>
+<task-id>a52fe2ea318f0d282</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a52fe2ea318f0d282.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Temporal Rust SDK state" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All questions answered with primary-source verification. Here is the report.
+
+---
+
+# Temporal Rust SDK — state as of 2026-07-05
+
+## 1. Official SDK status: there IS now a first-party, user-facing Rust SDK in Public Preview
+
+- **`temporalio/sdk-core` no longer exists as a repo name — it was renamed to `temporalio/sdk-rust`** ("Temporal Rust &amp; Core SDKs"). Verified directly: `https://github.com/temporalio/sdk-core` returns a **301 → `https://github.com/temporalio/sdk-rust`**, and the GitHub API for `repos/temporalio/sdk-core` resolves to `full_name: temporalio/sdk-rust`. Repo is active (pushed_at 2026-07-05, today).
+- The repo now houses **both** roles: the Core SDK is still described as the base of the TypeScript, Python, .NET, and Ruby SDKs, **and** a user-facing Rust SDK. README/crate-docs wording (verified in `crates/sdk/src/lib.rs` and `crates/sdk/README.md`): *"This crate contains a Public Preview Rust SDK. … The SDK is in Public Preview and under active development. The API can and will continue to evolve."*
+- **Official announcement**: Replay 2026 (May 6, 2026) — *"the Temporal Rust SDK is now in Public Preview"*: https://temporal.io/blog/replay-2026-product-announcements. Official docs section exists: https://docs.temporal.io/develop/rust (workflows, activities, workers, client, Nexus — **no testing/debugging pages yet**).
+- What "Public Preview" formally means at Temporal (verified at https://docs.temporal.io/evaluate/development-production-features/release-stages): *"recommended for production usage"*, formally supported, *"APIs may undergo changes; however, Temporal's goal is to maintain backward compatibility."* So it is **not** "not for production" — but it is pre-1.0 with explicit API-churn warnings, and all GitHub releases are flagged `prerelease: true`.
+- Releases (verified via GitHub API): `v0.1.0-alpha.1` 2026-02-19, `v0.2.0` 2026-03-19, `v0.3.0` 2026-04-25, `v0.4.0` 2026-04-29, **`v0.5.0` 2026-06-29** (latest). Breaking-ish minor bumps roughly every 1–2 months.
+- Background: QCon SF 2025 talk by SDK lead Spencer Judge on the shared-Rust-core strategy: https://www.infoq.com/news/2025/11/temporal-rust-polygot-sdk/
+
+## 2. crates.io publication — YES, under new `temporalio-*` names (this changes everything)
+
+The crate names in your question are the **old** naming and are dead ends (all verified via crates.io API):
+
+| old name | crates.io status |
+|---|---|
+| `temporal-sdk` | **does not exist** |
+| `temporal-client` | **does not exist** |
+| `temporal-sdk-core` | exists, stale placeholder `0.1.0-alpha.1` from **2021-04-22** — do not use |
+| `temporal-sdk-core-api` | `0.1.0`, one-off publish 2025-09-25, stale |
+| `temporal-sdk-core-protos` | `0.1.0`, 2025-09-25, stale (8.7k recent downloads — legacy dependents) |
+
+The **current** crates, all published from `temporalio/sdk-rust`, all at **0.5.0 (published 2026-06-29)**, first published 2026-02-19, 5 releases each, none yanked (verified via crates.io API):
+
+- `temporalio-sdk` (172k downloads), `temporalio-client` (200k), `temporalio-sdk-core` (174k), `temporalio-common` (200k), `temporalio-macros` (174k), `temporalio-workflow`, `temporalio-protos`, `temporalio-common-wasm`. (`temporalio-sdk-core-c-bridge` is not published.)
+- crates.io shows license as **"non-standard"** for all of them — because the manifests use `license-file = "LICENSE.txt"` instead of an SPDX `license = "MIT"` expression (verified in the workspace `Cargo.toml`). The file is the plain MIT license text; GitHub detects the repo as MIT. **cargo-deny implication for Helikon: these crates will fail the license allowlist as non-SPDX and need `[[licenses.clarify]]` entries in `deny.toml`.**
+- Experimental marking: versions are 0.x, GitHub releases marked prerelease, docs say "Public Preview … API can and will continue to evolve." No `rust_version` on most crates; `temporalio-sdk-core` declares 1.88.0.
+
+**Hard-constraint answer: a crates.io-publishable library crate CAN depend on the Temporal Rust SDK today.** Since 2026-02-19 the whole stack is on crates.io; internal deps are `path + version` (paths stripped at publish), so the dep tree is fully registry-resolvable. Verified by construction: cargo forbids publishing crates with git deps, and these crates are published, so no git deps exist anywhere in their graphs. The git-dep + `publish = false` era is over.
+
+## 3. Usability &amp; API shape of the user-facing SDK
+
+The old `temporal-sdk` prototype (`WfContext`/`ActContext`, "not for production") is **gone** — replaced by a redesigned macro-based SDK in `crates/sdk`. Current shape (verified from `crates/sdk/README.md`, `lib.rs`, and the hello-world example):
+
+- **Activities**: `#[activities]` on an `impl` block, `#[activity]` per method: `async fn greet(_ctx: ActivityContext, name: String) -&gt; Result&lt;String, ActivityError&gt;`; shared state via `self: Arc&lt;Self&gt;`.
+- **Workflows**: `#[workflow]` on a state struct + `#[workflow_methods]` impl with `#[init]` (constructor from `&amp;WorkflowContextView`), `#[run]` (async, `ctx: &amp;mut WorkflowContext&lt;Self&gt;` → `WorkflowResult&lt;T&gt;`), `#[signal]`, `#[query]`, `#[update]`. State access via `ctx.state(...)`/`state_mut(...)`. Activities invoked type-safely: `ctx.start_activity(MyActivities::greet, name, ActivityOptions::start_to_close_timeout(...))?.await?`.
+- **Worker**: `CoreRuntime::new_assume_tokio(RuntimeOptions)` → `Connection::connect` → `Client::new` → `WorkerOptions::new("task-queue").register_workflow::&lt;W&gt;()?.register_activities(A).build()` → `Worker::new(&amp;runtime, client, opts)?.run().await`. Config via env vars / `temporal.toml` (`envconfig` feature).
+- Coverage is broad: 15+ shipped examples (child workflows, continue-as-new, local activities, saga, schedules, cancellation, search attributes, message passing, heartbeating, interceptors, polling, updatable timers) plus experimental **WASM workflows** (`wasm-workflows` feature, wasmtime 44). `#![warn(missing_docs)]`; docs.rs builds cleanly: https://docs.rs/temporalio-sdk
+- Supported and documented (docs.temporal.io section + Public Preview support status), but explicitly API-unstable pre-1.0.
+
+## 4. Community alternatives — all superseded or niche
+
+From crates.io search + web search (verified metadata):
+
+- **`squads-temporal-sdk`** 0.1.0-alpha.1 + `squads-temporal-*` core forks 0.3.x — Squads' republication of the pre-publication SDK; frozen since 2025-07/09. Superseded by official crates.
+- **`altair-temporal` / `altair-wf`** 0.3.0 (2026-06-11) — "stable facade over the pre-1.0 temporalio Rust SDK"; a thin community churn-insulation layer over the official SDK (~50–200 downloads). Interesting precedent for the facade pattern, not an alternative SDK.
+- `temporal-agent-rs` 0.1.0 (AI agents on Temporal, 49 downloads), `cosm-public/temporal-samples-rust` (samples/docs only), `crabdance_*` (Cadence, not Temporal).
+- **Name-collision warning**: `temporal_rs` on crates.io is the ECMAScript Temporal date/time library (Boa project) — unrelated.
+
+Verdict: no maintained third-party SDK worth choosing; community energy collapsed into the official SDK once it hit crates.io.
+
+## 5. Testing story
+
+- **Local dev server**: yes — `temporal server start-dev` works as with every SDK. Better: `temporalio-sdk-core`'s **`ephemeral-server` feature** provides programmatic `TemporalDevServerConfig::start_server()` which can auto-download and cache the `temporal` CLI binary, and **`TestServerConfig`** which downloads/runs **`temporal-test-server` — the time-skipping test server** (verified in `crates/sdk-core/src/ephemeral_server/mod.rs`, incl. the `get_or_download("temporal-test-server", ...)` call).
+- **Replay**: core-level `replay` module exists and is public in `temporalio-sdk-core` (doc: "used by Lang SDKs to provide replay capabilities to users during testing"; `HistoryInfo` public; canned histories behind the not-public-API `test-utilities` feature). **The high-level `temporalio-sdk` does not yet expose a polished replayer or time-skipping test harness** (no testing module in `crates/sdk/src`; the official Rust docs section has no Testing page). Equivalent of Python's `WorkflowEnvironment.start_time_skipping()` at SDK level: not yet — you'd wire core's `ephemeral_server` + `replay` directly.
+- Practical today: dev-server/ephemeral-server integration tests (env-gate them, same pattern as Helikon's `sessions-it`/`forkd_live`). Replay tests: possible via core, rougher edges.
+
+## 6. Licensing and dependency weight
+
+- **License: MIT** — `LICENSE.txt` is verbatim MIT ("The MIT License, Copyright (c) 2021 Temporal Technologies, Inc."); GitHub SPDX detection = MIT. But declared via `license-file`, not SPDX expression → crates.io "non-standard" → **cargo-deny needs clarify entries** (flagged above).
+- **Pins** (verified from `Cargo.toml`s at `main`, matching published 0.5.0): `tonic 0.14.6` + `tonic-prost 0.14.6`, `prost 0.14`, `prost-wkt-types 0.7` (aliased as `prost-types`), `tokio 1.47`, `hyper 1.7`, `http 1.3`, `tokio-rustls 0.26` (rustls 0.23 line), `opentelemetry 0.32` (optional), `reqwest 0.13` (optional, `ephemeral-server`/`debug-plugin`), edition 2024, `bon` builders.
+- **Conflict check against paigasus-helikon** (verified locally in `/Users/smaschek/dev/paigasus/paigasus-helikon/Cargo.toml` + `Cargo.lock`): prost `0.14.4` already in the lock — compatible; **no tonic currently in the graph** — additive, no conflict; rustls `0.23.41` — same line.
+- **CryptoProvider risk — real, and there's a supported escape hatch**: `temporalio-sdk-core` and `temporalio-client` **default to `tls-ring`**, but both expose a **`tls-aws-lc`** feature. Helikon standardizes on aws-lc-rs (the gcp_auth lesson), so depend with `default-features = false, features = ["tls-aws-lc", ...]` on `temporalio-client`/`temporalio-sdk-core` (`temporalio-sdk` itself passes `default-features = false` to its core/client deps, so the consumer controls the provider — inferred from the feature graph, not compile-tested). Note `tonic/tls-native-roots` is always enabled by core/client.
+
+## 7. MSRV / edition
+
+- `temporalio-sdk-core`: **`rust-version = "1.88.0"`** (in-manifest, comment "due to cargo msrv find"; confirmed on crates.io for 0.3.0+). Other crates declare no MSRV; all are **edition 2024** (floor 1.85). Effective stack MSRV: **1.88**.
+- Helikon's workspace MSRV is 1.94 → **no MSRV impact**; the 1.94 test matrix leg will compile it fine.
+
+## Bottom line
+
+**Yes — a crates.io-published library crate can ship a Temporal-backed runner today.** The blocking constraint (Temporal Rust SDK only as git deps, which cargo refuses to publish against) dissolved on 2026-02-19 when Temporal published the full `temporalio-*` stack to crates.io, and the SDK formally entered supported Public Preview on 2026-05-06. For `paigasus-helikon-runtime-temporal`'s ascend, the viable design is a normal registry dependency; git-dep + `publish = false`, vendoring, or dep-in-example-only architectures are no longer forced. Remaining engineering caveats: (a) 0.x with explicit API churn — pin `"0.5"` and budget for breakage each minor (consider keeping the Temporal surface behind Helikon's own runner trait for insulation; the community `altair-temporal` facade exists precisely for this reason); (b) use `default-features = false` + `tls-aws-lc` to avoid the dual rustls CryptoProvider panic under `--all-features`; (c) add `[[licenses.clarify]]` MIT entries to `deny.toml` for the `license-file` crates; (d) no SDK-level replay/time-skip harness yet — integration tests should env-gate against a dev server or use core's `ephemeral-server` feature.
+
+**Verified**: repo rename/redirect, release tags/dates/prerelease flags, every crates.io version/date/license/edition/rust_version/download count, all Cargo.toml pins and TLS/ephemeral-server/replay code, README/lib.rs status wording, Replay 2026 quote, release-stage definitions, local lockfile state. **Inferred**: no-git-deps (by crates.io policy + successful publication), effective 1.88 stack MSRV (only core declares one), consumer-controlled TLS provider (feature-graph reading, not compile-tested), absence of any other mature third-party SDK (search-based negative).
+
+Sources: [temporalio/sdk-rust](https://github.com/temporalio/sdk-rust) · [Replay 2026 announcements](https://temporal.io/blog/replay-2026-product-announcements) · [docs.temporal.io/develop/rust](https://docs.temporal.io/develop/rust) · [Temporal release stages](https://docs.temporal.io/evaluate/development-production-features/release-stages) · [crates.io/crates/temporalio-sdk](https://crates.io/crates/temporalio-sdk) · [docs.rs/temporalio-sdk](https://docs.rs/temporalio-sdk/latest/temporalio_sdk/) · [InfoQ QCon SF 2025](https://www.infoq.com/news/2025/11/temporal-rust-polygot-sdk/) · [cosm-public/temporal-samples-rust](https://github.com/cosm-public/temporal-samples-rust) · [community forum: Rust SDK](https://community.temporal.io/t/rust-sdk-for-temporal/1334) · raw manifests/sources at `raw.githubusercontent.com/temporalio/sdk-rust/main/...` (workspace + `crates/{sdk,sdk-core,client,workflow,protos}/Cargo.toml`, `crates/sdk-core/src/ephemeral_server/mod.rs`, `crates/sdk-core/src/replay/mod.rs`, `crates/sdk/README.md`, `LICENSE.txt`) · crates.io API (`/api/v1/crates/...`).</result>
+<usage><subagent_tokens>74961</subagent_tokens><tool_uses>20</tool_uses><duration_ms>394470</duration_ms></usage>
+</task-notification>
