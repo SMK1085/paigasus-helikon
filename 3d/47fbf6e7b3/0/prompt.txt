@@ -1,0 +1,21 @@
+<task-notification>
+<task-id>ad8167f5dcf52f3b0</task-id>
+<tool-use-id>toolu_01BvbfFuYvszfWEfCjQJb2vo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/ad8167f5dcf52f3b0.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 10: temporal docs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE — review finding addressed.
+
+**Commit:** `a544e18` — `docs(runtime-temporal): SMA-332 compile-check crate doc examples`
+
+**Doctest summary:** `test result: ok. 2 passed; 0 failed; 0 ignored` — both lib.rs examples now compile as `no_run` doctests (previously 2 ignored). Docs build clean under `-D warnings`; fmt and workspace clippy clean.
+
+**Concerns:**
+- The old examples weren't just un-compiled — they taught a fabricated API (`Client::default()`, root re-export paths that don't exist, `with_ctx(Arc::new(...))` which can't compile). Rewrote both against the real API from `tests/temporal_live.rs`, with a hidden `NullModel` boilerplate impl per the suggested pattern.
+- Also fixed the README in the same commit: its snippets had the same fabricated API, and its plain ```` ```rust ```` fences violated the original brief's "no_run or ignore only" rule. Now `rust,ignore` (they keep a deliberate `my_model` placeholder) with the same verified API shapes, linking to the crate docs as the compile-checked versions.
+- Doctests rely on the `url` dev-dep for `Url::parse` — fine (doctests see dev-deps), but real users need `url` in their own deps; the examples show that honestly since `ConnectionOptions::new` takes a `url::Url`.
+
+Report updated: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-10-report.md`</result>
+<usage><subagent_tokens>151238</subagent_tokens><tool_uses>24</tool_uses><duration_ms>410167</duration_ms></usage>
+</task-notification>
