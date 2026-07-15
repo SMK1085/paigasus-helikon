@@ -1,0 +1,1 @@
+Remember that in this repository after merging to main, you need to check whether the release-plz PR has been opened. If it does, you need to watch the CI and inform me proactively.
