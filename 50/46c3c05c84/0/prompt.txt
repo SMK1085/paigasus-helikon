@@ -1,0 +1,14 @@
+<task-notification>
+<task-id>ada4dde96b1391234</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/ada4dde96b1391234.output</output-file>
+<status>completed</status>
+<summary>Agent "CodeRabbit round-1 fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've kicked off two verification tasks in the background and will be notified when they complete:
+1. `cargo test -p paigasus-helikon-core model_turn` (queued behind another concurrent cargo process in this shared worktree)
+2. `bash scripts/agentcore-image-check.sh` (Docker rebuild + four-gate check, expected to take a few minutes)
+
+I'll continue once notified.</result>
+<usage><subagent_tokens>114023</subagent_tokens><tool_uses>52</tool_uses><duration_ms>503975</duration_ms></usage>
+</task-notification>
