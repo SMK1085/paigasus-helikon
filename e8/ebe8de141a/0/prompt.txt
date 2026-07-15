@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>ba9e07wus</task-id>
+<tool-use-id>toolu_01NRvWx3XWgTxksxRek75YnG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/675514c0-c2aa-4241-99cb-b494bfa49759/tasks/ba9e07wus.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until CodeRabbit submits its review of PR 132" completed (exit code 0)</summary>
+</task-notification>
