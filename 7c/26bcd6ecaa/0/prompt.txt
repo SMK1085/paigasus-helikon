@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>a92134d8d3d7119cf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a92134d8d3d7119cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix Task 4 deque leak" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+**Status:** Done
+
+**Commit:** `182eb30` — `fix(runtime-axum): SMA-331 evict stale ids from RunRegistry completion queue on TTL sweep`
+
+**Test summary:** `cargo test -p paigasus-helikon-runtime-axum registry` → 3 passed, 0 failed (`ttl_evicts_after_deadline`, `count_cap_evicts_oldest_completed_first` [+ middle-run assert], `ttl_eviction_cleans_completion_queue` [new leak regression])
+
+**Concerns:** The `#[cfg(test)] impl RunRegistry` helper block had to be placed _before_ the `mod tests` block to satisfy `clippy::items_after_test_module` (`-D warnings`); both fmt and clippy are clean.
+
+**Report path:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/feature+sma-331-runtime-axum/.superpowers/sdd/task-4-report.md` (updated with "## Fix: completion_order leak" section; file is in `.git/info/exclude` so not tracked by git, as intended)</result>
+<usage><subagent_tokens>38317</subagent_tokens><tool_uses>18</tool_uses><duration_ms>143139</duration_ms></usage>
+</task-notification>
