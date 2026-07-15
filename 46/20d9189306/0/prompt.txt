@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bu7btvlit</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/5bdcf7d9-bffe-41f8-99e8-3f252ae7de91/tasks/bu7btvlit.output</output-file>
+<status>completed</status>
+<summary>Background command "Test remaining crates (excl. known-red-herring bedrock)" completed (exit code 0)</summary>
+</task-notification>
