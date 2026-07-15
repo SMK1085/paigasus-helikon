@@ -1,0 +1,66 @@
+<task-notification>
+<task-id>aa9c349e5f9a28613</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/aa9c349e5f9a28613.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 15 (book + rosters)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+### Spec Compliance — ❌ (two Important findings; Critical: none)
+
+---
+
+### Strengths
+
+- The new `docs/book/src/concepts/axum-server.md` is thorough and accurate: WebSocket-only is stated correctly for the events endpoint (table row + replayable-runs section), all three provider traits (`SessionProvider`, `ContextProvider&lt;Ctx&gt;`, `AuthLayer`) are covered with their exact signatures, `openapi` is documented as default-on with the correct disable instruction, and the replayable-run model (EventLog, cancellation behaviour, async outliving the connection) is clearly described.
+- Only `runtime-axum` flips stub→published across every affected file. `evals`, `runtime-temporal`, and `runtime-agentcore` are consistently listed as stubs in every changed file (README.md, facade README, crates.md, workspace-layout.md, api-docs.md, introduction.md, SUMMARY.md). No sibling wrongly reclassified.
+- All new relative links resolve to the newly created file: `./concepts/axum-server.md` in SUMMARY.md, `../concepts/axum-server.md` in `reference/api-docs.md` and `getting-started/workspace-layout.md`, and `concepts/axum-server.md` in `introduction.md` — all correct anchors given each file's location in the source tree.
+- SUMMARY.md wired under Concepts in the right position.
+- Markdown tables are structurally well-formed.
+
+---
+
+### Issues
+
+#### Important — count inconsistency (spec check #1: "counts updated consistently")
+
+**`docs/book/src/introduction.md` line 18 / `docs/book/src/getting-started/workspace-layout.md` line 46.**
+
+`introduction.md` says "Ten crates are published"; `workspace-layout.md` says "Ten crates carry real implementations" with a list of exactly 10. But `docs/book/src/reference/crates.md` (updated by this same diff) and `README.md` correctly reflect **14** published crates. The 4 missing from the short list: `providers-bedrock`, `providers-gemini`, `sessions-postgres`, `sessions-redis`. This is a perpetuation of pre-existing drift (those files said "Nine" before; the old "Nine" was already wrong — should have been 13). The diff incremented the wrong base number (+1 → 10) rather than correcting it (+1 → 14). The spec gate for this review explicitly states "counts updated consistently" and flags any count that doesn't add up.
+
+Fix: change `introduction.md` line 18 to "Fourteen crates are published", and change `workspace-layout.md` line 46 to "Fourteen crates carry real implementations" and append `providers-bedrock`, `providers-gemini`, `sessions-sqlite`→keep, `sessions-postgres`, `sessions-redis` to the list (they're already in `crates.md`).
+
+---
+
+#### Important — hardcoded version strings in install snippets (spec check #5)
+
+**`docs/book/src/concepts/axum-server.md` lines 9, 16, 156.**
+
+Three `[dependencies]` snippets carry `version = "0.1"`:
+
+- line 9: `paigasus-helikon = { version = "0.1", features = ["openai", "runtime-axum"] }`
+- line 16: `paigasus-helikon-runtime-axum = "0.1"`
+- line 156: `paigasus-helikon-runtime-axum = { version = "0.1", default-features = false }`
+
+Spec check #5 says "no hardcoded crate version in install snippets." The root `README.md` and facade README use `cargo add` / drift-free style for this reason. Note that `workspace-layout.md` lines 74 and 82 already carry hardcoded versions (`"0.5"`, `"0.3"`) — so this is consistent with existing book style — but the spec check explicitly applies here.
+
+Fix: replace with `cargo add paigasus-helikon --features openai,runtime-axum` / `cargo add paigasus-helikon-runtime-axum`, or at minimum use a version-free `workspace`-path note. For the disable-openapi example, show the `default-features = false` principle without pinning.
+
+---
+
+#### Minor — "six endpoints" in prose vs 4 rows in the table
+
+**`docs/book/src/concepts/axum-server.md` line 41.**
+
+"The server exposes six endpoints under a flat prefix" but the endpoint table immediately below has 4 rows (the three POST modes — one-shot, `?stream=sse`, `?mode=async` — are collapsed into one row). A reader who counts the table rows gets 4, not 6, and then wonders where six comes from. The spec itself counts the three POST modes as distinct endpoints.
+
+Fix: either expand the table to 6 rows (one per mode with Method/Path/Mode column), or change the prose to "four routes (six endpoint modes)" so the mismatch is explained rather than silent.
+
+---
+
+### Assessment — Task quality: **Needs fixes**
+
+The content is technically accurate — API behaviour, trait signatures, WebSocket-only caveat, and stub/published classification are all correct, and no relative links are broken. Two Important findings must be addressed before merge: the "Ten" vs "Fourteen" published-crate count divergence across the book (spec check #1), and three hardcoded version pins in the new install snippets (spec check #5).</result>
+<usage><subagent_tokens>58748</subagent_tokens><tool_uses>7</tool_uses><duration_ms>264662</duration_ms></usage>
+</task-notification>
