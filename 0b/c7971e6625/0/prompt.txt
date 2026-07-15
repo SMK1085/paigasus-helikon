@@ -1,0 +1,34 @@
+<task-notification>
+<task-id>add33ed2fe2675b6c</task-id>
+<tool-use-id>toolu_01E5Ne9x4dfSfLuuu1ohLQqU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/add33ed2fe2675b6c.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 13 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance
+✅
+
+### Strengths
+- **Driver drains unconditionally — verified.** The detached task's loop is `while let Some(ev) = events.next().await { let _ = tx.send(ev).await; }` (`crates/paigasus-helikon-runtime-agentcore/src/invoke.rs`, diff lines 298-304): no `?`, no early return, no `select!` exit. A dropped receiver makes `tx.send` fail instantly (loop continues), so the runner stream is always polled to its terminal. Cross-checked against `TokioRunner::run_streamed`'s cancelled path (`crates/paigasus-helikon-runtime-tokio/src/lib.rs:243-251`): on `Outcome::Cancelled` it calls `finalize(&amp;session, &amp;recorder).await` *before* yielding the synthetic `RunFailed` — so drain-to-end guarantees persistence on exactly the disconnect path being fixed.
+- **Cancel clone ordering correct.** `let cancel_for_sse = cancel.clone();` is taken before `state.context.build(&amp;parts, session, cancel)` consumes the original (diff lines 199-203), and the `DropGuard` lives in `SseDriverState` owned by the response's unfold stream (diff lines 307-319, 330-335) — it fires on early disconnect (cancels the in-flight run promptly, no 30s leak) and on clean completion (documented no-op). This also restores compliance with `ContextProvider::build`'s "the server cancels it when the client disconnects" contract (`runtime-axum/src/context.rs:83-84`).
+- **The disconnect test proves finalization, not just non-hang.** `sse_client_disconnect_still_finalizes_the_session` drives a raw TCP client, reads until the first `run_started` frame, drops the socket mid-stream, then polls the *shared* `InMemorySessionProvider` session's `snapshot()` until non-empty and asserts `messages[0]` is the persisted `Item::UserMessage` (diff lines 505-523). Against the pre-fix code (runner stream wired directly into the response body), the snapshot could never populate — the 10s timeout would fail the test, so it is mechanically a genuine regression test for the old bug.
+- **Both prior Minor items resolved.** `NotImplemented` fully excised — `grep` over the crate source confirms zero dangling references (variant, status arm, test, and stale doc all removed; crate is `0.0.0`/`publish = false`, so the pub-variant removal is not a published-API break). `ambiguous_body_with_both_messages_and_prompt_parses_as_messages` (diff lines 365-372) pins the Messages-wins ordering with a doc comment correctly framing it as order-pinning, not blessing the ambiguous shape.
+- **Eager forwarding preserved; JSON mode untouched.** Events flow one-at-a-time through the bounded `mpsc::channel(64)` — no whole-run buffering before the first frame; the bound gives sane backpressure for a slow-but-connected client. `run_json` has zero changes in this diff. Start-error → synthetic `RunFailed` frame behavior is carried over intact.
+- **Independently re-verified:** 28/28 tests green (`cargo test -p paigasus-helikon-runtime-agentcore`, including the new disconnect test), `clippy --all-features --all-targets -- -D warnings` clean, `cargo fmt --check` clean. Commit `500d42b fix(runtime-agentcore): SMA-332 finalize and cancel sse runs on client disconnect` — valid type/scope, lowercase subject.
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None.
+
+#### Minor (Nice to Have)
+- **JSON mode retains the analogous (pre-existing) disconnect gap.** `run_json` awaits `runner.run(...)` inside the handler future; a client disconnect mid-run drops that future, so `TokioRunner::run`'s internal `finalize` never executes and the turn is lost — the same failure class just fixed for SSE. `runtime-axum`'s one-shot path does *not* have this gap (its `spawn_writer` is detached, `runs.rs:187-198`). This was outside the fix's mandated scope ("JSON mode untouched" was a verification criterion, and the risk was named SSE-only), the run's work is at least not leaked (the whole future tree is dropped), and AgentCore's platform client is unlikely to abandon a buffered request — but a follow-up should either detach the JSON run the same way or document the accepted semantics in `run_json`'s doc comment.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** All five verification points check out against the diff and against the actual `TokioRunner` cancelled-path semantics: the detached driver guarantees finalize, the drop guard restores prompt cancellation and the documented `ContextProvider` contract, the new test genuinely discriminates old from new behavior, both prior Minors are cleanly resolved, and no contract regressions were introduced. The remaining JSON-mode note is pre-existing, out of this fix's scope, and non-blocking.</result>
+<usage><subagent_tokens>103493</subagent_tokens><tool_uses>4</tool_uses><duration_ms>115681</duration_ms></usage>
+</task-notification>
