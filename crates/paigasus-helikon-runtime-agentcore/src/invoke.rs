@@ -191,19 +191,27 @@ fn wants_json(headers: &HeaderMap) -> bool {
 ///   persists the turn to the session — inside the future it returns. Awaiting that
 ///   future *in the handler* would mean a client disconnect drops it mid-run and the
 ///   turn's session write is silently lost (SMA-456). Owning it in a detached task
-///   decouples the run's lifetime from the HTTP response's, so finalize always runs.
+///   decouples the run's lifetime from the HTTP response's, so a disconnect can no
+///   longer stop the runner from reaching its finalize path. (A run that fails
+///   *before* the agent starts — an unreadable session, say — never reaches finalize
+///   at all; there is no turn to lose in that case.)
 /// - `cancel` (a clone of the token also embedded in `ctx`, retained by the caller —
 ///   see [`invocations`]) is wrapped in a [`DropGuard`] bound for the handler
 ///   future's lifetime. When that future is dropped — a client disconnecting mid-run
 ///   — the guard fires [`CancellationToken::cancel`], so the runner aborts the
 ///   in-flight run instead of running to its natural end. Dropping the guard after a
 ///   clean completion is harmless (cancelling a finished run is a no-op).
-/// - Net effect: a disconnect cancels the run; the runner's stream ends, `finalize`
-///   persists the recorder's events (the turn's user message plus any assistant/tool
-///   items observed before the cancel), and `run` returns `Err(RunError::Cancelled)`
-///   — which nobody is left to receive. The turn is persisted; nothing is leaked.
-///   Unlike [`run_sse`], no synthetic terminal event is produced: terminal synthesis
-///   lives in `run_streamed`, not in `Runner::run`.
+/// - Net effect: a disconnect cancels the run; the runner's stream ends and
+///   `finalize` persists the recorder's events (the turn's user message plus any
+///   assistant/tool items observed before the cancel). If the cancel won — i.e. it
+///   aborted the run before any genuine terminal event — `run` returns
+///   `Err(RunError::Cancelled)`; if a real terminal had already occurred, that
+///   outcome wins instead, per [`Runner::run`]'s cancellation-precedence contract.
+///   Either way nobody is left to receive it, the turn is persisted, and nothing is
+///   leaked. Unlike [`run_sse`], no synthetic terminal event is produced: terminal
+///   synthesis lives in `run_streamed`, not in `Runner::run`.
+///
+/// [`Runner::run`]: paigasus_helikon_core::Runner::run
 ///
 /// Because finalize runs *before* `Runner::run`'s future resolves, a received result
 /// implies the session write was already issued — so the `200` is never returned ahead
