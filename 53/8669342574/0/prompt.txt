@@ -1,0 +1,34 @@
+<task-notification>
+<task-id>acbb2137629bc0b2a</task-id>
+<tool-use-id>toolu_01VwyVvv1eLSLKbHVpWB88uK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/acbb2137629bc0b2a.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 10 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Commit messages match the required global constraints exactly.
+
+### Spec Compliance
+⚠️
+
+### Strengths
+- All five required topic areas are present and substantively developed in `lib.rs`: v0 constraint set, worker-side posture, retry semantics + idempotency, quantified payload budget, and upgrade discipline (`crates/paigasus-helikon-runtime-temporal/src/lib.rs:137-247`, `README.md:127-154`).
+- Payload arithmetic is genuinely quantified, not hand-waved: "~1.5 MB of JSON," "15–20 turns," "≤50 KB each" — matches design spec §5.11 verbatim in substance (`docs/superpowers/specs/2026-07-05-runtime-temporal-agentcore-design.md:318-329`).
+- Retry semantics section correctly distinguishes crash-retry vs. application-error-retry, cites ADR-10 for model-error non-retryability, names `RetryingModel` as the sanctioned path, and documents `max_attempts: 1` as the idempotency opt-out — all consistent with spec §5.9.
+- The compile-check follow-up commit is real: I independently ran `cargo test -p paigasus-helikon-runtime-temporal --doc` and confirmed 2 passed / 0 ignored, both `no_run`. All builder/runner API names used in the examples (`TemporalAgentWorker::builder::&lt;Ctx&gt;()`, `.task_queue`/`.client`/`.with_ctx`/`.register`/`.build`, `TemporalRunner::new`, `TemporalRunnerConfig::new`, `RunContext::ephemeral`, `AgentInput::from_user_text`) check out against `worker.rs`/`runner.rs`/core exports — no fabricated API remains.
+- README Rust fences are consistently `rust,ignore`; intra-doc links only target public modules (`worker`, `driver`, `runner`, `error`, `payloads` are all `pub mod`; `activities`/`workflow` stay private and are never linked) — no SMA-415-style private intra-doc link regression.
+- Structure/tone matches sibling READMEs (`Install` → `Quick start`/`Example` → topical sections → `Links` → `License`).
+- Both commit messages match the required subjects exactly.
+
+### Issues
+
+#### Important (Should Fix)
+- **"All four are rejected/detected at registration" is factually wrong for nested agents, in both files.** `lib.rs:151` states "All four are detected during agent registration (via [`worker::TemporalAgentWorkerBuilder::register`]) and rejected with a [`worker::RegistrationError`]"; `README.md:114` says "All four are rejected at registration time with a descriptive error." I checked `worker.rs`'s actual `register()` (lines 202-215): it only checks `agent.hooks`, `agent.handoffs`, `agent.input_guardrails`, `agent.output_guardrails` — there is no check anywhere in the crate (`grep -rn "agent_as_tool\|nested\|AgentAsTool"` across `src/*.rs` returns nothing) that rejects nested agent-as-tool at registration. This is consistent with the design spec itself, whose §5.7 bullet for nested agents says "that works" (i.e., registration succeeds) and only "documented" — not "rejected" (`docs/superpowers/specs/2026-07-05-runtime-temporal-agentcore-design.md:248-249`). The task brief's own phrasing ("no hooks/guardrails/handoffs, fail-fast at registration; **nested agent-as-tool not durable**") deliberately separates these two categories — the implementer's docs conflate them into one false "all four, rejected" claim. A reader would wrongly conclude that registering an agent with a nested agent-as-tool tool throws `RegistrationError`, when in fact it silently succeeds and the nested run is merely non-durable at execution time. Compounding this, the README's own bullet list under this claim has only **three** items (hooks-and-guardrails combined, handoffs, nested agents), not four — the count doesn't even match its own list. This doesn't break any CI gate (rustdoc doesn't check prose truth), but it's a direct doc-vs-code contradiction in public-facing crate documentation. Fix: change the closing sentence in both files to state that hooks/handoffs/guardrails are rejected at registration, while nested agents are permitted but non-durable (matching the earlier, correct prose in the same paragraph).
+
+### Minor (Nice to Have)
+- None beyond the above — no other factual, fencing, or fabricated-API issues found in either file.
+
+### Assessment
+**Task quality:** Needs fixes
+**Reasoning:** Content coverage, payload arithmetic, retry semantics, example-API accuracy, and fencing discipline are all solid and independently verified (doctest recompiled clean, all API names checked against `worker.rs`/`runner.rs`/core), but both `lib.rs` and `README.md` carry the same doc-vs-code contradiction — claiming nested agent-as-tool is rejected at registration when the code and even the design spec say it is merely non-durable, not rejected — which is a one-line-per-file factual fix before this is ready to ship.</result>
+<usage><subagent_tokens>86584</subagent_tokens><tool_uses>29</tool_uses><duration_ms>215231</duration_ms></usage>
+</task-notification>
