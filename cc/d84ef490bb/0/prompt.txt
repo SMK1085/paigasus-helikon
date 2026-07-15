@@ -1,0 +1,1 @@
+sweep the stale release-plz branches too, note they might be blocked by a ruleset in GH, then we need to adjust that first
