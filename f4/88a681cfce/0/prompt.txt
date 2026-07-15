@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bddoswg9a</task-id>
+<tool-use-id>toolu_01GPE9n9sJB9yB86xwtnWkGU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/c436ccdf-cdfd-494d-9715-9e329a393568/tasks/bddoswg9a.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 94 full CI matrix run to completion" completed (exit code 0)</summary>
+</task-notification>
