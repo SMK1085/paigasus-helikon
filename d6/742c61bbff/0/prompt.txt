@@ -1,0 +1,45 @@
+<task-notification>
+<task-id>aaede5e7fd056ba78</task-id>
+<tool-use-id>toolu_01TnW26qRtu54r6rYsdtEGZU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/aaede5e7fd056ba78.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 9 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance
+- ⚠️
+
+The task's core deliverable — a genuinely non-vacuous crash-resume AC test — is correctly implemented. The timeout-knob addition is correctly wired, defaults-preserving, and documented. All five checklist items are resolved with real (not smoke) test evidence. Live-run results themselves are accepted on report evidence per the review's ground rules (see ⚠️ list below).
+
+⚠️ Live-only claims accepted on report evidence (not independently re-run):
+1. The pasted "6 passed" / stable 21.9s–22.0s timing output — cannot re-run without a server.
+2. Checklist items 2/3 ("cancel/timeout race arms drop cleanly" and "`Cancelled` outcome ≠ `WorkflowFailure`") rest partly on `runner.rs`'s `outcome_to_run_result` mapping, which is out-of-diff (Task 8 code, not touched here). The test's assertion (`Err(RunError::Cancelled)`) is consistent with the claimed design but the underlying enum-mapping guarantee itself isn't re-verified in this diff.
+3. Checklist item 4's underlying *decision* (v0 folds tool-infra-exhaustion into the run rather than terminal-failing it) is a Task-8 design fact, not something this diff's code proves independently — the new test's assertions are consistent with it and internally sound (see Issues), but the decision's provenance is trusted from the report.
+4. "No src defects were exposed" — trusted from the pasted live-run output.
+
+### Strengths
+- **Crash-resume AC is rigorous, not vacuous.** Traced the full chain: `ScriptedModel`'s `calls: Arc&lt;AtomicU32&gt;` is created once in `scripted_model()` and lives inside the single `Arc&lt;LlmAgent&lt;...&gt;&gt;` that both `worker1` and `worker2` register via `Arc::clone(&amp;agent)` (`tests/temporal_live.rs:927-933, 956-963, 972-979`) — the counter is genuinely shared across worker generations, not reconstructed, so a real re-execution of turn-0's `call_model` would push it to 3, not 2. `BlockOnceTool`'s `create_new(true)` flag-file (`:648-663`) atomically claims "first invocation" and blocks only once; the retry (invoked on gen-2) observes the flag and returns instantly, giving a real "blocked-attempt + retry" count of 2.
+- **Crash timing is provably mid-tool-call, not before/after.** `wait_for_file(&amp;flag_path, …)` blocks the test until the tool has entered its blocking branch (`:965-967`) before `worker1.stop()` is called — this is on-disk evidence the flag was written (i.e., the tool activity started) prior to abort, and since `invoke_tool` is only scheduled after `call_model`'s result is durably recorded in workflow history, turn-0's model completion necessarily preceded the abort.
+- **Worker "crash" is a real abandon, not graceful shutdown.** `WorkerHandle::stop` drops the shutdown sender to race the `select!` away from `worker.run()`, then joins the dedicated OS thread (`:766-780`), which drops the whole per-generation tokio runtime (and any in-flight blocked tool task) — matches the doc-commented rationale about `!Send` worker futures.
+- **Timeout knob is correctly wired and non-breaking.** `model_start_to_close`/`tool_start_to_close` map 1:1 into `ActivityTimeouts.model`/`.tool` (`worker.rs:189-201`) → `model_activity_opts`/`tool_activity_opts` (`workflow.rs:294-296`), with no swap; unset fields fall back to the pre-existing `DEFAULT_ACTIVITY_START_TO_CLOSE` (300s), preserving old behavior. The new unit test `build_activity_config_applies_timeout_overrides` (`workflow.rs:358-386`) asserts each of the three `close_timeouts` fields independently — a real per-field wiring check, not tautological.
+- **The two extra tests are real assertions, not smoke.** `model_failure_maps_to_typed_agent_error` asserts both the message survives (`"connection lost"`) *and* the JSON envelope does NOT leak (`!message.contains("\"Model\"")`) — a two-sided check that would catch a mis-targeted cause-chain extraction either way. `tool_infra_failure_folds_into_run_and_persists` structurally proves the fold-in decision: since `AlwaysBlockTool` never returns `Ok` in this scenario, the model's second invocation (needed to produce `"recovered"`) can only be reached if the exhausted tool failure was fed back as a `ToolResult`, so the passing assertion is sound evidence of fold-in behavior even without directly inspecting the `ToolResult` payload.
+- **Skip-gate matches the forkd_live pattern in spirit and improves on it appropriately.** Compared `forkd_live.rs` directly: same "print SKIPPED, early-return per test" shape (`temporal_live.rs:438-449` vs. `forkd_live.rs:15-30`); `connect()`/any network call is only reachable after the gate's `Some` branch, so gated-off runs have zero dependency on a Temporal server or CLI.
+- Commit messages match the required strings exactly; new pub methods (`model_start_to_close`, `tool_start_to_close`) carry substantive doc comments explaining the crash-detection mechanism, not just boilerplate.
+
+### Issues
+
+#### Critical (Must Fix)
+None found.
+
+#### Important (Should Fix)
+None found.
+
+#### Minor (Nice to Have)
+- **Inconsistent cleanup-before-assertion ordering leaks a worker thread on assertion failure in one test.** In every other test, `worker.stop().await` runs before any assertion that could panic, guaranteeing thread/runtime teardown even on failure. `session_round_trip` breaks this pattern: `assert!(r1.is_ok(), …)` and `assert!(r2.is_ok(), …)` (`tests/temporal_live.rs:1126, 1139`) execute *before* `worker.stop().await` (`:1141`) — if either assertion panics, the dedicated OS thread + tokio runtime + live Temporal client connection is never joined/torn down for the remainder of the test binary's life. Low real-world impact (only triggers on a live-run failure, and doesn't affect gated-off/CI runs at all), but worth aligning with the rest of the file's ordering, or better, giving `WorkerHandle` a fallible best-effort `Drop` as a backstop.
+- **Scope creep, self-disclosed.** The brief specifies 4 tests; 6 shipped. The implementer flags this explicitly in the report as a deliberate choice to give the checklist items 1 &amp; 4 durable regression coverage rather than throwaway verification — reasonable given the dispatch's checklist-resolution requirement, but technically beyond the brief's Step 1 list.
+- `fresh_temp_path`'s `let _ = std::fs::remove_file(&amp;p);` (`:490`) is dead-code-adjacent — a fresh UUID path essentially never pre-exists; harmless but unnecessary defensive code.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** The acceptance-criterion crash-resume test is genuinely non-vacuous — the shared atomic counter, disk-flag crash-timing proof, and dedicated-thread "crash" mechanism together rule out the specific vacuous-pass failure modes (counter reset, blocked-before/after-abort ambiguity) the dispatch asked to scrutinize. The timeout knob is correctly wired, default-preserving, and unit-tested per field. Remaining findings are cosmetic test-hygiene items confined to a non-critical test's failure path and don't bear on the AC's validity.</result>
+<usage><subagent_tokens>82173</subagent_tokens><tool_uses>4</tool_uses><duration_ms>297027</duration_ms></usage>
+</task-notification>
