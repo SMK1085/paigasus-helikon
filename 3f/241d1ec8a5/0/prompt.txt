@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bvnqev83e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/6811f5a3-8bd8-455e-ae27-de34962e1da8/tasks/bvnqev83e.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch release-plz publish run to completion" completed (exit code 0)</summary>
+</task-notification>
