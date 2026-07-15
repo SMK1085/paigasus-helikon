@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>ae85b25e50eeb5411</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/ae85b25e50eeb5411.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 16 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance
+- ✅
+
+### Strengths
+- All six factual-accuracy claims about the agentcore crate's contract (ping `Healthy`/`HealthyBusy` exact casing, `time_of_last_update` transition-only semantics, session header name + inclusive 33–256 range, three-shape `#[serde(untagged)]` body enum, MCP bind `0.0.0.0:8000`/stateless mode/`disable_allowed_hosts()`, and the MCP-mode fresh-in-memory-session claim) verified true against source (`crates/paigasus-helikon-runtime-agentcore/src/ping.rs`, `src/session.rs`, `src/invoke.rs`, `src/mcp.rs`).
+- Measured Docker numbers (1.31 MB / 3.27 MB / 11 ms / 9 ms) match `docs/runbooks/agentcore-image-check.md:10-23`'s canonical "Validated 2026-07-06" table exactly — this is the final, dated re-measurement after task-14's gate-assertion fixes, not the stale 17 ms figure that appears mid-way through `task-14-report.md`'s fix-verification log.
+- Facade README's two new feature-table rows (`crates/paigasus-helikon/README.md:33-34`) exactly match `crates/paigasus-helikon/Cargo.toml`'s `[features]` block (`dep:` syntax, lines ~46-47) and `src/lib.rs`'s `pub use ... as runtime_temporal`/`runtime_agentcore` (both carrying `///` doc comments, satisfying `missing_docs = "warn"`). No new rust fence was introduced in this README's diff — only two table rows and a prose sentence changed; the existing ` ```ignore ` doctest fence is untouched.
+- `.versionrc:18`'s `scopeRegex` genuinely excludes `book` and includes `repo` — the implementer's scope-rename justification (`docs(book)` → `docs(repo)`) is accurate, not a rationalization.
+- `docs/book/src/SUMMARY.md:22` registers `[Runtimes](./concepts/runtimes.md)` at the correct list level, sibling to other concept pages — not an orphan page.
+- Book-wide sweep is complete: no surviving "stub"/"0.0.0"/"not yet implemented" language for `runtime-temporal` or `runtime-agentcore` anywhere under `docs/book/src/`; every remaining stub mention refers exclusively to `paigasus-helikon-evals`, which is accurate.
+- `concepts/runtimes.md` is substantive, not filler — architecture paragraph, v0 constraint set, worker-side security posture, retry/payload budget, and a genuine "choosing between them" decision guide, matching scrutinize item 5.
+- The CDK snippet's import (`aws-cdk-lib/aws-bedrockagentcore`, hyphenated) and API surface (`Runtime`, `AgentRuntimeArtifact.fromEcrRepository`, `.addEndpoint`, `ProtocolType.MCP`) were independently re-verified via live web search/fetch against AWS's own CDK API docs (`docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_bedrockagentcore-readme.html`) during this review — the implementer's WebFetch-based claim holds: the actual npm TypeScript import path is hyphenated, and `Runtime`/`AgentRuntimeArtifact`/`ProtocolType` are all in the *stable*, graduated module (only the `Policy` submodule remains alpha, which this snippet doesn't touch). The snippet's `import`/usage pairs (`ecr`, `agentcore`) are internally consistent.
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None.
+
+#### Minor (Nice to Have)
+- **Cross-document CDK import-path inconsistency, introduced by this diff's own correction.** The new content in `crates/paigasus-helikon-runtime-agentcore/README.md` and `docs/book/src/concepts/runtimes.md:51` correctly uses the hyphenated `aws-cdk-lib/aws-bedrockagentcore` (verified live above), but the pre-existing, untouched `docs/runbooks/agentcore-image-check.md:138` — which the new README explicitly links to for "the full measurement procedure" — still says the underscored `aws-cdk-lib/aws_bedrockagentcore`. The design spec (`docs/superpowers/specs/2026-07-05-runtime-temporal-agentcore-design.md:73,443`) also asserts the underscored form, which is what the runbook inherited. The implementer disclosed the deviation-from-spec as a "concern/follow-up" but didn't reconcile the runbook's stray one-line mention, even though they had already read that file closely enough to cite its measured numbers. This is a real, now-visible inconsistency between two docs this same feature cross-links, but the runbook is outside task 16's declared file scope (it's not a `docs/book/src/*` page and wasn't listed as a target), so it doesn't block this task — a one-line follow-up fix would close it.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** Every dispatch-mandated contract detail (ping casing, session-header range, MCP port/stateless mode, measured image/cold-start numbers, facade table, SUMMARY.md registration, `.versionrc` scope justification) checked out true against source, and the book-wide stale-claim sweep left no orphaned stub language for the two promoted crates. The one finding — a leftover underscore-vs-hyphen CDK import-path mismatch in an out-of-scope runbook file — is a trivial, non-blocking follow-up, not a defect in what this task was actually asked to touch.</result>
+<usage><subagent_tokens>100835</subagent_tokens><tool_uses>17</tool_uses><duration_ms>223102</duration_ms></usage>
+</task-notification>
