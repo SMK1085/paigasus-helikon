@@ -1,0 +1,51 @@
+<task-notification>
+<task-id>abb81a4a5894a0132</task-id>
+<tool-use-id>toolu_019XWFu9SdCuRcckc43vqYjC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/abb81a4a5894a0132.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review SMA-452" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All tests pass (exit 0): the SSE suite (9 tests incl. both synthetic-frame tests and the `sse_stream_matches_local_events` happy-path guard), the WS suite (5 tests incl. both synthetic-frame tests and `ws_replays_completed_run_then_closes` guard), plus the lib unit tests (event_log + registry) which ran first under the same exit-0 invocation. The `--no-default-features` gate also builds clean (exit 0). I now have full static + dynamic verification. Here is the review.
+
+---
+
+### Strengths
+
+- **Batch-drain `subscribe` is correct and behaviorally sound.** I traced all three paths against the replaced per-event logic:
+  - *No-eviction replay*: `next_cursor = first_seq + retained_len` = seq of the next-to-append event; the whole snapshot is drained from an owned `IntoIter`, then the next `read_from(cursor)` resumes exactly at the tail. No overlap, no gap.
+  - *Under-range clamp*: `read_from` clamps `effective_cursor = cursor.max(first_seq)`, so an under-range `from` starts at the first retained event; verified against `subscribe_skips_gap_on_ring_eviction` (traced by hand: yields `[c, done]` exactly once each).
+  - *Mid-replay eviction*: because the batch is cloned into `pending` before draining, concurrent eviction cannot drop or re-emit an in-flight batch. This is actually *stronger* than the old per-event code (which could skip a mid-batch event on a race) — strictly fewer drops, never a duplicate. Not a regression.
+  - *Lost-wakeup ordering preserved*: `notified()`+`enable()` still precede every `read_from` that may return empty; the fast-path drain only runs when buffered data exists, so it never needs a wakeup. Correct.
+- **Synthetic-frame invariant is airtight.** `start_error` is written in `spawn_writer` *before* the `TerminalGuard` drop calls `mark_terminal()` (runs.rs:306 then Drop) — so when a subscriber observes terminal and calls `synthetic_terminal_frame`, `start_error` is already visible (mutex + notify happens-before). A normally-completed run always retains its terminal event as the last element (nothing appends after it → never ring-evicted), so `saw_terminal` is always `true` and no spurious `RunFailed` is injected — proven live by `sse_stream_matches_local_events` and `ws_replays_completed_run_then_closes` staying green. The WS `socket.recv()` disconnect arm `break`s without calling `synthetic_terminal_frame`, so a client close emits no synthetic frame. One-shot (`oneshot_response`) is untouched — still `Err(ServerError::RunStart)` → 500.
+- **Constraints all honored**: ring capacity still `max_events.min(64)` (event_log.rs:92); crate version `0.1.0` unchanged; no CHANGELOG/Cargo.toml edits; new CI job reuses the exact pinned action SHAs from sibling jobs; context name `build-no-default-features` is identical across ci.yml / ruleset JSON / CONTRIBUTING.md / CLAUDE.md.
+- `is_terminal` widening to `pub(crate)` and the `#[allow(dead_code)]` relocations are both justified (I confirmed `ReadSlice.first_seq` is read only in test code; `is_terminal` is consumed by both handlers). `AgentEvent` construction from the downstream crate is legal (only the *enum* is `#[non_exhaustive]`, not the `RunFailed` variant).
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+- **Published user-facing docs overstate the one-shot 500 behavior** — `crates/paigasus-helikon-runtime-axum/README.md:70` and `docs/book/src/concepts/axum-server.md:87`. Both say a run "that ends without a terminal event" makes streaming transports emit a synthetic frame while "one-shot runs instead return `500`". That is true only for the **start-error** sub-case. For a *started-but-terminal-less* run (the `PartialThenEndRunner` / panic-mid-stream shape), one-shot returns **200 with a partial `RunResponse`** (oneshot_response only 500s when `start_error` is `Some`; the design §Task 1 explicitly notes "panic-mid-stream → 200 failed envelope"). Why it matters: these are the crates.io landing page and the published book, asserting a wrong HTTP status for an edge case. Fix: scope the parenthetical, e.g. "one-shot returns `500` on a start error; a started run that ends without a terminal returns `200` with a partial result." (This is a cross-task doc/semantics gap the task-scoped reviews wouldn't have caught.)
+- **CLAUDE.md CI-section opening count is stale** (the T4 known-minor). The paragraph still says ci.yml "runs six jobs on every PR … the other five also run on push to `main`" and enumerates six; ci.yml now has **eight** jobs (fmt, clippy, test, build-no-default-features, docs, doc-coverage, commits, sessions-it — `book-build` lives in docs.yml). This PR added the 8th and edits the required-contexts sentence three lines below, so fixing "six→eight" / "other five→other seven" in the same hunk is cheap hygiene. Internal doc only, non-blocking.
+
+#### Minor (Nice to Have)
+- **T3 doc parity** — `handlers/events.rs` module doc (lines 8-12), `events` fn doc (38-40), and `handle_socket` doc (72-80) still describe stream termination only via the real terminal event; the SSE counterpart in `runs.rs` was updated to mention the synthetic frame. Cosmetic (`pub(crate)`, no `missing_docs`/doctest impact), but folding a one-line note into `handle_socket`'s doc would restore parity.
+- **T1 comment wording** — event_log.rs:216-217 "`read_from` clamps `next_cursor` up from `first_seq`" reads loosely; it clamps the *effective cursor*. Trivial.
+
+### Triage of known Minors
+- **T3 doc-parity (events.rs WS docs):** defer — cosmetic, no gate impact; nice to fold in but not blocking.
+- **T4 CLAUDE.md "six jobs" count:** fix-before-merge (recommended) — cheap, same paragraph already edited, and now more stale than before; non-blocking.
+- **T1 comment nit (event_log.rs 216-217):** defer — pure wording.
+- **T2 `SseState::disconnect` naming:** defer / keep as-is — and note the suggested `_disconnect` rename would **not** suppress the lint: a leading underscore silences `unused_variables` for *bindings*, not the `dead_code` "field never read" lint on a struct field. `#[allow(dead_code)]` is the correct idiom here; leave it.
+
+### Recommendations
+- Fold the two doc fixes (README/mdbook one-shot-500 scoping + CLAUDE.md job count) into this branch before opening the PR — both are one-liners and one of them is on the published crates.io/book surface.
+- Optionally add the T3 doc note to `handle_socket`. Everything else can defer.
+- Post-merge, remember the design's Task-2 rollout step: the `build-no-default-features` required context is inert until a maintainer runs `scripts/apply-repo-config.sh`, and applying it can block the release-plz PR until that PR re-reports the new context.
+
+### Assessment
+**Ready to merge?** With fixes
+**Reasoning:** The three correctness hearts — batch-drain equivalence, the synthetic-frame invariant, and the unchanged one-shot/async paths — are all verified sound and the full crate test suite plus the new `--no-default-features` gate are green; the only outstanding items are two low-cost documentation-accuracy fixes (one on the published README/book), neither of which blocks functionally.</result>
+<usage><subagent_tokens>123368</subagent_tokens><tool_uses>28</tool_uses><duration_ms>1549824</duration_ms></usage>
+</task-notification>
