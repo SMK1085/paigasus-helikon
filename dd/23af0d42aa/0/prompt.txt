@@ -1,0 +1,1 @@
+The book is now already majorly outdated in the repo, so we should file a linear issue to update it with what already landed, and also extend CLAUDE.md that we update the book before any PR
