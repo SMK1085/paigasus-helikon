@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>aad6dd36cc697a4d4</task-id>
+<tool-use-id>toolu_01PMNToR471gaM2FC6N6ggWS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/aad6dd36cc697a4d4.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 5 (session)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance — ✅
+
+All five global constraints and all task-scoped interface requirements are met:
+
+- `#[async_trait] pub trait SessionProvider: Send + Sync` with the exact `async fn session(&amp;self, id: Option&lt;&amp;str&gt;) -&gt; Result&lt;Arc&lt;dyn Session&gt;, ServerError&gt;` signature — `session.rs:73-77` ✅
+- `InMemorySessionProvider::new(max_sessions)`, same id → ptr_eq, None → fresh/unshared, FIFO eviction via `VecDeque` — `session.rs:101-168` ✅
+- No new `Session` impl; uses `paigasus_helikon_core::MemorySession::new()` throughout — `session.rs:53, 137, 156` ✅
+- `SessionLocks` `pub(crate)`, `lock_for(Some(id))` ptr_eq, `lock_for(None)` fresh distinct — `session.rs:182-212` ✅
+- `lib.rs` exports `mod session; pub use session::{InMemorySessionProvider, SessionProvider}` — `lib.rs:28-29` ✅
+
+---
+
+### Strengths
+
+- **TOCTOU double-check** in the slow write path (`session.rs:152-154`) correctly prevents two concurrent misses from both creating and inserting a new session for the same id.
+- **Eviction atomicity**: insertion and eviction happen together under the single write lock, so map and deque cannot diverge mid-operation (`session.rs:149-165`).
+- **Correct mutex choice for `SessionLocks`**: `std::sync::Mutex` (not tokio) is used to guard the lock map; the lock is acquired and released synchronously before any `await` point, so there is no async-mutex-across-await hazard (`session.rs:183, 206`).
+- **`tokio::sync::RwLock` for `InMemorySessionProvider`**: the async lock is properly `.await`-ed and released before the method returns; no lock is held across a suspension point.
+- All four prescribed tests are present and correctly assert ptr_eq / !ptr_eq semantics.
+
+---
+
+### Issues
+
+**Important — `SessionLocks` unbounded memory growth** (`session.rs:182-212`)
+
+The lock map `HashMap&lt;String, Arc&lt;tokio::sync::Mutex&lt;()&gt;&gt;&gt;` grows without any eviction or cleanup. `InMemorySessionProvider` is bounded by `max_sessions`, so the session map stays small; `SessionLocks` has no corresponding bound. A server that processes N distinct session ids over its lifetime accumulates N entries in the lock map indefinitely — each entry is a heap-allocated `String` + `Arc&lt;Mutex&lt;()&gt;&gt;` (~100–150 bytes), so 1 M unique ids → ~100–150 MB with no release path. The struct is `pub(crate)` and its actual consumers land in Task 10, which is the right place to wire cleanup (e.g., on session eviction from the provider). However, there is no note in the current doc comment signalling this footgun to the Task 10 implementer. The fix for this task is minimal: add a doc comment sentence to `SessionLocks` (or the `map` field) stating the known-unbounded-growth limitation and that cleanup is deferred to Task 10.
+
+**Minor — `len()` doc says "test builds only" but doesn't match the attribute** (`session.rs:119-129`)
+
+The doc comment says "Available in test builds only" while the `#[cfg(test)]` gate on the function body enforces exactly that — consistent. But `#[allow(clippy::len_without_is_empty)]` suppresses a lint that fires because `len()` exists without `is_empty()`; since `len()` is `#[cfg(test)]`, production callers never see it. The lint suppression is harmless and the allow targets the right item, but could carry a comment explaining the context.
+
+---
+
+### Assessment — Approved
+
+The implementation is spec-correct on all named constraints: eviction removes from both the map and the deque atomically (no stale-id leak), there is no lock held across an `.await`, and the `None`-id path is properly stateless. The one substantive finding — `SessionLocks` unbounded growth — is an architectural limitation, not a defect in the current task's contract, and is acceptable here provided a doc comment flags it for Task 10.</result>
+<usage><subagent_tokens>30910</subagent_tokens><tool_uses>3</tool_uses><duration_ms>109432</duration_ms></usage>
+</task-notification>
