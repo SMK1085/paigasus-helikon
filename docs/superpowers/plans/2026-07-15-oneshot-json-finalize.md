@@ -286,8 +286,9 @@ Replace the whole of `run_json` (`invoke.rs:179-197`, from its `/// Buffered JSO
 ///   lives in `run_streamed`, not in `Runner::run`.
 ///
 /// Because finalize runs *before* `Runner::run`'s future resolves, a received result
-/// implies the session write already landed — so the `200` is never returned ahead of
-/// the persisted turn.
+/// implies the session write was already issued — so the `200` is never returned ahead
+/// of the finalize step. (Ordering, not durability: persistence is best-effort, so a
+/// failed append is logged rather than propagated.)
 async fn run_json<Ctx: Send + Sync + 'static>(
     state: &AppState<Ctx>,
     ctx: RunContext<Ctx>,
@@ -628,10 +629,14 @@ In `crates/paigasus-helikon-core/src/runner.rs`, in the doc block for `run`, ins
     /// drive the run on a detached task and await its result over a channel, rather
     /// than awaiting it inline.
     ///
-    /// **Conversely, this future performs the session write before it resolves**, so
-    /// callers may treat its resolution as a persistence barrier: once `run` returns,
-    /// the turn is durable in the `Session`. This is what makes "detach and await the
-    /// result over a channel" a sufficient remedy for the hazard above.
+    /// **Conversely, this future issues the session write before it resolves**, so
+    /// callers may treat its resolution as an ordering barrier: the finalize step is
+    /// ordered before `run` returns, not left in flight behind it. This is what makes
+    /// "detach and await the result over a channel" a sufficient remedy for the hazard
+    /// above. Note this is an ordering guarantee, not a durability one: persistence is
+    /// best-effort, so an implementation may log rather than propagate an append
+    /// failure, and a run that fails before the agent starts never reaches finalize at
+    /// all.
 ```
 
 - [ ] **Step 2: Verify the docs build clean under `-D warnings`**

@@ -112,14 +112,15 @@ the runner-side fix is impossible.
 | Disconnect policy | **Cancel the run** | Matches `run_sse` and axum's `oneshot_response`, so all three transports agree; avoids burning model tokens for an absent client. Accepted cost: the persisted turn is partial. |
 | Same-session overlap | **Accept and document** | See below — a newly-persisting cancelled run can now overlap a retry. Pre-existing for SSE since SMA-332; this fix extends it to JSON. |
 | Observability | **Add tracing** | The detached path is otherwise silent in exactly the scenario the ticket exists for. |
-| Core docs | **Drop warning + persistence contract** | `run_streamed` warns about dropping the stream; `run` has no analogous warning about dropping the future — the exact trap behind this bug. The contract half is load-bearing: see below. |
+| Core docs | **Drop warning + ordering contract** | `run_streamed` warns about dropping the stream; `run` has no analogous warning about dropping the future — the exact trap behind this bug. The contract half is load-bearing: see below. |
 | Book | **Document agentcore's semantics** | `axum-server.md:87` states this property for axum; `runtimes.md` says nothing for agentcore. |
 
 ### The runner contract this fix depends on
 
 The fix works only because `TokioRunner::run` does `collect().await` → `finalize().await` → return
-(`runtime-tokio/src/lib.rs:169-172`), so `rx.await` resolving *implies the session write already
-landed*. That property is nowhere documented: `Runner::run`'s docs
+(`runtime-tokio/src/lib.rs:169-172`), so `rx.await` resolving *implies the session write was already
+issued* — see "Ordering, not durability" below. That property is nowhere documented:
+`Runner::run`'s docs
 (`core/src/runner.rs:68-91`) say only "the run's events are persisted at exit", and
 `AgentCoreServerBuilder::runner` (`agentcore/src/server.rs:123`) accepts **any**
 `Arc<dyn Runner<Ctx>>`. A custom runner that resolves before persisting would get zero benefit from
@@ -127,9 +128,19 @@ this fix, silently.
 
 Since this design argues the fix belongs at the call site, that contract becomes load-bearing and
 must be stated. The core docs deliverable therefore carries **both** halves: the drop warning *and*
-the positive contract ("`run`'s future performs the session write before it resolves; callers may
-treat its resolution as a persistence barrier"). Without the second, the warning tells callers to
+the positive contract ("`run`'s future *issues* the session write before it resolves; callers may
+treat its resolution as an **ordering** barrier"). Without the second, the warning tells callers to
 detach without telling them why detaching is sufficient.
+
+**Ordering, not durability** (corrected at final review). An earlier draft of this spec framed the
+second half as a *persistence* barrier — "once `run` returns, the turn is durable in the
+`Session`". That is false on three paths: `load_and_record` and `agent.run` both `?`-early-return
+before finalize (`runtime-tokio/src/lib.rs:154,156`), and `finalize` **swallows** `session.append`
+errors into a `tracing::warn!` by design (`lib.rs:118-129` — its own doc reads "Persistence is
+best-effort — an append error is logged, never propagated"), so `run` can return `Ok` with nothing
+durable. Only the *ordering* half is true — and only the ordering half is what this fix requires.
+Shipping the durability claim in a published crate's trait docs would have told implementors to
+propagate append errors that the default runner deliberately swallows.
 
 ### Same-session overlap (accepted)
 
@@ -276,8 +287,8 @@ billing it as "axum already passes this". The existing harness cannot express th
      cancels in-progress work, including the finalize step that persists the turn) rather than as a
      `TokioRunner` implementation claim, with the guidance that callers who cannot guarantee polling
      to completion should drive the run on a detached task and await the result over a channel; and
-  2. the positive persistence contract — `run`'s future performs the session write before it
-     resolves, so callers may treat its resolution as a persistence barrier. This is what makes
+  2. the positive ordering contract — `run`'s future *issues* the session write before it
+     resolves, so callers may treat its resolution as an ordering barrier. This is what makes
      "detach and await the result" a *sufficient* fix rather than merely a plausible one.
 - `docs/book/src/concepts/runtimes.md` — the agentcore section gains the disconnect semantics
   (both `/invocations` transports cancel the run on client disconnect while still finalizing the
