@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>boohxzlju</task-id>
+<tool-use-id>toolu_016BhgXCoB6AWrVaqs1JLhQM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/f1524f9a-e8ab-47e9-be2a-3599d89136df/tasks/boohxzlju.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR #86 CI checks until they settle" completed (exit code 0)</summary>
+</task-notification>
