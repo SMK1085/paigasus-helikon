@@ -1,0 +1,104 @@
+<task-notification>
+<task-id>a5a77c0ace6eba25e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a5a77c0ace6eba25e.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 3 (event_log)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+### Spec Compliance — ✅ with one ⚠️ Important bug
+
+All required public interfaces are present and correctly structured. The lost-wakeup ordering is correct. One correctness bug exists in `subscribe` that the test suite does not exercise.
+
+---
+
+### Strengths
+
+- **Lost-wakeup ordering is correct.** `event_log.rs:182–184`: `notified()` is created, `tokio::pin!`-ned, and `.enable()`-d at lines 182–184, then `read_from(cursor)` is called at line 187 — exactly the ordering the spec mandates. Any `notify_waiters()` fired between the enable and the eventual `notif.await` at line 207 cannot be missed.
+
+- **Stream termination is exact.** Line 194 recomputes `terminal = is_terminal(&amp;ev)` for the about-to-be-returned event. When that returns `true`, the state tuple carries `done = true`; the next unfold call hits `if done { return None; }` (line 175) immediately. The terminal event is yielded exactly once, then the stream closes. ✓
+
+- **Both deviations are correct.** `+ Unpin` is additive and required by the spec's own example tests (`sub.next().await` needs `Unpin`). Cloning the `Arc` per iteration rather than carrying it in the unfold state is the right workaround for the `Notified&lt;'_&gt;` self-borrow constraint — O(1) atomic increment, no correctness cost, and the lost-wakeup ordering is fully preserved.
+
+- **Lock is dropped before `notify_waiters()`.** Both `append` (line 96–97) and `mark_terminal` (line 107–108) use explicit `drop(inner)` before calling `notify_waiters()`, eliminating any risk of a subscriber waking and immediately deadlocking on the still-held mutex.
+
+- **Docs are thorough.** Every `pub(crate)` item has a `///` block; the lost-wakeup and pinning rationale docs are exactly right. ✓
+
+---
+
+### Issues
+
+#### Important — `subscribe` emits duplicate events when cursor falls behind `first_seq`
+
+**File:** `crates/paigasus-helikon-runtime-axum/src/event_log.rs:193`
+
+**What's wrong:** When ring eviction advances `first_seq` past the subscriber's `cursor` (a slow consumer lapped by a fast producer), `read_from(cursor)` clamps up to `first_seq` and returns events starting at sequence `first_seq`. The first returned event therefore sits at absolute seq `first_seq`, not `cursor`. But line 193 advances the state as:
+
+```rust
+let next_cursor = cursor + 1;
+```
+
+With `cursor &lt; first_seq`, `cursor + 1` is still below `first_seq`, so on the next unfold call `read_from(cursor + 1)` again clamps to `first_seq` and returns the exact same first event. This repeats until `cursor` naturally walks up to `first_seq` — meaning the event at `first_seq` is emitted `(first_seq − original_cursor)` extra times.
+
+**Why the tests don't catch it:** All subscribe tests use `max_events = 1024` and append only 2–3 events, so `first_seq` stays 0 throughout. The `bounded_ring_truncates_head` test exercises truncation only through `read_from` directly, not through `subscribe`.
+
+**Fix:** Use `slice.first_seq` (the effective start of the returned slice) rather than the raw `cursor`:
+
+```rust
+// At event_log.rs:193 — replace:
+let next_cursor = cursor + 1;
+// With:
+let next_cursor = cursor.max(slice.first_seq) + 1;
+```
+
+`slice.first_seq` is captured just before the `into_iter().next()` take, so it's available. This makes the subscriber jump over the eviction gap atomically in one step rather than incrementing through it one-by-one, which is the correct behavior `ReadSlice.first_seq` was designed to enable.
+
+A companion test to add:
+
+```rust
+#[tokio::test]
+async fn subscribe_skips_gap_on_ring_eviction() {
+    let log = Arc::new(EventLog::new(2));
+    // Fill: evicts "a" → first_seq = 1
+    log.append(delta("a"));
+    log.append(delta("b"));
+    log.append(delta("c")); // log now holds [b, c], first_seq = 1
+    // Subscribe from 0 (under-range)
+    let mut sub = log.subscribe(0);
+    log.append(done());     // log: [c, done], first_seq = 2
+    let got: Vec&lt;_&gt; = sub.collect().await;
+    // Should yield c + done exactly once each, not repeat c multiple times
+    assert_eq!(got.len(), 2);
+}
+```
+
+---
+
+#### Minor — `subscribe_does_not_lose_fast_appended_event` does not exercise the lost-wakeup race
+
+**File:** `crates/paigasus-helikon-runtime-axum/src/event_log.rs:271–288`
+
+The test name and comment claim to prove "notify-before-read ordering prevents lost wakeups." What it actually tests is simpler: events are already in the log before the stream is ever polled, so `read_from(0)` on the first iteration finds them immediately — no waiting, no race. The genuine lost-wakeup scenario requires the subscriber to have completed `read_from` (seeing an empty log), then the producer fires `notify_waiters()`, then the subscriber reaches `notif.await`. A deterministic reproduction requires a `Barrier` or similar synchronization primitive. The test is a valid regression test for replay, but the stated correctness claim it supports should be downgraded to "code inspection" in the doc comment, or the test should be restructured to actually race the two threads.
+
+---
+
+#### Minor — O(n²) replay cost
+
+**File:** `event_log.rs:187–195`
+
+Each unfold call takes only the first element from `slice.events`, so for N retained events the replay reads N, N−1, N−2, … entries = O(N²) total allocations and copies. For the bounded rings expected in production (hundreds of events per run) this is acceptable, but for `max_events = 100_000` it would be noticeable. A straightforward fix would batch-drain and queue events inside the unfold state, but that is a follow-on optimization rather than a bug for this task.
+
+---
+
+#### Minor — `VecDeque::with_capacity(max_events.min(64))` (line 71)
+
+For a log created with `EventLog::new(1024)`, the backing deque starts at capacity 64 and will reallocate ~4 times before reaching steady state. The cap at 64 was presumably added to avoid large allocations for test logs, but it imposes repeated reallocs for production-sized logs. `with_capacity(max_events)` is the straightforward choice; if allocation size is a concern, documenting the tradeoff in a comment would help.
+
+---
+
+### Assessment — Needs fixes
+
+The lost-wakeup ordering and stream-termination logic are correctly implemented. However, the `subscribe` cursor-advance logic at line 193 (`cursor + 1` instead of `cursor.max(slice.first_seq) + 1`) is a genuine correctness bug: a slow subscriber on a small-ring log will silently duplicate the first retained event multiple times after an eviction gap, and no test currently catches this. Fix the one-liner and add a companion test before this task is accepted.</result>
+<usage><subagent_tokens>47372</subagent_tokens><tool_uses>4</tool_uses><duration_ms>231040</duration_ms></usage>
+</task-notification>
