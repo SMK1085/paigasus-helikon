@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bd3tuswgv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/f1524f9a-e8ab-47e9-be2a-3599d89136df/tasks/bd3tuswgv.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch release-plz publish job to completion" completed (exit code 0)</summary>
+</task-notification>
