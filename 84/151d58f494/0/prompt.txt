@@ -1,0 +1,1 @@
+Also while waiting for it, I ran the script, verify that the repo ruleset is updated
