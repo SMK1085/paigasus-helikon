@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>a56a175c7286b7ec0</task-id>
+<tool-use-id>toolu_01AuGRuV7cyteLV86LsoYEDZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a56a175c7286b7ec0.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 14 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>### Spec Compliance
+⚠️
+
+### Strengths
+- `mcp.rs` correctly wires `StreamableHttpServerConfig::default().with_stateful_mode(false).disable_allowed_hosts()` into the actually-served router (`crates/paigasus-helikon-runtime-agentcore/src/mcp.rs:662-676`), and I independently verified every technical claim behind it against the real rmcp 1.8.0 source (not the implementer's paraphrase): `disable_allowed_hosts()` clears the vec (`rmcp-1.8.0/src/transport/streamable_http_server/tower.rs:132-134`), `host_is_allowed` treats an empty list as allow-all (`tower.rs:301-304`), and stateful-mode-only session-ID validation means stateless mode never inspects `Mcp-Session-Id` at all (`tower.rs:1055` vs. the `else` branch at `tower.rs:1220`). Task 11's own test (`crates/paigasus-helikon-mcp/tests/http_server.rs:103-137`) only ever hit 127.0.0.1 (loopback), so it never exercised the allowed-hosts guard — this task's added non-loopback `Host: agentcore-runtime.internal` header (`mcp.rs:763`) is a genuine, newly-exercised path, not busywork.
+- `agent_http.rs`'s `AnthropicModel::messages("claude-sonnet-4-6").build()?` (examples/agent_http.rs:302) is a verbatim match of the real public API (`crates/paigasus-helikon-providers-anthropic/src/model.rs:29-30`, `lib.rs:16`) — not a fabricated/guessed constructor.
+- Both "live-validation fixes" are real and correctly diagnosed, verified against out-of-diff library source: (1) module-level `tracing_subscriber::fmt::init()` uses `EnvFilter::from_default_env()`, which defaults to `LevelFilter::ERROR` when `RUST_LOG` is unset (`tracing-subscriber-0.3.23/src/filter/env/mod.rs:289-293`) — so the reported INFO-suppression bug is real, and the examples' fix (explicit `.with_env_filter(... EnvFilter::new("info"))`) genuinely closes it. (2) `SSL_CERT_FILE` is confirmed to short-circuit `rustls-native-certs`' own platform-guessing (`rustls-native-certs-0.8.4/src/lib.rs:118-124`, doc comment at line 226: "If `file` is Some, it is always used") — the Dockerfile's CA-bundle fix is sound.
+- Feature gating (`Cargo.toml:39-55`) is correctly wired: `mcp` default-on, `example-anthropic` optional, `[[example]] required-features` on both gated examples, `ANTHROPIC_API_KEY` read at runtime via env (never baked into the image).
+- Dockerfile has `--locked`, a real `strip`, `FROM scratch`, `EXPOSE 8080 8000`, and clearly documents build context = workspace root.
+- The agent-image size gate genuinely targets the agent image, not echo (`scripts/agentcore-image-check.sh:1130`), matching the brief's core STOP-RULE requirement.
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+- **Echo image size is never asserted, contradicting the brief's explicit "(echo asserted too)."** `scripts/agentcore-image-check.sh:1130-1135` only checks `agent_size` against `SIZE_LIMIT_BYTES`; `echo_size` is computed and printed as "(informational)" but never gated. Task brief step 4 (task-14-brief.md:13) explicitly says both images should be size-asserted. Low practical risk (echo is dependency-free and will never approach 30 MB) but a literal, unambiguous spec miss.
+- **The cold-start AC gate (&lt;50 ms) is applied to the wrong image.** `scripts/agentcore-image-check.sh:1137-1140` fails only on `echo_cold_start_ms`; `agent_cold_start_ms` is computed but left "(informational)" (script summary table, lines 1119-1122, and report table). This directly contradicts the implementer's own Dockerfile comment labeling `agent_http` as **"the size/cold-start acceptance-criteria image"** (docker/Dockerfile:187). Gating cold start on the trivial dependency-free echo binary — rather than the heavier, TLS/reqwest-carrying agent binary that a real AgentCore deployment would actually ship — means a future regression in the model-backed image's startup latency (e.g., from HTTP-client/TLS init) would never trip this check. The numbers are transparently reported either way (nothing is hidden), but the *gate* itself doesn't protect the thing that matters most.
+
+#### Minor (Nice to Have)
+- The CA bundle + `SSL_CERT_FILE` are copied unconditionally into **both** images (docker/Dockerfile:239-254), not parameterized by `EXAMPLE`/`FEATURES` as the dispatch phrasing ("+ CA bundle for agent variant — how is that parameterized?") implies. The implementer's rationale (~220 KB is negligible vs. the 30 MB budget, and conditional COPY is awkward in Dockerfile syntax) is reasonable and documented, but it's an unconditional copy, not a parameterized one.
+- `crates/paigasus-helikon-runtime-agentcore/src/lib.rs`'s new "MCP-protocol mode" doc block (lines 525-534) is not `#[cfg(feature = "mcp")]`-gated and contains an intra-doc link to `AgentCoreServer::mcp_router`, which only exists when `mcp` is enabled. Harmless today since `mcp` is default-on and CI's docs job uses `--all-features`, but `cargo doc -p paigasus-helikon-runtime-agentcore --no-default-features` would produce a dangling intra-doc-link warning.
+- The runbook/script comments describe the external measurement as "wall-clock time from `docker run` to the first successful health check" (docs/runbooks/agentcore-image-check.md:933-935; script header comment), but the code (`measure_cold_start_ms`, script lines 1078-1097) actually starts the timer *after* `docker run -d` returns, not at invocation — the right methodology (excludes Docker's own container-creation overhead, which is the point of "exec→200" vs. "container-create→200"), just slightly loosely worded.
+- `EchoAgent` is duplicated verbatim between `examples/echo_http.rs` and `examples/mcp_server.rs` — acceptable for standalone example binaries, just noted.
+
+### Assessment
+**Task quality:** Needs fixes
+**Reasoning:** The hard technical work — rmcp allowed-hosts/stateless-mode wiring, the Anthropic constructor usage, and both live-validation bug fixes (tracing filter, CA bundle) — is correct and was independently verified against out-of-diff library source, not fabricated. However, `scripts/agentcore-image-check.sh` has two concrete gate gaps: it never asserts the echo image's size (an explicit brief requirement) and it gates cold-start on the echo image rather than the agent image the implementer's own Dockerfile calls "the size/cold-start acceptance-criteria image" — both are small, low-risk, easily-fixed script edits, but they are genuine spec-compliance shortfalls in the acceptance-gate logic itself.</result>
+<usage><subagent_tokens>145661</subagent_tokens><tool_uses>38</tool_uses><duration_ms>566165</duration_ms></usage>
+</task-notification>
