@@ -1,0 +1,21 @@
+<task-notification>
+<task-id>ab5031186e74e08c1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/ab5031186e74e08c1.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 9: server harness" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** COMPLETE
+
+**Commit:** `b252ee0` feat(runtime-axum): SMA-331 add AgentServer builder, router, and agent listing
+
+**Test summary:** 3/3 integration tests GREEN (lists_mounted_agents, duplicate_agent_name_is_build_error, build_without_context_provider_errors); 23/23 total (unit + integration + 2 ignored doctests).
+
+**Concerns / notes:**
+- Axum 0.8 requires an explicit turbofish `get(handlers::agents::list::&lt;Ctx&gt;)` in `router()` — type inference cannot bind `Ctx` across the route registration boundary; this compiled cleanly.
+- Dead-code strategy: removed the module-level `#[allow(dead_code)]` from `mod registry;` (Task 9 now uses `spawn_sweeper`/`new`) and added targeted field- and method-level allows on the ~8 items still waiting for Task 10. The `event_log` module-level allow was restored since its methods are only reachable through `registry::create` which is itself dead until Task 10.
+- One clippy fix: replaced `contains_key` + `insert` pattern with the Entry API.
+
+**Report path:** `.superpowers/sdd/task-9-report.md`</result>
+<usage><subagent_tokens>111397</subagent_tokens><tool_uses>75</tool_uses><duration_ms>764206</duration_ms></usage>
+</task-notification>
