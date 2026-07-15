@@ -1,0 +1,29 @@
+<task-notification>
+<task-id>aa8b2c05e2a325f95</task-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/aa8b2c05e2a325f95.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 11: WebSocket events" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verified in the merged tree. Task 11 is complete.
+
+**Status: GREEN** — verified in the actual working branch, not just relayed.
+
+**Commit:** `9c4b4a9` — `feat(runtime-axum): SMA-331 add WebSocket run-events endpoint with replay` (present in branch, working tree clean).
+
+**Tests:** Both WS tests pass in the merged tree:
+- `ws_replays_completed_run_then_closes` — async run → WS connect → full event replay ending in server close.
+- `ws_unknown_id_404_before_upgrade` — nil UUID → 404, `connect_async` errors (no 101 upgrade).
+
+**Files landed:**
+- `crates/paigasus-helikon-runtime-axum/src/handlers/events.rs` (new) — `events&lt;Ctx&gt;` handler with 404-before-upgrade; `handle_socket` uses `tokio::select!` over `sub.next()` / `socket.recv()`, sends explicit `Message::Close(None)` on terminal.
+- `src/handlers/mod.rs` — `pub(crate) mod events;`
+- `src/server.rs` — `GET /agents/{name}/runs/{id}/events` route.
+- `src/registry.rs` — removed now-stale `#[allow(dead_code)]` on `agent_name`.
+- `tests/support/mod.rs` — `create_async_run` + `parse_event` helpers.
+- `tests/ws.rs` (new).
+
+**Gates:** fmt, clippy `-D warnings`, and `RUSTDOCFLAGS="-D warnings" cargo doc` all clean per the agent.
+
+**Concern:** The report file `.superpowers/sdd/task-11-report.md` was written to disk but `.superpowers/` is gitignored, so it isn't committed (expected — consistent with prior tasks; the implementation commit is what matters).</result>
+<usage><subagent_tokens>34645</subagent_tokens><tool_uses>3</tool_uses><duration_ms>691071</duration_ms></usage>
+</task-notification>
