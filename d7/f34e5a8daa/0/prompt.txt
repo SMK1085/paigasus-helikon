@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>a1b0626f29fc2523b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a1b0626f29fc2523b.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 12: agentcore skeleton" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is committed correctly. Task complete.
+
+Status: complete. Commit `3c1f3b1` — `feat(runtime-agentcore): SMA-332 add server skeleton and contract ping endpoint`.
+
+Test summary: `cargo test -p paigasus-helikon-runtime-agentcore` 10/10 green (ping transitions/stamps, router-level /ping and /invocations-501, builder validation); full `cargo test --workspace --all-features` also green; fmt/clippy(-D warnings)/docs(-D warnings) all clean.
+
+AppState note for Task 13: `server.rs`'s private `AppStateInner&lt;Ctx&gt;` already holds `agent`, `runner`, `sessions`, `context`, `run_config`, `ping` — a handler reaches it via `axum::extract::State&lt;AppState&lt;Ctx&gt;&gt;` (mirrors `runtime-axum`'s `AgentServer` shape). Task 13 should add the real `/invocations` handler with that same state extractor, then delete `invocations_placeholder` and the `#[allow(dead_code)]` on `AppStateInner`.
+
+Concerns: (1) had to fix a cross-crate Cargo quirk — the brief's `runtime-axum { default-features = false }` required adding `default-features = false` to the root `[workspace.dependencies]` entry (Cargo ignores per-member overrides otherwise), so I added `features = ["openapi"]` to the facade's dependency line to keep its behavior unchanged (verified via runtime-axum's own passing test suite and `cargo tree` showing agentcore alone pulls no utoipa). (2) `InMemorySessionProvider` has no `Default` impl in runtime-axum, so the builder default uses `::new(4096)` instead of the brief's literal `::default()`. Both documented in the report.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-12-report.md`</result>
+<usage><subagent_tokens>209636</subagent_tokens><tool_uses>90</tool_uses><duration_ms>1146201</duration_ms></usage>
+</task-notification>
