@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b3j2xx0eg</task-id>
+<tool-use-id>toolu_011uPkn8tHvoAHkaLtoQdYgR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e8d62a5b-6965-4310-bfe5-439a2421c212/tasks/b3j2xx0eg.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch release PR #116 CI to terminal state" completed (exit code 0)</summary>
+</task-notification>
