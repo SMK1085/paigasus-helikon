@@ -1,0 +1,5 @@
+<task-notification>
+<task-id>af794fe03cce0926f</task-id>
+<status>stopped</status>
+<summary>No completion record was found for background agent "Agent "af794fe03cce0926f" had no active task; resumed from transcript in the background with your message. You'll be notified when it finishes. Output: /private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/5bdcf7d9-bffe-41f8-99e8-3f252ae7de91/tasks/af794fe03cce0926f.output" after it was re-dispatched via SendMessage in the previous session. It may have been stopped (via the UI, an SDK interrupt, or agent teardown — these leave no transcript marker), or it may have been running when the previous Claude Code process exited. Check its worktree/output for partial work before assuming the task landed.</summary>
+</task-notification>
