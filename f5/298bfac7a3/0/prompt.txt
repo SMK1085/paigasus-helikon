@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b7lfj96rr</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0cd19677-dcae-4167-9539-e310ae0372bf/tasks/b7lfj96rr.output</output-file>
+<status>failed</status>
+<summary>Background command "Poll required CI checks on PR #113 until concluded" failed with exit code 1</summary>
+</task-notification>
