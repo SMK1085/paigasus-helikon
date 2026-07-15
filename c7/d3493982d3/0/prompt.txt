@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>a83359c9c0c234805</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a83359c9c0c234805.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix Task 13 SSE disconnect handling" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean, commit is in place.
+
+## Status: Complete
+
+**Commit SHA:** `500d42b01752c1ca7835379f4d5b084dfdfd0b2c`
+
+**Test summary:** `cargo test -p paigasus-helikon-runtime-agentcore --all-features` — 28/28 passed (added `sse_client_disconnect_still_finalizes_the_session` — drives a real TCP disconnect against a `SlowAgent`, confirmed to fail against the old buggy `run_sse` with `Elapsed(())` and pass reliably (&lt;0.03s, 5+ repeated runs) against the fix — plus `ambiguous_body_with_both_messages_and_prompt_parses_as_messages`); `cargo test --workspace --all-features` all green; `cargo fmt --all -- --check` and `cargo clippy --workspace --all-features --all-targets -- -D warnings` both clean.
+
+**What changed:** `run_sse` in `crates/paigasus-helikon-runtime-agentcore/src/invoke.rs` now retains a cancel-token clone before `ctx.build`, spawns a detached `tokio::spawn` driver that drains `runner.run_streamed(...).events` to terminal unconditionally over a bounded `mpsc` channel (ignoring send errors post-disconnect), and the SSE response stream wraps `cancel.drop_guard()` in a small `SseDriverState` so a client disconnect cancels the run promptly while the driver still finalizes/persists the turn — mirroring `runtime-axum`'s `spawn_writer`/`DropGuard` idiom sized for this crate's single-shot handler. Added `tokio-util` as a direct dependency (needed to name `DropGuard`). Also removed the stale unused `AgentCoreError::NotImplemented` variant and its status mapping/test, and added the ambiguous-body ordering test. Appended a "Fix: SSE disconnect handling" section to `.superpowers/sdd/task-13-report.md` (uncommitted, per instructions — `.superpowers/` is locally git-excluded).
+
+**Concerns:** None blocking. The disconnect test relies on hyper/axum promptly dropping the response body stream on TCP peer close, which is standard behavior but inherently timing-sensitive in CI; timeouts are generous (10s) and the test in practice completes in ~20ms.</result>
+<usage><subagent_tokens>201058</subagent_tokens><tool_uses>81</tool_uses><duration_ms>786366</duration_ms></usage>
+</task-notification>
