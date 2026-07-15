@@ -1,0 +1,50 @@
+<task-notification>
+<task-id>a96583fcba0673f4f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a96583fcba0673f4f.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 12 (concurrency tests)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+### Spec Compliance — ✅
+
+All three required tests are present, correctly named (close enough to spec; `concurrent_same_session_serialize` vs `concurrent_same_session_do_not_interleave` is an acceptable rename), and exercise real behavior. Doc fixes are accurate.
+
+---
+
+### Strengths
+
+**`concurrent_same_session_serialize` is genuinely meaningful.** The `SessionLocks::lock_for` returns a pointer-equal `Arc&lt;Mutex&lt;()&gt;&gt;` for the same session ID, and `create_run` acquires `lock_owned().await` on that Arc _before_ spawning the writer. The `OwnedMutexGuard` is then moved into the writer task and held for the entire span (through `runner.run_streamed`, event drain, `mark_terminal`, `note_terminal`, and finally `drop(guard)` at line 245). The 20 ms sleep in `OrderingAgent::run` executes _inside_ `runner.run_streamed(…).await`, which is inside the writer task that holds the guard — so the ticks are pushed under the session lock. With the lock absent, both writers would run concurrently: the 20 ms window guarantees `[0, 0, 1, 1]` rather than `[0, 1, 0, 1]`. The assertion is not tautological.
+
+**`start_error_returns_500_not_hang` is clean.** `FailingRunner::run_streamed` returns `Err(RunError::MaxIterations)`, which hits the `Err(e)` arm of `spawn_writer` (lines 234-243): sets `start_error`, calls `mark_terminal()`. `oneshot_response` then collects the now-terminal log, reads `start_error`, and returns `Err(ServerError::RunStart(…))` → 500. The 5 s `tokio::time::timeout` makes a hang a test failure rather than a forever-block.
+
+**Doc fixes are precise.** The 415→400 correction matches the actual code (`ServerError::BadRequest`). The `.expect()` on `insert_run_id` is a correctness improvement. The `max_events_per_run` note accurately describes the ring-buffer truncation. The stale `#[allow(dead_code)]` removal in `registry.rs` is clean now that `get` is used by the event handler.
+
+**`SessionLocks` prune logic is safe under concurrency.** When request 2 calls `lock_for("s1")`, the map entry's `Arc::strong_count` is 2 (map + guard1's internal Arc in `OwnedMutexGuard`), so `retain(|_, lock| Arc::strong_count(lock) &gt; 1)` keeps the entry. The two callers block on the same pointer-equal mutex. No race exists because the pruning runs under a sync `std::sync::Mutex`.
+
+---
+
+### Issues
+
+**Minor — `async_run_survives_creator_disconnect`: WS consumer lacks a timeout (`tests/concurrency.rs:200–207`)**
+
+```rust
+while let Some(Ok(msg)) = ws.next().await {
+    ...
+}
+```
+
+If the run hangs due to a future regression in event delivery or `mark_terminal`, this loop never returns and the test runner hangs indefinitely. Adding a `tokio::time::timeout` around the collection (similar to the 5 s guard in the 500 test) would make a regression produce a clear test failure instead of a hang.
+
+**Minor — `async_run_survives_creator_disconnect`: timing premise is soft (`tests/concurrency.rs:185–195`)**
+
+`create_async_run` (support/mod.rs:109-123) sends the POST, calls `resp.json().await`, and returns the run_id — dropping the `reqwest::Client` on return (which closes the TCP connection). The writer task is spawned _before_ the 202 is sent, so on a fast runtime the `ScriptedAgent` (synchronous `stream::iter`) could theoretically complete before the client receives the response body and drops the connection. In that case the test passes trivially regardless of whether the async path installs a drop-guard or not. In practice the HTTP round-trip creates enough scheduling slack that the writer task is rarely ahead of the client, but the test can't guarantee "run was in-flight at disconnect time." The behavioral assertion (full script present afterward) is still correct and the spec requirement is met — this is a proof-strength gap, not a correctness gap. A more rigorous approach would insert a barrier or a slow agent to guarantee in-flight status at disconnect, but that adds complexity that may not be warranted here.
+
+---
+
+### Assessment — **Approved**
+
+All three tests exercise real, non-vacuous behavior: the serialization test would fail without the per-session lock, the 500 test would fail or hang without the `start_error` path, and the async detachment test correctly asserts the required observable outcome. The two minor issues are robustness gaps (missing WS timeout, soft timing premise) that do not undermine spec compliance. No fixes are required before merging.</result>
+<usage><subagent_tokens>55295</subagent_tokens><tool_uses>7</tool_uses><duration_ms>297307</duration_ms></usage>
+</task-notification>
