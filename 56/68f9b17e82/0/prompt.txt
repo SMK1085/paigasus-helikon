@@ -1,0 +1,1 @@
+Full review at @docs/superpowers/specs/2026-06-20-sma-403-runcontext-ephemeral-design-review.md
