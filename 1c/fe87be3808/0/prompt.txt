@@ -1,0 +1,23 @@
+<task-notification>
+<task-id>ad33986b12b4c346b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/ad33986b12b4c346b.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: event_log.rs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+**Status:** DONE
+
+**Commit:** `6ff64f1` — `feat(runtime-axum): SMA-331 add bounded EventLog with replay and live subscription`
+
+**Test summary:** 4/4 pass — `read_from_cursor_returns_tail_and_terminal`, `bounded_ring_truncates_head`, `subscribe_replays_then_tails_until_terminal`, plus the bonus `subscribe_does_not_lose_fast_appended_event`.
+
+**Concerns (non-blocking):**
+- The brief's `subscribe` interface says `-&gt; impl Stream&lt;Item = AgentEvent&gt; + Send`, but the tests require `+ Unpin` (they call `sub.next().await` without pinning). Added `+ Unpin` and wrapped in `Box::pin`; this is the only way the brief's verbatim tests compile.
+- The unfold state is `(cursor, done)` only — not `(Arc&lt;EventLog&gt;, cursor, done)` as the brief prescribes — because carrying `Arc&lt;EventLog&gt;` in state creates an unsolvable borrow conflict with `log.notify.notified()` borrows. The Arc is cloned fresh per iteration from the outer closure capture; correctness and lost-wakeup guarantees are identical.
+- `#[allow(dead_code)]` on `mod event_log;` in `lib.rs` — will be removed when transport modules land in tasks 4+.
+
+**Report:** `.superpowers/sdd/task-3-report.md`</result>
+<usage><subagent_tokens>107771</subagent_tokens><tool_uses>34</tool_uses><duration_ms>1126617</duration_ms></usage>
+</task-notification>
