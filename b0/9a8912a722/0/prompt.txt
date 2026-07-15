@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bocgcpxdw</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e8d62a5b-6965-4310-bfe5-439a2421c212/tasks/bocgcpxdw.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-poll CodeRabbit until verdict posted (15min)" completed (exit code 0)</summary>
+</task-notification>
