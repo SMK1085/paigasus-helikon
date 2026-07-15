@@ -1,0 +1,44 @@
+<task-notification>
+<task-id>a7ec6d29772025fcf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a7ec6d29772025fcf.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 10 (run endpoints)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need. Let me confirm the runtime-tokio passthrough claim for AC2 fidelity is not contradicted by checking how the runner handles cancellation injecting a terminal — but the green AC2 test already proves passthrough on the success path, so I'll rely on that. My analysis is complete.
+
+---
+
+### Spec Compliance — ✅ (with sound, documented deviations)
+
+Every binding constraint in the brief is met. Route `POST /agents/{name}/runs` with axum-0.8 `{name}` (server.rs:280-281); `?stream=sse`/`?mode=async` dispatch (runs.rs:228-234); 404/401-403/400 mappings (runs.rs:180,184,252-263 + error.rs:83-86); per-session lock acquired before spawn and moved into the writer (runs.rs:201-225, 309); writer drains→`mark_terminal`→`note_terminal`, Err path records `start_error`+`mark_terminal` (runs.rs:283-310); plain→200+`X-Run-Id` with `start_error`→500 (runs.rs:353-371); SSE over `subscribe(0)` with disconnect drop-guard (runs.rs:328-348); async→202 detached with no guard (runs.rs:228-229, 314-322); `SessionLocks` prune wired (session.rs:172-187). AC1/AC2 tested and green.
+
+The three reported deviations are all sound: context-before-`create` (prevents a never-terminal registry leak on provider failure, and the early `?` correctly drops the not-yet-moved `guard`); JSON-value AC2 comparison (forced by `AgentEvent: !PartialEq`); 400 instead of 415 (the brief only requires 400 for a bad body, so this is *compliant*, not a true deviation).
+
+### Named risks — all verified sound
+1. **Cancel-on-disconnect:** One-shot binds the guard to a *named* `_disconnect` (runs.rs:355), so it lives to function-scope end across `collect().await` — not the `let _ =` footgun that would drop immediately. SSE threads the `DropGuard` through the unfold state `(events, disconnect)` and re-emits it each iteration (runs.rs:335-344), so it survives for the body's lifetime; client disconnect drops the body → state → guard → cancel. Async attaches none (runs.rs:228-229). Correct in all three.
+2. **Lock lifetime/deadlock:** `OwnedMutexGuard&lt;()&gt;` is `Send`, moved into the writer, dropped exactly once at completion (runs.rs:309) and via unwind on panic. No std `Mutex` (`SessionLocks.map`) is ever held across an await — `lock_for` locks and releases synchronously before `.lock_owned().await`. Different sessions use different `Arc&lt;Mutex&gt;`, so no cross-session stall. No AB-BA cycle (registry `note_terminal` releases `terminal_at` before taking the write lock; registry/event-log/session locks never nest into a cycle).
+3. **No-hang:** Both match arms call `mark_terminal()` before the writer can exit (runs.rs:296,305); the one-shot `subscribe(0).collect()` always observes terminal and returns. The only non-terminating case is an agent stream that never ends — an agent property, not a handler path, and the writer still cannot *exit* without a terminal.
+4. **Prune race:** `map.retain(strong_count &gt; 1)` runs under the same `map` guard as the subsequent `entry().or_insert` (atomic). The arc returned by `lock_for` keeps count ≥ 2 until `.lock_owned()` consumes it (no gap in the method chain), and an in-flight writer's guard keeps count ≥ 2, so a concurrent same-session caller always converges on the pointer-equal `Mutex`. Recreating a fresh lock only happens when count == 1 (no live holder ⇒ no concurrent run ⇒ safe).
+5. **start_error→500:** Checked after drain, returns `ServerError::RunStart` → 500 before building a 200 envelope (runs.rs:360-367; mapping at error.rs:86). The happens-before chain (writer writes `start_error`, then `mark_terminal` releases the EventLog mutex; reader observes terminal via that mutex, then reads `start_error`) guarantees the reader sees the value — no stale read.
+6. **AC2 fidelity:** `to_sse_event` serializes the *full* `AgentEvent` as the `data:` payload (runs.rs:377-386); `parse_sse` reconstructs it; compact JSON means one event per `data:` line. Faithful event-for-event.
+
+### Strengths
+- Correct `_disconnect` binding avoids the most common cancel-guard mistake.
+- Prune invariant is genuinely race-free, and the new `session_locks_prune_drops_unheld_entries` test pins both the prune and the still-held-survives case.
+- Disciplined lock model: no sync mutex across await; cancel token created once and shared by ctx + handle so a single drop-guard cancels the live run.
+- The `mark_terminal` safety net (runs.rs:296) defends against agent streams lacking a terminal event — a real hang-prevention measure beyond the literal spec.
+
+### Issues
+
+**Minor**
+- `crates/.../handlers/runs.rs:239` (and doc at runs.rs:159-162 region / 313): the comment calls the content-type check "415-aware," but it returns `ServerError::BadRequest` (400). Inaccurate comment — say "400 on explicit non-JSON" to match behavior.
+- One-shot completeness vs the bounded ring: `oneshot_response` (runs.rs:357) replays `subscribe(0)`, but if a run emits more than `max_events_per_run` events and the writer outpaces the reader, early events (including the assistant `MessageOutput`) can be evicted before `collect` reads them, yielding a partial `RunResponse` (`output: None`). This is an inherent `EventLog` ring tradeoff, not a regression, but worth a doc note or sizing guidance since one-shot aggregation depends on full retention.
+- `insert_run_id` (runs.rs:389-393) silently no-ops if `HeaderValue::from_str` fails — impossible for a UUID, so harmless, but an `.expect` would document the invariant.
+
+**Test gap (recommend, not blocking)**
+- No test exercises Risk 5 (`start_error`→500) or Risk 1 (cancel-on-disconnect). The scripted echo agent can't fail to start, so the 500 branch and the disconnect-cancel paths are unverified end-to-end (only `error.rs` unit-tests the `RunStart`→500 mapping). Both are correct by inspection, but given start_error→500 is a hard brief requirement on the crate's central surface, a small failing-runner integration test would lock it in.
+
+### Assessment — **Approved.** The lifetime/cancellation/lock model is correct across all three transports and all four shared-state primitives; the deviations are well-reasoned and the only findings are a misleading comment, an inherent ring tradeoff, and a couple of worthwhile-but-non-blocking test additions.</result>
+<usage><subagent_tokens>93551</subagent_tokens><tool_uses>11</tool_uses><duration_ms>326807</duration_ms></usage>
+</task-notification>
