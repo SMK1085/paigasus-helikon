@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>a1e4d2197303574bb</task-id>
+<tool-use-id>toolu_01Qmm9SVhqXQmvLupUyN13An</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/a1e4d2197303574bb.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 5 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Good — the mdbook build produced no working-tree changes (output directory is gitignored), confirming the build is clean and the review didn't mutate git state.
+
+Everything checks out. Here is my review.
+
+---
+
+✅ Spec compliance verified, no ⚠️ items — the diff matches the brief verbatim and the documented behavior is accurate to the actual code in this branch.
+
+**Strengths**
+
+- Both prose insertions are copied verbatim from the brief (`docs/book/src/concepts/axum-server.md:82`, `crates/paigasus-helikon-runtime-axum/README.md:78`) — no paraphrase drift.
+- Verified against `crates/paigasus-helikon-runtime-axum/src/registry.rs:34-59` (`RunHandle::synthetic_terminal_frame`) and `src/handlers/runs.rs:136-137,374-399`: the synthetic frame is emitted only when `saw_terminal` is `false` (start-error or terminal-less stream close), always as `AgentEvent::RunFailed`, and one-shot mode surfaces `ServerError::RunStart` → HTTP 500 instead. The added prose matches this exactly — no overclaim (doesn't say "on every close"), correctly names `run_failed`/500, and correctly scopes it to SSE + WebSocket only.
+- Placement matches the brief precisely: the mdBook bullet lands as the last bullet in "Replayable runs," right after "Cancellation" (`axum-server.md:82`), preserving the existing `- **Bold label**: text` bullet style; the README line lands as a standalone paragraph immediately after the Routes table and before `## Features` (`README.md:78`), matching the surrounding prose style (no new heading introduced).
+- Scope is exactly the two files named in the brief — confirmed via `git diff --stat bb37528..450d345` (`README.md` +2, `axum-server.md` +1). No code, no version, no CHANGELOG touched.
+- Re-ran `mdbook build docs/book` myself: exit 0, linkcheck backend invoked with no warnings, `git status` clean afterward (no incidental mutation). Confirms the implementer's report. No new markdown links were introduced (only inline code spans), so linkcheck had nothing new to check.
+- Commit message follows the prescribed `docs(runtime-axum): SMA-452 ...` format from the brief.
+
+**Issues**
+
+None found — Critical, Important, or Minor.
+
+**Task quality:** Approved
+**Reasoning:** The added prose is byte-for-byte accurate to both the brief and the actual implementation (verified against `registry.rs`/`runs.rs`), lands exactly where specified with matching style, stays within the two-file scope, and the `mdbook build` claim is independently reproduced clean.</result>
+<usage><subagent_tokens>53858</subagent_tokens><tool_uses>15</tool_uses><duration_ms>51798</duration_ms></usage>
+</task-notification>
