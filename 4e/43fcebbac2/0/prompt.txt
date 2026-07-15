@@ -1,0 +1,33 @@
+<task-notification>
+<task-id>ae9dc1a1f98107d30</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/2196b19f-9e15-48d3-84b1-b84149100049/tasks/ae9dc1a1f98107d30.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 3 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirms zero diff in the three off-limits files — scope constraint fully honored.
+
+## Spec Compliance
+
+✅ Matches the brief precisely. `handle_socket` implementation is a byte-for-byte match of the brief's Step 3 snippet; both WS tests are a byte-for-byte match of the brief's Step 1 snippet. Scope constraint honored (only `handlers/events.rs` and `tests/ws.rs` touched — confirmed zero diff against `registry.rs`, `event_log.rs`, `tests/support/mod.rs` between base and head). No ⚠️ items — nothing here is unverifiable from the diff; I traced the consumed `synthetic_terminal_frame`/`is_terminal` implementations directly to confirm the contract this task relies on.
+
+## Strengths
+
+- `saw_terminal` is set from `is_terminal(&amp;ev)` before serialization/send in the `Some(ev)` arm, and the synthetic frame is emitted (via `handle.synthetic_terminal_frame(saw_terminal)`) strictly before `Message::Close(None)` in the `None` arm — exactly the ordering the constraints require.
+- The `socket.recv()` arm is untouched byte-for-byte, so client-disconnect semantics (never cancels the run, no synthetic frame on disconnect) are preserved by construction.
+- Traced the full data path for both new tests against the real (already-merged, out-of-scope) `synthetic_terminal_frame`/`is_terminal`/writer-task code: `FailingRunner` → `start_error` set to `RunError::MaxIterations.to_string()` → `synthetic_terminal_frame(false)` returns `Some(RunFailed{error: &lt;non-empty&gt;})`; `PartialThenEndRunner` → one `TokenDelta`, no terminal, `TerminalGuard` drop marks the log terminal → `synthetic_terminal_frame(false)` falls back to the generic message. Both match the asserted expectations exactly, so the tests are exercising real behavior, not tautologies.
+- For a normal completed run: real terminal sets `saw_terminal=true`, next `sub.next()` yields `None` (log already terminal), `synthetic_terminal_frame(true)` returns `None` → exactly one terminal frame total (the real one), confirmed by the still-passing `ws_replays_completed_run_then_closes`.
+- Both new tests wrap the drain loop in a 5s `tokio::time::timeout`, so a regression fails fast rather than hanging CI.
+- Independently reran `cargo fmt --all -- --check` (clean) and `cargo clippy -p paigasus-helikon-runtime-axum --all-features --all-targets -- -D warnings` (clean, 0 warnings), corroborating the implementer's report.
+- Tests correctly use `matches!` (not `==`) against `#[non_exhaustive]` `AgentEvent`, and the start-error test asserts only the `RunFailed` variant + non-empty error, not `RunError::MaxIterations`'s exact `Display` — matching the constraint precisely.
+
+## Issues
+
+**Minor** — `crates/paigasus-helikon-runtime-axum/src/handlers/events.rs:8-10, 36-40, 72-76`: the module doc, the `events` fn doc, and the `handle_socket` fn doc still describe stream termination only in terms of the real terminal event ("stream closes naturally once the first terminal event is delivered" / "closes after the terminal event ... is delivered" / "event stream ends (terminal event reached and delivered)"), with no mention of the new synthetic-`RunFailed`-frame fallback. This is an inconsistency with the sibling SSE code path in this same crate (`handlers/runs.rs:341-348`), whose doc comment for the analogous `build_sse_response` was updated in the prior task (Task 2) to explicitly describe "If the live event stream ends without delivering a real terminal event ... exactly one synthetic `run_failed` frame is appended ... — see `RunHandle::synthetic_terminal_frame`." Not required by the brief and doesn't affect the `missing_docs` lint (these items are `pub(crate)`), so it's polish, not a defect — but worth a follow-up for doc parity between the two transports.
+
+No Critical or Important issues found.
+
+**Task quality:** Approved
+**Reasoning:** The implementation is a precise, verified match of the brief's exact code and ordering constraints (synthetic frame before Close, no frame on disconnect, no double-terminal), scope is strictly honored, both tests exercise genuinely real code paths (traced through to the underlying start-error/terminal-less-stream mechanics) rather than being tautological, and fmt/clippy were independently reconfirmed clean. The only finding is a cosmetic doc-comment parity gap with the SSE sibling, which does not affect correctness, safety, or CI gates.</result>
+<usage><subagent_tokens>81942</subagent_tokens><tool_uses>18</tool_uses><duration_ms>172425</duration_ms></usage>
+</task-notification>
