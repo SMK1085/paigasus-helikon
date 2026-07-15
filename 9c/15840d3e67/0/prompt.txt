@@ -1,0 +1,473 @@
+<task-notification>
+<task-id>a53f2240311a5fd53</task-id>
+<tool-use-id>toolu_01RoN41stAbexRbFVVx6JQw6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a53f2240311a5fd53.output</output-file>
+<status>completed</status>
+<summary>Agent "Map runtime/agent surface for axum server" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now I have a thorough understanding of the workspace. Let me compile a comprehensive reconnaissance report for you.
+
+---
+
+## **COMPREHENSIVE RECONNAISSANCE REPORT: Paigasus Helikon Workspace**
+
+### **1. THE `Agent` TRAIT** 
+**Location:** `/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-core/src/agent.rs:62-83`
+
+```rust
+#[async_trait]
+pub trait Agent&lt;Ctx&gt;: Send + Sync
+where
+    Ctx: Send + Sync + 'static,
+{
+    fn name(&amp;self) -&gt; &amp;str;
+    fn description(&amp;self) -&gt; &amp;str;
+    
+    async fn run(
+        &amp;self,
+        ctx: RunContext&lt;Ctx&gt;,
+        input: AgentInput,
+    ) -&gt; Result&lt;BoxStream&lt;'static, AgentEvent&gt;, AgentError&gt;;
+}
+```
+
+**Key Details:**
+- Generic over `Ctx` (user-supplied per-run context), generic parameter bound `Send + Sync + 'static`
+- Returns a `BoxStream&lt;'static, AgentEvent&gt;` — a lifetime-erased async stream
+- `AgentInput` carries `messages: Vec&lt;Item&gt;` — the new turn appended to session history
+- Invocation wraps `Agent::run()` via the `Runner` trait (e.g. `TokioRunner::run()`) which loads session history, merges it with input, runs the agent, persists events, and handles cancellation/timeout.
+
+**The concrete LlmAgent struct** (line 231–265) shows a typical agent construction:
+- `model: Arc&lt;M&gt;` — implements `paigasus_helikon_core::Model`
+- `tools: Vec&lt;Arc&lt;dyn Tool&lt;Ctx&gt;&gt;&gt;` — callable tools
+- `instructions: Arc&lt;dyn Instructions&lt;Ctx&gt;&gt;` — system prompt renderer
+- `output_type: Option&lt;OutputType&gt;` — structured-output schema marker
+- `handoffs: Vec&lt;Handoff&lt;Ctx&gt;&gt;` — agents this one may hand off to
+- Built via `LlmAgent::builder::&lt;Ctx&gt;()` typestate builder
+
+---
+
+### **2. `AgentEvent` &amp; STREAMING TYPES**
+**Location:** `/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-core/src/agent.rs:304-440`
+
+```rust
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AgentEvent {
+    // --- Lifecycle ---
+    RunStarted { agent: String },
+    TurnStarted { turn: u32 },
+    
+    // --- Raw deltas (low-latency UIs) ---
+    TokenDelta { text: String },
+    ReasoningDelta { text: String },
+    ToolCallDelta {
+        call_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option&lt;String&gt;,
+        args_delta: String,
+    },
+    
+    // --- Semantic items (full Items post-aggregation) ---
+    MessageOutput { item: Item },
+    ToolCallItem { item: Item },
+    ToolOutputItem { item: Item },
+    HandoffItem { from: String, to: String },
+    
+    // --- Agent transitions &amp; control ---
+    AgentUpdated { agent: String },
+    GuardrailTriggered { kind: GuardrailKind, info: serde_json::Value },
+    ApprovalRequested { call_id: String, tool: String, args: serde_json::Value },
+    PermissionDenied { tool: String, reason: String },
+    RepairStarted { attempt: u32 },
+    StructuredOutputFailed { schema_errors: Vec&lt;String&gt;, final_text: String },
+    
+    // --- Terminal ---
+    RunCompleted { usage: TokenUsage },
+    RunFailed { error: String },
+}
+```
+
+**Streaming:** Agent emits `BoxStream&lt;'static, AgentEvent&gt;`. Each event is serializable (tagged JSON). The runner (`TokioRunner`) wraps the stream with:
+- Cancellation/timeout control via `tokio::select!`
+- Session event recording (via `SessionRecorder`)
+- Aggregation into `RunResult&lt;T&gt;` and `RunResultStreaming` for collection
+
+**Stream lifecycle** (per `/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-runtime-tokio/src/lib.rs:55-91`):
+- Stream terminates when `RunCompleted` or `RunFailed` is yielded (or on cancel/timeout)
+- Callers must drain to completion to ensure session persistence (finalize runs post-drain)
+
+---
+
+### **3. RUNNER BOUNDARY: `paigasus-helikon-runtime-tokio`**
+**Location:** `/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-core/src/runner.rs:63-139`
+
+The **`Runner&lt;Ctx&gt;` trait** (object-safe):
+
+```rust
+#[async_trait]
+pub trait Runner&lt;Ctx&gt;: Send + Sync
+where
+    Ctx: Send + Sync + 'static,
+{
+    async fn run(
+        &amp;self,
+        agent: &amp;(dyn Agent&lt;Ctx&gt; + '_),
+        ctx: RunContext&lt;Ctx&gt;,
+        input: AgentInput,
+        config: RunConfig,
+    ) -&gt; Result&lt;RunResult, RunError&gt;;
+    
+    async fn run_streamed(
+        &amp;self,
+        agent: &amp;(dyn Agent&lt;Ctx&gt; + '_),
+        ctx: RunContext&lt;Ctx&gt;,
+        input: AgentInput,
+        config: RunConfig,
+    ) -&gt; Result&lt;RunResultStreaming, RunError&gt;;
+    
+    async fn resume(...) -&gt; Result&lt;RunResult, RunError&gt;;
+    async fn resume_streamed(...) -&gt; Result&lt;RunResultStreaming, RunError&gt;;
+}
+```
+
+**The TokioRunner implementation** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-runtime-tokio/src/lib.rs:133-259`):
+
+```rust
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TokioRunner;
+
+#[async_trait]
+impl&lt;Ctx&gt; Runner&lt;Ctx&gt; for TokioRunner
+where
+    Ctx: Send + Sync + 'static,
+{
+    async fn run(
+        &amp;self,
+        agent: &amp;(dyn Agent&lt;Ctx&gt; + '_),
+        ctx: RunContext&lt;Ctx&gt;,
+        input: AgentInput,
+        config: RunConfig,
+    ) -&gt; Result&lt;RunResult, RunError&gt; { ... }
+    
+    async fn run_streamed(
+        &amp;self,
+        agent: &amp;(dyn Agent&lt;Ctx&gt; + '_),
+        ctx: RunContext&lt;Ctx&gt;,
+        input: AgentInput,
+        config: RunConfig,
+    ) -&gt; Result&lt;RunResultStreaming, RunError&gt; { ... }
+}
+```
+
+**Key responsibilities:**
+1. **Session loading** (line 97–113): `load_and_record()` loads persisted history via `session.snapshot()`, merges with `input.messages`, seeds a `SessionRecorder`
+2. **Agent execution**: Calls `agent.run(ctx, merged_input)` to get event stream
+3. **Control wrapping** (line 55–91): `controlled()` wraps stream with `tokio::select!` over:
+   - `stream.next()` — agent events
+   - `cancel.cancelled()` — cancellation token
+   - `tokio::time::sleep(timeout)` — deadline
+4. **Session persistence** (line 118–129): `finalize()` drains `SessionRecorder` and appends events to session (best-effort, logged on error)
+5. **Terminal-event precedence** (SMA-421): Real terminal events (`RunCompleted`/`RunFailed`) override late cancel/timeout only when no terminal occurred in-flight
+
+**RunConfig** (line 141–201):
+- `max_turns: u32` (default 16) — enforced by core loop
+- `timeout: Option&lt;Duration&gt;` — enforced by runner, optional
+- `parallel_tool_call_limit: Option&lt;NonZeroUsize&gt;` — enforced by core
+- `max_agent_depth: u32` (default 8) — enforced by core (handoff + AgentAsTool nesting)
+
+---
+
+### **4. SESSION HANDLING**
+**Location:** `/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-core/src/session.rs:49-59, 544-546`
+
+**`Session` trait** (object-safe):
+
+```rust
+#[async_trait]
+pub trait Session: Send + Sync {
+    async fn append(&amp;self, events: &amp;[SessionEvent]) -&gt; Result&lt;(), SessionError&gt;;
+    async fn events(&amp;self, since: Option&lt;SequenceId&gt;) -&gt; Result&lt;Vec&lt;SessionEvent&gt;, SessionError&gt;;
+    async fn snapshot(&amp;self) -&gt; Result&lt;ConversationSnapshot, SessionError&gt;;
+}
+```
+
+**`SequenceId` — monotonic position in the log:**
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SequenceId(pub u64);
+```
+
+**`SessionEvent` variants** (lines 70–144):
+- `UserMessage { content: Vec&lt;ContentPart&gt;, ts: Timestamp }`
+- `AssistantMessage { content: Vec&lt;ContentPart&gt;, agent: String, ts: Timestamp }`
+- `ToolCalled { call_id: String, name: String, args: Value, ts: Timestamp }`
+- `ToolReturned { call_id: String, content: Vec&lt;ContentPart&gt;, ts: Timestamp }`
+- `HandoffOccurred { from: String, to: String, ts: Timestamp }`
+- `Compacted { summary: String, original_count: u64, ts: Timestamp }`
+
+**SQLite backend** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-sessions-sqlite/src/lib.rs:50–101`):
+
+```rust
+#[derive(Debug, Clone)]
+pub struct SqliteSession {
+    pool: SqlitePool,
+    session_id: String,
+}
+
+impl SqliteSession {
+    pub async fn migrate(pool: &amp;SqlitePool) -&gt; Result&lt;(), SessionError&gt; { ... }
+    pub async fn open(pool: SqlitePool, session_id: impl Into&lt;String&gt;) 
+        -&gt; Result&lt;Self, SessionError&gt; { ... }
+    pub fn open_without_migrate(pool: SqlitePool, session_id: impl Into&lt;String&gt;) -&gt; Self { ... }
+    pub fn session_id(&amp;self) -&gt; &amp;str { ... }
+}
+```
+
+**Session ID concept:** String-identified, no built-in UUID type — callers supply `session_id` when opening. Isolation by `(session_id, sequence)` compound key in the database.
+
+---
+
+### **5. TEMPLATE CRATE: `paigasus-helikon-mcp`**
+
+**Cargo.toml structure** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-mcp/Cargo.toml:1–31`):
+```toml
+[package]
+name = "paigasus-helikon-mcp"
+version = "0.1.12"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+paigasus-helikon-core = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }          # Already uses axum!
+futures-util = { workspace = true }
+rmcp = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+[lints]
+workspace = true
+```
+
+**lib.rs module structure** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-mcp/src/lib.rs:1–74`):
+```rust
+//! MCP integration for the Paigasus Helikon AI SDK.
+//! Wraps rmcp (official Rust MCP SDK) in both directions:
+//! - Client: McpServerHandle connects to external MCP server, re-exposes tools
+//! - Server: McpAgentServer wraps any Agent and serves it as MCP tool
+
+mod client;
+mod error;
+mod server;
+
+pub use client::handle::{McpConnectBuilder, McpConnectOptions, McpServerHandle};
+pub use client::tool::McpTool;
+pub use error::McpError;
+pub use server::{AgentMcpHandler, McpAgentServer};
+```
+
+**Server HTTP integration** (`src/server.rs:151–178`):
+```rust
+pub fn streamable_http_service(
+    &amp;self,
+) -&gt; Result&lt;StreamableHttpService&lt;AgentMcpHandler&lt;Ctx&gt;, LocalSessionManager&gt;, McpError&gt; {
+    let handler = self.handler()?;
+    Ok(StreamableHttpService::new(
+        move || Ok(handler.clone()),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    ))
+}
+
+pub async fn serve_streamable_http(&amp;self, addr: &amp;str) -&gt; Result&lt;(), McpError&gt; {
+    let service = self.streamable_http_service()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let router = axum::Router::new().nest_service("/mcp", service);
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+```
+
+**README template** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-mcp/README.md`):
+- Title + description linking to Paigasus Helikon
+- Install section (cargo add, facade feature mention)
+- Example code (copy-paste ready)
+- Links (docs.rs, guide site, GitHub)
+- License note
+
+---
+
+### **6. RUNTIME-AXUM STUB STATUS**
+
+**Cargo.toml** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-runtime-axum/Cargo.toml:1–17`):
+```toml
+[package]
+name = "paigasus-helikon-runtime-axum"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# EMPTY — only workspace lints
+
+[lints]
+workspace = true
+```
+
+**src/lib.rs** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-runtime-axum/src/lib.rs:1–2`):
+```rust
+//! `paigasus-helikon-runtime-axum` — stub. See SMA-304.
+```
+
+Completely empty. No dependencies added yet (axum available via workspace).
+
+---
+
+### **7. WORKSPACE `Cargo.toml` DEPENDENCIES**
+
+**Workspace.dependencies** (`/Users/smaschek/dev/paigasus/paigasus-helikon/Cargo.toml:16–115`):
+
+Key entries already present:
+- `axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }` (line 20)
+- `tokio = { version = "1", features = ["full"] }` (line 65)
+- `tokio-util = { version = "0.7", default-features = false, features = ["rt"] }` (line 66)
+- `async-trait = "0.1"` (line 23)
+- `serde_json = "1"` (line 60)
+- `tracing = "0.1"` (line 67)
+- `tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }` (line 68)
+
+**No `utoipa`, `tower`, or `hyper` in workspace yet** — they are transitive (hyper via axum, tower via axum).
+
+**Workspace.package** (line 5–14):
+- All metadata inherited by members
+
+**Workspace.lints.rust** (line 114–115):
+- `missing_docs = "warn"` — enforce crate-level docs
+
+---
+
+### **8. FACADE CRATE: `paigasus-helikon` FEATURE WIRING**
+
+**Cargo.toml features** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon/Cargo.toml:32–52`):
+```toml
+[features]
+default = []
+runtime-tokio = ["dep:paigasus-helikon-runtime-tokio"]
+runtime-axum = ["dep:paigasus-helikon-runtime-axum"]  # (line 45)
+runtime-temporal = ["dep:paigasus-helikon-runtime-temporal"]
+runtime-agentcore = ["dep:paigasus-helikon-runtime-agentcore"]
+sessions-sqlite = ["dep:paigasus-helikon-sessions-sqlite"]
+# ... etc
+```
+
+**lib.rs re-exports** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon/src/lib.rs:46–49`):
+```rust
+/// Self-hosted Axum runtime. Enabled via the `runtime-axum` feature.
+#[cfg(feature = "runtime-axum")]
+pub use paigasus_helikon_runtime_axum as runtime_axum;
+```
+
+**Pattern:** Kebab feature name `runtime-axum` maps to snake re-export `runtime_axum` (standard Rust convention).
+
+---
+
+### **9. EXISTING HTTP/SERVER CODE**
+
+**Only existing axum/HTTP usage:**
+1. **MCP crate** (`paigasus-helikon-mcp`): Uses axum for streamable HTTP transport; nests `StreamableHttpService` (from rmcp) into `axum::Router`.
+2. **MCP server.rs** shows the pattern:
+   - Bind `tokio::net::TcpListener`
+   - Build `axum::Router` with `.nest_service(path, service)`
+   - Call `axum::serve(listener, router)`
+
+No existing REST endpoints, OpenAPI specs, or session middleware in the workspace. The MCP crate's HTTP is strictly for the MCP protocol transport (rmcp's streamable HTTP).
+
+---
+
+### **10. RUNCONTEXT &amp; RELATED CRITICAL TYPES**
+
+**RunContext&lt;Ctx&gt;** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-core/src/context.rs:49–133`):
+```rust
+pub struct RunContext&lt;Ctx&gt;
+where
+    Ctx: Send + Sync + 'static,
+{
+    user_ctx: Arc&lt;Ctx&gt;,
+    session: Arc&lt;dyn Session&gt;,
+    hooks: HookRegistry&lt;Ctx&gt;,
+    tracer: TracerHandle,
+    cancel: CancellationToken,
+    run_config: Option&lt;RunConfig&gt;,            // Injected by runner
+    failure: FailureSlot,                     // Terminal error side-channel
+    agent_depth: u32,                         // Nesting depth
+    state: SessionState,                      // Sub-agent shared KV
+    actions: ActionsHandle,                   // Tool-write control signals
+    // Permission, guardrail, hook state omitted for brevity
+}
+```
+
+**Construction:**
+- `RunContext::new(user_ctx, session, hooks, tracer, cancel)` — full explicit
+- `RunContext::ephemeral(ctx)` — in-memory session, default tracer, fresh cancel token
+- `RunContext::ephemeral_shared(Arc&lt;Ctx&gt;)` — shared context, ephemeral session
+- Builder chain: `.with_session(...)`, `.with_tracer(...)`, etc.
+
+**FailureSlot** (line 1253–1283): Out-of-band carrier for terminal `AgentError`, read post-stream-drain.
+
+---
+
+### **11. ITEM &amp; CONTENT TYPES FOR STREAMING**
+
+**Item enum** (`/Users/smaschek/dev/paigasus/paigasus-helikon/crates/paigasus-helikon-core/src/item.rs:18–61`):
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Item {
+    UserMessage { content: Vec&lt;ContentPart&gt; },
+    AssistantMessage { content: Vec&lt;ContentPart&gt;, agent: Option&lt;String&gt; },
+    System { content: Vec&lt;ContentPart&gt; },
+    ToolCall { call_id: String, name: String, args: Value },
+    ToolResult { call_id: String, content: Vec&lt;ContentPart&gt; },
+}
+```
+
+**ContentPart enum** (lines 63–109):
+```rust
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    Image { source: MediaSource },
+    Audio { source: MediaSource },
+    ToolUse { call_id: String, name: String, args: Value },
+    ToolResult { call_id: String, content: Vec&lt;ContentPart&gt; },
+    Reasoning { text: String },
+}
+```
+
+All are serializable for JSON wire format. Session log stores as `SessionEvent` (distinct, role-agnostic variant set).
+
+---
+
+## **SUMMARY FOR DESIGN**
+
+Your HTTP server runtime (`paigasus-helikon-runtime-axum`) will:
+
+1. **Depend on workspace axum 0.8** (already available)
+2. **Implement the `Runner&lt;Ctx&gt;` trait** (per ADR-6), with methods:
+   - `run()` → `RunResult&lt;T&gt;`
+   - `run_streamed()` → `RunResultStreaming` (events: `BoxStream&lt;'static, AgentEvent&gt;`)
+   - Optionally `resume()` / `resume_streamed()`
+3. **Expose HTTP endpoints** returning `AgentEvent` as JSON (tagged enum) or SSE
+4. **Manage sessions** via `Session` implementations (pass in `RunContext`), keyed by header (e.g., `X-Session-Id: &lt;string&gt;`)
+5. **Handle cancellation** via `CancellationToken` propagated through the context
+6. **Nest into axum::Router** for modular composition (mirror MCP's `.nest_service(...)` pattern)
+
+The **public surface you must design** includes REST endpoints accepting `AgentInput` (user text/messages), routing to agents by name, and streaming/aggregating `AgentEvent` results. Session IDs are opaque strings; the runner doesn't allocate them — callers supply them via headers or request bodies.</result>
+<usage><subagent_tokens>79685</subagent_tokens><tool_uses>32</tool_uses><duration_ms>158258</duration_ms></usage>
+</task-notification>
