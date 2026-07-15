@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bqnmvoirf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/5bdcf7d9-bffe-41f8-99e8-3f252ae7de91/tasks/bqnmvoirf.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for release-plz publish run to complete" completed (exit code 0)</summary>
+</task-notification>
