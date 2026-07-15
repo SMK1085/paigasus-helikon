@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b03wwmtq4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/b03wwmtq4.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch #142 required checks until green" completed (exit code 0)</summary>
+</task-notification>
