@@ -1,0 +1,52 @@
+<task-notification>
+<task-id>a3c116012fe21dd89</task-id>
+<tool-use-id>toolu_01Xbg5MD1z7QCi1TgkEzvLod</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/a3c116012fe21dd89.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed — the ascend ritual is complete and correct. Here is my final whole-branch review.
+
+---
+
+### Spec Compliance — ✅ (AC1, AC2, and scope §5/§6)
+
+**AC1 ✅** — `tests/runs.rs::oneshot_returns_aggregated_result` exercises `POST /agents/echo/runs` with `Content-Type: application/json`, asserts the aggregated `RunResponse` JSON (`status=completed`, `output=echo`) and the `x-run-id` header. The `examples/curl_server.rs` backs the curl narrative.
+
+**AC2 ✅** — `tests/runs.rs::sse_stream_matches_local_events` parses the SSE `data:` lines and compares canonical JSON against `echo_script()` event-for-event. The single `EventLog` code path guarantees SSE/WS/one-shot all see the same sequence; the notify-before-read ordering (verified by `subscribe_does_not_lose_fast_appended_event`) closes the lost-wakeup race so a live subscriber retains full fidelity.
+
+**Scope §5/§6 ✅** — All six route modes present with correct axum-0.8 `{param}` syntax (`server.rs`). Error model split correctly: pre-run lookup/auth/body → real status (404/400/401-403); start-error → 500 (no hang, verified by `start_error_returns_500_not_hang`); in-stream terminal → 200 failure-as-data. Providers (`SessionProvider`/`ContextProvider`/`AuthLayer`), bounded `InMemorySessionProvider`, `with_default_context()` gate, per-session serialization, TTL+count retention, OpenAPI behind a default-on feature — all delivered. I verified in `crates/paigasus-helikon-core/src/context.rs:89-90,124,128` that the documented security posture is real: `approval_handler` defaults to `None` ("→ deny by default") and `permission_mode` defaults to `Default` with a tighten-only setter, so the `DefaultContextProvider`'s "deny is the safe network default" claim holds.
+
+### Strengths
+- **The hard concurrency primitives are correct and tested.** `EventLog::subscribe` uses the canonical `notified()`+`enable()`-before-`read_from` pattern; `note_terminal`/`sweep` never evict live runs and clean both the map and `completion_order` (regression-tested); `SessionLocks` self-prunes by `strong_count`, and because `lock_owned()` keeps the `Arc` alive inside the guard/queued future, pruning can never drop a lock with a pending waiter — serialization integrity is preserved.
+- **No premature-drop 404s, no task stranding.** Router state owns a strong `Arc&lt;RunRegistry&gt;`; the sweeper holds a `Weak` and exits when state drops; `router()` is pure (sweeper spawned only in `serve*`). The writer always `mark_terminal()`s on every arm (Ok / safety-net / start-error), so subscribers and one-shot awaiters can never hang.
+- **Cancellation scoping matches spec exactly** — drop-guard on one-shot/SSE only; async and WS attach none.
+- **Bounded everywhere**: 2 MiB body cap, per-run EventLog ring, count+TTL registry, count-bounded session map, self-pruning lock map. No client-driven unbounded growth except the by-design "live runs never evicted" (mitigated by `RunConfig.timeout`).
+- **Release/ascend plumbing is complete and correct**: crate `0.1.0`, `publish=false` removed, `release=false` block removed from `release-plz.toml`, workspace pin → `0.1.0`, facade → `0.4.14` (self-pin + CHANGELOG), no core bump. Feature gating for `openapi` is consistently applied across `dto.rs`, `handlers/{mod,openapi}.rs`, and `server.rs`.
+
+### Issues
+
+**Critical** — none.
+
+**Important**
+1. **`crates/paigasus-helikon-runtime-axum/CHANGELOG.md` (0.1.0 entry, ~lines 488-493) documents routes and trait names that do not exist.** It claims `POST /agents/{id}/run`, `/run/stream`, `/run/async`, WebSocket `/agents/{id}/runs/{run_id}/ws`, and traits `RunContextProvider` / `AuthProvider`. The actual surface is `POST /agents/{name}/runs` (with `?stream=sse` / `?mode=async` query params, not separate paths), WebSocket `/agents/{name}/runs/{id}/events`, and traits `ContextProvider` / `AuthLayer`. Because this is the stub-ascend flow (the PR bumps its own version and publishes on merge with no separate release-plz PR), this hand-written entry is the **permanent** 0.1.0 crates.io changelog and GitHub release body — it ships materially wrong. Trivial to fix; worth doing before merge.
+
+**Minor**
+2. **SSE/WS start-error path emits no synthetic error frame** (`handlers/runs.rs` `sse_response` / `handlers/events.rs`). On an outer `Err(RunError)` the writer sets `start_error` and `mark_terminal()` with no event appended, so streaming subscribers get a clean empty close — but spec §6 says "streams emit a final synthetic error frame, then close." One-shot correctly returns 500; only the streaming transports diverge, and only in the rare start-error case (never reachable with the default in-memory provider). No hang/leak. Defer, but note it.
+3. **OpenAPI doc stub mislabels the WS endpoint** (`handlers/openapi.rs` `_events_doc`): it describes `/agents/{name}/runs/{id}/events` as "Server-Sent Events stream of AgentEvents", status 200 — it is a WebSocket endpoint. This inaccuracy is served to API consumers in `/openapi.json`.
+4. **OpenAPI version wording drift**: README/crate docs say "OpenAPI 3.1"; `docs/book/src/concepts/axum-server.md` says "OpenAPI 3.0" (twice). utoipa 5.x emits 3.1, so the book is the wrong one.
+5. **No CI gate compiles `runtime-axum` with `--no-default-features`.** Gating is correct by inspection, but spec §9's "default-features=false compiles" claim is unverified by any standing gate (only `--all-features` runs in CI). Consider a follow-up build-matrix entry.
+
+### Carry-forward triage
+- Task 2 — status_mapping omits `Unauthorized`/`Internal` arms: **DEFER** (mapping trivial; `Internal`==`RunStart`→500, `Unauthorized` just forwards `rej.status`).
+- Task 3 — O(n²) replay + small-`with_capacity` reallocs: **DEFER** (perf, not correctness; bounded by 10k cap — note the mild DoS-amplification angle on large-run replays for a follow-up).
+- Task 4 — sweeper first `tick()` at t=0 no-op: **DEFER** (harmless on empty registry).
+- Task 12 — async-disconnect WS-collect loop unbounded + soft timing: **DEFER** (test robustness only; functionally passing).
+- Task 13 — openapi test `||` vs `&amp;&amp;`: **DEFER** (weaker but still asserts spec served + agent name present).
+- General — Sonnet 4.6 co-author trailer: **DEFER** (cosmetic; squashed on merge).
+
+### Merge recommendation — **Fix-then-merge**
+
+One must-fix before merge: correct the **runtime-axum `CHANGELOG.md` 0.1.0 entry** (wrong route paths and wrong trait names) since it becomes the permanent published release notes. Everything else — including the SSE/WS start-error synthetic-frame gap and the OpenAPI/book doc nits — is safe to land as a follow-up. The code itself (integration seams, concurrency/lifetime safety, security posture, public surface, and ascend plumbing) is sound and meets the spec; no Critical issues found.</result>
+<usage><subagent_tokens>168709</subagent_tokens><tool_uses>13</tool_uses><duration_ms>309363</duration_ms></usage>
+</task-notification>
