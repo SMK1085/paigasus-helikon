@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>br86jmv3c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/br86jmv3c.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch release-plz publish run to completion" completed (exit code 0)</summary>
+</task-notification>
