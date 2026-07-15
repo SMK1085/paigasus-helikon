@@ -52,6 +52,8 @@ Containers are **linux/arm64 mandatory**, ship from a private ECR repository, an
 
 AWS publishes a stable CDK L2 construct for deployment: `aws-cdk-lib/aws-bedrockagentcore`'s `Runtime` construct takes an `AgentRuntimeArtifact.fromEcrRepository(...)` and exposes `.addEndpoint(...)`; the same `Runtime` accepts `protocolConfiguration: ProtocolType.MCP` to switch it into MCP mode. The full snippet lives in the [crate README](https://docs.rs/paigasus-helikon-runtime-agentcore).
 
+**Client disconnects**: both `/invocations` transports — buffered JSON and SSE — drive the run on a detached task and hold a `CancellationToken` drop-guard, so a client that walks away mid-run cancels the run *and* still gets its turn finalized into the `Session`. The persisted turn is partial (whatever the run had produced when it was cancelled), which is the deliberate trade: a disconnected client should not keep burning model tokens. Note that agentcore has no per-session serialization lock (unlike [`runtime-axum`](./axum-server.md)), so a cancelled run's finalize can overlap a retry of the same session id — AgentCore pins a session to a container, which makes genuinely concurrent same-session invocations unlikely enough in practice that the lock isn't worth its cost here.
+
 **Termination is abrupt** — AgentCore documents no `SIGTERM` contract. In HTTP mode, durable conversation state belongs in a `Session` backend (SQLite/Postgres/Redis), never in container memory. In MCP mode this doesn't apply the same way: each MCP call gets a fresh, unshared in-memory session by construction, so MCP-mode AgentCore cannot use a persistent session backend in v0 at all — that's a known v0 limitation, not a deployment mistake to fix via configuration.
 
 ## Choosing between them
