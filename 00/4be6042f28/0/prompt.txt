@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>biugs0c5w</task-id>
+<tool-use-id>toolu_01NdU3NcrjddEG8H9aVso2sJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/ec9b178e-bd0a-4b90-b14e-8cf8100af223/tasks/biugs0c5w.output</output-file>
+<status>completed</status>
+<summary>Background command "Continue polling for CodeRabbit completion" completed (exit code 0)</summary>
+</task-notification>
