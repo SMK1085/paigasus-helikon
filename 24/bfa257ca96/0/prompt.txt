@@ -1,0 +1,51 @@
+<task-notification>
+<task-id>ac9ca2df81246ddb1</task-id>
+<tool-use-id>toolu_01Q44mgNWqTH1QN3nDTGgJ6n</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/ac9ca2df81246ddb1.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 8 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need. I verified all three named out-of-diff risks:
+
+- **(a) TokioRunner mirror:** `load_and_record` (runner.rs) and `finalize` (runner.rs) are **byte-for-byte identical** to `TokioRunner`'s (tokio lib.rs:97-129). The finalize-on-infra path (run_inner `Err(infra)` arm) and observe-all-events loop match the mirror claim.
+- **(b) `apply_tools` ordering contract:** driver.rs:302-321 iterates `outcomes` positionally and the doc mandates original call order; the workflow's `execute_tools` delivers exactly that.
+- **(c) SDK shapes:** cross-checked against task-4-report calibration; the `#[run]` no-self shape, `start_activity(&amp;self,…)`, `ctx.timer`, `ctx.cancelled()`, proto `RetryPolicy` fields, and client `start_workflow`/`get_result`/`cancel` all match the source-verified calibration.
+
+### Spec Compliance
+- ✅ Tool fan-out reassembled in original call order across chunks (sequential chunks + deterministic `join_all`, extended in order)
+- ✅ Cancel/timeout race returns normal `DurableRunOutcome`; workflow `run` is total (`Ok(drive(...).await)`), never returns a Temporal `Err`
+- ✅ Activity-failure parsing degrades to `ErrorKindPayload::Model` on unparseable/retryable-exhausted/timeout failures — no panic path
+- ✅ Runner session semantics: hard-error on snapshot read; observes all events; finalizes on every exit incl. infra failure; session append best-effort
+- ✅ `run_streamed` pre-sets the failure slot before returning the (buffered, documented) stream
+- ✅ Workflow determinism: single keyed `plans.get`, no uuid/time/random/map-iteration; `uuid` only client-side in runner.rs
+- ✅ Inherited ADR-10 test `error_kind_to_activity_error_model_is_non_retryable` present
+- ✅ `RetryPolicyConfig` wired into `ActivityOptions` via `to_proto_retry_policy`
+- ✅ `AgentPlan` never serialized — resolved process-locally via the factory `Arc`
+- ✅ Commit message matches the mandated string
+- ⚠️ **Live-only (Task 9 must verify):** (1) exact cause-chain depth in `activity_failure_message` — whether `err.cause().failure().message` is where `error_kind_to_activity_error`'s JSON actually lands; (2) clean drop of in-flight activity futures on the timeout/cancel race arms (Temporal cancellation-type behavior — `cancellation_type` is left at builder default); (3) workflow completing-normally-after-cancel yielding `Ok(Cancelled outcome)` from `get_result`; (4) tool-activity infra failure folded into a tool-error outcome vs. failing the run; (5) short start-to-close for crash-resume (no per-activity knob yet).
+
+### Strengths
+- The cancel handling in `run_workflow` is cleaner than the brief's "spawn a watcher": a `select!` loop with a `!requested_cancel` guard requests cancel exactly once then keeps awaiting the now-`Cancelled` outcome — no task leak, no busy-loop.
+- Session mirror is exact (verified against the source), so the finalize-on-every-exit and best-effort-append guarantees carry over precisely.
+- Determinism discipline is genuinely careful: borrow-scoped `select!` block releases `&amp;mut driver` before `driver.interrupt`, chunking uses the SDK's deterministic `join_all`, and the plan lookup is a keyed `get` not an iteration — matching the binding constraint verbatim.
+- Error-path hygiene is solid: no `unwrap`/`expect` in workflow or runner hot paths except the mutex-poison `expect` (which mirrors Tokio); all fallible conversions use `unwrap_or`/`.ok()`.
+- The infra-failure branch of `run_inner` still finalizes with the new-turn input held by the recorder — the subtle correct behavior.
+
+### Issues
+
+#### Critical (Must Fix)
+None.
+
+#### Important (Should Fix)
+None. Traced every risk in the dispatch; no correctness defect that makes the task untrustworthy. The Temporal-wired paths are compile-and-wire per the brief's bar, with live semantics correctly deferred to Task 9.
+
+#### Minor (Nice to Have)
+- **Render-instructions infra failure is mislabeled as a model error.** In `run_effects` (workflow.rs), the `RenderInstructions` failure arm calls `driver.apply_model_failure(extract_error_kind(&amp;err))`. Since a render failure never went through `error_kind_to_activity_error`, `extract_error_kind` degrades it to `ErrorKindPayload::Model { message }`, so an instructions-rendering infra failure surfaces to the user as a model error kind. Cosmetic — the outcome is still a terminal `AgentFailed` with events-so-far, which is the desired behavior; only the error *label* is off. A dedicated `apply_instructions_failure` or an `Other`-kinded path would read more truthfully.
+- **`run_streamed`'s `RunFailed`-last check only inspects `events.last()`** (runner.rs). If a durable `AgentFailed` event log ever ended with a non-`RunFailed` event, a duplicate synthetic `RunFailed` would be pushed. Today the driver always terminates `AgentFailed` runs with `RunFailed` last (verified in driver.rs `apply_model_failure`/`finish`), so this is latent, not live — but a scan (`events.iter().any(...)`) would be more robust.
+- **Minor double work in `execute_tools`**: `call` is cloned, then `call_id` cloned again from the clone before `call` is moved into the activity input. Negligible; not worth churning.
+
+### Assessment
+**Task quality:** Approved
+**Reasoning:** The two riskiest areas — tool fan-out ordering under chunking and the cancel/timeout race returning a total outcome — are both correct and verified against the driver contract and the SDK calibration; session semantics are a byte-exact mirror of the audited TokioRunner. Only cosmetic Minor items remain, and every unverifiable behavior is legitimately a Task-9 live-validation concern, which the implementer flagged.</result>
+<usage><subagent_tokens>113669</subagent_tokens><tool_uses>6</tool_uses><duration_ms>331041</duration_ms></usage>
+</task-notification>
