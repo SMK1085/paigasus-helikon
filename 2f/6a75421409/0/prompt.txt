@@ -1,0 +1,29 @@
+<task-notification>
+<task-id>a6c241bbb9c23347a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/40764949-1760-4852-8f6b-de4c6623ccd7/tasks/a6c241bbb9c23347a.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 9: live integration tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 9 complete. All work is committed, the dev server is stopped, and the working tree is clean.
+
+**Status: DONE** — 4 required tests + 2 checklist-verification tests, all passing live; no src defects exposed (only the required timeout knob added).
+
+**Commits** (on `feature/sma-332-...-runtime`):
+- `f631500` feat(runtime-temporal): SMA-332 add per-activity timeout overrides to worker builder
+- `5c1fbdf` test(runtime-temporal): SMA-332 add env-gated live integration suite incl. crash-resume AC
+
+**Live run:** `TEMPORAL_TEST_SERVER=localhost:7233 cargo test -p paigasus-helikon-runtime-temporal --test temporal_live -- --test-threads=1` → **6 passed; 0 failed; finished in 21.98s** (stable across two back-to-back runs; gated-off = 6 SKIPPED, exit 0).
+
+**Checklist outcomes:**
+1. `activity_failure_message` cause-chain — VERIFIED correct via a real non-retryable model failure (JSON extracted from `err.cause().failure().message`, parsed, not leaked); no fix needed.
+2. Cancel race drops in-flight activity cleanly — VERIFIED (~0.06s, no stuck workflow/orphan blocking the outcome).
+3. Cancelled workflow → `Ok(outcome)`→`Err(RunError::Cancelled)`, not WorkflowFailure — VERIFIED.
+4. Tool INFRA failure — DECIDED+VERIFIED: folds into the run (no hang, events preserved, session write intact); v0 fold-and-continue, not terminal.
+5. Short tool start-to-close + knob — DONE: added `model_start_to_close`/`tool_start_to_close`; AC uses 5s; heartbeat not needed (start-to-close is sufficient/sole crash-detection).
+
+**Concerns:** suite is 6 tests not 4 (2 added for items 1 &amp; 4 as durable regression coverage — droppable); crash-resume is wall-clock-sensitive on a live server (generous per-test timeout backstops); crate is still a `0.0.0` stub so book/README untouched (new builder knob is public API for the ascend step).
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-332-runtime-temporal-agentcore/.superpowers/sdd/task-9-report.md`</result>
+<usage><subagent_tokens>285079</subagent_tokens><tool_uses>108</tool_uses><duration_ms>2368949</duration_ms></usage>
+</task-notification>
