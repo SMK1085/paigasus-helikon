@@ -15,7 +15,7 @@ use paigasus_helikon_core::{
     Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunConfig, RunContext, RunError,
     RunResult, RunResultStreaming, Runner, TokenUsage,
 };
-use paigasus_helikon_runtime_actix::AgentServer;
+use paigasus_helikon_runtime_actix::{AgentServer, InMemorySessionProvider, SessionProvider};
 
 /// A test [`Agent`] that emits a fixed sequence of events rather than
 /// talking to any real model.
@@ -167,6 +167,45 @@ impl<Ctx: Send + Sync + 'static> Runner<Ctx> for FailingRunner {
     }
 }
 
+// ── PanicStreamRunner ───────────────────────────────────────────────────────────
+
+/// A test [`Runner`] whose `run_streamed` succeeds but returns an event stream
+/// that **panics** on the first poll, before any terminal event is emitted.
+///
+/// Exercises the writer task's panic-unwind path: the `TerminalGuard` drop must
+/// still mark the run terminal so a one-shot request returns instead of hanging.
+pub struct PanicStreamRunner;
+
+/// Diverging helper that pins the panicking stream's item type to [`AgentEvent`]
+/// without tripping the `unreachable_code` lint.
+fn panic_event() -> AgentEvent {
+    panic!("simulated stream panic before terminal event")
+}
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> Runner<Ctx> for PanicStreamRunner {
+    async fn run(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResult, RunError> {
+        unimplemented!("PanicStreamRunner is only used through run_streamed")
+    }
+
+    async fn run_streamed(
+        &self,
+        _agent: &(dyn Agent<Ctx> + '_),
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+        _config: RunConfig,
+    ) -> Result<RunResultStreaming, RunError> {
+        let stream = stream::once(async { panic_event() }).boxed();
+        Ok(RunResultStreaming::new(stream))
+    }
+}
+
 // ── PartialThenEndRunner ────────────────────────────────────────────────────────
 
 /// A test [`Runner`] whose `run_streamed` succeeds and yields exactly one
@@ -298,4 +337,36 @@ impl<Ctx: Send + Sync + 'static> Agent<Ctx> for SignallingHangingAgent {
         });
         Ok(first.chain(hangs).boxed())
     }
+}
+
+/// Spawn an [`AgentServer`] mounting a single `hanging` [`SignallingHangingAgent`]
+/// and return both the bound base URL and the injected session provider.
+///
+/// Mirrors [`spawn_actix_server`]'s thread model — bind the listener on the
+/// calling thread, then drive the serve loop from an [`actix_web::rt::System`] on
+/// a dedicated OS thread — but additionally hands back the
+/// [`InMemorySessionProvider`] so a test can assert on what the run actually
+/// persisted (the builder's default provider is otherwise unreachable).
+pub fn spawn_hanging_server(
+    started: tokio::sync::mpsc::UnboundedSender<()>,
+) -> (String, Arc<InMemorySessionProvider>) {
+    let sessions = Arc::new(InMemorySessionProvider::new(16));
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .agent(Arc::new(SignallingHangingAgent { started }))
+        .session_provider(Arc::clone(&sessions) as Arc<dyn SessionProvider>)
+        .build()
+        .expect("server builds");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+        actix_web::rt::System::new().block_on(async move {
+            server.serve_with_listener(listener).await.expect("serve");
+        });
+    });
+    // Brief readiness wait: the accept loop starts asynchronously on the spawned
+    // thread, so give it a moment before the first connection attempt.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    (format!("http://{addr}"), sessions)
 }

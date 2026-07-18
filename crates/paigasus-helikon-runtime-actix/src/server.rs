@@ -304,8 +304,12 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
                 .spawn_sweeper(&crate::runtime::shared_handle());
             let scope = web::scope("")
                 .app_data(Data::new(state.clone()))
-                .route("/agents", web::get().to(handlers::agents::list::<Ctx>));
-            // Task 7/9/11 append further .route(...) calls here; Task 10 wraps
+                .route("/agents", web::get().to(handlers::agents::list::<Ctx>))
+                .route(
+                    "/agents/{name}/runs",
+                    web::post().to(handlers::runs::create_run::<Ctx>),
+                );
+            // Task 9/11 append further .route(...) calls here; Task 10 wraps
             // `scope` with the auth Transform when state.auth.is_some().
             cfg.service(scope);
         }
