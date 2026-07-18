@@ -313,9 +313,19 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
                     "/agents/{name}/runs/{id}/events",
                     web::get().to(handlers::events::events::<Ctx>),
                 );
-            // Task 11 appends further .route(...) calls here; Task 10 wraps
-            // `scope` with the auth Transform when state.auth.is_some().
-            cfg.service(scope);
+            // Task 11 appends further .route(...) calls to `scope` above.
+            //
+            // When an `AuthLayer` is configured, wrap the whole scope in the
+            // `AuthGuard` middleware so EVERY route is gated (parity with the
+            // axum runtime's router-level gate). `.wrap()` changes the scope's
+            // type, so the `cfg.service(...)` call is branched rather than the
+            // scope reassigned.
+            match &state.auth {
+                Some(auth) => {
+                    cfg.service(scope.wrap(crate::middleware::AuthGuard::new(Arc::clone(auth))))
+                }
+                None => cfg.service(scope),
+            };
         }
     }
 

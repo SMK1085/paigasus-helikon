@@ -9,6 +9,7 @@
 
 mod event_log;
 mod handlers;
+mod middleware;
 mod registry;
 mod runtime;
 
