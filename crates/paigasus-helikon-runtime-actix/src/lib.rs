@@ -12,3 +12,8 @@ mod registry;
 
 mod dto;
 pub use dto::{AgentInfo, AsyncAccepted, RunRequest, RunResponse, RunStatus};
+
+mod error;
+pub use error::{AuthRejection, ServerError};
+mod session;
+pub use session::{InMemorySessionProvider, SessionProvider};
