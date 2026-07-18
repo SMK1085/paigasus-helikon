@@ -354,54 +354,77 @@ pub use auth::AuthLayer;
 
 ---
 
-## Task 5: `server.rs` — AppState, builder, shared runtime, `configure()`/`serve()`
+## Task 5: `server.rs` + `runtime.rs` — AppState, builder, shared runtime, `configure()`/`serve()`
 
-The builder is identical to axum; `AppStateInner` gains a shared tokio runtime; `configure()` registers routes (under an inner `web::scope("")` so auth can wrap them in Task 10); `serve()`/`serve_with_listener()` drive `HttpServer`.
+The builder is identical to axum. Writer tasks + the registry sweeper run on a **process-wide** multi-thread tokio runtime (`runtime.rs`), NOT on actix's per-worker `actix-rt` and NOT on a per-server `Runtime`. `configure()` registers routes under an inner `web::scope("")` (so Task 10's auth can `.wrap()` it) and spawns the (idempotent) sweeper; `serve()`/`serve_with_listener()` drive `HttpServer`.
+
+> **CRITICAL runtime note (why not a per-server `Runtime`):** `tokio::runtime::Runtime::new()` **panics** ("cannot create a runtime from within a runtime") whenever it runs inside an existing runtime — which is ALWAYS the case here: `build()`/`serve()` are called from `#[actix_web::main]`, `#[tokio::test]`, or the conformance harness's `System` thread. So the shared runtime is created **lazily on a dedicated OS thread** and exposed as a `'static` `Handle` (`runtime::shared_handle()`). This avoids the nested-runtime panic, avoids the drop-in-async panic (a `'static` runtime is never dropped), and is shared by all servers in the process. `AppStateInner` holds **no** runtime.
 
 **Files:**
+- Create: `crates/paigasus-helikon-runtime-actix/src/runtime.rs`
 - Create: `crates/paigasus-helikon-runtime-actix/src/server.rs`
-- Create: `crates/paigasus-helikon-runtime-actix/src/handlers/mod.rs` (stub, filled by Tasks 6–9)
-- Modify: `crates/paigasus-helikon-runtime-actix/src/registry.rs` (sweeper spawns on the shared `Handle`)
+- Modify: `crates/paigasus-helikon-runtime-actix/src/registry.rs` (idempotent `spawn_sweeper(&Handle)`)
+- Modify: `crates/paigasus-helikon-runtime-actix/src/lib.rs` (`mod runtime; mod server; pub use server::{AgentServer, AgentServerBuilder};`)
 
 **Interfaces:**
 - Consumes: everything from Tasks 2–4.
-- Produces: `server::{AgentServer<Ctx>, AgentServerBuilder<Ctx>}`; `pub(crate) struct AppState<Ctx>` (Deref to `AppStateInner<Ctx>`) with fields: `registry, runner, agents, sessions, context, auth, run_config, locks, rt: Arc<tokio::runtime::Runtime>`. `AgentServer::configure(&self) -> impl Fn(&mut ServiceConfig) + Send + Clone + 'static`; `serve(self, addr)`, `serve_with_listener(self, std::net::TcpListener)`.
+- Produces: `server::{AgentServer<Ctx>, AgentServerBuilder<Ctx>}`; `pub(crate) struct AppState<Ctx>` (Deref to `AppStateInner<Ctx>`) with fields `registry, runner, agents, sessions, context, auth, run_config, locks` (SAME as axum — **no** `rt` field); `runtime::shared_handle() -> tokio::runtime::Handle`. `AgentServer::configure(&self) -> impl Fn(&mut ServiceConfig) + Send + Clone + 'static`; `serve(self, addr)`, `serve_with_listener(self, std::net::TcpListener)`.
 
-- [ ] **Step 1: Change `registry.rs` sweeper to use a tokio `Handle`.** Replace `spawn_sweeper(self: &Arc<Self>)`'s internal `tokio::spawn(...)` with a method that takes the handle:
+- [ ] **Step 1: Write `runtime.rs`** — the process-wide executor:
+
+```rust
+//! Process-wide executor for detached run work. actix runs each worker on its
+//! own single-threaded `actix-rt` runtime (recyclable if a worker dies), so run
+//! writer tasks and the registry sweeper run on ONE process-wide multi-thread
+//! tokio runtime instead. It is created lazily on a dedicated OS thread — a
+//! fresh thread avoids the "cannot create a runtime from within a runtime" panic
+//! that firing `Runtime::new()` inside `#[actix_web::main]`/`#[tokio::test]`
+//! would cause — and held `'static`, so it is never dropped in an async context.
+use std::sync::OnceLock;
+use tokio::runtime::{Builder, Handle};
+
+static SHARED: OnceLock<Handle> = OnceLock::new();
+
+/// Handle to the process-wide runtime that executes run writer tasks and the
+/// registry sweeper. Lazily initialised on first use.
+pub(crate) fn shared_handle() -> Handle {
+    SHARED
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name("helikon-actix-rt".to_owned())
+                .spawn(move || {
+                    let rt = Builder::new_multi_thread().enable_all().build()
+                        .expect("build shared runtime");
+                    tx.send(rt.handle().clone()).expect("send runtime handle");
+                    rt.block_on(std::future::pending::<()>()); // keep alive for process lifetime
+                })
+                .expect("spawn shared runtime thread");
+            rx.recv().expect("receive runtime handle")
+        })
+        .clone()
+}
+```
+
+- [ ] **Step 2: Make `registry.rs`'s sweeper idempotent + `Handle`-driven.** `configure()` runs once PER actix worker, so `spawn_sweeper` must spawn exactly ONE sweeper no matter how many times it's called. Add a `sweeper: std::sync::Once` field to `RunRegistry` (init `Once::new()` in `new()`), and:
 
 ```rust
 // registry.rs
 pub fn spawn_sweeper(self: &Arc<Self>, handle: &tokio::runtime::Handle) {
     let registry = Arc::clone(self);
-    handle.spawn(async move { registry.sweep_loop().await });
+    let handle = handle.clone();
+    self.sweeper.call_once(move || {
+        handle.spawn(async move { registry.sweep_loop().await });
+    });
 }
 ```
-(Rename the existing loop body to `sweep_loop` if needed; keep TTL + `max_runs` eviction unchanged.)
+(Rename the existing loop body to `sweep_loop` if needed; keep TTL + `max_runs` eviction logic unchanged. The existing registry unit tests are unaffected.)
 
-- [ ] **Step 2: Write `AppStateInner`/`AppState`** — copy axum's `AppStateInner`/`AppState` (Deref + Clone), adding `pub rt: Arc<tokio::runtime::Runtime>`.
+- [ ] **Step 3: Write `AppStateInner`/`AppState`** — copy axum's `AppStateInner`/`AppState` (Deref + Clone) VERBATIM (same fields, **no** `rt`). All fields' types are `Send + Sync` (the `Arc<dyn ContextProvider>`/`Arc<dyn AuthLayer>` trait objects are `Send + Sync` despite their `?Send` futures), so `AppState<Ctx>: Send + Sync + Clone + 'static` — required for `web::Data` and the `configure()` closure bound.
 
-- [ ] **Step 3: Write `AgentServerBuilder`** — copy axum's builder **verbatim** (all setter methods, `dup_error` handling, defaults, `with_default_context`), changing only `build()` to construct the shared runtime and pass it into state:
+- [ ] **Step 4: Write `AgentServerBuilder`** — copy axum's builder **verbatim** (all setter methods, `dup_error` handling, defaults, `with_default_context`). `build()` is the SAME as axum except it does **not** create any runtime and constructs `AppStateInner` with the same field set (no `rt`). Do NOT call `Runtime::new()` anywhere.
 
-```rust
-pub fn build(self) -> Result<AgentServer<Ctx>, ServerError> {
-    // … identical validation (dup_error, max_sessions==0, context required) …
-    let runner = self.runner.unwrap_or_else(|| Arc::new(TokioRunner));
-    let sessions = self.sessions.unwrap_or_else(|| Arc::new(InMemorySessionProvider::new(self.max_sessions)));
-    let registry = RunRegistry::new(self.retention, self.max_runs, self.max_events_per_run);
-    let rt = Arc::new(
-        tokio::runtime::Builder::new_multi_thread().enable_all().build()
-            .map_err(|e| ServerError::Internal(format!("failed to build runtime: {e}")))?,
-    );
-    let state = AppState { inner: Arc::new(AppStateInner {
-        registry, runner, agents: self.agents, sessions, context, auth: self.auth,
-        run_config: self.run_config, locks: SessionLocks::new(), rt,
-    })};
-    Ok(AgentServer { state })
-}
-```
-> Implementation note (spike-verified): the `Arc<Runtime>` lives in long-lived state and drops at teardown; if a drop-in-async-context panic is observed, switch to holding a `Handle` + a runtime parked on a dedicated thread. Do NOT reduce to per-worker `tokio::spawn`.
-
-- [ ] **Step 4: Write `AgentServer` with `configure()` + serve methods:**
+- [ ] **Step 5: Write `AgentServer` with `configure()` + serve methods:**
 
 ```rust
 impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
@@ -410,7 +433,7 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     /// Returns a closure that mounts the agent routes on an actix `App` at root.
     ///
     /// **Incremental build note:** `configure()` may only route to handlers that
-    /// EXIST. Task 5 ships an EMPTY scope (shared state + sweeper, no routes) so it
+    /// EXIST. Task 5 ships an EMPTY scope (state + sweeper, no routes) so it
     /// compiles with no `handlers` module present. Each later handler task APPENDS
     /// its route here and adds its module to `handlers/mod.rs`: Task 6 adds
     /// `GET /agents`, Task 7 adds `POST /agents/{name}/runs`, Task 9 adds
@@ -419,8 +442,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     pub fn configure(&self) -> impl Fn(&mut ServiceConfig) + Send + Clone + 'static {
         let state = self.state.clone();
         move |cfg: &mut ServiceConfig| {
-            // Ensure the sweeper runs even on the embedded path (OnceCell-guarded).
-            state.registry.spawn_sweeper(state.rt.handle());
+            // Idempotent: spawns exactly one sweeper across all workers, on the
+            // process-wide runtime. Runs on the embed path too (host calls
+            // configure()); a built-but-never-served server never calls this, so
+            // it leaks no sweeper.
+            state.registry.spawn_sweeper(&crate::runtime::shared_handle());
             let scope = web::scope("").app_data(Data::new(state.clone()));
             // Task 6/7/9/11 append .route(...) here; Task 10 wraps `scope` with the
             // auth Transform when state.auth.is_some().
@@ -443,11 +469,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     }
 }
 ```
-(`use actix_web::{web::{self, Data, ServiceConfig}, App, HttpServer};`)
+(`use actix_web::{web::{self, Data, ServiceConfig}, App, HttpServer};`. Note: `serve()` only needs to COMPILE in this task — it isn't run until Task 6's harness, which drives it inside an `actix_rt::System`.)
 
-- [ ] **Step 5: Add builder unit tests** in `server.rs` (`#[cfg(test)]`, no HTTP): duplicate agent name → `Err(ServerError::BadRequest)`; no context provider → `Err(ServerError::Internal)`; `max_sessions(0)` with the default session store → `Err(ServerError::BadRequest)`; happy path `AgentServer::<()>::builder().with_default_context().agent(..).build()` → `Ok`. No `handlers` module is created in this task — `configure()`'s scope is empty, so nothing references `handlers::` yet.
+- [ ] **Step 6: Add builder unit tests** in `server.rs` (`#[cfg(test)]`, no HTTP): duplicate agent name → `Err(ServerError::BadRequest)`; no context provider → `Err(ServerError::Internal)`; `max_sessions(0)` with the default session store → `Err(ServerError::BadRequest)`; happy path `AgentServer::<()>::builder().with_default_context().agent(..).build()` → `Ok`. Use plain `#[test]` (build() spawns nothing and creates no runtime, so no async runtime is needed; do NOT wrap these in `#[tokio::test]`). No `handlers` module is created in this task.
 
-- [ ] **Step 6: Build + test + commit:** `cargo build -p paigasus-helikon-runtime-actix` and `cargo test -p paigasus-helikon-runtime-actix --lib server::` → clean/PASS. (`dead_code` on not-yet-wired items expected; do not gate on `clippy -D warnings`.) Commit `feat(runtime-actix): SMA-343 add AgentServer builder, shared runtime, configure()/serve()`.
+- [ ] **Step 7: Build + test + commit:** `cargo build -p paigasus-helikon-runtime-actix` and `cargo test -p paigasus-helikon-runtime-actix --lib` → clean/PASS. (`dead_code` on not-yet-wired items expected; do not gate on `clippy -D warnings`.) Commit `feat(runtime-actix): SMA-343 add AgentServer builder, process-wide runtime, configure()/serve()`.
 
 ---
 
@@ -542,7 +568,7 @@ This is the **go/no-go checkpoint for decision 6.** Implement the shared writer 
 
 - [ ] **Step 2: Run → FAIL.**
 
-- [ ] **Step 3: Implement `runs.rs`.** Port axum's structure — `RunQuery` (+`validate`), `TerminalGuard`, `spawn_writer`, `oneshot_response` — changing: (a) manual body read via `web::Payload` with `MAX_BODY_BYTES = 2*1024*1024` and the tolerant content-type check (return `ServerError::BadRequest` on oversize/non-JSON); (b) `spawn_writer` uses `state.rt.handle().spawn(...)` not `tokio::spawn`; (c) session id from `req.headers().get("x-session-id")`; (d) one-shot holds `handle.cancel.clone().drop_guard()` while awaiting `handle.log.subscribe(0).collect()`, then builds `HttpResponse::Ok().insert_header(("x-run-id", run_id.to_string())).json(RunResponse::from_events(run_id, events))`; start-error → `ServerError::RunStart`.
+- [ ] **Step 3: Implement `runs.rs`.** Port axum's structure — `RunQuery` (+`validate`), `TerminalGuard`, `spawn_writer`, `oneshot_response` — changing: (a) manual body read via `web::Payload` with `MAX_BODY_BYTES = 2*1024*1024` and the tolerant content-type check (return `ServerError::BadRequest` on oversize/non-JSON); (b) `spawn_writer` spawns the writer future via `crate::runtime::shared_handle().spawn(...)` (the process-wide runtime from Task 5) — NOT `tokio::spawn` (which would pin the writer to the actix worker) and NOT `state.rt` (removed). The writer future is `Send` (holds only `Arc<dyn Runner>`, `Arc<dyn Agent>`, `RunContext<Ctx>`, `AgentInput`, `Arc<RunHandle>`, `OwnedMutexGuard`, all `Send`), so `handle.spawn` accepts it. Build the `RunContext` via `state.context.build(&req, …).await?` in the handler FIRST (its future is `!Send`, fine on the worker), then move the resulting `Send` `RunContext` into the spawned writer; (c) session id from `req.headers().get("x-session-id")`; (d) one-shot holds `handle.cancel.clone().drop_guard()` while awaiting `handle.log.subscribe(0).collect()`, then builds `HttpResponse::Ok().insert_header(("x-run-id", run_id.to_string())).json(RunResponse::from_events(run_id, events))`; start-error → `ServerError::RunStart`.
 
 ```rust
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
