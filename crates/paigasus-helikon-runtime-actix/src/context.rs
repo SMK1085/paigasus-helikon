@@ -68,7 +68,20 @@ use crate::error::ServerError;
 /// [`PermissionMode`]: paigasus_helikon_core::PermissionMode
 /// [`ApprovalHandler`]: paigasus_helikon_core::ApprovalHandler
 /// [`HookRegistry`]: paigasus_helikon_core::HookRegistry
-#[async_trait]
+///
+/// # `?Send` futures
+///
+/// `actix_web::HttpRequest` wraps an `Rc` internally and is therefore `!Sync`
+/// (so `&HttpRequest` is `!Send`). Any implementation that actually reads from
+/// `req` — the common case, e.g. parsing a JWT from the headers — captures a
+/// `!Send` reference in its future, so this trait is declared
+/// `#[async_trait(?Send)]`: the returned future is not required to be `Send`.
+/// The server awaits `build` on the worker thread that received the request
+/// (before it hands the resulting `RunContext`, which *is* `Send`, to the run's
+/// writer task), matching actix-web's request-bound execution model. The trait
+/// object itself stays `Send + Sync`, so `Arc<dyn ContextProvider<Ctx>>` remains
+/// shareable across workers.
+#[async_trait(?Send)]
 pub trait ContextProvider<Ctx>: Send + Sync
 where
     Ctx: Send + Sync + 'static,
@@ -121,7 +134,7 @@ where
 /// `.with_approval_handler`).
 pub struct DefaultContextProvider;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<Ctx> ContextProvider<Ctx> for DefaultContextProvider
 where
     Ctx: Default + Send + Sync + 'static,
@@ -154,6 +167,45 @@ mod tests {
             as Arc<dyn paigasus_helikon_core::Session>;
         let cancel = tokio_util::sync::CancellationToken::new();
         let _ctx: RunContext<()> = DefaultContextProvider
+            .build(&req, session, cancel)
+            .await
+            .unwrap();
+    }
+
+    /// A [`ContextProvider`] that actually READS `req` (the trait's documented
+    /// primary use case, e.g. extracting a tenant/JWT from headers). This
+    /// captures a `!Send` `&HttpRequest` in its future and therefore only
+    /// compiles under `#[async_trait(?Send)]` — a plain (Send-mode)
+    /// `#[async_trait]` would reject it. This test is the compile-time guard that
+    /// keeps the trait `?Send`.
+    struct HeaderReadingProvider;
+
+    #[async_trait(?Send)]
+    impl ContextProvider<()> for HeaderReadingProvider {
+        async fn build(
+            &self,
+            req: &HttpRequest,
+            session: Arc<dyn Session>,
+            cancel: CancellationToken,
+        ) -> Result<RunContext<()>, ServerError> {
+            // Reading the request is what makes the returned future `!Send`.
+            let _has_tenant = req.headers().get("x-tenant").is_some();
+            Ok(RunContext::ephemeral(())
+                .with_session(session)
+                .with_cancel(cancel))
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_reading_request_compiles_and_builds() {
+        use actix_web::test::TestRequest;
+        let req = TestRequest::default()
+            .insert_header(("x-tenant", "acme"))
+            .to_http_request();
+        let session = Arc::new(paigasus_helikon_core::MemorySession::new())
+            as Arc<dyn paigasus_helikon_core::Session>;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let _ctx: RunContext<()> = HeaderReadingProvider
             .build(&req, session, cancel)
             .await
             .unwrap();
