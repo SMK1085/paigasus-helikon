@@ -313,7 +313,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
                     "/agents/{name}/runs/{id}/events",
                     web::get().to(handlers::events::events::<Ctx>),
                 );
-            // Task 11 appends further .route(...) calls to `scope` above.
+            #[cfg(feature = "openapi")]
+            let scope = scope.route(
+                "/openapi.json",
+                web::get().to(handlers::openapi::openapi_json::<Ctx>),
+            );
             //
             // When an `AuthLayer` is configured, wrap the whole scope in the
             // `AuthGuard` middleware so EVERY route is gated (parity with the
