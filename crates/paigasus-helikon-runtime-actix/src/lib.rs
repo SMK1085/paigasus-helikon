@@ -9,6 +9,7 @@
 
 mod event_log;
 mod registry;
+mod runtime;
 
 mod dto;
 pub use dto::{AgentInfo, AsyncAccepted, RunRequest, RunResponse, RunStatus};
@@ -22,3 +23,6 @@ mod context;
 pub use context::{ContextProvider, DefaultContextProvider};
 mod auth;
 pub use auth::AuthLayer;
+
+mod server;
+pub use server::{AgentServer, AgentServerBuilder};
