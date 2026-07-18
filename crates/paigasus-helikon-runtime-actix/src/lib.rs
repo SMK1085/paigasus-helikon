@@ -6,3 +6,9 @@
 //!
 //! See the crate `README.md` for a runnable example.
 #![forbid(unsafe_code)]
+
+mod event_log;
+mod registry;
+
+mod dto;
+pub use dto::{AgentInfo, AsyncAccepted, RunRequest, RunResponse, RunStatus};
