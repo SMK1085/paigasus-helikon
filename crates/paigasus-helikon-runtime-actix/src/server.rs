@@ -308,8 +308,12 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
                 .route(
                     "/agents/{name}/runs",
                     web::post().to(handlers::runs::create_run::<Ctx>),
+                )
+                .route(
+                    "/agents/{name}/runs/{id}/events",
+                    web::get().to(handlers::events::events::<Ctx>),
                 );
-            // Task 9/11 append further .route(...) calls here; Task 10 wraps
+            // Task 11 appends further .route(...) calls here; Task 10 wraps
             // `scope` with the auth Transform when state.auth.is_some().
             cfg.service(scope);
         }

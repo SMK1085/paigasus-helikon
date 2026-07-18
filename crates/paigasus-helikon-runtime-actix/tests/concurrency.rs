@@ -13,6 +13,10 @@
 //! - [`oneshot_client_disconnect_behavior`] — INVESTIGATION (not a gate): does
 //!   actix cancel a one-shot run when the client disconnects mid-run? Asserts the
 //!   actual observed behavior; see the test body for the finding.
+//! - [`ws_subscribe_receives_full_sequence_cross_runtime`] — a WebSocket
+//!   subscriber on a per-worker `actix-rt` runtime receives the full event
+//!   sequence for an async run whose writer lives on the shared runtime (the same
+//!   cross-runtime `Notify` handoff, exercised over the WS transport).
 
 mod support;
 
@@ -21,6 +25,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::StreamExt as _;
 use paigasus_helikon_runtime_actix::{AgentServer, SessionProvider};
 
 /// **GO gate #1 — one-shot correctness under the default multi-worker server.**
@@ -203,5 +208,43 @@ async fn oneshot_client_disconnect_behavior() {
         !cancelled_and_finalized,
         "unexpected: actix cancelled+finalized the one-shot run on disconnect within 3s — \
          the documented divergence (no disconnect-cancel) no longer holds; update the finding"
+    );
+}
+
+/// **Cross-runtime WebSocket subscribe.**
+///
+/// On the default multi-worker server, create an async run (its writer runs on
+/// the shared process-wide runtime) and then WebSocket-subscribe from a per-worker
+/// `actix-rt` runtime. The subscription may land on a different worker than the
+/// one that accepted the create request, so the full event sequence arriving over
+/// the socket proves the `EventLog` `Notify` handoff works across the two runtimes
+/// via the WS transport (not just the one-shot/SSE bodies).
+#[tokio::test]
+async fn ws_subscribe_receives_full_sequence_cross_runtime() {
+    let base = support::spawn_echo_server();
+    let run_id = support::create_async_run(&base, "echo").await;
+
+    let host = base.strip_prefix("http://").unwrap_or(&base);
+    let url = format!("ws://{host}/agents/echo/runs/{run_id}/events");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .expect("WS handshake should succeed for a known run");
+
+    let got = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut got = Vec::new();
+        while let Some(Ok(msg)) = ws.next().await {
+            if msg.is_text() {
+                got.push(support::parse_event(msg.to_text().unwrap()));
+            }
+        }
+        got
+    })
+    .await
+    .expect("WS stream must complete within 5s, not hang");
+
+    assert_eq!(
+        serde_json::to_value(&got).unwrap(),
+        serde_json::to_value(support::echo_script()).unwrap(),
+        "the full event sequence must arrive over the cross-runtime WS subscription"
     );
 }
