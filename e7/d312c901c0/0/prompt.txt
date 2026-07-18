@@ -1,0 +1,4 @@
+<bash-stdout></bash-stdout><bash-stderr>pre-push: convco rejected commits in c247bd0f7e9911cf820715817a60bcb9b084655a..f734d066c70084098bb8f11e28c8f0cb548bcb7a
+  run: convco check c247bd0f7e9911cf820715817a60bcb9b084655a..f734d066c70084098bb8f11e28c8f0cb548bcb7a
+error: failed to push some refs to 'github.com:SMK1085/paigasus-helikon.git'
+</bash-stderr>
