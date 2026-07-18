@@ -74,6 +74,23 @@ where
     /// new turn (or to retry a failed run without re-appending the user message),
     /// use [`Runner::resume`].
     ///
+    /// **The returned future must be polled to completion for the run's events to
+    /// be persisted.** Finalization happens inside this future, so — as with any
+    /// future — dropping it early cancels the work still in flight, including the
+    /// session write, and the turn is lost. A caller that cannot guarantee it will
+    /// poll to completion (an HTTP handler whose client may disconnect, say) should
+    /// drive the run on a detached task and await its result over a channel, rather
+    /// than awaiting it inline.
+    ///
+    /// **Conversely, this future issues the session write before it resolves**, so
+    /// callers may treat its resolution as an ordering barrier: the finalize step is
+    /// ordered before `run` returns, not left in flight behind it. This is what makes
+    /// "detach and await the result over a channel" a sufficient remedy for the hazard
+    /// above. Note this is an ordering guarantee, not a durability one: persistence is
+    /// best-effort, so an implementation may log rather than propagate an append
+    /// failure, and a run that fails before the agent starts never reaches finalize at
+    /// all.
+    ///
     /// **Cancellation/timeout is best-effort and loses to a genuine terminal
     /// event that already occurred.** If the run reaches a terminal
     /// (`RunCompleted`/`RunFailed`) before — or in the same poll as — a cancel or

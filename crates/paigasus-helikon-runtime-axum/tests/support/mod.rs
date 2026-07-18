@@ -16,7 +16,7 @@ use paigasus_helikon_core::{
     Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunConfig, RunContext, RunError,
     RunResult, RunResultStreaming, Runner, TokenUsage,
 };
-use paigasus_helikon_runtime_axum::AgentServer;
+use paigasus_helikon_runtime_axum::{AgentServer, InMemorySessionProvider, SessionProvider};
 
 /// A test [`Agent`] that emits a fixed sequence of events rather than
 /// talking to any real model.
@@ -281,4 +281,81 @@ impl<Ctx: Send + Sync + 'static> Agent<Ctx> for OrderingAgent {
         }])
         .boxed())
     }
+}
+
+// ── SignallingHangingAgent ──────────────────────────────────────────────────────
+
+/// A test [`Agent`] that signals on `started` from its FIRST stream element,
+/// then hangs for 30s before it would emit `RunCompleted`.
+///
+/// Used to model a client that walks away mid-run. The signal exists because a
+/// one-shot client receives nothing until the run ends, so there is no frame to
+/// key a disconnect off and a fixed sleep would race the run's start.
+pub struct SignallingHangingAgent {
+    /// Fires once, from the first stream element, when the run has started.
+    pub started: tokio::sync::mpsc::UnboundedSender<()>,
+}
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> Agent<Ctx> for SignallingHangingAgent {
+    fn name(&self) -> &str {
+        "hanging"
+    }
+
+    fn description(&self) -> &str {
+        "test agent that signals run start then hangs"
+    }
+
+    async fn run(
+        &self,
+        _ctx: RunContext<Ctx>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        let started = self.started.clone();
+        let first = stream::once(async move {
+            let _ = started.send(());
+            AgentEvent::RunStarted {
+                agent: "hanging".to_owned(),
+            }
+        });
+        let hangs = stream::once(async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            }
+        });
+        Ok(first.chain(hangs).boxed())
+    }
+}
+
+/// Spawn an [`AgentServer`] mounting a single `hanging` [`SignallingHangingAgent`]
+/// and return both the bound address and the injected session provider.
+///
+/// Unlike [`spawn_echo_server`], this hands back the [`InMemorySessionProvider`] so
+/// a test can assert on what the run actually persisted — the builder's default
+/// provider is otherwise unreachable from outside the server.
+pub async fn spawn_hanging_server(
+    started: tokio::sync::mpsc::UnboundedSender<()>,
+) -> (SocketAddr, Arc<InMemorySessionProvider>) {
+    let sessions = Arc::new(InMemorySessionProvider::new(16));
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .agent(Arc::new(SignallingHangingAgent { started }))
+        .session_provider(Arc::clone(&sessions) as Arc<dyn SessionProvider>)
+        .build()
+        .expect("server builds");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+
+    tokio::spawn(async move {
+        server
+            .serve_with_listener(listener)
+            .await
+            .expect("serve loop");
+    });
+
+    (addr, sessions)
 }
