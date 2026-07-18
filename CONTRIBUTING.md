@@ -53,7 +53,8 @@ Scope is optional. If present, must match one of:
 - **Crate scopes** (one per workspace member, facade collapsed to `facade`):
   `core`, `cli`, `facade`, `macros`, `mcp`, `tools`, `evals`,
   `providers`, `providers-openai`, `providers-anthropic`,
-  `runtime`, `runtime-tokio`, `runtime-axum`, `runtime-temporal`, `runtime-agentcore`
+  `runtime`, `runtime-tokio`, `runtime-axum`, `runtime-temporal`, `runtime-agentcore`,
+  `runtime-actix`
 - **Cross-cutting scopes:** `workspace`, `workflows`, `ci`, `deps`,
   `release`, `repo`, `docs`, `contributing`, `readme`, `claude`,
   `spec`, `specs`, `plan`, `lints`
