@@ -14,6 +14,7 @@ use crate::{
     auth::AuthLayer,
     context::{ContextProvider, DefaultContextProvider},
     error::ServerError,
+    handlers,
     registry::RunRegistry,
     session::{InMemorySessionProvider, SessionLocks, SessionProvider},
 };
@@ -286,12 +287,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     /// freely, so the same closure can configure every worker's `App`.
     ///
     /// **Incremental build note:** `configure()` may only route to handlers that
-    /// EXIST. Task 5 ships an EMPTY scope (state + sweeper, no routes) so it
-    /// compiles with no `handlers` module present. Each later handler task APPENDS
-    /// its route here and adds its module to `handlers/mod.rs`: Task 6 adds
-    /// `GET /agents`, Task 7 adds `POST /agents/{name}/runs`, Task 9 adds
-    /// `GET /agents/{name}/runs/{id}/events`, Task 11 adds the feature-gated
-    /// `/openapi.json`. Do NOT reference a handler before its task.
+    /// EXIST. Task 6 adds the `handlers` module and its first route (`GET
+    /// /agents`). Each later handler task APPENDS its route here and adds its
+    /// module to `handlers/mod.rs`: Task 7 adds `POST /agents/{name}/runs`,
+    /// Task 9 adds `GET /agents/{name}/runs/{id}/events`, Task 11 adds the
+    /// feature-gated `/openapi.json`. Do NOT reference a handler before its task.
     pub fn configure(&self) -> impl Fn(&mut ServiceConfig) + Send + Clone + 'static {
         let state = self.state.clone();
         move |cfg: &mut ServiceConfig| {
@@ -302,9 +302,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
             state
                 .registry
                 .spawn_sweeper(&crate::runtime::shared_handle());
-            let scope = web::scope("").app_data(Data::new(state.clone()));
-            // Task 6/7/9/11 append .route(...) here; Task 10 wraps `scope` with the
-            // auth Transform when state.auth.is_some().
+            let scope = web::scope("")
+                .app_data(Data::new(state.clone()))
+                .route("/agents", web::get().to(handlers::agents::list::<Ctx>));
+            // Task 7/9/11 append further .route(...) calls here; Task 10 wraps
+            // `scope` with the auth Transform when state.auth.is_some().
             cfg.service(scope);
         }
     }

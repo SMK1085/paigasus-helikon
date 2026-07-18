@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod event_log;
+mod handlers;
 mod registry;
 mod runtime;
 
