@@ -1,6 +1,6 @@
 # Crate overview
 
-The workspace is **19 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
+The workspace is **20 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
 
 For orientation — how to pick crates and add them to your `Cargo.toml` — see [workspace layout](../getting-started/workspace-layout.md). For the rendered rustdoc, see [API docs](./api-docs.md).
 
@@ -30,6 +30,7 @@ Versions below are **current as of 2026-07-06** and move every release — read 
 | [`paigasus-helikon-sessions-redis`](https://docs.rs/paigasus-helikon-sessions-redis) | Redis Streams-backed `Session` backend (`RedisSession`) | published | `0.1.0` |
 | [`paigasus-helikon-runtime-tokio`](https://docs.rs/paigasus-helikon-runtime-tokio) | Default ephemeral Tokio runner | published | `0.1.9` |
 | [`paigasus-helikon-runtime-axum`](https://docs.rs/paigasus-helikon-runtime-axum) | Self-hosted Axum HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints, replayable runs) | published | `0.1.0` |
+| [`paigasus-helikon-runtime-actix`](https://docs.rs/paigasus-helikon-runtime-actix) | Self-hosted actix-web HTTP/SSE/WebSocket agent server (same public surface as `runtime-axum`; embed into an existing actix-web app) | published | `0.1.0` |
 | [`paigasus-helikon-runtime-temporal`](https://docs.rs/paigasus-helikon-runtime-temporal) | Durable Temporal-backed runner (`TemporalRunner`; crash-resume via Temporal history replay) | published | `0.1.0` |
 | [`paigasus-helikon-runtime-agentcore`](https://docs.rs/paigasus-helikon-runtime-agentcore) | AWS Bedrock AgentCore container shim (`AgentCoreServer`; HTTP + MCP protocol contract) | published | `0.1.0` |
 | [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) | MCP integration — `rmcp` client and server wrappers | published | `0.1.3` |
@@ -38,7 +39,9 @@ Versions below are **current as of 2026-07-06** and move every release — read 
 | [`paigasus-helikon-cli`](https://docs.rs/paigasus-helikon-cli) | `helikon` / `paigasus-helikon` CLI binaries; lib target is internal, no stability guarantee | published (binary crate) | `0.1.0` |
 | `paigasus-helikon-sessions-testkit` | Shared `Session` conformance test harness (internal — never published) | internal — `publish = false` | `0.0.0` |
 
-Every crate above the `-sessions-testkit` row publishes to crates.io — the last two stubs (`-evals`, `-cli`) ascended to real implementations in SMA-332/SMA-333, following the four-remaining-crates ascend before them (`-runtime-axum`, `-runtime-temporal`, `-runtime-agentcore`). `paigasus-helikon-sessions-testkit` is the sole `publish = false` crate, and it is an intentional internal test harness rather than a stub awaiting an ascend.
+Every crate above the `-sessions-testkit` row publishes to crates.io — the last two stubs (`-evals`, `-cli`) ascended to real implementations in SMA-332/SMA-333, following the four-remaining-crates ascend before them (`-runtime-axum`, `-runtime-temporal`, `-runtime-agentcore`). `paigasus-helikon-sessions-testkit` is the sole `publish = false` crate under `crates/`, and it is an intentional internal test harness rather than a stub awaiting an ascend.
+
+The workspace has one further member outside `crates/`: `paigasus-helikon-runtime-http-conformance` (under `tests/runtime-http-conformance/`, `version = "0.0.0"`, `publish = false`) — an internal axum⇔actix wire-format conformance suite exercising both HTTP runtimes against the same test cases. Like `-sessions-testkit`, it is an intentional non-published test harness, not a stub.
 
 ## Facade feature → re-export map
 
@@ -60,6 +63,7 @@ Add the facade and turn on the features you need. Each feature gates one sibling
 | `sessions-redis` | `paigasus_helikon::sessions_redis` | `paigasus-helikon-sessions-redis` |
 | `runtime-tokio` | `paigasus_helikon::runtime_tokio` | `paigasus-helikon-runtime-tokio` |
 | `runtime-axum` | `paigasus_helikon::runtime_axum` | `paigasus-helikon-runtime-axum` |
+| `runtime-actix` | `paigasus_helikon::runtime_actix` | `paigasus-helikon-runtime-actix` |
 | `runtime-temporal` | `paigasus_helikon::runtime_temporal` | `paigasus-helikon-runtime-temporal` |
 | `runtime-agentcore` | `paigasus_helikon::runtime_agentcore` | `paigasus-helikon-runtime-agentcore` |
 | `evals` | `paigasus_helikon::evals` | `paigasus-helikon-evals` |
