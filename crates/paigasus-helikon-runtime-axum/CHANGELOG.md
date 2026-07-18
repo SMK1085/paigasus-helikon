@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-axum-v0.1.3...paigasus-helikon-runtime-axum-v0.1.4) - 2026-07-18
+
+### Fixed
+
+- *(runtime-agentcore)* SMA-456 finalize one-shot json runs on client disconnect ([#150](https://github.com/SMK1085/paigasus-helikon/pull/150))
+
 ## [0.1.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-axum-v0.1.2...paigasus-helikon-runtime-axum-v0.1.3) - 2026-07-13
 
 ### Other
