@@ -3865,6 +3865,7 @@ dependencies = [
  "paigasus-helikon-providers-bedrock",
  "paigasus-helikon-providers-gemini",
  "paigasus-helikon-providers-openai",
+ "paigasus-helikon-runtime-actix",
  "paigasus-helikon-runtime-agentcore",
  "paigasus-helikon-runtime-axum",
  "paigasus-helikon-runtime-temporal",
