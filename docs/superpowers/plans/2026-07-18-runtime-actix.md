@@ -165,20 +165,21 @@ git commit -m "feat(runtime-actix): SMA-343 scaffold actix runtime crate"
 
 ---
 
-## Task 2: Port framework-agnostic internals verbatim (`dto`, `event_log`, `registry`, `session`)
+## Task 2: Port framework-agnostic internals verbatim (`dto`, `event_log`, `registry`)
 
-These four modules are runtime-agnostic (tokio primitives + core types only). Copy each from the axum crate **unchanged** except: (a) crate-internal `use crate::…` paths stay the same; (b) `registry::spawn_sweeper` is changed in Task 5 to accept a tokio `Handle` — for now copy it verbatim (it uses `tokio::spawn`, which Task 5 replaces).
+These three modules are runtime-agnostic (tokio primitives + core types only). Copy each from the axum crate **unchanged** except: (a) crate-internal `use crate::…` paths stay the same; (b) `registry::spawn_sweeper` is changed in Task 5 to accept a tokio `Handle` — for now copy it verbatim (it uses `tokio::spawn`, which Task 5 replaces).
+
+> **Sequencing note (discovered during execution):** `session.rs` imports `crate::error::ServerError`, so it moved to Task 3 (which creates `error.rs` first). Task 2 ships only the three modules that compile standalone.
 
 **Files:**
 - Create (copy): `crates/paigasus-helikon-runtime-actix/src/dto.rs` ← `…-axum/src/dto.rs`
 - Create (copy): `crates/paigasus-helikon-runtime-actix/src/event_log.rs` ← axum
 - Create (copy): `crates/paigasus-helikon-runtime-actix/src/registry.rs` ← axum
-- Create (copy): `crates/paigasus-helikon-runtime-actix/src/session.rs` ← axum
 
 **Interfaces:**
-- Produces (unchanged from axum): `dto::{AgentInfo, AsyncAccepted, RunRequest, RunResponse, RunStatus}`; `event_log::{EventLog, RunHandle, is_terminal}`; `registry::{RunRegistry, RunHandle re-export}`; `session::{SessionProvider, InMemorySessionProvider, SessionLocks}`.
+- Produces (unchanged from axum): `dto::{AgentInfo, AsyncAccepted, RunRequest, RunResponse, RunStatus}`; `event_log::{EventLog, RunHandle, is_terminal}`; `registry::{RunRegistry, RunHandle re-export}`. (`session` moves to Task 3 — it imports `crate::error`.)
 
-- [ ] **Step 1: Copy the four files verbatim** from `crates/paigasus-helikon-runtime-axum/src/{dto,event_log,registry,session}.rs` to the actix crate's `src/`. Do not edit logic. The `#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]` attrs in `dto.rs` carry over as-is.
+- [ ] **Step 1: Copy the three files verbatim** from `crates/paigasus-helikon-runtime-axum/src/{dto,event_log,registry}.rs` to the actix crate's `src/`. Do not edit logic. The `#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]` attrs in `dto.rs` carry over as-is.
 
 - [ ] **Step 2: Declare the modules in `src/lib.rs`** (add below the crate doc):
 
@@ -186,38 +187,37 @@ These four modules are runtime-agnostic (tokio primitives + core types only). Co
 mod event_log;
 mod registry;
 
-mod session;
-pub use session::{InMemorySessionProvider, SessionProvider};
-
 mod dto;
 pub use dto::{AgentInfo, AsyncAccepted, RunRequest, RunResponse, RunStatus};
 ```
 
 - [ ] **Step 3: Run the copied unit tests** (each file carries its own `#[cfg(test)] mod tests`):
 
-Run: `cargo test -p paigasus-helikon-runtime-actix --lib dto:: session:: event_log:: registry::`
+Run: `cargo test -p paigasus-helikon-runtime-actix --lib dto:: event_log:: registry::`
 Expected: PASS (same tests that pass in the axum crate).
 
-- [ ] **Step 4: fmt + clippy + commit:**
+- [ ] **Step 4: fmt + build/test + commit** (dead_code warnings on not-yet-wired `event_log`/`registry` items are expected until later tasks use them — do NOT gate on `clippy -D warnings` here; the full clippy gate runs at Task 17):
 
 ```bash
 cargo fmt --all
-cargo clippy -p paigasus-helikon-runtime-actix --all-features --all-targets -- -D warnings
-git add crates/paigasus-helikon-runtime-actix/src/
-git commit -m "feat(runtime-actix): SMA-343 port framework-agnostic dto/event_log/registry/session"
+cargo build -p paigasus-helikon-runtime-actix
+cargo test -p paigasus-helikon-runtime-actix --lib
+git add crates/paigasus-helikon-runtime-actix/src/dto.rs crates/paigasus-helikon-runtime-actix/src/event_log.rs crates/paigasus-helikon-runtime-actix/src/registry.rs crates/paigasus-helikon-runtime-actix/src/lib.rs
+git commit -m "feat(runtime-actix): SMA-343 port framework-agnostic dto/event_log/registry"
 ```
 
 ---
 
-## Task 3: Adapt `error.rs` (actix `ResponseError`)
+## Task 3: Adapt `error.rs` (actix `ResponseError`) + port `session.rs`
 
-`ServerError`, `AuthRejection`, `ErrorBody`, the status map, and the `AuthRejection` `Display`/`Error` impls are **identical** to axum. Only the response-conversion trait changes: axum's `IntoResponse` → actix's `ResponseError`, and `StatusCode` comes from `actix_web::http`.
+`ServerError`, `AuthRejection`, `ErrorBody`, the status map, and the `AuthRejection` `Display`/`Error` impls are **identical** to axum. Only the response-conversion trait changes: axum's `IntoResponse` → actix's `ResponseError`, and `StatusCode` comes from `actix_web::http`. `session.rs` is a verbatim port (moved here from Task 2 because it imports `crate::error::ServerError`).
 
 **Files:**
 - Create: `crates/paigasus-helikon-runtime-actix/src/error.rs`
+- Create (copy): `crates/paigasus-helikon-runtime-actix/src/session.rs` ← axum (verbatim)
 
 **Interfaces:**
-- Produces: `error::{ServerError, AuthRejection, ErrorBody}`. `ServerError: actix_web::ResponseError`. `AuthRejection.status: actix_web::http::StatusCode`.
+- Produces: `error::{ServerError, AuthRejection, ErrorBody}` (`ServerError: actix_web::ResponseError`; `AuthRejection.status: actix_web::http::StatusCode`); `session::{SessionProvider, InMemorySessionProvider, SessionLocks}` (verbatim from axum).
 
 - [ ] **Step 1: Copy `error.rs` from axum**, then replace the imports + the `IntoResponse` impl. Keep the enum, `ErrorBody`, `AuthRejection`, the `Display`/`Error` impls, and the exact status mapping (including the auth-status clamp) unchanged. New top + new impl:
 
@@ -263,11 +263,18 @@ fn status_mapping() {
 // + unauthorized_status_is_clamped mirrored onto status_code()
 ```
 
-- [ ] **Step 3: Declare + export in `lib.rs`:** `mod error; pub use error::{AuthRejection, ServerError};`
+- [ ] **Step 3: Copy `session.rs` verbatim** from `…-axum/src/session.rs` (it imports `crate::error::ServerError`, now available). Then **declare + export in `lib.rs`:**
 
-- [ ] **Step 4: Run + verify:** `cargo test -p paigasus-helikon-runtime-actix --lib error::` → PASS.
+```rust
+mod error;
+pub use error::{AuthRejection, ServerError};
+mod session;
+pub use session::{InMemorySessionProvider, SessionProvider};
+```
 
-- [ ] **Step 5: fmt/clippy/commit** `feat(runtime-actix): SMA-343 adapt ServerError to actix ResponseError`.
+- [ ] **Step 4: Run + verify:** `cargo test -p paigasus-helikon-runtime-actix --lib error:: session::` → PASS (session's copied tests come along; `dead_code` on not-yet-wired items is expected).
+
+- [ ] **Step 5: fmt + build/test + commit** (do not gate on `clippy -D warnings` yet): `feat(runtime-actix): SMA-343 adapt ServerError to actix ResponseError + port session`.
 
 ---
 
@@ -400,20 +407,23 @@ pub fn build(self) -> Result<AgentServer<Ctx>, ServerError> {
 impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     pub fn builder() -> AgentServerBuilder<Ctx> { AgentServerBuilder::new() }
 
-    /// Returns a closure that mounts all agent routes on an actix `App` at root.
+    /// Returns a closure that mounts the agent routes on an actix `App` at root.
+    ///
+    /// **Incremental build note:** `configure()` may only route to handlers that
+    /// EXIST. Task 5 ships an EMPTY scope (shared state + sweeper, no routes) so it
+    /// compiles with no `handlers` module present. Each later handler task APPENDS
+    /// its route here and adds its module to `handlers/mod.rs`: Task 6 adds
+    /// `GET /agents`, Task 7 adds `POST /agents/{name}/runs`, Task 9 adds
+    /// `GET /agents/{name}/runs/{id}/events`, Task 11 adds the feature-gated
+    /// `/openapi.json`. Do NOT reference a handler before its task.
     pub fn configure(&self) -> impl Fn(&mut ServiceConfig) + Send + Clone + 'static {
         let state = self.state.clone();
         move |cfg: &mut ServiceConfig| {
             // Ensure the sweeper runs even on the embedded path (OnceCell-guarded).
             state.registry.spawn_sweeper(state.rt.handle());
-            let mut scope = web::scope("")
-                .app_data(Data::new(state.clone()))
-                .route("/agents", web::get().to(handlers::agents::list::<Ctx>))
-                .route("/agents/{name}/runs", web::post().to(handlers::runs::create_run::<Ctx>))
-                .route("/agents/{name}/runs/{id}/events", web::get().to(handlers::events::events::<Ctx>));
-            #[cfg(feature = "openapi")]
-            { scope = scope.route("/openapi.json", web::get().to(handlers::openapi::openapi_json::<Ctx>)); }
-            // Task 10 wraps `scope` with the auth Transform when state.auth.is_some().
+            let scope = web::scope("").app_data(Data::new(state.clone()));
+            // Task 6/7/9/11 append .route(...) here; Task 10 wraps `scope` with the
+            // auth Transform when state.auth.is_some().
             cfg.service(scope);
         }
     }
@@ -435,22 +445,23 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
 ```
 (`use actix_web::{web::{self, Data, ServiceConfig}, App, HttpServer};`)
 
-- [ ] **Step 5: Port the builder unit tests** (`server.rs` in axum has none; the integration tests cover builder errors — see Task 6). Add a `handlers/mod.rs` stub declaring the four handler modules so `configure()` compiles; the handler fns are added in Tasks 6–9. Temporarily stub them as `pub(crate) async fn … -> Result<HttpResponse, ServerError> { unimplemented!() }` OR write Task 6 first and gate `configure()` routes behind what exists. **Recommended:** implement Task 6 (`agents::list`) in the same commit so `configure()` has at least one real route and compiles.
+- [ ] **Step 5: Add builder unit tests** in `server.rs` (`#[cfg(test)]`, no HTTP): duplicate agent name → `Err(ServerError::BadRequest)`; no context provider → `Err(ServerError::Internal)`; `max_sessions(0)` with the default session store → `Err(ServerError::BadRequest)`; happy path `AgentServer::<()>::builder().with_default_context().agent(..).build()` → `Ok`. No `handlers` module is created in this task — `configure()`'s scope is empty, so nothing references `handlers::` yet.
 
-- [ ] **Step 6: Build:** `cargo build -p paigasus-helikon-runtime-actix` → clean. Commit `feat(runtime-actix): SMA-343 add AgentServer builder, shared runtime, configure()/serve()`.
+- [ ] **Step 6: Build + test + commit:** `cargo build -p paigasus-helikon-runtime-actix` and `cargo test -p paigasus-helikon-runtime-actix --lib server::` → clean/PASS. (`dead_code` on not-yet-wired items expected; do not gate on `clippy -D warnings`.) Commit `feat(runtime-actix): SMA-343 add AgentServer builder, shared runtime, configure()/serve()`.
 
 ---
 
 ## Task 6: `handlers/agents.rs` — `GET /agents`
 
 **Files:**
-- Create: `crates/paigasus-helikon-runtime-actix/src/handlers/agents.rs`
+- Create: `crates/paigasus-helikon-runtime-actix/src/handlers/mod.rs` + `src/handlers/agents.rs`
+- Modify: `crates/paigasus-helikon-runtime-actix/src/lib.rs` (add `mod handlers;`) + `src/server.rs` (append the `/agents` route to `configure()`)
 - Create: `crates/paigasus-helikon-runtime-actix/tests/support/mod.rs`
 - Create: `crates/paigasus-helikon-runtime-actix/tests/server.rs`
 
 **Interfaces:**
-- Consumes: `AppState`, `dto::AgentInfo`.
-- Produces: `handlers::agents::list::<Ctx>(state: Data<AppState<Ctx>>) -> Json<Vec<AgentInfo>>`; test helper `spawn_echo_server() -> String` (base URL) using a dedicated actix `System` thread (see Step 1).
+- Consumes: `AppState` (from Task 5), `dto::AgentInfo`.
+- Produces: `handlers::agents::list::<Ctx>(state: Data<AppState<Ctx>>) -> Json<Vec<AgentInfo>>`; test helper `spawn_echo_server() -> String` (base URL) using a dedicated actix `System` thread (see Step 1). This is the first task to create the `handlers` module and to add a route to `configure()`.
 
 - [ ] **Step 1: Write `tests/support/mod.rs`** — port axum's `ScriptedAgent`, `echo_script`, `FailingRunner`, `PartialThenEndRunner`, `OrderingAgent`, `SignallingHangingAgent` **verbatim** (they use core types only). Replace `spawn_echo_server` with the actix `System`-thread pattern returning a base URL:
 
@@ -491,9 +502,10 @@ async fn lists_mounted_agents() {
 
 - [ ] **Step 3: Run → FAIL** (handler `unimplemented!`/missing). `cargo test -p paigasus-helikon-runtime-actix --test server`.
 
-- [ ] **Step 4: Implement `handlers/agents.rs`:**
+- [ ] **Step 4: Implement `handlers/agents.rs` and wire the route:**
 
 ```rust
+// src/handlers/agents.rs
 use actix_web::web::{Data, Json};
 use crate::{dto::AgentInfo, server::AppState};
 
@@ -503,7 +515,11 @@ pub(crate) async fn list<Ctx: Send + Sync + 'static>(state: Data<AppState<Ctx>>)
 }
 ```
 
-- [ ] **Step 5: Run → PASS.** Also add builder-error tests to `tests/server.rs` (duplicate agent name → `build()` err; missing context provider → err; `max_sessions(0)` → err), mirroring axum's coverage.
+Then wire it up: create `src/handlers/mod.rs` with `pub(crate) mod agents;`; add `mod handlers;` to `src/lib.rs`; and in `src/server.rs` append the route to `configure()`'s scope so it reads
+`web::scope("").app_data(Data::new(state.clone())).route("/agents", web::get().to(handlers::agents::list::<Ctx>))`
+(add `use crate::handlers;` if the path isn't already in scope).
+
+- [ ] **Step 5: Run → PASS.** (Builder-error unit tests live in Task 5's `server.rs`; this task's `tests/server.rs` covers the `/agents` HTTP behaviour + the test harness.)
 
 - [ ] **Step 6: fmt/clippy/commit** `feat(runtime-actix): SMA-343 GET /agents + test harness`.
 
