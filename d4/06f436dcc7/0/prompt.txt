@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bg03qwjrx</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/5929a33d-ef3e-4030-a9a1-304ae814028f/tasks/bg03qwjrx.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for release-plz to settle, recheck agentcore bump in #152" completed (exit code 0)</summary>
+</task-notification>
