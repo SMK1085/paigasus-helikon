@@ -45,7 +45,7 @@ globset               = "0.4"
 # unmaintained `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`.
 # Relax once jiff drops that transitive dep.
 jiff                  = { version = "=0.2.28", features = ["serde"] }
-jsonschema            = { version = "0.47", default-features = false }
+jsonschema            = { version = "0.48", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"
 notify                = "8"
@@ -72,7 +72,7 @@ seccompiler           = "0.5"
 serde                 = { version = "1", features = ["derive"] }
 serde_json            = "1"
 sqlx                  = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
-syn                   = { version = "2", features = ["full"] }
+syn                   = { version = "3", features = ["full"] }
 tempfile              = "3"
 thiserror             = "2"
 tokio                 = { version = "1", features = ["full"] }
