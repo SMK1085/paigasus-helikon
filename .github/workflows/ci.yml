@@ -25,7 +25,7 @@ jobs:
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
           components: rustfmt
@@ -39,7 +39,7 @@ jobs:
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
           components: clippy
@@ -73,7 +73,7 @@ jobs:
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: ${{ matrix.toolchain }}
       # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
@@ -94,7 +94,7 @@ jobs:
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
       # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
@@ -114,7 +114,7 @@ jobs:
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
       # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
@@ -138,7 +138,7 @@ jobs:
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain master (no tagged releases)
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
       # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
@@ -188,7 +188,7 @@ jobs:
       - if: steps.filter.outputs.sessions == 'false'
         run: echo "No session-related changes; nothing to run."
       - if: steps.filter.outputs.sessions == 'true'
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
       # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
