@@ -25,7 +25,7 @@ jobs:
         with:
           persist-credentials: false
       # taiki-e/install-action v2.79.3
-      - uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468
+      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }}
       - name: Build mdBook (HTML + linkcheck)
