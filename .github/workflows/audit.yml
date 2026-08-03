@@ -29,7 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-directories: "~/.cargo/advisory-db"
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         with:
           tool: cargo-audit
       - run: cargo audit --deny warnings
