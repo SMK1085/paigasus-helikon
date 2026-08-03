@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "99e9ed9348af",
+  "strategy": "manual-commit",
+  "branch": "feature/deps-event-listener-5-4-2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/99/e9ed9348af/0/metadata.json",
+      "transcript": "/99/e9ed9348af/0/full.jsonl",
+      "compact_transcript": "/99/e9ed9348af/0/transcript.jsonl",
+      "content_hash": "/99/e9ed9348af/0/content_hash.txt",
+      "prompt": "/99/e9ed9348af/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 77790,
+    "cache_read_tokens": 1823425,
+    "output_tokens": 16231,
+    "api_call_count": 23
+  }
+}
