@@ -35,6 +35,18 @@ use crate::error::ServerError;
 ///   that are pointer-equal (`Arc::ptr_eq`).
 /// - `None` — return a fresh, anonymous session that is *not* stored and is
 ///   never pointer-equal to any other session.
+///
+/// # Security — the session id is caller-controlled
+///
+/// `id` comes straight from the request's `X-Session-Id` header, so it is
+/// attacker-chosen. A provider that uses it as its sole lookup key lets any
+/// admitted caller who learns (or guesses) another caller's id read and append
+/// to that conversation.
+///
+/// In a multi-tenant deployment the implementation **must** combine the
+/// requested id with the authenticated principal established by the
+/// [`AuthLayer`](crate::AuthLayer) — for example by namespacing the key — so
+/// that ids from different principals can never collide.
 #[async_trait]
 pub trait SessionProvider: Send + Sync {
     /// Look up or create the session for `id`.
@@ -51,6 +63,15 @@ pub trait SessionProvider: Send + Sync {
 /// When the number of tracked sessions exceeds `max_sessions` the oldest
 /// session (by insertion order) is evicted.  Anonymous sessions (`id = None`)
 /// are never stored and never count toward the limit.
+///
+/// # Security
+///
+/// This provider keys solely on the caller-supplied `X-Session-Id`, so it is
+/// appropriate only when **every** admitted caller is trusted with every
+/// session — a single-tenant service, a development server, or a deployment
+/// behind an authenticating proxy that already isolates tenants. For anything
+/// multi-tenant, implement [`SessionProvider`] so the key also incorporates the
+/// authenticated principal.
 pub struct InMemorySessionProvider {
     max_sessions: usize,
     /// Guards both `map` and `order` together so eviction and insertion are

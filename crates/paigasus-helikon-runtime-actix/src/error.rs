@@ -28,6 +28,11 @@ pub struct AuthRejection {
     /// HTTP status code that should be returned to the caller (401 or 403).
     pub status: StatusCode,
     /// Human-readable reason for the rejection.
+    ///
+    /// This string is serialised verbatim into the response body, so it must be
+    /// safe to show an unauthenticated caller. Keep it generic (`"invalid
+    /// token"`); never put a token fragment, an internal error, a stack detail,
+    /// or anything else that would help an attacker in here.
     pub message: String,
 }
 

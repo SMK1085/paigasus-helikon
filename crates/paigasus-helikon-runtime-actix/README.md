@@ -98,6 +98,18 @@ This crate is a port, not a reimplementation — the wire format, DTOs, and beha
 
 See the [Axum Server Runtime](https://smk1085.github.io/paigasus-helikon/concepts/axum-server.html#actix-web-variant) book chapter for the full writeup.
 
+## Security: the session id is caller-controlled
+
+Session affinity comes from the `X-Session-Id` request header, which the caller
+chooses. The bundled `InMemorySessionProvider` uses that value as its only lookup
+key, so any admitted caller who learns another caller's id can read and append to
+that conversation.
+
+That is fine for a single-tenant service, a dev server, or a deployment behind an
+authenticating proxy that already isolates tenants. For a multi-tenant deployment,
+implement `SessionProvider` yourself so the key also incorporates the authenticated
+principal established by your `AuthLayer`.
+
 ## Features
 
 | Feature | Default | Description |

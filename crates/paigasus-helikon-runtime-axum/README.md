@@ -78,6 +78,18 @@ See the [`curl_server`](https://github.com/SMK1085/paigasus-helikon/blob/main/cr
 
 On a start error — or any run that ends without a terminal event — the streaming transports (SSE and WebSocket) emit a final synthetic `run_failed` event before closing, so a streaming client always sees a terminal frame. One-shot runs instead return `500` on a start error, or `200` with a partial result when a started run ends without a terminal event.
 
+## Security: the session id is caller-controlled
+
+Session affinity comes from the `X-Session-Id` request header, which the caller
+chooses. The bundled `InMemorySessionProvider` uses that value as its only lookup
+key, so any admitted caller who learns another caller's id can read and append to
+that conversation.
+
+That is fine for a single-tenant service, a dev server, or a deployment behind an
+authenticating proxy that already isolates tenants. For a multi-tenant deployment,
+implement `SessionProvider` yourself so the key also incorporates the authenticated
+principal established by your `AuthLayer`.
+
 ## Features
 
 | Feature | Default | Description |
