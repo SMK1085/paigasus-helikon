@@ -1,15 +1,16 @@
 # Runtimes
 
-`paigasus-helikon-core`'s `Runner` trait is the seam between the agent-loop state machine (`core::transition`, driven inline by `LlmAgent::run`) and *where a run actually executes*. Four crates implement or host that seam today, each trading off differently on durability, deployment shape, and operational complexity:
+`paigasus-helikon-core`'s `Runner` trait is the seam between the agent-loop state machine (`core::transition`, driven inline by `LlmAgent::run`) and *where a run actually executes*. Five crates implement or host that seam today, each trading off differently on durability, deployment shape, and operational complexity:
 
 | Crate | Feature | What it is | When to use it |
 | --- | --- | --- | --- |
 | [`paigasus-helikon-runtime-tokio`](../reference/crates.md) | `runtime-tokio` | Default ephemeral in-process runner | A single process, no crash-resume needs, no network exposure required |
 | [`paigasus-helikon-runtime-axum`](../reference/crates.md) | `runtime-axum` | Self-hosted HTTP/SSE/WebSocket agent server | You need a network-accessible agent server with replayable runs, and you own the deployment |
+| [`paigasus-helikon-runtime-actix`](../reference/crates.md) | `runtime-actix` | Self-hosted actix-web HTTP/SSE/WebSocket agent server, API-identical to `runtime-axum` | You're embedding into an existing actix-web service |
 | `paigasus-helikon-runtime-temporal` | `runtime-temporal` | Durable runner backed by the [Temporal](https://temporal.io) Rust SDK | A run must survive a worker crash or restart — long-running, multi-tool-call agents where losing progress is expensive |
 | `paigasus-helikon-runtime-agentcore` | `runtime-agentcore` | AWS Bedrock AgentCore container shim | You want a managed, serverless-ish deployment target on AWS and are fine with AgentCore's container/microVM contract |
 
-The first two are covered in their own chapters — see [Axum Server Runtime](./axum-server.md) for the self-hosted HTTP/SSE/WebSocket server. This page covers the other two, both shipped in the same release (SMA-332).
+The first three are covered in their own chapters — see [Axum Server Runtime](./axum-server.md) for the self-hosted HTTP/SSE/WebSocket server and its actix-web variant (`paigasus-helikon-runtime-actix`). This page covers the other two, both shipped in the same release (SMA-332).
 
 ## `paigasus-helikon-runtime-temporal` — durable runner
 
@@ -58,7 +59,7 @@ AWS publishes a stable CDK L2 construct for deployment: `aws-cdk-lib/aws-bedrock
 
 ## Choosing between them
 
-- Need a network endpoint you host and operate yourself, with no crash-resume requirement? **`runtime-axum`.**
+- Need a network endpoint you host and operate yourself, with no crash-resume requirement? **`runtime-axum`** — or **`runtime-actix`** if you're embedding into an existing actix-web service; the two are API-identical apart from a handful of unavoidable framework deltas (see [Axum Server Runtime](./axum-server.md#actix-web-variant)).
 - Need a run to survive a worker crash or a long-running multi-hour agent to keep progress across restarts? **`runtime-temporal`.**
 - Deploying onto AWS Bedrock AgentCore's managed Runtime platform specifically? **`runtime-agentcore`** — note its HTTP mode still delegates to `TokioRunner` under the hood (no crash-resume of its own; pair with `runtime-temporal`'s `Runner` if both properties are needed simultaneously, though that combination is untested as of this writing).
 - Everything else (tests, single-shot scripts, embedding in your own async runtime)? **`runtime-tokio`**, the default.

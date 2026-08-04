@@ -34,3 +34,11 @@ sort_commits = "newest"
 name = "paigasus-helikon-sessions-testkit"
 publish = false
 release = false
+
+# Internal cross-runtime HTTP wire-format conformance suite: boots BOTH the axum
+# and actix runtimes and asserts byte/structural parity. Never published, so it
+# carries the same publish=false / release=false pair as the testkit above.
+[[package]]
+name = "paigasus-helikon-runtime-http-conformance"
+publish = false
+release = false

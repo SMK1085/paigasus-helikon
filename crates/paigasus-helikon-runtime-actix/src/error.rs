@@ -1,14 +1,10 @@
-//! Error types for the axum runtime server.
+//! Error types for the actix runtime server.
 //!
 //! [`ServerError`] is the central error enum returned by every handler. It implements
-//! [`axum::response::IntoResponse`] so that handlers can use `?` and the appropriate
+//! [`actix_web::ResponseError`] so that handlers can use `?` and the appropriate
 //! HTTP status code is automatically written to the response.
 
-use axum::{
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json,
-};
+use actix_web::{http::StatusCode, HttpResponse, ResponseError};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -40,7 +36,7 @@ pub struct AuthRejection {
     pub message: String,
 }
 
-/// Top-level error type returned by all axum handlers in this crate.
+/// Top-level error type returned by all actix handlers in this crate.
 ///
 /// The enum is `#[non_exhaustive]` so that future variants (e.g. new protocol
 /// errors) can be added without breaking callers that match exhaustively.
@@ -82,9 +78,9 @@ impl std::fmt::Display for AuthRejection {
 // Required for `#[from] AuthRejection` in the thiserror derive.
 impl std::error::Error for AuthRejection {}
 
-impl IntoResponse for ServerError {
-    fn into_response(self) -> Response {
-        let status = match &self {
+impl ResponseError for ServerError {
+    fn status_code(&self) -> StatusCode {
+        match self {
             ServerError::UnknownAgent(_) => StatusCode::NOT_FOUND,
             ServerError::BadRequest(_) => StatusCode::BAD_REQUEST,
             // Clamp to a real auth status: a buggy `AuthLayer` must never let a
@@ -96,46 +92,41 @@ impl IntoResponse for ServerError {
             ServerError::RunStart(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ServerError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServerError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        }
+    }
 
-        let body = ErrorBody {
+    fn error_response(&self) -> HttpResponse {
+        HttpResponse::build(self.status_code()).json(ErrorBody {
             error: self.to_string(),
-        };
-
-        (status, Json(body)).into_response()
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::StatusCode;
-    use axum::response::IntoResponse;
+    use actix_web::http::StatusCode;
 
     #[test]
     fn status_mapping() {
         assert_eq!(
-            ServerError::UnknownAgent("x".into())
-                .into_response()
-                .status(),
+            ServerError::UnknownAgent("x".into()).status_code(),
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            ServerError::BadRequest("x".into()).into_response().status(),
+            ServerError::BadRequest("x".into()).status_code(),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            ServerError::RunStart("x".into()).into_response().status(),
+            ServerError::RunStart("x".into()).status_code(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
-            ServerError::Unavailable("x".into())
-                .into_response()
-                .status(),
+            ServerError::Unavailable("x".into()).status_code(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(
-            ServerError::Internal("x".into()).into_response().status(),
+            ServerError::Internal("x".into()).status_code(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }
@@ -148,22 +139,19 @@ mod tests {
             status: StatusCode::UNAUTHORIZED,
             message: "no creds".into(),
         });
-        assert_eq!(
-            unauthorized.into_response().status(),
-            StatusCode::UNAUTHORIZED
-        );
+        assert_eq!(unauthorized.status_code(), StatusCode::UNAUTHORIZED);
 
         let forbidden = ServerError::Unauthorized(AuthRejection {
             status: StatusCode::FORBIDDEN,
             message: "denied".into(),
         });
-        assert_eq!(forbidden.into_response().status(), StatusCode::FORBIDDEN);
+        assert_eq!(forbidden.status_code(), StatusCode::FORBIDDEN);
 
         // A bogus 2xx from a misbehaving auth layer must not leak through.
         let bogus = ServerError::Unauthorized(AuthRejection {
             status: StatusCode::OK,
             message: "oops".into(),
         });
-        assert_eq!(bogus.into_response().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(bogus.status_code(), StatusCode::UNAUTHORIZED);
     }
 }

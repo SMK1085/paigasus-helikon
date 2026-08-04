@@ -1,0 +1,33 @@
+[package]
+name        = "paigasus-helikon-runtime-http-conformance"
+description = "Internal: shared HTTP wire-format conformance suite for Helikon runtimes."
+version     = "0.0.0"
+publish     = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+paigasus-helikon-core = { workspace = true }
+async-trait  = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+# `openapi` is enabled explicitly: the workspace pins both runtimes with
+# `default-features = false`, so the `/openapi.json` route (behind the default
+# `openapi` feature) would otherwise be absent and the openapi parity check
+# would 404.
+paigasus-helikon-runtime-axum  = { workspace = true, features = ["openapi"] }
+paigasus-helikon-runtime-actix = { workspace = true, features = ["openapi"] }
+tokio             = { workspace = true, features = ["macros", "rt-multi-thread"] }
+reqwest           = { workspace = true, features = ["json", "rustls"] }
+actix-web         = { workspace = true }
+serde_json        = { workspace = true }
+
+[lints]
+workspace = true

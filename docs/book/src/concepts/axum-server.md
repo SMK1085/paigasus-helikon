@@ -167,8 +167,41 @@ let app = axum::Router::new()
 axum::serve(listener, app).await?;
 ```
 
+## actix-web variant
+
+`paigasus-helikon-runtime-actix` (feature `runtime-actix`) is the same server, ported to [actix-web](https://docs.rs/actix-web) instead of axum — for when you're embedding into an existing actix-web service rather than owning the process's `axum::Router`. It is **API-identical** to `paigasus-helikon-runtime-axum`: the same `AgentServer` / `AgentServerBuilder`, the same routes, the same DTOs, and byte-identical JSON/SSE wire formats (verified by a shared conformance suite that runs both servers side by side). Only the handful of deltas below — all forced by the framework, not by design choice — differ.
+
+1. **Mount seam.** Instead of `.router() -> axum::Router`, call `.configure()`, which returns an `App::configure` closure (`impl Fn(&mut actix_web::web::ServiceConfig) + Send + Clone + 'static`) that mounts the agent routes on an existing actix `App`.
+2. **Listener type.** `.serve_with_listener(listener)` takes a **`std::net::TcpListener`** (set non-blocking internally), not axum's `tokio::net::TcpListener`. `.serve(addr)` keeps the same signature as the axum runtime.
+3. **Entrypoint attribute.** The standalone `.serve()`/`.serve_with_listener()` path requires an `actix-rt` `System`, so binaries use `#[actix_web::main]` rather than `#[tokio::main]`.
+4. **Custom `AuthLayer` / `ContextProvider` are framework-coupled.** Because the request type *is* the framework, a hand-rolled implementation takes `&actix_web::HttpRequest` rather than `&axum::http::request::Parts` — the trait names, method names, and auth→context identity hand-off are otherwise the same.
+5. **Client-disconnect behavior differs for one-shot runs.** SSE cancels the run on a client disconnect, matching the axum runtime. A **one-shot** run does not: actix does not drop the buffered handler future when the client goes away, so the run is driven to completion regardless of disconnect — unlike the axum runtime, where both one-shot and SSE cancel on disconnect.
+
+Embedding via `configure()` inside a host `App`:
+
+```rust,ignore
+use actix_web::{App, HttpServer};
+use paigasus_helikon_runtime_actix::AgentServer;
+
+let server = AgentServer::<()>::builder()
+    .with_default_context()
+    .agent(Arc::new(my_agent))
+    .build()?;
+let cfg = server.configure(); // Fn(&mut ServiceConfig) + Send + Clone + 'static
+
+HttpServer::new(move || {
+    App::new()
+        .configure(cfg.clone()) // mounts /agents, /agents/{name}/runs, …
+})
+.bind(("127.0.0.1", 8080))?
+.run()
+.await?;
+```
+
+See the [crate README](https://docs.rs/paigasus-helikon-runtime-actix) for a full walkthrough, and `examples/actix_embed.rs` in the crate for a runnable version mounted alongside an unrelated host route.
+
 ## API reference
 
-Full per-item documentation: [`paigasus_helikon_runtime_axum`](https://docs.rs/paigasus-helikon-runtime-axum).
+Full per-item documentation: [`paigasus_helikon_runtime_axum`](https://docs.rs/paigasus-helikon-runtime-axum) ([`paigasus_helikon_runtime_actix`](https://docs.rs/paigasus-helikon-runtime-actix) for the actix-web variant).
 
-Facade re-export: enable the `runtime-axum` feature on `paigasus-helikon` and import via `paigasus_helikon::runtime_axum::*`.
+Facade re-export: enable the `runtime-axum` feature on `paigasus-helikon` and import via `paigasus_helikon::runtime_axum::*` (or `runtime-actix` / `paigasus_helikon::runtime_actix::*`).

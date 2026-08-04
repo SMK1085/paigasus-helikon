@@ -1,4 +1,4 @@
-//! Session management for the axum runtime.
+//! Session management for the actix runtime.
 //!
 //! [`SessionProvider`] maps an optional `X-Session-Id` header value to a
 //! [`paigasus_helikon_core::Session`].  [`InMemorySessionProvider`] is the
@@ -27,7 +27,7 @@ use crate::error::ServerError;
 /// Maps an optional session identifier to a [`Session`] object.
 ///
 /// Implementations must be cheaply cloneable (all provided by this crate wrap
-/// an `Arc` internally) so that the axum state extractor can share one
+/// an `Arc` internally) so that the actix state extractor can share one
 /// instance across all handler tasks.
 ///
 /// - `Some(id)` — return the existing session for `id`, creating one on the

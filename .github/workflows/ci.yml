@@ -105,6 +105,15 @@ jobs:
       # Swatinem/rust-cache v2.9.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
       - run: cargo build -p paigasus-helikon-runtime-axum --no-default-features
+      - run: cargo build -p paigasus-helikon-runtime-actix --no-default-features
+      - name: Assert no axum leakage under runtime-actix
+        run: |
+          if cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qE '(^|[^-])axum v'; then
+            echo "::error::axum leaked into the runtime-actix feature dependency graph"
+            cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -E '(^|[^-])axum v' || true
+            exit 1
+          fi
+          echo "no axum under runtime-actix"
 
   docs:
     runs-on: ubuntu-latest

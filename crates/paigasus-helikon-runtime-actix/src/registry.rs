@@ -1,6 +1,6 @@
 //! Run registry: in-flight and recently-completed runs, with TTL and count-cap retention.
 //!
-//! [`RunRegistry`] stores every run that was started by the axum server. Completed runs are
+//! [`RunRegistry`] stores every run that was started by the actix server. Completed runs are
 //! retained until they age out (TTL) or until the retained-run count exceeds `max_runs`
 //! (FIFO-by-completion eviction). Live (non-terminal) runs are **never** evicted.
 
@@ -8,10 +8,9 @@ use crate::event_log::EventLog;
 use paigasus_helikon_core::AgentEvent;
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, Once, RwLock},
     time::{Duration, Instant},
 };
-use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -82,8 +81,9 @@ pub(crate) struct RunRegistry {
     max_runs: usize,
     /// [`EventLog`] capacity for each newly-created run.
     max_events_per_run: usize,
-    /// Guards [`RunRegistry::spawn_sweeper`] so at most one background task is spawned.
-    sweeper_once: OnceCell<()>,
+    /// Guards [`RunRegistry::spawn_sweeper`] so at most one background task is
+    /// spawned, no matter how many actix workers call `configure()`.
+    sweeper: Once,
 }
 
 impl RunRegistry {
@@ -101,7 +101,7 @@ impl RunRegistry {
             ttl,
             max_runs,
             max_events_per_run,
-            sweeper_once: OnceCell::new(),
+            sweeper: Once::new(),
         })
     }
 
@@ -229,14 +229,18 @@ impl RunRegistry {
 
     /// Spawn a background task that calls [`sweep`](RunRegistry::sweep) every 30 seconds.
     ///
-    /// At most one task is spawned per registry instance (guarded by a [`OnceCell`]).
-    /// The task holds a [`Weak`] reference so it automatically exits when the registry is dropped
-    /// (i.e., no [`Arc`] remainders outside the spawned task itself).
-    pub fn spawn_sweeper(self: &Arc<Self>) {
-        // `OnceCell::set` succeeds exactly once; subsequent calls return `Err` which we ignore.
-        if self.sweeper_once.set(()).is_ok() {
-            let weak = Arc::downgrade(self);
-            tokio::spawn(async move {
+    /// At most one task is spawned per registry instance (guarded by a
+    /// [`Once`]). `configure()` runs once per actix worker, so this is called
+    /// once per worker; the [`Once`] collapses those to a single sweeper. The
+    /// task is spawned onto the process-wide runtime via `handle`, not onto the
+    /// per-worker `actix-rt` runtime. It holds only a [`Weak`](std::sync::Weak)
+    /// reference, so on its next tick after the registry is dropped it observes a
+    /// failed upgrade and exits (no strong [`Arc`] outlives the registry itself).
+    pub fn spawn_sweeper(self: &Arc<Self>, handle: &tokio::runtime::Handle) {
+        let weak = Arc::downgrade(self);
+        let handle = handle.clone();
+        self.sweeper.call_once(move || {
+            handle.spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(30));
                 loop {
                     interval.tick().await;
@@ -246,7 +250,7 @@ impl RunRegistry {
                     }
                 }
             });
-        }
+        });
     }
 }
 

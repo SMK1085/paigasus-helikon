@@ -48,6 +48,10 @@ pub use paigasus_helikon_runtime_tokio as runtime_tokio;
 #[cfg(feature = "runtime-axum")]
 pub use paigasus_helikon_runtime_axum as runtime_axum;
 
+/// Self-hosted actix-web runtime. Enabled via the `runtime-actix` feature.
+#[cfg(feature = "runtime-actix")]
+pub use paigasus_helikon_runtime_actix as runtime_actix;
+
 /// Temporal-backed durable runtime. Enabled via the `runtime-temporal` feature.
 #[cfg(feature = "runtime-temporal")]
 pub use paigasus_helikon_runtime_temporal as runtime_temporal;

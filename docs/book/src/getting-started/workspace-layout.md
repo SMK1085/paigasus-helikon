@@ -1,7 +1,7 @@
 # Workspace layout
 
-Paigasus Helikon is a Cargo workspace of **19 crates** under the `paigasus-helikon-*`
-namespace. As a consumer you rarely depend on more than two of them directly: the
+Paigasus Helikon is a Cargo workspace of **20 crates** under `crates/`, all in the
+`paigasus-helikon-*` namespace. As a consumer you rarely depend on more than two of them directly: the
 `paigasus-helikon-core` trait crate, or — more commonly — the `paigasus-helikon` **facade**,
 which re-exports `core` plus the optional sibling crates behind Cargo features.
 
@@ -46,7 +46,7 @@ macro invocation `tools![...]` versus a path `tools::SomeTool`. Be explicit abou
 
 ## Published vs stub crates
 
-Eighteen crates carry real implementations and are published on crates.io / docs.rs:
+Nineteen crates carry real implementations and are published on crates.io / docs.rs:
 
 - `paigasus-helikon-core` — the dependency root (traits, agent loop, carrier types)
 - `paigasus-helikon` — the facade
@@ -60,6 +60,7 @@ Eighteen crates carry real implementations and are published on crates.io / docs
 - `paigasus-helikon-sessions-redis`
 - `paigasus-helikon-runtime-tokio`
 - `paigasus-helikon-runtime-axum` — self-hosted HTTP/SSE/WebSocket agent server (see [Axum Server Runtime](../concepts/axum-server.md))
+- `paigasus-helikon-runtime-actix` — self-hosted actix-web HTTP/SSE/WebSocket agent server (same public surface as `runtime-axum`)
 - `paigasus-helikon-runtime-temporal` — durable Temporal-backed runner (see [Runtimes](../concepts/runtimes.md))
 - `paigasus-helikon-runtime-agentcore` — AWS Bedrock AgentCore container shim (see [Runtimes](../concepts/runtimes.md))
 - `paigasus-helikon-mcp`
@@ -68,7 +69,7 @@ Eighteen crates carry real implementations and are published on crates.io / docs
 - `paigasus-helikon-cli` — published binary crate (`helikon` / `paigasus-helikon` binaries); its lib target is internal and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves
 
 Zero name-claim stubs remain in the workspace. The one crate that rounds out the
-workspace's 19 without publishing is `paigasus-helikon-sessions-testkit`, an internal
+workspace's 20 without publishing is `paigasus-helikon-sessions-testkit`, an internal
 `Session` conformance test harness (`publish = false` by design).
 
 ## Picking your surface

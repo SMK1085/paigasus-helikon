@@ -30,6 +30,7 @@ Each feature gates one sibling crate behind a module on `paigasus_helikon::`:
 | `sessions-redis` | `sessions_redis` | `paigasus-helikon-sessions-redis` |
 | `runtime-tokio` | `runtime_tokio` | `paigasus-helikon-runtime-tokio` |
 | `runtime-axum` | `runtime_axum` | `paigasus-helikon-runtime-axum` |
+| `runtime-actix` | `runtime_actix` | `paigasus-helikon-runtime-actix` |
 | `runtime-temporal` | `runtime_temporal` | `paigasus-helikon-runtime-temporal` |
 | `runtime-agentcore` | `runtime_agentcore` | `paigasus-helikon-runtime-agentcore` |
 | `evals` | `evals` | `paigasus-helikon-evals` |
