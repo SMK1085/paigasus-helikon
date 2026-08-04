@@ -4,9 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 6 * * *"  # daily, 06:17 UTC — offset from audit.yml's 06:00
+  workflow_dispatch:
 
+# Keyed on github.event_name for the same reason as audit.yml: schedule,
+# workflow_dispatch, and push to main all share refs/heads/main, and a shared
+# group with cancel-in-progress: false lets a merge cancel a pending cron run
+# (SMA-479).
 concurrency:
-  group: deny-${{ github.workflow }}-${{ github.ref }}
+  group: deny-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -19,12 +26,29 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # Fails fast, before the expensive toolchain + install steps. deny.toml
+      # and .cargo/audit.toml must carry identical [advisories].ignore lists;
+      # both are now evaluated daily against the same DB, so drift shows up as
+      # one gate green and the other red on main (SMA-479).
+      - name: Check advisory ignore lists are in sync
+        run: ./scripts/check-advisory-ignore-sync.sh
+      # dtolnay/rust-toolchain master (no tagged releases)
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      # Swatinem/rust-cache v2.9.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           cache-directories: "~/.cargo/advisory-dbs"
-      - uses: taiki-e/install-action@v2.85.5
+      # taiki-e/install-action v2.85.7
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-deny
+      # cargo-deny fetches the advisory DB unless -d/--disable-fetch or the
+      # global --offline is passed; we pass neither, so the cache above only
+      # makes that fetch incremental.
       - run: cargo deny --all-features check
