@@ -152,7 +152,7 @@ workspace = true
 Run:
 ```bash
 cargo build -p paigasus-helikon-runtime-actix
-cargo tree -p paigasus-helikon-runtime-actix -e no-dev | grep -qx 'axum' && echo "LEAK" || echo "no axum"
+cargo tree -p paigasus-helikon-runtime-actix -e no-dev | grep -qE '(^|[^-])axum v' && echo "LEAK" || echo "no axum"
 ```
 Expected: builds clean; prints `no axum`.
 
@@ -771,7 +771,7 @@ pub use paigasus_helikon_runtime_actix as runtime_actix;
 
 ```bash
 cargo build -p paigasus-helikon --features runtime-actix
-cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qx 'axum' && echo LEAK || echo ok
+cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qE '(^|[^-])axum v' && echo LEAK || echo ok
 ```
 Expected: builds clean; prints `ok`.
 
@@ -877,7 +877,7 @@ async fn axum_and_actix_are_wire_compatible() {
 ```yaml
 - name: no axum under runtime-actix
   run: |
-    if cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qx 'axum'; then
+    if cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qE '(^|[^-])axum v'; then
       echo "axum leaked into runtime-actix"; exit 1; fi
 ```
 

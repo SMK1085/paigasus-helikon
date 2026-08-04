@@ -286,12 +286,9 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     /// Call it once and pass the result to [`App::configure`]; it may be cloned
     /// freely, so the same closure can configure every worker's `App`.
     ///
-    /// **Incremental build note:** `configure()` may only route to handlers that
-    /// EXIST. Task 6 adds the `handlers` module and its first route (`GET
-    /// /agents`). Each later handler task APPENDS its route here and adds its
-    /// module to `handlers/mod.rs`: Task 7 adds `POST /agents/{name}/runs`,
-    /// Task 9 adds `GET /agents/{name}/runs/{id}/events`, Task 11 adds the
-    /// feature-gated `/openapi.json`. Do NOT reference a handler before its task.
+    /// The routes mounted are `GET /agents`, `POST /agents/{name}/runs`,
+    /// `GET /agents/{name}/runs/{id}/events`, and — behind the `openapi`
+    /// feature — `GET /openapi.json`.
     pub fn configure(&self) -> impl Fn(&mut ServiceConfig) + Send + Clone + 'static {
         let state = self.state.clone();
         move |cfg: &mut ServiceConfig| {

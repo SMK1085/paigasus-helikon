@@ -8,15 +8,16 @@
 //!
 //! - the *user context* (`Ctx`) extracted from the request (e.g. parsed JWT
 //!   claims, tenant id, feature flags);
-//! - optionally, a stricter [`PermissionMode`] or a custom
-//!   [`ApprovalHandler`] so that tool calls from network clients default to
-//!   *deny* rather than the core's interactive prompt;
+//! - optionally, a stricter [`PermissionMode`], or a custom
+//!   [`ApprovalHandler`] if tool calls that would ask for approval should be
+//!   resolved by the operator instead of denied;
 //! - any [`HookRegistry`] or [`TracerHandle`] the operator wants attached.
 //!
 //! [`DefaultContextProvider`] covers the common case where `Ctx: Default` and
 //! no request-level data needs to be extracted.  It leaves all optional
-//! settings at their core defaults — note that the default approval handler is
-//! *deny*, which is the safe posture for a network service.
+//! settings at their core defaults — no [`ApprovalHandler`] is installed, so a
+//! permission decision of *ask* resolves to *deny*, which is the safe posture
+//! for a network service.
 //!
 //! [`PermissionMode`]: paigasus_helikon_core::PermissionMode
 //! [`ApprovalHandler`]: paigasus_helikon_core::ApprovalHandler
