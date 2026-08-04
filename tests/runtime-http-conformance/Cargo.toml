@@ -26,7 +26,6 @@ paigasus-helikon-runtime-axum  = { workspace = true, features = ["openapi"] }
 paigasus-helikon-runtime-actix = { workspace = true, features = ["openapi"] }
 tokio             = { workspace = true, features = ["macros", "rt-multi-thread"] }
 reqwest           = { workspace = true, features = ["json", "rustls"] }
-tokio-tungstenite = { workspace = true }
 actix-web         = { workspace = true }
 serde_json        = { workspace = true }
 
