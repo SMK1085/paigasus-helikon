@@ -114,7 +114,7 @@ weaker signal is a stronger one:
   1. **A check run on `main`'s HEAD commit.** A `schedule` run creates check runs against the
      default branch's head SHA, so a failure renders as a red ✗ beside the latest commit on the
      repo home page, in the commit list, and in `gh api /repos/{owner}/{repo}/commits/main/status`.
-     This — not the Actions tab — is the real AC1 surface, and verification step 4 checks it.
+     This — not the Actions tab — is the real AC1 surface, and verification step 6 checks it.
   2. **A `failure` row in `gh run list --workflow=audit.yml --branch main`**, which is what the
      ticket's own repro section tells the next person to read.
   3. **Email**, which is genuinely best-effort — see Risks.
@@ -141,7 +141,17 @@ weaker signal is a stronger one:
   the ambient `GITHUB_TOKEN` would close both holes with no new secret and no second copy of the
   strict command — it was evaluated and declined for this ticket, keeping the diff to triggers and
   documentation. Recorded here so the decision is visible rather than implied.
-* **`sbom.yml`.** Tag-triggered, no time-varying input, no severity semantics. Untouched.
+* **`sbom.yml` and `msrv.yml`.** `sbom.yml` is tag-triggered with no time-varying input and no
+  severity semantics. Both remain on mutable action tags after this PR; the SHA-pinning sweep below
+  is deliberately scoped to the two files this change opens.
+* **`ci.yml`'s equivalent drift — out of scope, and no follow-up ticket.** `ci.yml` runs
+  `dtolnay/rust-toolchain@stable` with `cargo clippy … -D warnings` and has no cron, so a new Rust
+  stable release that adds lints reddens every PR while `main` stays green on its last run against
+  the old compiler — structurally the same pathology, and in practice the one that fires most
+  often. It is excluded because the mechanism differs (toolchain version, not advisory database)
+  and because a cron over `ci.yml`'s eight jobs, including a 3×2 test matrix, is a materially
+  larger standing commitment than two single-job supply-chain workflows. Recorded so that the Goal
+  above is not read as a workspace-wide guarantee.
 * **Any change to job names or required status checks.**
 
 ## Design
@@ -242,6 +252,56 @@ command, in one place, and drift is structurally impossible rather than merely d
 cost is one extra runner and a duplicated checkout + `cargo-audit` install on cron days, roughly a
 minute. That is the right trade.
 
+### SHA-pin the actions in both files
+
+`CLAUDE.md` requires every `uses:` line to pin a commit SHA of the action's latest stable major,
+with a human-readable `# action vX.Y.Z` comment above it. `ci.yml`, `docs.yml`, `bench.yml`, and
+`release-plz.yml` comply. `audit.yml` and `deny.yml` do not — they carry bare `actions/checkout@v7`,
+`dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, `taiki-e/install-action@v2.85.5`, and
+`rustsec/audit-check@v2`.
+
+Two reasons this belongs in *this* PR rather than a sweep:
+
+1. `rustsec/audit-check@v2` is **the only third-party action in the repository that runs with write
+   permission** (`issues: write`). A mutable tag on it is the highest-value pin available.
+2. This spec's entire Root-cause section, and the Non-goals decision resting on it, were derived by
+   reading the source at whatever commit `v2` resolved to on 2026-08-04. Unpinned, that analysis
+   expires silently the moment the tag moves. Pinning anchors the reasoning to the artefact it was
+   performed against.
+
+Also add `persist-credentials: false` to both checkouts, matching every other workflow in the repo.
+
+**Two gotchas the implementation must not trip over:**
+
+* `dtolnay/rust-toolchain` normally selects the toolchain **from its ref name** (`@stable`).
+  Pinning it to a SHA destroys that signal, so the pin must be accompanied by an explicit
+  `with: { toolchain: stable }`, exactly as `ci.yml` does. A bare SHA pin here would be a silent
+  behaviour change, not a no-op.
+* Resolve the SHAs **at implementation time**, not from this document — `CLAUDE.md` explicitly
+  forbids using a plan-time pin if a newer release shipped in between. Note that `ci.yml` currently
+  pins `taiki-e/install-action` *older* (v2.79.x) than the `v2.85.5` tag these two files request, and
+  labels the same SHA `v2.79.0` in `ci.yml` and `v2.79.3` in `docs.yml` — one of those comments is
+  already wrong. Do not propagate either; resolve fresh, and leave `ci.yml` to Dependabot's
+  `github-actions` group.
+
+### Enforce ignore-list sync between the two policy files
+
+`.cargo/audit.toml` and `deny.toml` carry byte-identical three-entry `[advisories].ignore` lists,
+kept in sync by prose policy (`CONTRIBUTING.md`) and nothing else. Adding a cron to `deny.yml` means
+both lists are now evaluated daily against the same advisory database — so a one-line drift produces
+`audit` green beside `deny` red on `main`, every day, until someone notices. Closing a
+severity-asymmetry hole while leaving an unguarded one in the adjacent file is not a good trade.
+
+Add `scripts/check-advisory-ignore-sync.sh`: extract the quoted advisory IDs from each file, sort,
+and `diff`. Wire it as a step in the `deny` job, before `cargo deny` runs.
+
+Extraction matches **quoted** IDs only — `grep -oE '"RUSTSEC-[0-9]{4}-[0-9]{4}"'`. This is
+deliberate and load-bearing: both files' comments mention `RUSTSEC-2023-0071` and
+`RUSTSEC-2025-0052` in unquoted prose as historical notes about entries that were *removed*. A
+naive unquoted grep would match those and report permanent false sync. The known limitation is that
+a quoted advisory ID inside a comment would produce a false positive; that is acceptable and noted
+in the script's header.
+
 ### A trap to document in-place
 
 `workflow_dispatch` exercises the strict job but **not** the cron path's distinguishing behaviour:
@@ -316,29 +376,36 @@ the policy-ignored advisories are fully suppressed from JSON output, not merely 
    advisory. Restore the entry and confirm exit 0. This edit is never committed — so **paste both
    outputs into the PR body**, or the only evidence for the central claim of this spec evaporates
    with the shell session.
-3. **On the PR — proves the un-gated job still gates PRs.** The `audit` and `deny` checks run as
-   `pull_request` and must remain required and green.
-4. **Post-merge, same day — proves the new trigger paths.** `gh workflow run audit.yml` and
+3. **Local — proves the sync check works in both directions.** Run
+   `scripts/check-advisory-ignore-sync.sh` against the tree as-is: it must exit 0 and report three
+   IDs. Then temporarily delete one entry from `deny.toml` only: it must exit non-zero and name the
+   missing ID. Restore. A sync check that has only ever been observed passing is not evidence.
+4. **On the PR — proves the un-gated job still gates PRs.** The `audit` and `deny` checks run as
+   `pull_request` and must remain required and green — `deny` now also running the sync step, and
+   both jobs now running on SHA-pinned actions with an explicit `toolchain: stable`.
+5. **Post-merge, same day — proves the new trigger paths.** `gh workflow run audit.yml` and
    `gh workflow run deny.yml`, then confirm via `gh run view <id> --json jobs` that each run
    contains the strict job.
-5. **First cron after merge (next 06:00/06:17 UTC) — final confirmation.**
+6. **First cron after merge (next 06:00/06:17 UTC) — final confirmation.**
    `gh run list --workflow=audit.yml --branch main --json event,conclusion,createdAt` should show a
    `schedule` row; `gh run view <id> --json jobs` should list **both** `audit` and
    `scheduled-audit`; and `gh run list --workflow=deny.yml --branch main --json event` should show
    a `schedule` row that did not exist before.
 
-**Steps 4 and 5 are owned by the PR author and due the day after merge.** A verification step with
+**Steps 5 and 6 are owned by the PR author and due the day after merge.** A verification step with
 no owner and no date is how the `deny` cron ends up never having fired with nobody finding out.
+Step 6 also confirms the AC1 detection surface: `gh api /repos/{owner}/{repo}/commits/main/status`
+should reflect the cron run's verdict against `main`'s HEAD.
 
 ### Known pre-merge limitation
 
 GitHub fires `workflow_dispatch` only for workflows present **on the default branch**. Because this
-PR is what adds that trigger, step 4 cannot run before merge — dispatching from the feature branch
-is rejected. Pre-merge evidence is therefore steps 1–3 plus review of the `if:` removal; steps 4
-and 5 are post-merge confirmations. This is stated explicitly so that a green PR is not mistaken
+PR is what adds that trigger, step 5 cannot run before merge — dispatching from the feature branch
+is rejected. Pre-merge evidence is therefore steps 1–4 plus review of the `if:` removal; steps 5
+and 6 are post-merge confirmations. This is stated explicitly so that a green PR is not mistaken
 for having exercised the schedule path.
 
-Two ways to convert step 4 into pre-merge evidence were considered and declined:
+Two ways to convert step 5 into pre-merge evidence were considered and declined:
 
 * **A precursor PR** adding only `workflow_dispatch` to both files, merged first, so the trigger is
   live on the default branch before the semantics change lands. This works, but costs a full extra
@@ -406,9 +473,10 @@ Both changes are single-commit reverts with no state to unwind: re-add
 
 | File | Change |
 | --- | --- |
-| `.github/workflows/audit.yml` | remove `if: github.event_name != 'schedule'` from the `audit` job; add `workflow_dispatch`; key the concurrency group on `github.event_name`; add the trap comment below |
-| `.github/workflows/deny.yml` | add `schedule` (daily 06:17 UTC) and `workflow_dispatch` triggers; key the concurrency group on `github.event_name` |
-| `CLAUDE.md` | rewrite the supply-chain paragraph: tools *and* severity behaviour, new triggers |
-| `CONTRIBUTING.md` | correct the `audit` bullet's daily-run description; add the cron to `deny` |
+| `.github/workflows/audit.yml` | remove `if: github.event_name != 'schedule'` from the `audit` job; add `workflow_dispatch`; key the concurrency group on `github.event_name`; add the `workflow_dispatch`-widening trap comment; SHA-pin all four `uses:` lines with `# action vX.Y.Z` comments; add `toolchain: stable` and `persist-credentials: false` |
+| `.github/workflows/deny.yml` | add `schedule` (daily 06:17 UTC) and `workflow_dispatch` triggers; key the concurrency group on `github.event_name`; add the ignore-sync step; SHA-pin all four `uses:` lines; add `toolchain: stable` and `persist-credentials: false` |
+| `scripts/check-advisory-ignore-sync.sh` | **new** — asserts `.cargo/audit.toml` and `deny.toml` ignore lists match |
+| `CLAUDE.md` | rewrite the supply-chain paragraph: tools *and* severity behaviour, new triggers, `scheduled-audit`'s green means nothing, absent/cancelled ≠ green, concurrency-group rationale |
+| `CONTRIBUTING.md` | correct the `audit` bullet's daily-run description; add the cron to `deny`; document the ignore-sync check beside the existing "keep both files in sync" prose |
 | `docs/superpowers/specs/2026-08-04-sma-479-audit-severity-alignment-design.md` | this document |
 | `docs/superpowers/plans/2026-08-04-sma-479-audit-severity-alignment.md` | implementation plan |
