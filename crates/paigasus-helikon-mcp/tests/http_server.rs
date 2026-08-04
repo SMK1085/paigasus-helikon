@@ -110,7 +110,8 @@ async fn stateless_streamable_http_accepts_unknown_session_id() {
     // `StreamableHttpServerConfig` is `#[non_exhaustive]`, so external crates
     // must go through `Default::default()` + the `with_*` builder methods
     // rather than struct-literal syntax.
-    let config = rmcp::transport::StreamableHttpServerConfig::default().with_stateful_mode(false);
+    let config =
+        rmcp::transport::StreamableHttpServerConfig::default().with_legacy_session_mode(false);
     let service = server
         .streamable_http_service_with(config)
         .expect("service");

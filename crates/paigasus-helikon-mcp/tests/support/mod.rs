@@ -4,8 +4,8 @@
 
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
+    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::ErrorData;
@@ -69,8 +69,10 @@ impl ServerHandler for FixtureServer {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        match request.name.as_ref() {
+    ) -> Result<CallToolResponse, ErrorData> {
+        // Every fixture tool answers inline, so the rmcp 3 response is always
+        // `Complete`; wrap once rather than at each arm.
+        let result = match request.name.as_ref() {
             "echo" => {
                 let msg = request
                     .arguments
@@ -79,19 +81,22 @@ impl ServerHandler for FixtureServer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("<missing>")
                     .to_owned();
-                Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
+                CallToolResult::success(vec![ContentBlock::text(msg)])
             }
-            "boom" => Ok(CallToolResult::error(vec![ContentBlock::text("kaboom")])),
-            "shape" => Ok(CallToolResult::structured(serde_json::json!({"ok": true}))),
+            "boom" => CallToolResult::error(vec![ContentBlock::text("kaboom")]),
+            "shape" => CallToolResult::structured(serde_json::json!({"ok": true})),
             "sleepy" => {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                Ok(CallToolResult::success(vec![ContentBlock::text("woke")]))
+                CallToolResult::success(vec![ContentBlock::text("woke")])
             }
-            other => Err(ErrorData::invalid_params(
-                format!("unknown tool {other}"),
-                None,
-            )),
-        }
+            other => {
+                return Err(ErrorData::invalid_params(
+                    format!("unknown tool {other}"),
+                    None,
+                ))
+            }
+        };
+        Ok(CallToolResponse::Complete(result))
     }
 }
 

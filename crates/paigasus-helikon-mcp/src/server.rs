@@ -8,8 +8,9 @@ use paigasus_helikon_core::{
 };
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, Implementation, JsonObject,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool as McpToolDef,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
+    Tool as McpToolDef,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -296,7 +297,7 @@ impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         if request.name != self.tool_name {
             return Err(ErrorData::invalid_params(
                 format!("unknown tool: {}", request.name),
@@ -348,21 +349,25 @@ impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
                 Ok(outcome) => outcome,
                 Err(_elapsed) => {
                     cancel.cancel();
-                    return Ok(CallToolResult::error(vec![ContentBlock::text(
-                        "agent run timed out",
-                    )]));
+                    return Ok(CallToolResponse::Complete(CallToolResult::error(vec![
+                        ContentBlock::text("agent run timed out"),
+                    ])));
                 }
             },
             None => run.await,
         };
 
+        // rmcp 3 widened `call_tool`'s return to `CallToolResponse`, whose other
+        // variants (`InputRequired`, `Task`) let a server defer completion. This
+        // handler always runs the agent to completion inline, so every path is
+        // `Complete` — the same value the rmcp 2 signature returned directly.
         match outcome {
-            Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(
-                result.final_output,
-            )])),
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "agent run failed: {e}"
-            ))])),
+            Ok(result) => Ok(CallToolResponse::Complete(CallToolResult::success(vec![
+                ContentBlock::text(result.final_output),
+            ]))),
+            Err(e) => Ok(CallToolResponse::Complete(CallToolResult::error(vec![
+                ContentBlock::text(format!("agent run failed: {e}")),
+            ]))),
         }
     }
 }
