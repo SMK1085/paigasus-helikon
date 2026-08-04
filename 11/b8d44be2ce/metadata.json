@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "11b8d44be2ce",
+  "strategy": "manual-commit",
+  "branch": "feature/deps-rmcp-3x",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/paigasus-helikon-mcp/src/server.rs",
+    "crates/paigasus-helikon-mcp/tests/http_server.rs",
+    "crates/paigasus-helikon-mcp/tests/support/mod.rs",
+    "crates/paigasus-helikon-runtime-agentcore/README.md",
+    "crates/paigasus-helikon-runtime-agentcore/src/mcp.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/11/b8d44be2ce/0/metadata.json",
+      "transcript": "/11/b8d44be2ce/0/full.jsonl",
+      "compact_transcript": "/11/b8d44be2ce/0/transcript.jsonl",
+      "content_hash": "/11/b8d44be2ce/0/content_hash.txt",
+      "prompt": "/11/b8d44be2ce/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 168,
+    "cache_creation_tokens": 559934,
+    "cache_read_tokens": 23157879,
+    "output_tokens": 35550,
+    "api_call_count": 84
+  }
+}
