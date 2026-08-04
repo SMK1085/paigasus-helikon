@@ -6,9 +6,17 @@ on:
   pull_request:
   schedule:
     - cron: "0 6 * * *"   # daily, 06:00 UTC
+  workflow_dispatch:
 
+# The group is keyed on github.event_name as well as github.ref because
+# `schedule`, `workflow_dispatch`, and `push` to main all resolve github.ref to
+# refs/heads/main. Sharing one group with cancel-in-progress: false means a
+# queued cron run goes *pending*, and GitHub cancels a pending run when the next
+# run enters the group — so the next merge to main would silently discard the
+# day's only strict evaluation of main, leaving a `cancelled` row that is
+# neither success nor failure. Do not "simplify" this key back (SMA-479).
 concurrency:
-  group: audit-${{ github.workflow }}-${{ github.ref }}
+  group: audit-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -18,22 +26,42 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The strict gate. Deliberately runs on EVERY event, including the daily cron:
+  # the daily signal and the PR gate are the same job definition, so their
+  # severity cannot drift apart. Do not re-add an event filter here (SMA-479).
   audit:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # dtolnay/rust-toolchain master (no tagged releases)
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      # Swatinem/rust-cache v2.9.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           cache-directories: "~/.cargo/advisory-db"
-      - uses: taiki-e/install-action@v2.85.5
+      # taiki-e/install-action v2.85.7
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:
           tool: cargo-audit
+      # cargo-audit fetches the advisory DB on every run unless -n/--no-fetch,
+      # so the cache above only makes that fetch incremental — never stale.
       - run: cargo audit --deny warnings
 
+  # Receipt-filer ONLY. rustsec/audit-check routes `schedule` events to its
+  # reportIssues() path, which files GitHub issues and returns without ever
+  # failing — at ANY severity, including critical vulnerabilities. This job
+  # going green means nothing; the `audit` job above is the verdict.
+  #
+  # Do NOT widen this condition to also run on workflow_dispatch. A non-schedule
+  # event routes the action to reportCheck(), which calls the Checks API and
+  # requires `checks: write`; this job grants only `issues: write`, so it 403s.
   scheduled-audit:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -41,7 +69,11 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # rustsec/audit-check v2.0.0
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
