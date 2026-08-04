@@ -2,7 +2,7 @@
 
 use syn::{
     Attribute, Error, FnArg, GenericArgument, ItemFn, Pat, PatType, PathArguments, Result,
-    ReturnType, Type, TypePath, TypeReference,
+    ReturnType, Safety, Type, TypePath, TypeReference,
 };
 
 /// Decomposed view of the user's `async fn`.
@@ -27,7 +27,10 @@ impl ToolSignature {
                 "#[tool] requires an `async fn`",
             ));
         }
-        if let Some(unsafe_tok) = &sig.unsafety {
+        // syn 3 replaced `Signature::unsafety: Option<Token![unsafe]>` with
+        // `safety: Safety`. `Safety::Safe` is only reachable inside `extern`
+        // blocks, so matching `Unsafe` alone preserves the previous behaviour.
+        if let Safety::Unsafe(unsafe_tok) = &sig.safety {
             return Err(Error::new_spanned(
                 unsafe_tok,
                 "#[tool] cannot wrap an `unsafe fn`; `Tool::invoke` is safe — \
