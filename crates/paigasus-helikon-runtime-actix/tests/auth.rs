@@ -96,6 +96,30 @@ async fn no_auth_header_is_401_on_all_routes() {
         401,
         "POST /agents/{{name}}/runs must be gated"
     );
+
+    // The OpenAPI document route is gated too (the auth wrap sits above the
+    // whole scope, so it applies even to the read-only spec endpoint).
+    let openapi = client
+        .get(format!("{base}/openapi.json"))
+        .send()
+        .await
+        .expect("GET /openapi.json");
+    assert_eq!(openapi.status(), 401, "GET /openapi.json must be gated");
+
+    // The WebSocket events route is gated *before* the upgrade: with no auth
+    // header the handshake fails with HTTP 401 (no `101 Switching Protocols`).
+    let host = base.strip_prefix("http://").unwrap_or(&base);
+    let ws_url =
+        format!("ws://{host}/agents/echo/runs/00000000-0000-0000-0000-000000000000/events");
+    let err = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .expect_err("WS upgrade with no auth header must fail the handshake, not upgrade");
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => {
+            assert_eq!(resp.status(), 401, "WS handshake must be gated with 401");
+        }
+        other => panic!("expected a 401 handshake failure, got: {other:?}"),
+    }
 }
 
 /// A request WITH the `authorization` header passes the guard and reaches the

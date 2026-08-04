@@ -87,21 +87,39 @@ async fn conflicting_async_and_sse_is_400() {
 }
 
 /// **AC2** — the SSE stream emits exactly the agent's local event sequence,
-/// event for event.
+/// event for event. Also asserts the SSE response headers: `text/event-stream`
+/// content type, `no-cache`, and an `x-run-id` correlation header.
 #[tokio::test]
 async fn sse_stream_matches_local_events() {
     let base = support::spawn_echo_server();
-    let text = reqwest::Client::new()
+    let resp = reqwest::Client::new()
         .post(format!("{base}/agents/echo/runs?stream=sse"))
         .header("content-type", "application/json")
         .body(r#"{"input":"hi"}"#)
         .send()
         .await
-        .unwrap()
-        .text()
-        .await
         .unwrap();
 
+    // SSE response headers must identify the transport and disable caching, and
+    // carry the run id for correlation.
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .expect("content-type header present"),
+        "text/event-stream",
+    );
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .expect("cache-control header present"),
+        "no-cache",
+    );
+    assert!(
+        resp.headers().contains_key("x-run-id"),
+        "SSE response must carry an x-run-id header"
+    );
+
+    let text = resp.text().await.unwrap();
     let got = support::parse_sse(&text);
     let want = support::echo_script();
     // `AgentEvent` does not derive `PartialEq` in core, so assert event-for-event
