@@ -1,6 +1,6 @@
 //! Run registry: in-flight and recently-completed runs, with TTL and count-cap retention.
 //!
-//! [`RunRegistry`] stores every run that was started by the axum server. Completed runs are
+//! [`RunRegistry`] stores every run that was started by the actix server. Completed runs are
 //! retained until they age out (TTL) or until the retained-run count exceeds `max_runs`
 //! (FIFO-by-completion eviction). Live (non-terminal) runs are **never** evicted.
 
@@ -226,23 +226,24 @@ impl RunRegistry {
     /// [`Once`]). `configure()` runs once per actix worker, so this is called
     /// once per worker; the [`Once`] collapses those to a single sweeper. The
     /// task is spawned onto the process-wide runtime via `handle`, not onto the
-    /// per-worker `actix-rt` runtime, and holds a strong [`Arc`] so it runs for
-    /// the process lifetime (only served servers ever reach this call).
+    /// per-worker `actix-rt` runtime. It holds only a [`Weak`](std::sync::Weak)
+    /// reference, so on its next tick after the registry is dropped it observes a
+    /// failed upgrade and exits (no strong [`Arc`] outlives the registry itself).
     pub fn spawn_sweeper(self: &Arc<Self>, handle: &tokio::runtime::Handle) {
-        let registry = Arc::clone(self);
+        let weak = Arc::downgrade(self);
         let handle = handle.clone();
         self.sweeper.call_once(move || {
-            handle.spawn(async move { registry.sweep_loop().await });
+            handle.spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(30));
+                loop {
+                    interval.tick().await;
+                    match weak.upgrade() {
+                        None => return, // Registry dropped; exit.
+                        Some(reg) => reg.sweep(Instant::now()),
+                    }
+                }
+            });
         });
-    }
-
-    /// Sweep the registry every 30 seconds until the process ends.
-    async fn sweep_loop(self: Arc<Self>) {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            self.sweep(Instant::now());
-        }
     }
 }
 
