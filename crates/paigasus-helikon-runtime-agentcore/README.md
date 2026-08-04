@@ -97,7 +97,9 @@ AgentCore also supports an **MCP runtime type**: instead of the HTTP-protocol co
 | Session header | `Mcp-Session-Id`, platform-injected and never initialized by this server — stateless mode is required so an unrecognized, platform-generated id is accepted rather than rejected |
 | Bonus | A trivial `GET /ping` also answers on port 8000 (not part of MCP itself; cheap insurance for probes that expect *something* there) |
 
-`AgentCoreServer::mcp_router()`/`serve_mcp()` configure rmcp with `with_stateful_mode(false)` and `disable_allowed_hosts()` — the latter because rmcp's DNS-rebinding guard defaults to accepting only a loopback `Host` header, and real AgentCore traffic arrives from inside the platform's microVM with an arbitrary one; AgentCore's microVM boundary is the actual network perimeter here, not this in-process check.
+`AgentCoreServer::mcp_router()`/`serve_mcp()` configure rmcp with `with_legacy_session_mode(false)` and `disable_allowed_hosts()` — the latter because rmcp's DNS-rebinding guard defaults to accepting only a loopback `Host` header, and real AgentCore traffic arrives from inside the platform's microVM with an arbitrary one; AgentCore's microVM boundary is the actual network perimeter here, not this in-process check.
+
+(rmcp 3 renamed `with_stateful_mode` to `with_legacy_session_mode`. Per SEP-2567 sessions are removed from protocol version `2026-07-28`, so a client negotiating that version is served statelessly regardless of the flag; it still governs the legacy `< 2026-07-28` path, which is where the platform-injected session id would otherwise be rejected.)
 
 ```bash
 cargo run -p paigasus-helikon-runtime-agentcore --example mcp_server --features mcp

@@ -76,12 +76,17 @@ impl<Ctx: Default + Send + Sync + 'static> AgentCoreServer<Ctx> {
     /// The MCP service is configured for AgentCore's reality rather than rmcp's
     /// loopback-only defaults:
     ///
-    /// - **Stateless mode** (`with_stateful_mode(false)`) — required because
+    /// - **Stateless mode** (`with_legacy_session_mode(false)`) — required because
     ///   AgentCore injects its own platform-generated `Mcp-Session-Id` header on
     ///   every request, an id this server never issued. rmcp's default *stateful*
     ///   mode would 404 on that unrecognized session; stateless mode never reads the
     ///   header at all (see
     ///   [`paigasus_helikon_mcp::McpAgentServer::streamable_http_service_with`]).
+    ///   rmcp 3 renamed this from `with_stateful_mode` and narrowed its reach: per
+    ///   SEP-2567 sessions are removed from protocol version `2026-07-28`, so a
+    ///   client negotiating that version is served statelessly regardless. The flag
+    ///   still matters here because it governs the legacy (`< 2026-07-28`) path,
+    ///   which is what a client pinning an older protocol version would take.
     /// - **`disable_allowed_hosts()`** — rmcp's DNS-rebinding guard defaults to
     ///   accepting only a `Host` header of `localhost`/`127.0.0.1`/`::1`, to protect
     ///   a locally-running dev server. Real AgentCore traffic arrives from inside the
@@ -102,7 +107,7 @@ impl<Ctx: Default + Send + Sync + 'static> AgentCoreServer<Ctx> {
         let agent = SharedAgent(self.agent());
         let mcp_server = McpAgentServer::with_default_ctx(agent);
         let config = StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .disable_allowed_hosts();
         let service = mcp_server
             .streamable_http_service_with(config)
