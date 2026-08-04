@@ -262,3 +262,51 @@ async fn ws_disconnect_does_not_cancel_run() {
         "run must still be live after a WS disconnect (read-only observer), but client B saw {next:?}"
     );
 }
+
+/// **Regression — inbound ping is answered with a pong.** `actix-ws` leaves pong
+/// to the application, unlike axum, whose tungstenite layer replies
+/// automatically. Without an explicit reply a client keepalive goes unanswered
+/// and the peer tears the connection down as dead. Uses the hanging agent so the
+/// socket stays open long enough to round-trip the frame.
+#[tokio::test]
+async fn ws_answers_client_ping_with_pong() {
+    use futures_util::SinkExt as _;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (base, _sessions) = support::spawn_hanging_server(started_tx);
+    let run_id = support::create_async_run(&base, "hanging").await;
+
+    tokio::time::timeout(Duration::from_secs(10), started_rx.recv())
+        .await
+        .expect("timed out waiting for the run to start")
+        .expect("agent signalled run start");
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(&base, "hanging", &run_id))
+        .await
+        .expect("WS handshake");
+
+    let payload: Vec<u8> = b"helikon".to_vec();
+    ws.send(Message::Ping(payload.clone().into()))
+        .await
+        .expect("send ping");
+
+    // The replayed `RunStarted` text frame may arrive first; skip non-pong frames.
+    let pong = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Pong(bytes) = msg {
+                return Some(bytes);
+            }
+        }
+        None
+    })
+    .await
+    .expect("a pong must arrive within 5s — the server ignored the ping")
+    .expect("socket closed before a pong arrived");
+
+    assert_eq!(
+        pong.as_ref(),
+        payload.as_slice(),
+        "the pong must echo the ping payload back verbatim (RFC 6455 §5.5.3)"
+    );
+}

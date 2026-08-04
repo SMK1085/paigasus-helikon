@@ -109,9 +109,18 @@ pub(crate) async fn events<Ctx: Send + Sync + 'static>(
                     }
                 },
                 // Inbound frames from the client (drain to observe close/disconnect).
-                // Ignore inbound data/ping/pong — this is a read-only observer.
+                // Data and pong frames are ignored — this is a read-only observer —
+                // but ping frames MUST be answered: unlike axum, whose tungstenite
+                // layer replies automatically, `actix-ws` leaves pong to the
+                // application, so an unanswered ping fails client keepalive.
                 msg = msg_stream.next() => match msg {
                     None | Some(Err(_)) | Some(Ok(actix_ws::Message::Close(_))) => break,
+                    Some(Ok(actix_ws::Message::Ping(bytes))) => {
+                        if session.pong(&bytes).await.is_err() {
+                            // Client went away between polls; stop sending.
+                            break;
+                        }
+                    }
                     Some(Ok(_)) => {}
                 }
             }
