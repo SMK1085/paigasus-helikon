@@ -84,7 +84,13 @@ the fix must be a second command, not a setting.
 
 ## Goals
 
-Land the invariant: **if a PR would go red, `main` should already be red.**
+The ticket states the invariant as **"if a PR would go red, `main` should already be red."** Taken
+literally that is not achievable and not what this change delivers — a PR that *introduces* a bad
+dependency (most Dependabot lockfile PRs) can be red while `main` is legitimately green. The
+precise, deliverable form is:
+
+> **For advisories and yanks affecting `main`'s committed lockfile, `main` is re-evaluated daily
+> at full PR severity, with a lag of at most 24 hours.**
 
 Derived from the ticket's acceptance criteria:
 
@@ -94,6 +100,27 @@ Derived from the ticket's acceptance criteria:
    other.
 3. `CLAUDE.md`'s CI section documents the final arrangement: both jobs' tools *and* their severity
    behaviour.
+
+### AC1 has two halves, and this change delivers them unequally
+
+It is worth separating them, because conflating them is how a spec talks itself into believing a
+weaker signal is a stronger one:
+
+* **Diagnosis** — *when someone checks whether `main` is clean, do they get the truth?* Today they
+  get a lie: `scheduled-audit` is green on every advisory class. This change fixes that
+  completely, and that is the failure that actually cost the time on 2026-08-03.
+* **Detection** — *does anyone find out without looking?* This is weaker, and the spec must not
+  pretend otherwise. The mechanisms, strongest first:
+  1. **A check run on `main`'s HEAD commit.** A `schedule` run creates check runs against the
+     default branch's head SHA, so a failure renders as a red ✗ beside the latest commit on the
+     repo home page, in the commit list, and in `gh api /repos/{owner}/{repo}/commits/main/status`.
+     This — not the Actions tab — is the real AC1 surface, and verification step 4 checks it.
+  2. **A `failure` row in `gh run list --workflow=audit.yml --branch main`**, which is what the
+     ticket's own repro section tells the next person to read.
+  3. **Email**, which is genuinely best-effort — see Risks.
+
+  Detection remains pull-based. That is an accepted limitation of this change, recorded here
+  rather than glossed.
 
 ## Non-goals
 
@@ -105,8 +132,15 @@ Derived from the ticket's acceptance criteria:
   are met by the strict-command change alone; issue filing is a nice-to-have on top. No follow-up
   ticket is planned.
 * **Removing or replacing `rustsec/audit-check@v2`.** It keeps filing GitHub receipts, unchanged.
-  Its known limitations (points 2 and 3 above) are accepted, and are made tolerable by the fact
-  that the strict job now reddens the same run.
+  Be explicit about what that accepts: after this change the receipt mechanism remains **broken for
+  both incidents on record** — it files nothing for yanked crates (the `spin 0.9.8` class) and never
+  re-files an advisory whose issue has been closed (so a RUSTSEC-2026-0221 recurrence would be
+  silent). This is tolerable only because the strict job now reddens the same run: the receipt is
+  demoted from *the* signal to a convenience, and the design no longer depends on it being correct.
+  A ~6-line `if: failure() && github.event_name == 'schedule'` step calling `gh issue create` with
+  the ambient `GITHUB_TOKEN` would close both holes with no new secret and no second copy of the
+  strict command — it was evaluated and declined for this ticket, keeping the diff to triggers and
+  documentation. Recorded here so the decision is visible rather than implied.
 * **`sbom.yml`.** Tag-triggered, no time-varying input, no severity semantics. Untouched.
 * **Any change to job names or required status checks.**
 
@@ -114,7 +148,7 @@ Derived from the ticket's acceptance criteria:
 
 ### `.github/workflows/audit.yml`
 
-Delete the event gate on the strict job, and add a manual trigger:
+Delete the event gate on the strict job, add a manual trigger, and repair the concurrency group:
 
 ```yaml
  on:
@@ -124,6 +158,11 @@ Delete the event gate on the strict job, and add a manual trigger:
    schedule:
      - cron: "0 6 * * *"   # daily, 06:00 UTC
 +  workflow_dispatch:
+
+ concurrency:
+-  group: audit-${{ github.workflow }}-${{ github.ref }}
++  group: audit-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
  jobs:
    audit:
@@ -136,8 +175,28 @@ Delete the event gate on the strict job, and add a manual trigger:
 
 On a cron event both jobs now run, in parallel, with no dependency between them. GitHub Actions
 has no job-level fail-fast (that is matrix-only), so a failing `audit` does not prevent
-`scheduled-audit` from filing its issue. The receipt and the red run are independent and both
-arrive.
+`scheduled-audit` from filing its issue.
+
+#### The concurrency group must be keyed on the event, or the daily run can vanish
+
+The existing group is `audit-${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress`
+true only for pull requests. On `schedule`, `workflow_dispatch`, and `push`-to-`main`, `github.ref`
+is all three times `refs/heads/main` — so all three share one group with `cancel-in-progress:
+false`. GitHub's documented behaviour for that combination is that a run entering an occupied group
+goes *pending*, and **"any previously pending job or workflow in the concurrency group will be
+canceled."**
+
+The consequence: a 06:00 cron run that arrives while a push-to-`main` run is in flight goes
+pending, and the next merge to `main` cancels it outright. Today that costs nothing, because the
+cron run only carries the decorative `scheduled-audit`. After this change it would silently discard
+the day's only strict evaluation of `main`, and leave behind a row whose conclusion is `cancelled`
+— neither `success` nor `failure`. That is the ticket's own disease (absence misread as health) in
+a new costume.
+
+Adding `-${{ github.event_name }}` to the group separates the three event streams. Push runs to
+`main` remain serialised against each other, PR runs keep cancelling their own predecessors, and
+cron runs no longer compete with anything. The same fix applies to `deny.yml`, whose concurrency
+block has the identical shape.
 
 ### `.github/workflows/deny.yml`
 
@@ -152,12 +211,22 @@ disease in a worse form, since there is not even a weak daily signal to be misle
      branches: [main]
    pull_request:
 +  schedule:
-+    - cron: "0 6 * * *"   # daily, 06:00 UTC
++    - cron: "17 6 * * *"  # daily, 06:17 UTC — offset from audit.yml's 06:00
 +  workflow_dispatch:
+
+ concurrency:
+-  group: deny-${{ github.workflow }}-${{ github.ref }}
++  group: deny-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 ```
 
 No job or severity changes are needed. `cargo deny --all-features check` already has exactly one
 severity on every event.
+
+The cron is deliberately offset to `06:17`. Top-of-hour is GitHub's most congested scheduling slot;
+scheduled runs are best-effort and can be delayed or dropped under load, and stacking two
+supply-chain workflows plus Dependabot's Monday 06:00 window on the same minute maximises that
+risk for no benefit.
 
 ### Why un-gating, and not a strict step inside `scheduled-audit`
 
@@ -173,23 +242,47 @@ command, in one place, and drift is structurally impossible rather than merely d
 cost is one extra runner and a duplicated checkout + `cargo-audit` install on cron days, roughly a
 minute. That is the right trade.
 
+### A trap to document in-place
+
+`workflow_dispatch` exercises the strict job but **not** the cron path's distinguishing behaviour:
+`scheduled-audit` keeps `if: github.event_name == 'schedule'`, so a manual run produces one job,
+not two. The obvious "improvement" — widening that condition to
+`|| github.event_name == 'workflow_dispatch'` so dispatch rehearses the full cron run — is a trap.
+It would route `rustsec/audit-check` down its `reportCheck` branch, which calls the Checks API and
+needs `checks: write`; the job grants only `contents: read` + `issues: write`, so it would 403.
+
+This gets a short comment beside the `if:` in `audit.yml`, because that is where someone will trip
+over it, not in a design document they will not be reading at the time.
+
 ### Effect on the compounding trap
 
 Today a `schedule` row in `gh run list --workflow=audit.yml` means only "the weak job passed". A
-workflow run's conclusion is `failure` if any of its jobs fails, so after this change a cron run
-carries the strict job's verdict: a green `schedule` row genuinely means *`main`'s lockfile was
-clean against the RustSec DB at 06:00 UTC*.
+workflow run's conclusion is `failure` if any of its jobs fails (absent `continue-on-error`, which
+neither workflow uses), so after this change a cron run carries the strict job's verdict: a green
+`schedule` row genuinely means *`main`'s lockfile was clean against the RustSec DB at 06:00 UTC*.
 
 "Read `event`, not just `conclusion`" therefore stops being a semantics trap and becomes a
 staleness note — a green row can be up to 24 hours old. `workflow_dispatch` is the on-demand
 escape from even that.
 
+**One caveat survives, and belongs in the documentation:** a row that is `cancelled`, or a day with
+no row at all, is *not* a green row. Scheduled runs are best-effort — GitHub can delay or drop them
+under load, and disables them entirely after 60 days of inactivity in a public repository. The
+concurrency fix above removes the one cause of cancellation this change would otherwise have
+introduced, but it cannot make cron delivery guaranteed. The honest reading rule is: **green means
+clean; red means dirty; absent or cancelled means unverified, same as before.**
+
 ### Documentation
 
 * **`CLAUDE.md`** — rewrite the supply-chain paragraph (currently line 105) to record both jobs'
-  tools *and* their severity behaviour, the new trigger set for both workflows, and the fact that
-  `scheduled-audit` is a receipt-filer with no failure semantics on any advisory class. Satisfies
-  acceptance criterion 3.
+  tools *and* their severity behaviour, the new trigger set for both workflows, and — in one
+  explicit sentence — that **`scheduled-audit`'s green job status means nothing at any severity**,
+  including critical vulnerabilities. AC2 is satisfied at the *run* level, not the job level: the
+  run is red because `audit` failed, while `scheduled-audit` sits green beside it. Anyone reading
+  job status instead of run status is back in the original trap. Must also carry the reading rule
+  from "Effect on the compounding trap" (absent or cancelled ≠ green) and the concurrency-group
+  rationale, so a future editor does not "simplify" the group key back. Satisfies acceptance
+  criterion 3.
 * **`CONTRIBUTING.md`** — the `audit` bullet (around line 247) currently reads "plus a daily
   scheduled run on `main` that auto-files a GitHub issue if a new advisory affects the locked
   deps", which omits that it cannot fail. Correct it and add the cron to the `deny` bullet.
@@ -210,43 +303,98 @@ Baseline, confirmed 2026-08-04 on this branch: `cargo audit --deny warnings` exi
 `cargo audit --json` reports `vulnerabilities.found = false` with an empty `warnings` object —
 the policy-ignored advisories are fully suppressed from JSON output, not merely downgraded.
 
-1. **Local — proves severity.** Comment out `RUSTSEC-2025-0012` in `.cargo/audit.toml`; run
-   `cargo audit --deny warnings`. It must exit non-zero and name the advisory. Restore the entry
-   and confirm exit 0. This change is never committed.
-2. **On the PR — proves the un-gated job still gates PRs.** The `audit` and `deny` checks run as
+1. **Local, static — proves the YAML is valid and the triggers parse.** Run `actionlint` over both
+   changed files. This is the one piece of pre-merge evidence for `deny.yml` that actually matters:
+   its change is a *brand-new* `on: schedule:` block, and a mistyped key or wrong indentation
+   fails **open and silently** — PRs keep passing, and the cron simply never fires. Nobody would
+   notice for months. `actionlint` also validates the `${{ }}` expressions in the reworked
+   concurrency groups. It is not currently installed (`brew install actionlint`), and this PR does
+   *not* add it as a CI gate — that is a separate concern; here it is a pre-merge check the
+   implementer runs and pastes the output of.
+2. **Local, behavioural — proves severity.** Comment out `RUSTSEC-2025-0012` in
+   `.cargo/audit.toml`; run `cargo audit --deny warnings`. It must exit non-zero and name the
+   advisory. Restore the entry and confirm exit 0. This edit is never committed — so **paste both
+   outputs into the PR body**, or the only evidence for the central claim of this spec evaporates
+   with the shell session.
+3. **On the PR — proves the un-gated job still gates PRs.** The `audit` and `deny` checks run as
    `pull_request` and must remain required and green.
-3. **Post-merge — proves the new trigger paths.** `gh workflow run audit.yml` and
+4. **Post-merge, same day — proves the new trigger paths.** `gh workflow run audit.yml` and
    `gh workflow run deny.yml`, then confirm via `gh run view <id> --json jobs` that each run
    contains the strict job.
-4. **First cron after merge — final confirmation.** `gh run list --workflow=audit.yml --branch
-   main --json event,conclusion,createdAt` should show a `schedule` row, and
-   `gh run view <id> --json jobs` should list **both** `audit` and `scheduled-audit`.
+5. **First cron after merge (next 06:00/06:17 UTC) — final confirmation.**
+   `gh run list --workflow=audit.yml --branch main --json event,conclusion,createdAt` should show a
+   `schedule` row; `gh run view <id> --json jobs` should list **both** `audit` and
+   `scheduled-audit`; and `gh run list --workflow=deny.yml --branch main --json event` should show
+   a `schedule` row that did not exist before.
+
+**Steps 4 and 5 are owned by the PR author and due the day after merge.** A verification step with
+no owner and no date is how the `deny` cron ends up never having fired with nobody finding out.
 
 ### Known pre-merge limitation
 
-GitHub fires `workflow_dispatch` only for workflows present **on the default branch**. Because
-this PR is what adds that trigger, step 3 cannot run before merge — dispatching from the feature
-branch is rejected. Pre-merge evidence is therefore steps 1 and 2 plus review of the `if:`
-removal; steps 3 and 4 are post-merge confirmations. This is stated explicitly so that a green PR
-is not mistaken for having exercised the schedule path.
+GitHub fires `workflow_dispatch` only for workflows present **on the default branch**. Because this
+PR is what adds that trigger, step 4 cannot run before merge — dispatching from the feature branch
+is rejected. Pre-merge evidence is therefore steps 1–3 plus review of the `if:` removal; steps 4
+and 5 are post-merge confirmations. This is stated explicitly so that a green PR is not mistaken
+for having exercised the schedule path.
+
+Two ways to convert step 4 into pre-merge evidence were considered and declined:
+
+* **A precursor PR** adding only `workflow_dispatch` to both files, merged first, so the trigger is
+  live on the default branch before the semantics change lands. This works, but costs a full extra
+  PR cycle to de-risk a four-line diff.
+* **A scratch fork** whose default branch carries the change, dispatched there. Also works, and
+  also costs more setup than `actionlint` plus reading a one-line `if:` deletion.
+
+`actionlint` (step 1) covers the failure mode those would have caught — a malformed trigger block —
+at a fraction of the cost.
+
+### Rollback
+
+Both changes are single-commit reverts with no state to unwind: re-add
+`if: github.event_name != 'schedule'` to the `audit` job, and drop the `schedule:` block from
+`deny.yml`. No published artefact, crate version, or branch-protection setting is touched.
 
 ## Risks and accepted trade-offs
 
 * **Advisory-DB cache staleness — checked, not a problem.** The `audit` job's
   `Swatinem/rust-cache` caches `~/.cargo/advisory-db`, which could in principle serve a stale DB
   and mask a newly published advisory. It does not: `cargo audit` fetches the advisory DB on every
-  run unless `--no-fetch` is passed, and we do not pass it, so the cache only makes that fetch
-  incremental. `cargo deny` likewise fetches unless `--offline`. Note the two tools cache
+  run unless `-n` / `--no-fetch` is passed, and we do not pass it, so the cache only makes that
+  fetch incremental. `cargo deny` likewise fetches unless suppressed — by `-d` / `--disable-fetch`
+  on the `check` subcommand, or the global `--offline`; we pass neither. Note the two tools cache
   different paths — `~/.cargo/advisory-db` (singular) for cargo-audit, `~/.cargo/advisory-dbs`
   (plural) for cargo-deny per `deny.toml`'s `db-path`.
-* **Notification routing is best-effort.** GitHub mails scheduled-run failures to the user who
-  last modified the cron *syntax*. This PR does not touch `audit.yml`'s cron line, so its routing
-  is unchanged; `deny.yml`'s new cron routes to its author. The red run visible in the Actions tab
-  and in `gh run list` is the primary signal — email is a bonus, not the mechanism, and acceptance
-  criterion 1 does not depend on it.
-* **60-day dormancy.** GitHub disables cron triggers in repositories with no activity for 60 days.
-  This applies to both workflows equally and to `audit.yml`'s existing cron already. The repo is
-  active; noted, not engineered around.
+* **A red `main` does not block unrelated PRs — confirmed, not assumed.**
+  `.github/rulesets/main-protection-checks.json` sets `strict_required_status_checks_policy:
+  false`, so PRs are not required to be up to date with `main`, and required contexts are evaluated
+  against the PR's own head SHA. A failing `audit` check run created by a cron against `main`'s HEAD
+  is therefore inert with respect to merging. This matters because "red `main` with no PR to fix
+  it" becomes a *steady state* during an unfixable-advisory window, and a reviewer should not have
+  to derive its blast radius.
+* **Fork PRs are unaffected.** The strict job needs no secrets and no write permissions;
+  `scheduled-audit` never runs on `pull_request`; GitHub disables `schedule` on forks by default;
+  and `workflow_dispatch` requires write access to the repository. Stated so the next reviewer does
+  not have to re-derive it.
+* **Notification routing is best-effort, and in this repo it is entirely untested.** GitHub mails
+  scheduled-run failures to the user who last modified the cron *syntax*, subject to that user's
+  Watch and Actions notification settings. This PR does not touch `audit.yml`'s cron line, so its
+  routing is unchanged; `deny.yml`'s new cron routes to its author. Sharper point: `audit.yml`'s
+  cron has existed since SMA-306 and **every scheduled run in the visible history has concluded
+  `success`** — so no failure email has ever actually been delivered from this workflow. "Email is
+  best-effort" understates it; the mechanism is unproven here. AC1 therefore rests on the check run
+  against `main`'s HEAD and on `gh run list`, not on email.
+* **60-day dormancy.** GitHub disables cron triggers in **public** repositories with no activity
+  for 60 days (it emails first; private-repo behaviour differs). This applies to both workflows
+  equally and to `audit.yml`'s existing cron already. The repo is active; noted, not engineered
+  around.
+* **A network flake can turn `main` red for a non-reason.** Both tools fetch over the network — the
+  advisory DB, and the crates.io index. A transient failure produces a red cron run that looks
+  exactly like a real advisory hit. The whole design rests on "red `main` means something," so a
+  few false reds would train the maintainer to ignore it. **Triage rule: reproduce any red cron run
+  with `cargo audit --deny warnings` (or `cargo deny --all-features check`) on a clean checkout of
+  `main` before treating it as an advisory** — which is what the ticket's own repro section already
+  prescribes as authoritative.
 * **`main` can now be red with no PR to fix it.** This is the intended outcome — it is the
   "visible failing signal" of acceptance criterion 1. The documented escape hatch when no upgrade
   exists is the `[advisories].ignore` list, which must be added to *both* `.cargo/audit.toml` and
@@ -258,8 +406,8 @@ is not mistaken for having exercised the schedule path.
 
 | File | Change |
 | --- | --- |
-| `.github/workflows/audit.yml` | remove `if: github.event_name != 'schedule'` from the `audit` job; add `workflow_dispatch` |
-| `.github/workflows/deny.yml` | add `schedule` (daily 06:00 UTC) and `workflow_dispatch` triggers |
+| `.github/workflows/audit.yml` | remove `if: github.event_name != 'schedule'` from the `audit` job; add `workflow_dispatch`; key the concurrency group on `github.event_name`; add the trap comment below |
+| `.github/workflows/deny.yml` | add `schedule` (daily 06:17 UTC) and `workflow_dispatch` triggers; key the concurrency group on `github.event_name` |
 | `CLAUDE.md` | rewrite the supply-chain paragraph: tools *and* severity behaviour, new triggers |
 | `CONTRIBUTING.md` | correct the `audit` bullet's daily-run description; add the cron to `deny` |
 | `docs/superpowers/specs/2026-08-04-sma-479-audit-severity-alignment-design.md` | this document |
