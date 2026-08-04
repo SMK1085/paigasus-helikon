@@ -670,12 +670,17 @@ gh run view "$deny_run" --json event,conclusion,jobs --jq '.event, .conclusion, 
 
 ```bash
 cron_run=$(gh run list --workflow=audit.yml --event schedule --limit 1 --json databaseId --jq '.[0].databaseId')
-gh run view "$cron_run" --json event,conclusion,jobs --jq '.event, .conclusion, [.jobs[].name]'
-# expect: schedule, success, ["audit","scheduled-audit"]  -> BOTH jobs, which is the whole change
+gh run view "$cron_run" --json jobs --jq '.jobs[] | "\(.name): \(.conclusion)"'
+# expect BOTH of:
+#   audit: success
+#   scheduled-audit: success
+# NEITHER may be `skipped`.
 
 gh run list --workflow=deny.yml --event schedule --limit 1 --json event,conclusion,createdAt
 # expect: a schedule row, which never existed before this PR
 ```
+
+**Assert on job `conclusion`, never on the list of job names.** `.jobs[].name` includes **skipped** jobs. Verified on PR #172's own `pull_request` run, where `[.jobs[].name]` returned `["audit","scheduled-audit"]` while the per-job conclusions were `audit: success` / `scheduled-audit: skipped`. A name-based assertion therefore passes identically whether both jobs ran or one was skipped — it cannot fail, which is the same class of defect as the `scheduled-audit` green this whole ticket exists to fix. The `pull_request` run is also the correct negative control: on any non-`schedule` event, `scheduled-audit` **must** read `skipped`.
 
 - [ ] **Confirm the AC1 detection surface**
 
