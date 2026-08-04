@@ -151,10 +151,14 @@ workspace = true
 
 Run:
 ```bash
+set -euo pipefail
 cargo build -p paigasus-helikon-runtime-actix
-cargo tree -p paigasus-helikon-runtime-actix -e no-dev | grep -qE '(^|[^-])axum v' && echo "LEAK" || echo "no axum"
+tree=$(cargo tree -p paigasus-helikon-runtime-actix -e no-dev)
+if grep -qE '(^|[^-])axum v' <<<"$tree"; then echo "LEAK" >&2; exit 1; fi
+echo "no axum"
 ```
-Expected: builds clean; prints `no axum`.
+Expected: builds clean; prints `no axum` and exits 0. A leak exits non-zero, and
+a failing `cargo tree` aborts rather than being reported as "no axum".
 
 - [ ] **Step 5: Commit:**
 
@@ -770,10 +774,14 @@ pub use paigasus_helikon_runtime_actix as runtime_actix;
 - [ ] **Step 3: Facade isolation build + no-axum-leak assertion:**
 
 ```bash
+set -euo pipefail
 cargo build -p paigasus-helikon --features runtime-actix
-cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qE '(^|[^-])axum v' && echo LEAK || echo ok
+tree=$(cargo tree -p paigasus-helikon --features runtime-actix -e no-dev)
+if grep -qE '(^|[^-])axum v' <<<"$tree"; then echo "LEAK" >&2; exit 1; fi
+echo ok
 ```
-Expected: builds clean; prints `ok`.
+Expected: builds clean; prints `ok` and exits 0. A leak exits non-zero, and a
+failing `cargo tree` aborts rather than being reported as `ok`.
 
 - [ ] **Step 4: Commit** `feat(facade): SMA-343 wire runtime-actix feature + re-export`.
 
