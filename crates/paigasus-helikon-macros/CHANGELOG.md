@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.2.3...paigasus-helikon-macros-v0.2.4) - 2026-08-04
+
+### Other
+
+- *(deps)* bump syn to 3, jsonschema to 0.49, base64 to 0.23 ([#168](https://github.com/SMK1085/paigasus-helikon/pull/168))
+
 ## [0.2.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.2.2...paigasus-helikon-macros-v0.2.3) - 2026-06-16
 
 ### Other
