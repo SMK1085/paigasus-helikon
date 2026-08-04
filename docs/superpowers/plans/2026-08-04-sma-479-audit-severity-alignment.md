@@ -42,6 +42,14 @@ actionlint --version
 
 If `brew` is unavailable, download a release binary from `https://github.com/rhysd/actionlint/releases`. Do **not** skip it — it is the only pre-merge evidence that `deny.yml`'s brand-new `on: schedule:` block parses. A malformed trigger block fails **open and silently**: PRs keep passing and the cron simply never fires.
 
+Task 3 Step 4 additionally parses the workflow with Python's `yaml` module as an independent cross-check. **PyYAML is not a declared dependency of this repository** — it is not in any `requirements*.txt`, `pyproject.toml`, or CI setup, so it is present only incidentally on a given machine. Confirm it before relying on that step, and install it if missing:
+
+```bash
+python3 -c "import yaml; print('pyyaml', yaml.__version__)" || pip3 install --user pyyaml
+```
+
+If installing PyYAML is unwelcome, skip that step: `actionlint` already validates workflow schema and trigger structure. The Python parse is a belt-and-braces cross-check, not the primary gate.
+
 ---
 
 ### Task 1: Advisory ignore-list sync guard
@@ -685,11 +693,25 @@ gh run list --workflow=deny.yml --event schedule --limit 1 --json event,conclusi
 - [ ] **Confirm the AC1 detection surface**
 
 ```bash
-gh api /repos/SMK1085/paigasus-helikon/commits/main/status --jq '.state, (.statuses[].context)'
+gh api repos/SMK1085/paigasus-helikon/commits/main/check-runs \
+  --jq '.check_runs[] | select(.name=="audit" or .name=="deny") | "\(.name): \(.status) \(.conclusion)"'
 ```
 
 The cron run's verdict must be reflected against `main`'s HEAD — this, not the Actions tab, is what renders a red ✗ beside the latest commit and is the mechanism acceptance criterion 1 actually rests on.
 
+**Use the Checks API, never `/commits/{ref}/status`.** GitHub Actions publishes *check runs*; the legacy status endpoint returns only commit statuses. Measured on PR #172's head SHA, `/status` returned `{"state":"success","total_count":1,"contexts":["CodeRabbit"]}` — a confident green with **no audit verdict in it at all** — while `/check-runs` returned 22 entries including `audit: success` and `deny: success`. An earlier revision of this plan used `/status`; that would have been a verification step incapable of detecting the failure it was written to detect.
+
 ## Rollback
 
-Both changes are single-commit reverts with no state to unwind: re-add `if: github.event_name != 'schedule'` to the `audit` job, and drop the `schedule:` block from `deny.yml`. No published artefact, crate version, or branch-protection setting is touched.
+Nothing here touches a published artefact, a crate version, or a branch-protection setting, so there is no state to unwind in any scenario. Pick the narrowest option that addresses the problem:
+
+**Partial — the daily cron is too noisy, but keep everything else.** Two independent, one-line edits:
+
+- Re-add `if: github.event_name != 'schedule'` to the `audit` job in `audit.yml`.
+- Delete the `schedule:` block from `deny.yml`.
+
+This restores the previous severity behaviour while keeping the SHA pins, `persist-credentials`, the event-keyed concurrency groups, `workflow_dispatch`, the sync guard, and the docs. Update the `CLAUDE.md` / `CONTRIBUTING.md` wording in the same commit, or they become wrong.
+
+**Partial — the sync guard is blocking unrelated work.** Delete only the `Check advisory ignore lists are in sync` step from `deny.yml`. Leave `scripts/check-advisory-ignore-sync.sh` in place; it is inert unless invoked.
+
+**Full — revert the PR.** `git revert -m 1 <merge-sha>` undoes all four implementation commits together: the sync guard, both workflow rewrites, and the documentation. Note this also reverts the SHA pins and `persist-credentials: false`, putting `audit.yml` and `deny.yml` back on mutable action tags — including `rustsec/audit-check@v2`, the only third-party action in the repo holding `issues: write`. Prefer a partial rollback unless the whole change is genuinely unwanted.

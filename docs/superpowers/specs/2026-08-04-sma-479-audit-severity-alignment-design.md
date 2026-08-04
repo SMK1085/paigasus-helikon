@@ -89,8 +89,14 @@ literally that is not achievable and not what this change delivers — a PR that
 dependency (most Dependabot lockfile PRs) can be red while `main` is legitimately green. The
 precise, deliverable form is:
 
-> **For advisories and yanks affecting `main`'s committed lockfile, `main` is re-evaluated daily
-> at full PR severity, with a lag of at most 24 hours.**
+> **Every successfully delivered scheduled run evaluates `main`'s committed lockfile at full PR
+> severity — the same job, the same command, the same exit code as the gate a PR must pass.**
+
+Note what this deliberately does *not* claim: a maximum staleness bound. An earlier draft said
+"with a lag of at most 24 hours", which contradicts this spec's own Risks section — scheduled runs
+are best-effort, and GitHub may delay them, drop them under load, or disable them entirely after 60
+days of repository inactivity. No upper bound is enforceable, so the invariant is defined per
+*delivered* run, and a missing run counts as unverified rather than as passing.
 
 Derived from the ticket's acceptance criteria:
 
@@ -113,8 +119,17 @@ weaker signal is a stronger one:
   pretend otherwise. The mechanisms, strongest first:
   1. **A check run on `main`'s HEAD commit.** A `schedule` run creates check runs against the
      default branch's head SHA, so a failure renders as a red ✗ beside the latest commit on the
-     repo home page, in the commit list, and in `gh api /repos/{owner}/{repo}/commits/main/status`.
+     repo home page and in the commit list. Query it with the **Checks API**:
+     `gh api repos/{owner}/{repo}/commits/main/check-runs --jq '.check_runs[] | select(.name=="audit") | {name,status,conclusion}'`.
      This — not the Actions tab — is the real AC1 surface, and verification step 6 checks it.
+
+     **Do not use `/commits/{ref}/status` for this.** GitHub Actions publishes *check runs*; that
+     legacy endpoint returns only commit statuses. Measured on this repository (PR #172 head SHA):
+     `/status` returned `{"state":"success","total_count":1,"contexts":["CodeRabbit"]}` — a
+     confident green containing **no audit verdict at all** — while `/check-runs` returned 22 runs
+     including `audit: success` and `deny: success`. An earlier draft of this spec used the legacy
+     endpoint, which would have reproduced the precise bug this document exists to fix: a green
+     reading that does not mean what it appears to mean.
   2. **A `failure` row in `gh run list --workflow=audit.yml --branch main`**, which is what the
      ticket's own repro section tells the next person to read.
   3. **Email**, which is genuinely best-effort — see Risks.
@@ -286,14 +301,20 @@ Also add `persist-credentials: false` to both checkouts, matching every other wo
 
 ### Enforce ignore-list sync between the two policy files
 
-`.cargo/audit.toml` and `deny.toml` carry byte-identical three-entry `[advisories].ignore` lists,
+`.cargo/audit.toml` and `deny.toml` currently carry the same three `[advisories].ignore` entries,
 kept in sync by prose policy (`CONTRIBUTING.md`) and nothing else. Adding a cron to `deny.yml` means
 both lists are now evaluated daily against the same advisory database — so a one-line drift produces
 `audit` green beside `deny` red on `main`, every day, until someone notices. Closing a
 severity-asymmetry hole while leaving an unguarded one in the adjacent file is not a good trade.
 
 Add `scripts/check-advisory-ignore-sync.sh`: extract the quoted advisory IDs from each file, sort,
-and `diff`. Wire it as a step in the `deny` job, before `cargo deny` runs.
+deduplicate, and compare. Wire it as a step in the `deny` job, before `cargo deny` runs.
+
+**What it asserts, precisely: equality of the two quoted-advisory-ID *sets*.** Not byte identity,
+and not list ordering — the entries may appear in any order, with any surrounding comments or
+formatting, and a repeated ID collapses to one. That is the right granularity, because the two
+files legitimately differ everywhere else (`deny.toml` also carries `[licenses]`, `[bans]`, and
+`[sources]` sections) and their ignore-entry rationale comments are maintained independently.
 
 Extraction matches **quoted** IDs only — `grep -oE '"RUSTSEC-[0-9]{4}-[0-9]{4}"'`. This is
 deliberate and load-bearing: both files' comments mention `RUSTSEC-2023-0071` and
@@ -329,8 +350,17 @@ escape from even that.
 no row at all, is *not* a green row. Scheduled runs are best-effort — GitHub can delay or drop them
 under load, and disables them entirely after 60 days of inactivity in a public repository. The
 concurrency fix above removes the one cause of cancellation this change would otherwise have
-introduced, but it cannot make cron delivery guaranteed. The honest reading rule is: **green means
-clean; red means dirty; absent or cancelled means unverified, same as before.**
+introduced, but it cannot make cron delivery guaranteed.
+
+The honest reading rule is therefore **not** "red means dirty" — that overclaims in two directions
+this spec itself documents elsewhere. A run also goes red when the advisory-DB or crates.io fetch
+fails transiently, and when `scheduled-audit` fails (say, the GitHub API rejecting an issue write)
+while the strict `audit` job passed and the lockfile is clean. State it at job granularity:
+
+> **Green** — the strict `audit` job passed; `main`'s lockfile is clean against the advisory DB as
+> of that run. **Red** — some job failed and needs triage: read *which* job, then reproduce with
+> `cargo audit --deny warnings` on a clean checkout before concluding an advisory exists.
+> **Absent or `cancelled`** — unverified, exactly as before this change.
 
 ### Documentation
 
@@ -394,7 +424,8 @@ the policy-ignored advisories are fully suppressed from JSON output, not merely 
 
 **Steps 5 and 6 are owned by the PR author and due the day after merge.** A verification step with
 no owner and no date is how the `deny` cron ends up never having fired with nobody finding out.
-Step 6 also confirms the AC1 detection surface: `gh api /repos/{owner}/{repo}/commits/main/status`
+Step 6 also confirms the AC1 detection surface — via the Checks API, not the legacy status API:
+`gh api repos/{owner}/{repo}/commits/main/check-runs --jq '.check_runs[] | select(.name=="audit") | {name,status,conclusion}'`
 should reflect the cron run's verdict against `main`'s HEAD.
 
 ### Known pre-merge limitation
