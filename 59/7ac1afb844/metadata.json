@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "597ac1afb844",
+  "strategy": "manual-commit",
+  "branch": "feature/deps-syn3-jsonschema-base64",
+  "checkpoints_count": 51,
+  "files_touched": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/paigasus-helikon-macros/src/signature.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/59/7ac1afb844/0/metadata.json",
+      "transcript": "/59/7ac1afb844/0/full.jsonl",
+      "compact_transcript": "/59/7ac1afb844/0/transcript.jsonl",
+      "content_hash": "/59/7ac1afb844/0/content_hash.txt",
+      "prompt": "/59/7ac1afb844/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 323,
+    "cache_creation_tokens": 654207,
+    "cache_read_tokens": 27153280,
+    "output_tokens": 69818,
+    "api_call_count": 162
+  }
+}
