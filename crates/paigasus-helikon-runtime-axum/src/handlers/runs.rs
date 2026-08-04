@@ -218,7 +218,14 @@ async fn read_run_request(parts: &Parts, body: Body) -> Result<RunRequest, Serve
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
     {
-        let mime = ct.split(';').next().unwrap_or("").trim();
+        // Media types are case-insensitive (RFC 9110 §8.3.1), so `Application/JSON`
+        // must be accepted exactly like `application/json`.
+        let mime = ct
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         let is_json = mime == "application/json"
             || (mime.starts_with("application/") && mime.ends_with("+json"));
         if !is_json {

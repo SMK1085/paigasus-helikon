@@ -263,6 +263,26 @@ async fn axum_and_actix_are_wire_compatible() {
         }
     }
 
+    // ── content-type is case-insensitive (RFC 9110 §8.3.1) ───────────────────
+    {
+        for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+            for ct in ["Application/JSON", "APPLICATION/JSON; charset=UTF-8"] {
+                let resp = client
+                    .post(format!("{base}/agents/echo/runs?mode=async"))
+                    .header("content-type", ct)
+                    .body(r#"{"input":"hi"}"#)
+                    .send()
+                    .await
+                    .unwrap_or_else(|e| panic!("{name} request with `{ct}`: {e}"));
+                assert_eq!(
+                    resp.status(),
+                    202,
+                    "{name} must accept `{ct}` — media types are case-insensitive"
+                );
+            }
+        }
+    }
+
     // ── error body — 404 + byte-identical {"error":...} ──────────────────────
     {
         let axum_resp = client

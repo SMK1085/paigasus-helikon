@@ -176,8 +176,15 @@ impl RunRegistry {
                 .lock()
                 .expect("terminal_at mutex poisoned");
             match *t {
-                // Keep if still within the TTL window or non-terminal.
-                Some(terminal_at) if terminal_at + ttl <= now => {
+                // Keep if still within the TTL window or non-terminal. `checked_add`
+                // rather than `+`: an overflowing deadline would panic here while the
+                // write lock is held, poisoning the `RwLock` for every later caller.
+                // An un-representable deadline is infinitely far away, so keep the run.
+                Some(terminal_at)
+                    if terminal_at
+                        .checked_add(ttl)
+                        .is_some_and(|deadline| deadline <= now) =>
+                {
                     evicted.insert(*id);
                     false
                 }
