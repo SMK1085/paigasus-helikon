@@ -245,11 +245,20 @@ To exercise the OpenAI provider against the real API, set `OPENAI_API_KEY` and r
 Three workflows complement CI and gate PRs alongside the build matrix:
 
 - `audit` — `cargo audit --deny warnings` against the [RustSec Advisory DB](https://rustsec.org/).
-  Runs on every PR + push to `main`, plus a daily scheduled run on `main` that
-  auto-files a GitHub issue if a new advisory affects the locked deps.
+  Runs on every PR, every push to `main`, a daily cron at 06:00 UTC, and on
+  demand via `workflow_dispatch`. The daily run uses the same job and the same
+  command as the PR gate, so `main` cannot report green on an advisory that
+  would redden a PR (SMA-479). A second job, `scheduled-audit`, runs
+  `rustsec/audit-check` on the cron purely to auto-file a GitHub issue — it
+  never fails, at any severity, so read the run's conclusion rather than that
+  job's status.
 - `deny` — `cargo deny --all-features check` enforces the license allowlist,
   ban list, source registry restrictions, and a second advisory pass. Policy
-  lives in `deny.toml` at the workspace root.
+  lives in `deny.toml` at the workspace root. Same trigger set as `audit`, with
+  the cron offset to 06:17 UTC. The job first runs
+  `scripts/check-advisory-ignore-sync.sh`, which fails if the
+  `[advisories].ignore` lists in `deny.toml` and `.cargo/audit.toml` have
+  diverged — keep the two in sync, as the note below requires.
 - `sbom` — on every `v*` tag push, generates a CycloneDX SBOM via
   `cargo-cyclonedx` and uploads it as a release asset.
 
