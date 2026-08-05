@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.25](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.24...paigasus-helikon-v0.4.25) - 2026-08-04
+
+### Added
+
+- *(runtime)* SMA-343 add actix-web REST/SSE/WebSocket agent server ([#173](https://github.com/SMK1085/paigasus-helikon/pull/173))
+
 ## [0.4.24](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.23...paigasus-helikon-v0.4.24) - 2026-08-04
 
 ### Other
