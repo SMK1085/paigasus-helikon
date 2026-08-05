@@ -1,0 +1,177 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "e209c8f27ae8",
+  "session_id": "c79dca16-16ca-4121-ab44-f1bd72ff6dda",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-05T05:16:10.559971Z",
+  "branch": "feature/sma-483-track-entire-claude-code-settings-so-git-worktrees-inherit",
+  "checkpoints_count": 36,
+  "files_touched": [
+    ".gitignore"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "15f21941d264",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 387,
+    "cache_creation_tokens": 670745,
+    "cache_read_tokens": 43160229,
+    "output_tokens": 145946,
+    "api_call_count": 209
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015NsmEYVXfkqwDZQvyvEPKu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:executing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "15f21941d264",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 65,
+        "end": 66,
+        "entry_ids": [
+          "91f7a709-e5c0-42af-bb9f-d10f4aa4908e"
+        ],
+        "tool_use_id": "toolu_015NsmEYVXfkqwDZQvyvEPKu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015NsmEYVXfkqwDZQvyvEPKu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:executing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01BhszUvQHDf8TDjjvpDnMra",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:open-pr"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "15f21941d264",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 262,
+        "end": 263,
+        "entry_ids": [
+          "5745e48a-fd61-4e86-a64a-d00f33354a9e"
+        ],
+        "tool_use_id": "toolu_01BhszUvQHDf8TDjjvpDnMra"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01BhszUvQHDf8TDjjvpDnMra"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:open-pr",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_012XTKmUqygJ3xTcHaiu5sxR",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:address-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "15f21941d264",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 398,
+        "end": 399,
+        "entry_ids": [
+          "ce89b454-6e22-4408-ae5e-8f319e255c0c"
+        ],
+        "tool_use_id": "toolu_012XTKmUqygJ3xTcHaiu5sxR"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_012XTKmUqygJ3xTcHaiu5sxR"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:address-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01XjxLvxYmFF1HvARYTv6ZU6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "15f21941d264",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 406,
+        "end": 407,
+        "entry_ids": [
+          "28b57cf3-22cf-4556-9196-19be1f7c5c86"
+        ],
+        "tool_use_id": "toolu_01XjxLvxYmFF1HvARYTv6ZU6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XjxLvxYmFF1HvARYTv6ZU6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 36
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-05T05:16:10.496686Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 1,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 84,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84
+      }
+    }
+  ]
+}

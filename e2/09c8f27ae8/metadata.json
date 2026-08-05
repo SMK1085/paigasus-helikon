@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "e209c8f27ae8",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-483-track-entire-claude-code-settings-so-git-worktrees-inherit",
+  "checkpoints_count": 36,
+  "files_touched": [
+    ".gitignore"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e2/09c8f27ae8/0/metadata.json",
+      "transcript": "/e2/09c8f27ae8/0/full.jsonl",
+      "compact_transcript": "/e2/09c8f27ae8/0/transcript.jsonl",
+      "content_hash": "/e2/09c8f27ae8/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 387,
+    "cache_creation_tokens": 670745,
+    "cache_read_tokens": 43160229,
+    "output_tokens": 145946,
+    "api_call_count": 209
+  }
+}
