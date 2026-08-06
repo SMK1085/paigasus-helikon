@@ -34,7 +34,8 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::ApplicationFailure;
 
 use crate::activity_input::{
-    CallModelArgs, CallModelInput, RenderInstructionsArgs, RenderInstructionsInput,
+    CallModelArgs, CallModelInput, InvokeToolArgs, InvokeToolInput, RenderInstructionsArgs,
+    RenderInstructionsInput,
 };
 use crate::driver::AgentPlan;
 use crate::error::ErrorKindPayload;
@@ -425,10 +426,13 @@ impl AgentActivities {
     pub(crate) async fn invoke_tool(
         self: Arc<Self>,
         ctx: ActivityContext,
-        agent_name: String,
-        call: ToolCallRequest,
-        ctx_seed: Option<serde_json::Value>,
+        input: InvokeToolInput,
     ) -> Result<ToolCallOutcome, ActivityError> {
+        let InvokeToolArgs {
+            agent_name,
+            call,
+            ctx_seed,
+        } = input.0;
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,

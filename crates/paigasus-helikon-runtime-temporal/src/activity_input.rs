@@ -60,7 +60,7 @@
 //! Rules 1 and 2 are asserted by the tests below. Rules 3 and 4 are review
 //! obligations.
 
-use paigasus_helikon_core::ModelRequest;
+use paigasus_helikon_core::{ModelRequest, ToolCallRequest};
 use serde::{Deserialize, Serialize};
 use temporalio_common::data_converters::{
     GenericPayloadConverter, PayloadConversionError, SerializationContext, TemporalDeserializable,
@@ -296,12 +296,108 @@ impl TemporalDeserializable for CallModelInput {
     }
 }
 
+/// Activity name used in decode diagnostics and legacy-shape warnings.
+const ACT_INVOKE_TOOL: &str = "invoke_tool";
+
+/// The `invoke_tool` activity's input fields.
+///
+/// Serialized as one JSON object with `call` **nested** as an object — never
+/// stringified (see [`CallModelArgs`] on the payload budget).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct InvokeToolArgs {
+    /// Name of the agent to resolve on the worker's registry.
+    pub agent_name: String,
+    /// The single tool call to execute.
+    pub call: ToolCallRequest,
+    /// Optional request-scoped seed the worker's ctx factory reconstitutes.
+    #[serde(default)]
+    pub ctx_seed: Option<serde_json::Value>,
+}
+
+/// Temporal `Input` wrapper for [`InvokeToolArgs`]. Derives no serde — see the
+/// module docs on the blanket-impl coherence conflict. `Debug` is required
+/// because the tests call `.expect_err()` on a `Result<InvokeToolInput, _>`.
+#[derive(Debug)]
+pub(crate) struct InvokeToolInput(
+    /// The wrapped fields.
+    pub InvokeToolArgs,
+);
+
+impl From<InvokeToolArgs> for InvokeToolInput {
+    fn from(args: InvokeToolArgs) -> Self {
+        Self(args)
+    }
+}
+
+impl TemporalSerializable for InvokeToolInput {
+    fn to_payloads(
+        &self,
+        ctx: &SerializationContext<'_>,
+    ) -> Result<Vec<Payload>, PayloadConversionError> {
+        encode_envelope(ctx, &self.0)
+    }
+}
+
+impl TemporalDeserializable for InvokeToolInput {
+    fn from_payloads(
+        ctx: &SerializationContext<'_>,
+        payloads: Vec<Payload>,
+    ) -> Result<Self, PayloadConversionError> {
+        match payloads.len() {
+            // Envelope: one JSON object.
+            1 => {
+                let mut it = payloads.into_iter();
+                let args = decode_arg(
+                    ctx,
+                    it.next().expect("length checked above"),
+                    ACT_INVOKE_TOOL,
+                    0,
+                    "InvokeToolArgs",
+                )?;
+                Ok(Self(args))
+            }
+            // Legacy 0.2.x: (agent_name, call, ctx_seed) as three payloads.
+            3 => {
+                warn_legacy(ACT_INVOKE_TOOL, 3);
+                let mut it = payloads.into_iter();
+                let agent_name = decode_arg(
+                    ctx,
+                    it.next().expect("length checked above"),
+                    ACT_INVOKE_TOOL,
+                    0,
+                    "String",
+                )?;
+                let call = decode_arg(
+                    ctx,
+                    it.next().expect("length checked above"),
+                    ACT_INVOKE_TOOL,
+                    1,
+                    "ToolCallRequest",
+                )?;
+                let ctx_seed = decode_arg(
+                    ctx,
+                    it.next().expect("length checked above"),
+                    ACT_INVOKE_TOOL,
+                    2,
+                    "Option<serde_json::Value>",
+                )?;
+                Ok(Self(InvokeToolArgs {
+                    agent_name,
+                    call,
+                    ctx_seed,
+                }))
+            }
+            _ => Err(PayloadConversionError::WrongEncoding),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paigasus_helikon_core::ModelRequest;
+    use paigasus_helikon_core::{ModelRequest, ToolCallRequest};
     use temporalio_common::data_converters::{
-        MultiArgs2, PayloadConverter, SerializationContextData,
+        MultiArgs2, MultiArgs3, PayloadConverter, SerializationContextData,
     };
 
     /// Run `f` with a [`SerializationContext`] over the **production**
@@ -630,6 +726,159 @@ mod tests {
             let err = ctx
                 .converter
                 .from_payloads::<CallModelInput>(ctx, payloads)
+                .expect_err("a non-String agent_name must fail");
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError, got {err:?}"
+            );
+        });
+    }
+
+    fn tool_call() -> ToolCallRequest {
+        ToolCallRequest {
+            call_id: "c1".to_owned(),
+            name: "echo".to_owned(),
+            args: serde_json::json!({ "x": 1 }),
+        }
+    }
+
+    fn invoke_tool_args() -> InvokeToolArgs {
+        InvokeToolArgs {
+            agent_name: "agent-1".to_owned(),
+            call: tool_call(),
+            ctx_seed: Some(serde_json::json!({ "tenant": "acme" })),
+        }
+    }
+
+    #[test]
+    fn invoke_tool_round_trips_as_exactly_one_payload() {
+        with_ctx(|ctx| {
+            let args = invoke_tool_args();
+            let expected = json_of(&args);
+            let payloads = ctx
+                .converter
+                .to_payloads(ctx, &InvokeToolInput(args))
+                .expect("encode");
+            assert_eq!(
+                payloads.len(),
+                1,
+                "the envelope must serialize to exactly one payload"
+            );
+
+            let back: InvokeToolInput = ctx.converter.from_payloads(ctx, payloads).expect("decode");
+            assert_eq!(json_of(&back.0), expected);
+        });
+    }
+
+    #[test]
+    fn invoke_tool_decodes_legacy_three_payload_shape() {
+        with_ctx(|ctx| {
+            let legacy = MultiArgs3(
+                "agent-1".to_owned(),
+                tool_call(),
+                Some(serde_json::json!({ "tenant": "acme" })),
+            );
+            let payloads = ctx
+                .converter
+                .to_payloads(ctx, &legacy)
+                .expect("encode legacy");
+            assert_eq!(payloads.len(), 3, "legacy shape is three payloads");
+
+            let decoded: InvokeToolInput = ctx
+                .converter
+                .from_payloads(ctx, payloads)
+                .expect("a 0.2.x-queued task must decode");
+            assert_eq!(json_of(&decoded.0), json_of(&invoke_tool_args()));
+        });
+    }
+
+    #[test]
+    fn invoke_tool_decodes_frozen_envelope_literal() {
+        const FROZEN: &str = r#"{"agent_name":"agent-1","call":{"call_id":"c1","name":"echo","args":{"x":1}},"ctx_seed":{"tenant":"acme"}}"#;
+        with_ctx(|ctx| {
+            let value: serde_json::Value = serde_json::from_str(FROZEN).expect("literal parses");
+            let payload = ctx
+                .converter
+                .to_payload(ctx, &value)
+                .expect("encode literal");
+            let decoded: InvokeToolInput = ctx
+                .converter
+                .from_payloads(ctx, vec![payload])
+                .expect("decode");
+            assert_eq!(json_of(&decoded.0), json_of(&invoke_tool_args()));
+        });
+    }
+
+    /// Contract rule 1: the `#[serde(default)]` `ctx_seed` may be absent.
+    #[test]
+    fn invoke_tool_envelope_defaults_absent_fields() {
+        const FROZEN_NO_SEED: &str =
+            r#"{"agent_name":"agent-1","call":{"call_id":"c1","name":"echo","args":{"x":1}}}"#;
+        with_ctx(|ctx| {
+            let value: serde_json::Value =
+                serde_json::from_str(FROZEN_NO_SEED).expect("literal parses");
+            let payload = ctx
+                .converter
+                .to_payload(ctx, &value)
+                .expect("encode literal");
+            let decoded: InvokeToolInput = ctx
+                .converter
+                .from_payloads(ctx, vec![payload])
+                .expect("decode");
+            assert_eq!(decoded.0.ctx_seed, None);
+        });
+    }
+
+    #[test]
+    fn invoke_tool_envelope_ignores_unknown_fields() {
+        const FROZEN_FUTURE: &str = r#"{"agent_name":"agent-1","call":{"call_id":"c1","name":"echo","args":{"x":1}},"ctx_seed":{"tenant":"acme"},"added_in_a_later_release":42}"#;
+        with_ctx(|ctx| {
+            let value: serde_json::Value =
+                serde_json::from_str(FROZEN_FUTURE).expect("literal parses");
+            let payload = ctx
+                .converter
+                .to_payload(ctx, &value)
+                .expect("encode literal");
+            let decoded: InvokeToolInput = ctx
+                .converter
+                .from_payloads(ctx, vec![payload])
+                .expect("an envelope with an unknown field must still decode");
+            assert_eq!(json_of(&decoded.0), json_of(&invoke_tool_args()));
+        });
+    }
+
+    #[test]
+    fn invoke_tool_rejects_unrecognized_arity() {
+        with_ctx(|ctx| {
+            let zero: Result<InvokeToolInput, _> = ctx.converter.from_payloads(ctx, vec![]);
+            assert!(matches!(zero, Err(PayloadConversionError::WrongEncoding)));
+
+            let p = ctx
+                .converter
+                .to_payload(ctx, &"x".to_owned())
+                .expect("encode");
+            let two: Result<InvokeToolInput, _> =
+                ctx.converter.from_payloads(ctx, vec![p.clone(), p.clone()]);
+            assert!(
+                matches!(two, Err(PayloadConversionError::WrongEncoding)),
+                "invoke_tool has no two-payload shape (0.1.x is out of the support window)"
+            );
+
+            let four: Result<InvokeToolInput, _> = ctx
+                .converter
+                .from_payloads(ctx, vec![p.clone(), p.clone(), p.clone(), p]);
+            assert!(matches!(four, Err(PayloadConversionError::WrongEncoding)));
+        });
+    }
+
+    #[test]
+    fn invoke_tool_content_failure_is_encoding_error() {
+        with_ctx(|ctx| {
+            let bad = MultiArgs3(42_u32, tool_call(), Option::<serde_json::Value>::None);
+            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            let err = ctx
+                .converter
+                .from_payloads::<InvokeToolInput>(ctx, payloads)
                 .expect_err("a non-String agent_name must fail");
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),
