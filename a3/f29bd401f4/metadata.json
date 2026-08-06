@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "a3f29bd401f4",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-462-runtime-temporal-backward-compatible-activity-input-for-zero",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-temporal/src/activities.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/activity_input.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/workflow.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a3/f29bd401f4/0/metadata.json",
+      "transcript": "/a3/f29bd401f4/0/full.jsonl",
+      "compact_transcript": "/a3/f29bd401f4/0/transcript.jsonl",
+      "content_hash": "/a3/f29bd401f4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 5726,
+    "cache_read_tokens": 670845,
+    "output_tokens": 3354,
+    "api_call_count": 2
+  }
+}
