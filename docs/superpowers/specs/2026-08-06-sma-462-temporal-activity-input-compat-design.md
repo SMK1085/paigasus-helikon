@@ -65,11 +65,14 @@ there are two independent directions:
 - **New reads old** — a task queued by an old worker is picked up by a new worker.
   *Retrofittable*: we control the new decoder.
 - **Old reads new** — a task queued by a new worker is picked up by an old worker. **Not
-  retrofittable.** Published binaries are frozen at `MultiArgs{N}::from_payloads`; no change
-  landed now can teach them a new shape.
+  retrofittable.** Published 0.2.x binaries are frozen at `MultiArgs{N}::from_payloads`; no
+  change landed now can teach them a new shape.
 
 A single release that changes both encoder and decoder therefore always has one lossy
-direction. §3 D9 explains how staging removes it entirely.
+direction. This release is such a release (D9): it fixes new-reads-old for 0.2.x-queued
+tasks and makes every **subsequent** input change compatible in both directions, while the
+0.2.x → this-release hop itself is one-directional. §5.2 and §7 record exactly what that
+costs and how to bound it.
 
 ## 2. Goals / non-goals
 
@@ -81,14 +84,15 @@ direction. §3 D9 explains how staging removes it entirely.
   executes activity tasks queued by a 0.2.x worker.
 - Keep every activity **name** byte-identical, so in-flight workflow replay is unaffected
   (D2).
-- Make the *migration itself* zero-downtime in both directions (D9) — the ticket's headline
-  claim, stated as fact rather than aspiration.
 - Change no public Rust API. Every new type is `pub(crate)`.
 - Replace the crate's hedged upgrade-discipline prose with an accurate, appropriately
-  scoped statement (§8).
+  scoped statement (§8), including an honest account of this release's own one-directional
+  hop and its rollback constraint.
 
 ### Non-goals
 
+- **Making the 0.2.x → this-release hop itself bidirectional.** Impossible without staging
+  the encoder flip across two releases, which was considered and declined (D9).
 - **Temporal Worker Versioning (Build IDs)** — unsupported in the Rust SDK; remains named
   future work.
 - **0.1.x wire tolerance** (D4).
@@ -106,15 +110,15 @@ direction. §3 D9 explains how staging removes it entirely.
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | Activity inputs become a **single JSON-object envelope payload** per activity, with a decoder that also accepts the 0.2.x positional shapes. | *(User decision.)* Fixes new-reads-old and makes all future additive changes compatible in both directions. Rejected alternative: minimal forward-compat only, which defers the identical break to the next input change. **Correction after challenge:** the original rationale also dismissed two-phase expand/contract as costing "two deploys per wire change forever". That was wrong — expand/contract costs one extra deploy **once**, because after the envelope exists later field additions need no phasing. See D9, which adopts the staging. |
+| D1 | Activity inputs become a **single JSON-object envelope payload** per activity, with a decoder that also accepts the 0.2.x positional shapes. | *(User decision.)* Fixes new-reads-old and makes all future additive changes compatible in both directions. Rejected alternative: minimal forward-compat only, which defers the identical break to the next input change. |
 | D2 | Activity **names stay identical** — no `_v2` suffix. | Not merely a preference. `temporalio-sdk-core-0.5.0/src/worker/workflow/machines/activity_state_machine.rs:376-396` compares `act_id` and `act_type`, gated on `CoreInternalFlags::IdAndTypeDeterminismChecks`. A rename **would** trip the non-determinism checker on any history recorded by a flag-aware core against a metadata-capable server (the gate can be inactive — `internal_flags.rs:120-138` — so the claim is conditional, but the conclusion is not). Input payloads are never compared, which is why the *encoding* may change freely. |
 | D3 | **All three** activities move to envelopes, including the unchanged `call_model`. | Leaving `call_model` positional guarantees a repeat of this ticket at its first input change. One pattern, one migration, one set of docs. |
-| D4 | Legacy tolerance window is **0.2.x only**. | *(User decision — YAGNI.)* 0.1.1 was superseded on 2026-07-09; a 0.1.x ↔ post-SMA-462 rolling deploy is not a real scenario, and D9's staging means the supported hop is always single-version. **Corrected rationale after challenge:** the earlier claim that including 0.1.x would force costly "ordered-attempt decoding" overstated it — only `render_instructions` differs (1 payload: bare JSON string vs. JSON object) and one failed serde attempt distinguishes them. The decision stands on YAGNI, not on cost. |
+| D4 | Legacy tolerance window is **0.2.x only**. | *(User decision — YAGNI.)* 0.1.1 was superseded on 2026-07-09; a 0.1.x ↔ post-SMA-462 rolling deploy is not a real scenario. **Corrected rationale after challenge:** the earlier claim that including 0.1.x would force costly "ordered-attempt decoding" overstated it — only `render_instructions` differs (1 payload: bare JSON string vs. JSON object) and one failed serde attempt distinguishes them. The decision stands on YAGNI, not on cost. |
 | D5 | The envelope type is a **serde-free newtype wrapping a serde-derived args struct**. | Forced, not stylistic. `temporalio-common-wasm-0.5.0` carries blanket impls `impl<T: Serialize> TemporalSerializable for T` (`:603-610`) and `impl<T: DeserializeOwned> TemporalDeserializable for T` (`:611-627`). A type deriving serde therefore **cannot** also hand-implement the Temporal traits — coherence conflict. |
 | D6 | Unrecognized arity → `WrongEncoding`; recognized arity with bad content → `EncodingError` with a **payload-free** diagnostic. | `PayloadConverter::Composite` treats `WrongEncoding` as "not my encoding" and continues to the next converter (`data_converters.rs:577`), but returns any other error immediately (`:578`). `EncodingError` therefore surfaces the real diagnostic. It must never embed payload bytes — §5.1. |
 | D7 | A **field-evolution contract** governs every future envelope change, not just `#[serde(default)]`. | See §4.6. The single-rule version proposed pre-challenge was insufficient: it governs required-ness only, says nothing about `deny_unknown_fields` / `rename` / tagging, and its "unknown fields are ignored" property is a **fail-open** for any field whose meaning is security-relevant. |
 | D8 | Codec lives in a **new `activity_input.rs` module**, not in `activities.rs` or `payloads.rs`. | `activities.rs` is already 870 lines; `payloads.rs` holds the *public* wire types. The codec has one job and no dependents beyond the activity layer and the workflow. |
-| D9 | **The encoder flip is staged across two releases.** This release (N) decodes both shapes but still **encodes** the 0.2.x positional shape; a follow-up ticket flips `to_payloads` to emit the envelope. | *(Added after challenge — resolves the BLOCKER, and needs explicit confirmation at GATE 1 because it changes what SMA-462 ships.)* Every hop then has an overlap release that reads both shapes: 0.2.1 ↔ N is wire-identical, N ↔ N+1 is covered by N's decoder. This eliminates the lossy direction, the retry-budget hazards of §5.2, **and** the rollback one-way door — all of which exist *solely* because encode and decode would otherwise flip together. Cost: one extra release whose diff is one function body. |
+| D9 | **The encoder flips in this single release** — no staged two-release rollout. | *(User decision at GATE 1, after the challenge proposed staging.)* The considered alternative was: release N decodes both but still encodes the 0.2.x shape, release N+1 flips. That would have made every hop bidirectional and removed the rollback constraint, at the cost of one extra release. Declined in favour of landing the change whole. **The accepted consequences are therefore real and must be documented, not minimised:** the 0.2.x → this-release hop is one-directional (§5.2), and rolling back after this release has queued envelope-shaped tasks requires draining first (§7.4). |
 | D10 | Three separate envelope types, not one shared `ActivityInput` with every field `#[serde(default)]`. | *(Considered and rejected.)* A shared type would make `request` and `call` optional at the type level, moving a compile-time guarantee into a runtime check for no benefit. Three types cost three near-identical codec impls, mitigated by a shared decode helper (§4.4). |
 
 ## 4. Architecture
@@ -190,27 +194,20 @@ pub(crate) async fn render_instructions(
 
 ### 4.3 Encode
 
-`TemporalSerializable::to_payloads` is overridden on each wrapper. Under D9 this release
-emits the **legacy** shape; the follow-up release replaces the body with the envelope form:
+`TemporalSerializable::to_payloads` is overridden on each wrapper to emit exactly one
+payload:
 
 ```rust
-// Release N (this ticket) — wire-identical to 0.2.x:
-fn to_payloads(&self, ctx: &SerializationContext<'_>) -> Result<Vec<Payload>, PayloadConversionError> {
-    MultiArgs3(self.0.agent_name.clone(), self.0.call.clone(), self.0.ctx_seed.clone())
-        .to_payloads(ctx)
-}
-
-// Release N+1 (follow-up) — the envelope:
 fn to_payloads(&self, ctx: &SerializationContext<'_>) -> Result<Vec<Payload>, PayloadConversionError> {
     Ok(vec![ctx.converter.to_payload(ctx, &self.0)?])
 }
 ```
 
-The envelope form **nests**: `ctx.converter.to_payload` resolves the inner serde-derived
-struct through the composite's `serde_json` arm, producing one JSON object with `request` /
-`call` as nested objects. It must not stringify them — per-payload size then stays
-equivalent to today's largest payload, which matters against the ~1.5 MB practical budget
-documented at `src/lib.rs:300-319`.
+The envelope **nests**: `ctx.converter.to_payload` resolves the inner serde-derived struct
+through the composite's `serde_json` arm, producing one JSON object with `request` / `call`
+as nested objects. It must not stringify them — per-payload size then stays equivalent to
+today's largest payload, which matters against the ~1.5 MB practical budget documented at
+`src/lib.rs:300-319`.
 
 ### 4.4 Decode
 
@@ -284,7 +281,7 @@ tracing::warn!(activity = %name, legacy_arity = n,
 
 Documented as the operator's "safe to remove the shim" signal: once no such warning has
 appeared for a full retention window, the arms can go. A follow-up Linear issue records the
-removal, alongside the D9 encoder-flip issue.
+removal.
 
 ### 4.8 Call sites changed
 
@@ -319,17 +316,12 @@ the expected type. It must **never** include payload bytes or the underlying ser
 rendering of the input value. A unit test asserts a sentinel value planted in the payload
 does not appear in the message.
 
-### 5.2 What the retry budget actually buys (and where it runs out)
+### 5.2 The reverse direction during this release's rollout
 
-**D9 removes this failure mode from the supported upgrade path entirely.** Release N writes
-the legacy shape, which 0.2.x reads; release N+1 writes envelopes, which N already reads.
-Neither hop has a direction that fails. What follows therefore applies **only to an
-unsupported two-version jump** (0.2.x → N+1, skipping the overlap release), and belongs in
-the CHANGELOG as the reason that jump is unsupported rather than merely discouraged.
-
-In that case an old worker handed a new-shape payload fails retryably and Temporal
-re-dispatches until a new worker takes it. Four things bound that recovery, and only the
-first was identified pre-challenge:
+Because the encoder flips in this release (D9), a 0.2.x worker will be handed
+envelope-shaped payloads for as long as the fleet is mixed. It fails the attempt retryably
+and Temporal re-dispatches until a worker on the new code takes it. Four things bound that
+recovery, and only the first was identified pre-challenge:
 
 1. **Finite `maximum_attempts`.** `worker::RetryPolicyConfig` exposes
    `maximum_attempts: Option<u32>` for `model_retry_policy` / `tool_retry_policy`. A finite
@@ -345,11 +337,14 @@ first was identified pre-challenge:
    failing loudly.
 
 So "degrades to retry latency, not a dead run" holds only for `invoke_tool` with unlimited
-attempts and no run deadline. All four points go in the CHANGELOG upgrade notes as the
-justification for §7.5's one-release-at-a-time rule. A related question this design does not
-answer: each failed attempt writes an `ActivityTaskFailed` event, so a sustained
-two-version-jump rollout also consumes workflow history length. One more reason the jump is
-unsupported rather than merely slow.
+attempts and no run deadline. Each failed attempt also writes an `ActivityTaskFailed` event,
+so a slow rollout consumes workflow history length as well as wall-clock.
+
+**Operator guidance, which goes in the CHANGELOG:** keep the mixed-fleet window short, and
+either drain in-flight runs first or ensure `maximum_attempts` is unlimited and run
+deadlines are generous for the duration. Drain-before-upgrade / blue-green task queues
+remain the conservative path for *this* upgrade specifically — the change's benefit lands on
+the *next* one.
 
 ## 6. Testing
 
@@ -363,8 +358,8 @@ top risk (§11) unmitigated by the very tests claimed to mitigate it.
 
 Per envelope:
 
-1. **Round-trip** through the default converter, asserting the exact payload count (legacy
-   arity in release N; exactly 1 after the D9 flip) and an identical `*Args` on the way back.
+1. **Round-trip** through the default converter, asserting the payload count is **exactly 1**
+   and an identical `*Args` on the way back.
 2. **Legacy decode** — build the 0.2.x payload vector via `MultiArgs2/3::to_payloads` and
    assert it decodes to the identical `*Args`. This is the acceptance criterion in miniature.
 3. **Envelope decode** — a **frozen JSON string literal** (not a value produced by
@@ -386,9 +381,8 @@ Per envelope:
 ### 6.2 Live coverage
 
 The existing env-gated suite (`tests/temporal_live.rs`, gated on `TEMPORAL_TEST_SERVER`)
-exercises whichever encoding is active end-to-end on a real server for free — `happy_path_
-tool_roundtrip` alone covers encode→schedule→decode→execute. Under D9 that is the legacy
-shape this release, and the envelope after the flip.
+exercises the new envelope encoding end-to-end on a real server for free —
+`happy_path_tool_roundtrip` alone covers encode→schedule→decode→execute.
 
 **A bespoke legacy-marker live test is explicitly rejected, not silently dropped.** The
 pre-challenge plan — a test-only `ActivityDefinition` marker scheduled from a test workflow
@@ -406,21 +400,22 @@ description records the command run and its output as the evidence artifact.
 
 ## 7. Upgrade story
 
-Stated plainly, because the current docs hedge on a question that is now answered:
+Stated plainly, including the parts that are not favourable:
 
 1. **In-flight workflows replay fine.** Replay compares `act_id` and `act_type` only, never
    input payloads (D2). The encoding change cannot cause a non-determinism error.
 2. **Completed activities are unaffected** — they replay from recorded results.
-3. **This release (N) is wire-identical to 0.2.x** (D9), so its own rollout is trivially
-   bidirectional; a rollback to 0.2.1 is safe at any point.
-4. **The follow-up release (N+1) flips the encoder.** N workers already read both shapes, so
-   that rollout is bidirectional too. Its one asymmetry — a rollback from N+1 to N *after*
-   N+1 has queued envelope-shaped tasks — is safe, because N decodes envelopes. A rollback
-   past N to 0.2.1 is **not** safe and requires draining first; the CHANGELOG says so.
-5. **Two-version jumps are unsupported.** 0.2.x → N+1 directly skips the overlap release.
-   Upgrade one release at a time, or drain.
-6. **Drain-before-upgrade / blue-green task queues remain available** but are no longer
-   required for this class of change.
+3. **Activity tasks queued by a 0.2.x worker** are decoded transparently by a new worker
+   (§4.4) — the direction this ticket set out to fix.
+4. **Activity tasks queued by a new worker and picked up by a 0.2.x worker fail** and are
+   re-dispatched, subject to the four bounds in §5.2. This is the accepted cost of D9.
+   **Rollback constraint:** once a new worker has queued an envelope-shaped task, that
+   payload is frozen in the `ActivityTaskScheduled` event and every retry re-delivers it. A
+   rollback to 0.2.1 therefore leaves those activities permanently undecodable until the run
+   deadline. **Drain in-flight runs before rolling back**, or accept that in-flight runs fail.
+5. **Drain-before-upgrade / blue-green task queues remain the conservative path for *this*
+   upgrade.** The benefit of this change lands on the *next* input change, which will be
+   bidirectional by construction.
 
 ## 8. Documentation impact
 
@@ -428,14 +423,16 @@ Stated plainly, because the current docs hedge on a question that is now answere
   reasoned claim, not a guarantee proven against every upgrade path"*) exists because
   SMA-455's D6 could not settle the replay question; that part can now be stated with a
   quoted source. **The hedge is narrowed, not deleted**: the new guarantee is scoped to
-  *the envelope field set of activity inputs*, and an explicit caveat remains for nested
-  `paigasus-helikon-core` types and for activity outputs (§4.6 rule 4), which this design
-  does not govern. Replacing a correct hedge with a narrow guarantee stated broadly would be
-  worse documentation than the hedge.
-- `README.md:159` — the upgrade paragraph gains the supported compat window and the
-  one-release-at-a-time rule.
-- `CHANGELOG.md` — upgrade notes: the staged plan (D9), the 0.2.x-only window, and all four
-  retry-budget bounds from §5.2.
+  *the envelope field set of activity inputs* and to *changes after this release*, and an
+  explicit caveat remains for nested `paigasus-helikon-core` types and for activity outputs
+  (§4.6 rule 4), which this design does not govern. Replacing a correct hedge with a narrow
+  guarantee stated broadly would be worse documentation than the hedge.
+- `README.md:159` — the upgrade paragraph gains the supported compat window and a pointer to
+  the §7.4 rollback constraint.
+- `CHANGELOG.md` — upgrade notes: the envelope shape, the 0.2.x-only window, all four
+  retry-budget bounds from §5.2, the §5.2 operator guidance, and the §7.4 rollback
+  constraint. This is the most important doc surface in the change; an operator who reads
+  only the CHANGELOG must still learn that this specific upgrade wants a drain.
 - `docs/book/src/concepts/runtimes.md` — **one sentence added** to the retry/heartbeat/payload
   paragraph (`:35-37`) pointing at the crate docs' upgrade section. Revised from the
   pre-challenge "no change needed" call: the page has no upgrade section so the letter of
@@ -452,13 +449,9 @@ is **no public Rust API change**: no `paigasus-helikon-core` bump, and therefore
 manual bump and no manual facade bump (the release-plz `dependencies_update` cascade is not
 defeated). release-plz bumps a `feat` on a `0.x` crate as a **patch**.
 
-D9's follow-up release is a separate ticket and a separate release-plz cycle.
-
 ## 10. Follow-up issues to file
 
-1. **Flip the encoder to the envelope shape** (D9 release N+1) — one function body per
-   wrapper, plus the §6.1.1 payload-count assertions and the §5.2 upgrade notes.
-2. **Remove the 0.2.x legacy decode arms** — triggered by the §4.7 warning going silent for
+1. **Remove the 0.2.x legacy decode arms** — triggered by the §4.7 warning going silent for
    a full retention window.
 
 ## 11. Open risks
@@ -474,5 +467,5 @@ D9's follow-up release is a separate ticket and a separate release-plz cycle.
 - **Nested core types are ungoverned** (§4.6 rule 4). A `ModelRequest` / `ToolCallRequest`
   serde change breaks the wire regardless of this design. Accepted residual risk; the open
   question of whether those types are a stable wire contract is worth a separate decision.
-- **§5.2's four retry-budget bounds** apply only to an unsupported two-version jump —
-  documented as the reason that jump is barred, not fixed.
+- **This release's own rollout is one-directional** (D9, §5.2, §7.4). Accepted by decision,
+  bounded by documentation and the drain recommendation — not fixed in code.
