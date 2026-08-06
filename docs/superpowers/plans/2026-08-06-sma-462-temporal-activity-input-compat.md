@@ -671,9 +671,19 @@ Append inside the existing `#[cfg(test)] mod tests` block in `src/activity_input
         });
     }
 
+    /// The `request` value is a frozen literal of `ModelRequest`'s wire shape as
+    /// of this commit, NOT a value serialized at test time — a serialized
+    /// fixture tracks the struct's drift and asserts nothing.
+    ///
+    /// If a future change to `paigasus-helikon-core`'s `ModelRequest` breaks this
+    /// test, that is the test working as intended: `ModelRequest` is a nested
+    /// core type, explicitly outside this module's field-evolution contract
+    /// (rule 4), so a change to it IS a wire-compatibility break. Update the
+    /// literal deliberately and treat the break as a release note, rather than
+    /// regenerating the fixture to make the red go away.
     #[test]
     fn call_model_decodes_frozen_envelope_literal() {
-        const FROZEN: &str = r#"{"agent_name":"agent-1","request":{}}"#;
+        const FROZEN: &str = r#"{"agent_name":"agent-1","request":{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}}}"#;
         with_ctx(|ctx| {
             let value: serde_json::Value = serde_json::from_str(FROZEN).expect("literal parses");
             let payload = ctx.converter.to_payload(ctx, &value).expect("encode literal");
@@ -687,8 +697,7 @@ Append inside the existing `#[cfg(test)] mod tests` block in `src/activity_input
 
     #[test]
     fn call_model_envelope_ignores_unknown_fields() {
-        const FROZEN_FUTURE: &str =
-            r#"{"agent_name":"agent-1","request":{},"added_in_a_later_release":42}"#;
+        const FROZEN_FUTURE: &str = r#"{"agent_name":"agent-1","request":{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}},"added_in_a_later_release":42}"#;
         with_ctx(|ctx| {
             let value: serde_json::Value =
                 serde_json::from_str(FROZEN_FUTURE).expect("literal parses");
