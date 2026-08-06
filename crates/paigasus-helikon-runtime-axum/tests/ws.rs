@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::AgentEvent;
-use paigasus_helikon_runtime_axum::AgentServer;
+use paigasus_helikon_runtime_axum::{AgentServer, AuthLayer, AuthRejection, Principal};
 
 /// **AC1** — connecting to an existing, already-completed run replays the full
 /// event sequence and then closes the stream (server sends a Close frame once
@@ -174,4 +174,180 @@ async fn ws_emits_synthetic_run_failed_after_terminalless_stream() {
         "expected generic RunFailed last, got {:?}",
         got[1]
     );
+}
+
+// ── principal scoping ───────────────────────────────────────────────────────
+
+/// Admits every request, and establishes a [`Principal`] only when the
+/// `X-Test-Principal` header is present. Mirrors `tests/principal.rs`.
+struct HeaderPrincipalAuth;
+
+#[async_trait::async_trait]
+impl AuthLayer for HeaderPrincipalAuth {
+    async fn authenticate(
+        &self,
+        parts: &mut axum::http::request::Parts,
+    ) -> Result<(), AuthRejection> {
+        if let Some(value) = parts.headers.get("x-test-principal") {
+            if let Ok(s) = value.to_str() {
+                parts.extensions.insert(Principal(s.to_owned()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Build an [`AgentServer`] mounting the `echo` [`support::ScriptedAgent`]
+/// behind [`HeaderPrincipalAuth`], bind it to an ephemeral loopback port, spawn
+/// the serve loop, and return the bound address.
+async fn spawn_authed_echo_server() -> std::net::SocketAddr {
+    let server = AgentServer::<()>::builder()
+        .with_default_context()
+        .auth(Arc::new(HeaderPrincipalAuth))
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "echo".into(),
+            events: support::echo_script(),
+        }))
+        .build()
+        .expect("server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { server.serve_with_listener(listener).await.unwrap() });
+    addr
+}
+
+/// Create an async run as `principal` via `POST /agents/{name}/runs?mode=async`
+/// and return the run id.
+async fn create_async_run_as(
+    addr: std::net::SocketAddr,
+    agent_name: &str,
+    principal: &str,
+) -> String {
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/agents/{agent_name}/runs?mode=async"))
+        .header("content-type", "application/json")
+        .header("x-test-principal", principal)
+        .body(r#"{"input":"test"}"#)
+        .send()
+        .await
+        .expect("async run request");
+    assert_eq!(resp.status(), 202, "expected 202 Accepted");
+    let v: serde_json::Value = resp.json().await.expect("async run response body");
+    v["run_id"]
+        .as_str()
+        .expect("run_id field in response")
+        .to_owned()
+}
+
+/// Build a WebSocket client request for `url`, attaching
+/// `X-Test-Principal: {principal}` when given.
+fn ws_request_as(
+    url: &str,
+    principal: Option<&str>,
+) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let mut request = url.into_client_request().expect("ws request");
+    if let Some(p) = principal {
+        request
+            .headers_mut()
+            .insert("x-test-principal", p.parse().expect("header value"));
+    }
+    request
+}
+
+/// Drain a connected WebSocket to completion, collecting every text frame as a
+/// decoded [`AgentEvent`]. Bounded by a 5s timeout so a regression (e.g. a
+/// missing Close frame) fails fast instead of hanging the test.
+async fn drain_ws_events(
+    mut ws: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) -> Vec<AgentEvent> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut got = Vec::new();
+        while let Some(Ok(msg)) = ws.next().await {
+            if msg.is_text() {
+                got.push(support::parse_event(msg.to_text().unwrap()));
+            }
+        }
+        got
+    })
+    .await
+    .expect("WS stream must complete within 5s, not hang")
+}
+
+/// A run started by one principal is invisible to another — reported as a plain
+/// 404, indistinguishable from a run id that never existed.
+#[tokio::test]
+async fn cross_principal_subscription_is_404() {
+    let addr = spawn_authed_echo_server().await;
+    let run_id = create_async_run_as(addr, "echo", "alice").await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    let url = format!("ws://{addr}/agents/echo/runs/{run_id}/events");
+    let request = ws_request_as(&url, Some("mallory"));
+    let err = tokio_tungstenite::connect_async(request)
+        .await
+        .expect_err("cross-principal subscription must fail the handshake (404, not 101)");
+    assert_handshake_404(err);
+}
+
+/// The owning principal can still subscribe, so the gate is not "deny all".
+#[tokio::test]
+async fn owning_principal_can_subscribe() {
+    let addr = spawn_authed_echo_server().await;
+    let run_id = create_async_run_as(addr, "echo", "alice").await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    let url = format!("ws://{addr}/agents/echo/runs/{run_id}/events");
+    let request = ws_request_as(&url, Some("alice"));
+    let (ws, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("owning principal's handshake should succeed");
+
+    let got = drain_ws_events(ws).await;
+    assert_eq!(
+        serde_json::to_value(&got).unwrap(),
+        serde_json::to_value(support::echo_script()).unwrap(),
+    );
+}
+
+/// With no principals anywhere (`None == None`), subscription still succeeds —
+/// the single-tenant and development-server path is unchanged.
+#[tokio::test]
+async fn unbound_run_is_subscribable_without_a_principal() {
+    // No `AuthLayer` configured at all: `principal` resolves to `None` on both
+    // the create and the subscribe side, matching the pre-existing
+    // single-tenant behaviour exactly.
+    let addr = support::spawn_echo_server().await;
+    let run_id = support::create_async_run(addr, "echo").await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    let url = format!("ws://{addr}/agents/echo/runs/{run_id}/events");
+    let (ws, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .expect("unbound run must remain subscribable with no principal established");
+
+    let got = drain_ws_events(ws).await;
+    assert_eq!(
+        serde_json::to_value(&got).unwrap(),
+        serde_json::to_value(support::echo_script()).unwrap(),
+    );
+}
+
+/// The agent-name mismatch check still returns 404 independently of principals.
+#[tokio::test]
+async fn agent_name_mismatch_is_still_404() {
+    let addr = spawn_authed_echo_server().await;
+    let run_id = create_async_run_as(addr, "echo", "alice").await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+
+    // The SAME principal that owns the run, but the URL names a different
+    // agent — proves the agent-name filter still fires on its own.
+    let url = format!("ws://{addr}/agents/other/runs/{run_id}/events");
+    let request = ws_request_as(&url, Some("alice"));
+    let err = tokio_tungstenite::connect_async(request)
+        .await
+        .expect_err("agent-name mismatch should fail the WS handshake (404, not 101)");
+    assert_handshake_404(err);
 }

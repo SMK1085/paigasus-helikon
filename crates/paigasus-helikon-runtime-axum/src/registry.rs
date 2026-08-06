@@ -21,6 +21,11 @@ use uuid::Uuid;
 pub(crate) struct RunHandle {
     /// Name of the agent that owns this run.
     pub agent_name: String,
+    /// Principal that started this run; `None` for an unbound run.
+    ///
+    /// The WebSocket events endpoint compares against this so a run's stream is
+    /// readable only by its owner.
+    pub principal: Option<String>,
     /// Append-only, bounded event log for this run.
     pub log: Arc<EventLog>,
     /// Cancellation token — drop or call `.cancel()` to abort the run.
@@ -125,14 +130,24 @@ impl RunRegistry {
         })
     }
 
-    /// Mint a new run id, build its handle, insert it into the registry, and return both.
+    /// Mint a new run id, build its handle, insert it into the registry, and
+    /// return both.
+    ///
+    /// `principal` is the identity that started the run; the events endpoint
+    /// uses it to scope subscriptions.
     ///
     /// The run starts as non-terminal. Call [`note_terminal`](RunRegistry::note_terminal) once
     /// the run ends.
-    pub fn create(&self, agent_name: String, cancel: CancellationToken) -> (Uuid, Arc<RunHandle>) {
+    pub fn create(
+        &self,
+        agent_name: String,
+        principal: Option<String>,
+        cancel: CancellationToken,
+    ) -> (Uuid, Arc<RunHandle>) {
         let id = Uuid::new_v4();
         let handle = Arc::new(RunHandle {
             agent_name,
+            principal,
             log: Arc::new(EventLog::new(self.max_events_per_run)),
             cancel,
             start_error: Mutex::new(None),
@@ -291,7 +306,7 @@ mod tests {
     #[test]
     fn ttl_evicts_after_deadline() {
         let reg = RunRegistry::new(Duration::from_secs(60), 1024, 1024);
-        let (id, _h) = reg.create("a".into(), CancellationToken::new());
+        let (id, _h) = reg.create("a".into(), None, CancellationToken::new());
         let t0 = Instant::now();
         reg.note_terminal(id, t0);
         reg.sweep(t0 + Duration::from_secs(59));
@@ -308,7 +323,7 @@ mod tests {
         let t0 = Instant::now();
         let ids: Vec<_> = (0..3)
             .map(|i| {
-                let (id, _) = reg.create("a".into(), CancellationToken::new());
+                let (id, _) = reg.create("a".into(), None, CancellationToken::new());
                 reg.note_terminal(id, t0 + Duration::from_secs(i));
                 id
             })
@@ -329,7 +344,7 @@ mod tests {
 
         // Create and terminate three runs.
         for _ in 0..3 {
-            let (id, _h) = reg.create("a".into(), CancellationToken::new());
+            let (id, _h) = reg.create("a".into(), None, CancellationToken::new());
             reg.note_terminal(id, t0);
         }
         assert_eq!(reg.completion_queue_len(), 3);
@@ -349,7 +364,7 @@ mod tests {
     #[test]
     fn synthetic_terminal_frame_branches() {
         let reg = RunRegistry::new(Duration::from_secs(60), 16, 16);
-        let (_id, h) = reg.create("a".into(), CancellationToken::new());
+        let (_id, h) = reg.create("a".into(), None, CancellationToken::new());
 
         assert!(h.synthetic_terminal_frame(true).is_none());
 

@@ -241,7 +241,7 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    `Send` and is what moves into the writer task.
     let cancel = CancellationToken::new();
     let ctx = state.context.build(&req, session, cancel.clone()).await?;
-    let (run_id, handle) = state.registry.create(name, cancel);
+    let (run_id, handle) = state.registry.create(name, principal.clone(), cancel);
 
     // 6. Spawn the writer task on the process-wide runtime: drive the agent and
     //    drain its events into the log.

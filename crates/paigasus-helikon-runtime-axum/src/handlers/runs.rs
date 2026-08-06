@@ -206,7 +206,7 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    the context provider fails.
     let cancel = CancellationToken::new();
     let ctx = state.context.build(&parts, session, cancel.clone()).await?;
-    let (run_id, handle) = state.registry.create(name, cancel);
+    let (run_id, handle) = state.registry.create(name, principal.clone(), cancel);
 
     // 6. Spawn the writer task: drive the agent and drain its events into the log.
     spawn_writer(

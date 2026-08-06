@@ -1,11 +1,14 @@
 //! Handler for the `GET /agents/{name}/runs/{id}/events` WebSocket endpoint,
 //! implemented over [`actix_ws`].
 //!
-//! Implements the **404-before-upgrade** pattern: the agent name and run id are
-//! validated against the registry *before* the HTTP connection is promoted to a
-//! WebSocket (via [`actix_ws::handle`]). A malformed run id returns a plain HTTP
-//! 400, and a missing or name-mismatched run returns a plain HTTP 404 — in both
-//! cases without initiating the upgrade handshake.
+//! Implements the **404-before-upgrade** pattern: the agent name, run id, and
+//! owning principal are validated against the registry *before* the HTTP
+//! connection is promoted to a WebSocket (via [`actix_ws::handle`]). A
+//! malformed run id returns a plain HTTP 400. A missing run, a name mismatch,
+//! or a run owned by a different principal all return a plain HTTP 404 — in
+//! every case without initiating the upgrade handshake, and indistinguishably
+//! from one another, so the endpoint cannot be used as an existence oracle for
+//! harvested run ids.
 //!
 //! Once the handshake succeeds, a spawned task replays all previously recorded
 //! events from sequence 0 and then delivers live events in real time. The stream
@@ -21,15 +24,16 @@ use actix_web::{
 use futures_util::StreamExt;
 use uuid::Uuid;
 
-use crate::{error::ServerError, event_log::is_terminal, server::AppState};
+use crate::{auth::Principal, error::ServerError, event_log::is_terminal, server::AppState};
 
 /// `GET /agents/{name}/runs/{id}/events` — subscribe to run events via WebSocket.
 ///
 /// Performs the 404 check *before* accepting the WebSocket upgrade:
 ///
 /// - If `id` is not a valid UUID, returns `400 Bad Request`.
-/// - If no run with `id` exists in the registry, or the run's agent name does
-///   not match `name`, returns `404 Not Found`.
+/// - If no run with `id` exists in the registry, the run's agent name does not
+///   match `name`, or the run belongs to a different principal than the one
+///   resolved for this request, returns `404 Not Found`.
 /// - Otherwise returns `101 Switching Protocols` and streams all events for the
 ///   run, starting from sequence 0, as JSON text frames.
 ///
@@ -44,8 +48,12 @@ use crate::{error::ServerError, event_log::is_terminal, server::AppState};
 ///
 /// - [`ServerError::BadRequest`] (400) — `id` is not a valid UUID, or the request
 ///   was not a valid WebSocket upgrade.
-/// - [`ServerError::UnknownAgent`] (404) — the run does not exist or is owned by
-///   a different agent.
+/// - [`ServerError::UnknownAgent`] (404) — the run does not exist, is owned by
+///   a different agent, or is owned by a different principal than the caller.
+///   A run owned by a different principal is deliberately reported the same
+///   way as a missing run: a distinct status would confirm the run id exists
+///   and belongs to someone else, turning this endpoint into an existence
+///   oracle for harvested run ids.
 pub(crate) async fn events<Ctx: Send + Sync + 'static>(
     state: Data<AppState<Ctx>>,
     path: web::Path<(String, String)>,
@@ -58,12 +66,26 @@ pub(crate) async fn events<Ctx: Send + Sync + 'static>(
     let run_id = Uuid::parse_str(&id)
         .map_err(|_| ServerError::BadRequest(format!("invalid run id: {id}")))?;
 
-    // Look up the run; absence or agent-name mismatch returns 404 *before* the
-    // WebSocket upgrade is initiated.
+    // The `Ref` from `extensions()` MUST be dropped before any `.await` — read
+    // it in this scoped block, exactly as `handlers/runs.rs` does. actix
+    // request extensions are `RefCell`-backed and this handler future carries
+    // no `Send` bound, so holding the `Ref` across the `actix_ws::handle` call
+    // below would compile and then panic at runtime with "already mutably
+    // borrowed" the first time something else touches the extensions.
+    let principal: Option<String> = {
+        use actix_web::HttpMessage as _;
+        req.extensions().get::<Principal>().map(|p| p.0.clone())
+    };
+
+    // Absence, an agent-name mismatch, and a principal mismatch all return the
+    // SAME 404 *before* the WebSocket upgrade is initiated. A distinct status
+    // for the last case would confirm the run exists and belongs to someone
+    // else — an existence oracle for harvested run ids.
     let handle = state
         .registry
         .get(run_id)
         .filter(|h| h.agent_name == name)
+        .filter(|h| h.principal.as_deref() == principal.as_deref())
         .ok_or_else(|| ServerError::UnknownAgent(format!("{name}/{id}")))?;
 
     // Run confirmed — perform the WebSocket upgrade handshake. A failed upgrade

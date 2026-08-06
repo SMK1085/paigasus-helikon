@@ -771,3 +771,106 @@ async fn same_session_id_different_principals_are_isolated() {
         );
     }
 }
+
+/// Extract the status and (lossily-decoded) body of a failed WebSocket
+/// handshake — used below to assert a denial's exact wire shape without
+/// completing the upgrade.
+fn handshake_failure_status_and_body(err: tokio_tungstenite::tungstenite::Error) -> (u16, String) {
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => {
+            let status = resp.status().as_u16();
+            let body = resp
+                .body()
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_default();
+            (status, body)
+        }
+        other => panic!("expected an HTTP handshake failure, got: {other:?}"),
+    }
+}
+
+/// A run's event stream must be readable only by the principal that started it.
+/// The denial is folded into the EXISTING 404 rather than a new 403: a distinct
+/// status would confirm the run id exists and belongs to someone else, turning
+/// the endpoint into an existence oracle for harvested ids.
+///
+/// The negative (mallory) check goes through a genuine WebSocket handshake
+/// request (`tokio_tungstenite::connect_async`) rather than a bare
+/// `reqwest::Client::get()`. axum's `WebSocketUpgrade` extractor validates the
+/// `Connection` / `Upgrade` / `Sec-WebSocket-*` handshake headers *before* the
+/// handler body runs, independently of the registry — so a plain non-upgrade
+/// GET always fails with 400 on axum regardless of whether the run exists or
+/// who owns it (a pre-existing axum/actix ordering asymmetry: actix checks the
+/// registry before attempting the upgrade, axum validates the upgrade before
+/// the handler body executes at all). A bare GET therefore cannot distinguish
+/// "denied by the principal gate" from "rejected before the gate was ever
+/// reached" on axum, and would pass even against the unfixed handler. A real
+/// handshake request reaches the same registry `.filter()` chain the positive
+/// control below exercises, which is what actually proves the fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ws_events_are_scoped_to_the_owning_principal() {
+    let axum_base = boot_axum_authed().await;
+    let actix_base = boot_actix_authed();
+    let client = reqwest::Client::new();
+
+    let mut denial_bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        // alice starts a run.
+        let resp = client
+            .post(format!("{base}/agents/echo/runs?mode=async"))
+            .header("content-type", "application/json")
+            .header("x-test-principal", "alice")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice async run: {e}"));
+        assert_eq!(resp.status(), 202, "{name} alice async status");
+        let v: serde_json::Value = resp.json().await.expect("async body");
+        let run_id = v["run_id"].as_str().expect("run_id string").to_owned();
+
+        let ws_url = format!("{base}/agents/echo/runs/{run_id}/events").replacen("http", "ws", 1);
+
+        // mallory must not reach it — 404, and NOT an upgrade.
+        let mallory_request = {
+            use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+            let mut r = ws_url.clone().into_client_request().expect("ws request");
+            r.headers_mut()
+                .insert("x-test-principal", "mallory".parse().expect("header value"));
+            r
+        };
+        let err = tokio_tungstenite::connect_async(mallory_request)
+            .await
+            .err()
+            .unwrap_or_else(|| {
+                panic!("{name}: mallory's handshake unexpectedly succeeded — cross-principal isolation broken")
+            });
+        let (status, body) = handshake_failure_status_and_body(err);
+        assert_eq!(
+            status, 404,
+            "{name}: another principal's run must 404, not 403 (no existence oracle)"
+        );
+        // The body embeds the per-run UUID (`unknown agent: echo/<run_id>`);
+        // normalize it to a fixed token before the cross-runtime byte compare,
+        // exactly as `normalize_run_id` does for the JSON run responses above.
+        denial_bodies.push(body.replace(&run_id, RUN_ID_TOKEN));
+
+        // Positive control: alice CAN reach her own run, so the test cannot pass
+        // by denying everyone.
+        let request = {
+            use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+            let mut r = ws_url.into_client_request().expect("ws request");
+            r.headers_mut()
+                .insert("x-test-principal", "alice".parse().expect("header value"));
+            r
+        };
+        let (socket, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice ws connect (positive control): {e}"));
+        drop(socket);
+    }
+    assert_eq!(
+        denial_bodies[0], denial_bodies[1],
+        "cross-principal denial bodies must be byte-identical"
+    );
+}
