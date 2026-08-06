@@ -31,31 +31,51 @@ pub(crate) struct RunHandle {
     pub terminal_at: Mutex<Option<Instant>>,
 }
 
+/// Public `error` text for a run that failed before emitting any event.
+///
+/// The detailed cause is logged once by the writer task; putting it in the
+/// frame would leak it to every SSE and WebSocket subscriber (CWE-209).
+const PUBLIC_RUN_FAILED_TO_START: &str = "run failed to start";
+
+/// Public `error` text for a stream that ended without a terminal event.
+const PUBLIC_RUN_NO_TERMINAL: &str = "run ended before producing a terminal event";
+
 impl RunHandle {
     /// The synthetic terminal frame a streaming transport must emit when its
     /// subscribe stream ended without delivering a real `RunCompleted`/`RunFailed`.
     ///
     /// Returns `None` when a real terminal was already delivered (`saw_terminal`
-    /// is `true`). Otherwise returns an [`AgentEvent::RunFailed`], sourced from
-    /// [`start_error`](RunHandle#structfield.start_error) if the run failed to
-    /// start, or a generic message (e.g. a stream that panicked or ended mid-run
-    /// before any terminal event).
+    /// is `true`). Otherwise returns an [`AgentEvent::RunFailed`], carrying
+    /// [`PUBLIC_RUN_FAILED_TO_START`] if the run failed to start, or
+    /// [`PUBLIC_RUN_NO_TERMINAL`] otherwise (e.g. a stream that panicked or
+    /// ended mid-run before any terminal event). Both are fixed public strings —
+    /// the detailed cause never reaches this frame (CWE-209).
     pub(crate) fn synthetic_terminal_frame(&self, saw_terminal: bool) -> Option<AgentEvent> {
         if saw_terminal {
             return None;
         }
-        let error = self
+        let failed_to_start = self
             .start_error
             .lock()
             .expect("start_error mutex poisoned")
-            .clone()
-            .unwrap_or_else(|| "run ended before producing a terminal event".to_owned());
+            .is_some();
+        let error = if failed_to_start {
+            PUBLIC_RUN_FAILED_TO_START
+        } else {
+            PUBLIC_RUN_NO_TERMINAL
+        };
+        // Note this logs the PUBLIC string, not the detail. The detail is logged
+        // once by the writer task; this method runs once per subscriber, so
+        // logging it here would duplicate it per subscriber and skip it entirely
+        // for an unwatched run.
         tracing::warn!(
             agent = %self.agent_name,
             %error,
             "run ended without a real terminal event; synthesizing a RunFailed frame for the stream subscriber"
         );
-        Some(AgentEvent::RunFailed { error })
+        Some(AgentEvent::RunFailed {
+            error: error.to_owned(),
+        })
     }
 }
 
@@ -341,8 +361,12 @@ mod tests {
 
         *h.start_error.lock().unwrap() = Some("boom".to_owned());
         match h.synthetic_terminal_frame(false) {
-            Some(AgentEvent::RunFailed { error }) => assert_eq!(error, "boom"),
-            other => panic!("expected RunFailed(boom), got {other:?}"),
+            // Redacted: the detail lives in the log, not the frame.
+            Some(AgentEvent::RunFailed { error }) => {
+                assert_eq!(error, "run failed to start");
+                assert!(!error.contains("boom"));
+            }
+            other => panic!("expected redacted RunFailed, got {other:?}"),
         }
     }
 }

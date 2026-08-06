@@ -78,6 +78,16 @@ impl std::fmt::Display for AuthRejection {
 // Required for `#[from] AuthRejection` in the thiserror derive.
 impl std::error::Error for AuthRejection {}
 
+/// Body text returned for every HTTP 500.
+///
+/// Deliberately non-diagnostic: the underlying error is recorded via `tracing`
+/// at `error` level instead, so an external caller learns nothing about the
+/// server's internals (CWE-209).
+const PUBLIC_INTERNAL_ERROR: &str = "internal error";
+
+/// Body text returned for every HTTP 503, redacted for the same reason.
+const PUBLIC_UNAVAILABLE: &str = "service unavailable";
+
 impl ResponseError for ServerError {
     fn status_code(&self) -> StatusCode {
         match self {
@@ -96,9 +106,28 @@ impl ResponseError for ServerError {
     }
 
     fn error_response(&self) -> HttpResponse {
-        HttpResponse::build(self.status_code()).json(ErrorBody {
-            error: self.to_string(),
-        })
+        let status = self.status_code();
+        let public: Option<&'static str> = match self {
+            ServerError::RunStart(_) | ServerError::Internal(_) => {
+                tracing::error!(error = %self, "internal server error");
+                Some(PUBLIC_INTERNAL_ERROR)
+            }
+            ServerError::Unavailable(_) => {
+                tracing::error!(error = %self, "service unavailable");
+                Some(PUBLIC_UNAVAILABLE)
+            }
+            _ => None,
+        };
+
+        let body = ErrorBody {
+            error: public.map_or_else(|| self.to_string(), str::to_owned),
+        };
+
+        let mut builder = HttpResponse::build(status);
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            builder.insert_header((actix_web::http::header::RETRY_AFTER, "1"));
+        }
+        builder.json(body)
     }
 }
 
@@ -129,6 +158,61 @@ mod tests {
             ServerError::Internal("x".into()).status_code(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    /// Render a [`ServerError`] through the real `error_response` path and read
+    /// back its body as a UTF-8 string.
+    async fn render_body(e: ServerError) -> String {
+        let body = e.error_response().into_body();
+        let bytes = actix_web::body::to_bytes(body)
+            .await
+            .expect("response body reads");
+        String::from_utf8(bytes.to_vec()).expect("response body is utf-8")
+    }
+
+    /// Every 5xx body is a fixed public string; every 4xx body keeps its detail.
+    #[actix_web::test]
+    async fn five_hundreds_are_redacted_four_hundreds_are_not() {
+        assert_eq!(
+            render_body(ServerError::Internal("secret detail".into())).await,
+            r#"{"error":"internal error"}"#
+        );
+        assert_eq!(
+            render_body(ServerError::RunStart("secret detail".into())).await,
+            r#"{"error":"internal error"}"#
+        );
+        assert_eq!(
+            render_body(ServerError::Unavailable("pool at postgres://u:pw@h".into())).await,
+            r#"{"error":"service unavailable"}"#
+        );
+        assert_eq!(
+            render_body(ServerError::BadRequest("bad selector `x`".into())).await,
+            r#"{"error":"bad request: bad selector `x`"}"#
+        );
+        assert_eq!(
+            render_body(ServerError::UnknownAgent("nope".into())).await,
+            r#"{"error":"unknown agent: nope"}"#
+        );
+    }
+
+    /// The 503 response carries `Retry-After: 1`; the 500 response carries no
+    /// such header (there is nothing for the caller to retry against — the
+    /// error is not necessarily transient).
+    #[test]
+    fn retry_after_only_on_503() {
+        let unavailable = ServerError::Unavailable("x".into()).error_response();
+        assert_eq!(
+            unavailable
+                .headers()
+                .get(actix_web::http::header::RETRY_AFTER)
+                .map(|v| v.to_str().unwrap()),
+            Some("1")
+        );
+
+        let internal = ServerError::Internal("x".into()).error_response();
+        assert!(!internal
+            .headers()
+            .contains_key(actix_web::http::header::RETRY_AFTER));
     }
 
     /// An [`AuthRejection`] carrying a 401 or 403 passes through unchanged, but

@@ -307,9 +307,15 @@ fn spawn_writer<Ctx: Send + Sync + 'static>(
                 // guard's `mark_terminal` is an idempotent safety net otherwise.
             }
             Err(e) => {
-                // The run failed to *start* (no events were ever emitted). Record
-                // the cause; `_terminal` marks the log terminal so subscribers
-                // unblock.
+                // The run failed to *start* (no events were ever emitted). Log the
+                // detailed cause exactly once — the wire-facing frame and the 500
+                // body are both redacted, so this is the only place it survives.
+                tracing::error!(
+                    agent = %handle.agent_name,
+                    %run_id,
+                    error = %e,
+                    "run failed to start"
+                );
                 *handle
                     .start_error
                     .lock()

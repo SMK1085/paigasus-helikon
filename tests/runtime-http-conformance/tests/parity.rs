@@ -373,3 +373,120 @@ async fn fixture_set_exposes_all_three_agents() {
         }
     }
 }
+
+/// The runner's error text must not reach the caller on ANY transport. A 500
+/// body carrying it is CWE-209; so is the synthetic `run_failed` frame the SSE
+/// and WebSocket transports emit, which is a 200 response and would otherwise
+/// let `?stream=sse` walk straight around the redaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_error_detail_is_redacted_on_every_transport() {
+    /// Substring of the underlying `boom` failure. Its presence anywhere on the
+    /// wire is the bug this test exists to catch.
+    const LEAK: &str = "max turns";
+
+    let axum_base = boot_axum().await;
+    let actix_base = boot_actix();
+    let client = reqwest::Client::new();
+
+    // ── one-shot: 500 with a fixed, non-diagnostic body ──────────────────────
+    let mut oneshot_bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let resp = client
+            .post(format!("{base}/agents/boom/runs"))
+            .header("content-type", "application/json")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} boom one-shot: {e}"));
+        assert_eq!(resp.status(), 500, "{name} boom one-shot status");
+        let body = resp.text().await.expect("boom one-shot body");
+        assert_eq!(
+            body, r#"{"error":"internal error"}"#,
+            "{name} 500 body must be the fixed public string"
+        );
+        assert!(
+            !body.contains(LEAK),
+            "{name} 500 body leaked `{LEAK}`: {body}"
+        );
+        oneshot_bodies.push(body);
+    }
+    assert_eq!(
+        oneshot_bodies[0], oneshot_bodies[1],
+        "500 bodies must be byte-identical across runtimes"
+    );
+
+    // ── SSE: the synthetic run_failed frame is redacted and byte-identical ───
+    let mut sse_bytes = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let resp = client
+            .post(format!("{base}/agents/boom/runs?stream=sse"))
+            .header("content-type", "application/json")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} boom sse: {e}"));
+        assert_eq!(resp.status(), 200, "{name} boom sse status");
+        let text = resp.text().await.expect("boom sse body");
+        assert!(
+            !text.contains(LEAK),
+            "{name} SSE body leaked `{LEAK}`: {text}"
+        );
+        let values = sse_data_values(&text);
+        let terminal = values.last().expect("sse stream has at least one frame");
+        assert_eq!(terminal["type"], "run_failed", "{name} sse terminal type");
+        assert_eq!(
+            terminal["error"], "run failed to start",
+            "{name} sse terminal carries the fixed public string"
+        );
+        sse_bytes.push(text);
+    }
+    assert_eq!(
+        sse_bytes[0], sse_bytes[1],
+        "SSE bodies for a failed run must be byte-identical across runtimes"
+    );
+
+    // ── WebSocket: same redacted frame ───────────────────────────────────────
+    let mut ws_frames = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let run_id = {
+            let resp = client
+                .post(format!("{base}/agents/boom/runs?mode=async"))
+                .header("content-type", "application/json")
+                .body(r#"{"input":"hi"}"#)
+                .send()
+                .await
+                .unwrap_or_else(|e| panic!("{name} boom async: {e}"));
+            assert_eq!(resp.status(), 202, "{name} boom async status");
+            let v: serde_json::Value = resp.json().await.expect("async body is JSON");
+            v["run_id"].as_str().expect("run_id string").to_owned()
+        };
+
+        let ws_url = format!("{base}/agents/boom/runs/{run_id}/events").replacen("http", "ws", 1);
+        let (mut socket, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .unwrap_or_else(|e| panic!("{name} ws connect: {e}"));
+
+        let mut last_text: Option<String> = None;
+        while let Some(Ok(msg)) = futures_util::StreamExt::next(&mut socket).await {
+            if let tokio_tungstenite::tungstenite::Message::Text(t) = msg {
+                last_text = Some(t.to_string());
+            }
+        }
+        let frame = last_text.expect("ws delivered at least one text frame");
+        assert!(
+            !frame.contains(LEAK),
+            "{name} ws frame leaked `{LEAK}`: {frame}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&frame).expect("ws frame is JSON");
+        assert_eq!(v["type"], "run_failed", "{name} ws terminal type");
+        assert_eq!(
+            v["error"], "run failed to start",
+            "{name} ws terminal carries the fixed public string"
+        );
+        ws_frames.push(frame);
+    }
+    assert_eq!(
+        ws_frames[0], ws_frames[1],
+        "WebSocket terminal frames must be byte-identical across runtimes"
+    );
+}

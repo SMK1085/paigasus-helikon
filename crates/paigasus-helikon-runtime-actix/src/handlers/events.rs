@@ -42,11 +42,10 @@ use crate::{error::ServerError, event_log::is_terminal, server::AppState};
 ///
 /// # Errors
 ///
-/// - [`ServerError::BadRequest`] (400) — `id` is not a valid UUID.
+/// - [`ServerError::BadRequest`] (400) — `id` is not a valid UUID, or the request
+///   was not a valid WebSocket upgrade.
 /// - [`ServerError::UnknownAgent`] (404) — the run does not exist or is owned by
 ///   a different agent.
-/// - [`ServerError::Internal`] (500) — the WebSocket upgrade handshake failed
-///   (e.g. the request was not a valid WebSocket upgrade).
 pub(crate) async fn events<Ctx: Send + Sync + 'static>(
     state: Data<AppState<Ctx>>,
     path: web::Path<(String, String)>,
@@ -67,9 +66,11 @@ pub(crate) async fn events<Ctx: Send + Sync + 'static>(
         .filter(|h| h.agent_name == name)
         .ok_or_else(|| ServerError::UnknownAgent(format!("{name}/{id}")))?;
 
-    // Run confirmed — perform the WebSocket upgrade handshake.
-    let (response, mut session, mut msg_stream) =
-        actix_ws::handle(&req, body).map_err(|e| ServerError::Internal(e.to_string()))?;
+    // Run confirmed — perform the WebSocket upgrade handshake. A failed upgrade
+    // means the request itself was not a valid WebSocket upgrade — a client
+    // error, not a server fault — so it maps to 400, not 500.
+    let (response, mut session, mut msg_stream) = actix_ws::handle(&req, body)
+        .map_err(|e| ServerError::BadRequest(format!("invalid websocket upgrade: {e}")))?;
 
     // Drive the subscription on a detached task. It is spawned on the worker's
     // `actix-rt` runtime (via `actix_web::rt::spawn`); the writer that feeds the
