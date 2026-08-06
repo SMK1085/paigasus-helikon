@@ -3,7 +3,7 @@
   "checkpoint_id": "59b9c48a44da",
   "strategy": "manual-commit",
   "branch": "feature/sma-482-runtime-axum-runtime-actix-harden-5xx-redaction-session",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     "Cargo.lock",
     "tests/runtime-http-conformance/Cargo.toml",
@@ -17,13 +17,20 @@
       "compact_transcript": "/59/b9c48a44da/0/transcript.jsonl",
       "content_hash": "/59/b9c48a44da/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/59/b9c48a44da/1/metadata.json",
+      "transcript": "/59/b9c48a44da/1/full.jsonl",
+      "compact_transcript": "/59/b9c48a44da/1/transcript.jsonl",
+      "content_hash": "/59/b9c48a44da/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 49,
-    "cache_creation_tokens": 17007,
-    "cache_read_tokens": 2084578,
-    "output_tokens": 6931,
-    "api_call_count": 7
+    "input_tokens": 53,
+    "cache_creation_tokens": 32912,
+    "cache_read_tokens": 2451320,
+    "output_tokens": 13248,
+    "api_call_count": 9
   }
 }
