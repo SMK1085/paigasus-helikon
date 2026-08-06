@@ -54,7 +54,8 @@ Tasks 1–3 are vertical slices, one per activity. Each ends with the crate comp
 - Produces, for Tasks 2 and 3:
   - `fn decode_arg<T: TemporalDeserializable + 'static>(ctx: &SerializationContext<'_>, payload: Payload, activity: &str, index: usize, expected: &str) -> Result<T, PayloadConversionError>`
   - `fn warn_legacy(activity: &str, arity: usize)`
-  - `const ACT_RENDER: &str`, `ACT_CALL_MODEL: &str`, `ACT_INVOKE_TOOL: &str`
+  - `fn encode_envelope<T: TemporalSerializable + 'static>(ctx: &SerializationContext<'_>, args: &T) -> Result<Vec<Payload>, PayloadConversionError>`
+  - `const ACT_RENDER: &str` **only**. Tasks 2 and 3 each define their own activity-name constant when they first use it — defining all three up front leaves two unused and fails `clippy -D warnings` with `dead_code` at the end of Task 1.
   - `pub(crate) struct RenderInstructionsArgs { pub agent_name: String, pub ctx_seed: Option<serde_json::Value> }`
   - `pub(crate) struct RenderInstructionsInput(pub RenderInstructionsArgs)` with `impl From<RenderInstructionsArgs>`
   - Test helper `fn with_ctx<R>(f: impl FnOnce(&SerializationContext<'_>) -> R) -> R`
@@ -135,10 +136,6 @@ use temporalio_common::protos::temporal::api::common::v1::Payload;
 
 /// Activity name used in decode diagnostics and legacy-shape warnings.
 const ACT_RENDER: &str = "render_instructions";
-/// Activity name used in decode diagnostics and legacy-shape warnings.
-const ACT_CALL_MODEL: &str = "call_model";
-/// Activity name used in decode diagnostics and legacy-shape warnings.
-const ACT_INVOKE_TOOL: &str = "invoke_tool";
 
 /// Warn that a pre-envelope activity input was decoded.
 ///
@@ -227,7 +224,10 @@ pub(crate) struct RenderInstructionsArgs {
 }
 
 /// Temporal `Input` wrapper for [`RenderInstructionsArgs`]. Derives no serde —
-/// see the module docs on the blanket-impl coherence conflict.
+/// see the module docs on the blanket-impl coherence conflict. `Debug` is
+/// required because the tests call `.expect_err()` on a
+/// `Result<RenderInstructionsInput, _>`.
+#[derive(Debug)]
 pub(crate) struct RenderInstructionsInput(
     /// The wrapped fields.
     pub RenderInstructionsArgs,
@@ -604,7 +604,7 @@ git commit -m "feat(runtime-temporal): SMA-462 add envelope input for render_ins
 - Modify: `crates/paigasus-helikon-runtime-temporal/src/workflow.rs:324-330` (the `DriverEffect::CallModel` arm)
 
 **Interfaces:**
-- Consumes from Task 1: `decode_arg`, `warn_legacy`, `ACT_CALL_MODEL`, and the test helper `with_ctx`.
+- Consumes from Task 1: `decode_arg`, `warn_legacy`, `encode_envelope`, and the test helper `with_ctx`. This task **defines** `ACT_CALL_MODEL` itself (Task 1 deliberately does not — an unused constant fails `clippy -D warnings`).
 - Produces: `pub(crate) struct CallModelArgs { pub agent_name: String, pub request: ModelRequest }` and `pub(crate) struct CallModelInput(pub CallModelArgs)` with `impl From<CallModelArgs>`.
 
 > **Note on assertions:** `ModelRequest` derives no `PartialEq`, so tests compare with `serde_json::to_value(..)` on both sides rather than `assert_eq!` on the struct. This matches the existing pattern in `src/payloads.rs` tests. `ModelRequest` is also `#[non_exhaustive]`, so construct it with `ModelRequest::new()`, never a struct literal.
@@ -743,6 +743,9 @@ Expected: FAIL to compile — `cannot find type CallModelArgs / CallModelInput i
 Append to the non-test part of `src/activity_input.rs` (after the `render_instructions` pair). Add `use paigasus_helikon_core::ModelRequest;` to the module's imports:
 
 ```rust
+/// Activity name used in decode diagnostics and legacy-shape warnings.
+const ACT_CALL_MODEL: &str = "call_model";
+
 /// The `call_model` activity's input fields.
 ///
 /// Serialized as one JSON object with `request` **nested** as an object — never
@@ -757,7 +760,9 @@ pub(crate) struct CallModelArgs {
 }
 
 /// Temporal `Input` wrapper for [`CallModelArgs`]. Derives no serde — see the
-/// module docs on the blanket-impl coherence conflict.
+/// module docs on the blanket-impl coherence conflict. `Debug` is required
+/// because the tests call `.expect_err()` on a `Result<CallModelInput, _>`.
+#[derive(Debug)]
 pub(crate) struct CallModelInput(
     /// The wrapped fields.
     pub CallModelArgs,
@@ -918,7 +923,7 @@ git commit -m "feat(runtime-temporal): SMA-462 add envelope input for call_model
 - Modify: `crates/paigasus-helikon-runtime-temporal/src/workflow.rs:374-379` (inside `execute_tools`)
 
 **Interfaces:**
-- Consumes from Task 1: `decode_arg`, `warn_legacy`, `ACT_INVOKE_TOOL`, `with_ctx`, `json_of` (from Task 2).
+- Consumes from Task 1: `decode_arg`, `warn_legacy`, `encode_envelope`, `with_ctx`, and `json_of` (from Task 2). This task **defines** `ACT_INVOKE_TOOL` itself (Task 1 deliberately does not — an unused constant fails `clippy -D warnings`).
 - Produces: `pub(crate) struct InvokeToolArgs { pub agent_name: String, pub call: ToolCallRequest, pub ctx_seed: Option<serde_json::Value> }` and `pub(crate) struct InvokeToolInput(pub InvokeToolArgs)` with `impl From<InvokeToolArgs>`.
 
 > **Note:** `ToolCallRequest` derives no `PartialEq`, so compare via `json_of` as in Task 2. Unlike the other two, `invoke_tool`'s legacy shape is **three** payloads.
@@ -1093,6 +1098,9 @@ Expected: FAIL to compile — `cannot find type InvokeToolArgs / InvokeToolInput
 Append to the non-test part of `src/activity_input.rs`. Extend the core import to `use paigasus_helikon_core::{ModelRequest, ToolCallRequest};`:
 
 ```rust
+/// Activity name used in decode diagnostics and legacy-shape warnings.
+const ACT_INVOKE_TOOL: &str = "invoke_tool";
+
 /// The `invoke_tool` activity's input fields.
 ///
 /// Serialized as one JSON object with `call` **nested** as an object — never
@@ -1109,7 +1117,9 @@ pub(crate) struct InvokeToolArgs {
 }
 
 /// Temporal `Input` wrapper for [`InvokeToolArgs`]. Derives no serde — see the
-/// module docs on the blanket-impl coherence conflict.
+/// module docs on the blanket-impl coherence conflict. `Debug` is required
+/// because the tests call `.expect_err()` on a `Result<InvokeToolInput, _>`.
+#[derive(Debug)]
 pub(crate) struct InvokeToolInput(
     /// The wrapped fields.
     pub InvokeToolArgs,
