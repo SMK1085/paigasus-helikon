@@ -1406,7 +1406,7 @@ In `crates/paigasus-helikon-runtime-temporal/CHANGELOG.md`, replace the line `##
 - **Upgrade one release at a time**, and keep the mixed-fleet window short. A 0.2.x worker handed one of the new envelope payloads cannot decode it; it fails the attempt retryably and Temporal re-dispatches until a worker on this version takes it. Four things bound that recovery: a finite `maximum_attempts` on `model_retry_policy` / `tool_retry_policy` can be exhausted; `WorkflowInput::timeout_ms` interrupts the run regardless of retry policy; a terminal `render_instructions` failure ends the run outright; and exhausted `invoke_tool` retries are folded into a tool-error result fed to the model rather than failing loudly.
 - **Prefer draining in-flight runs before this upgrade**, or ensure retry caps are unlimited and run deadlines generous for the duration of the rollout. Blue-green task queues remain available.
 - **Rolling back requires a drain.** Once a worker on this version has queued an envelope-shaped activity task, that payload is frozen in the `ActivityTaskScheduled` event and every retry re-delivers it; a rollback to 0.2.x leaves those activities undecodable until the run deadline.
-- Activity input encoding is **not** a replay hazard: Temporal's replay check compares an activity's id and type only, never its input payloads.
+- Activity input encoding is **not** a replay hazard: Temporal's replay check compares an activity's id and type only, never its input payloads. Verified against `temporalio-* = 0.5.0`; re-verify on any SDK bump.
 ```
 
 - [ ] **Step 4: Add the book sentence**
@@ -1414,7 +1414,7 @@ In `crates/paigasus-helikon-runtime-temporal/CHANGELOG.md`, replace the line `##
 In `docs/book/src/concepts/runtimes.md`, append to the end of the paragraph that currently ends `(~15–20 turns with tool outputs ≤ 50 KB each).`:
 
 ```markdown
- Those payloads are a single self-describing envelope per activity, which makes future input changes backward- and forward-compatible — but upgrading a worker fleet still wants care: see the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Upgrade Discipline and Determinism") for the one-release-at-a-time and drain-before-rollback rules.
+ Those payloads are a single self-describing envelope per activity, so future additions to an activity's *own* input fields stay backward- and forward-compatible — a change inside a nested `paigasus-helikon-core` type such as `ModelRequest` still breaks the wire. Upgrading a worker fleet also wants care: see the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Upgrade Discipline and Determinism") for the one-release-at-a-time and drain-before-rollback rules.
 ```
 
 - [ ] **Step 5: Verify the docs build**
