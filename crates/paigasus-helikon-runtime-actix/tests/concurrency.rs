@@ -26,7 +26,7 @@ use std::{
 };
 
 use futures_util::StreamExt as _;
-use paigasus_helikon_runtime_actix::{AgentServer, SessionProvider};
+use paigasus_helikon_runtime_actix::{AgentServer, SessionKey, SessionProvider};
 
 /// **GO gate #1 — one-shot correctness under the default multi-worker server.**
 ///
@@ -184,7 +184,12 @@ async fn oneshot_client_disconnect_behavior() {
     }
 
     // Observe whether the run is cancelled + finalized quickly after disconnect.
-    let session = sessions.session(Some(session_id)).await.unwrap();
+    // No `AuthLayer` on this server, so the run resolved its session under the
+    // principal-less key — look it up the same way.
+    let session = sessions
+        .session(SessionKey::new(None, Some(session_id)))
+        .await
+        .unwrap();
     let cancelled_and_finalized = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             let snapshot = session.snapshot().await.unwrap();

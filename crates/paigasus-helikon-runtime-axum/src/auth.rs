@@ -29,6 +29,18 @@ use crate::error::AuthRejection;
 /// here are available to context-building logic and, through the context, to agent
 /// handlers. This is the documented auth→context bridge.
 ///
+/// One extension type is **not** opaque to the server: [`Principal`]. Insert it
+/// to name the authenticated caller, and the server scopes every session that
+/// caller reaches to that name:
+///
+/// ```ignore
+/// parts.extensions.insert(Principal(user_id));
+/// ```
+///
+/// Without it, a request carrying `X-Session-Id` is refused with `403 Forbidden`
+/// — see
+/// [`AgentServerBuilder::require_principal`](crate::AgentServerBuilder::require_principal).
+///
 /// On failure the implementation returns an [`AuthRejection`] carrying the HTTP
 /// status code (typically `401 Unauthorized` or `403 Forbidden`) and a
 /// human-readable message. The server converts this into a JSON error response
@@ -53,6 +65,19 @@ pub trait AuthLayer: Send + Sync {
         parts: &mut axum::http::request::Parts,
     ) -> Result<(), AuthRejection>;
 }
+
+/// A stable identity for the authenticated caller.
+///
+/// An [`AuthLayer`] establishes it by inserting the value into the request's
+/// extensions. The server then scopes every session the caller reaches to that
+/// identity, so two callers can no longer collide on one `X-Session-Id`
+/// (CWE-639).
+///
+/// A server built with an [`AuthLayer`] but whose layer never inserts a
+/// `Principal` refuses any request carrying `X-Session-Id` with `403 Forbidden`
+/// — see [`AgentServerBuilder::require_principal`](crate::AgentServerBuilder::require_principal).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Principal(pub String);
 
 #[cfg(test)]
 mod tests {

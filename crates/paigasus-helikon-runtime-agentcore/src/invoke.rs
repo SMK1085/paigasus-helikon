@@ -39,6 +39,7 @@ use futures_util::{stream, StreamExt as _};
 use paigasus_helikon_core::{
     AgentEvent, AgentInput, CancellationToken, Item, RunContext, TokenUsage,
 };
+use paigasus_helikon_runtime_axum::SessionKey;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::DropGuard;
@@ -148,7 +149,14 @@ pub(crate) async fn invocations<Ctx: Send + Sync + 'static>(
         .map_err(|e| AgentCoreError::BadRequest(format!("invalid invocation request body: {e}")))?;
     let input = invocation.into_agent_input();
 
-    let session = state.sessions.session(session_id).await?;
+    // No principal component: this runtime has no `AuthLayer` seam, and AgentCore's
+    // execution model already gives each session its own microVM instance, so the
+    // validated session id is the whole identity here. Passing `None` preserves the
+    // pre-SessionKey behaviour exactly.
+    let session = state
+        .sessions
+        .session(SessionKey::new(None, session_id))
+        .await?;
     let cancel = CancellationToken::new();
     // Retain a clone before it is moved into `ctx`: both transports need their own
     // handle on the token to cancel the run on client disconnect (see each one's
@@ -753,7 +761,7 @@ mod tests {
     /// the whole response and cannot model a client walking away mid-stream).
     #[tokio::test]
     async fn sse_client_disconnect_still_finalizes_the_session() {
-        use paigasus_helikon_runtime_axum::{InMemorySessionProvider, SessionProvider};
+        use paigasus_helikon_runtime_axum::{InMemorySessionProvider, SessionKey, SessionProvider};
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let sessions = Arc::new(InMemorySessionProvider::new(16));
@@ -813,7 +821,10 @@ mod tests {
         // still drain it to a (synthetic) terminal, finalizing the session with the
         // turn's input message. Poll with a timeout since finalize is async and
         // races the server noticing the TCP disconnect.
-        let session = sessions.session(Some(&session_id)).await.unwrap();
+        let session = sessions
+            .session(SessionKey::new(None, Some(&session_id)))
+            .await
+            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 let snapshot = session.snapshot().await.unwrap();
@@ -892,7 +903,7 @@ mod tests {
     /// buffers the whole response and cannot model a client walking away).
     #[tokio::test]
     async fn json_client_disconnect_still_finalizes_the_session() {
-        use paigasus_helikon_runtime_axum::{InMemorySessionProvider, SessionProvider};
+        use paigasus_helikon_runtime_axum::{InMemorySessionProvider, SessionKey, SessionProvider};
         use tokio::io::AsyncWriteExt as _;
 
         let (started_tx, mut started_rx) = mpsc::unbounded_channel();
@@ -946,7 +957,10 @@ mod tests {
         // aborts on cancel without synthesizing a terminal — that behavior belongs
         // to `run_streamed` — so the assertion below is on the persisted user
         // message, not on a terminal event.)
-        let session = sessions.session(Some(&session_id)).await.unwrap();
+        let session = sessions
+            .session(SessionKey::new(None, Some(&session_id)))
+            .await
+            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 let snapshot = session.snapshot().await.unwrap();

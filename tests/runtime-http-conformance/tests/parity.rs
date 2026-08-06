@@ -70,6 +70,167 @@ fn boot_actix() -> String {
     format!("http://{addr}")
 }
 
+/// An `AuthLayer` for the parity suite that maps the `X-Test-Principal` header
+/// to a `Principal`. A request with no such header is admitted but establishes
+/// no principal — which is exactly the fail-closed row under test.
+mod principal_auth {
+    use async_trait::async_trait;
+
+    /// axum flavour of the header→principal auth layer.
+    pub struct HeaderPrincipalAuth;
+
+    #[async_trait]
+    impl paigasus_helikon_runtime_axum::AuthLayer for HeaderPrincipalAuth {
+        async fn authenticate(
+            &self,
+            parts: &mut axum::http::request::Parts,
+        ) -> Result<(), paigasus_helikon_runtime_axum::AuthRejection> {
+            if let Some(v) = parts.headers.get("x-test-principal") {
+                if let Ok(s) = v.to_str() {
+                    parts
+                        .extensions
+                        .insert(paigasus_helikon_runtime_axum::Principal(s.to_owned()));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// actix flavour of the same layer.
+    pub struct ActixHeaderPrincipalAuth;
+
+    #[async_trait(?Send)]
+    impl paigasus_helikon_runtime_actix::AuthLayer for ActixHeaderPrincipalAuth {
+        async fn authenticate(
+            &self,
+            req: &actix_web::HttpRequest,
+        ) -> Result<(), paigasus_helikon_runtime_actix::AuthRejection> {
+            use actix_web::HttpMessage as _;
+            let found = req
+                .headers()
+                .get("x-test-principal")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            if let Some(s) = found {
+                req.extensions_mut()
+                    .insert(paigasus_helikon_runtime_actix::Principal(s));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// A fourth agent, mounted only on the authenticated servers, that echoes the
+/// **merged conversation** (the session history the runner loaded plus this
+/// turn's input) back as its assistant message.
+///
+/// The shared `scripted_agents()` set cannot prove session isolation over HTTP:
+/// `echo` emits a fixed string, so its response body is identical whether or
+/// not two principals collided. This agent makes the loaded history *observable
+/// in the response body*, which is what turns the isolation assertion below
+/// from a status-code check into a real one.
+mod history_echo {
+    use async_trait::async_trait;
+    use futures_util::stream::{self, BoxStream, StreamExt as _};
+    use paigasus_helikon_core::{
+        Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext, TokenUsage,
+    };
+
+    /// Echoes the merged conversation as one assistant message.
+    pub struct HistoryEchoAgent;
+
+    #[async_trait]
+    impl Agent<()> for HistoryEchoAgent {
+        fn name(&self) -> &str {
+            "history"
+        }
+
+        fn description(&self) -> &str {
+            "echoes the merged conversation (session history + this turn)"
+        }
+
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            let mut parts: Vec<String> = Vec::new();
+            for item in &input.messages {
+                let content = match item {
+                    Item::UserMessage { content } => content,
+                    Item::AssistantMessage { content, .. } => content,
+                    _ => continue,
+                };
+                for part in content {
+                    if let ContentPart::Text { text } = part {
+                        parts.push(text.clone());
+                    }
+                }
+            }
+            Ok(stream::iter(vec![
+                AgentEvent::MessageOutput {
+                    item: Item::AssistantMessage {
+                        content: vec![ContentPart::Text {
+                            text: parts.join("|"),
+                        }],
+                        agent: None,
+                    },
+                },
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                },
+            ])
+            .boxed())
+        }
+    }
+}
+
+/// Boot an axum server with the header-principal auth layer. Mirrors
+/// `boot_axum` otherwise, plus the `history` agent.
+async fn boot_axum_authed() -> String {
+    let mut builder = paigasus_helikon_runtime_axum::AgentServer::<()>::builder()
+        .with_default_context()
+        .auth(std::sync::Arc::new(principal_auth::HeaderPrincipalAuth))
+        .agent(std::sync::Arc::new(history_echo::HistoryEchoAgent));
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("axum authed server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        server.serve_with_listener(listener).await.expect("serve");
+    });
+    format!("http://{addr}")
+}
+
+/// Boot an actix server with the header-principal auth layer. Mirrors
+/// `boot_actix` otherwise, including its dedicated-thread `System`, plus the
+/// `history` agent.
+fn boot_actix_authed() -> String {
+    let mut builder = paigasus_helikon_runtime_actix::AgentServer::<()>::builder()
+        .with_default_context()
+        .auth(std::sync::Arc::new(
+            principal_auth::ActixHeaderPrincipalAuth,
+        ))
+        .agent(std::sync::Arc::new(history_echo::HistoryEchoAgent));
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("actix authed server builds");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    std::thread::spawn(move || {
+        actix_web::rt::System::new().block_on(async move {
+            server.serve_with_listener(listener).await.expect("serve");
+        });
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    format!("http://{addr}")
+}
+
 /// Replace the run's UUID (read from the body's `run_id` field) with a fixed
 /// token so two otherwise-identical bodies can be byte-compared. Parsing only
 /// locates the UUID; the substitution is a raw-text replace, so field order and
@@ -489,4 +650,124 @@ async fn start_error_detail_is_redacted_on_every_transport() {
         ws_frames[0], ws_frames[1],
         "WebSocket terminal frames must be byte-identical across runtimes"
     );
+}
+
+/// A named session with no established principal must be refused identically on
+/// both runtimes. This is the most security-critical new response AND the one
+/// whose implementations diverge most — axum gates via `from_fn_with_state`
+/// plus a `Request::from_parts` reassembly, actix via a hand-rolled
+/// `AuthGuard` short-circuit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_session_without_principal_is_refused_identically() {
+    let axum_base = boot_axum_authed().await;
+    let actix_base = boot_actix_authed();
+    let client = reqwest::Client::new();
+
+    let mut bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let resp = client
+            .post(format!("{base}/agents/echo/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "victim-session")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} unbound-session request: {e}"));
+        assert_eq!(
+            resp.status(),
+            403,
+            "{name} unbound named session must be 403"
+        );
+        bodies.push(resp.text().await.expect("403 body"));
+    }
+    assert_eq!(
+        bodies[0], bodies[1],
+        "403 bodies must be byte-identical\naxum : {}\nactix: {}",
+        bodies[0], bodies[1]
+    );
+    assert_eq!(
+        bodies[0],
+        r#"{"error":"unauthorized: session id requires an authenticated principal (403 Forbidden)"}"#,
+        "the 403 body is pinned so the two runtimes cannot drift"
+    );
+}
+
+/// Two principals using the SAME `X-Session-Id` must not share conversation
+/// history. This is the IDOR itself, asserted end to end on both runtimes.
+///
+/// The `history` agent (not `echo`) is what gives this teeth: its response body
+/// carries the conversation the runner loaded, so a collision shows up as
+/// alice's literal text inside mallory's response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_session_id_different_principals_are_isolated() {
+    let axum_base = boot_axum_authed().await;
+    let actix_base = boot_actix_authed();
+    let client = reqwest::Client::new();
+
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        // Principal "alice" runs once under session id "shared".
+        let alice = client
+            .post(format!("{base}/agents/history/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "shared")
+            .header("x-test-principal", "alice")
+            .body(r#"{"input":"alice-secret"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice run: {e}"));
+        assert_eq!(alice.status(), 200, "{name} alice run status");
+        let alice_run: serde_json::Value = alice.json().await.expect("alice body");
+
+        // Principal "mallory" reuses the id. If the two collide, mallory's run
+        // resumes alice's session and her text is echoed back to him.
+        let mallory = client
+            .post(format!("{base}/agents/history/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "shared")
+            .header("x-test-principal", "mallory")
+            .body(r#"{"input":"mallory-probe"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} mallory run: {e}"));
+        assert_eq!(mallory.status(), 200, "{name} mallory run status");
+        let mallory_run: serde_json::Value = mallory.json().await.expect("mallory body");
+
+        assert_ne!(
+            alice_run["run_id"], mallory_run["run_id"],
+            "{name} runs must be distinct"
+        );
+        assert_eq!(
+            mallory_run["output"], "mallory-probe",
+            "{name} mallory must see only his own turn, not alice's history"
+        );
+        assert!(
+            !serde_json::to_string(&mallory_run)
+                .expect("re-serialize")
+                .contains("alice-secret"),
+            "{name}: mallory's response leaked alice's input — sessions collided"
+        );
+
+        // Positive control: alice still resumes her OWN conversation, so the
+        // isolation above is not just "session affinity is broken for everyone".
+        let alice_again = client
+            .post(format!("{base}/agents/history/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "shared")
+            .header("x-test-principal", "alice")
+            .body(r#"{"input":"alice-again"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice second run: {e}"));
+        assert_eq!(alice_again.status(), 200, "{name} alice second run status");
+        let alice_again_run: serde_json::Value = alice_again.json().await.expect("alice body");
+        let output = alice_again_run["output"].as_str().expect("output string");
+        assert!(
+            output.contains("alice-secret"),
+            "{name}: alice lost her own conversation; got {output:?}"
+        );
+        assert!(
+            !output.contains("mallory-probe"),
+            "{name}: alice read mallory's conversation; got {output:?}"
+        );
+    }
 }

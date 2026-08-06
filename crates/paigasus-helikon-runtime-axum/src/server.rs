@@ -41,6 +41,9 @@ pub(crate) struct AppStateInner<Ctx> {
     pub run_config: RunConfig,
     /// Per-session run serialisation locks.
     pub locks: SessionLocks,
+    /// Refuse `X-Session-Id` from callers with no established
+    /// [`Principal`](crate::Principal).
+    pub require_principal: bool,
 }
 
 /// Cheaply-cloneable axum extraction state.
@@ -87,6 +90,9 @@ pub struct AgentServerBuilder<Ctx> {
     retention: Duration,
     max_runs: usize,
     max_events_per_run: usize,
+    /// `None` until set explicitly; `build()` then defaults it to
+    /// `self.auth.is_some()`.
+    require_principal: Option<bool>,
 }
 
 impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
@@ -103,6 +109,7 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             retention: Duration::from_secs(300),
             max_runs: 1024,
             max_events_per_run: 10_000,
+            require_principal: None,
         }
     }
 
@@ -183,6 +190,38 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
         self
     }
 
+    /// Require an authenticated [`Principal`](crate::Principal) before honouring
+    /// an `X-Session-Id` header.
+    ///
+    /// When enabled, a request that carries `X-Session-Id` but for which no
+    /// `Principal` was established is rejected with `403 Forbidden`, because it
+    /// would otherwise land in a namespace shared with every other
+    /// principal-less caller (CWE-639).
+    ///
+    /// **Default:** enabled exactly when an [`AuthLayer`] is configured. Set it
+    /// explicitly to `true` when the server is *embedded* in a host application
+    /// that authenticates for it — via [`AgentServer::router`] — since no `AuthLayer` is
+    /// configured on this builder in that topology and the default would leave
+    /// the check off.
+    pub fn require_principal(mut self, required: bool) -> Self {
+        self.require_principal = Some(required);
+        self
+    }
+
+    /// Permit `X-Session-Id` from callers with no established principal.
+    ///
+    /// Equivalent to `require_principal(false)`. Appropriate for a single-tenant
+    /// service or a shared-API-key deployment that genuinely wants one shared
+    /// session namespace.
+    ///
+    /// This suppresses the 403 **and nothing else**: the session key stays
+    /// compound, so a caller that *does* carry a `Principal` is still isolated
+    /// to it.
+    pub fn allow_unbound_sessions(mut self) -> Self {
+        self.require_principal = Some(false);
+        self
+    }
+
     /// Build an [`AgentServer`].
     ///
     /// # Errors
@@ -223,6 +262,10 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
 
         let registry = RunRegistry::new(self.retention, self.max_runs, self.max_events_per_run);
 
+        // Default the gate to "on whenever this builder authenticates". An
+        // embedded deployment whose host authenticates must opt in explicitly.
+        let require_principal = self.require_principal.unwrap_or(self.auth.is_some());
+
         let state = AppState {
             inner: Arc::new(AppStateInner {
                 registry,
@@ -233,6 +276,7 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
                 auth: self.auth,
                 run_config: self.run_config,
                 locks: SessionLocks::new(),
+                require_principal,
             }),
         };
 

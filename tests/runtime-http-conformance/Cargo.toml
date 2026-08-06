@@ -26,7 +26,11 @@ paigasus-helikon-runtime-axum  = { workspace = true, features = ["openapi"] }
 paigasus-helikon-runtime-actix = { workspace = true, features = ["openapi"] }
 tokio             = { workspace = true, features = ["macros", "rt-multi-thread"] }
 reqwest           = { workspace = true, features = ["json", "rustls"] }
+# Both web frameworks are needed directly: `actix-web` to drive the actix
+# `System`, and `axum` for the `axum::http::request::Parts` type in the
+# parity suite's `AuthLayer` impl (the runtime crate does not re-export it).
 actix-web         = { workspace = true }
+axum              = { workspace = true }
 serde_json        = { workspace = true }
 tokio-tungstenite  = { workspace = true }
 

@@ -59,7 +59,10 @@
 use std::{convert::Infallible, sync::Arc, time::Instant};
 
 use actix_web::{
-    http::header::{CACHE_CONTROL, CONTENT_TYPE},
+    http::{
+        header::{CACHE_CONTROL, CONTENT_TYPE},
+        StatusCode,
+    },
     web::{self, Data},
     HttpRequest, HttpResponse,
 };
@@ -71,11 +74,13 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use uuid::Uuid;
 
 use crate::{
+    auth::Principal,
     dto::{AsyncAccepted, RunRequest, RunResponse},
-    error::ServerError,
+    error::{AuthRejection, ServerError},
     event_log::{is_terminal, EventLog},
     registry::{RunHandle, RunRegistry},
     server::AppState,
+    session::SessionKey,
 };
 
 /// Upper bound on the request body we will buffer before deserializing (2 MiB).
@@ -151,7 +156,9 @@ impl RunQuery {
 ///
 /// - [`ServerError::UnknownAgent`] (404) — no agent with `name` is registered.
 /// - [`ServerError::Unauthorized`] (401/403) — the context provider rejected the
-///   request's credentials.
+///   request's credentials, or the request carried `X-Session-Id` with no
+///   established [`Principal`](crate::Principal) while the principal gate is on
+///   (403).
 /// - [`ServerError::BadRequest`] (400) — an invalid or conflicting `?stream=` /
 ///   `?mode=` selector, the body was not valid JSON for a [`RunRequest`], an
 ///   explicit non-JSON content type was supplied, or the body exceeded the
@@ -181,22 +188,51 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    oversize).
     let input = read_run_request(&req, body).await?.into_agent_input();
 
-    // 3. Resolve the session from the optional `X-Session-Id` header.
-    let session_id: Option<String> = req
-        .headers()
-        .get("x-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let session = state.sessions.session(session_id.as_deref()).await?;
+    // 3. Resolve the principal the auth layer established, and the session id.
+    //
+    //    The `Ref` from `extensions()` MUST be dropped before any `.await`.
+    //    actix request extensions are `RefCell`-backed and handler futures carry
+    //    no `Send` bound, so holding it across an await compiles and then panics
+    //    with "already mutably borrowed" the first time a `ContextProvider` or
+    //    `AuthLayer` calls `extensions_mut()`.
+    let principal: Option<String> = {
+        use actix_web::HttpMessage as _;
+        req.extensions().get::<Principal>().map(|p| p.0.clone())
+    };
+
+    // A present-but-non-UTF-8 header is a 400 rather than a silent `None`:
+    // coercing it to `None` would skip the fail-closed gate below.
+    let session_id: Option<String> = match req.headers().get("x-session-id") {
+        None => None,
+        Some(value) => Some(
+            value
+                .to_str()
+                .map_err(|_| {
+                    ServerError::BadRequest(
+                        "invalid `X-Session-Id` header: not valid UTF-8".to_owned(),
+                    )
+                })?
+                .to_owned(),
+        ),
+    };
+
+    // Fail closed: a named session with no principal would join the shared
+    // principal-less namespace, which is exactly the IDOR this gate prevents.
+    if state.require_principal && principal.is_none() && session_id.is_some() {
+        return Err(ServerError::Unauthorized(AuthRejection {
+            status: StatusCode::FORBIDDEN,
+            message: "session id requires an authenticated principal".to_owned(),
+        }));
+    }
+
+    let key = SessionKey::new(principal.as_deref(), session_id.as_deref());
+    let session = state.sessions.session(key).await?;
 
     // 4. Acquire the per-session serialization lock BEFORE creating/spawning the
-    //    run so that same-session requests queue. The owned guard is moved into
-    //    the writer task and released when the run completes.
-    let guard: OwnedMutexGuard<()> = state
-        .locks
-        .lock_for(session_id.as_deref())
-        .lock_owned()
-        .await;
+    //    run so that same-session requests queue. `SessionKey` is `Copy`, so the
+    //    same value feeds both calls without a clone. The owned guard is moved
+    //    into the writer task and released when the run completes.
+    let guard: OwnedMutexGuard<()> = state.locks.lock_for(key).lock_owned().await;
 
     // 5. Build the run context, then register the run. Building the context
     //    before registering avoids leaking a never-terminal registry entry if
