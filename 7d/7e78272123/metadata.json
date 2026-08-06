@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "7d7e78272123",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-482-runtime-axum-runtime-actix-harden-5xx-redaction-session",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-actix/src/handlers/openapi.rs",
+    "crates/paigasus-helikon-runtime-axum/src/handlers/openapi.rs",
+    "tests/runtime-http-conformance/tests/parity.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/7e78272123/0/metadata.json",
+      "transcript": "/7d/7e78272123/0/full.jsonl",
+      "compact_transcript": "/7d/7e78272123/0/transcript.jsonl",
+      "content_hash": "/7d/7e78272123/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 7517,
+    "cache_read_tokens": 1605565,
+    "output_tokens": 5387,
+    "api_call_count": 4
+  }
+}
