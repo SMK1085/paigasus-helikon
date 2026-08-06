@@ -12,9 +12,9 @@
 //! # Wire shapes
 //!
 //! Each wrapper encodes to **one** JSON-object payload, and decodes from either
-//! that or the legacy 0.2.x positional arity (2 payloads for
-//! `render_instructions` / `call_model`, 3 for `invoke_tool`). Both paths build
-//! the same `*Args` value, so everything downstream is shape-agnostic.
+//! that or the legacy pre-envelope (0.2.0–0.2.1) positional arity (2 payloads
+//! for `render_instructions` / `call_model`, 3 for `invoke_tool`). Both paths
+//! build the same `*Args` value, so everything downstream is shape-agnostic.
 //!
 //! # Why the hand-written impls are reached at all
 //!
@@ -69,18 +69,25 @@ use temporalio_common::data_converters::{
 use temporalio_common::protos::temporal::api::common::v1::Payload;
 
 /// Activity name used in decode diagnostics and legacy-shape warnings.
-const ACT_RENDER: &str = "render_instructions";
+///
+/// Fully qualified to match the `ActivityType` Temporal actually registers:
+/// `#[activities]` with no name override derives it as
+/// `"{ImplType}::{method}"` (`temporalio-macros-0.5.0/src/activities_definitions.rs:556`),
+/// i.e. `AgentActivities::render_instructions` here — not the bare method name
+/// — so this string is what an operator would actually grep for in the
+/// Temporal Web UI or an `ActivityTaskFailed` history event.
+const ACT_RENDER: &str = "AgentActivities::render_instructions";
 
 /// Warn that a pre-envelope activity input was decoded.
 ///
 /// This is the operator's "safe to remove the legacy decode arms" signal: once
-/// no such warning has appeared for a full retention window, no 0.2.x-era worker
-/// is scheduling tasks any more and the arms can go.
+/// no such warning has appeared for a full retention window, no
+/// 0.2.1-and-earlier worker is scheduling tasks any more and the arms can go.
 fn warn_legacy(activity: &str, arity: usize) {
     tracing::warn!(
         activity,
         legacy_arity = arity,
-        "decoded a pre-envelope activity input; a 0.2.x-era worker is still scheduling tasks"
+        "decoded a pre-envelope activity input; a 0.2.1-and-earlier worker is still scheduling tasks"
     );
 }
 
@@ -169,7 +176,15 @@ impl TemporalDeserializable for RenderInstructionsInput {
         payloads: Vec<Payload>,
     ) -> Result<Self, PayloadConversionError> {
         match payloads.len() {
-            // Envelope: one JSON object.
+            // Envelope: one JSON object. This arity collides with pre-SMA-455
+            // (0.1.x) `render_instructions`, which took a single
+            // `agent_name: String` argument — one payload, same as here. The
+            // collision is arity-only, not shape: a bare JSON string cannot
+            // deserialize into `RenderInstructionsArgs`, so a straggling
+            // 0.1.x-shaped task fails safe here as an `EncodingError` (see
+            // `decode_arg`) rather than being silently misread. 0.1.x is out
+            // of the support window, so this is not handled beyond failing
+            // safe.
             1 => {
                 let mut it = payloads.into_iter();
                 let args = decode_arg(
@@ -181,7 +196,7 @@ impl TemporalDeserializable for RenderInstructionsInput {
                 )?;
                 Ok(Self(args))
             }
-            // Legacy 0.2.x: (agent_name, ctx_seed) as two payloads.
+            // Legacy pre-envelope (0.2.0–0.2.1): (agent_name, ctx_seed) as two payloads.
             2 => {
                 warn_legacy(ACT_RENDER, 2);
                 let mut it = payloads.into_iter();
@@ -209,8 +224,9 @@ impl TemporalDeserializable for RenderInstructionsInput {
     }
 }
 
-/// Activity name used in decode diagnostics and legacy-shape warnings.
-const ACT_CALL_MODEL: &str = "call_model";
+/// Activity name used in decode diagnostics and legacy-shape warnings. Fully
+/// qualified to match the registered `ActivityType` — see `ACT_RENDER`'s doc.
+const ACT_CALL_MODEL: &str = "AgentActivities::call_model";
 
 /// The `call_model` activity's input fields.
 ///
@@ -267,8 +283,8 @@ impl TemporalDeserializable for CallModelInput {
                 )?;
                 Ok(Self(args))
             }
-            // Legacy 0.2.x: (agent_name, request) as two payloads. Unchanged
-            // since 0.1.x, but still pre-envelope.
+            // Legacy pre-envelope (0.2.0–0.2.1): (agent_name, request) as two
+            // payloads. Unchanged since 0.1.x, but still pre-envelope.
             2 => {
                 warn_legacy(ACT_CALL_MODEL, 2);
                 let mut it = payloads.into_iter();
@@ -296,8 +312,9 @@ impl TemporalDeserializable for CallModelInput {
     }
 }
 
-/// Activity name used in decode diagnostics and legacy-shape warnings.
-const ACT_INVOKE_TOOL: &str = "invoke_tool";
+/// Activity name used in decode diagnostics and legacy-shape warnings. Fully
+/// qualified to match the registered `ActivityType` — see `ACT_RENDER`'s doc.
+const ACT_INVOKE_TOOL: &str = "AgentActivities::invoke_tool";
 
 /// The `invoke_tool` activity's input fields.
 ///
@@ -356,7 +373,7 @@ impl TemporalDeserializable for InvokeToolInput {
                 )?;
                 Ok(Self(args))
             }
-            // Legacy 0.2.x: (agent_name, call, ctx_seed) as three payloads.
+            // Legacy pre-envelope (0.2.0–0.2.1): (agent_name, call, ctx_seed) as three payloads.
             3 => {
                 warn_legacy(ACT_INVOKE_TOOL, 3);
                 let mut it = payloads.into_iter();
@@ -400,14 +417,18 @@ mod tests {
         MultiArgs2, MultiArgs3, PayloadConverter, SerializationContextData,
     };
 
-    /// Run `f` with a [`SerializationContext`] over the **production**
-    /// converter.
+    /// Run `f` with a [`SerializationContext`] over the **default** converter.
     ///
     /// Every codec test must go through this rather than calling
     /// `Wrapper::from_payloads` directly: a direct call exercises none of the
-    /// `Composite` -> `UseWrappers` dispatch the design depends on. The crate
-    /// never configures a `DataConverter`, so `PayloadConverter::default()` is
-    /// the exact converter used in production.
+    /// `Composite` -> `UseWrappers` dispatch the design depends on. This crate
+    /// never configures a `DataConverter` itself — the caller supplies the
+    /// connected `temporalio_client::Client` (`TemporalAgentWorkerBuilder::client`)
+    /// — so a worker built against a client left on the SDK's defaults yields
+    /// exactly `PayloadConverter::default()`. That is the configuration these
+    /// tests target; a caller-supplied client with a non-default
+    /// `DataConverter` is out of scope here, same as it always was for the
+    /// legacy `MultiArgs{N}` shapes this design builds on.
     fn with_ctx<R>(f: impl FnOnce(&SerializationContext<'_>) -> R) -> R {
         let converter = PayloadConverter::default();
         let data = SerializationContextData::Activity;
@@ -460,7 +481,7 @@ mod tests {
             let decoded: RenderInstructionsInput = ctx
                 .converter
                 .from_payloads(ctx, payloads)
-                .expect("a 0.2.x-queued task must decode");
+                .expect("a task queued by a 0.2.1-and-earlier worker must decode");
             assert_eq!(decoded.0, render_args());
         });
     }
@@ -578,6 +599,16 @@ mod tests {
     /// NOT prove anything here — `Unexpected::Map` never echoes nested content,
     /// so such a test passes whether or not `decode_arg` discards its source
     /// error.
+    ///
+    /// This is also the only test that exercises the **envelope** arm's
+    /// (arity 1) error path — every `*_content_failure_is_encoding_error` test
+    /// feeds a legacy `MultiArgs{N}` shape instead. So it additionally asserts
+    /// the error variant is `EncodingError`, not just sentinel-absent: if the
+    /// envelope arm ever regressed to returning `WrongEncoding`, the composite
+    /// converter would silently fall through to the `serde_json` arm (which
+    /// also yields `WrongEncoding`), and production would lose this
+    /// diagnostic — a bare "Wrong encoding" in Temporal history — while every
+    /// other test here kept passing.
     #[test]
     fn decode_diagnostics_never_leak_payload_bytes() {
         const SENTINEL: &str = "super-secret-tenant-token";
@@ -590,6 +621,11 @@ mod tests {
                 .converter
                 .from_payloads::<RenderInstructionsInput>(ctx, vec![payload])
                 .expect_err("a bare string is not an envelope");
+
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError from the envelope arm, got {err:?}"
+            );
 
             let display = err.to_string();
             let debug = format!("{err:?}");
@@ -648,7 +684,7 @@ mod tests {
             let decoded: CallModelInput = ctx
                 .converter
                 .from_payloads(ctx, payloads)
-                .expect("a 0.2.x-queued task must decode");
+                .expect("a task queued by a 0.2.1-and-earlier worker must decode");
             assert_eq!(json_of(&decoded.0), json_of(&call_model_args()));
         });
     }
@@ -663,6 +699,12 @@ mod tests {
     /// (rule 4), so a change to it IS a wire-compatibility break. Update the
     /// literal deliberately and treat the break as a release note, rather than
     /// regenerating the fixture to make the red go away.
+    ///
+    /// Asserts full JSON equality (`json_of`), not just `agent_name`: if
+    /// `ModelRequest` ever grew a `#[serde(default)]` field, a same-fields-only
+    /// check would let the frozen literal decode with that field silently
+    /// defaulted, and this canary would stay green through the exact drift it
+    /// exists to catch.
     #[test]
     fn call_model_decodes_frozen_envelope_literal() {
         const FROZEN: &str = r#"{"agent_name":"agent-1","request":{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}}}"#;
@@ -676,7 +718,7 @@ mod tests {
                 .converter
                 .from_payloads(ctx, vec![payload])
                 .expect("decode");
-            assert_eq!(decoded.0.agent_name, "agent-1");
+            assert_eq!(json_of(&decoded.0), json_of(&call_model_args()));
         });
     }
 
@@ -694,7 +736,7 @@ mod tests {
                 .converter
                 .from_payloads(ctx, vec![payload])
                 .expect("an envelope with an unknown field must still decode");
-            assert_eq!(decoded.0.agent_name, "agent-1");
+            assert_eq!(json_of(&decoded.0), json_of(&call_model_args()));
         });
     }
 
@@ -787,7 +829,7 @@ mod tests {
             let decoded: InvokeToolInput = ctx
                 .converter
                 .from_payloads(ctx, payloads)
-                .expect("a 0.2.x-queued task must decode");
+                .expect("a task queued by a 0.2.1-and-earlier worker must decode");
             assert_eq!(json_of(&decoded.0), json_of(&invoke_tool_args()));
         });
     }

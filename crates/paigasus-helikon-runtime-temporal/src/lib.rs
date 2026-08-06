@@ -339,11 +339,13 @@
 //! **SMA-462 wire change (activity inputs are now a single envelope payload).** Each of
 //! `render_instructions` / `call_model` / `invoke_tool` takes one self-describing JSON-object
 //! payload instead of positional arguments. Workers on this version also decode the previous
-//! 0.2.x positional shapes, so activity tasks queued by a 0.2.x worker execute normally.
+//! pre-envelope (0.2.0–0.2.1) positional shapes, so activity tasks queued by a 0.2.1-and-earlier
+//! worker execute normally.
 //!
-//! The reverse does not hold, and it matters during a rolling deploy: a **0.2.x** worker handed
-//! one of the new envelope payloads cannot decode it. It fails the attempt retryably and Temporal
-//! re-dispatches until a worker on this version takes it. Four things bound that recovery:
+//! The reverse does not hold, and it matters during a rolling deploy: a **0.2.1-and-earlier**
+//! worker handed one of the new envelope payloads cannot decode it. It fails the attempt
+//! retryably and Temporal re-dispatches until a worker on this version takes it. Four things
+//! bound that recovery:
 //!
 //! 1. A finite `maximum_attempts` on `model_retry_policy` / `tool_retry_policy` can be exhausted.
 //! 2. `WorkflowInput::timeout_ms` interrupts the whole run on its own schedule, regardless of
@@ -358,8 +360,8 @@
 //!
 //! **Rolling back.** Once a worker on this version has queued an envelope-shaped activity task,
 //! that payload is frozen in the `ActivityTaskScheduled` event and every retry re-delivers it. A
-//! rollback to 0.2.x leaves those activities undecodable until the run deadline. **Drain in-flight
-//! runs before rolling back.**
+//! rollback to 0.2.1 and earlier leaves those activities undecodable until the run deadline.
+//! **Drain in-flight runs before rolling back.**
 //!
 //! **What this buys.** Future additive changes to an activity's input are compatible in both
 //! directions, because the envelope is self-describing: unknown fields are ignored and absent
@@ -395,8 +397,9 @@
 /// or consumed through [`worker`].
 mod activities;
 /// Wire codec for activity inputs: one self-describing envelope payload per
-/// activity, decoding both that and the legacy 0.2.x positional shapes.
-/// Private — the envelope types never cross the public API boundary.
+/// activity, decoding both that and the legacy pre-envelope (0.2.0–0.2.1)
+/// positional shapes. Private — the envelope types never cross the public API
+/// boundary.
 mod activity_input;
 /// The pure durable-loop step machine.
 ///

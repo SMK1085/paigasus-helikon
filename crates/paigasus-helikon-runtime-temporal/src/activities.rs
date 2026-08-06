@@ -367,8 +367,6 @@ pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
 impl AgentActivities {
     /// Render the named agent's system-prompt text.
     ///
-    /// Render the named agent's system-prompt text.
-    ///
     /// `pub(crate)` so `#[activities]` emits a `pub(crate)` associated const
     /// (`AgentActivities::render_instructions`) — the typed activity marker
     /// SMA-332 Task 8's workflow passes to `WorkflowContext::start_activity`
