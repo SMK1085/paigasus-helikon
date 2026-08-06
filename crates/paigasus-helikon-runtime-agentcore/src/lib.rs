@@ -35,6 +35,21 @@
 //! provider traits (`SessionProvider`/`ContextProvider`), so a self-hosted deployment
 //! and an AgentCore deployment of the same agent share one provider vocabulary.
 //!
+//! # Session keys carry no principal in this runtime
+//!
+//! The [`SessionKey`](paigasus_helikon_runtime_axum::SessionKey) handed to the
+//! configured provider always has `principal: None`. This runtime exposes no
+//! `AuthLayer` seam, and AgentCore's execution model already isolates each session in
+//! its own microVM instance, so the validated session id is the whole identity here.
+//!
+//! A custom [`SessionProvider`](paigasus_helikon_runtime_axum::SessionProvider)
+//! supplied through [`AgentCoreServerBuilder::session_provider`] must therefore not
+//! expect principal-based separation on this runtime — including via
+//! [`SessionKey::storage_key`](paigasus_helikon_runtime_axum::SessionKey::storage_key),
+//! which reduces to a stable per-id key when the principal is absent. That is the
+//! intended behaviour here, not an oversight; the separation the axum and actix
+//! runtimes get from a `Principal` is provided by the microVM boundary instead.
+//!
 //! # MCP-protocol mode (feature `mcp`, default on)
 //!
 //! `AgentCoreServer::serve_mcp` serves the same configured agent as a single MCP

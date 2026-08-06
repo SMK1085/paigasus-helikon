@@ -58,15 +58,27 @@ impl<'a> SessionKey<'a> {
     /// Returns `None` for an anonymous request (`id` is `None`), which must not
     /// be stored at all.
     ///
-    /// The principal is length-prefixed so that no two distinct
-    /// `(principal, id)` pairs can produce the same string. A plain
-    /// `format!("{principal}:{id}")` would let `("a:b", "c")` and
-    /// `("a", "b:c")` collide, reintroducing the very IDOR this type exists to
-    /// close.
+    /// # Encoding
+    ///
+    /// No two distinct `(principal, id)` pairs can produce the same string, so a
+    /// provider may safely key on this value alone:
+    ///
+    /// - `Some(p)` renders as `p<len>:<principal>:<id>`. The length prefix is
+    ///   what makes it unambiguous — a plain `format!("{principal}:{id}")` would
+    ///   let `("a:b", "c")` and `("a", "b:c")` collide, reintroducing the very
+    ///   IDOR this type exists to close.
+    /// - `None` renders as `a:<id>` — `a` for *absent*. The tag is what keeps it
+    ///   apart from every `Some` form, `Some("")` included. Folding an absent
+    ///   principal into `""` before the length prefix would render `(None, "s1")`
+    ///   and `(Some(""), "s1")` — a principal-less caller and one whose token
+    ///   carries an empty subject claim, two genuinely different callers — onto
+    ///   one row.
     pub fn storage_key(&self) -> Option<String> {
         let id = self.id?;
-        let principal = self.principal.unwrap_or("");
-        Some(format!("{}:{}:{}", principal.len(), principal, id))
+        Some(match self.principal {
+            None => format!("a:{id}"),
+            Some(principal) => format!("p{}:{}:{}", principal.len(), principal, id),
+        })
     }
 }
 
@@ -360,6 +372,57 @@ mod tests {
             SessionKey::new(Some("a"), Some("b:c")).storage_key(),
         );
         assert_eq!(SessionKey::new(Some("a"), None).storage_key(), None);
+    }
+
+    /// `None` and `Some("")` are two DIFFERENT callers: one with no established
+    /// principal, one whose principal is the empty string (a token with an empty
+    /// subject claim, say).
+    ///
+    /// An earlier encoding folded the absent principal into `""` *before*
+    /// computing the length prefix, so both rendered as `"0::s1"`. The bundled
+    /// tuple-keyed provider kept them apart, but any provider that followed the
+    /// trait docs onto `storage_key` — the documented single-string path — put
+    /// them on one row and shared their conversation.
+    #[test]
+    fn storage_key_separates_an_absent_principal_from_an_empty_one() {
+        assert_ne!(
+            SessionKey::new(None, Some("s1")).storage_key(),
+            SessionKey::new(Some(""), Some("s1")).storage_key(),
+        );
+    }
+
+    /// `storage_key` is injective over awkward inputs: separators, empty
+    /// strings, an absent principal, and values that mimic the encoding's own
+    /// tag and length prefixes.
+    #[test]
+    fn storage_key_is_injective() {
+        let principals = [
+            None,
+            Some(""),
+            Some("a"),
+            Some("0"),
+            Some("a:b"),
+            Some("p1"),
+            Some("a:x"),
+            Some("1:a"),
+        ];
+        let ids = ["s1", "", "b:c", ":s1", "a:s1", "p1:a:s1"];
+
+        let mut seen: std::collections::HashMap<String, (Option<&str>, &str)> =
+            std::collections::HashMap::new();
+        for principal in principals {
+            for id in ids {
+                let encoded = SessionKey::new(principal, Some(id))
+                    .storage_key()
+                    .expect("a named id always encodes");
+                if let Some(previous) = seen.insert(encoded.clone(), (principal, id)) {
+                    panic!(
+                        "storage_key collision on {encoded:?}: {previous:?} and {:?}",
+                        (principal, id)
+                    );
+                }
+            }
+        }
     }
 
     /// Anonymous requests are never stored and never shared, whatever the
