@@ -3,7 +3,7 @@
   "checkpoint_id": "040512dd9374",
   "strategy": "manual-commit",
   "branch": "feature/sma-462-runtime-temporal-backward-compatible-activity-input-for-zero",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "crates/paigasus-helikon-runtime-temporal/CHANGELOG.md",
     "crates/paigasus-helikon-runtime-temporal/README.md",
@@ -17,13 +17,20 @@
       "compact_transcript": "/04/0512dd9374/0/transcript.jsonl",
       "content_hash": "/04/0512dd9374/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/04/0512dd9374/1/metadata.json",
+      "transcript": "/04/0512dd9374/1/full.jsonl",
+      "compact_transcript": "/04/0512dd9374/1/transcript.jsonl",
+      "content_hash": "/04/0512dd9374/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 8,
-    "cache_creation_tokens": 8744,
-    "cache_read_tokens": 1421514,
-    "output_tokens": 6488,
-    "api_call_count": 4
+    "input_tokens": 15,
+    "cache_creation_tokens": 16494,
+    "cache_read_tokens": 2846664,
+    "output_tokens": 11016,
+    "api_call_count": 8
   }
 }
