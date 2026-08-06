@@ -339,8 +339,10 @@
 //! **SMA-462 wire change (activity inputs are now a single envelope payload).** Each of
 //! `render_instructions` / `call_model` / `invoke_tool` takes one self-describing JSON-object
 //! payload instead of positional arguments. Workers on this version also decode the previous
-//! pre-envelope (0.2.0–0.2.1) positional shapes, so activity tasks queued by a 0.2.1-and-earlier
-//! worker execute normally.
+//! pre-envelope positional shapes from 0.2.0 or 0.2.1 specifically, so activity tasks queued by
+//! a worker on either of those two versions execute normally. 0.1.x is outside the support
+//! window: its `render_instructions` and `invoke_tool` shapes fail closed with a decode error
+//! rather than being silently misread.
 //!
 //! The reverse does not hold, and it matters during a rolling deploy: a **0.2.1-and-earlier**
 //! worker handed one of the new envelope payloads cannot decode it. It fails the attempt

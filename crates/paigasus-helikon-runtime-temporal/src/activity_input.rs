@@ -81,13 +81,13 @@ const ACT_RENDER: &str = "AgentActivities::render_instructions";
 /// Warn that a pre-envelope activity input was decoded.
 ///
 /// This is the operator's "safe to remove the legacy decode arms" signal: once
-/// no such warning has appeared for a full retention window, no
-/// 0.2.1-and-earlier worker is scheduling tasks any more and the arms can go.
+/// no such warning has appeared for a full retention window, no worker on
+/// 0.2.0 or 0.2.1 is scheduling tasks any more and the arms can go.
 fn warn_legacy(activity: &str, arity: usize) {
     tracing::warn!(
         activity,
         legacy_arity = arity,
-        "decoded a pre-envelope activity input; a 0.2.1-and-earlier worker is still scheduling tasks"
+        "decoded a pre-envelope activity input; a worker on 0.2.0 or 0.2.1 is still scheduling tasks"
     );
 }
 
@@ -481,7 +481,7 @@ mod tests {
             let decoded: RenderInstructionsInput = ctx
                 .converter
                 .from_payloads(ctx, payloads)
-                .expect("a task queued by a 0.2.1-and-earlier worker must decode");
+                .expect("a task queued by a worker on 0.2.0 or 0.2.1 must decode");
             assert_eq!(decoded.0, render_args());
         });
     }
@@ -684,7 +684,7 @@ mod tests {
             let decoded: CallModelInput = ctx
                 .converter
                 .from_payloads(ctx, payloads)
-                .expect("a task queued by a 0.2.1-and-earlier worker must decode");
+                .expect("a task queued by a worker on 0.2.0 or 0.2.1 must decode");
             assert_eq!(json_of(&decoded.0), json_of(&call_model_args()));
         });
     }
@@ -829,7 +829,7 @@ mod tests {
             let decoded: InvokeToolInput = ctx
                 .converter
                 .from_payloads(ctx, payloads)
-                .expect("a task queued by a 0.2.1-and-earlier worker must decode");
+                .expect("a task queued by a worker on 0.2.0 or 0.2.1 must decode");
             assert_eq!(json_of(&decoded.0), json_of(&invoke_tool_args()));
         });
     }

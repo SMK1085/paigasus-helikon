@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - *(runtime-temporal)* SMA-462 activity inputs are now a **single self-describing envelope payload**
-  - `render_instructions`, `call_model` and `invoke_tool` each take one JSON-object payload instead of positional arguments. Workers on this version also decode the previous pre-envelope (0.2.0–0.2.1) positional shapes, so activity tasks queued by a 0.2.1-and-earlier worker execute normally.
+  - `render_instructions`, `call_model` and `invoke_tool` each take one JSON-object payload instead of positional arguments. Workers on this version also decode the previous pre-envelope positional shapes from 0.2.0 or 0.2.1 specifically, so activity tasks queued by a worker on either of those two versions execute normally. 0.1.x is outside the support window: its `render_instructions` and `invoke_tool` shapes fail closed with a decode error rather than being silently misread.
   - No public Rust API change — the envelope types are crate-internal.
   - Future additive changes to an activity's input are now compatible in both directions (unknown fields ignored, absent fields defaulted). This is scoped to the envelope's own field set: it does **not** cover the `paigasus-helikon-core` types nested inside them (`ModelRequest`, `ToolCallRequest`) or activity outputs.
 
