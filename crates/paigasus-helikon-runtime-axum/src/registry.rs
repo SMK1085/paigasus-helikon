@@ -235,7 +235,15 @@ impl RunRegistry {
             *t = Some(now);
             drop(t);
             inner.completion_order.push_back(id);
-            inner.live -= 1;
+            // `saturating_sub`, not `-=`: the three `live`-mutation sites (here,
+            // `create`, and `sweep` pass 0) are proven not to drift today, but a
+            // future fourth stamp site or a bug would otherwise wrap a `usize`
+            // underflow to `usize::MAX` in release, permanently wedging the
+            // admission check (`live >= max_in_flight` becomes always-true) with
+            // no log and no recovery short of a restart. `debug_assert!` still
+            // fails loudly in tests/debug builds so drift is caught, not masked.
+            debug_assert!(inner.live > 0, "live run count underflow in note_terminal");
+            inner.live = inner.live.saturating_sub(1);
         }
     }
 
@@ -293,7 +301,10 @@ impl RunRegistry {
                 *t = Some(now);
                 drop(t);
                 inner.completion_order.push_back(id);
-                inner.live -= 1;
+                // See the matching comment in `note_terminal`: saturating, plus a
+                // debug-only assert, rather than a bare `-=` that could wrap.
+                debug_assert!(inner.live > 0, "live run count underflow in sweep pass 0");
+                inner.live = inner.live.saturating_sub(1);
                 tracing::warn!(%id, agent = %handle.agent_name,
                                "reclaiming run that exceeded max_run_duration");
             }
@@ -364,11 +375,31 @@ impl RunRegistry {
     /// At most one task is spawned per registry instance (guarded by a [`OnceCell`]).
     /// The task holds a [`Weak`] reference so it automatically exits when the registry is dropped
     /// (i.e., no [`Arc`] remainders outside the spawned task itself).
+    ///
+    /// Requires an ambient Tokio runtime
+    /// ([`tokio::runtime::Handle::try_current`]). Called from both
+    /// `AgentServer::router` (a sync method, possibly invoked outside any
+    /// runtime — e.g. while an embedding host is still assembling its own
+    /// router before ever starting it) and `AgentServer::serve_with_listener`
+    /// (always async, so always inside one). When no runtime is available this
+    /// is a no-op that logs a `tracing::warn!` naming the consequence (the
+    /// sweeper was not spawned, so overdue runs will not be reclaimed) instead
+    /// of panicking — and it deliberately does NOT claim the [`OnceCell`] slot
+    /// in that case, so a later call made from within a runtime still spawns
+    /// the sweeper.
     pub fn spawn_sweeper(self: &Arc<Self>) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                "no Tokio runtime available; the run-registry sweeper was not spawned — runs \
+                 exceeding max_run_duration will not be reclaimed until spawn_sweeper is called \
+                 again from within an async context"
+            );
+            return;
+        };
         // `OnceCell::set` succeeds exactly once; subsequent calls return `Err` which we ignore.
         if self.sweeper_once.set(()).is_ok() {
             let weak = Arc::downgrade(self);
-            tokio::spawn(async move {
+            handle.spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(30));
                 loop {
                     interval.tick().await;
@@ -389,6 +420,16 @@ impl RunRegistry {
     /// Returns the current length of `completion_order` for leak-regression tests.
     fn completion_queue_len(&self) -> usize {
         self.inner.read().unwrap().completion_order.len()
+    }
+
+    /// True once [`spawn_sweeper`](RunRegistry::spawn_sweeper) has actually
+    /// claimed the [`OnceCell`] slot and spawned its background task.
+    ///
+    /// `pub(crate)`, not private, so `server.rs`'s tests can use it to prove
+    /// [`AgentServer::router`](crate::server::AgentServer::router) alone
+    /// spawns the sweeper without needing to wait for its 30-second tick.
+    pub(crate) fn sweeper_is_spawned(&self) -> bool {
+        self.sweeper_once.get().is_some()
     }
 }
 

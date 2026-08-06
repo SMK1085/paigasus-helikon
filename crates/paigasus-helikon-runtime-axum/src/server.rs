@@ -374,14 +374,32 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
 
     /// Build the axum [`Router`].
     ///
-    /// Pure: spawns nothing.  Suitable for embedding into a larger router or for
-    /// testing with axum's `Router::oneshot`.
+    /// Also (idempotently) spawns the run registry's background reclaiming
+    /// sweeper, so a server embedded via this method reclaims runs that exceed
+    /// `max_run_duration` the same way
+    /// [`serve_with_listener`](AgentServer::serve_with_listener) does. Without
+    /// this, an embedding host that builds its own server around this router
+    /// and never calls `serve_with_listener` would never spawn the sweeper —
+    /// and the `max_in_flight` admission cap would become a permanent-outage
+    /// vector once every slot were consumed by a run that never reaches a
+    /// terminal state, exactly the failure `max_run_duration` exists to
+    /// prevent. Spawning the sweeper requires an ambient Tokio runtime; if this
+    /// is called outside one (e.g. while the embedding host is still
+    /// assembling its router before ever running it), the spawn is skipped and
+    /// a `tracing::warn!` is logged — call `router()` again from within a
+    /// runtime, or call `serve_with_listener` (always async), to actually start
+    /// reclamation.
+    ///
+    /// Otherwise pure: builds and returns a router with no side effects beyond
+    /// that one-time sweeper spawn. Suitable for embedding into a larger router
+    /// or for testing with axum's `Router::oneshot`.
     ///
     /// When an [`AuthLayer`] is configured the whole router is wrapped in a
     /// request-level authentication middleware, so **every** route — including
     /// `GET /agents`, `GET /openapi.json`, and the WebSocket events endpoint —
     /// is gated, not just the run-creation handler.
     pub fn router(&self) -> Router {
+        self.state.registry.spawn_sweeper();
         let router = Router::new()
             .route("/agents", get(handlers::agents::list::<Ctx>))
             .route(
@@ -413,7 +431,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     /// Start serving on `listener`.
     ///
     /// Spawns the run-registry sweeper background task, then drives the axum
-    /// serve loop until it exits.
+    /// serve loop until it exits. [`router`](AgentServer::router) — called just
+    /// below — now spawns the sweeper too (idempotently); this call stays as a
+    /// redundant-but-harmless belt-and-braces spawn attempt from within a
+    /// context that is always async, so it degrades to a no-op via the
+    /// sweeper's internal `OnceCell` guard rather than doing anything.
     ///
     /// # Errors
     ///
@@ -465,5 +487,65 @@ async fn auth_middleware<Ctx: Send + Sync + 'static>(
         Ok(next.run(req).await)
     } else {
         Ok(next.run(req).await)
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+//
+// Crate-internal (not `tests/server.rs`) specifically so these two can reach
+// `server.state.registry.sweeper_is_spawned()` — a `pub(crate)` peek at the
+// registry's sweeper `OnceCell` that lets them prove `router()` alone spawns
+// or skips spawning the sweeper, without waiting out its real 30-second tick
+// interval or reaching into private state from an external integration test.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the bug where only `serve_with_listener` spawned the
+    /// reclaiming sweeper: a host embedding via `router()` alone — the
+    /// documented embed topology (`require_principal`'s own docs name it) —
+    /// would never reclaim an overdue run, and `max_in_flight` would become a
+    /// permanent-outage vector once every slot was consumed by a run that
+    /// never reaches a terminal state. `router()` must spawn the sweeper too,
+    /// exactly as actix's `configure()` (its own embed path) already does.
+    #[tokio::test]
+    async fn router_alone_spawns_the_sweeper() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .build()
+            .expect("server builds");
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "the sweeper must not be spawned before router() is ever called"
+        );
+
+        let _router = server.router(); // NOT server.serve_with_listener(...)
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "router() alone must spawn the reclaiming sweeper"
+        );
+    }
+
+    /// `router()` must not panic when called with no ambient Tokio runtime —
+    /// e.g. an embedding host assembling its router before ever starting an
+    /// async runtime. It degrades to a no-op (logging a warning) instead, and
+    /// — critically — does NOT claim the sweeper's `OnceCell` slot in that
+    /// case, so a later call made from within a real runtime still spawns it.
+    #[test]
+    fn router_without_a_runtime_does_not_panic_and_does_not_claim_the_slot() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .build()
+            .expect("server builds");
+
+        let _router = server.router(); // no #[tokio::test] / runtime in scope
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "with no ambient runtime, router() must not have spawned the sweeper"
+        );
     }
 }

@@ -235,7 +235,15 @@ impl RunRegistry {
             *t = Some(now);
             drop(t);
             inner.completion_order.push_back(id);
-            inner.live -= 1;
+            // `saturating_sub`, not `-=`: the three `live`-mutation sites (here,
+            // `create`, and `sweep` pass 0) are proven not to drift today, but a
+            // future fourth stamp site or a bug would otherwise wrap a `usize`
+            // underflow to `usize::MAX` in release, permanently wedging the
+            // admission check (`live >= max_in_flight` becomes always-true) with
+            // no log and no recovery short of a restart. `debug_assert!` still
+            // fails loudly in tests/debug builds so drift is caught, not masked.
+            debug_assert!(inner.live > 0, "live run count underflow in note_terminal");
+            inner.live = inner.live.saturating_sub(1);
         }
     }
 
@@ -293,7 +301,10 @@ impl RunRegistry {
                 *t = Some(now);
                 drop(t);
                 inner.completion_order.push_back(id);
-                inner.live -= 1;
+                // See the matching comment in `note_terminal`: saturating, plus a
+                // debug-only assert, rather than a bare `-=` that could wrap.
+                debug_assert!(inner.live > 0, "live run count underflow in sweep pass 0");
+                inner.live = inner.live.saturating_sub(1);
                 tracing::warn!(%id, agent = %handle.agent_name,
                                "reclaiming run that exceeded max_run_duration");
             }

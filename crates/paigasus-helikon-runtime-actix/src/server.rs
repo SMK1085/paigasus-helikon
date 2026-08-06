@@ -544,13 +544,25 @@ mod tests {
 
     /// `max_in_flight(0)` must be rejected before construction — it is
     /// unconditional (unlike `max_sessions`, no custom component overrides it),
-    /// since a zero cap would reject every run.
+    /// since a zero cap would reject every run. Asserts the message names
+    /// `max_in_flight` specifically, not just the error variant — otherwise a
+    /// deleted guard that happened to trip some other `BadRequest` path would
+    /// still pass this test.
     #[test]
     fn zero_max_in_flight_is_bad_request() {
         let result = AgentServer::<()>::builder()
             .with_default_context()
             .max_in_flight(0)
             .build();
-        assert!(matches!(result, Err(ServerError::BadRequest(_))));
+        let err = result.err().expect("max_in_flight(0) must fail the build");
+        match err {
+            ServerError::BadRequest(msg) => {
+                assert!(
+                    msg.contains("max_in_flight"),
+                    "expected a max_in_flight message, got: {msg}"
+                );
+            }
+            other => panic!("expected ServerError::BadRequest, got: {other}"),
+        }
     }
 }
