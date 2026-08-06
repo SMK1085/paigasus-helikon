@@ -981,3 +981,58 @@ async fn in_flight_cap_rejects_identically() {
     }
     assert_eq!(bodies[0], bodies[1], "503 bodies must be byte-identical");
 }
+
+/// The two runtimes must document the SAME response codes, not merely the same
+/// paths. Path-only parity let the 503 go undocumented on both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openapi_response_sets_match() {
+    let axum_base = boot_axum().await;
+    let actix_base = boot_actix();
+
+    let fetch = |base: String| async move {
+        let spec: serde_json::Value = reqwest::Client::new()
+            .get(format!("{base}/openapi.json"))
+            .send()
+            .await
+            .expect("openapi request")
+            .json()
+            .await
+            .expect("openapi body");
+        spec
+    };
+    let axum_spec = fetch(axum_base).await;
+    let actix_spec = fetch(actix_base).await;
+
+    /// Collect `path -> method -> sorted status codes`.
+    fn response_sets(spec: &serde_json::Value) -> Vec<(String, String, Vec<String>)> {
+        let mut out = Vec::new();
+        for (path, item) in spec["paths"].as_object().expect("paths object") {
+            for (method, op) in item.as_object().expect("path item object") {
+                let mut codes: Vec<String> = op["responses"]
+                    .as_object()
+                    .map(|r| r.keys().cloned().collect())
+                    .unwrap_or_default();
+                codes.sort();
+                out.push((path.clone(), method.clone(), codes));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    assert_eq!(
+        response_sets(&axum_spec),
+        response_sets(&actix_spec),
+        "documented response codes must match between runtimes"
+    );
+
+    let run_codes = response_sets(&axum_spec)
+        .into_iter()
+        .find(|(p, m, _)| p == "/agents/{name}/runs" && m == "post")
+        .map(|(_, _, c)| c)
+        .expect("POST /agents/{name}/runs is documented");
+    assert!(
+        run_codes.contains(&"503".to_owned()),
+        "the in-flight cap's 503 must be documented; got {run_codes:?}"
+    );
+}

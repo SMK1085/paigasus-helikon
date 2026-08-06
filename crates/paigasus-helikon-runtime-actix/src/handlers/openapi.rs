@@ -55,9 +55,10 @@ async fn _list_agents_doc() {}
         (status = 202, description = "Run accepted (async mode)", body = AsyncAccepted),
         (status = 400, description = "Invalid or conflicting `stream`/`mode` selector, malformed JSON body, or a non-JSON content type"),
         (status = 401, description = "Authentication required or credentials rejected"),
-        (status = 403, description = "Authenticated but not permitted"),
+        (status = 403, description = "Authenticated but not permitted, or an `X-Session-Id` was supplied without an authenticated principal"),
         (status = 404, description = "No agent with the given name is registered"),
         (status = 500, description = "The run failed to start before emitting any event"),
+        (status = 503, description = "In-flight run limit reached; retry after the `Retry-After` interval"),
     ),
     tag = "runs"
 )]
@@ -75,7 +76,7 @@ async fn _create_run_doc() {}
     responses(
         (status = 101, description = "WebSocket upgrade — replays the run's event log from the start then live-tails new events until the run is terminal"),
         (status = 400, description = "The run id path segment is not a valid UUID"),
-        (status = 404, description = "Run not found"),
+        (status = 404, description = "Run not found, owned by a different agent, or owned by a different principal"),
     ),
     tag = "runs"
 )]
