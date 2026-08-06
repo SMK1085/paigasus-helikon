@@ -405,6 +405,24 @@ impl RunRegistry {
     fn completion_queue_len(&self) -> usize {
         self.inner.read().unwrap().completion_order.len()
     }
+
+    /// True once [`spawn_sweeper`](RunRegistry::spawn_sweeper) has actually
+    /// spawned its background task.
+    ///
+    /// `Once::is_completed` only returns `true` once its `call_once` closure
+    /// has *returned* — i.e. after `handle.spawn(...)` inside it has already
+    /// run — and a panicking closure poisons the `Once` rather than
+    /// completing it, so this can't observe a completed-but-unspawned state:
+    /// `spawn_sweeper`'s closure is the single unconditional
+    /// `handle.spawn(...)` statement, no branch inside it can finish without
+    /// spawning.
+    ///
+    /// `pub(crate)`, not private, so `server.rs`'s tests can use it to prove
+    /// [`AgentServer::configure`](crate::server::AgentServer::configure)
+    /// spawns the sweeper without needing to wait for its 30-second tick.
+    pub(crate) fn sweeper_is_spawned(&self) -> bool {
+        self.sweeper.is_completed()
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

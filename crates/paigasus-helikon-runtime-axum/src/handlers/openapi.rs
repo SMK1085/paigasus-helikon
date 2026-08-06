@@ -75,7 +75,7 @@ async fn _create_run_doc() {}
     ),
     responses(
         (status = 101, description = "WebSocket upgrade — replays the run's event log from the start then live-tails new events until the run is terminal"),
-        (status = 400, description = "The run id path segment is not a valid UUID"),
+        (status = 400, description = "The run id path segment is not a valid UUID, or the request was not a valid WebSocket upgrade"),
         (status = 404, description = "Run not found, owned by a different agent, or owned by a different principal"),
     ),
     tag = "runs"

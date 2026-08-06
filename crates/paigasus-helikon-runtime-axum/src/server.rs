@@ -257,8 +257,9 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
     /// # Errors
     ///
     /// - [`ServerError::BadRequest`] — a duplicate agent name was registered, or
-    ///   `max_sessions` / [`max_in_flight`](AgentServerBuilder::max_in_flight) was
-    ///   set to `0`.
+    ///   `max_sessions` / [`max_in_flight`](AgentServerBuilder::max_in_flight) /
+    ///   [`max_run_duration`](AgentServerBuilder::max_run_duration) was set to
+    ///   `0`.
     /// - [`ServerError::Internal`] — no context provider was supplied (either via
     ///   [`context_provider`](AgentServerBuilder::context_provider) or
     ///   [`with_default_context`](AgentServerBuilder::with_default_context)).
@@ -284,6 +285,17 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
         if self.max_in_flight == 0 {
             return Err(ServerError::BadRequest(
                 "max_in_flight must be greater than 0".to_owned(),
+            ));
+        }
+
+        // Unconditional, same reasoning as `max_in_flight` above: a zero
+        // duration is silently indistinguishable from "works" at build time —
+        // the sweeper's next tick (at most 30s later) would cancel every run
+        // still executing, forever, with no error and no log. Reject it here
+        // instead of letting it degrade into a permanent-outage vector.
+        if self.max_run_duration.is_zero() {
+            return Err(ServerError::BadRequest(
+                "max_run_duration must be greater than 0".to_owned(),
             ));
         }
 

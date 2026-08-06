@@ -257,8 +257,9 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
     /// # Errors
     ///
     /// - [`ServerError::BadRequest`] — a duplicate agent name was registered, or
-    ///   `max_sessions` / [`max_in_flight`](AgentServerBuilder::max_in_flight) was
-    ///   set to `0`.
+    ///   `max_sessions` / [`max_in_flight`](AgentServerBuilder::max_in_flight) /
+    ///   [`max_run_duration`](AgentServerBuilder::max_run_duration) was set to
+    ///   `0`.
     /// - [`ServerError::Internal`] — no context provider was supplied (either via
     ///   [`context_provider`](AgentServerBuilder::context_provider) or
     ///   [`with_default_context`](AgentServerBuilder::with_default_context)).
@@ -284,6 +285,17 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
         if self.max_in_flight == 0 {
             return Err(ServerError::BadRequest(
                 "max_in_flight must be greater than 0".to_owned(),
+            ));
+        }
+
+        // Unconditional, same reasoning as `max_in_flight` above: a zero
+        // duration is silently indistinguishable from "works" at build time —
+        // the sweeper's next tick (at most 30s later) would cancel every run
+        // still executing, forever, with no error and no log. Reject it here
+        // instead of letting it degrade into a permanent-outage vector.
+        if self.max_run_duration.is_zero() {
+            return Err(ServerError::BadRequest(
+                "max_run_duration must be greater than 0".to_owned(),
             ));
         }
 
@@ -564,5 +576,65 @@ mod tests {
             }
             other => panic!("expected ServerError::BadRequest, got: {other}"),
         }
+    }
+
+    /// `max_run_duration(Duration::ZERO)` must be rejected before
+    /// construction, same as `max_in_flight(0)` above. Left unguarded, it is
+    /// accepted silently and then cancels every run at the sweeper's very
+    /// next tick (at most 30s later), forever, with no error and no log.
+    /// Asserts the message names `max_run_duration` specifically, matching
+    /// the stronger of the two `max_in_flight` assertions above.
+    #[test]
+    fn zero_max_run_duration_is_bad_request() {
+        let result = AgentServer::<()>::builder()
+            .with_default_context()
+            .max_run_duration(std::time::Duration::ZERO)
+            .build();
+        let err = result
+            .err()
+            .expect("max_run_duration(Duration::ZERO) must fail the build");
+        match err {
+            ServerError::BadRequest(msg) => {
+                assert!(
+                    msg.contains("max_run_duration"),
+                    "expected a max_run_duration message, got: {msg}"
+                );
+            }
+            other => panic!("expected ServerError::BadRequest, got: {other}"),
+        }
+    }
+
+    /// Regression for the bug this crate's sweeper-spawn wiring exists to
+    /// prevent: dropping the `spawn_sweeper` call from `configure()` would
+    /// break `max_run_duration` reclamation on the actix embed path — turning
+    /// the `max_in_flight` admission cap into a permanent-outage vector — with
+    /// no test failing. Mirrors axum's `router_alone_spawns_the_sweeper`
+    /// (`AgentServer::router` there, `AgentServer::configure` here — actix's
+    /// own embed path, as its docs already name it).
+    ///
+    /// `App::configure` runs its argument closure synchronously and
+    /// unconditionally the moment it's called — no ambient actix/Tokio
+    /// runtime is required, since `spawn_sweeper` spawns onto the
+    /// process-wide runtime obtained from `crate::runtime::shared_handle()`,
+    /// not the current one.
+    #[test]
+    fn configure_spawns_the_sweeper() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .build()
+            .expect("server builds");
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "the sweeper must not be spawned before configure() is ever called"
+        );
+
+        let cfg = server.configure();
+        let _app = App::new().configure(cfg); // NOT server.serve(...)
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "configure() alone must spawn the reclaiming sweeper"
+        );
     }
 }
