@@ -47,7 +47,7 @@ use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityExecutionError, ActivityOptions, WorkflowContext, WorkflowResult};
 
 use crate::activities::AgentActivities;
-use crate::activity_input::RenderInstructionsArgs;
+use crate::activity_input::{CallModelArgs, RenderInstructionsArgs};
 use crate::driver::{AgentPlan, DriverEffect, DurableDriver, InterruptKind};
 use crate::error::ErrorKindPayload;
 use crate::payloads::{DurableRunOutcome, RunStatusPayload, WorkflowInput};
@@ -328,7 +328,10 @@ async fn run_effects(
                 match ctx
                     .start_activity(
                         AgentActivities::call_model,
-                        (agent_name.to_owned(), request),
+                        CallModelArgs {
+                            agent_name: agent_name.to_owned(),
+                            request,
+                        },
                         config.model_activity_opts.clone(),
                     )
                     .await

@@ -60,6 +60,7 @@
 //! Rules 1 and 2 are asserted by the tests below. Rules 3 and 4 are review
 //! obligations.
 
+use paigasus_helikon_core::ModelRequest;
 use serde::{Deserialize, Serialize};
 use temporalio_common::data_converters::{
     GenericPayloadConverter, PayloadConversionError, SerializationContext, TemporalDeserializable,
@@ -208,9 +209,97 @@ impl TemporalDeserializable for RenderInstructionsInput {
     }
 }
 
+/// Activity name used in decode diagnostics and legacy-shape warnings.
+const ACT_CALL_MODEL: &str = "call_model";
+
+/// The `call_model` activity's input fields.
+///
+/// Serialized as one JSON object with `request` **nested** as an object — never
+/// stringified, so per-payload size stays equivalent to the pre-envelope
+/// `request` payload against the crate's ~1.5 MB practical budget.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CallModelArgs {
+    /// Name of the agent to resolve on the worker's registry.
+    pub agent_name: String,
+    /// The model request for this turn.
+    pub request: ModelRequest,
+}
+
+/// Temporal `Input` wrapper for [`CallModelArgs`]. Derives no serde — see the
+/// module docs on the blanket-impl coherence conflict. `Debug` is required
+/// because the tests call `.expect_err()` on a `Result<CallModelInput, _>`.
+#[derive(Debug)]
+pub(crate) struct CallModelInput(
+    /// The wrapped fields.
+    pub CallModelArgs,
+);
+
+impl From<CallModelArgs> for CallModelInput {
+    fn from(args: CallModelArgs) -> Self {
+        Self(args)
+    }
+}
+
+impl TemporalSerializable for CallModelInput {
+    fn to_payloads(
+        &self,
+        ctx: &SerializationContext<'_>,
+    ) -> Result<Vec<Payload>, PayloadConversionError> {
+        encode_envelope(ctx, &self.0)
+    }
+}
+
+impl TemporalDeserializable for CallModelInput {
+    fn from_payloads(
+        ctx: &SerializationContext<'_>,
+        payloads: Vec<Payload>,
+    ) -> Result<Self, PayloadConversionError> {
+        match payloads.len() {
+            // Envelope: one JSON object.
+            1 => {
+                let mut it = payloads.into_iter();
+                let args = decode_arg(
+                    ctx,
+                    it.next().expect("length checked above"),
+                    ACT_CALL_MODEL,
+                    0,
+                    "CallModelArgs",
+                )?;
+                Ok(Self(args))
+            }
+            // Legacy 0.2.x: (agent_name, request) as two payloads. Unchanged
+            // since 0.1.x, but still pre-envelope.
+            2 => {
+                warn_legacy(ACT_CALL_MODEL, 2);
+                let mut it = payloads.into_iter();
+                let agent_name = decode_arg(
+                    ctx,
+                    it.next().expect("length checked above"),
+                    ACT_CALL_MODEL,
+                    0,
+                    "String",
+                )?;
+                let request = decode_arg(
+                    ctx,
+                    it.next().expect("length checked above"),
+                    ACT_CALL_MODEL,
+                    1,
+                    "ModelRequest",
+                )?;
+                Ok(Self(CallModelArgs {
+                    agent_name,
+                    request,
+                }))
+            }
+            _ => Err(PayloadConversionError::WrongEncoding),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paigasus_helikon_core::ModelRequest;
     use temporalio_common::data_converters::{
         MultiArgs2, PayloadConverter, SerializationContextData,
     };
@@ -415,6 +504,136 @@ mod tests {
             assert!(
                 !debug.contains(SENTINEL),
                 "Debug leaked payload bytes: {debug}"
+            );
+        });
+    }
+
+    fn call_model_args() -> CallModelArgs {
+        CallModelArgs {
+            agent_name: "agent-1".to_owned(),
+            request: ModelRequest::new(),
+        }
+    }
+
+    fn json_of<T: Serialize>(value: &T) -> serde_json::Value {
+        serde_json::to_value(value).expect("serializes")
+    }
+
+    #[test]
+    fn call_model_round_trips_as_exactly_one_payload() {
+        with_ctx(|ctx| {
+            let args = call_model_args();
+            let expected = json_of(&args);
+            let payloads = ctx
+                .converter
+                .to_payloads(ctx, &CallModelInput(args))
+                .expect("encode");
+            assert_eq!(
+                payloads.len(),
+                1,
+                "the envelope must serialize to exactly one payload"
+            );
+
+            let back: CallModelInput = ctx.converter.from_payloads(ctx, payloads).expect("decode");
+            assert_eq!(json_of(&back.0), expected);
+        });
+    }
+
+    #[test]
+    fn call_model_decodes_legacy_two_payload_shape() {
+        with_ctx(|ctx| {
+            let legacy = MultiArgs2("agent-1".to_owned(), ModelRequest::new());
+            let payloads = ctx
+                .converter
+                .to_payloads(ctx, &legacy)
+                .expect("encode legacy");
+            assert_eq!(payloads.len(), 2, "legacy shape is two payloads");
+
+            let decoded: CallModelInput = ctx
+                .converter
+                .from_payloads(ctx, payloads)
+                .expect("a 0.2.x-queued task must decode");
+            assert_eq!(json_of(&decoded.0), json_of(&call_model_args()));
+        });
+    }
+
+    /// The `request` value is a frozen literal of `ModelRequest`'s wire shape as
+    /// of this commit, NOT a value serialized at test time — a serialized
+    /// fixture tracks the struct's drift and asserts nothing.
+    ///
+    /// If a future change to `paigasus-helikon-core`'s `ModelRequest` breaks this
+    /// test, that is the test working as intended: `ModelRequest` is a nested
+    /// core type, explicitly outside this module's field-evolution contract
+    /// (rule 4), so a change to it IS a wire-compatibility break. Update the
+    /// literal deliberately and treat the break as a release note, rather than
+    /// regenerating the fixture to make the red go away.
+    #[test]
+    fn call_model_decodes_frozen_envelope_literal() {
+        const FROZEN: &str = r#"{"agent_name":"agent-1","request":{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}}}"#;
+        with_ctx(|ctx| {
+            let value: serde_json::Value = serde_json::from_str(FROZEN).expect("literal parses");
+            let payload = ctx
+                .converter
+                .to_payload(ctx, &value)
+                .expect("encode literal");
+            let decoded: CallModelInput = ctx
+                .converter
+                .from_payloads(ctx, vec![payload])
+                .expect("decode");
+            assert_eq!(decoded.0.agent_name, "agent-1");
+        });
+    }
+
+    #[test]
+    fn call_model_envelope_ignores_unknown_fields() {
+        const FROZEN_FUTURE: &str = r#"{"agent_name":"agent-1","request":{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}},"added_in_a_later_release":42}"#;
+        with_ctx(|ctx| {
+            let value: serde_json::Value =
+                serde_json::from_str(FROZEN_FUTURE).expect("literal parses");
+            let payload = ctx
+                .converter
+                .to_payload(ctx, &value)
+                .expect("encode literal");
+            let decoded: CallModelInput = ctx
+                .converter
+                .from_payloads(ctx, vec![payload])
+                .expect("an envelope with an unknown field must still decode");
+            assert_eq!(decoded.0.agent_name, "agent-1");
+        });
+    }
+
+    #[test]
+    fn call_model_rejects_unrecognized_arity() {
+        with_ctx(|ctx| {
+            let zero: Result<CallModelInput, _> = ctx.converter.from_payloads(ctx, vec![]);
+            assert!(matches!(zero, Err(PayloadConversionError::WrongEncoding)));
+
+            let p = ctx
+                .converter
+                .to_payload(ctx, &"x".to_owned())
+                .expect("encode");
+            let three: Result<CallModelInput, _> = ctx
+                .converter
+                .from_payloads(ctx, vec![p.clone(), p.clone(), p]);
+            assert!(
+                matches!(three, Err(PayloadConversionError::WrongEncoding)),
+                "call_model has no three-payload shape"
+            );
+        });
+    }
+
+    #[test]
+    fn call_model_content_failure_is_encoding_error() {
+        with_ctx(|ctx| {
+            let bad = MultiArgs2(42_u32, ModelRequest::new());
+            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            let err = ctx
+                .converter
+                .from_payloads::<CallModelInput>(ctx, payloads)
+                .expect_err("a non-String agent_name must fail");
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError, got {err:?}"
             );
         });
     }
