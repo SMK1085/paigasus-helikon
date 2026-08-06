@@ -344,7 +344,8 @@ mod tests {
     }
 
     /// `synthetic_terminal_frame` returns `None` once a real terminal was seen,
-    /// the captured `start_error` when present, and a generic message otherwise.
+    /// and otherwise one of two fixed public strings — never the captured
+    /// `start_error` detail, which stays confined to the log (CWE-209).
     #[test]
     fn synthetic_terminal_frame_branches() {
         let reg = RunRegistry::new(Duration::from_secs(60), 16, 16);

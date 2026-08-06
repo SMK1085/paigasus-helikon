@@ -101,6 +101,44 @@ async fn ws_bad_uuid_400_before_upgrade() {
     assert_handshake_status(err, 400);
 }
 
+/// **Regression — a malformed WebSocket upgrade is a 400, not a 500.** A plain
+/// `GET` against a valid, existing run's events route — but with none of the
+/// `Upgrade: websocket` handshake headers — must be rejected with
+/// `400 Bad Request` carrying the `bad request: ...` error shape.
+///
+/// This is the only coverage of the reclassification in `handlers/events.rs`
+/// (`actix_ws::handle`'s `Err` branch maps to [`ServerError::BadRequest`], not
+/// [`ServerError::Internal`]). Without it, a future refactor could restore the
+/// old `Internal` (500) mapping and nothing in the workspace would fail — yet
+/// that mapping is exactly what let an attacker drive unbounded
+/// `error!`-level log volume by looping non-upgrade `GET`s at this route (every
+/// 500 is now logged at `error` level). Uses a real, valid run id (not a bogus
+/// one) so the request reaches the upgrade attempt instead of failing earlier
+/// at the 404-before-upgrade check.
+#[tokio::test]
+async fn ws_malformed_upgrade_is_400_bad_request() {
+    let base = support::spawn_echo_server();
+    let run_id = support::create_async_run(&base, "echo").await;
+
+    let url = format!("{base}/agents/echo/runs/{run_id}/events");
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .expect("plain GET to the events route");
+
+    assert_eq!(
+        resp.status(),
+        400,
+        "a non-upgrade request must be rejected with 400, not treated as a WS handshake"
+    );
+    let body = resp.text().await.expect("error body");
+    assert!(
+        body.starts_with(r#"{"error":"bad request:"#),
+        "expected the BadRequest error shape, got: {body}"
+    );
+}
+
 /// **AC — 404 before upgrade (unknown run).** Connecting to a valid-but-unknown
 /// run id must fail the WebSocket handshake (the server returns 404, not 101).
 #[tokio::test]
