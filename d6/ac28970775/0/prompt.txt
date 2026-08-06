@@ -1,0 +1,13 @@
+/feature-pipeline SMA-482
+
+---
+
+yes
+
+---
+
+fold the IDOR in, go ahead
+
+---
+
+yes run it subagent driven, open the PR once done, run the coderabbit loop and inform me once gate 2 is reached
