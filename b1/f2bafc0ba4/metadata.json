@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "b1f2bafc0ba4",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-482-runtime-axum-runtime-actix-harden-5xx-redaction-session",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-06-sma-482-runtime-http-hardening-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b1/f2bafc0ba4/0/metadata.json",
+      "transcript": "/b1/f2bafc0ba4/0/full.jsonl",
+      "compact_transcript": "/b1/f2bafc0ba4/0/transcript.jsonl",
+      "content_hash": "/b1/f2bafc0ba4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 37586,
+    "cache_read_tokens": 1089831,
+    "output_tokens": 26173,
+    "api_call_count": 6
+  }
+}
