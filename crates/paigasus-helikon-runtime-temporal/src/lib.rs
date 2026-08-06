@@ -366,6 +366,10 @@
 /// why). Private: every externally-relevant type it defines is re-exported
 /// or consumed through [`worker`].
 mod activities;
+/// Wire codec for activity inputs: one self-describing envelope payload per
+/// activity, decoding both that and the legacy 0.2.x positional shapes.
+/// Private — the envelope types never cross the public API boundary.
+mod activity_input;
 /// The pure durable-loop step machine.
 ///
 /// [`driver::DurableDriver`] wraps [`paigasus_helikon_core::transition`] with

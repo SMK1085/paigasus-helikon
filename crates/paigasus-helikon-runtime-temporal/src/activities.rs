@@ -33,6 +33,7 @@ use paigasus_helikon_core::{
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::ApplicationFailure;
 
+use crate::activity_input::{RenderInstructionsArgs, RenderInstructionsInput};
 use crate::driver::AgentPlan;
 use crate::error::ErrorKindPayload;
 use crate::payloads::ModelTurnResult;
@@ -373,9 +374,12 @@ impl AgentActivities {
     pub(crate) async fn render_instructions(
         self: Arc<Self>,
         ctx: ActivityContext,
-        agent_name: String,
-        ctx_seed: Option<serde_json::Value>,
+        input: RenderInstructionsInput,
     ) -> Result<String, ActivityError> {
+        let RenderInstructionsArgs {
+            agent_name,
+            ctx_seed,
+        } = input.0;
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,
