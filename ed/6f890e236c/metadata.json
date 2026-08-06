@@ -3,7 +3,7 @@
   "checkpoint_id": "ed6f890e236c",
   "strategy": "manual-commit",
   "branch": "feature/sma-482-runtime-axum-runtime-actix-harden-5xx-redaction-session",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     "docs/superpowers/plans/2026-08-06-sma-482-runtime-http-hardening.md"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/ed/6f890e236c/0/transcript.jsonl",
       "content_hash": "/ed/6f890e236c/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/ed/6f890e236c/1/metadata.json",
+      "transcript": "/ed/6f890e236c/1/full.jsonl",
+      "compact_transcript": "/ed/6f890e236c/1/transcript.jsonl",
+      "content_hash": "/ed/6f890e236c/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 4,
-    "cache_creation_tokens": 45787,
-    "cache_read_tokens": 483848,
-    "output_tokens": 44128,
-    "api_call_count": 2
+    "input_tokens": 10,
+    "cache_creation_tokens": 47046,
+    "cache_read_tokens": 1016690,
+    "output_tokens": 46561,
+    "api_call_count": 5
   }
 }
