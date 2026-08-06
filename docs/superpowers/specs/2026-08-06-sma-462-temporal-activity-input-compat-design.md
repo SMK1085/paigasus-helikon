@@ -321,12 +321,15 @@ does not appear in the message.
 
 ### 5.2 What the retry budget actually buys (and where it runs out)
 
-Under D9 this release never encounters the reverse direction, because it does not change the
-wire. The following applies to the follow-up release that flips the encoder, and belongs in
-its upgrade notes:
+**D9 removes this failure mode from the supported upgrade path entirely.** Release N writes
+the legacy shape, which 0.2.x reads; release N+1 writes envelopes, which N already reads.
+Neither hop has a direction that fails. What follows therefore applies **only to an
+unsupported two-version jump** (0.2.x → N+1, skipping the overlap release), and belongs in
+the CHANGELOG as the reason that jump is unsupported rather than merely discouraged.
 
-An old worker handed a new-shape payload fails retryably and Temporal re-dispatches until a
-new worker takes it. Three things bound that, and only the first was identified pre-challenge:
+In that case an old worker handed a new-shape payload fails retryably and Temporal
+re-dispatches until a new worker takes it. Four things bound that recovery, and only the
+first was identified pre-challenge:
 
 1. **Finite `maximum_attempts`.** `worker::RetryPolicyConfig` exposes
    `maximum_attempts: Option<u32>` for `model_retry_policy` / `tool_retry_policy`. A finite
@@ -342,7 +345,11 @@ new worker takes it. Three things bound that, and only the first was identified 
    failing loudly.
 
 So "degrades to retry latency, not a dead run" holds only for `invoke_tool` with unlimited
-attempts and no run deadline. All four points go in the CHANGELOG upgrade notes.
+attempts and no run deadline. All four points go in the CHANGELOG upgrade notes as the
+justification for §7.5's one-release-at-a-time rule. A related question this design does not
+answer: each failed attempt writes an `ActivityTaskFailed` event, so a sustained
+two-version-jump rollout also consumes workflow history length. One more reason the jump is
+unsupported rather than merely slow.
 
 ## 6. Testing
 
@@ -467,4 +474,5 @@ D9's follow-up release is a separate ticket and a separate release-plz cycle.
 - **Nested core types are ungoverned** (§4.6 rule 4). A `ModelRequest` / `ToolCallRequest`
   serde change breaks the wire regardless of this design. Accepted residual risk; the open
   question of whether those types are a stable wire contract is worth a separate decision.
-- **§5.2's four retry-budget bounds** apply to the follow-up release — documented, not fixed.
+- **§5.2's four retry-budget bounds** apply only to an unsupported two-version jump —
+  documented as the reason that jump is barred, not fixed.
