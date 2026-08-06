@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade one release at a time**, and keep the mixed-fleet window short. A 0.2.x worker handed one of the new envelope payloads cannot decode it; it fails the attempt retryably and Temporal re-dispatches until a worker on this version takes it. Four things bound that recovery: a finite `maximum_attempts` on `model_retry_policy` / `tool_retry_policy` can be exhausted; `WorkflowInput::timeout_ms` interrupts the run regardless of retry policy; a terminal `render_instructions` failure ends the run outright; and exhausted `invoke_tool` retries are folded into a tool-error result fed to the model rather than failing loudly.
 - **Prefer draining in-flight runs before this upgrade**, or ensure retry caps are unlimited and run deadlines generous for the duration of the rollout. Blue-green task queues remain available.
 - **Rolling back requires a drain.** Once a worker on this version has queued an envelope-shaped activity task, that payload is frozen in the `ActivityTaskScheduled` event and every retry re-delivers it; a rollback to 0.2.x leaves those activities undecodable until the run deadline.
-- Activity input encoding is **not** a replay hazard: Temporal's replay check compares an activity's id and type only, never its input payloads.
+- Activity input encoding is **not** a replay hazard: Temporal's replay check compares an activity's id and type only, never its input payloads. Verified against `temporalio-* = 0.5.0`; re-verify on any SDK bump.
 
 ## [0.2.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.2.0...paigasus-helikon-runtime-temporal-v0.2.1) - 2026-07-18
 
