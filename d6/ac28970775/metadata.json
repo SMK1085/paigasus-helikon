@@ -3,7 +3,7 @@
   "checkpoint_id": "d6ac28970775",
   "strategy": "manual-commit",
   "branch": "feature/sma-482-runtime-axum-runtime-actix-harden-5xx-redaction-session",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "crates/paigasus-helikon-runtime-actix/src/error.rs",
     "crates/paigasus-helikon-runtime-actix/src/handlers/events.rs",
@@ -21,13 +21,20 @@
       "compact_transcript": "/d6/ac28970775/0/transcript.jsonl",
       "content_hash": "/d6/ac28970775/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/d6/ac28970775/1/metadata.json",
+      "transcript": "/d6/ac28970775/1/full.jsonl",
+      "compact_transcript": "/d6/ac28970775/1/transcript.jsonl",
+      "content_hash": "/d6/ac28970775/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 4,
-    "cache_creation_tokens": 4532,
-    "cache_read_tokens": 620714,
-    "output_tokens": 3087,
-    "api_call_count": 2
+    "input_tokens": 22,
+    "cache_creation_tokens": 16506,
+    "cache_read_tokens": 2733800,
+    "output_tokens": 6978,
+    "api_call_count": 11
   }
 }
