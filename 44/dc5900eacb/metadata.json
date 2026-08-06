@@ -3,7 +3,7 @@
   "checkpoint_id": "44dc5900eacb",
   "strategy": "manual-commit",
   "branch": "feature/sma-462-runtime-temporal-backward-compatible-activity-input-for-zero",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "crates/paigasus-helikon-runtime-temporal/src/activities.rs",
     "crates/paigasus-helikon-runtime-temporal/src/activity_input.rs",
@@ -16,6 +16,13 @@
       "transcript": "/44/dc5900eacb/0/full.jsonl",
       "compact_transcript": "/44/dc5900eacb/0/transcript.jsonl",
       "content_hash": "/44/dc5900eacb/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/44/dc5900eacb/1/metadata.json",
+      "transcript": "/44/dc5900eacb/1/full.jsonl",
+      "compact_transcript": "/44/dc5900eacb/1/transcript.jsonl",
+      "content_hash": "/44/dc5900eacb/1/content_hash.txt",
       "prompt": ""
     }
   ],
