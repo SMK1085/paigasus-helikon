@@ -179,9 +179,36 @@ fn decode_arg<T: TemporalDeserializable + 'static>(
         )
     })
 }
+
+/// Encode one envelope as a single payload.
+///
+/// Shared by all three wrappers' [`TemporalSerializable::to_payloads`] impls so
+/// the encode path exists once rather than being triplicated (spec §4.4).
+///
+/// The nested `to_payload` call terminates rather than recursing — see the
+/// module docs.
+fn encode_envelope<T: TemporalSerializable + 'static>(
+    ctx: &SerializationContext<'_>,
+    args: &T,
+) -> Result<Vec<Payload>, PayloadConversionError> {
+    Ok(vec![ctx.converter.to_payload(ctx, args)?])
+}
 ```
 
+> **Note on the remaining per-activity repetition.** `decode_arg`,
+> `warn_legacy` and `encode_envelope` carry every piece of shared logic. What
+> stays per-activity is the `match payloads.len()` skeleton, whose arms
+> genuinely differ in field count, names and types — three explicit `match`
+> blocks are clearer here than a `macro_rules!` that would hide them. This is a
+> deliberate stopping point, not an oversight.
+
 - [ ] **Step 2: Add the `render_instructions` envelope pair**
+
+> **On ordering:** Task 1 is the one task that cannot be strictly tests-first — the
+> module and its shared helpers must exist before any test can reference them, and
+> the codec's own tests need the envelope types. Tasks 2 and 3 *are* strictly
+> tests-first (their Step 1 writes tests that fail to compile). Do not "fix" Task 1
+> by writing tests against types that don't exist yet; just follow the steps.
 
 Append to `src/activity_input.rs`:
 
@@ -217,7 +244,7 @@ impl TemporalSerializable for RenderInstructionsInput {
         &self,
         ctx: &SerializationContext<'_>,
     ) -> Result<Vec<Payload>, PayloadConversionError> {
-        Ok(vec![ctx.converter.to_payload(ctx, &self.0)?])
+        encode_envelope(ctx, &self.0)
     }
 }
 
@@ -479,10 +506,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they fail**
+- [ ] **Step 5: Run the codec tests**
 
 Run: `cargo test -p paigasus-helikon-runtime-temporal --lib activity_input`
-Expected: **compile error** — `render_instructions` in `activities.rs` still takes two parameters, so nothing yet uses `RenderInstructionsInput` as an `Input`. The module itself should compile; if the tests already pass at this point, the codec is written but not yet wired, which Steps 6–7 fix.
+Expected: **PASS — all eight.** The codec is self-contained; it does not need the activity wiring to work, so these tests are green before Steps 6–7. If any fails, the codec is wrong — fix it here, not after wiring, because a failure after wiring is much harder to localise.
+
+Note you may see `dead_code` warnings for the envelope types at this point: nothing outside the test module uses them yet. That is expected and Steps 6–7 resolve it. Do **not** silence it with `#[allow(dead_code)]`.
 
 - [ ] **Step 6: Wire the activity method**
 
@@ -745,7 +774,7 @@ impl TemporalSerializable for CallModelInput {
         &self,
         ctx: &SerializationContext<'_>,
     ) -> Result<Vec<Payload>, PayloadConversionError> {
-        Ok(vec![ctx.converter.to_payload(ctx, &self.0)?])
+        encode_envelope(ctx, &self.0)
     }
 }
 
@@ -1097,7 +1126,7 @@ impl TemporalSerializable for InvokeToolInput {
         &self,
         ctx: &SerializationContext<'_>,
     ) -> Result<Vec<Payload>, PayloadConversionError> {
-        Ok(vec![ctx.converter.to_payload(ctx, &self.0)?])
+        encode_envelope(ctx, &self.0)
     }
 }
 
