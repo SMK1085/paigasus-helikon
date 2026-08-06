@@ -1,0 +1,97 @@
+/feature-pipeline SMA-462
+
+---
+
+yes
+
+---
+
+yes
+
+---
+
+single release, flip encoder now
+
+---
+
+approved
+
+---
+
+yes proceed with subagent
+
+---
+
+<task-notification>
+<task-id>af1b1f3190cc43ffa</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/af1b1f3190cc43ffa.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 render_instructions envelope" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean (the report file edit is outside git tracking, same as before).
+
+## Summary
+
+**Status: DONE**
+
+**Commit:** `5ffc881d320ec05c4cf4cbdfcb52a75913a7f9bd` — `fix(runtime-temporal): SMA-462 scope activity-name constants and harden the leak test`
+
+**Test summary:** `cargo test -p paigasus-helikon-runtime-temporal --lib activity_input` → 8/8 passed; full crate suite (`cargo test -p paigasus-helikon-runtime-temporal`) → 63 lib + 6 integration + 2 doctests all passed; `cargo clippy -p paigasus-helikon-runtime-temporal --all-features --all-targets -- -D warnings` → clean, zero warnings.
+
+**Finding 2 evidence (failed-then-passed):**
+- With `decode_arg`'s `.map_err(|_| ...)` temporarily changed to chain the source error, the new `decode_diagnostics_never_leak_payload_bytes` test **FAILED**, leaking the sentinel verbatim: `Display leaked payload bytes: ... invalid type: string "super-secret-tenant-token", expected struct RenderInstructionsArgs`.
+- After reverting to the original `.map_err(|_| ...)`, the same test suite **PASSED** (8/8), and `git diff` confirms no chaining code was left in the committed change.
+
+**Concerns:** None. Both findings fully resolved; the crate's clippy gate is now clean end-to-end for Task 1 in isolation.</result>
+<usage><subagent_tokens>127170</subagent_tokens><tool_uses>27</tool_uses><duration_ms>176015</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4e62cec45cd5609f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a4e62cec45cd5609f.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 call_model envelope" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean tree, commit signed and recorded. Task 2 is now complete.
+
+## Summary
+
+**Status: DONE**
+
+**Commit SHA:** `764f2a7` — `feat(runtime-temporal): SMA-462 add envelope input for call_model`
+
+**Test summary:** `cargo test -p paigasus-helikon-runtime-temporal` → 69 lib tests + 6 `temporal_live` integration tests + 2 doc-tests, all passing, 0 failed; `cargo clippy -p paigasus-helikon-runtime-temporal --all-features --all-targets -- -D warnings` → clean.
+
+**Frozen `request` JSON text settled on** (obtained by serializing `ModelRequest::new()` once in a throwaway scratch test, then deleted — never committed):
+```
+{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}}
+```
+Applied inside both fixtures:
+- `call_model_decodes_frozen_envelope_literal`: `{"agent_name":"agent-1","request":{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}}}`
+- `call_model_envelope_ignores_unknown_fields`: same, with `,"added_in_a_later_release":42` appended.
+
+Added your exact doc comment above `call_model_decodes_frozen_envelope_literal`.
+
+**Concerns:** None outstanding. `paigasus-helikon-core` was never touched (verified via `git status` throughout); the commit contains only the three brief-specified files, staged explicitly (no `git add -A`); signing succeeded.</result>
+<usage><subagent_tokens>121461</subagent_tokens><tool_uses>15</tool_uses><duration_ms>113791</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa73255a23a4e88c5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/aa73255a23a4e88c5.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 4 documentation" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+**Commit SHA:** `1ab7a8527aed30f68c4b813f6a02cbaad8aba491`
+**Verification:** `cargo doc -p paigasus-helikon-runtime-temporal --all-features --no-deps` (RUSTDOCFLAGS=-D warnings) clean; `mdbook build docs/book` actually ran (mdbook v0.4.43) and exited 0 clean.
+**Concerns:** None.</result>
+<usage><subagent_tokens>93367</subagent_tokens><tool_uses>12</tool_uses><duration_ms>80719</duration_ms></usage>
+</task-notification>
