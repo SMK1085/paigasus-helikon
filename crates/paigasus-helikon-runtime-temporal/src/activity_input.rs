@@ -69,10 +69,6 @@ use temporalio_common::protos::temporal::api::common::v1::Payload;
 
 /// Activity name used in decode diagnostics and legacy-shape warnings.
 const ACT_RENDER: &str = "render_instructions";
-/// Activity name used in decode diagnostics and legacy-shape warnings.
-const ACT_CALL_MODEL: &str = "call_model";
-/// Activity name used in decode diagnostics and legacy-shape warnings.
-const ACT_INVOKE_TOOL: &str = "invoke_tool";
 
 /// Warn that a pre-envelope activity input was decoded.
 ///
@@ -389,19 +385,26 @@ mod tests {
 
     /// Spec §5.1: the diagnostic lands in Temporal history and must never carry
     /// payload bytes.
+    ///
+    /// The payload is a bare JSON **string** decoded against the envelope arm,
+    /// which expects a struct. That combination is the one that actually leaks:
+    /// serde_json renders it as `invalid type: string "<content>", expected
+    /// struct ...`, embedding the value verbatim. A map-vs-string mismatch would
+    /// NOT prove anything here — `Unexpected::Map` never echoes nested content,
+    /// so such a test passes whether or not `decode_arg` discards its source
+    /// error.
     #[test]
     fn decode_diagnostics_never_leak_payload_bytes() {
         const SENTINEL: &str = "super-secret-tenant-token";
         with_ctx(|ctx| {
-            let bad = MultiArgs2(
-                serde_json::json!({ "leak": SENTINEL }),
-                Option::<serde_json::Value>::None,
-            );
-            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            let payload = ctx
+                .converter
+                .to_payload(ctx, &SENTINEL.to_owned())
+                .expect("encode");
             let err = ctx
                 .converter
-                .from_payloads::<RenderInstructionsInput>(ctx, payloads)
-                .expect_err("an object where a String is required must fail");
+                .from_payloads::<RenderInstructionsInput>(ctx, vec![payload])
+                .expect_err("a bare string is not an envelope");
 
             let display = err.to_string();
             let debug = format!("{err:?}");
