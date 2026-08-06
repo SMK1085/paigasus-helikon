@@ -5,8 +5,8 @@
 **Branch:** `feature/sma-482-runtime-axum-runtime-actix-harden-5xx-redaction-session`
 **Crates:** `paigasus-helikon-runtime-axum`, `paigasus-helikon-runtime-actix`, `paigasus-helikon-runtime-http-conformance` (internal)
 
-**Revision 2** — incorporates the adversarial spec review. The changes from revision 1 are listed
-in "Review changelog" at the end.
+**Revision 3** — incorporates the adversarial spec review (see "Review changelog" at the end), and
+pulls the WebSocket-events authorisation gap (§4) in from the follow-up list at Sven's direction.
 
 ## Problem
 
@@ -24,7 +24,16 @@ deliberately deferred: each is a breaking or feature-level change, not a port de
 3. **CWE-770, unbounded resource consumption.** `RunRegistry::create` inserts unconditionally;
    `max_runs` caps only *retained terminal* runs. Concurrent live runs grow without bound.
 
-All three apply identically to both HTTP runtimes. They share one constraint: **any fix must land
+A fourth item, **CWE-639 again on the WebSocket events endpoint**, was surfaced by the adversarial
+review of this spec and pulled into scope at Sven's direction:
+
+4. `GET /agents/{name}/runs/{id}/events` authorises on the run id alone
+   (`handlers/events.rs:58-62`), so a caller who obtains another principal's run id can read that
+   run's entire event stream. It is the same threat class as item 2, and closing it is only
+   tractable *because* item 2 introduces `Principal` — which is why it belongs in this change
+   rather than a later one.
+
+All four apply identically to both HTTP runtimes. They share one constraint: **any fix must land
 in both runtimes in the same change**, or it silently breaks the wire/API parity that
 `tests/runtime-http-conformance` exists to assert.
 
@@ -40,13 +49,12 @@ in both runtimes in the same change**, or it silently breaks the wire/API parity
 
 Explicitly out of scope; each is recorded in "Follow-ups".
 
-- Authorising the WebSocket events endpoint against the principal.
 - A per-principal sub-cap on in-flight runs, and a per-principal session-eviction bound.
 - Any change to `paigasus-helikon-core`.
 
 ## Architecture
 
-Three independent changes, applied symmetrically to both runtimes. The two crates have
+Four independent changes, applied symmetrically to both runtimes. The two crates have
 structurally identical call sites — `handlers/runs.rs` resolves the session, acquires the
 per-session lock, then calls `registry.create` — so each change is the same edit twice, modulo
 each framework's request type.
@@ -535,6 +543,72 @@ and the panic-unwind path (`handlers/runs.rs:259-264`). A client disconnect eith
 
 ---
 
+## 4. Authorise the WebSocket events endpoint against the principal
+
+`handlers/events.rs` currently authorises a subscription on two facts: the run id exists, and its
+`agent_name` matches the path segment (`events.rs:58-62`). Nothing ties the run to a caller, so any
+admitted caller holding another principal's run id can replay and live-tail that run's entire event
+stream — every message, tool call, and result. Run ids are UUIDv4 and are not enumerable, which is
+why this was survivable; it is still the same IDOR class as §2, and §2's `Principal` is what makes
+the fix a few lines rather than a redesign.
+
+### Mechanism
+
+`RunHandle` gains an owning principal, captured at creation:
+
+```rust
+pub(crate) struct RunHandle {
+    pub agent_name: String,
+    /// Principal that started this run; `None` for an unbound run.
+    pub principal: Option<String>,
+    /* … */
+}
+
+// pub(crate), so not a public break
+pub fn create(&self, agent_name: String, principal: Option<String>,
+              cancel: CancellationToken) -> Result<(Uuid, Arc<RunHandle>), ServerError>
+```
+
+`create_run` passes the principal it already resolved for §2. The events handler resolves the
+requesting principal the same way and compares:
+
+```rust
+let handle = state
+    .registry
+    .get(run_id)
+    .filter(|h| h.agent_name == name)
+    .filter(|h| h.principal.as_deref() == principal.as_deref())   // NEW
+    .ok_or_else(|| ServerError::UnknownAgent(format!("{name}/{id}")))?;
+```
+
+### Why 404 and not 403
+
+The mismatch is folded into the **existing 404**, deliberately. A distinct 403 would confirm that
+the run id exists and belongs to someone else, turning the endpoint into an existence oracle and
+handing an attacker a way to validate harvested ids. A 404 is indistinguishable from "no such run",
+which is the property worth having. This also means the change adds no new status code to the
+endpoint and no new OpenAPI response — only the 404 description widens.
+
+### Compatibility
+
+The comparison is `Option<String>` equality, so when no principal is ever established — no
+`AuthLayer`, `require_principal` false — every run has `principal: None`, every request resolves
+`None`, and every comparison succeeds. The single-tenant and development-server behaviour is
+bit-for-bit unchanged; the gate only bites once principals exist, which is exactly when it should.
+
+One consequence worth stating: a run started by principal A can no longer be observed by principal
+B **even if B is an operator**. There is no administrative override, and adding one is out of scope.
+
+### Framework difference
+
+The axum handler's current signature takes `State`, `Path`, and `WebSocketUpgrade` and never sees
+the request extensions. It gains `principal: Option<Extension<Principal>>` (`Principal` is `Clone`,
+and the extractor ordering is unaffected because `WebSocketUpgrade` stays last). actix reads
+`req.extensions()` inside an explicit scope, under the same `RefCell` rule as §2 — the `Ref` must
+be dropped before the upgrade `.await`.
+
+---
+
 ## Error handling
 
 No new error variants. The three behaviours reuse existing ones:
@@ -560,7 +634,9 @@ gain:
 (status = 503, description = "In-flight run limit reached; retry after the `Retry-After` interval"),
 ```
 
-and the 403 description is extended to cover the missing-principal case. The conformance suite
+and the 403 description is extended to cover the missing-principal case. For the events route
+(`openapi.rs:76-78`) the **404 description** widens to cover a run owned by a different principal —
+per §4 that case deliberately reuses 404 rather than adding a status code. The conformance suite
 gains a response-set parity assertion so this class of drift is caught next time.
 
 ## Testing
@@ -608,6 +684,11 @@ New parity assertions:
    conversation history — asserted identically on both runtimes.
 7. **Response-set parity for `/openapi.json`** — the documented status codes for each path match
    between runtimes, not just the path keys.
+8. **WebSocket cross-principal denial (§4).** With the `AuthLayer` pair from assertion 6: start a
+   run as principal A, then attempt `GET /agents/echo/runs/{id}/events` as principal B. Both
+   runtimes must return **404** — not 403, and not an upgrade — with byte-identical bodies. A
+   companion sub-assertion confirms principal A *can* subscribe to its own run, so the test cannot
+   pass by denying everyone.
 
 Assertions 5 and 6 are the ones the parity suite most needs, because the 403 is the most
 security-critical new response *and* the two implementations diverge most there: axum uses
@@ -660,6 +741,16 @@ In-flight cap:
   a new run (driven with an injected `Instant`, as the existing sweep tests do);
 - `build()` rejects `max_in_flight(0)`.
 
+WebSocket authorisation (§4):
+
+- a run created with `principal: Some("a")` is not reachable by a request resolving
+  `Some("b")` or `None` → 404, and the response is byte-identical to a genuinely-unknown run id
+  (no oracle);
+- the owning principal *can* subscribe (the positive control);
+- with no principal anywhere (`None` == `None`), subscription still succeeds — the
+  single-tenant path is unchanged;
+- the agent-name mismatch check still returns 404 independently of the principal check.
+
 Redaction:
 
 - `Internal` and `RunStart` render exactly `{"error":"internal error"}`; `Unavailable` renders
@@ -707,6 +798,9 @@ Migration content:
   `require_principal(true)`.
 - 5xx response bodies are no longer diagnostic.
 - In-flight runs are capped at 1 024 by default, and a run still live after 1 hour is cancelled.
+- A run's WebSocket event stream is readable only by the principal that started it; other
+  principals receive 404. There is no administrative override. Deployments with no principals are
+  unaffected.
 
 ## Verification
 
@@ -727,12 +821,6 @@ conformance suite and can mask feature-unification problems.
 
 ## Follow-ups (not this PR)
 
-- **WebSocket events endpoint principal check.** `GET /agents/{name}/runs/{id}/events` authorises
-  on run id alone, so a caller who obtains another principal's run id can read that run's full
-  event stream. Mitigated by UUIDv4 unguessability and non-enumerable ids, but it is the same
-  threat class as §2. Now cheap once `Principal` exists: store it on `RunHandle` at `create` and
-  compare in the events handler. Deliberately held back so this PR's scope matches the ticket —
-  see the open question at the gate.
 - Per-principal sub-cap on in-flight runs, so one noisy tenant cannot exhaust the global cap.
 - Per-principal bound on `max_sessions`, closing the cross-tenant session-eviction primitive
   documented in §2.
@@ -772,6 +860,11 @@ Considered and **not** acted on:
 - **`Principal` in `paigasus-helikon-core` instead of per crate.** The two `AuthLayer` traits
   already have different signatures and different `Send` bounds, so an operator writes two impls
   either way; a shared type buys nothing and would drag core into this PR's release train.
-- **Closing the WebSocket events IDOR in this PR.** Real and now cheap, but it is a fourth change
-  to a ticket that already carries three breaking ones. Raised as an explicit scope question at the
-  approval gate rather than absorbed silently.
+- **Closing the WebSocket events IDOR in this PR.** Raised as an explicit scope question at the
+  approval gate rather than absorbed silently — and **accepted**: it is now §4. The argument that
+  won was that it is only cheap *because* §2 lands in the same change, so deferring it would mean
+  paying to re-establish the context later.
+
+Also updated the migration content and the `Documentation` section for §4: the crate READMEs and
+`docs/book/src/concepts/axum-server.md` must state that a run's event stream is now readable only
+by the principal that started it, and that there is no administrative override.
