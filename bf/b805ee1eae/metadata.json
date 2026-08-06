@@ -3,7 +3,7 @@
   "checkpoint_id": "bfb805ee1eae",
   "strategy": "manual-commit",
   "branch": "feature/sma-462-runtime-temporal-backward-compatible-activity-input-for-zero",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "docs/superpowers/plans/2026-08-06-sma-462-temporal-activity-input-compat.md"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/bf/b805ee1eae/0/transcript.jsonl",
       "content_hash": "/bf/b805ee1eae/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/bf/b805ee1eae/1/metadata.json",
+      "transcript": "/bf/b805ee1eae/1/full.jsonl",
+      "compact_transcript": "/bf/b805ee1eae/1/transcript.jsonl",
+      "content_hash": "/bf/b805ee1eae/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 15,
+    "cache_creation_tokens": 12460,
+    "cache_read_tokens": 2572580,
+    "output_tokens": 7821,
+    "api_call_count": 8
   }
 }
