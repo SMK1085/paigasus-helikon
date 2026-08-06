@@ -168,6 +168,21 @@ runtime.addEndpoint('production', {
 
 AgentCore gives no documented `SIGTERM` contract — termination (idle timeout, max lifetime, or scale-down) can be abrupt. **In HTTP-protocol mode**, durable conversation state belongs in the configured `Session` backend (e.g. `paigasus-helikon-sessions-sqlite`/`-postgres`/`-redis` via a custom `SessionProvider`), never in container memory — the default `InMemorySessionProvider` loses everything on termination, same as any in-process cache. **In MCP-protocol mode**, this guidance does not apply: `AgentCoreServer::mcp_router`/`serve_mcp` always give the wrapped `McpAgentServer` a fresh, unshared in-memory session per call (mirroring `paigasus-helikon-mcp`'s own per-call-context design) and do not consult this server's configured session/context providers at all — MCP mode cannot use a persistent session backend in v0.
 
+## Session keys carry no principal in this runtime
+
+This crate reuses `paigasus-helikon-runtime-axum`'s `SessionProvider` trait, whose
+`session` method now takes a `SessionKey<'_>` (principal + caller-supplied id)
+instead of a bare `Option<&str>` — see that crate's README for the full
+migration story. In *this* runtime the key's `principal` is always `None`:
+AgentCore exposes no `AuthLayer` seam, and each session already runs in its own
+microVM instance, so the validated session id is the whole identity here. A
+custom `SessionProvider` supplied via `AgentCoreServerBuilder::session_provider`
+must not expect principal-based separation — including via
+`SessionKey::storage_key`, which reduces to a stable per-id key when the
+principal is absent. That is the intended behaviour, not an oversight; see the
+crate docs (§ "Session keys carry no principal in this runtime") for the full
+rationale.
+
 ## Links
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-runtime-agentcore)

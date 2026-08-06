@@ -99,7 +99,7 @@ Completed runs are retained for a configurable period and count:
 | `.max_in_flight(usize)` | 1 024 | Cap on simultaneously in-flight (non-terminal) runs; further run creation is rejected with `503` + `Retry-After` once reached |
 | `.max_run_duration(Duration)` | 1 hour | Wall-clock lifetime after which a still-live run is cancelled and marked terminal by the sweeper, reclaiming its in-flight slot |
 
-A background sweeper task is started by `.serve()` / `.serve_with_listener()` to prune expired entries.
+A background sweeper task prunes expired entries and reclaims runs over `max_run_duration`. It starts on `.serve()`, `.serve_with_listener()`, and — since the embed path must reclaim too — `.router()` as well (actix's `.configure()` starts it the same way). On axum, `.router()`'s spawn needs an ambient Tokio runtime; if none is available (e.g. an embedding host still assembling its router before ever starting one) the spawn is skipped with a `tracing::warn!`, and a later call made from within a runtime spawns it then.
 
 ## Provider traits
 
@@ -116,7 +116,7 @@ pub trait SessionProvider: Send + Sync {
 
 Maps a `SessionKey` — the pair of the authenticated `Principal` (if any) and the caller-supplied `X-Session-Id` (if any) — to a `Session`. The built-in `InMemorySessionProvider` is the default; swap it for a `PostgresSession` or `RedisSession` backend via `.session_provider(Arc::new(...))` on the builder.
 
-**Key on `storage_key()`, not `id` alone.** `SessionKey::storage_key()` returns a collision-free single-string encoding of the compound key, for a backend that needs one string to key on. Reading `key.id` alone preserves the pre-0.2 behaviour *and* the CWE-639 vulnerability it fixed: a custom provider that keys only on the caller-supplied id lets any admitted caller who learns or guesses another caller's id read and append to that conversation.
+**Key on `storage_key()`, not `id` alone.** `SessionKey::storage_key()` returns a collision-free single-string encoding of the compound key, for a backend that needs one string to key on — as `Option<String>`, where `None` means the request is anonymous and MUST NOT be stored. Folding that `None` into a default string (e.g. `.unwrap_or_default()`) puts every anonymous caller on one shared row, reopening a cross-caller leak. Reading `key.id` alone preserves the pre-0.2 behaviour *and* the CWE-639 vulnerability it fixed: a custom provider that keys only on the caller-supplied id lets any admitted caller who learns or guesses another caller's id read and append to that conversation.
 
 ### `ContextProvider<Ctx>`
 

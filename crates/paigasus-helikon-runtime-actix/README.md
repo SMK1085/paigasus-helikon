@@ -110,6 +110,8 @@ An `AuthLayer` establishes the principal by inserting a `Principal(String)`
 into the request extensions from `authenticate()`:
 
 ```ignore
+use actix_web::HttpMessage; // brings `extensions_mut()` into scope
+
 req.extensions_mut().insert(Principal(user_id));
 ```
 
@@ -145,18 +147,26 @@ Deployments that mix authenticated and anonymous traffic should authenticate
 consistently across a run's lifetime.
 
 **The `actix-web` dependency seam.** `AuthLayer::authenticate` takes
-`&actix_web::HttpRequest`, but this crate does not re-export `actix-web`.
-Implementing `AuthLayer` — or using `.serve(addr)` without ever otherwise
-touching `actix_web` types — means adding `actix-web` as a direct dependency
-and keeping its minor version aligned with this crate's.
+`&actix_web::HttpRequest`, but this crate does not re-export `actix-web`, so
+implementing `AuthLayer` forces the dependency directly. Calling `.serve(addr)`
+on its own does too — not because `serve` itself names an `actix_web` type
+(it doesn't), but because driving it to completion needs an actix-rt `System`,
+which in practice means wrapping `main` in `#[actix_web::main]` (see
+"Entrypoint attribute" above). Either way, add `actix-web` as a direct
+dependency and keep its **major** version aligned with this crate's —
+actix-web is a 4.x crate, so the major, not the minor, is the breaking
+component.
 
 ## Migrating to 0.2
 
 - `SessionProvider::session` now takes a `SessionKey<'_>` instead of
   `Option<&str>`. Use `key.storage_key()` for a single-string backend key
-  (Postgres, Redis, a filesystem path). **Reading `key.id` alone preserves the
-  old behaviour *and* the CWE-639 vulnerability** — it drops the principal
-  component the key exists to add.
+  (Postgres, Redis, a filesystem path); it returns `Option<String>`, `None`
+  meaning the request is anonymous and MUST NOT be stored — folding that
+  `None` into a default string (e.g. `.unwrap_or_default()`) puts every
+  anonymous caller on one shared row, reopening a cross-caller leak. **Reading
+  `key.id` alone preserves the old behaviour *and* the CWE-639 vulnerability**
+  — it drops the principal component the key exists to add.
 - An `AuthLayer` used together with `X-Session-Id` must now insert a
   `Principal`, or the server must be built with `.allow_unbound_sessions()`;
   otherwise sessioned requests are refused with `403`.

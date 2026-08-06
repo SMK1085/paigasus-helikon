@@ -133,9 +133,12 @@ keeping its minor version aligned with this crate's.
 
 - `SessionProvider::session` now takes a `SessionKey<'_>` instead of
   `Option<&str>`. Use `key.storage_key()` for a single-string backend key
-  (Postgres, Redis, a filesystem path). **Reading `key.id` alone preserves the
-  old behaviour *and* the CWE-639 vulnerability** — it drops the principal
-  component the key exists to add.
+  (Postgres, Redis, a filesystem path); it returns `Option<String>`, `None`
+  meaning the request is anonymous and MUST NOT be stored — folding that
+  `None` into a default string (e.g. `.unwrap_or_default()`) puts every
+  anonymous caller on one shared row, reopening a cross-caller leak. **Reading
+  `key.id` alone preserves the old behaviour *and* the CWE-639 vulnerability**
+  — it drops the principal component the key exists to add.
 - An `AuthLayer` used together with `X-Session-Id` must now insert a
   `Principal`, or the server must be built with `.allow_unbound_sessions()`;
   otherwise sessioned requests are refused with `403`.
