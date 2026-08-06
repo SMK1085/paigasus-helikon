@@ -338,3 +338,38 @@ async fn axum_and_actix_are_wire_compatible() {
         }
     }
 }
+
+/// The shared fixture set must expose all three agents on both runtimes. `boom`
+/// and `hang` are what make the redaction and in-flight-cap assertions
+/// reachable; without them those behaviours cannot be triggered from the
+/// parity suite at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fixture_set_exposes_all_three_agents() {
+    let axum_base = boot_axum().await;
+    let actix_base = boot_actix();
+    let client = reqwest::Client::new();
+
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let body = client
+            .get(format!("{base}/agents"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} GET /agents: {e}"))
+            .text()
+            .await
+            .expect("agents body");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("agents body is JSON");
+        let names: Vec<&str> = value
+            .as_array()
+            .expect("agents body is an array")
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        for expected in ["echo", "boom", "hang"] {
+            assert!(
+                names.contains(&expected),
+                "{name} /agents is missing `{expected}`; got {names:?}"
+            );
+        }
+    }
+}
