@@ -90,6 +90,8 @@ pub struct AgentServerBuilder<Ctx> {
     retention: Duration,
     max_runs: usize,
     max_events_per_run: usize,
+    max_in_flight: usize,
+    max_run_duration: Duration,
     /// `None` until set explicitly; `build()` then defaults it to
     /// `self.auth.is_some()`.
     require_principal: Option<bool>,
@@ -109,6 +111,8 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             retention: Duration::from_secs(300),
             max_runs: 1024,
             max_events_per_run: 10_000,
+            max_in_flight: 1024,
+            max_run_duration: Duration::from_secs(3600),
             require_principal: None,
         }
     }
@@ -190,6 +194,32 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
         self
     }
 
+    /// Cap the number of simultaneously in-flight (non-terminal) runs.
+    ///
+    /// Once this many runs are live, further run creation is rejected with
+    /// `503 Service Unavailable` until a run reaches a terminal state.
+    ///
+    /// Default: 1 024, matching
+    /// [`max_retained_runs`](AgentServerBuilder::max_retained_runs).
+    pub fn max_in_flight(mut self, max: usize) -> Self {
+        self.max_in_flight = max;
+        self
+    }
+
+    /// Maximum wall-clock lifetime of a single run.
+    ///
+    /// A run still live after this long is cancelled and marked terminal by the
+    /// registry sweeper, releasing its in-flight slot. Without this a run that
+    /// never terminates — a hung agent on a detached `?mode=async` request —
+    /// would hold its slot for the process lifetime and eventually exhaust
+    /// [`max_in_flight`](AgentServerBuilder::max_in_flight) permanently.
+    ///
+    /// Default: 1 hour.
+    pub fn max_run_duration(mut self, duration: Duration) -> Self {
+        self.max_run_duration = duration;
+        self
+    }
+
     /// Require an authenticated [`Principal`](crate::Principal) before honouring
     /// an `X-Session-Id` header.
     ///
@@ -226,7 +256,9 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
     ///
     /// # Errors
     ///
-    /// - [`ServerError::BadRequest`] — a duplicate agent name was registered.
+    /// - [`ServerError::BadRequest`] — a duplicate agent name was registered, or
+    ///   `max_sessions` / [`max_in_flight`](AgentServerBuilder::max_in_flight) was
+    ///   set to `0`.
     /// - [`ServerError::Internal`] — no context provider was supplied (either via
     ///   [`context_provider`](AgentServerBuilder::context_provider) or
     ///   [`with_default_context`](AgentServerBuilder::with_default_context)).
@@ -246,6 +278,15 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             ));
         }
 
+        // Unconditional: a zero cap would reject every run, and no custom
+        // component can override it the way a session provider overrides
+        // `max_sessions`.
+        if self.max_in_flight == 0 {
+            return Err(ServerError::BadRequest(
+                "max_in_flight must be greater than 0".to_owned(),
+            ));
+        }
+
         let context = self.context.ok_or_else(|| {
             ServerError::Internal(
                 "no context provider set; call `.context_provider(…)` or \
@@ -260,7 +301,13 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             .sessions
             .unwrap_or_else(|| Arc::new(InMemorySessionProvider::new(self.max_sessions)));
 
-        let registry = RunRegistry::new(self.retention, self.max_runs, self.max_events_per_run);
+        let registry = RunRegistry::new(
+            self.retention,
+            self.max_runs,
+            self.max_events_per_run,
+            self.max_in_flight,
+            self.max_run_duration,
+        );
 
         // Default the gate to "on whenever this builder authenticates". An
         // embedded deployment whose host authenticates must opt in explicitly.
@@ -493,5 +540,17 @@ mod tests {
             .agent(agent("a"))
             .build();
         assert!(server.is_ok());
+    }
+
+    /// `max_in_flight(0)` must be rejected before construction — it is
+    /// unconditional (unlike `max_sessions`, no custom component overrides it),
+    /// since a zero cap would reject every run.
+    #[test]
+    fn zero_max_in_flight_is_bad_request() {
+        let result = AgentServer::<()>::builder()
+            .with_default_context()
+            .max_in_flight(0)
+            .build();
+        assert!(matches!(result, Err(ServerError::BadRequest(_))));
     }
 }

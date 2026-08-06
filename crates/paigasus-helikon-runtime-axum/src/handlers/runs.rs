@@ -139,6 +139,8 @@ impl RunQuery {
 ///   explicit non-JSON content type was supplied.
 /// - [`ServerError::RunStart`] (500) — the run failed before emitting any event
 ///   (one-shot mode only).
+/// - [`ServerError::Unavailable`] (503) — the server's in-flight run cap
+///   (`max_in_flight`) has been reached.
 pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     State(state): State<AppState<Ctx>>,
     Path(name): Path<String>,
@@ -206,7 +208,7 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    the context provider fails.
     let cancel = CancellationToken::new();
     let ctx = state.context.build(&parts, session, cancel.clone()).await?;
-    let (run_id, handle) = state.registry.create(name, principal.clone(), cancel);
+    let (run_id, handle) = state.registry.create(name, principal.clone(), cancel)?;
 
     // 6. Spawn the writer task: drive the agent and drain its events into the log.
     spawn_writer(

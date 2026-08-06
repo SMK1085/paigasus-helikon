@@ -886,3 +886,98 @@ async fn ws_events_are_scoped_to_the_owning_principal() {
         "cross-principal denial bodies must be byte-identical"
     );
 }
+
+/// Boot an axum server with a one-run admission cap. Single-purpose: the `hang`
+/// run it admits holds its slot until `max_run_duration` elapses, so nothing
+/// else should be asserted against this pair.
+async fn boot_axum_capped() -> String {
+    let mut builder = paigasus_helikon_runtime_axum::AgentServer::<()>::builder()
+        .with_default_context()
+        .max_in_flight(1);
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("axum capped server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        server.serve_with_listener(listener).await.expect("serve");
+    });
+    format!("http://{addr}")
+}
+
+/// Boot an actix server with a one-run admission cap. Same single-purpose
+/// caveat as `boot_axum_capped`.
+fn boot_actix_capped() -> String {
+    let mut builder = paigasus_helikon_runtime_actix::AgentServer::<()>::builder()
+        .with_default_context()
+        .max_in_flight(1);
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("actix capped server builds");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    std::thread::spawn(move || {
+        actix_web::rt::System::new().block_on(async move {
+            server.serve_with_listener(listener).await.expect("serve");
+        });
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    format!("http://{addr}")
+}
+
+/// Once the in-flight cap is reached, further runs are refused with an
+/// identical 503 on both runtimes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_flight_cap_rejects_identically() {
+    let axum_base = boot_axum_capped().await;
+    let actix_base = boot_actix_capped();
+    let client = reqwest::Client::new();
+
+    let mut bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        // Fill the single slot. `?mode=async` returns only AFTER `registry.create`
+        // has run, so the sequencing below is race-free.
+        let first = client
+            .post(format!("{base}/agents/hang/runs?mode=async"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "slot-holder")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} first hang run: {e}"));
+        assert_eq!(first.status(), 202, "{name} first run must be admitted");
+
+        // A DIFFERENT session id, deliberately: same-session requests queue on
+        // the per-session lock and would never reach the admission check, so the
+        // test would pass for the wrong reason.
+        let second = client
+            .post(format!("{base}/agents/echo/runs?mode=async"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "other-caller")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} second run: {e}"));
+        assert_eq!(second.status(), 503, "{name} second run must be refused");
+        assert_eq!(
+            second
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("1"),
+            "{name} 503 must carry Retry-After"
+        );
+        let body = second.text().await.expect("503 body");
+        assert_eq!(
+            body, r#"{"error":"service unavailable"}"#,
+            "{name} 503 body must be redacted — the reason goes to tracing, not \
+             the wire, so it does not confirm to an attacker that the cap is finite"
+        );
+        bodies.push(body);
+    }
+    assert_eq!(bodies[0], bodies[1], "503 bodies must be byte-identical");
+}

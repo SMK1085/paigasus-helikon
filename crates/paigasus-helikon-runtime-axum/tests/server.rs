@@ -110,3 +110,30 @@ fn max_sessions_zero_is_build_error() {
         other => panic!("expected ServerError::BadRequest, got: {other}"),
     }
 }
+
+/// `max_in_flight(0)` must be rejected before construction — it is
+/// unconditional (unlike `max_sessions`, no custom component overrides it),
+/// since a zero cap would reject every run.
+#[test]
+fn max_in_flight_zero_is_build_error() {
+    let b = AgentServer::<()>::builder()
+        .with_default_context()
+        .max_in_flight(0)
+        .agent(Arc::new(support::ScriptedAgent {
+            name: "x".into(),
+            events: vec![],
+        }));
+    let err = b
+        .build()
+        .err()
+        .expect("max_in_flight(0) must fail the build");
+    match err {
+        ServerError::BadRequest(msg) => {
+            assert!(
+                msg.contains("max_in_flight"),
+                "expected a max_in_flight message, got: {msg}"
+            );
+        }
+        other => panic!("expected ServerError::BadRequest, got: {other}"),
+    }
+}

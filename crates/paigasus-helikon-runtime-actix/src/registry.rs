@@ -4,6 +4,7 @@
 //! retained until they age out (TTL) or until the retained-run count exceeds `max_runs`
 //! (FIFO-by-completion eviction). Live (non-terminal) runs are **never** evicted.
 
+use crate::error::ServerError;
 use crate::event_log::EventLog;
 use paigasus_helikon_core::AgentEvent;
 use std::{
@@ -33,6 +34,9 @@ pub(crate) struct RunHandle {
     pub start_error: Mutex<Option<String>>,
     /// Set once the run enters a terminal state (via [`RunRegistry::note_terminal`]).
     pub terminal_at: Mutex<Option<Instant>>,
+    /// When the run was created. Used by the sweeper to reclaim a run that never
+    /// reaches a terminal state.
+    pub created_at: Instant,
 }
 
 /// Public `error` text for a run that failed before emitting any event.
@@ -91,6 +95,15 @@ struct RegistryInner {
     runs: HashMap<Uuid, Arc<RunHandle>>,
     /// Insertion order of terminal runs (oldest → newest). Used for FIFO eviction.
     completion_order: VecDeque<Uuid>,
+    /// Count of entries in `runs` whose `terminal_at` is `None`.
+    ///
+    /// Maintained rather than recomputed. Every mutation happens under the one
+    /// `inner` write lock (`create` +1, `note_terminal` −1, `sweep` pass 0 −1)
+    /// and `sweep` never removes a non-terminal run, so it cannot drift from the
+    /// map. Scanning instead would hold the write lock while taking up to
+    /// `max_runs + max_in_flight` mutexes, serialising against every concurrent
+    /// `get`.
+    live: usize,
 }
 
 // ── RunRegistry ───────────────────────────────────────────────────────────────
@@ -106,6 +119,10 @@ pub(crate) struct RunRegistry {
     max_runs: usize,
     /// [`EventLog`] capacity for each newly-created run.
     max_events_per_run: usize,
+    /// Maximum number of simultaneously in-flight (non-terminal) runs.
+    max_in_flight: usize,
+    /// Maximum wall-clock lifetime of a single run before the sweeper reclaims it.
+    max_run_duration: Duration,
     /// Guards [`RunRegistry::spawn_sweeper`] so at most one background task is
     /// spawned, no matter how many actix workers call `configure()`.
     sweeper: Once,
@@ -117,15 +134,28 @@ impl RunRegistry {
     /// * `ttl` – retention window after a run becomes terminal.
     /// * `max_runs` – cap on retained completed runs; oldest-completed runs are evicted first.
     /// * `max_events_per_run` – passed to each run's [`EventLog::new`].
-    pub fn new(ttl: Duration, max_runs: usize, max_events_per_run: usize) -> Arc<Self> {
+    /// * `max_in_flight` – cap on simultaneously non-terminal runs; further
+    ///   admission is refused once reached.
+    /// * `max_run_duration` – wall-clock lifetime after which the sweeper
+    ///   cancels and reclaims a run that never reached a terminal state.
+    pub fn new(
+        ttl: Duration,
+        max_runs: usize,
+        max_events_per_run: usize,
+        max_in_flight: usize,
+        max_run_duration: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner: RwLock::new(RegistryInner {
                 runs: HashMap::new(),
                 completion_order: VecDeque::new(),
+                live: 0,
             }),
             ttl,
             max_runs,
             max_events_per_run,
+            max_in_flight,
+            max_run_duration,
             sweeper: Once::new(),
         })
     }
@@ -138,24 +168,44 @@ impl RunRegistry {
     ///
     /// The run starts as non-terminal. Call [`note_terminal`](RunRegistry::note_terminal) once
     /// the run ends.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Unavailable`] when admitting the run would exceed
+    /// `max_in_flight`. The check and the insert share one critical section, so
+    /// there is no window in which two callers both see room for the last slot.
     pub fn create(
         &self,
         agent_name: String,
         principal: Option<String>,
         cancel: CancellationToken,
-    ) -> (Uuid, Arc<RunHandle>) {
+    ) -> Result<(Uuid, Arc<RunHandle>), ServerError> {
+        let mut inner = self.inner.write().expect("RunRegistry RwLock poisoned");
+        if inner.live >= self.max_in_flight {
+            // The only server-side signal that the cap is biting; the caller's
+            // 503 body is redacted.
+            tracing::warn!(
+                live = inner.live,
+                cap = self.max_in_flight,
+                "rejecting run: in-flight limit reached"
+            );
+            return Err(ServerError::Unavailable(
+                "in-flight run limit reached".to_owned(),
+            ));
+        }
         let id = Uuid::new_v4();
         let handle = Arc::new(RunHandle {
             agent_name,
             principal,
+            created_at: Instant::now(),
             log: Arc::new(EventLog::new(self.max_events_per_run)),
             cancel,
             start_error: Mutex::new(None),
             terminal_at: Mutex::new(None),
         });
-        let mut inner = self.inner.write().expect("RunRegistry RwLock poisoned");
         inner.runs.insert(id, Arc::clone(&handle));
-        (id, handle)
+        inner.live += 1;
+        Ok((id, handle))
     }
 
     /// Look up a run by id. Returns `None` if it has been evicted or never existed.
@@ -183,11 +233,20 @@ impl RunRegistry {
             .expect("terminal_at mutex poisoned");
         if t.is_none() {
             *t = Some(now);
+            drop(t);
             inner.completion_order.push_back(id);
+            inner.live -= 1;
         }
     }
 
-    /// Evict stale runs in two passes.
+    /// Evict stale runs in three passes.
+    ///
+    /// **Pass 0 – reclamation:** cancel and stamp terminal every non-terminal run
+    /// whose `created_at + max_run_duration ≤ now`. This is what makes the
+    /// in-flight cap (`max_in_flight`) safe: without it, a run that never
+    /// terminates (`?mode=async` attaches no cancel guard, and
+    /// `RunConfig::default().timeout` is `None`) would hold its slot for the
+    /// process lifetime, and the cap would become a permanent-outage vector.
     ///
     /// **Pass 1 – TTL:** remove every terminal run whose `terminal_at + ttl ≤ now`.
     ///
@@ -195,12 +254,50 @@ impl RunRegistry {
     /// `max_runs`, pop the front of the completion queue and evict it (skipping ids that
     /// were already removed by pass 1 or a previous cap iteration).
     ///
-    /// Live (non-terminal) runs are **never** evicted by either pass.
+    /// Live (non-terminal, not-yet-overdue) runs are **never** evicted by pass 1
+    /// or pass 2.
     ///
     /// `now` is passed explicitly so callers can inject a deterministic clock in tests.
     pub fn sweep(&self, now: Instant) {
         let mut inner = self.inner.write().expect("RunRegistry RwLock poisoned");
         let ttl = self.ttl;
+
+        // Pass 0: reclaim runs that never terminated. Without this the in-flight
+        // cap is a permanent-outage vector — `?mode=async` attaches no cancel
+        // guard and `RunConfig::default().timeout` is `None`, so a wedged run
+        // would hold its slot for the process lifetime.
+        let overdue: Vec<Uuid> = inner
+            .runs
+            .iter()
+            .filter(|(_, h)| {
+                h.terminal_at
+                    .lock()
+                    .expect("terminal_at mutex poisoned")
+                    .is_none()
+                    && h.created_at
+                        .checked_add(self.max_run_duration)
+                        .is_some_and(|deadline| deadline <= now)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in overdue {
+            let Some(handle) = inner.runs.get(&id).cloned() else {
+                continue;
+            };
+            handle.cancel.cancel();
+            let mut t = handle
+                .terminal_at
+                .lock()
+                .expect("terminal_at mutex poisoned");
+            if t.is_none() {
+                *t = Some(now);
+                drop(t);
+                inner.completion_order.push_back(id);
+                inner.live -= 1;
+                tracing::warn!(%id, agent = %handle.agent_name,
+                               "reclaiming run that exceeded max_run_duration");
+            }
+        }
 
         // Pass 1: TTL eviction. Track evicted ids so we can also clean them from
         // `completion_order`, preventing unbounded deque growth across long uptimes.
@@ -309,8 +406,16 @@ mod tests {
     /// once the clock has advanced past `terminal_at + ttl`.
     #[test]
     fn ttl_evicts_after_deadline() {
-        let reg = RunRegistry::new(Duration::from_secs(60), 1024, 1024);
-        let (id, _h) = reg.create("a".into(), None, CancellationToken::new());
+        let reg = RunRegistry::new(
+            Duration::from_secs(60),
+            1024,
+            1024,
+            1024,
+            Duration::from_secs(3600),
+        );
+        let (id, _h) = reg
+            .create("a".into(), None, CancellationToken::new())
+            .unwrap();
         let t0 = Instant::now();
         reg.note_terminal(id, t0);
         reg.sweep(t0 + Duration::from_secs(59));
@@ -323,11 +428,19 @@ mod tests {
     /// evicted first, regardless of which run finished last.
     #[test]
     fn count_cap_evicts_oldest_completed_first() {
-        let reg = RunRegistry::new(Duration::from_secs(3600), 2, 1024);
+        let reg = RunRegistry::new(
+            Duration::from_secs(3600),
+            2,
+            1024,
+            1024,
+            Duration::from_secs(3600),
+        );
         let t0 = Instant::now();
         let ids: Vec<_> = (0..3)
             .map(|i| {
-                let (id, _) = reg.create("a".into(), None, CancellationToken::new());
+                let (id, _) = reg
+                    .create("a".into(), None, CancellationToken::new())
+                    .unwrap();
                 reg.note_terminal(id, t0 + Duration::from_secs(i));
                 id
             })
@@ -343,12 +456,20 @@ mod tests {
     /// completion-queue leak found in review).
     #[test]
     fn ttl_eviction_cleans_completion_queue() {
-        let reg = RunRegistry::new(Duration::from_secs(60), 1024, 1024);
+        let reg = RunRegistry::new(
+            Duration::from_secs(60),
+            1024,
+            1024,
+            1024,
+            Duration::from_secs(3600),
+        );
         let t0 = Instant::now();
 
         // Create and terminate three runs.
         for _ in 0..3 {
-            let (id, _h) = reg.create("a".into(), None, CancellationToken::new());
+            let (id, _h) = reg
+                .create("a".into(), None, CancellationToken::new())
+                .unwrap();
             reg.note_terminal(id, t0);
         }
         assert_eq!(reg.completion_queue_len(), 3);
@@ -367,8 +488,16 @@ mod tests {
     /// `start_error` detail, which stays confined to the log (CWE-209).
     #[test]
     fn synthetic_terminal_frame_branches() {
-        let reg = RunRegistry::new(Duration::from_secs(60), 16, 16);
-        let (_id, h) = reg.create("a".into(), None, CancellationToken::new());
+        let reg = RunRegistry::new(
+            Duration::from_secs(60),
+            16,
+            16,
+            16,
+            Duration::from_secs(3600),
+        );
+        let (_id, h) = reg
+            .create("a".into(), None, CancellationToken::new())
+            .unwrap();
 
         assert!(h.synthetic_terminal_frame(true).is_none());
 
@@ -388,5 +517,86 @@ mod tests {
             }
             other => panic!("expected redacted RunFailed, got {other:?}"),
         }
+    }
+
+    /// The cap admits exactly `max_in_flight` live runs and refuses the next.
+    #[test]
+    fn cap_admits_then_rejects() {
+        let reg = RunRegistry::new(
+            Duration::from_secs(60),
+            1024,
+            1024,
+            2,
+            Duration::from_secs(3600),
+        );
+        let (_a, _ha) = reg
+            .create("a".into(), None, CancellationToken::new())
+            .unwrap();
+        let (_b, _hb) = reg
+            .create("a".into(), None, CancellationToken::new())
+            .unwrap();
+        assert!(reg
+            .create("a".into(), None, CancellationToken::new())
+            .is_err());
+    }
+
+    /// A terminal run frees its slot; a terminal-but-RETAINED run must not keep
+    /// consuming one — that distinction is the entire point of the fix.
+    #[test]
+    fn terminal_runs_do_not_consume_slots() {
+        let reg = RunRegistry::new(
+            Duration::from_secs(3600),
+            1024,
+            1024,
+            1,
+            Duration::from_secs(3600),
+        );
+        let (id, _h) = reg
+            .create("a".into(), None, CancellationToken::new())
+            .unwrap();
+        assert!(reg
+            .create("a".into(), None, CancellationToken::new())
+            .is_err());
+
+        reg.note_terminal(id, Instant::now());
+        // Still retained (TTL is an hour), but no longer in flight.
+        assert!(reg.get(id).is_some());
+        assert!(reg
+            .create("a".into(), None, CancellationToken::new())
+            .is_ok());
+    }
+
+    /// A run that never terminates is reclaimed once it exceeds
+    /// `max_run_duration`, and its slot is reusable.
+    #[test]
+    fn sweep_reclaims_overdue_runs() {
+        let reg = RunRegistry::new(
+            Duration::from_secs(3600),
+            1024,
+            1024,
+            1,
+            Duration::from_secs(60),
+        );
+        let t0 = Instant::now();
+        let (_id, handle) = reg
+            .create("a".into(), None, CancellationToken::new())
+            .unwrap();
+        assert!(reg
+            .create("a".into(), None, CancellationToken::new())
+            .is_err());
+
+        reg.sweep(t0 + Duration::from_secs(59));
+        assert!(reg
+            .create("a".into(), None, CancellationToken::new())
+            .is_err());
+
+        reg.sweep(t0 + Duration::from_secs(61));
+        assert!(
+            handle.cancel.is_cancelled(),
+            "overdue run must be cancelled"
+        );
+        assert!(reg
+            .create("a".into(), None, CancellationToken::new())
+            .is_ok());
     }
 }

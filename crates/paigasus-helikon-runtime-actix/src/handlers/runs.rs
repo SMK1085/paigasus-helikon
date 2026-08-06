@@ -165,6 +165,8 @@ impl RunQuery {
 ///   [`MAX_BODY_BYTES`] cap.
 /// - [`ServerError::RunStart`] (500) — the run failed before emitting any event
 ///   (one-shot mode only).
+/// - [`ServerError::Unavailable`] (503) — the server's in-flight run cap
+///   (`max_in_flight`) has been reached.
 pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     state: Data<AppState<Ctx>>,
     path: web::Path<String>,
@@ -241,7 +243,7 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    `Send` and is what moves into the writer task.
     let cancel = CancellationToken::new();
     let ctx = state.context.build(&req, session, cancel.clone()).await?;
-    let (run_id, handle) = state.registry.create(name, principal.clone(), cancel);
+    let (run_id, handle) = state.registry.create(name, principal.clone(), cancel)?;
 
     // 6. Spawn the writer task on the process-wide runtime: drive the agent and
     //    drain its events into the log.
