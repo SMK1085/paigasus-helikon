@@ -850,7 +850,19 @@ async fn ws_events_are_scoped_to_the_owning_principal() {
             status, 404,
             "{name}: another principal's run must 404, not 403 (no existence oracle)"
         );
-        // The body embeds the per-run UUID (`unknown agent: echo/<run_id>`);
+        // `tungstenite::Error::Http`'s body comes from whatever was left in the
+        // handshake read-buffer tail (tungstenite's client handshake reads
+        // headers and body opportunistically off the same buffer). If headers
+        // and body ever arrived in separate reads, that tail — and therefore
+        // `body` — would be empty on BOTH runtimes, and the byte-equality
+        // check below would silently degrade to `"" == ""`, passing without
+        // asserting anything. Pin down what we can actually rely on first: a
+        // non-empty body carrying the expected error shape.
+        assert!(
+            body.contains("unknown agent"),
+            "{name}: cross-principal denial body must carry the `unknown agent` shape, got {body:?}"
+        );
+        // The body also embeds the per-run UUID (`unknown agent: echo/<run_id>`);
         // normalize it to a fixed token before the cross-runtime byte compare,
         // exactly as `normalize_run_id` does for the JSON run responses above.
         denial_bodies.push(body.replace(&run_id, RUN_ID_TOKEN));

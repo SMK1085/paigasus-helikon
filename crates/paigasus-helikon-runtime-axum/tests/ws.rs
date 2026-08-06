@@ -70,6 +70,30 @@ fn assert_handshake_404(err: tokio_tungstenite::tungstenite::Error) {
     }
 }
 
+/// Extract the status and (lossily-decoded) body of a failed WebSocket
+/// handshake, without completing the upgrade.
+///
+/// `tungstenite::Error::Http`'s body comes from whatever was left in the
+/// handshake read-buffer tail, so it is not guaranteed non-empty in general
+/// (headers and body could in principle arrive in separate reads). Callers
+/// that compare bodies for equality should assert the body carries the
+/// expected shape first, so an empty tail on both sides can't make the
+/// comparison silently vacuous.
+fn handshake_failure_status_and_body(err: tokio_tungstenite::tungstenite::Error) -> (u16, String) {
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => {
+            let status = resp.status().as_u16();
+            let body = resp
+                .body()
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_default();
+            (status, body)
+        }
+        other => panic!("expected an HTTP handshake failure, got: {other:?}"),
+    }
+}
+
 /// A WebSocket connection that targets the correct run id but the wrong agent
 /// name must fail the upgrade (server returns 404 before the 101 handshake).
 #[tokio::test]
@@ -277,19 +301,63 @@ async fn drain_ws_events(
 }
 
 /// A run started by one principal is invisible to another — reported as a plain
-/// 404, indistinguishable from a run id that never existed.
+/// 404, byte-identical (once the run id itself is normalized out) to a run id
+/// that never existed. That equality — not just the 404 status — is the actual
+/// security property: a principal-mismatch branch that grew a distinguishable
+/// message (e.g. to help debugging) would reopen the existence oracle while
+/// leaving a status-only assertion green.
 #[tokio::test]
 async fn cross_principal_subscription_is_404() {
     let addr = spawn_authed_echo_server().await;
     let run_id = create_async_run_as(addr, "echo", "alice").await;
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
 
+    // mallory reaches alice's real run — denied.
     let url = format!("ws://{addr}/agents/echo/runs/{run_id}/events");
     let request = ws_request_as(&url, Some("mallory"));
     let err = tokio_tungstenite::connect_async(request)
         .await
         .expect_err("cross-principal subscription must fail the handshake (404, not 101)");
-    assert_handshake_404(err);
+    let (cross_principal_status, cross_principal_body) = handshake_failure_status_and_body(err);
+    assert_eq!(
+        cross_principal_status, 404,
+        "cross-principal denial must be 404, not 403"
+    );
+
+    // mallory reaches a run id that never existed — same agent name, same
+    // principal, only the id differs.
+    let never_existed_id = uuid::Uuid::new_v4();
+    let never_existed_url = format!("ws://{addr}/agents/echo/runs/{never_existed_id}/events");
+    let never_existed_request = ws_request_as(&never_existed_url, Some("mallory"));
+    let err = tokio_tungstenite::connect_async(never_existed_request)
+        .await
+        .expect_err("an unknown run id must also fail the handshake (404, not 101)");
+    let (never_existed_status, never_existed_body) = handshake_failure_status_and_body(err);
+    assert_eq!(never_existed_status, 404, "unknown-run denial must be 404");
+
+    // Pin down what we can actually rely on before comparing: a non-empty
+    // body carrying the expected error shape (see `handshake_failure_status_and_body`
+    // for why the tail is not guaranteed non-empty in general).
+    assert!(
+        cross_principal_body.contains("unknown agent"),
+        "cross-principal denial body must carry the `unknown agent` shape, got {cross_principal_body:?}"
+    );
+    assert!(
+        never_existed_body.contains("unknown agent"),
+        "unknown-run denial body must carry the `unknown agent` shape, got {never_existed_body:?}"
+    );
+
+    // Both bodies embed their own (necessarily different) run id
+    // (`unknown agent: echo/<id>`); normalize each out to a fixed token before
+    // comparing, so the equality check is over everything EXCEPT the one piece
+    // of data that must legitimately differ.
+    let normalize = |body: &str, id: &str| body.replace(id, "<RUN_ID>");
+    assert_eq!(
+        normalize(&cross_principal_body, &run_id),
+        normalize(&never_existed_body, &never_existed_id.to_string()),
+        "a cross-principal denial must be indistinguishable from an unknown-run denial — \
+         any difference would reveal that the run id exists and belongs to someone else"
+    );
 }
 
 /// The owning principal can still subscribe, so the gate is not "deny all".

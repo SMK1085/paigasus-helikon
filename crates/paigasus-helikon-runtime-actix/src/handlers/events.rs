@@ -66,12 +66,17 @@ pub(crate) async fn events<Ctx: Send + Sync + 'static>(
     let run_id = Uuid::parse_str(&id)
         .map_err(|_| ServerError::BadRequest(format!("invalid run id: {id}")))?;
 
-    // The `Ref` from `extensions()` MUST be dropped before any `.await` — read
-    // it in this scoped block, exactly as `handlers/runs.rs` does. actix
-    // request extensions are `RefCell`-backed and this handler future carries
-    // no `Send` bound, so holding the `Ref` across the `actix_ws::handle` call
-    // below would compile and then panic at runtime with "already mutably
-    // borrowed" the first time something else touches the extensions.
+    // Read the principal in a scoped block, matching the pattern in
+    // `handlers/runs.rs`. There the scoping is load-bearing: that handler's
+    // `Ref` would otherwise straddle `context.build(..).await`, and actix
+    // request extensions are `RefCell`-backed with no `Send` bound on the
+    // handler future, so holding a `Ref` across an `.await` compiles and then
+    // panics at runtime with "already mutably borrowed". Here there is no
+    // `.await` between this read and its use, and `actix_ws::handle` below
+    // never touches request extensions (it only reads `req.head()` and the
+    // `Sec-WebSocket-Protocol` header), so that panic path is not actually
+    // live in this handler — the block is kept anyway for consistency with
+    // the rest of the crate, not because removing it would reintroduce a bug.
     let principal: Option<String> = {
         use actix_web::HttpMessage as _;
         req.extensions().get::<Principal>().map(|p| p.0.clone())
