@@ -73,9 +73,11 @@ or an explicit multi-turn message list:
 
 ### Session affinity
 
-Callers pass `X-Session-Id: <opaque-string>` to pin a run to a named session. The default `InMemorySessionProvider` maps that header to a shared `MemorySession`; two requests with the same `X-Session-Id` share history and are serialised (the second waits until the first run completes) to avoid race conditions on the shared session state.
+Callers pass `X-Session-Id: <opaque-string>` to pin a run to a named session, but the header alone no longer resolves one. Every lookup is keyed on a `SessionKey` — the pair of that header value and the `Principal` your `AuthLayer` established for the request (see below) — so two callers can no longer collide on a guessed or shared id (CWE-639). The default `InMemorySessionProvider` maps a `SessionKey` to a shared `MemorySession`; two requests with an equal key share history and are serialised (the second waits until the first run completes) to avoid race conditions on the shared session state.
 
-Requests without `X-Session-Id` receive a fresh anonymous session that is never stored.
+By default — whenever `.auth(...)` is configured on the builder — a request that carries `X-Session-Id` but for which no `Principal` was established is refused with `403 Forbidden`, because it would otherwise land in a namespace shared by every principal-less caller. `.allow_unbound_sessions()` opts out of the check for a single-tenant or shared-API-key deployment; `.require_principal(true)` opts in explicitly for an embedded deployment where a host application authenticates and no `AuthLayer` is configured on this builder.
+
+Requests without `X-Session-Id` receive a fresh anonymous session that is never stored, regardless of principal.
 
 ## Replayable runs
 
@@ -94,6 +96,8 @@ Completed runs are retained for a configurable period and count:
 | `.run_retention(Duration)` | 5 minutes | How long completed runs stay in the registry |
 | `.max_retained_runs(usize)` | 1 024 | Cap on retained completed runs (oldest evicted first) |
 | `.max_sessions(usize)` | 4 096 | Cap on tracked named sessions (oldest evicted first) |
+| `.max_in_flight(usize)` | 1 024 | Cap on simultaneously in-flight (non-terminal) runs; further run creation is rejected with `503` + `Retry-After` once reached |
+| `.max_run_duration(Duration)` | 1 hour | Wall-clock lifetime after which a still-live run is cancelled and marked terminal by the sweeper, reclaiming its in-flight slot |
 
 A background sweeper task is started by `.serve()` / `.serve_with_listener()` to prune expired entries.
 
@@ -106,11 +110,13 @@ Three traits are the extension points for operator customisation:
 ```ignore
 #[async_trait]
 pub trait SessionProvider: Send + Sync {
-    async fn session(&self, id: Option<&str>) -> Result<Arc<dyn Session>, ServerError>;
+    async fn session(&self, key: SessionKey<'_>) -> Result<Arc<dyn Session>, ServerError>;
 }
 ```
 
-Maps the `X-Session-Id` header value to a `Session`. The built-in `InMemorySessionProvider` is the default; swap it for a `PostgresSession` or `RedisSession` backend via `.session_provider(Arc::new(...))` on the builder.
+Maps a `SessionKey` — the pair of the authenticated `Principal` (if any) and the caller-supplied `X-Session-Id` (if any) — to a `Session`. The built-in `InMemorySessionProvider` is the default; swap it for a `PostgresSession` or `RedisSession` backend via `.session_provider(Arc::new(...))` on the builder.
+
+**Key on `storage_key()`, not `id` alone.** `SessionKey::storage_key()` returns a collision-free single-string encoding of the compound key, for a backend that needs one string to key on. Reading `key.id` alone preserves the pre-0.2 behaviour *and* the CWE-639 vulnerability it fixed: a custom provider that keys only on the caller-supplied id lets any admitted caller who learns or guesses another caller's id read and append to that conversation.
 
 ### `ContextProvider<Ctx>`
 
@@ -138,6 +144,8 @@ pub trait AuthLayer: Send + Sync {
 ```
 
 Called before every request. Return `Ok(())` to allow; return `Err(AuthRejection { status, message })` to reject. On success, you may insert an identity value into `parts.extensions` — the `ContextProvider` receives the same `parts`, creating the auth→context bridge. When `.auth(...)` is not called on the builder, all requests are admitted without authentication.
+
+One extension type is not opaque to the server: insert `Principal(user_id)` to name the authenticated caller, and the server scopes every session that caller reaches to that name (see [Session affinity](#session-affinity) above). Implementing `AuthLayer` names `axum::http::request::Parts`, but this crate does not re-export `axum` — add it as a direct dependency and keep its minor version aligned with this crate's.
 
 ### Security note
 
