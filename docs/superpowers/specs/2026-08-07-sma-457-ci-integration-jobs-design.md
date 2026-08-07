@@ -520,9 +520,18 @@ change alters no public API, quickstart flow, crate roster entry, or documented 
   contexts as required, not by suppressing failure.
 - **Release impact.** The PR touches `crates/paigasus-helikon-runtime-agentcore/docker/Dockerfile`
   and `crates/paigasus-helikon-runtime-temporal/{README.md,tests/}`, and release-plz attributes
-  bumps by file path. The squashed commit's **type** is what decides: `ci` carries
-  `increment: None` in `.versionrc`, so a `ci(...)`-titled PR bumps nothing. The PR title must
-  therefore not be `feat`/`fix` — stated here so it is a constraint, not a post-merge surprise.
+  bumps by file path. `.versionrc`'s `increment: None` for `ci` governs convco (the `commits`
+  CI gate and the local `commit-msg` hook) only — release-plz does not read `.versionrc`; it has
+  its own logic (feat → minor, breaking → major, everything else → **patch**). So the squashed
+  `ci(...)`-titled commit will still give both `paigasus-helikon-runtime-temporal` and
+  `paigasus-helikon-runtime-agentcore` a patch bump, cascading a patch bump to the
+  `paigasus-helikon` facade via `dependencies_update = true`. Precedent in this repo's history:
+  `6ebac2c` (`docs(repo): SMA-424 ...`), which touched only `crates/*/README.md`, was followed
+  by `b0671ec` (`chore: release (#94)`), which bumped and published nine crates including
+  `paigasus-helikon-core`. This bump is harmless — no library code changed — but it is real and
+  must be expected, with its CI watched after merge, not assumed away. The `ci` type is still
+  the right PR-title choice: it keeps the change out of the user-facing CHANGELOG sections
+  (`hidden: true` in `.versionrc`), which is what that field actually controls.
 - **Rollback.** The two halves are independently revertible. `integration.yml` can be deleted
   on its own, leaving the script/Dockerfile improvements in place — that is the first thing to
   revert if the jobs misbehave. The `agentcore-image-check.sh` and Dockerfile changes are

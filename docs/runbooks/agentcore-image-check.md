@@ -22,6 +22,30 @@
 > Both gates passed with wide margin (agent image at ~11% of the size budget;
 > cold start at ~20% of the latency budget).
 
+> **CI-observed 2026-08-07 on `ubuntu-24.04-arm`** (native arm64, no
+> emulation) — `agentcore-image`'s first cold run in `.github/workflows/integration.yml`
+> (PR #181, run 31206300324). Real numbers from that run, with
+> `AGENTCORE_COLD_START_LIMIT_MS=250`:
+>
+> | Metric | Value | Gate |
+> | --- | ---: | --- |
+> | `helikon-agentcore-echo` image size (AC gate) | 2.84 MB | < 30 MB |
+> | `helikon-agentcore-agent` image size (AC gate) | 6.78 MB | < 30 MB |
+> | echo `exec`→`/ping`-200 (CI gate) | 7 ms | < 250 ms |
+> | agent `exec`→`/ping`-200 (CI gate) | 7 ms | < 250 ms |
+> | both images built, both cache mounts cold, all four gates checked | ~240 s (4 min) | `timeout-minutes: 60` |
+>
+> All four gates passed with wide margin. Recorded honestly rather than
+> papered over: for the same Dockerfile and the same `Cargo.lock`, the CI
+> images run **roughly twice the size** of the macOS row above (2.84/6.78 MB
+> vs. 1.31/3.27 MB), while the CI cold starts run **lower** than macOS's
+> (7/7 ms vs. 11/9 ms) — native Linux Docker has no Docker Desktop
+> host↔VM port-forwarding overhead to pay on every `exec`→`/ping` probe, which
+> is exactly the kind of instrument difference §"Acceptance-criteria
+> interpretation note" below describes for the external cold-start number.
+> Both figures remain far under their respective gates either way; the point
+> of this row is that it is true, not that it is small.
+
 ## Prerequisites
 
 - **Docker with BuildKit — now mandatory, not merely default.** The Dockerfile's

@@ -250,9 +250,12 @@ jobs:
           EVENT: ${{ github.event_name }}
           MATCHED: ${{ steps.filter.outputs.agentcore }}
         run: |
-          # No nightly: a 40-60 minute arm64 double-build every night to
-          # re-measure two numbers sitting at ~11% and ~20% of their budgets is
-          # not worth it. workflow_dispatch still reaches this job.
+          # No nightly: the images build in ~4 minutes cold (measured in CI),
+          # so this isn't a cost call. The numbers sit far under their budgets
+          # (~11% of the size gate, ~20% of the latency gate) and cannot drift
+          # without a first-party change the path filter above already catches
+          # on the next PR — re-measuring two stable numbers every night adds
+          # no information. workflow_dispatch still reaches this job.
           if [ "${EVENT}" = "schedule" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
           elif [ "${EVENT}" = "workflow_dispatch" ]; then
@@ -261,13 +264,26 @@ jobs:
             echo "run=${MATCHED:-false}" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.decide.outputs.run != 'true'
-        run: echo "No AgentCore image-related changes; nothing to run."
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "${EVENT}" = "schedule" ]; then
+            echo "Nightly run: agentcore-image opts out of the cron by design; use workflow_dispatch to force one."
+          else
+            echo "No AgentCore image-related changes; nothing to run."
+          fi
       - if: steps.decide.outputs.run == 'true'
         name: Report runner capacity
         run: |
           # Two musl release builds share one cache-mounted /workspace/target
           # inside BuildKit's storage. A disk-full there surfaces as an opaque
           # build error that reads like an AgentCore regression, so measure first.
+          # `docker version` needs a live daemon; `|| true` keeps a hiccup here
+          # from failing a job whose actual gates haven't run yet. `tee -a`
+          # (not `>>`) sends the same content to both the job log — where
+          # someone debugging a disk-full failure will actually look — and the
+          # step summary, appending since $GITHUB_STEP_SUMMARY accumulates
+          # across steps and truncating would discard earlier steps' content.
           {
             echo "## agentcore-image runner"
             echo
@@ -275,9 +291,9 @@ jobs:
             nproc
             free -h
             df -h /
-            docker version --format 'docker {{.Server.Version}}'
+            docker version --format 'docker {{.Server.Version}}' || true
             echo '```'
-          } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
       - if: steps.decide.outputs.run == 'true'
         name: Build both images and check the gates
         env:
@@ -291,12 +307,17 @@ jobs:
         run: bash scripts/agentcore-image-check.sh
       - if: always() && steps.decide.outputs.run == 'true'
         name: Report disk after the build
+        # always() so this step still runs after a failed build — with
+        # `|| true` on the daemon-dependent commands and `tee -a` (not `>>`,
+        # append not truncate) so a reporting hiccup here can never turn a run
+        # where all four gates passed into a red job. See the "Report runner
+        # capacity" step above for the same reasoning.
         run: |
           {
             echo
             echo "Disk after build:"
             echo '```'
             df -h /
-            docker system df
+            docker system df || true
             echo '```'
-          } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stdout}"

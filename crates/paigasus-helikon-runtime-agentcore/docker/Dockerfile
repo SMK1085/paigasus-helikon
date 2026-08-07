@@ -6,6 +6,9 @@
 # stage needs every member crate's Cargo.toml + src/, not just this one crate's
 # directory). Run from the repository root:
 #
+# Requires BuildKit (default since Docker 23; `DOCKER_BUILDKIT=1` if disabled) —
+# the builder stage's RUN below uses a cache mount; see its comment for why.
+#
 #   # Minimal-overhead image (no model provider, no TLS stack):
 #   docker build --platform linux/arm64 \
 #     -f crates/paigasus-helikon-runtime-agentcore/docker/Dockerfile \
