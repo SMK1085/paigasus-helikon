@@ -590,6 +590,21 @@ jobs:
           set -e
           echo "duration_s=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
           exit "${status}"
+      - if: steps.decide.outputs.run == 'true'
+        name: Self-test the never-green-by-skip guard
+        # Regression test for gate()'s HELIKON_REQUIRE_TEMPORAL branch. The job's
+        # HELIKON_REQUIRE_TEMPORAL=1 is inherited from job env; TEMPORAL_TEST_SERVER
+        # is scoped to the suite step above, so it is absent here — exactly the
+        # condition the guard exists to catch. The suite MUST fail. If someone
+        # deletes those five lines, this step is what notices; without it the job
+        # would quietly return to passing while asserting nothing. The test binary
+        # is already compiled, so this costs seconds.
+        run: |
+          if cargo test -p paigasus-helikon-runtime-temporal --test temporal_live -- --test-threads=1; then
+            echo "::error::HELIKON_REQUIRE_TEMPORAL=1 with no TEMPORAL_TEST_SERVER must FAIL, but the suite passed — the never-green-by-skip guard in gate() is gone."
+            exit 1
+          fi
+          echo "guard OK: the suite fails when TEMPORAL_TEST_SERVER is absent"
       - if: always() && steps.suite.outcome != 'skipped'
         name: Record the run in the job summary
         env:
@@ -633,7 +648,7 @@ print('runs-on:', d['jobs']['temporal-it']['runs-on'])
 print('guarded steps:', sum(1 for s in d['jobs']['temporal-it']['steps'] if 'if' in s))
 "
 ```
-Expected: `triggers: ['pull_request', 'push', 'schedule', 'workflow_dispatch']`, `jobs: ['temporal-it']`, `runs-on: ubuntu-latest`, and a guarded-step count of 11.
+Expected: `triggers: ['pull_request', 'push', 'schedule', 'workflow_dispatch']`, `jobs: ['temporal-it']`, `runs-on: ubuntu-latest`, and a guarded-step count of 12.
 
 - [ ] **Step 4: Commit**
 
@@ -966,7 +981,7 @@ Both jobs **must actually run on this PR**: it touches `.github/workflows/integr
 
 - [ ] **Step 4: Confirm `temporal-it` genuinely executed the suite**
 
-In the job log, confirm: `6 passed` (not `0 passed`), and **no** `SKIPPED:` line. Confirm the job summary shows the outcome and wall-clock. Compare that duration against Task 1 Step 7's local figure — an order-of-magnitude difference means the runner is far more contended than assumed and `timeout-minutes` needs revisiting.
+In the job log, confirm: `6 passed` (not `0 passed`), and **no** `SKIPPED:` line. Confirm the "Self-test the never-green-by-skip guard" step passed — it must print `guard OK`, meaning the suite genuinely failed when the server address was withheld. Confirm the job summary shows the outcome and wall-clock. Compare that duration against Task 1 Step 7's local figure — an order-of-magnitude difference means the runner is far more contended than assumed and `timeout-minutes` needs revisiting.
 
 - [ ] **Step 5: Record the CI-observed numbers**
 
