@@ -34,6 +34,12 @@
 > | echo `exec`→`/ping`-200 (CI gate) | 7 ms | < 250 ms |
 > | agent `exec`→`/ping`-200 (CI gate) | 7 ms | < 250 ms |
 > | both images built, both cache mounts cold, all four gates checked | ~240 s (4 min) | `timeout-minutes: 60` |
+> | disk consumed by the two builds | ~2 GB of 109 GB free | — |
+>
+> Runner capacity, measured on the same run: 4 vCPU, 15 GiB RAM, Docker 28.0.4,
+> and 145 GB of disk with 109 GB free (107 GB after the build; Docker reports
+> 1.88 GB of images plus 1.11 GB of build cache). Disk headroom is not a
+> constraint here, so the BuildKit cache mounts are kept in full.
 >
 > All four gates passed with wide margin. Recorded honestly rather than
 > papered over: for the same Dockerfile and the same `Cargo.lock`, the CI

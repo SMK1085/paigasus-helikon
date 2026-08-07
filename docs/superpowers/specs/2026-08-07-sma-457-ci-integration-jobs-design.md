@@ -455,21 +455,22 @@ commit. This is the cheap half of the win; the expensive half is a non-goal.
 ### 6.3 Disk and capacity budget
 
 Two musl release builds of the aws-lc-rs/rustls stack share one cache-mounted
-`/workspace/target` inside BuildKit's storage, alongside two image builds. GitHub's published
-spec for the free public-repo arm64 runner is 4 vCPU / 16 GB RAM / 14 GB storage — and the
-first draft verified a tarball checksum while never checking the one environmental fact the
-entire job depends on.
+`/workspace/target` inside BuildKit's storage, alongside two image builds. A disk-full inside
+BuildKit surfaces as an opaque build error that would read as an AgentCore regression, so a
+`df -h` step before and after the build records the real figures. This was explicitly a
+*measure first* decision.
 
-A disk-full inside BuildKit surfaces as an opaque build error and would read as an AgentCore
-regression, so: a `df -h` step before and after the build writes the real figures to the step
-summary. If the first run shows the headroom is thin, the mitigations in preference order are
-(a) drop the `/workspace/target` mount and keep only `$CARGO_HOME/registry`, which has no
-growth or staleness hazard and gives up the reuse §6.2 buys; (b) `docker builder prune -f`
-between the two builds, same trade; (c) free the runner's preinstalled toolchains. This is
-explicitly a *measure first* decision, and the measurement is what the first run delivers.
+**Measured, 2026-08-07, `ubuntu-24.04-arm`:** 4 vCPU, 15 GiB RAM (+3 GiB swap), Docker 28.0.4,
+and **145 GB of disk with 109 GB free before the build**. Afterwards: 107 GB free — the two
+builds cost roughly **2 GB** (Docker reports 1.88 GB images + 1.11 GB build cache).
 
-Docker's presence on `ubuntu-24.04-arm` is likewise confirmed at implementation time, not
-assumed.
+That settles the question with a very wide margin, and corrects this section's own pre-run
+estimate: it guessed "14 GB storage" from GitHub's published spec, which is off by an order of
+magnitude for this runner. None of the mitigations drafted here — dropping the
+`/workspace/target` mount, `docker builder prune -f` between builds, or freeing the runner's
+preinstalled toolchains — is needed, and the cache-mount reuse §6.2 buys is kept in full.
+
+Docker's presence on `ubuntu-24.04-arm` was likewise confirmed by that run rather than assumed.
 
 ### 6.4 The 250 ms budget
 
