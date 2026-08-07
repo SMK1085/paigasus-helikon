@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "d013b90bd82a",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-482-runtime-axum-runtime-actix-harden-5xx-redaction-session",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-actix/src/error.rs",
+    "crates/paigasus-helikon-runtime-actix/src/handlers/runs.rs",
+    "crates/paigasus-helikon-runtime-actix/src/server.rs",
+    "crates/paigasus-helikon-runtime-actix/tests/ws.rs",
+    "crates/paigasus-helikon-runtime-axum/src/error.rs",
+    "crates/paigasus-helikon-runtime-axum/src/handlers/runs.rs",
+    "crates/paigasus-helikon-runtime-axum/src/server.rs",
+    "crates/paigasus-helikon-runtime-axum/tests/ws.rs",
+    "docs/book/src/concepts/axum-server.md",
+    "docs/superpowers/plans/2026-08-06-sma-482-runtime-http-hardening.md",
+    "docs/superpowers/specs/2026-08-06-sma-482-runtime-http-hardening-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d0/13b90bd82a/0/metadata.json",
+      "transcript": "/d0/13b90bd82a/0/full.jsonl",
+      "compact_transcript": "/d0/13b90bd82a/0/transcript.jsonl",
+      "content_hash": "/d0/13b90bd82a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 19522,
+    "cache_read_tokens": 4389925,
+    "output_tokens": 12020,
+    "api_call_count": 9
+  }
+}
