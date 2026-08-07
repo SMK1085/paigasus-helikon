@@ -336,34 +336,59 @@
 //! therefore cannot trip the non-determinism checker; *renaming* an activity would. This
 //! statement is pinned to `temporalio-* = 0.5.0` and must be re-verified on any SDK bump.
 //!
-//! **SMA-462 wire change (activity inputs are now a single envelope payload).** Each of
+//! **SMA-484 wire change (activity inputs are envelope-only as of 0.3.0).** Each of
 //! `render_instructions` / `call_model` / `invoke_tool` takes one self-describing JSON-object
-//! payload instead of positional arguments. Workers on this version also decode the previous
-//! pre-envelope positional shapes from 0.2.0 or 0.2.1 specifically, so activity tasks queued by
-//! a worker on either of those two versions execute normally. 0.1.x is outside the support
-//! window: its `render_instructions` and `invoke_tool` shapes fail closed with a decode error
-//! rather than being silently misread.
+//! payload, and that is now the **only** shape a worker decodes. The pre-envelope positional
+//! shapes (0.2.1 and earlier) are recognized solely to produce a named decode error; SMA-462's
+//! 0.2.2 release, which decoded both, is the migration bridge. 0.1.x remains outside the support
+//! window and fails closed as before.
 //!
-//! The reverse does not hold, and it matters during a rolling deploy: a **0.2.1-and-earlier**
-//! worker handed one of the new envelope payloads cannot decode it. It fails the attempt
-//! retryably and Temporal re-dispatches until a worker on this version takes it. Four things
-//! bound that recovery:
+//! **Upgrading from 0.2.1 or earlier requires a stop at 0.2.2**, for activity inputs:
+//!
+//! | from → to | outcome |
+//! |---|---|
+//! | `0.2.2` → `0.3.0` | compatible **both** ways — both encode and decode the envelope; no drain needed for this change |
+//! | `0.2.1` or earlier → `0.3.0`, directly | **broken both ways** — `0.3.0` cannot read legacy-queued tasks, and a `0.2.1` worker cannot read an envelope |
+//! | `0.2.1` or earlier → `0.2.2` → `0.3.0` | works, **provided in-flight runs are drained while the fleet is on 0.2.2** |
+//!
+//! Throughout this section, *drain* means: stop starting new executions on the task queue, and
+//! wait until every execution already on it reaches a **terminal** state — not merely pausing
+//! new runs.
+//!
+//! **If a 0.3.0 worker meets a pre-envelope task anyway**, it logs at `ERROR` and fails the
+//! attempt **retryably**, so Temporal re-dispatches. That is the recovery path: any worker on
+//! 0.2.2 still polling the queue decodes and executes the task. Re-join one, let in-flight runs
+//! drain, then remove it. A run that cannot be drained in an acceptable window is handled with a
+//! blue-green task queue (below) or by terminating the execution.
+//!
+//! **The envelope is unreadable below 0.2.2, and that matters during a rolling deploy.** A
+//! **0.2.1-and-earlier** worker handed an envelope payload cannot decode it. It fails the
+//! attempt retryably and Temporal re-dispatches until a worker that understands the envelope
+//! takes it. The same is true of a 0.3.0 worker handed a pre-envelope payload. Four things bound
+//! that recovery:
 //!
 //! 1. A finite `maximum_attempts` on `model_retry_policy` / `tool_retry_policy` can be exhausted.
 //! 2. `WorkflowInput::timeout_ms` interrupts the whole run on its own schedule, regardless of
-//!    retry policy — so `render_instructions`' unlimited default retries are not the safety net
-//!    they appear to be.
+//!    retry policy.
 //! 3. A terminal `render_instructions` failure ends the run; it is not a degraded step.
 //! 4. Exhausted `invoke_tool` retries are folded into a tool-error result and fed to the model
 //!    rather than failing loudly.
 //!
+//! **Neither of the first two is on by default.** `render_instructions` is built with no retry
+//! policy at all, so the Temporal server default — unlimited attempts — applies; and
+//! `WorkflowInput::timeout_ms` is `None` unless set, meaning no deadline. On a default
+//! configuration the retry loop is therefore **unbounded**: the run retries indefinitely, writing
+//! one `ActivityTaskFailed` event per attempt and consuming workflow history. Do not rely on the
+//! failure self-terminating; recovery is operator action.
+//!
 //! So: **keep the mixed-fleet window short**, and either drain in-flight runs first or ensure
 //! retry caps are unlimited and run deadlines generous for the duration of the rollout.
 //!
-//! **Rolling back.** Once a worker on this version has queued an envelope-shaped activity task,
-//! that payload is frozen in the `ActivityTaskScheduled` event and every retry re-delivers it. A
-//! rollback to 0.2.1 and earlier leaves those activities undecodable until the run deadline.
-//! **Drain in-flight runs before rolling back.**
+//! **Rolling back.** Once a worker has queued an envelope-shaped activity task, that payload is
+//! frozen in the `ActivityTaskScheduled` event and every retry re-delivers it. A rollback to
+//! **below 0.2.2** leaves those activities undecodable until the run deadline — which, per the
+//! paragraph above, may not exist. **Drain in-flight runs before rolling back below 0.2.2.**
+//! Rolling back from 0.3.0 to 0.2.2 is safe: 0.2.2 decodes the envelope.
 //!
 //! **What this buys.** Future additive changes to an activity's input are compatible in both
 //! directions, because the envelope is self-describing: unknown fields are ignored and absent
@@ -399,9 +424,9 @@
 /// or consumed through [`worker`].
 mod activities;
 /// Wire codec for activity inputs: one self-describing envelope payload per
-/// activity, decoding both that and the legacy pre-envelope (0.2.0–0.2.1)
-/// positional shapes. Private — the envelope types never cross the public API
-/// boundary.
+/// activity. The pre-envelope positional shapes (0.2.1 and earlier) are
+/// recognized only to produce a named decode error. Private — the envelope
+/// types never cross the public API boundary.
 mod activity_input;
 /// The pure durable-loop step machine.
 ///
