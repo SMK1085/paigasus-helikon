@@ -289,7 +289,7 @@ In the module docs, replace the `# Wire shapes` paragraph (L12-17) with:
 //! The pre-envelope positional arities (2 payloads for `render_instructions` /
 //! `call_model`, 3 for `invoke_tool`) are still recognized, but only to produce
 //! a named [`reject_legacy`] error; they are no longer decoded. Upgrading a
-//! fleet from 0.2.1 or earlier therefore requires a stop at 0.2.2, which
+//! fleet from 0.2.0 or 0.2.1 therefore requires a stop at 0.2.2, which
 //! decodes both shapes — see the crate docs, § "Upgrade Discipline and
 //! Determinism".
 ```
@@ -526,7 +526,7 @@ In `lib.rs`, replace the paragraph beginning `//! **SMA-462 wire change (activit
 //! 0.2.2 release, which decoded both, is the migration bridge. 0.1.x remains outside the support
 //! window and fails closed as before.
 //!
-//! **Upgrading from 0.2.1 or earlier requires a stop at 0.2.2**, for activity inputs:
+//! **Upgrading from 0.2.0 or 0.2.1 requires a stop at 0.2.2**, for activity inputs:
 //!
 //! | from → to | outcome |
 //! |---|---|
@@ -604,7 +604,7 @@ Replace the doc comment at `lib.rs:401-404` with:
 In `crates/paigasus-helikon-runtime-temporal/README.md`, replace the paragraph beginning `Activity inputs are a single self-describing envelope payload as of SMA-462,` (L161) with:
 
 ```markdown
-Activity inputs are a single self-describing envelope payload, and as of 0.3.0 (SMA-484) that is the **only** shape a worker decodes. **Upgrading from 0.2.1 or earlier requires a stop at 0.2.2**, which decodes both shapes: land the fleet on 0.2.2, drain in-flight runs, then take 0.3.0. 0.2.2 ↔ 0.3.0 is compatible both ways for activity inputs and needs no drain for this change. If a 0.3.0 worker does meet a pre-envelope task it logs an error and fails the attempt retryably — re-join a 0.2.2 worker to the task queue and let the runs drain. Because a queued envelope payload is frozen in history, **drain in-flight runs before rolling back below 0.2.2**. Blue-green task queues remain available. See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Upgrade Discipline and Determinism").
+Activity inputs are a single self-describing envelope payload, and as of 0.3.0 (SMA-484) that is the **only** shape a worker decodes. **Upgrading from 0.2.0 or 0.2.1 requires a stop at 0.2.2**, which decodes both shapes (0.1.x cannot use that bridge and must drain outright): land the fleet on 0.2.2, drain in-flight runs, then take 0.3.0. 0.2.2 ↔ 0.3.0 is compatible both ways for activity inputs and needs no drain for this change. If a 0.3.0 worker does meet a pre-envelope task it logs an error and fails the attempt retryably — re-join a 0.2.2 worker to the task queue and let the runs drain. Because a queued envelope payload is frozen in history, **drain in-flight runs before rolling back below 0.2.2**. Blue-green task queues remain available. See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Upgrade Discipline and Determinism").
 ```
 
 Leave the preceding paragraph (`Replaying workflows against a different version …`) unchanged.
@@ -666,7 +666,7 @@ In `crates/paigasus-helikon-runtime-temporal/CHANGELOG.md`, replace the line `##
 
 ### Upgrade notes
 
-- **Upgrading from 0.2.1 or earlier requires a stop at 0.2.2.** That release decodes both the envelope and the pre-envelope positional shapes, so it is the migration bridge: land the fleet on 0.2.2, **drain in-flight runs while it is there**, then take this version. *Drain* means every workflow execution on the task queue has reached a terminal state — not merely that new runs have been paused.
+- **Upgrading from 0.2.0 or 0.2.1 requires a stop at 0.2.2.** That release decodes both the envelope and those two releases' pre-envelope positional shapes, so it is the migration bridge: land the fleet on 0.2.2, **drain in-flight runs while it is there**, then take this version. *Drain* means every workflow execution on the task queue has reached a terminal state — not merely that new runs have been paused.
 - **0.2.2 ↔ this version is compatible in both directions for activity inputs.** Both encode and decode the envelope, so a rolling 0.2.2 → 0.3.0 upgrade needs no drain on account of this change. (Scope: activity inputs. `WorkflowInput` and activity outputs are unchanged here and carry their own compatibility story.)
 - **If a worker on this version meets a pre-envelope task anyway**, the attempt fails *retryably* and Temporal re-dispatches it. Any 0.2.2 worker still polling the queue will decode and execute it — so the recovery is to re-join one, let in-flight runs drain, then remove it. For a run that cannot be drained in an acceptable window, use a blue-green task queue or terminate the execution.
 - **Do not expect the failure to self-terminate.** `render_instructions` is built with no retry policy, so the server default of unlimited attempts applies, and `WorkflowInput::timeout_ms` is `None` unless set. On a default configuration the retry loop is unbounded and recovery is operator action.
@@ -684,7 +684,7 @@ In `crates/paigasus-helikon/CHANGELOG.md`, replace the line `## [Unreleased]` wi
 
 ### Upgrade notes
 
-- **`runtime-temporal` feature: the bundled `paigasus-helikon-runtime-temporal` contains a wire-breaking change** (SMA-484 — activity inputs are envelope-only). Despite arriving here as a routine dependency bump, upgrading a Temporal worker fleet from a release built against `paigasus-helikon-runtime-temporal` 0.2.1 or earlier requires a stop at 0.2.2 and a drain of in-flight runs. See that crate's CHANGELOG for the full upgrade notes.
+- **`runtime-temporal` feature: the bundled `paigasus-helikon-runtime-temporal` contains a wire-breaking change** (SMA-484 — activity inputs are envelope-only). Despite arriving here as a routine dependency bump, upgrading a Temporal worker fleet from a release built against `paigasus-helikon-runtime-temporal` 0.2.0 or 0.2.1 requires a stop at 0.2.2 and a drain of in-flight runs (0.1.x cannot use that bridge and must drain outright). See that crate's CHANGELOG for the full upgrade notes.
 ```
 
 - [ ] **Step 3: Correct the crate table's version column**
@@ -791,6 +791,14 @@ grep -rn 'warn_legacy\|decodes_legacy\|0\.2\.0–0\.2\.1' \
 Expected: matches only in `CHANGELOG.md`'s historical `0.2.2` entry, which is an immutable record and must not be edited. A match in `src/` or in `README.md` means something was missed.
 
 `legacy_arity` is deliberately **not** in that pattern: `reject_legacy` still emits it as a `tracing` field, so searching for it would flag intended code. Likewise "0.2.0 or 0.2.1" is now legitimate prose in the migration guidance (see the version-string constraint above), so it is not a stray-reference marker either.
+
+Then assert the two version scopes have not bled into each other. **"0.2.1 or earlier" must not appear in migration guidance** — it over-scopes the bridge to include 0.1.x, which 0.2.2 cannot rescue:
+
+```bash
+grep -rn '0\.2\.1 or earlier' crates/ --include='*.rs' --include='*.md'
+```
+
+Expected: **exactly one** match — `reject_legacy`'s `tracing::error!` message in `src/activity_input.rs`, where the phrase is correct because it names the shape that *arrived*. Any other match — in `lib.rs`'s upgrade section, the README, or either CHANGELOG's `[Unreleased]` block — is the bug this check exists to catch. (Matches inside a CHANGELOG's already-released sections are immutable history; leave them.)
 
 - [ ] **Step 4: Verify the commit types will satisfy `convco`**
 

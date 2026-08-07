@@ -15,9 +15,14 @@
 //! The pre-envelope positional arities (2 payloads for `render_instructions` /
 //! `call_model`, 3 for `invoke_tool`) are still recognized, but only to produce
 //! a named [`reject_legacy`] error; they are no longer decoded. Upgrading a
-//! fleet from 0.2.1 or earlier therefore requires a stop at 0.2.2, which
-//! decodes both shapes — see the crate docs, § "Upgrade Discipline and
-//! Determinism".
+//! fleet from 0.2.0 or 0.2.1 therefore requires a stop at 0.2.2, which decodes
+//! both shapes; 0.1.x cannot use that bridge and must drain outright — see the
+//! crate docs, § "Upgrade Discipline and Determinism".
+//!
+//! Note the two version scopes are not interchangeable: [`reject_legacy`]'s own
+//! message says "0.2.1 and earlier" because it describes the shape that
+//! *arrived* (`call_model`'s 2-payload shape dates back to 0.1.x), whereas the
+//! supported *migration* path is 0.2.0/0.2.1 only.
 //!
 //! # Why the hand-written impls are reached at all
 //!
