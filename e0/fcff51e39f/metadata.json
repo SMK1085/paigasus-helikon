@@ -3,7 +3,7 @@
   "checkpoint_id": "e0fcff51e39f",
   "strategy": "manual-commit",
   "branch": "feature/sma-457-ci-add-temporal-it-and-agentcore-docker-build-jobs",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": null,
   "sessions": [
     {
@@ -12,13 +12,20 @@
       "compact_transcript": "/e0/fcff51e39f/0/transcript.jsonl",
       "content_hash": "/e0/fcff51e39f/0/content_hash.txt",
       "prompt": "/e0/fcff51e39f/0/prompt.txt"
+    },
+    {
+      "metadata": "/e0/fcff51e39f/1/metadata.json",
+      "transcript": "/e0/fcff51e39f/1/full.jsonl",
+      "compact_transcript": "/e0/fcff51e39f/1/transcript.jsonl",
+      "content_hash": "/e0/fcff51e39f/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 350,
-    "cache_creation_tokens": 393725,
-    "cache_read_tokens": 19023350,
-    "output_tokens": 147874,
-    "api_call_count": 97
+    "input_tokens": 356,
+    "cache_creation_tokens": 402145,
+    "cache_read_tokens": 19892205,
+    "output_tokens": 151124,
+    "api_call_count": 100
   }
 }
