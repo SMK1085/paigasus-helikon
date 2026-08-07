@@ -102,6 +102,20 @@ TEMPORAL_TEST_SERVER=localhost:7233 cargo test -p paigasus-helikon-runtime-tempo
 
 Tests validate crash-resume (stopping mid-tool-call and resuming), cancellation with partial transcripts, session persistence, and model error handling.
 
+Set `HELIKON_REQUIRE_TEMPORAL=1` to turn the suite's loud skip into a hard
+failure. Without a server the tests *pass* (a skipped test is a passing test, and
+`cargo test` captures its output), so this is what stops an unattended run from
+reporting green while asserting nothing:
+
+```bash
+HELIKON_REQUIRE_TEMPORAL=1 TEMPORAL_TEST_SERVER=127.0.0.1:7233 \
+  cargo test -p paigasus-helikon-runtime-temporal --test temporal_live -- --test-threads=1
+```
+
+CI runs exactly this in the `temporal-it` job
+(`.github/workflows/integration.yml`), currently as a signal-only, non-required
+check.
+
 ## Core concepts
 
 ### v0 Constraint Set

@@ -239,7 +239,7 @@ cargo msrv --path crates/paigasus-helikon-core verify
 
 (`cargo-msrv` has no `--workspace` flag. Since every crate's `rust-version` inherits from `[workspace.package]`, verifying one representative crate covers the whole workspace.)
 
-To exercise the OpenAI provider against the real API, set `OPENAI_API_KEY` and run `cargo test -p paigasus-helikon-providers-openai -- --ignored`. Live tests are not part of CI.
+To exercise the OpenAI provider against the real API, set `OPENAI_API_KEY` and run `cargo test -p paigasus-helikon-providers-openai -- --ignored`. Those `--ignored` provider tests are not part of CI. The other env-gated live suites are: `.github/workflows/integration.yml` runs the Temporal integration suite (`temporal-it`, with `HELIKON_REQUIRE_TEMPORAL=1` so a missing server fails the job instead of skipping silently) and the AgentCore image size/cold-start gates (`agentcore-image`, on an arm64 runner) as signal-only, non-required jobs. See CLAUDE.md's CI section for the promotion bar.
 
 ## Supply-chain security
 
