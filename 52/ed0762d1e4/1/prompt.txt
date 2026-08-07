@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b8cgxbwbb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/b8cgxbwbb.output</output-file>
+<status>failed</status>
+<summary>Background command "Poll for CodeRabbit re-review of round 1" failed with exit code 1</summary>
+</task-notification>
