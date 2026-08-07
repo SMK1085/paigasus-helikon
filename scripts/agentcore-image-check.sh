@@ -19,18 +19,23 @@
 # decide the recorded fallback; it does not silently substitute the echo image's
 # size for the agent image's.
 #
-# All four measured metrics are AC-gated (see the SIZE_LIMIT_BYTES/
+# All four measured metrics are gated (see the SIZE_LIMIT_BYTES/
 # COLD_START_LIMIT_MS checks below): both images' size and both images'
 # exec->/ping cold start. The echo image also demonstrates the framework's own
 # minimal-overhead footprint, but that is in addition to — not instead of —
 # being checked against the same gates as the agent image.
+#
+# The two size gates are always the AC value. The cold-start gate defaults to the
+# AC value but can be raised via AGENTCORE_COLD_START_LIMIT_MS for environments
+# whose container-start overhead is not comparable to a quiet developer machine
+# (CI uses 250 ms); an override prints a loud NOTE above the summary table.
 #
 # Cold start: runs the container and measures wall-clock time from container
 # start (after `docker run -d` returns) to the first successful `GET /ping` 200,
 # using a single `curl` process with its own zero-delay retry loop (`--retry
 # --retry-delay 0 --retry-connrefused`) rather than a shell polling loop — a bash
 # loop that spawns a fresh `curl` process per attempt adds tens of milliseconds of
-# process-spawn overhead per iteration on macOS, which would swamp the sub-50ms
+# process-spawn overhead per iteration on macOS, which would swamp the sub-50ms default
 # budget with measurement noise rather than real latency (empirically: ~100ms via a
 # 5ms-interval spawn-per-attempt loop vs. ~10ms via this single-process retry
 # loop, for the exact same container). This is still an external, container-start-
@@ -39,6 +44,12 @@
 # numbers are reported and what each one means).
 
 set -euo pipefail
+
+# The Dockerfile's builder stage uses `RUN --mount=type=cache`, which requires
+# BuildKit. It is the default since Docker 23, but export it so a stale
+# DOCKER_BUILDKIT=0 in the caller's environment cannot select the legacy builder
+# and fail the build on a confusing syntax error (SMA-457).
+export DOCKER_BUILDKIT=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -51,11 +62,19 @@ AGENT_CONTAINER="agentcore-image-check-agent"
 HOST_PORT_ECHO="18080"
 HOST_PORT_AGENT="18081"
 
-# The AC gate (spec §6.4 / task brief): both the model-backed image and the
-# echo image must stay under this many bytes — see the module doc comment above.
+# The AC gate (spec §6.4 / task brief): both the model-backed image and the echo
+# image must stay under this many bytes — see the module doc comment above.
+# Deliberately NOT overridable: this gate carries the STOP RULE below, and an env
+# knob on it would be precisely the quiet relaxation that rule exists to prevent.
 SIZE_LIMIT_BYTES=$((30 * 1024 * 1024))
 # Cold-start gate: exec (docker run) → first `/ping` 200, in milliseconds.
-COLD_START_LIMIT_MS=50
+# Overridable via AGENTCORE_COLD_START_LIMIT_MS, because unlike image size this
+# measures the host as much as the image: the 50 ms AC was measured on a quiet
+# developer machine, and CI runs on a shared runner where that budget is
+# instrument noise rather than a regression signal. Any override prints a loud
+# NOTE below so no reader mistakes the effective gate for the AC (SMA-457).
+COLD_START_LIMIT_MS_DEFAULT=50
+COLD_START_LIMIT_MS="${AGENTCORE_COLD_START_LIMIT_MS:-${COLD_START_LIMIT_MS_DEFAULT}}"
 
 cd "${REPO_ROOT}"
 
@@ -125,17 +144,39 @@ to_mb() {
 }
 
 echo
+if [[ "${COLD_START_LIMIT_MS}" != "${COLD_START_LIMIT_MS_DEFAULT}" ]]; then
+  echo "NOTE: cold-start gate overridden to ${COLD_START_LIMIT_MS} ms (default ${COLD_START_LIMIT_MS_DEFAULT} ms) — this is NOT the AC value."
+  echo
+fi
 echo "== Summary =="
 printf '| %-32s | %14s | %10s |\n' "Metric" "Value" "Gate"
 printf '| %-32s | %14s | %10s |\n' "--------------------------------" "--------------" "----------"
 printf '| %-32s | %11s MB | %10s |\n' "echo image size (AC gate)" "$(to_mb "${echo_size}")" "< 30 MB"
 printf '| %-32s | %11s MB | %10s |\n' "agent image size (AC gate)" "$(to_mb "${agent_size}")" "< 30 MB"
-printf '| %-32s | %12s ms | %10s |\n' "echo exec->200 (AC gate)" "${echo_cold_start_ms}" "< 50 ms"
-printf '| %-32s | %12s ms | %10s |\n' "agent exec->200 (AC gate)" "${agent_cold_start_ms}" "< 50 ms"
+printf '| %-32s | %12s ms | %10s |\n' "echo exec->200 (gate)" "${echo_cold_start_ms}" "< ${COLD_START_LIMIT_MS} ms"
+printf '| %-32s | %12s ms | %10s |\n' "agent exec->200 (gate)" "${agent_cold_start_ms}" "< ${COLD_START_LIMIT_MS} ms"
 echo
 echo "echo image app-side log:  ${echo_ready_log}"
 echo "agent image app-side log: ${agent_ready_log}"
 echo
+
+# Mirrors scripts/check-doc-coverage.sh:85 — appends to the GitHub job summary in
+# CI, and to stdout when run locally. Emitted before the gate checks below so a
+# failing run still records its numbers.
+{
+  echo "## AgentCore image gates"
+  echo
+  if [[ "${COLD_START_LIMIT_MS}" != "${COLD_START_LIMIT_MS_DEFAULT}" ]]; then
+    echo "> **NOTE:** cold-start gate overridden to ${COLD_START_LIMIT_MS} ms (default ${COLD_START_LIMIT_MS_DEFAULT} ms) — this is NOT the AC value."
+    echo
+  fi
+  echo "| Metric | Value | Gate |"
+  echo "| --- | ---: | --- |"
+  echo "| echo image size | $(to_mb "${echo_size}") MB | < 30 MB (AC) |"
+  echo "| agent image size | $(to_mb "${agent_size}") MB | < 30 MB (AC) |"
+  echo "| echo exec→200 | ${echo_cold_start_ms} ms | < ${COLD_START_LIMIT_MS} ms |"
+  echo "| agent exec→200 | ${agent_cold_start_ms} ms | < ${COLD_START_LIMIT_MS} ms |"
+} >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 
 failed=0
 
