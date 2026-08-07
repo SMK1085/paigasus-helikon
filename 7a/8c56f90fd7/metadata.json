@@ -3,7 +3,7 @@
   "checkpoint_id": "7a8c56f90fd7",
   "strategy": "manual-commit",
   "branch": "feature/sma-484-runtime-temporal-remove-the-02x-legacy-activity-input-decode",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "crates/paigasus-helikon-runtime-temporal/src/activity_input.rs"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/7a/8c56f90fd7/0/transcript.jsonl",
       "content_hash": "/7a/8c56f90fd7/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/7a/8c56f90fd7/1/metadata.json",
+      "transcript": "/7a/8c56f90fd7/1/full.jsonl",
+      "compact_transcript": "/7a/8c56f90fd7/1/transcript.jsonl",
+      "content_hash": "/7a/8c56f90fd7/1/content_hash.txt",
+      "prompt": "/7a/8c56f90fd7/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 14,
-    "cache_creation_tokens": 6437,
-    "cache_read_tokens": 1708161,
-    "output_tokens": 4382,
-    "api_call_count": 7
+    "input_tokens": 18,
+    "cache_creation_tokens": 11169,
+    "cache_read_tokens": 2165777,
+    "output_tokens": 7060,
+    "api_call_count": 9
   }
 }
