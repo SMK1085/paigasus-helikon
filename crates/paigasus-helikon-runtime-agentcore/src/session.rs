@@ -13,7 +13,13 @@
 //! [`SessionProvider`](paigasus_helikon_runtime_axum::SessionProvider). A present
 //! header is validated here — 33 to 256 characters, inclusive — before it ever reaches
 //! the session provider; two requests presenting the exact same valid id are then
-//! routed to the same session by the provider's ordinary `Some(id)` path.
+//! routed to the same session by the provider's ordinary named-id path.
+//!
+//! The id is passed as a
+//! [`SessionKey`](paigasus_helikon_runtime_axum::SessionKey) whose `principal`
+//! component is `None`: this runtime exposes no `AuthLayer` seam, and AgentCore's
+//! execution model already isolates each session in its own microVM instance, so the
+//! validated id is the whole identity.
 
 use axum::http::HeaderMap;
 

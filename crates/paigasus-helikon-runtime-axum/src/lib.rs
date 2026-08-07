@@ -14,13 +14,13 @@ mod event_log;
 mod registry;
 
 mod session;
-pub use session::{InMemorySessionProvider, SessionProvider};
+pub use session::{InMemorySessionProvider, SessionKey, SessionProvider};
 
 mod context;
 pub use context::{ContextProvider, DefaultContextProvider};
 
 mod auth;
-pub use auth::AuthLayer;
+pub use auth::{AuthLayer, Principal};
 
 mod dto;
 pub use dto::{AgentInfo, AsyncAccepted, RunRequest, RunResponse, RunStatus};

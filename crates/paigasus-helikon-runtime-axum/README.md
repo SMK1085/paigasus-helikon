@@ -78,17 +78,79 @@ See the [`curl_server`](https://github.com/SMK1085/paigasus-helikon/blob/main/cr
 
 On a start error — or any run that ends without a terminal event — the streaming transports (SSE and WebSocket) emit a final synthetic `run_failed` event before closing, so a streaming client always sees a terminal frame. One-shot runs instead return `500` on a start error, or `200` with a partial result when a started run ends without a terminal event.
 
-## Security: the session id is caller-controlled
+## Security: sessions are scoped to the authenticated principal
 
-Session affinity comes from the `X-Session-Id` request header, which the caller
-chooses. The bundled `InMemorySessionProvider` uses that value as its only lookup
-key, so any admitted caller who learns another caller's id can read and append to
-that conversation.
+Session affinity still comes from the `X-Session-Id` request header, which the
+caller chooses — but the header alone no longer resolves a session. Every
+lookup is keyed on a `SessionKey`, the pair of that header value and the
+`Principal` your `AuthLayer` established for the request, so two callers can
+no longer collide on a guessed or shared id (CWE-639).
 
-That is fine for a single-tenant service, a dev server, or a deployment behind an
-authenticating proxy that already isolates tenants. For a multi-tenant deployment,
-implement `SessionProvider` yourself so the key also incorporates the authenticated
-principal established by your `AuthLayer`.
+An `AuthLayer` establishes the principal by inserting a `Principal(String)`
+into the request extensions from `authenticate()`:
+
+```ignore
+parts.extensions.insert(Principal(user_id));
+```
+
+By default (whenever `.auth(...)` is configured), a request that carries
+`X-Session-Id` with no `Principal` attached is refused with `403 Forbidden` —
+a named session with no principal would otherwise land in a namespace shared
+by every principal-less caller. Two builder methods adjust this:
+
+- `.allow_unbound_sessions()` — permit `X-Session-Id` from callers with no
+  established principal, for a single-tenant service or a shared-API-key
+  deployment that genuinely wants one shared session namespace. This
+  suppresses the 403 and nothing else: a caller that *does* carry a
+  `Principal` is still isolated to it.
+- `.require_principal(true)` — turn the check on explicitly for an embedded
+  deployment (`AgentServer::router()` nested into a host app), where no
+  `AuthLayer` is configured on this builder because the host application
+  authenticates upstream. Insert `Principal` into the request extensions
+  yourself before the request reaches this router.
+
+A run's WebSocket event stream (`GET /agents/{name}/runs/{id}/events`) is
+readable only by the principal that started it; any other principal —
+including an operator with no special override — gets `404 Not Found`, the
+same response a nonexistent run id gets, so the endpoint cannot be used as an
+existence oracle for harvested run ids.
+
+**Mixed authenticated/anonymous traffic.** A run started with no `Principal`
+is stored with `principal: None` and stays readable by any other anonymous
+caller; `require_principal` does not close this, because it only fires when
+`X-Session-Id` is present. It also means a caller who starts a run
+anonymously and later subscribes to its WebSocket *with* credentials gets
+`404` for their own run — `Some("alice")` and `None` are different owners.
+Deployments that mix authenticated and anonymous traffic should authenticate
+consistently across a run's lifetime.
+
+**The `axum` dependency seam.** `AuthLayer::authenticate` takes
+`&mut axum::http::request::Parts`, but this crate does not re-export `axum`.
+Implementing `AuthLayer` means adding `axum` as a direct dependency and
+keeping its minor version aligned with this crate's.
+
+## Migrating to 0.2
+
+- `SessionProvider::session` now takes a `SessionKey<'_>` instead of
+  `Option<&str>`. Use `key.storage_key()` for a single-string backend key
+  (Postgres, Redis, a filesystem path); it returns `Option<String>`, `None`
+  meaning the request is anonymous and MUST NOT be stored — folding that
+  `None` into a default string (e.g. `.unwrap_or_default()`) puts every
+  anonymous caller on one shared row, reopening a cross-caller leak. **Reading
+  `key.id` alone preserves the old behaviour *and* the CWE-639 vulnerability**
+  — it drops the principal component the key exists to add.
+- An `AuthLayer` used together with `X-Session-Id` must now insert a
+  `Principal`, or the server must be built with `.allow_unbound_sessions()`;
+  otherwise sessioned requests are refused with `403`.
+- Embedded deployments where a host application authenticates (no `AuthLayer`
+  configured on this builder) should insert `Principal` themselves and call
+  `.require_principal(true)`.
+- Every `5xx` response body is now a fixed, non-diagnostic string; the
+  underlying detail is logged via `tracing` at `error` level instead.
+- In-flight runs are capped at 1 024 by default (`.max_in_flight(usize)`),
+  rejecting further run creation with `503` + `Retry-After` once reached; a
+  run still live after 1 hour (`.max_run_duration(Duration)`) is cancelled and
+  its slot reclaimed.
 
 ## Features
 

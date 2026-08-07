@@ -1,9 +1,11 @@
 //! Handler for the `GET /agents/{name}/runs/{id}/events` WebSocket endpoint.
 //!
-//! Implements the **404-before-upgrade** pattern: the agent name and run id are
-//! validated against the registry *before* the HTTP connection is promoted to a
-//! WebSocket. A missing or name-mismatched run returns a plain HTTP 404 without
-//! initiating an upgrade handshake.
+//! Implements the **404-before-upgrade** pattern: the agent name, run id, and
+//! owning principal are validated against the registry *before* the HTTP
+//! connection is promoted to a WebSocket. A missing run, a name mismatch, or a
+//! run owned by a different principal all return a plain HTTP 404 without
+//! initiating an upgrade handshake — indistinguishably, so the endpoint cannot
+//! be used as an existence oracle for harvested run ids.
 //!
 //! Once the handshake succeeds, [`handle_socket`] replays all previously
 //! recorded events from sequence 0 and then delivers live events in real time.
@@ -23,15 +25,19 @@ use axum::{
 use futures_util::StreamExt;
 use uuid::Uuid;
 
-use crate::{error::ServerError, event_log::is_terminal, registry::RunHandle, server::AppState};
+use crate::{
+    auth::Principal, error::ServerError, event_log::is_terminal, registry::RunHandle,
+    server::AppState,
+};
 
 /// `GET /agents/{name}/runs/{id}/events` — subscribe to run events via WebSocket.
 ///
 /// Performs a 404 check *before* accepting the WebSocket upgrade:
 ///
 /// - If `id` is not a valid UUID, returns `400 Bad Request`.
-/// - If no run with `id` exists in the registry, or the run's agent name does
-///   not match `name`, returns `404 Not Found`.
+/// - If no run with `id` exists in the registry, the run's agent name does not
+///   match `name`, or the run belongs to a different principal than the one
+///   resolved for this request, returns `404 Not Found`.
 /// - Otherwise returns `101 Switching Protocols` and streams all events for the
 ///   run, starting from sequence 0, as JSON text frames.
 ///
@@ -42,23 +48,32 @@ use crate::{error::ServerError, event_log::is_terminal, registry::RunHandle, ser
 /// # Errors
 ///
 /// - [`ServerError::BadRequest`] (400) — `id` is not a valid UUID.
-/// - [`ServerError::UnknownAgent`] (404) — the run does not exist or is owned
-///   by a different agent.
+/// - [`ServerError::UnknownAgent`] (404) — the run does not exist, is owned by
+///   a different agent, or is owned by a different principal than the caller.
+///   A run owned by a different principal is deliberately reported the same
+///   way as a missing run: a distinct status would confirm the run id exists
+///   and belongs to someone else, turning this endpoint into an existence
+///   oracle for harvested run ids.
 pub(crate) async fn events<Ctx: Send + Sync + 'static>(
     State(state): State<AppState<Ctx>>,
     Path((name, id)): Path<(String, String)>,
+    principal: Option<axum::Extension<Principal>>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ServerError> {
     // Parse the run id; a non-UUID string is a client error (400).
     let run_id = Uuid::parse_str(&id)
         .map_err(|_| ServerError::BadRequest(format!("invalid run id: {id}")))?;
 
-    // Look up the run; absence or agent-name mismatch returns 404 without
-    // upgrading the connection.
+    let principal: Option<String> = principal.map(|axum::Extension(p)| p.0);
+
+    // Absence, an agent-name mismatch, and a principal mismatch all return the
+    // SAME 404. A distinct status for the last case would confirm the run exists
+    // and belongs to someone else — an existence oracle for harvested run ids.
     let handle = state
         .registry
         .get(run_id)
         .filter(|h| h.agent_name == name)
+        .filter(|h| h.principal.as_deref() == principal.as_deref())
         .ok_or_else(|| ServerError::UnknownAgent(format!("{name}/{id}")))?;
 
     // Run confirmed — accept the WebSocket upgrade.

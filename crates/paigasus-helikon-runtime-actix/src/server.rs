@@ -39,6 +39,9 @@ pub(crate) struct AppStateInner<Ctx> {
     pub run_config: RunConfig,
     /// Per-session run serialisation locks.
     pub locks: SessionLocks,
+    /// Refuse `X-Session-Id` from callers with no established
+    /// [`Principal`](crate::Principal).
+    pub require_principal: bool,
 }
 
 /// Cheaply-cloneable actix extraction state.
@@ -87,6 +90,11 @@ pub struct AgentServerBuilder<Ctx> {
     retention: Duration,
     max_runs: usize,
     max_events_per_run: usize,
+    max_in_flight: usize,
+    max_run_duration: Duration,
+    /// `None` until set explicitly; `build()` then defaults it to
+    /// `self.auth.is_some()`.
+    require_principal: Option<bool>,
 }
 
 impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
@@ -103,6 +111,9 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             retention: Duration::from_secs(300),
             max_runs: 1024,
             max_events_per_run: 10_000,
+            max_in_flight: 1024,
+            max_run_duration: Duration::from_secs(3600),
+            require_principal: None,
         }
     }
 
@@ -183,11 +194,72 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
         self
     }
 
+    /// Cap the number of simultaneously in-flight (non-terminal) runs.
+    ///
+    /// Once this many runs are live, further run creation is rejected with
+    /// `503 Service Unavailable` until a run reaches a terminal state.
+    ///
+    /// Default: 1 024, matching
+    /// [`max_retained_runs`](AgentServerBuilder::max_retained_runs).
+    pub fn max_in_flight(mut self, max: usize) -> Self {
+        self.max_in_flight = max;
+        self
+    }
+
+    /// Maximum wall-clock lifetime of a single run.
+    ///
+    /// A run still live after this long is cancelled and marked terminal by the
+    /// registry sweeper, releasing its in-flight slot. Without this a run that
+    /// never terminates — a hung agent on a detached `?mode=async` request —
+    /// would hold its slot for the process lifetime and eventually exhaust
+    /// [`max_in_flight`](AgentServerBuilder::max_in_flight) permanently.
+    ///
+    /// Default: 1 hour.
+    pub fn max_run_duration(mut self, duration: Duration) -> Self {
+        self.max_run_duration = duration;
+        self
+    }
+
+    /// Require an authenticated [`Principal`](crate::Principal) before honouring
+    /// an `X-Session-Id` header.
+    ///
+    /// When enabled, a request that carries `X-Session-Id` but for which no
+    /// `Principal` was established is rejected with `403 Forbidden`, because it
+    /// would otherwise land in a namespace shared with every other
+    /// principal-less caller (CWE-639).
+    ///
+    /// **Default:** enabled exactly when an [`AuthLayer`] is configured. Set it
+    /// explicitly to `true` when the server is *embedded* in a host application
+    /// that authenticates for it — via [`AgentServer::configure`] — since no `AuthLayer` is
+    /// configured on this builder in that topology and the default would leave
+    /// the check off.
+    pub fn require_principal(mut self, required: bool) -> Self {
+        self.require_principal = Some(required);
+        self
+    }
+
+    /// Permit `X-Session-Id` from callers with no established principal.
+    ///
+    /// Equivalent to `require_principal(false)`. Appropriate for a single-tenant
+    /// service or a shared-API-key deployment that genuinely wants one shared
+    /// session namespace.
+    ///
+    /// This suppresses the 403 **and nothing else**: the session key stays
+    /// compound, so a caller that *does* carry a `Principal` is still isolated
+    /// to it.
+    pub fn allow_unbound_sessions(mut self) -> Self {
+        self.require_principal = Some(false);
+        self
+    }
+
     /// Build an [`AgentServer`].
     ///
     /// # Errors
     ///
-    /// - [`ServerError::BadRequest`] — a duplicate agent name was registered.
+    /// - [`ServerError::BadRequest`] — a duplicate agent name was registered, or
+    ///   `max_sessions` / [`max_in_flight`](AgentServerBuilder::max_in_flight) /
+    ///   [`max_run_duration`](AgentServerBuilder::max_run_duration) was set to
+    ///   `0`.
     /// - [`ServerError::Internal`] — no context provider was supplied (either via
     ///   [`context_provider`](AgentServerBuilder::context_provider) or
     ///   [`with_default_context`](AgentServerBuilder::with_default_context)).
@@ -207,6 +279,26 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             ));
         }
 
+        // Unconditional: a zero cap would reject every run, and no custom
+        // component can override it the way a session provider overrides
+        // `max_sessions`.
+        if self.max_in_flight == 0 {
+            return Err(ServerError::BadRequest(
+                "max_in_flight must be greater than 0".to_owned(),
+            ));
+        }
+
+        // Unconditional, same reasoning as `max_in_flight` above: a zero
+        // duration is silently indistinguishable from "works" at build time —
+        // the sweeper's next tick (at most 30s later) would cancel every run
+        // still executing, forever, with no error and no log. Reject it here
+        // instead of letting it degrade into a permanent-outage vector.
+        if self.max_run_duration.is_zero() {
+            return Err(ServerError::BadRequest(
+                "max_run_duration must be greater than 0".to_owned(),
+            ));
+        }
+
         let context = self.context.ok_or_else(|| {
             ServerError::Internal(
                 "no context provider set; call `.context_provider(…)` or \
@@ -221,7 +313,17 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             .sessions
             .unwrap_or_else(|| Arc::new(InMemorySessionProvider::new(self.max_sessions)));
 
-        let registry = RunRegistry::new(self.retention, self.max_runs, self.max_events_per_run);
+        let registry = RunRegistry::new(
+            self.retention,
+            self.max_runs,
+            self.max_events_per_run,
+            self.max_in_flight,
+            self.max_run_duration,
+        );
+
+        // Default the gate to "on whenever this builder authenticates". An
+        // embedded deployment whose host authenticates must opt in explicitly.
+        let require_principal = self.require_principal.unwrap_or(self.auth.is_some());
 
         let state = AppState {
             inner: Arc::new(AppStateInner {
@@ -233,6 +335,7 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
                 auth: self.auth,
                 run_config: self.run_config,
                 locks: SessionLocks::new(),
+                require_principal,
             }),
         };
 
@@ -449,5 +552,144 @@ mod tests {
             .agent(agent("a"))
             .build();
         assert!(server.is_ok());
+    }
+
+    /// `max_in_flight(0)` must be rejected before construction — it is
+    /// unconditional (unlike `max_sessions`, no custom component overrides it),
+    /// since a zero cap would reject every run. Asserts the message names
+    /// `max_in_flight` specifically, not just the error variant — otherwise a
+    /// deleted guard that happened to trip some other `BadRequest` path would
+    /// still pass this test.
+    #[test]
+    fn zero_max_in_flight_is_bad_request() {
+        let result = AgentServer::<()>::builder()
+            .with_default_context()
+            .max_in_flight(0)
+            .build();
+        let err = result.err().expect("max_in_flight(0) must fail the build");
+        match err {
+            ServerError::BadRequest(msg) => {
+                assert!(
+                    msg.contains("max_in_flight"),
+                    "expected a max_in_flight message, got: {msg}"
+                );
+            }
+            other => panic!("expected ServerError::BadRequest, got: {other}"),
+        }
+    }
+
+    /// `max_run_duration(Duration::ZERO)` must be rejected before
+    /// construction, same as `max_in_flight(0)` above. Left unguarded, it is
+    /// accepted silently and then cancels every run at the sweeper's very
+    /// next tick (at most 30s later), forever, with no error and no log.
+    /// Asserts the message names `max_run_duration` specifically, matching
+    /// the stronger of the two `max_in_flight` assertions above.
+    #[test]
+    fn zero_max_run_duration_is_bad_request() {
+        let result = AgentServer::<()>::builder()
+            .with_default_context()
+            .max_run_duration(std::time::Duration::ZERO)
+            .build();
+        let err = result
+            .err()
+            .expect("max_run_duration(Duration::ZERO) must fail the build");
+        match err {
+            ServerError::BadRequest(msg) => {
+                assert!(
+                    msg.contains("max_run_duration"),
+                    "expected a max_run_duration message, got: {msg}"
+                );
+            }
+            other => panic!("expected ServerError::BadRequest, got: {other}"),
+        }
+    }
+
+    /// Regression for the bug this crate's sweeper-spawn wiring exists to
+    /// prevent: dropping the `spawn_sweeper` call from `configure()` would
+    /// break `max_run_duration` reclamation on the actix embed path — turning
+    /// the `max_in_flight` admission cap into a permanent-outage vector — with
+    /// no test failing. Mirrors axum's `router_alone_spawns_the_sweeper`
+    /// (`AgentServer::router` there, `AgentServer::configure` here — actix's
+    /// own embed path, as its docs already name it).
+    ///
+    /// `App::configure` runs its argument closure synchronously and
+    /// unconditionally the moment it's called — no ambient actix/Tokio
+    /// runtime is required, since `spawn_sweeper` spawns onto the
+    /// process-wide runtime obtained from `crate::runtime::shared_handle()`,
+    /// not the current one.
+    #[test]
+    fn configure_spawns_the_sweeper() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .build()
+            .expect("server builds");
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "the sweeper must not be spawned before configure() is ever called"
+        );
+
+        let cfg = server.configure();
+        let _app = App::new().configure(cfg); // NOT server.serve(...)
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "configure() alone must spawn the reclaiming sweeper"
+        );
+    }
+
+    /// Symmetric with axum's backstop (`request_path_starts_the_sweeper_even_when_router_was_built_outside_a_runtime`
+    /// in `paigasus-helikon-runtime-axum`), added for the same reason: a
+    /// future refactor of `configure()` — this crate's own embed path — must
+    /// not be able to silently drop the sweeper spawn without a test failing.
+    ///
+    /// Unlike axum, `configure()`'s own `spawn_sweeper` call here does not
+    /// depend on an ambient runtime (it spawns onto the explicit
+    /// process-wide handle from `crate::runtime::shared_handle()`, not onto
+    /// whatever runtime happens to be current), so there is no "outside a
+    /// runtime" state to reproduce here — `configure_spawns_the_sweeper`
+    /// above already proves that. What this test proves instead: `create_run`
+    /// spawns the sweeper on its own, independent of `configure()` ever
+    /// having run at all. The route below is wired directly to
+    /// `handlers::runs::create_run`, bypassing `configure()` entirely, so
+    /// `configure()`'s own spawn call never fires — the sweeper being spawned
+    /// afterward can only be `create_run`'s doing.
+    #[actix_web::test]
+    async fn request_path_starts_the_sweeper_even_without_configure_ever_running() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .agent(agent("noop"))
+            .build()
+            .expect("server builds");
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "the sweeper must not be spawned before anything runs"
+        );
+
+        let state = server.state.clone();
+        let app = actix_web::test::init_service(App::new().app_data(Data::new(state)).route(
+            "/agents/{name}/runs",
+            web::post().to(handlers::runs::create_run::<()>),
+        ))
+        .await;
+
+        let req = actix_web::test::TestRequest::post()
+            .uri("/agents/noop/runs?mode=async")
+            .insert_header(("content-type", "application/json"))
+            .set_payload(r#"{"input":"test"}"#)
+            .to_request();
+        let resp = actix_web::test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::ACCEPTED,
+            "expected 202 Accepted"
+        );
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "the request path must spawn the sweeper once a run is admitted, \
+             even though configure() was never called"
+        );
     }
 }

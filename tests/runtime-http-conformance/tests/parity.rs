@@ -70,6 +70,167 @@ fn boot_actix() -> String {
     format!("http://{addr}")
 }
 
+/// An `AuthLayer` for the parity suite that maps the `X-Test-Principal` header
+/// to a `Principal`. A request with no such header is admitted but establishes
+/// no principal — which is exactly the fail-closed row under test.
+mod principal_auth {
+    use async_trait::async_trait;
+
+    /// axum flavour of the header→principal auth layer.
+    pub struct HeaderPrincipalAuth;
+
+    #[async_trait]
+    impl paigasus_helikon_runtime_axum::AuthLayer for HeaderPrincipalAuth {
+        async fn authenticate(
+            &self,
+            parts: &mut axum::http::request::Parts,
+        ) -> Result<(), paigasus_helikon_runtime_axum::AuthRejection> {
+            if let Some(v) = parts.headers.get("x-test-principal") {
+                if let Ok(s) = v.to_str() {
+                    parts
+                        .extensions
+                        .insert(paigasus_helikon_runtime_axum::Principal(s.to_owned()));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// actix flavour of the same layer.
+    pub struct ActixHeaderPrincipalAuth;
+
+    #[async_trait(?Send)]
+    impl paigasus_helikon_runtime_actix::AuthLayer for ActixHeaderPrincipalAuth {
+        async fn authenticate(
+            &self,
+            req: &actix_web::HttpRequest,
+        ) -> Result<(), paigasus_helikon_runtime_actix::AuthRejection> {
+            use actix_web::HttpMessage as _;
+            let found = req
+                .headers()
+                .get("x-test-principal")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            if let Some(s) = found {
+                req.extensions_mut()
+                    .insert(paigasus_helikon_runtime_actix::Principal(s));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// A fourth agent, mounted only on the authenticated servers, that echoes the
+/// **merged conversation** (the session history the runner loaded plus this
+/// turn's input) back as its assistant message.
+///
+/// The shared `scripted_agents()` set cannot prove session isolation over HTTP:
+/// `echo` emits a fixed string, so its response body is identical whether or
+/// not two principals collided. This agent makes the loaded history *observable
+/// in the response body*, which is what turns the isolation assertion below
+/// from a status-code check into a real one.
+mod history_echo {
+    use async_trait::async_trait;
+    use futures_util::stream::{self, BoxStream, StreamExt as _};
+    use paigasus_helikon_core::{
+        Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext, TokenUsage,
+    };
+
+    /// Echoes the merged conversation as one assistant message.
+    pub struct HistoryEchoAgent;
+
+    #[async_trait]
+    impl Agent<()> for HistoryEchoAgent {
+        fn name(&self) -> &str {
+            "history"
+        }
+
+        fn description(&self) -> &str {
+            "echoes the merged conversation (session history + this turn)"
+        }
+
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            let mut parts: Vec<String> = Vec::new();
+            for item in &input.messages {
+                let content = match item {
+                    Item::UserMessage { content } => content,
+                    Item::AssistantMessage { content, .. } => content,
+                    _ => continue,
+                };
+                for part in content {
+                    if let ContentPart::Text { text } = part {
+                        parts.push(text.clone());
+                    }
+                }
+            }
+            Ok(stream::iter(vec![
+                AgentEvent::MessageOutput {
+                    item: Item::AssistantMessage {
+                        content: vec![ContentPart::Text {
+                            text: parts.join("|"),
+                        }],
+                        agent: None,
+                    },
+                },
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                },
+            ])
+            .boxed())
+        }
+    }
+}
+
+/// Boot an axum server with the header-principal auth layer. Mirrors
+/// `boot_axum` otherwise, plus the `history` agent.
+async fn boot_axum_authed() -> String {
+    let mut builder = paigasus_helikon_runtime_axum::AgentServer::<()>::builder()
+        .with_default_context()
+        .auth(std::sync::Arc::new(principal_auth::HeaderPrincipalAuth))
+        .agent(std::sync::Arc::new(history_echo::HistoryEchoAgent));
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("axum authed server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        server.serve_with_listener(listener).await.expect("serve");
+    });
+    format!("http://{addr}")
+}
+
+/// Boot an actix server with the header-principal auth layer. Mirrors
+/// `boot_actix` otherwise, including its dedicated-thread `System`, plus the
+/// `history` agent.
+fn boot_actix_authed() -> String {
+    let mut builder = paigasus_helikon_runtime_actix::AgentServer::<()>::builder()
+        .with_default_context()
+        .auth(std::sync::Arc::new(
+            principal_auth::ActixHeaderPrincipalAuth,
+        ))
+        .agent(std::sync::Arc::new(history_echo::HistoryEchoAgent));
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("actix authed server builds");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    std::thread::spawn(move || {
+        actix_web::rt::System::new().block_on(async move {
+            server.serve_with_listener(listener).await.expect("serve");
+        });
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    format!("http://{addr}")
+}
+
 /// Replace the run's UUID (read from the body's `run_id` field) with a fixed
 /// token so two otherwise-identical bodies can be byte-compared. Parsing only
 /// locates the UUID; the substitution is a raw-text replace, so field order and
@@ -337,4 +498,541 @@ async fn axum_and_actix_are_wire_compatible() {
             }
         }
     }
+}
+
+/// The shared fixture set must expose all three agents on both runtimes. `boom`
+/// and `hang` are what make the redaction and in-flight-cap assertions
+/// reachable; without them those behaviours cannot be triggered from the
+/// parity suite at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fixture_set_exposes_all_three_agents() {
+    let axum_base = boot_axum().await;
+    let actix_base = boot_actix();
+    let client = reqwest::Client::new();
+
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let body = client
+            .get(format!("{base}/agents"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} GET /agents: {e}"))
+            .text()
+            .await
+            .expect("agents body");
+        let value: serde_json::Value = serde_json::from_str(&body).expect("agents body is JSON");
+        let names: Vec<&str> = value
+            .as_array()
+            .expect("agents body is an array")
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        for expected in ["echo", "boom", "hang"] {
+            assert!(
+                names.contains(&expected),
+                "{name} /agents is missing `{expected}`; got {names:?}"
+            );
+        }
+    }
+}
+
+/// The runner's error text must not reach the caller on ANY transport. A 500
+/// body carrying it is CWE-209; so is the synthetic `run_failed` frame the SSE
+/// and WebSocket transports emit, which is a 200 response and would otherwise
+/// let `?stream=sse` walk straight around the redaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_error_detail_is_redacted_on_every_transport() {
+    /// Substring of the underlying `boom` failure. Its presence anywhere on the
+    /// wire is the bug this test exists to catch.
+    const LEAK: &str = "max turns";
+
+    let axum_base = boot_axum().await;
+    let actix_base = boot_actix();
+    let client = reqwest::Client::new();
+
+    // ── one-shot: 500 with a fixed, non-diagnostic body ──────────────────────
+    let mut oneshot_bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let resp = client
+            .post(format!("{base}/agents/boom/runs"))
+            .header("content-type", "application/json")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} boom one-shot: {e}"));
+        assert_eq!(resp.status(), 500, "{name} boom one-shot status");
+        let body = resp.text().await.expect("boom one-shot body");
+        assert_eq!(
+            body, r#"{"error":"internal error"}"#,
+            "{name} 500 body must be the fixed public string"
+        );
+        assert!(
+            !body.contains(LEAK),
+            "{name} 500 body leaked `{LEAK}`: {body}"
+        );
+        oneshot_bodies.push(body);
+    }
+    assert_eq!(
+        oneshot_bodies[0], oneshot_bodies[1],
+        "500 bodies must be byte-identical across runtimes"
+    );
+
+    // ── SSE: the synthetic run_failed frame is redacted and byte-identical ───
+    let mut sse_bytes = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let resp = client
+            .post(format!("{base}/agents/boom/runs?stream=sse"))
+            .header("content-type", "application/json")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} boom sse: {e}"));
+        assert_eq!(resp.status(), 200, "{name} boom sse status");
+        let text = resp.text().await.expect("boom sse body");
+        assert!(
+            !text.contains(LEAK),
+            "{name} SSE body leaked `{LEAK}`: {text}"
+        );
+        let values = sse_data_values(&text);
+        let terminal = values.last().expect("sse stream has at least one frame");
+        assert_eq!(terminal["type"], "run_failed", "{name} sse terminal type");
+        assert_eq!(
+            terminal["error"], "run failed to start",
+            "{name} sse terminal carries the fixed public string"
+        );
+        sse_bytes.push(text);
+    }
+    assert_eq!(
+        sse_bytes[0], sse_bytes[1],
+        "SSE bodies for a failed run must be byte-identical across runtimes"
+    );
+
+    // ── WebSocket: same redacted frame ───────────────────────────────────────
+    let mut ws_frames = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let run_id = {
+            let resp = client
+                .post(format!("{base}/agents/boom/runs?mode=async"))
+                .header("content-type", "application/json")
+                .body(r#"{"input":"hi"}"#)
+                .send()
+                .await
+                .unwrap_or_else(|e| panic!("{name} boom async: {e}"));
+            assert_eq!(resp.status(), 202, "{name} boom async status");
+            let v: serde_json::Value = resp.json().await.expect("async body is JSON");
+            v["run_id"].as_str().expect("run_id string").to_owned()
+        };
+
+        let ws_url = format!("{base}/agents/boom/runs/{run_id}/events").replacen("http", "ws", 1);
+        let (mut socket, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .unwrap_or_else(|e| panic!("{name} ws connect: {e}"));
+
+        let mut last_text: Option<String> = None;
+        while let Some(Ok(msg)) = futures_util::StreamExt::next(&mut socket).await {
+            if let tokio_tungstenite::tungstenite::Message::Text(t) = msg {
+                last_text = Some(t.to_string());
+            }
+        }
+        let frame = last_text.expect("ws delivered at least one text frame");
+        assert!(
+            !frame.contains(LEAK),
+            "{name} ws frame leaked `{LEAK}`: {frame}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&frame).expect("ws frame is JSON");
+        assert_eq!(v["type"], "run_failed", "{name} ws terminal type");
+        assert_eq!(
+            v["error"], "run failed to start",
+            "{name} ws terminal carries the fixed public string"
+        );
+        ws_frames.push(frame);
+    }
+    assert_eq!(
+        ws_frames[0], ws_frames[1],
+        "WebSocket terminal frames must be byte-identical across runtimes"
+    );
+}
+
+/// A named session with no established principal must be refused identically on
+/// both runtimes. This is the most security-critical new response AND the one
+/// whose implementations diverge most — axum gates via `from_fn_with_state`
+/// plus a `Request::from_parts` reassembly, actix via a hand-rolled
+/// `AuthGuard` short-circuit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_session_without_principal_is_refused_identically() {
+    let axum_base = boot_axum_authed().await;
+    let actix_base = boot_actix_authed();
+    let client = reqwest::Client::new();
+
+    let mut bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        let resp = client
+            .post(format!("{base}/agents/echo/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "victim-session")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} unbound-session request: {e}"));
+        assert_eq!(
+            resp.status(),
+            403,
+            "{name} unbound named session must be 403"
+        );
+        bodies.push(resp.text().await.expect("403 body"));
+    }
+    assert_eq!(
+        bodies[0], bodies[1],
+        "403 bodies must be byte-identical\naxum : {}\nactix: {}",
+        bodies[0], bodies[1]
+    );
+    assert_eq!(
+        bodies[0],
+        r#"{"error":"unauthorized: session id requires an authenticated principal (403 Forbidden)"}"#,
+        "the 403 body is pinned so the two runtimes cannot drift"
+    );
+}
+
+/// Two principals using the SAME `X-Session-Id` must not share conversation
+/// history. This is the IDOR itself, asserted end to end on both runtimes.
+///
+/// The `history` agent (not `echo`) is what gives this teeth: its response body
+/// carries the conversation the runner loaded, so a collision shows up as
+/// alice's literal text inside mallory's response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_session_id_different_principals_are_isolated() {
+    let axum_base = boot_axum_authed().await;
+    let actix_base = boot_actix_authed();
+    let client = reqwest::Client::new();
+
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        // Principal "alice" runs once under session id "shared".
+        let alice = client
+            .post(format!("{base}/agents/history/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "shared")
+            .header("x-test-principal", "alice")
+            .body(r#"{"input":"alice-secret"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice run: {e}"));
+        assert_eq!(alice.status(), 200, "{name} alice run status");
+        let alice_run: serde_json::Value = alice.json().await.expect("alice body");
+
+        // Principal "mallory" reuses the id. If the two collide, mallory's run
+        // resumes alice's session and her text is echoed back to him.
+        let mallory = client
+            .post(format!("{base}/agents/history/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "shared")
+            .header("x-test-principal", "mallory")
+            .body(r#"{"input":"mallory-probe"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} mallory run: {e}"));
+        assert_eq!(mallory.status(), 200, "{name} mallory run status");
+        let mallory_run: serde_json::Value = mallory.json().await.expect("mallory body");
+
+        assert_ne!(
+            alice_run["run_id"], mallory_run["run_id"],
+            "{name} runs must be distinct"
+        );
+        assert_eq!(
+            mallory_run["output"], "mallory-probe",
+            "{name} mallory must see only his own turn, not alice's history"
+        );
+        assert!(
+            !serde_json::to_string(&mallory_run)
+                .expect("re-serialize")
+                .contains("alice-secret"),
+            "{name}: mallory's response leaked alice's input — sessions collided"
+        );
+
+        // Positive control: alice still resumes her OWN conversation, so the
+        // isolation above is not just "session affinity is broken for everyone".
+        let alice_again = client
+            .post(format!("{base}/agents/history/runs"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "shared")
+            .header("x-test-principal", "alice")
+            .body(r#"{"input":"alice-again"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice second run: {e}"));
+        assert_eq!(alice_again.status(), 200, "{name} alice second run status");
+        let alice_again_run: serde_json::Value = alice_again.json().await.expect("alice body");
+        let output = alice_again_run["output"].as_str().expect("output string");
+        assert!(
+            output.contains("alice-secret"),
+            "{name}: alice lost her own conversation; got {output:?}"
+        );
+        assert!(
+            !output.contains("mallory-probe"),
+            "{name}: alice read mallory's conversation; got {output:?}"
+        );
+    }
+}
+
+/// Extract the status and (lossily-decoded) body of a failed WebSocket
+/// handshake — used below to assert a denial's exact wire shape without
+/// completing the upgrade.
+fn handshake_failure_status_and_body(err: tokio_tungstenite::tungstenite::Error) -> (u16, String) {
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => {
+            let status = resp.status().as_u16();
+            let body = resp
+                .body()
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_default();
+            (status, body)
+        }
+        other => panic!("expected an HTTP handshake failure, got: {other:?}"),
+    }
+}
+
+/// A run's event stream must be readable only by the principal that started it.
+/// The denial is folded into the EXISTING 404 rather than a new 403: a distinct
+/// status would confirm the run id exists and belongs to someone else, turning
+/// the endpoint into an existence oracle for harvested ids.
+///
+/// The negative (mallory) check goes through a genuine WebSocket handshake
+/// request (`tokio_tungstenite::connect_async`) rather than a bare
+/// `reqwest::Client::get()`. axum's `WebSocketUpgrade` extractor validates the
+/// `Connection` / `Upgrade` / `Sec-WebSocket-*` handshake headers *before* the
+/// handler body runs, independently of the registry — so a plain non-upgrade
+/// GET always fails with 400 on axum regardless of whether the run exists or
+/// who owns it (a pre-existing axum/actix ordering asymmetry: actix checks the
+/// registry before attempting the upgrade, axum validates the upgrade before
+/// the handler body executes at all). A bare GET therefore cannot distinguish
+/// "denied by the principal gate" from "rejected before the gate was ever
+/// reached" on axum, and would pass even against the unfixed handler. A real
+/// handshake request reaches the same registry `.filter()` chain the positive
+/// control below exercises, which is what actually proves the fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ws_events_are_scoped_to_the_owning_principal() {
+    let axum_base = boot_axum_authed().await;
+    let actix_base = boot_actix_authed();
+    let client = reqwest::Client::new();
+
+    let mut denial_bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        // alice starts a run.
+        let resp = client
+            .post(format!("{base}/agents/echo/runs?mode=async"))
+            .header("content-type", "application/json")
+            .header("x-test-principal", "alice")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice async run: {e}"));
+        assert_eq!(resp.status(), 202, "{name} alice async status");
+        let v: serde_json::Value = resp.json().await.expect("async body");
+        let run_id = v["run_id"].as_str().expect("run_id string").to_owned();
+
+        let ws_url = format!("{base}/agents/echo/runs/{run_id}/events").replacen("http", "ws", 1);
+
+        // mallory must not reach it — 404, and NOT an upgrade.
+        let mallory_request = {
+            use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+            let mut r = ws_url.clone().into_client_request().expect("ws request");
+            r.headers_mut()
+                .insert("x-test-principal", "mallory".parse().expect("header value"));
+            r
+        };
+        let err = tokio_tungstenite::connect_async(mallory_request)
+            .await
+            .err()
+            .unwrap_or_else(|| {
+                panic!("{name}: mallory's handshake unexpectedly succeeded — cross-principal isolation broken")
+            });
+        let (status, body) = handshake_failure_status_and_body(err);
+        assert_eq!(
+            status, 404,
+            "{name}: another principal's run must 404, not 403 (no existence oracle)"
+        );
+        // `tungstenite::Error::Http`'s body comes from whatever was left in the
+        // handshake read-buffer tail (tungstenite's client handshake reads
+        // headers and body opportunistically off the same buffer). If headers
+        // and body ever arrived in separate reads, that tail — and therefore
+        // `body` — would be empty on BOTH runtimes, and the byte-equality
+        // check below would silently degrade to `"" == ""`, passing without
+        // asserting anything. Pin down what we can actually rely on first: a
+        // non-empty body carrying the expected error shape.
+        assert!(
+            body.contains("unknown agent"),
+            "{name}: cross-principal denial body must carry the `unknown agent` shape, got {body:?}"
+        );
+        // The body also embeds the per-run UUID (`unknown agent: echo/<run_id>`);
+        // normalize it to a fixed token before the cross-runtime byte compare,
+        // exactly as `normalize_run_id` does for the JSON run responses above.
+        denial_bodies.push(body.replace(&run_id, RUN_ID_TOKEN));
+
+        // Positive control: alice CAN reach her own run, so the test cannot pass
+        // by denying everyone.
+        let request = {
+            use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+            let mut r = ws_url.into_client_request().expect("ws request");
+            r.headers_mut()
+                .insert("x-test-principal", "alice".parse().expect("header value"));
+            r
+        };
+        let (socket, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .unwrap_or_else(|e| panic!("{name} alice ws connect (positive control): {e}"));
+        drop(socket);
+    }
+    assert_eq!(
+        denial_bodies[0], denial_bodies[1],
+        "cross-principal denial bodies must be byte-identical"
+    );
+}
+
+/// Boot an axum server with a one-run admission cap. Single-purpose: the `hang`
+/// run it admits holds its slot until `max_run_duration` elapses, so nothing
+/// else should be asserted against this pair.
+async fn boot_axum_capped() -> String {
+    let mut builder = paigasus_helikon_runtime_axum::AgentServer::<()>::builder()
+        .with_default_context()
+        .max_in_flight(1);
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("axum capped server builds");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        server.serve_with_listener(listener).await.expect("serve");
+    });
+    format!("http://{addr}")
+}
+
+/// Boot an actix server with a one-run admission cap. Same single-purpose
+/// caveat as `boot_axum_capped`.
+fn boot_actix_capped() -> String {
+    let mut builder = paigasus_helikon_runtime_actix::AgentServer::<()>::builder()
+        .with_default_context()
+        .max_in_flight(1);
+    for agent in scripted_agents() {
+        builder = builder.agent(agent);
+    }
+    let server = builder.build().expect("actix capped server builds");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    std::thread::spawn(move || {
+        actix_web::rt::System::new().block_on(async move {
+            server.serve_with_listener(listener).await.expect("serve");
+        });
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    format!("http://{addr}")
+}
+
+/// Once the in-flight cap is reached, further runs are refused with an
+/// identical 503 on both runtimes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_flight_cap_rejects_identically() {
+    let axum_base = boot_axum_capped().await;
+    let actix_base = boot_actix_capped();
+    let client = reqwest::Client::new();
+
+    let mut bodies = Vec::new();
+    for (name, base) in [("axum", &axum_base), ("actix", &actix_base)] {
+        // Fill the single slot. `?mode=async` returns only AFTER `registry.create`
+        // has run, so the sequencing below is race-free.
+        let first = client
+            .post(format!("{base}/agents/hang/runs?mode=async"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "slot-holder")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} first hang run: {e}"));
+        assert_eq!(first.status(), 202, "{name} first run must be admitted");
+
+        // A DIFFERENT session id, deliberately: same-session requests queue on
+        // the per-session lock and would never reach the admission check, so the
+        // test would pass for the wrong reason.
+        let second = client
+            .post(format!("{base}/agents/echo/runs?mode=async"))
+            .header("content-type", "application/json")
+            .header("x-session-id", "other-caller")
+            .body(r#"{"input":"hi"}"#)
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{name} second run: {e}"));
+        assert_eq!(second.status(), 503, "{name} second run must be refused");
+        assert_eq!(
+            second
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("1"),
+            "{name} 503 must carry Retry-After"
+        );
+        let body = second.text().await.expect("503 body");
+        assert_eq!(
+            body, r#"{"error":"service unavailable"}"#,
+            "{name} 503 body must be redacted — the reason goes to tracing, not \
+             the wire, so it does not confirm to an attacker that the cap is finite"
+        );
+        bodies.push(body);
+    }
+    assert_eq!(bodies[0], bodies[1], "503 bodies must be byte-identical");
+}
+
+/// The two runtimes must document the SAME response codes, not merely the same
+/// paths. Path-only parity let the 503 go undocumented on both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openapi_response_sets_match() {
+    let axum_base = boot_axum().await;
+    let actix_base = boot_actix();
+
+    let fetch = |base: String| async move {
+        let spec: serde_json::Value = reqwest::Client::new()
+            .get(format!("{base}/openapi.json"))
+            .send()
+            .await
+            .expect("openapi request")
+            .json()
+            .await
+            .expect("openapi body");
+        spec
+    };
+    let axum_spec = fetch(axum_base).await;
+    let actix_spec = fetch(actix_base).await;
+
+    /// Collect `path -> method -> sorted status codes`.
+    fn response_sets(spec: &serde_json::Value) -> Vec<(String, String, Vec<String>)> {
+        let mut out = Vec::new();
+        for (path, item) in spec["paths"].as_object().expect("paths object") {
+            for (method, op) in item.as_object().expect("path item object") {
+                let mut codes: Vec<String> = op["responses"]
+                    .as_object()
+                    .map(|r| r.keys().cloned().collect())
+                    .unwrap_or_default();
+                codes.sort();
+                out.push((path.clone(), method.clone(), codes));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    assert_eq!(
+        response_sets(&axum_spec),
+        response_sets(&actix_spec),
+        "documented response codes must match between runtimes"
+    );
+
+    let run_codes = response_sets(&axum_spec)
+        .into_iter()
+        .find(|(p, m, _)| p == "/agents/{name}/runs" && m == "post")
+        .map(|(_, _, c)| c)
+        .expect("POST /agents/{name}/runs is documented");
+    assert!(
+        run_codes.contains(&"503".to_owned()),
+        "the in-flight cap's 503 must be documented; got {run_codes:?}"
+    );
 }

@@ -226,7 +226,7 @@ async fn concurrent_same_session_serialize() {
 /// naturally inside the window. Do not shorten it.
 #[tokio::test]
 async fn oneshot_client_disconnect_still_finalizes_the_session() {
-    use paigasus_helikon_runtime_axum::SessionProvider;
+    use paigasus_helikon_runtime_axum::{SessionKey, SessionProvider};
     use tokio::io::AsyncWriteExt as _;
 
     let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -258,7 +258,12 @@ async fn oneshot_client_disconnect_still_finalizes_the_session() {
             .expect("agent signalled run start");
     }
 
-    let session = sessions.session(Some(session_id)).await.unwrap();
+    // No `AuthLayer` on this server, so the run resolved its session under the
+    // principal-less key — look it up the same way.
+    let session = sessions
+        .session(SessionKey::new(None, Some(session_id)))
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let snapshot = session.snapshot().await.unwrap();

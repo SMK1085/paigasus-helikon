@@ -41,6 +41,9 @@ pub(crate) struct AppStateInner<Ctx> {
     pub run_config: RunConfig,
     /// Per-session run serialisation locks.
     pub locks: SessionLocks,
+    /// Refuse `X-Session-Id` from callers with no established
+    /// [`Principal`](crate::Principal).
+    pub require_principal: bool,
 }
 
 /// Cheaply-cloneable axum extraction state.
@@ -87,6 +90,11 @@ pub struct AgentServerBuilder<Ctx> {
     retention: Duration,
     max_runs: usize,
     max_events_per_run: usize,
+    max_in_flight: usize,
+    max_run_duration: Duration,
+    /// `None` until set explicitly; `build()` then defaults it to
+    /// `self.auth.is_some()`.
+    require_principal: Option<bool>,
 }
 
 impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
@@ -103,6 +111,9 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             retention: Duration::from_secs(300),
             max_runs: 1024,
             max_events_per_run: 10_000,
+            max_in_flight: 1024,
+            max_run_duration: Duration::from_secs(3600),
+            require_principal: None,
         }
     }
 
@@ -183,11 +194,72 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
         self
     }
 
+    /// Cap the number of simultaneously in-flight (non-terminal) runs.
+    ///
+    /// Once this many runs are live, further run creation is rejected with
+    /// `503 Service Unavailable` until a run reaches a terminal state.
+    ///
+    /// Default: 1 024, matching
+    /// [`max_retained_runs`](AgentServerBuilder::max_retained_runs).
+    pub fn max_in_flight(mut self, max: usize) -> Self {
+        self.max_in_flight = max;
+        self
+    }
+
+    /// Maximum wall-clock lifetime of a single run.
+    ///
+    /// A run still live after this long is cancelled and marked terminal by the
+    /// registry sweeper, releasing its in-flight slot. Without this a run that
+    /// never terminates — a hung agent on a detached `?mode=async` request —
+    /// would hold its slot for the process lifetime and eventually exhaust
+    /// [`max_in_flight`](AgentServerBuilder::max_in_flight) permanently.
+    ///
+    /// Default: 1 hour.
+    pub fn max_run_duration(mut self, duration: Duration) -> Self {
+        self.max_run_duration = duration;
+        self
+    }
+
+    /// Require an authenticated [`Principal`](crate::Principal) before honouring
+    /// an `X-Session-Id` header.
+    ///
+    /// When enabled, a request that carries `X-Session-Id` but for which no
+    /// `Principal` was established is rejected with `403 Forbidden`, because it
+    /// would otherwise land in a namespace shared with every other
+    /// principal-less caller (CWE-639).
+    ///
+    /// **Default:** enabled exactly when an [`AuthLayer`] is configured. Set it
+    /// explicitly to `true` when the server is *embedded* in a host application
+    /// that authenticates for it — via [`AgentServer::router`] — since no `AuthLayer` is
+    /// configured on this builder in that topology and the default would leave
+    /// the check off.
+    pub fn require_principal(mut self, required: bool) -> Self {
+        self.require_principal = Some(required);
+        self
+    }
+
+    /// Permit `X-Session-Id` from callers with no established principal.
+    ///
+    /// Equivalent to `require_principal(false)`. Appropriate for a single-tenant
+    /// service or a shared-API-key deployment that genuinely wants one shared
+    /// session namespace.
+    ///
+    /// This suppresses the 403 **and nothing else**: the session key stays
+    /// compound, so a caller that *does* carry a `Principal` is still isolated
+    /// to it.
+    pub fn allow_unbound_sessions(mut self) -> Self {
+        self.require_principal = Some(false);
+        self
+    }
+
     /// Build an [`AgentServer`].
     ///
     /// # Errors
     ///
-    /// - [`ServerError::BadRequest`] — a duplicate agent name was registered.
+    /// - [`ServerError::BadRequest`] — a duplicate agent name was registered, or
+    ///   `max_sessions` / [`max_in_flight`](AgentServerBuilder::max_in_flight) /
+    ///   [`max_run_duration`](AgentServerBuilder::max_run_duration) was set to
+    ///   `0`.
     /// - [`ServerError::Internal`] — no context provider was supplied (either via
     ///   [`context_provider`](AgentServerBuilder::context_provider) or
     ///   [`with_default_context`](AgentServerBuilder::with_default_context)).
@@ -207,6 +279,26 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             ));
         }
 
+        // Unconditional: a zero cap would reject every run, and no custom
+        // component can override it the way a session provider overrides
+        // `max_sessions`.
+        if self.max_in_flight == 0 {
+            return Err(ServerError::BadRequest(
+                "max_in_flight must be greater than 0".to_owned(),
+            ));
+        }
+
+        // Unconditional, same reasoning as `max_in_flight` above: a zero
+        // duration is silently indistinguishable from "works" at build time —
+        // the sweeper's next tick (at most 30s later) would cancel every run
+        // still executing, forever, with no error and no log. Reject it here
+        // instead of letting it degrade into a permanent-outage vector.
+        if self.max_run_duration.is_zero() {
+            return Err(ServerError::BadRequest(
+                "max_run_duration must be greater than 0".to_owned(),
+            ));
+        }
+
         let context = self.context.ok_or_else(|| {
             ServerError::Internal(
                 "no context provider set; call `.context_provider(…)` or \
@@ -221,7 +313,17 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
             .sessions
             .unwrap_or_else(|| Arc::new(InMemorySessionProvider::new(self.max_sessions)));
 
-        let registry = RunRegistry::new(self.retention, self.max_runs, self.max_events_per_run);
+        let registry = RunRegistry::new(
+            self.retention,
+            self.max_runs,
+            self.max_events_per_run,
+            self.max_in_flight,
+            self.max_run_duration,
+        );
+
+        // Default the gate to "on whenever this builder authenticates". An
+        // embedded deployment whose host authenticates must opt in explicitly.
+        let require_principal = self.require_principal.unwrap_or(self.auth.is_some());
 
         let state = AppState {
             inner: Arc::new(AppStateInner {
@@ -233,6 +335,7 @@ impl<Ctx: Send + Sync + 'static> AgentServerBuilder<Ctx> {
                 auth: self.auth,
                 run_config: self.run_config,
                 locks: SessionLocks::new(),
+                require_principal,
             }),
         };
 
@@ -283,14 +386,35 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
 
     /// Build the axum [`Router`].
     ///
-    /// Pure: spawns nothing.  Suitable for embedding into a larger router or for
-    /// testing with axum's `Router::oneshot`.
+    /// Also (idempotently) spawns the run registry's background reclaiming
+    /// sweeper, so a server embedded via this method reclaims runs that exceed
+    /// `max_run_duration` the same way
+    /// [`serve_with_listener`](AgentServer::serve_with_listener) does. Without
+    /// this, an embedding host that builds its own server around this router
+    /// and never calls `serve_with_listener` would never spawn the sweeper —
+    /// and the `max_in_flight` admission cap would become a permanent-outage
+    /// vector once every slot were consumed by a run that never reaches a
+    /// terminal state, exactly the failure `max_run_duration` exists to
+    /// prevent. Spawning the sweeper requires an ambient Tokio runtime; if this
+    /// is called outside one (e.g. while the embedding host is still
+    /// assembling its router before ever running it), the spawn is skipped and
+    /// a `tracing::warn!` is logged — call `router()` again from within a
+    /// runtime, or call `serve_with_listener` (always async), to actually start
+    /// reclamation. As a backstop, the request handler that admits a run also
+    /// spawns the sweeper (idempotently) before doing so, so even a `router()`
+    /// that only ever ran outside a runtime still gets reclamation started —
+    /// no later than the first admitted run.
+    ///
+    /// Otherwise pure: builds and returns a router with no side effects beyond
+    /// that one-time sweeper spawn. Suitable for embedding into a larger router
+    /// or for testing with axum's `Router::oneshot`.
     ///
     /// When an [`AuthLayer`] is configured the whole router is wrapped in a
     /// request-level authentication middleware, so **every** route — including
     /// `GET /agents`, `GET /openapi.json`, and the WebSocket events endpoint —
     /// is gated, not just the run-creation handler.
     pub fn router(&self) -> Router {
+        self.state.registry.spawn_sweeper();
         let router = Router::new()
             .route("/agents", get(handlers::agents::list::<Ctx>))
             .route(
@@ -322,7 +446,11 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     /// Start serving on `listener`.
     ///
     /// Spawns the run-registry sweeper background task, then drives the axum
-    /// serve loop until it exits.
+    /// serve loop until it exits. [`router`](AgentServer::router) — called just
+    /// below — now spawns the sweeper too (idempotently); this call stays as a
+    /// redundant-but-harmless belt-and-braces spawn attempt from within a
+    /// context that is always async, so it degrades to a no-op via the
+    /// sweeper's internal `OnceCell` guard rather than doing anything.
     ///
     /// # Errors
     ///
@@ -374,5 +502,152 @@ async fn auth_middleware<Ctx: Send + Sync + 'static>(
         Ok(next.run(req).await)
     } else {
         Ok(next.run(req).await)
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+//
+// Crate-internal (not `tests/server.rs`) specifically so these three can reach
+// `server.state.registry.sweeper_is_spawned()` — a `pub(crate)` peek at the
+// registry's sweeper `OnceCell` that lets them prove `router()` (and, for the
+// third, the request path in `handlers::runs::create_run`) spawns or skips
+// spawning the sweeper, without waiting out its real 30-second tick interval
+// or reaching into private state from an external integration test.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the bug where only `serve_with_listener` spawned the
+    /// reclaiming sweeper: a host embedding via `router()` alone — the
+    /// documented embed topology (`require_principal`'s own docs name it) —
+    /// would never reclaim an overdue run, and `max_in_flight` would become a
+    /// permanent-outage vector once every slot was consumed by a run that
+    /// never reaches a terminal state. `router()` must spawn the sweeper too,
+    /// exactly as actix's `configure()` (its own embed path) already does.
+    #[tokio::test]
+    async fn router_alone_spawns_the_sweeper() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .build()
+            .expect("server builds");
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "the sweeper must not be spawned before router() is ever called"
+        );
+
+        let _router = server.router(); // NOT server.serve_with_listener(...)
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "router() alone must spawn the reclaiming sweeper"
+        );
+    }
+
+    /// `router()` must not panic when called with no ambient Tokio runtime —
+    /// e.g. an embedding host assembling its router before ever starting an
+    /// async runtime. It degrades to a no-op (logging a warning) instead, and
+    /// — critically — does NOT claim the sweeper's `OnceCell` slot in that
+    /// case, so a later call made from within a real runtime still spawns it.
+    #[test]
+    fn router_without_a_runtime_does_not_panic_and_does_not_claim_the_slot() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .build()
+            .expect("server builds");
+
+        let _router = server.router(); // no #[tokio::test] / runtime in scope
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "with no ambient runtime, router() must not have spawned the sweeper"
+        );
+    }
+
+    /// A minimal [`Agent`] that emits no events, so an async run started
+    /// against it returns `202` without waiting on any real work.
+    struct NoopAgent;
+
+    #[async_trait::async_trait]
+    impl Agent<()> for NoopAgent {
+        fn name(&self) -> &str {
+            "noop"
+        }
+
+        fn description(&self) -> &str {
+            "does nothing"
+        }
+
+        async fn run(
+            &self,
+            _ctx: paigasus_helikon_core::RunContext<()>,
+            _input: paigasus_helikon_core::AgentInput,
+        ) -> Result<
+            futures_util::stream::BoxStream<'static, paigasus_helikon_core::AgentEvent>,
+            paigasus_helikon_core::AgentError,
+        > {
+            use futures_util::stream::StreamExt as _;
+            Ok(futures_util::stream::iter(Vec::new()).boxed())
+        }
+    }
+
+    /// The bug this backstop closes: `router()` called with no ambient Tokio
+    /// runtime (proven by the test just above) skips spawning the sweeper,
+    /// and — before this change — nothing else ever retried, so a host that
+    /// only ever assembles its router that way would never reclaim an
+    /// overdue run, turning `max_in_flight` into a permanent-outage vector.
+    /// `create_run` (`handlers/runs.rs`) now spawns the sweeper itself before
+    /// admitting a run, so the first admitted run starts reclamation
+    /// regardless of how the router was assembled.
+    ///
+    /// This proves the backstop actually fires end-to-end, not just that it
+    /// compiles: the router is built with no ambient runtime exactly like the
+    /// test above, then served on a runtime created afterwards, and one real
+    /// run is driven through the handler before the assertion.
+    #[test]
+    fn request_path_starts_the_sweeper_even_when_router_was_built_outside_a_runtime() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .agent(Arc::new(NoopAgent))
+            .build()
+            .expect("server builds");
+
+        // Build the router with NO ambient Tokio runtime — same setup as
+        // `router_without_a_runtime_does_not_panic_and_does_not_claim_the_slot`.
+        let router = server.router();
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "router() built outside a runtime must not have spawned the sweeper"
+        );
+
+        // Enter a runtime created here (not via #[tokio::test]), so the
+        // router above is provably unaffected by it, and drive one run
+        // through the request path.
+        let rt = tokio::runtime::Runtime::new().expect("build a runtime to serve on");
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind ephemeral port");
+            let addr = listener.local_addr().expect("local addr");
+            tokio::spawn(async move {
+                axum::serve(listener, router).await.expect("serve loop");
+            });
+
+            let resp = reqwest::Client::new()
+                .post(format!("http://{addr}/agents/noop/runs?mode=async"))
+                .header("content-type", "application/json")
+                .body(r#"{"input":"test"}"#)
+                .send()
+                .await
+                .expect("async run request");
+            assert_eq!(resp.status(), 202, "expected 202 Accepted");
+        });
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "the request path must spawn the sweeper once a run is admitted, \
+             even though router() itself never spawned it"
+        );
     }
 }

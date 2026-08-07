@@ -4157,6 +4157,7 @@ version = "0.0.0"
 dependencies = [
  "actix-web",
  "async-trait",
+ "axum",
  "futures-util",
  "paigasus-helikon-core",
  "paigasus-helikon-runtime-actix",
@@ -4164,6 +4165,7 @@ dependencies = [
  "reqwest 0.13.4",
  "serde_json",
  "tokio",
+ "tokio-tungstenite 0.30.0",
 ]
 
 [[package]]
