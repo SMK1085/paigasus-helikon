@@ -1,0 +1,23 @@
+approved
+
+---
+
+unlocked
+
+---
+
+<task-notification>
+<task-id>ad35ed9bbe568bcbb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/ad35ed9bbe568bcbb.output</output-file>
+<status>completed</status>
+<summary>Agent "SDD Task 2 implementer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Report appended successfully via heredoc.
+
+**Status:** DONE
+**Commit SHA:** `1086601fa263e08f92978fbdebb5f9ccb86a0b4f`
+**Test summary:** `cargo test -p paigasus-helikon-runtime-temporal` → 77 unit + 6 integration + 2 doctests, all passed (no regression from the doc-only change).
+**Concerns:** None. Reworded only the false exclusivity claim on `decode_diagnostics_never_leak_payload_bytes`, preserved the leak-surfacing and `EncodingError`-vs-`WrongEncoding` regression reasoning verbatim in spirit. Both Minor observations left untouched per instruction. `git show --stat HEAD` confirms exactly one file (`activity_input.rs`) landed; commit signed successfully.</result>
+<usage><subagent_tokens>104960</subagent_tokens><tool_uses>11</tool_uses><duration_ms>104036</duration_ms></usage>
+</task-notification>
