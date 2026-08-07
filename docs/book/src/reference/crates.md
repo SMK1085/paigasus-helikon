@@ -31,7 +31,7 @@ Versions below are **current as of 2026-07-06** and move every release — read 
 | [`paigasus-helikon-runtime-tokio`](https://docs.rs/paigasus-helikon-runtime-tokio) | Default ephemeral Tokio runner | published | `0.1.9` |
 | [`paigasus-helikon-runtime-axum`](https://docs.rs/paigasus-helikon-runtime-axum) | Self-hosted Axum HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints, replayable runs) | published | `0.1.0` |
 | [`paigasus-helikon-runtime-actix`](https://docs.rs/paigasus-helikon-runtime-actix) | Self-hosted actix-web HTTP/SSE/WebSocket agent server (same public surface as `runtime-axum`; embed into an existing actix-web app) | published | `0.1.0` |
-| [`paigasus-helikon-runtime-temporal`](https://docs.rs/paigasus-helikon-runtime-temporal) | Durable Temporal-backed runner (`TemporalRunner`; crash-resume via Temporal history replay) | published | `0.1.0` |
+| [`paigasus-helikon-runtime-temporal`](https://docs.rs/paigasus-helikon-runtime-temporal) | Durable Temporal-backed runner (`TemporalRunner`; crash-resume via Temporal history replay) | published | `0.3.0` |
 | [`paigasus-helikon-runtime-agentcore`](https://docs.rs/paigasus-helikon-runtime-agentcore) | AWS Bedrock AgentCore container shim (`AgentCoreServer`; HTTP + MCP protocol contract) | published | `0.1.0` |
 | [`paigasus-helikon-mcp`](https://docs.rs/paigasus-helikon-mcp) | MCP integration — `rmcp` client and server wrappers | published | `0.1.3` |
 | [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) | Sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`) | published | `0.1.5` |
