@@ -1,0 +1,205 @@
+name: integration
+
+# Signal-only integration jobs (SMA-457): the live Temporal suite and the
+# AgentCore image gates, both shipped local-only by SMA-332.
+#
+# Deliberately NOT in ci.yml. `temporal-it` is *expected* to flake while it earns
+# promotion to a required check — crash_resume_mid_tool_call aborts a real worker
+# against wall-clock activity timeouts — and a failing job makes its whole
+# workflow run conclude `failure`, required or not. Keeping these out of ci.yml is
+# what stops "ci is red on main" from becoming meaningless. They also need
+# triggers ci.yml does not have: the nightly cron is what accumulates the flake
+# record the promotion decision depends on.
+#
+# Neither job is in .github/rulesets/main-protection-checks.json. "Signal-only"
+# means *not listed as required* — never `continue-on-error`, which would report
+# green unconditionally and remove the signal rather than weaken it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Nightly, so the flake record accumulates even in weeks when nothing Temporal
+  # changes. Only temporal-it runs on this event — see each job's `decide` step.
+  # Per CLAUDE.md: GitHub delays cron under load and disables it after 60 days of
+  # repository inactivity, so this is best-effort evidence — a missing run is not
+  # a passing run.
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  temporal-it:
+    runs-on: ubuntu-latest
+    # Must absorb a cold build of temporalio-sdk-core + prost/tonic + protoc
+    # codegen — the heaviest dependency tree in the workspace. rust-cache usually
+    # misses here: the job is path-filtered, so pushes to main rarely populate the
+    # cache other branches read from.
+    timeout-minutes: 60
+    env:
+      # Never green-by-skip: makes gate() panic instead of quietly passing when
+      # TEMPORAL_TEST_SERVER is missing. A skipped test *passes* and cargo test
+      # captures a passing test's output, so without this a job that never
+      # reached a server is indistinguishable from a green one. Mirrors
+      # HELIKON_REQUIRE_SANDBOX in ci.yml's `test` job.
+      HELIKON_REQUIRE_TEMPORAL: "1"
+      # Pinned literals, not fetched from the release's own checksums.txt: a
+      # checksum served by the same host as the artifact proves only that the
+      # download was not corrupted, never the artifact's identity. Hand-bumped;
+      # Dependabot does not track these.
+      TEMPORAL_CLI_VERSION: "1.8.2"
+      TEMPORAL_CLI_SHA256: "d8421bda989e6514b4bdb4d63a9012a8a05a806892e881a5aad8510496349a94"
+    steps:
+      # actions/checkout v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      # dorny/paths-filter v4.0.1 — needs a base to diff against, which schedule
+      # and workflow_dispatch do not provide; hence the event guard here and the
+      # `decide` step below.
+      - if: github.event_name == 'push' || github.event_name == 'pull_request'
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706
+        id: filter
+        with:
+          filters: |
+            temporal:
+              - 'crates/paigasus-helikon-runtime-temporal/**'
+              - 'crates/paigasus-helikon-core/src/**'
+              - 'crates/paigasus-helikon-core/Cargo.toml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/integration.yml'
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          MATCHED: ${{ steps.filter.outputs.temporal }}
+        run: |
+          # When the filter step is skipped its outputs are empty, hence :-false.
+          if [ "${EVENT}" = "workflow_dispatch" ] || [ "${EVENT}" = "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=${MATCHED:-false}" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.decide.outputs.run != 'true'
+        run: echo "No Temporal-related changes; nothing to run."
+      # Every remaining step is guarded at STEP level, not with a job-level `if:`.
+      # A skipped *job* reports no status at all, which would block every PR the
+      # moment this context is promoted to required. sessions-it does the same.
+      - if: steps.decide.outputs.run == 'true'
+        # dtolnay/rust-toolchain master (no tagged releases)
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at build
+      # time (prost-build); a system protoc is required (SMA-332). repo-token
+      # avoids unauthenticated GitHub API rate limits.
+      - if: steps.decide.outputs.run == 'true'
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Swatinem/rust-cache v2.9.1 — cache-on-failure because this job is expected
+      # to go red sometimes, and a red run must still warm the cache for the next.
+      - if: steps.decide.outputs.run == 'true'
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          cache-on-failure: "true"
+      - if: steps.decide.outputs.run == 'true'
+        name: Install the Temporal CLI
+        run: |
+          tarball="temporal_cli_${TEMPORAL_CLI_VERSION}_linux_amd64.tar.gz"
+          url="https://github.com/temporalio/cli/releases/download/v${TEMPORAL_CLI_VERSION}/${tarball}"
+          curl -sSfL -o "${RUNNER_TEMP}/${tarball}" "${url}"
+          echo "${TEMPORAL_CLI_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" temporal
+          sudo install -m 0755 "${RUNNER_TEMP}/temporal" /usr/local/bin/temporal
+          temporal --version
+      - if: steps.decide.outputs.run == 'true'
+        name: Start the Temporal dev server
+        run: |
+          # Redirect BOTH streams to a file: a background process holding the
+          # step's stdio pipes open can stop the step from ever completing, and
+          # the diagnostics step below needs a log to print. The process survives
+          # into later steps — the runner does not reap it until the job ends.
+          temporal server start-dev --headless --ip 127.0.0.1 --port 7233 \
+            > "${RUNNER_TEMP}/temporal-dev-server.log" 2>&1 &
+          # Probe the `default` namespace, not `operator cluster health`: the
+          # cluster reports healthy before `default` finishes registering, and the
+          # suite connects with ClientOptions::new("default"). A
+          # namespace-not-found in the first test would look like a real regression.
+          for i in $(seq 1 30); do
+            if temporal operator namespace describe default --address 127.0.0.1:7233 > /dev/null 2>&1; then
+              echo "dev server ready after $((i * 2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Temporal dev server did not become ready within 60s"
+          cat "${RUNNER_TEMP}/temporal-dev-server.log" || true
+          exit 1
+      - if: steps.decide.outputs.run == 'true'
+        id: suite
+        name: Run the live Temporal suite
+        timeout-minutes: 20
+        env:
+          # 127.0.0.1, not localhost: on a dual-stack runner `localhost` can
+          # resolve to ::1 first while the dev server is bound to IPv4, producing
+          # a connection failure that looks like a Temporal bug.
+          TEMPORAL_TEST_SERVER: 127.0.0.1:7233
+        run: |
+          # Deliberately a SINGLE attempt, unlike sessions-it's 3x retry loop.
+          # sessions-it is required, so a flake there blocks a merge; this job is
+          # signal-only precisely to measure how often the wall-clock-sensitive
+          # crash-resume test flakes. A retry loop would erase that evidence.
+          start=$(date +%s)
+          set +e
+          cargo test -p paigasus-helikon-runtime-temporal --test temporal_live -- --test-threads=1
+          status=$?
+          set -e
+          echo "duration_s=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+          exit "${status}"
+      - if: steps.decide.outputs.run == 'true'
+        name: Self-test the never-green-by-skip guard
+        # Regression test for gate()'s HELIKON_REQUIRE_TEMPORAL branch. The job's
+        # HELIKON_REQUIRE_TEMPORAL=1 is inherited from job env; TEMPORAL_TEST_SERVER
+        # is scoped to the suite step above, so it is absent here — exactly the
+        # condition the guard exists to catch. The suite MUST fail. If someone
+        # deletes those five lines, this step is what notices; without it the job
+        # would quietly return to passing while asserting nothing. The test binary
+        # is already compiled, so this costs seconds.
+        run: |
+          if cargo test -p paigasus-helikon-runtime-temporal --test temporal_live -- --test-threads=1; then
+            echo "::error::HELIKON_REQUIRE_TEMPORAL=1 with no TEMPORAL_TEST_SERVER must FAIL, but the suite passed — the never-green-by-skip guard in gate() is gone."
+            exit 1
+          fi
+          echo "guard OK: the suite fails when TEMPORAL_TEST_SERVER is absent"
+      - if: always() && steps.suite.outcome != 'skipped'
+        name: Record the run in the job summary
+        env:
+          EVENT: ${{ github.event_name }}
+          OUTCOME: ${{ steps.suite.outcome }}
+          DURATION: ${{ steps.suite.outputs.duration_s }}
+        run: |
+          # This is the flake record the promotion decision depends on.
+          {
+            echo "## temporal-it"
+            echo
+            echo "- event: \`${EVENT}\`"
+            echo "- outcome: **${OUTCOME}**"
+            echo "- suite wall-clock: ${DURATION}s"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+      - if: always() && steps.suite.outcome == 'failure'
+        name: Dump the dev-server log
+        # Keyed on the suite step's own outcome, not a bare failure(): the first
+        # question a red run raises is "did the server even come up?", and a
+        # signal-only job that cannot answer it gets muted rather than fixed.
+        run: cat "${RUNNER_TEMP}/temporal-dev-server.log" || echo "(no server log — did install/start fail?)"
