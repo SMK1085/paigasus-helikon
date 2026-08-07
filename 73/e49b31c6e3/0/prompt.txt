@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bjxfw73cb</task-id>
+<tool-use-id>toolu_01R49Vn9wcf2bAoUJHtNM621</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/bjxfw73cb.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch integration run 2" completed (exit code 0)</summary>
+</task-notification>
