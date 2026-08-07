@@ -107,8 +107,9 @@ fn reject_legacy(activity: &str, arity: usize) -> PayloadConversionError {
         format!(
             "{activity}: received {arity} payloads — the pre-envelope positional shape \
              (0.2.1 and earlier). This worker decodes only the single-payload envelope. \
-             Recovery: re-join a worker on 0.2.2, which decodes both shapes, to this task \
-             queue and let in-flight runs drain."
+             Recovery: re-join a worker built against `paigasus-helikon-runtime-temporal` \
+             0.2.2, which decodes both shapes, to this task queue and let in-flight runs \
+             drain."
         )
         .into(),
     )
@@ -549,7 +550,7 @@ mod tests {
     /// `WrongEncoding` — the former short-circuits the composite converter and
     /// surfaces the real diagnostic.
     ///
-    /// Since SMA-484 the only recognized arity is 1, so this feeds a single
+    /// Since SMA-484 the only **decodable** arity is 1, so this feeds a single
     /// payload. The bad-content case is a **missing required field**, kept
     /// deliberately distinct from `decode_diagnostics_never_leak_payload_bytes`
     /// (which feeds a bare JSON string at the same arity) so the two tests do
@@ -630,6 +631,12 @@ mod tests {
     /// carries real content, so without this test a later edit appending the
     /// offending payload's bytes to the message would ship silently into
     /// Temporal history.
+    ///
+    /// Also asserts the error variant, same as its arity-1 sibling: without
+    /// it, deleting the `2 =>` rejection arm would leave this test passing
+    /// against the fallback `WrongEncoding` case, whose `Display` ("Wrong
+    /// encoding") is sentinel-free by construction — silently testing
+    /// nothing about `reject_legacy` at all.
     #[test]
     fn rejection_diagnostics_never_leak_payload_bytes() {
         const SENTINEL: &str = "super-secret-tenant-token";
@@ -643,6 +650,11 @@ mod tests {
                 .converter
                 .from_payloads::<RenderInstructionsInput>(ctx, payloads)
                 .expect_err("the pre-envelope shape must no longer decode");
+
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError from reject_legacy, got {err:?}"
+            );
 
             let display = err.to_string();
             let debug = format!("{err:?}");

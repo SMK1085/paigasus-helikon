@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
-- **`runtime-temporal` feature: the bundled `paigasus-helikon-runtime-temporal` contains a wire-breaking change** (SMA-484 — activity inputs are envelope-only). Despite arriving here as a routine dependency bump, upgrading a Temporal worker fleet from a release built against `paigasus-helikon-runtime-temporal` 0.2.1 or earlier requires a stop at 0.2.2 and a drain of in-flight runs. See that crate's CHANGELOG for the full upgrade notes.
+- **`runtime-temporal` feature: the bundled `paigasus-helikon-runtime-temporal` contains a wire-breaking change** (SMA-484 — activity inputs are envelope-only). Despite arriving here as a routine dependency bump, upgrading a Temporal worker fleet from a release built against `paigasus-helikon-runtime-temporal` 0.2.1 or earlier requires a stop at 0.2.2 and a drain of in-flight runs. See that crate's CHANGELOG for the full upgrade notes. The facade release that bundles `runtime-temporal` 0.2.2 is `paigasus-helikon` 0.4.26 — pin `paigasus-helikon = "=0.4.26"` for the bridge hop.
 
 ## [0.4.26](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.4.25...paigasus-helikon-v0.4.26) - 2026-08-07
 

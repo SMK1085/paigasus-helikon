@@ -357,9 +357,12 @@
 //!
 //! **If a 0.3.0 worker meets a pre-envelope task anyway**, it logs at `ERROR` and fails the
 //! attempt **retryably**, so Temporal re-dispatches. That is the recovery path: any worker on
-//! 0.2.2 still polling the queue decodes and executes the task. Re-join one, let in-flight runs
-//! drain, then remove it. A run that cannot be drained in an acceptable window is handled with a
-//! blue-green task queue (below) or by terminating the execution.
+//! 0.2.2 still polling the queue decodes and executes the task, for as long as 0.2.2 can still
+//! decode the nested core types in play (see the field-evolution scope below). Re-join one, let
+//! in-flight runs drain, then remove it. 0.2.2 and 0.3.0 share identical workflow logic, so a
+//! temporary mixed fleet across this pair is not a replay hazard; the one-version-at-a-time rule
+//! above still governs every other pair. A run that cannot be drained in an acceptable window is
+//! handled with a blue-green task queue (below) or by terminating the execution.
 //!
 //! **The envelope is unreadable below 0.2.2, and that matters during a rolling deploy.** A
 //! **0.2.1-and-earlier** worker handed an envelope payload cannot decode it. It fails the
@@ -386,8 +389,8 @@
 //!
 //! **Rolling back.** Once a worker has queued an envelope-shaped activity task, that payload is
 //! frozen in the `ActivityTaskScheduled` event and every retry re-delivers it. A rollback to
-//! **below 0.2.2** leaves those activities undecodable until the run deadline — which, per the
-//! paragraph above, may not exist. **Drain in-flight runs before rolling back below 0.2.2.**
+//! **below 0.2.2** leaves those activities undecodable until the run deadline — which, on a
+//! default configuration, does not exist. **Drain in-flight runs before rolling back below 0.2.2.**
 //! Rolling back from 0.3.0 to 0.2.2 is safe: 0.2.2 decodes the envelope.
 //!
 //! **What this buys.** Future additive changes to an activity's input are compatible in both
@@ -400,7 +403,8 @@
 //! **Operational guidance:**
 //!
 //! 1. **Upgrade one release at a time.** Skipping a release skips the overlap window in which
-//!    both shapes are readable.
+//!    both shapes are readable (a fleet on 0.2.1 goes 0.2.1 → 0.2.2 → 0.3.0, draining while on
+//!    0.2.2).
 //! 2. **Drain in-flight runs before redeploying** when in doubt. Agent runs are typically
 //!    minutes-to-hours, not months. Alternatively use blue-green task queues: point the old
 //!    worker to `"queue-v1"` and the runner to `"queue-v2"`, run new workflows on v2 while old
