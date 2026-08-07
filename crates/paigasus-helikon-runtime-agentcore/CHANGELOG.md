@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.1.6...paigasus-helikon-runtime-agentcore-v0.2.0) - 2026-08-07
+
+### Added
+
+- *(runtime)* [**breaking**] SMA-482 harden 5xx redaction, session-principal binding, and run caps ([#177](https://github.com/SMK1085/paigasus-helikon/pull/177))
+
 ## [0.1.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.1.5...paigasus-helikon-runtime-agentcore-v0.1.6) - 2026-08-04
 
 ### Other
