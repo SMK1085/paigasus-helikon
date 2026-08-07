@@ -210,3 +210,93 @@ jobs:
         # question a red run raises is "did the server even come up?", and a
         # signal-only job that cannot answer it gets muted rather than fixed.
         run: cat "${RUNNER_TEMP}/temporal-dev-server.log" || echo "(no server log — did install/start fail?)"
+
+  agentcore-image:
+    # Native arm64 is mandatory, not a preference: the Dockerfile hardcodes
+    # --platform linux/arm64 because AgentCore's runtime targets are arm64
+    # microVMs. On an x86 runner this would be a qemu-emulated musl build of
+    # aws-lc-rs's C and assembly — plausibly an hour-plus, twice. GitHub's arm64
+    # runners are free for public repos, which is what makes this job viable.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      # actions/checkout v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      # dorny/paths-filter v4.0.1
+      - if: github.event_name == 'push' || github.event_name == 'pull_request'
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706
+        id: filter
+        with:
+          # Deliberately narrow. core/runtime-axum/runtime-tokio/mcp/
+          # providers-anthropic are all compiled into the images, so a first-party
+          # change there *can* move the numbers — but the measured margins are
+          # wide (~11% of the size budget, ~20% of the latency budget) and
+          # Cargo.lock still catches dependency bumps. Explicit trade for a job
+          # this expensive. .dockerignore controls the build context and can break
+          # the build outright; root Cargo.toml is the natural home for a future
+          # [profile.release], which would move image size immediately.
+          filters: |
+            agentcore:
+              - 'crates/paigasus-helikon-runtime-agentcore/**'
+              - 'scripts/agentcore-image-check.sh'
+              - '.dockerignore'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/integration.yml'
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          MATCHED: ${{ steps.filter.outputs.agentcore }}
+        run: |
+          # No nightly: a 40-60 minute arm64 double-build every night to
+          # re-measure two numbers sitting at ~11% and ~20% of their budgets is
+          # not worth it. workflow_dispatch still reaches this job.
+          if [ "${EVENT}" = "schedule" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ "${EVENT}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=${MATCHED:-false}" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.decide.outputs.run != 'true'
+        run: echo "No AgentCore image-related changes; nothing to run."
+      - if: steps.decide.outputs.run == 'true'
+        name: Report runner capacity
+        run: |
+          # Two musl release builds share one cache-mounted /workspace/target
+          # inside BuildKit's storage. A disk-full there surfaces as an opaque
+          # build error that reads like an AgentCore regression, so measure first.
+          {
+            echo "## agentcore-image runner"
+            echo
+            echo '```'
+            nproc
+            free -h
+            df -h /
+            docker version --format 'docker {{.Server.Version}}'
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+      - if: steps.decide.outputs.run == 'true'
+        name: Build both images and check the gates
+        env:
+          # The 50 ms AC was measured on a quiet developer machine; a shared
+          # runner is a different instrument. ~5-10x the expected native-Linux
+          # figure: loose enough that contention does not redden the job, tight
+          # enough that a blocking-init regression still trips it by an order of
+          # magnitude. The script prints a loud NOTE whenever this differs from
+          # the default. The 30 MB size gate is NOT overridable.
+          AGENTCORE_COLD_START_LIMIT_MS: "250"
+        run: bash scripts/agentcore-image-check.sh
+      - if: always() && steps.decide.outputs.run == 'true'
+        name: Report disk after the build
+        run: |
+          {
+            echo
+            echo "Disk after build:"
+            echo '```'
+            df -h /
+            docker system df
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
