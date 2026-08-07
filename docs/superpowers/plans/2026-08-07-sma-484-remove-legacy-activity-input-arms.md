@@ -20,7 +20,10 @@
 - **Never intra-doc-link (`[`crate::foo`]`) from a `pub` item's docs to a `pub(crate)`/private item** — `rustdoc::private_intra_doc_links` fails the required `docs` job while build and tests stay green. Everything in `activity_input.rs` is `pub(crate)`, so links *within* that module are fine; links from `lib.rs`'s public docs into it are not.
 - **MSRV is 1.94.** Do not use newer language features.
 - **Diagnostic messages must never contain payload bytes.** Activity-input decode errors land in Temporal history, which is a persistence boundary readable by anyone with namespace read. Only the activity name and the payload *count* may appear.
-- **Version strings used verbatim across this plan:** the removed shapes are described as **"0.2.1 and earlier"** (never "0.2.0/0.2.1" — `call_model`'s 2-payload shape is unchanged since 0.1.x, see spec §9). The recovery version is **`0.2.2`**. The release being built is **`0.3.0`**.
+- **Version strings used verbatim across this plan** — and the two scopes are *not* interchangeable:
+  - In **diagnostics** (the decode error, the module docs describing what is rejected), the removed shapes are **"0.2.1 and earlier"**, never "0.2.0/0.2.1" — `call_model`'s 2-payload shape is unchanged since 0.1.x, so the narrower range would mislabel a real case. See spec §9.
+  - In **migration guidance** (the upgrade notes, the compatibility matrix, the README), the bridge scope is **"0.2.0 or 0.2.1"**. 0.2.2 decodes those two releases' arities specifically; 0.1.x cannot hop through it and must drain outright.
+  - The recovery version is **`0.2.2`**. The release being built is **`0.3.0`**.
 - **Do not edit any `Cargo.toml` `version` field.** release-plz performs the `0.2.2` → `0.3.0` bump from the PR title's `feat(runtime-temporal)!` type. Hand-bumping would break the release flow.
 - **Verification command for every task:** `cargo test -p paigasus-helikon-runtime-temporal` for fast cycles. Before the final commit of the branch, run the full gate: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-features --all-targets -- -D warnings`, `cargo test --workspace --all-features`.
 - **Work synchronously.** Run `cargo` commands in the foreground and wait for them. Do not background a build or test run and end your turn before it reaches a terminal status.
@@ -781,11 +784,13 @@ If any `Cargo.toml` appears in the diff, that is a mistake — revert it. releas
 - [ ] **Step 3: Confirm no stray legacy references remain**
 
 ```bash
-grep -rn 'warn_legacy\|legacy_arity\|decodes_legacy\|0\.2\.0–0\.2\.1\|0\.2\.0 or 0\.2\.1' \
+grep -rn 'warn_legacy\|decodes_legacy\|0\.2\.0–0\.2\.1' \
   crates/paigasus-helikon-runtime-temporal/ --include='*.rs' --include='*.md'
 ```
 
 Expected: matches only in `CHANGELOG.md`'s historical `0.2.2` entry, which is an immutable record and must not be edited. A match in `src/` or in `README.md` means something was missed.
+
+`legacy_arity` is deliberately **not** in that pattern: `reject_legacy` still emits it as a `tracing` field, so searching for it would flag intended code. Likewise "0.2.0 or 0.2.1" is now legitimate prose in the migration guidance (see the version-string constraint above), so it is not a stray-reference marker either.
 
 - [ ] **Step 4: Verify the commit types will satisfy `convco`**
 

@@ -340,16 +340,26 @@
 //! `render_instructions` / `call_model` / `invoke_tool` takes one self-describing JSON-object
 //! payload, and that is now the **only** shape a worker decodes. The pre-envelope positional
 //! shapes (0.2.1 and earlier) are recognized solely to produce a named decode error; SMA-462's
-//! 0.2.2 release, which decoded both, is the migration bridge. 0.1.x remains outside the support
-//! window and fails closed as before.
+//! 0.2.2 release, which decoded both, is the migration bridge **for 0.2.0 and 0.2.1**. 0.1.x
+//! remains outside the support window and fails closed as before — see the 0.1.x note below,
+//! because the bridge does not rescue it.
 //!
-//! **Upgrading from 0.2.1 or earlier requires a stop at 0.2.2**, for activity inputs:
+//! **Upgrading from 0.2.0 or 0.2.1 requires a stop at 0.2.2**, for activity inputs:
 //!
 //! | from → to | outcome |
 //! |---|---|
 //! | `0.2.2` → `0.3.0` | compatible **both** ways — both encode and decode the envelope; no drain needed for this change |
-//! | `0.2.1` or earlier → `0.3.0`, directly | **broken both ways** — `0.3.0` cannot read legacy-queued tasks, and a `0.2.1` worker cannot read an envelope |
-//! | `0.2.1` or earlier → `0.2.2` → `0.3.0` | works, **provided in-flight runs are drained while the fleet is on 0.2.2** |
+//! | `0.2.0` / `0.2.1` → `0.3.0`, directly | **broken both ways** — `0.3.0` cannot read legacy-queued tasks, and a `0.2.0`/`0.2.1` worker cannot read an envelope |
+//! | `0.2.0` / `0.2.1` → `0.2.2` → `0.3.0` | works, **provided in-flight runs are drained while the fleet is on 0.2.2** |
+//!
+//! **0.1.x cannot use the bridge.** 0.2.2 decodes the 0.2.0/0.2.1 arities specifically, and only
+//! `call_model`'s shape (2 payloads) happens to be unchanged since 0.1.x. A 0.1.x
+//! `render_instructions` task is one payload and fails in 0.2.2's envelope arm; a 0.1.x
+//! `invoke_tool` task is two payloads, which is not `invoke_tool`'s legacy arity, so it fails
+//! there too. A fleet on 0.1.x must therefore drain (or terminate) its in-flight runs outright
+//! rather than hopping through 0.2.2. Note the *diagnostic* wording stays "0.2.1 and earlier"
+//! deliberately: it describes the shape that arrived, and `call_model`'s 2-payload shape really
+//! does date back to 0.1.x.
 //!
 //! Throughout this section, *drain* means: stop starting new executions on the task queue, and
 //! wait until every execution already on it reaches a **terminal** state — not merely pausing
@@ -403,8 +413,8 @@
 //! **Operational guidance:**
 //!
 //! 1. **Upgrade one release at a time.** Skipping a release skips the overlap window in which
-//!    both shapes are readable (a fleet on 0.2.1 goes 0.2.1 → 0.2.2 → 0.3.0, draining while on
-//!    0.2.2).
+//!    both shapes are readable (a fleet on 0.2.0 or 0.2.1 goes → 0.2.2 → 0.3.0, draining while
+//!    on 0.2.2; 0.1.x has no such overlap and must drain outright).
 //! 2. **Drain in-flight runs before redeploying** when in doubt. Agent runs are typically
 //!    minutes-to-hours, not months. Alternatively use blue-green task queues: point the old
 //!    worker to `"queue-v1"` and the runner to `"queue-v2"`, run new workflows on v2 while old

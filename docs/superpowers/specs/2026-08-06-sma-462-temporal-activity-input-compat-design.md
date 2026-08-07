@@ -457,8 +457,11 @@ defeated). release-plz bumps a `feat` on a `0.x` crate as a **patch**.
 
 ## 10. Follow-up issues to file
 
-1. **Remove the 0.2.x legacy decode arms** — triggered by the §4.7 warning going silent for
-   a full retention window.
+> **Historical — this follow-up is done.** Item 1 was filed as SMA-484 and completed in 0.3.0.
+> Its stated trigger never fired and was retired as unobservable; see the banner at the top.
+
+1. ~~**Remove the 0.2.x legacy decode arms** — triggered by the §4.7 warning going silent for
+   a full retention window.~~ Done in 0.3.0 (SMA-484).
 
 ## 11. Open risks
 

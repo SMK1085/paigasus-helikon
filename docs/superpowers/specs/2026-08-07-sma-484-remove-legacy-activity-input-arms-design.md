@@ -267,8 +267,10 @@ silent skip" rule.
    it, let the old queue drain on `0.2.2`, then decommission — or terminating
    the affected executions. Both are pre-existing, documented practice for this
    crate.
-6. **Retries do not bound this** — see §6. Do not rely on the failure
-   self-terminating.
+6. **Default retry settings do not bound this** — see §6.1. Do not rely on the
+   failure self-terminating. A configured finite `maximum_attempts`, or a set
+   `WorkflowInput::timeout_ms`, *does* bound it — which cuts the other way,
+   closing the recovery window rather than helping.
 7. The pre-existing drain / one-release-at-a-time discipline and the
    replay-determinism caveats are unchanged.
 
