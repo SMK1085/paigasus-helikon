@@ -1,0 +1,144 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "9e92eb902fb9",
+  "session_id": "88f479a5-59d6-4426-936a-d6e643209f87",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-07T17:31:21.586695Z",
+  "branch": "feature/sma-457-ci-add-temporal-it-and-agentcore-docker-build-jobs",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "11f495caf665",
+  "checkpoint_transcript_start": 478,
+  "transcript_lines_at_start": 478,
+  "compact_transcript_start": 124,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-feature-pipeline-2026-08-07T16:10:20.352102Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "feature-pipeline"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "ec7e6eab8a1a",
+      "timestamp": "2026-08-07T16:10:20.352102Z",
+      "native": {
+        "command": "/feature-pipeline"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/feature-pipeline",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01JHsdYannQYKb6uDN8fxfTX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "11f495caf665",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 81,
+        "end": 82,
+        "entry_ids": [
+          "3221716b-6ccb-46ea-801d-101bf1d054c8"
+        ],
+        "tool_use_id": "toolu_01JHsdYannQYKb6uDN8fxfTX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01JHsdYannQYKb6uDN8fxfTX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Lks4icBtGQ2VDr5pyoikjo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "11f495caf665",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 255,
+        "end": 256,
+        "entry_ids": [
+          "165f8a2b-1a19-4da5-9ed3-c8659e713302"
+        ],
+        "tool_use_id": "toolu_01Lks4icBtGQ2VDr5pyoikjo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Lks4icBtGQ2VDr5pyoikjo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_017Boo2SwRCEHtLmbQEaAg7L",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "11f495caf665",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 280,
+        "end": 281,
+        "entry_ids": [
+          "5985bcc2-fd85-47de-b09c-b92d7b239dfc"
+        ],
+        "tool_use_id": "toolu_017Boo2SwRCEHtLmbQEaAg7L"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_017Boo2SwRCEHtLmbQEaAg7L"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  }
+}
