@@ -452,7 +452,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: integration-${{ github.workflow }}-${{ github.ref }}
+  # Keyed on github.event_name as well as github.ref — load-bearing, not
+  # decoration, and the same rule CLAUDE.md records for audit.yml/deny.yml.
+  # push-to-main, schedule, and workflow_dispatch all resolve github.ref to
+  # refs/heads/main, so a shared group with cancel-in-progress: false would let a
+  # queued nightly sit pending until the next merge cancels it — silently
+  # discarding the flake record this workflow exists to accumulate. Do not
+  # simplify the key back.
+  group: integration-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
