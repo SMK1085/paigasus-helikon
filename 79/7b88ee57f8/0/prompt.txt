@@ -1,0 +1,17 @@
+<task-notification>
+<task-id>bvjpkyton</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/bvjpkyton.output</output-file>
+<status>failed</status>
+<summary>Background command "Poll for CodeRabbit review" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bo4m8gll2</task-id>
+<tool-use-id>toolu_01X7hqXpa2SS5eF7To3duoLz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/bo4m8gll2.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch final ci run" completed (exit code 0)</summary>
+</task-notification>
