@@ -42,10 +42,22 @@ use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 
 /// Returns the configured Temporal server address (`host:port`), or prints a
 /// loud skip message and returns `None`.
+///
+/// Set `HELIKON_REQUIRE_TEMPORAL=1` to turn that skip into a hard failure. CI
+/// sets it (`.github/workflows/integration.yml`) because a skipped test *passes*
+/// and `cargo test` captures a passing test's output — so without this, a job
+/// that never reached a server is indistinguishable from a green one. Mirrors
+/// the `HELIKON_REQUIRE_SANDBOX` guard in `paigasus-helikon-tools`.
 fn gate() -> Option<String> {
     match std::env::var("TEMPORAL_TEST_SERVER") {
         Ok(addr) if !addr.is_empty() => Some(addr),
         _ => {
+            if std::env::var("HELIKON_REQUIRE_TEMPORAL").as_deref() == Ok("1") {
+                panic!(
+                    "HELIKON_REQUIRE_TEMPORAL=1 but TEMPORAL_TEST_SERVER is unset or empty — \
+                     the live Temporal suite would have skipped silently"
+                );
+            }
             eprintln!(
                 "SKIPPED: set TEMPORAL_TEST_SERVER=<host:port> (e.g. localhost:7233) and start a \
                  dev server (`temporal server start-dev --headless`) to run the live Temporal suite"
