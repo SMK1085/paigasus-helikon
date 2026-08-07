@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.2.1...paigasus-helikon-runtime-temporal-v0.2.2) - 2026-08-07
+
+### Added
+
+- *(runtime-temporal)* SMA-462 replace positional activity inputs with a versionable envelope ([#176](https://github.com/SMK1085/paigasus-helikon/pull/176))
+
 ### Changed
 
 - *(runtime-temporal)* SMA-462 activity inputs are now a **single self-describing envelope payload**
