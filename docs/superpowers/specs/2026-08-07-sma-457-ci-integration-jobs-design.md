@@ -77,7 +77,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: integration-${{ github.workflow }}-${{ github.ref }}
+  group: integration-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}  # event_name is load-bearing (push/schedule/workflow_dispatch all resolve ref to refs/heads/main) — see audit.yml/deny.yml
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -124,8 +124,9 @@ the job always reports, green, having run nothing. `sessions-it` (`ci.yml:197-23
 does this, and it is required.
 
 **`agentcore-image` opts out of the nightly** — its `decide` step maps `schedule` to
-`false`. A 40–60 minute arm64 double-build every night, to re-measure two numbers sitting at
-~11% and ~20% of their budgets, is not worth it. `workflow_dispatch` still reaches it.
+`false`. Measured cold on the first CI run, both images build and all four gates run in
+**~4 minutes**, so this is not a cost decision — re-measuring two numbers that sit far under
+their budgets every night simply adds no information. `workflow_dispatch` still reaches it.
 
 ## 4. Rejected alternatives
 
@@ -347,7 +348,8 @@ All are compiled into the images, so a first-party change there *can* move the n
 the measured margins are wide (~11% of the size budget, ~20% of the latency budget) and
 `Cargo.lock` still catches dependency bumps. The trade is explicit and accepted for a job this
 expensive. Because the workflow self-reference is now `integration.yml` rather than `ci.yml`,
-including it no longer triggers a 40–60 minute arm64 double-build on every unrelated CI edit.
+including it no longer triggers an arm64 double-build (measured at ~4 minutes cold) on every
+unrelated CI edit.
 
 **Steps:** checkout → filter → decide → free-disk report (§6.3) →
 `bash scripts/agentcore-image-check.sh` with `AGENTCORE_COLD_START_LIMIT_MS: "250"` (quoted,
@@ -522,7 +524,10 @@ change alters no public API, quickstart flow, crate roster entry, or documented 
   and `crates/paigasus-helikon-runtime-temporal/{README.md,tests/}`, and release-plz attributes
   bumps by file path. `.versionrc`'s `increment: None` for `ci` governs convco (the `commits`
   CI gate and the local `commit-msg` hook) only — release-plz does not read `.versionrc`; it has
-  its own logic (feat → minor, breaking → major, everything else → **patch**). So the squashed
+  its own logic, and every crate in this workspace is still 0.x (`runtime-temporal` 0.2.2,
+  `runtime-agentcore` 0.2.0, facade 0.4.x), where release-plz's 0.x SemVer mapping is the
+  inverse of the ≥1.0 one: **feat → patch, breaking → minor**, everything else → patch. So the
+  squashed
   `ci(...)`-titled commit will still give both `paigasus-helikon-runtime-temporal` and
   `paigasus-helikon-runtime-agentcore` a patch bump, cascading a patch bump to the
   `paigasus-helikon` facade via `dependencies_update = true`. Precedent in this repo's history:
