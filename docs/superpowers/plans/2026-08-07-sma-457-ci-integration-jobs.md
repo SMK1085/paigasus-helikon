@@ -648,7 +648,7 @@ print('runs-on:', d['jobs']['temporal-it']['runs-on'])
 print('guarded steps:', sum(1 for s in d['jobs']['temporal-it']['steps'] if 'if' in s))
 "
 ```
-Expected: `triggers: ['pull_request', 'push', 'schedule', 'workflow_dispatch']`, `jobs: ['temporal-it']`, `runs-on: ubuntu-latest`, and a guarded-step count of 12.
+Expected: `triggers: ['pull_request', 'push', 'schedule', 'workflow_dispatch']`, `jobs: ['temporal-it']`, `runs-on: ubuntu-latest`, and a guarded-step count of **11** out of 13 total steps. The two unguarded steps are `actions/checkout` (the filter needs a tree to diff) and `decide` (it must always run to produce its output).
 
 - [ ] **Step 4: Commit**
 
