@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "9fc9f86c6be8",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-484-runtime-temporal-remove-the-02x-legacy-activity-input-decode",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/9f/c9f86c6be8/0/metadata.json",
+      "transcript": "/9f/c9f86c6be8/0/full.jsonl",
+      "compact_transcript": "/9f/c9f86c6be8/0/transcript.jsonl",
+      "content_hash": "/9f/c9f86c6be8/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 344,
+    "cache_creation_tokens": 387361,
+    "cache_read_tokens": 18105818,
+    "output_tokens": 143878,
+    "api_call_count": 94
+  }
+}
