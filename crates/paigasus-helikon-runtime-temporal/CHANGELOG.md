@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.2.2...paigasus-helikon-runtime-temporal-v0.3.0) - 2026-08-07
+
+### Added
+
+- *(runtime-temporal)* [**breaking**] SMA-484 remove the pre-envelope activity-input decode arms ([#180](https://github.com/SMK1085/paigasus-helikon/pull/180))
+
 ### Changed
 
 - *(runtime-temporal)* SMA-484 activity inputs are **envelope-only**
