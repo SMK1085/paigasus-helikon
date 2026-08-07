@@ -107,7 +107,9 @@ cargo run -p paigasus-helikon-runtime-agentcore --example mcp_server --features 
 
 ## Docker image
 
-`docker/Dockerfile` is a multi-stage build: a `rust:1.94-alpine` (musl) builder stage produces a statically linked `aarch64-unknown-linux-musl` binary, stripped and shipped alone in a `FROM scratch` final image (no libc, no shell, nothing else). Build context must be the workspace root (it's a Cargo workspace):
+`docker/Dockerfile` is a multi-stage build: a `rust:1.94-alpine` (musl) builder stage produces a statically linked `aarch64-unknown-linux-musl` binary, stripped and shipped alone in a `FROM scratch` final image (no libc, no shell, nothing else). Build context must be the workspace root (it's a Cargo workspace).
+
+The builder stage's `RUN` uses a BuildKit cache mount, so BuildKit is required — the default since Docker 23; set `DOCKER_BUILDKIT=1` if it's been disabled in your environment, otherwise the build fails with `dockerfile parse error … Unknown flag: mount`.
 
 ```bash
 # Minimal-overhead image (no model provider, no TLS stack):

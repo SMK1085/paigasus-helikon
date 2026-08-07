@@ -22,10 +22,42 @@
 > Both gates passed with wide margin (agent image at ~11% of the size budget;
 > cold start at ~20% of the latency budget).
 
+> **CI-observed 2026-08-07 on `ubuntu-24.04-arm`** (native arm64, no
+> emulation) — `agentcore-image`'s first cold run in `.github/workflows/integration.yml`
+> (PR #181, run 31206300324). Real numbers from that run, with
+> `AGENTCORE_COLD_START_LIMIT_MS=250`:
+>
+> | Metric | Value | Gate |
+> | --- | ---: | --- |
+> | `helikon-agentcore-echo` image size (AC gate) | 2.84 MB | < 30 MB |
+> | `helikon-agentcore-agent` image size (AC gate) | 6.78 MB | < 30 MB |
+> | echo `exec`→`/ping`-200 (CI gate) | 7 ms | < 250 ms |
+> | agent `exec`→`/ping`-200 (CI gate) | 7 ms | < 250 ms |
+> | both images built, both cache mounts cold, all four gates checked | ~240 s (4 min) | `timeout-minutes: 60` |
+> | disk consumed by the two builds | ~2 GB of 109 GB free | — |
+>
+> Runner capacity, measured on the same run: 4 vCPU, 15 GiB RAM, Docker 28.0.4,
+> and 145 GB of disk with 109 GB free (107 GB after the build; Docker reports
+> 1.88 GB of images plus 1.11 GB of build cache). Disk headroom is not a
+> constraint here, so the BuildKit cache mounts are kept in full.
+>
+> All four gates passed with wide margin. Recorded honestly rather than
+> papered over: for the same Dockerfile and the same `Cargo.lock`, the CI
+> images run **roughly twice the size** of the macOS row above (2.84/6.78 MB
+> vs. 1.31/3.27 MB), while the CI cold starts run **lower** than macOS's
+> (7/7 ms vs. 11/9 ms) — native Linux Docker has no Docker Desktop
+> host↔VM port-forwarding overhead to pay on every `exec`→`/ping` probe, which
+> is exactly the kind of instrument difference §"Acceptance-criteria
+> interpretation note" below describes for the external cold-start number.
+> Both figures remain far under their respective gates either way; the point
+> of this row is that it is true, not that it is small.
+
 ## Prerequisites
 
-- Docker with BuildKit (Docker Desktop ≥ 4.x ships this by default; plain `docker`
-  CLI ≥ 23 also defaults to BuildKit).
+- **Docker with BuildKit — now mandatory, not merely default.** The Dockerfile's
+  builder stage uses `RUN --mount=type=cache` (SMA-457), which the legacy builder
+  cannot parse. The script exports `DOCKER_BUILDKIT=1` itself, so a stale
+  `DOCKER_BUILDKIT=0` in your environment cannot break it.
 - **An arm64 host for a native build** (e.g. Apple Silicon macOS, or an arm64
   Linux box). The Dockerfile's builder stage is `rust:1.94-alpine`, published for
   both `amd64` and `arm64/v8` — on a non-arm64 host, add `docker buildx` with the
@@ -39,8 +71,14 @@
   `/bin/bash` 3.2, but the script itself only needs POSIX-ish `bash` features
   present since 3.2; no `brew install bash` required, unlike
   `scripts/check-doc-coverage.sh`'s `mapfile` usage).
-- Enough free disk for two small images plus Cargo's registry/build cache inside
-  the builder stage (a few hundred MB; the images themselves are a few MB each).
+- Disk: the images themselves are a few MB each, but the BuildKit **cache mounts**
+  (`$CARGO_HOME/registry` and the musl `target/` dir) persist between runs and are
+  **never garbage-collected** — budget a few GB, and reclaim with
+  `docker builder prune` when it grows. If a measurement ever looks wrong, re-run
+  with `--no-cache`: cargo's freshness check is mtime-based against a tree
+  supplied by `COPY . .`.
+- GNU `date` on `PATH` (for `date +%s%N`). macOS's BSD `date` emits a literal `N`
+  and the cold-start arithmetic breaks; `brew install coreutils` provides it.
 
 ## The one-liner
 
@@ -61,6 +99,23 @@ of the four gates fails.
 To build either image by hand — e.g. to `docker run` one interactively — see the
 exact commands documented at the top of the Dockerfile itself.
 
+### The cold-start gate is overridable; the size gate is not
+
+`AGENTCORE_COLD_START_LIMIT_MS` raises the cold-start budget (default `50`).
+Unlike image size, that number measures the *host* as much as the image —
+container-start overhead is not comparable between a quiet developer machine and
+a shared CI runner. Any override prints a loud
+`NOTE: … this is NOT the AC value.` above the summary table, so a reader of the
+output can never mistake the effective gate for the acceptance criterion.
+
+There is deliberately **no** size override. The 30 MB gate carries the STOP RULE,
+and an env knob on it would be exactly the quiet relaxation that rule exists to
+prevent. (`AGENTCORE_SIZE_LIMIT_BYTES` is inert — setting it does nothing.)
+
+CI runs this script from `.github/workflows/integration.yml`'s `agentcore-image`
+job on `ubuntu-24.04-arm` with `AGENTCORE_COLD_START_LIMIT_MS=250`, as a
+signal-only (non-required) check.
+
 ## Expected output
 
 The script's final section looks like this (exact numbers vary run to run; the
@@ -72,8 +127,8 @@ table above captures one real validated run):
 | -------------------------------- | -------------- | ---------- |
 | echo image size (AC gate)        |        1.31 MB |    < 30 MB |
 | agent image size (AC gate)       |        3.27 MB |    < 30 MB |
-| echo exec->200 (AC gate)         |           11 ms |    < 50 ms |
-| agent exec->200 (AC gate)        |            9 ms |    < 50 ms |
+| echo exec->200 (gate)            |           11 ms |    < 50 ms |
+| agent exec->200 (gate)           |            9 ms |    < 50 ms |
 
 echo image app-side log:  ...INFO paigasus_helikon_runtime_agentcore::server: ready in 0ms elapsed_ms=0
 agent image app-side log: ...INFO paigasus_helikon_runtime_agentcore::server: ready in 0ms elapsed_ms=0

@@ -6,6 +6,9 @@
 # stage needs every member crate's Cargo.toml + src/, not just this one crate's
 # directory). Run from the repository root:
 #
+# Requires BuildKit (default since Docker 23; `DOCKER_BUILDKIT=1` if disabled) —
+# the builder stage's RUN below uses a cache mount; see its comment for why.
+#
 #   # Minimal-overhead image (no model provider, no TLS stack):
 #   docker build --platform linux/arm64 \
 #     -f crates/paigasus-helikon-runtime-agentcore/docker/Dockerfile \
@@ -56,7 +59,29 @@ ARG FEATURES=
 # empty (the echo_http build), and to `--features example-anthropic` when set (the
 # agent_http build). Docker exposes declared ARGs as this RUN step's shell
 # environment, so the expansion sees the --build-arg value directly.
-RUN cargo build --release --locked -p paigasus-helikon-runtime-agentcore \
+# BuildKit cache mounts (SMA-457). Both the CI job and the check script build two
+# images back to back; these let the second build reuse the first's downloaded
+# crates and compiled dependencies — roughly 40-50% off the second build. They do
+# NOT help the first build and do NOT persist across CI runs (every job gets a
+# fresh runner with an empty cache).
+#
+# /usr/local/cargo is this base image's CARGO_HOME. The workspace has no git
+# dependencies, so a mount on `registry` alone covers the download cache.
+#
+# Requires BuildKit — the default since Docker 23, and
+# scripts/agentcore-image-check.sh exports DOCKER_BUILDKIT=1 so a stale
+# DOCKER_BUILDKIT=0 in the environment cannot select the legacy builder and fail
+# on this line.
+#
+# LOAD-BEARING: the `cp` below MUST stay inside this same RUN. A cache mount is
+# not part of the image filesystem, so moving the copy into a later RUN (or a
+# COPY --from) would silently produce a final image with no binary in it.
+#
+# Cache mounts are never garbage-collected; see docs/runbooks/agentcore-image-check.md
+# for the `docker builder prune` note if local disk use grows.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    cargo build --release --locked -p paigasus-helikon-runtime-agentcore \
     --example "${EXAMPLE}" ${FEATURES:+--features "${FEATURES}"} \
     && strip "target/release/examples/${EXAMPLE}" \
     && cp "target/release/examples/${EXAMPLE}" /agentcore-example
