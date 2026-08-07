@@ -582,15 +582,16 @@ mod tests {
     /// so such a test passes whether or not `decode_arg` discards its source
     /// error.
     ///
-    /// This is also the only test that exercises the **envelope** arm's
-    /// (arity 1) error path — every `*_content_failure_is_encoding_error` test
-    /// feeds a legacy `MultiArgs{N}` shape instead. So it additionally asserts
-    /// the error variant is `EncodingError`, not just sentinel-absent: if the
-    /// envelope arm ever regressed to returning `WrongEncoding`, the composite
-    /// converter would silently fall through to the `serde_json` arm (which
-    /// also yields `WrongEncoding`), and production would lose this
-    /// diagnostic — a bare "Wrong encoding" in Temporal history — while every
-    /// other test here kept passing.
+    /// Since SMA-484 the sibling `*_content_failure_is_encoding_error` tests
+    /// also exercise the **envelope** arm's (arity 1) error path, but each
+    /// feeds a struct with a missing or wrong-typed field; this test is the
+    /// one that feeds a bare string instead, for the leak-surfacing reason
+    /// above. It additionally asserts the error variant is `EncodingError`,
+    /// not just sentinel-absent: if the envelope arm ever regressed to
+    /// returning `WrongEncoding`, the composite converter would silently fall
+    /// through to the `serde_json` arm (which also yields `WrongEncoding`),
+    /// and production would lose this diagnostic — a bare "Wrong encoding" in
+    /// Temporal history — while every other test here kept passing.
     #[test]
     fn decode_diagnostics_never_leak_payload_bytes() {
         const SENTINEL: &str = "super-secret-tenant-token";
