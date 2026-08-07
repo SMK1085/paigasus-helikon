@@ -1,0 +1,122 @@
+/feature-pipeline SMA-482
+
+---
+
+yes
+
+---
+
+fold the IDOR in, go ahead
+
+---
+
+yes run it subagent driven, open the PR once done, run the coderabbit loop and inform me once gate 2 is reached
+
+---
+
+<task-notification>
+<task-id>ab228a2780dc4a8a9</task-id>
+<tool-use-id>toolu_01WZ1DfWzVbPTB9AQRMWHHoy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/ab228a2780dc4a8a9.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 5xx redaction" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>1. Status: DONE
+2. Commit SHAs: `99e76016a6ac85e99ec1eb15e54651faef3b0c36` (original), `1d1b9f58fdf6254739aec43320690e697d5f9612` (fix-up, both signed/verified `G`)
+3. Test results: `cargo test -p paigasus-helikon-runtime-actix --test ws` → 9 passed (incl. new `ws_malformed_upgrade_is_400_bad_request`); `cargo test -p paigasus-helikon-runtime-axum -p paigasus-helikon-runtime-actix --lib` → 33+28 passed, 0 failed; fmt/clippy clean.
+4. Concerns: none.</result>
+<usage><subagent_tokens>192907</subagent_tokens><tool_uses>17</tool_uses><duration_ms>162105</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a16ada403bf8ca349</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/a16ada403bf8ca349.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 3 principal binding" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status: DONE**
+
+**Commit SHAs:** `66368dbdc0d90674887898557eb5cf87f5198b7b` (this fix, signed `G`) on top of `d378c77c72049b678dee76fcfaf1adca5e29f8e0` (Task 3). `convco check`: no errors in 9 commits; working tree clean.
+
+**Tests:** `cargo test -p paigasus-helikon-runtime-axum -p paigasus-helikon-runtime-actix --lib` → 39 + 34 passed, 0 failed (was 37 + 32; +2 each); `RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-runtime-agentcore --no-deps` clean; plus clippy and the runtime-crate docs build, both exit 0.
+
+**Concerns:**
+- Finding 1 confirmed exactly as reported and fixed by tagging the two shapes — `None` → `a:&lt;id&gt;`, `Some(p)` → `p&lt;len&gt;:&lt;principal&gt;:&lt;id&gt;`. Injective by decode: the tag splits the cases positionally, and within `p` the decimal length field is terminated by the first `:`, so the principal boundary is unambiguous. Two tests added per crate: the exact requested assertion, plus a general `storage_key_is_injective` (8 principals × 6 ids, including values that mimic the encoding's own `a:`/`p&lt;len&gt;:` prefixes) so the property is locked rather than just the one pair.
+- Report correction made as instructed: the claim that `absent_principal_is_its_own_namespace` proved `Some("")` couldn't spoof `None` via the length prefix was wrong on both counts — that test only exercises the tuple-keyed in-memory provider and never calls `storage_key()`, and the property it appeared to promise was in fact false at the time. The test stays; the claim is corrected and the property is now actually covered.
+- Finding 2 fixed in `agentcore/src/lib.rs` crate docs (public rustdoc), naming `storage_key` specifically since that is what a third party reaches for after reading the trait's `# Security` section. The private `session.rs` note is left for maintainers.
+- One thing worth flagging for later tasks: the encoding change is free only because `storage_key` has never been published — it was introduced in the immediately preceding commit on this branch, so no persisted rows exist in the old format. If a later task re-touches the encoding after release, that will need a migration note.
+- Per your scoping I did not re-run the integration matrices (`tests/principal.rs`, parity); they key on the tuple, not `storage_key`, and were untouched.</result>
+<usage><subagent_tokens>284748</subagent_tokens><tool_uses>12</tool_uses><duration_ms>225270</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>accaf09b4c14dc9ae</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/accaf09b4c14dc9ae.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 4 WS principal gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three findings addressed, verified, committed, and reported.
+
+1. **Status**: DONE
+2. **Commit SHAs**: `20582650e17416d8370b085388cec96856e1abf1` (original Task 4 fix), `fceef9196519609801107b8529d75df40698ba9d` (review-findings fix)
+3. **Test results**: `cargo test -p paigasus-helikon-runtime-axum -p paigasus-helikon-runtime-actix -p paigasus-helikon-runtime-http-conformance` — all green (0 failed across every test file); `cargo clippy --workspace --all-features --all-targets -- -D warnings` clean.
+4. **Concerns**: None. Regression-catch verified per instructions for Finding 1 (temporarily made the principal-mismatch branch emit a distinguishable message in both crates' `handlers/events.rs`; both new tests failed with a clear body-diff; restored, both `git diff` showed 0 lines, reverified green). Finding 3's claim was independently re-verified against the vendored `actix-ws-0.4.0` source before rewriting the comment.</result>
+<usage><subagent_tokens>298089</subagent_tokens><tool_uses>55</tool_uses><duration_ms>518344</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a367ce8ff29f9796c</task-id>
+<tool-use-id>toolu_01F1C3FS1MJfbVvDCaxLJnmD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/a367ce8ff29f9796c.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 5 in-flight cap" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All review findings addressed and verified. Summary:
+
+1. **Status:** DONE
+2. **Commit SHAs:** `40af814320daefd8ea6b05e943a15a459f8919ff` (original Task 5), `aa48da1c220f38e9f5b01049d2100367db98c8fa` (review-fix: spawn sweeper on axum's embed path + saturating counter + stronger actix test)
+3. **Test results:** `cargo test` across all three crates — all green; `cargo clippy --workspace --all-features --all-targets -- -D warnings` — clean (incl. `runtime-agentcore`); `cargo doc -p runtime-axum -p runtime-actix --no-deps` and full-workspace docs gate — both clean (exit 0).
+4. **Concerns:** None. Mutation check confirmed the new `router_alone_spawns_the_sweeper` test catches the exact regression (fails when the `spawn_sweeper()` call is removed from `router()`, passes when restored). One judgment call: proved Finding 1's fix via direct `pub(crate)` observation of the sweeper's spawn state rather than an end-to-end 30s-interval reclaim test — the reviewer explicitly allowed this fallback when direct observation is practical, and it avoided adding a `tokio::time::pause`/`test-util` dependency with attendant flake risk.</result>
+<usage><subagent_tokens>292641</subagent_tokens><tool_uses>64</tool_uses><duration_ms>814796</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a749ce19f1008d705</task-id>
+<tool-use-id>toolu_01UnLFYCEhHiWLxoAWij2FYA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/a749ce19f1008d705.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 7 docs and migration guide" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five findings plus the agentcore README addition are fixed and committed.
+
+**Status:** DONE
+
+**Commits:**
+- `feabdd912d7791cefc9c3e2446f0e18b1359ddb7` — original task-7 commit (unchanged)
+- `70134df3f56d4737f503e1c2b48c842d69fb7c56` — `docs(runtime): SMA-482 correct the sweeper, storage_key and actix dependency notes` (signed, 4 files: both runtime READMEs, the agentcore README, and the mdBook page)
+
+**mdbook build:** clean — ran again after the fixes, HTML + linkcheck backends both completed with no warnings/errors.
+
+**Concerns:** None. Fixed and re-verified against source (not the finding text) for all five: the sweeper now correctly documents `.router()`/`.configure()` also spawning it (with the axum runtime-availability caveat); `storage_key()`'s `Option&lt;String&gt;`/anonymous-`None` contract is now stated in both READMEs and the mdBook; the actix README's semver claim now correctly says "major" (actix-web is pinned at `4` vs axum's pre-1.0 `0.8`, confirmed against the workspace `Cargo.toml`); the actix dependency-seam reason now points at the actix-rt `System`/`#[actix_web::main]` requirement rather than `.serve`'s signature; the actix snippet now includes `use actix_web::HttpMessage;`. Also added the out-of-scope-but-CLAUDE.md-mandated note to `crates/paigasus-helikon-runtime-agentcore/README.md` about that runtime's `principal: None`-always behavior. Fix report appended to the same `task-7-report.md` file.</result>
+<usage><subagent_tokens>183456</subagent_tokens><tool_uses>31</tool_uses><duration_ms>213113</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ba1abzna0</task-id>
+<tool-use-id>toolu_01WApXPSdeotwSxcLusoAfP5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/627e2e93-41d5-4b8c-a0f9-6cc98d087823/tasks/ba1abzna0.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CodeRabbit review to finish" completed (exit code 0)</summary>
+</task-notification>
