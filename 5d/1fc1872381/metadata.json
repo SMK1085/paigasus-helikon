@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "5d1fc1872381",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-457-ci-add-temporal-it-and-agentcore-docker-build-jobs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-agentcore/docker/Dockerfile"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5d/1fc1872381/0/metadata.json",
+      "transcript": "/5d/1fc1872381/0/full.jsonl",
+      "compact_transcript": "/5d/1fc1872381/0/transcript.jsonl",
+      "content_hash": "/5d/1fc1872381/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
