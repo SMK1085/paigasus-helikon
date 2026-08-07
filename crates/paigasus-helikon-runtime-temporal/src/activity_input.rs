@@ -548,16 +548,22 @@ mod tests {
     /// A recognized arity whose content is wrong must be `EncodingError`, not
     /// `WrongEncoding` — the former short-circuits the composite converter and
     /// surfaces the real diagnostic.
+    ///
+    /// Since SMA-484 the only recognized arity is 1, so this feeds a single
+    /// payload. The bad-content case is a **missing required field**, kept
+    /// deliberately distinct from `decode_diagnostics_never_leak_payload_bytes`
+    /// (which feeds a bare JSON string at the same arity) so the two tests do
+    /// not collapse into duplicates.
     #[test]
     fn render_instructions_content_failure_is_encoding_error() {
         with_ctx(|ctx| {
-            // Legacy arity, but argument 0 is a number where a String is required.
-            let bad = MultiArgs2(42_u32, Option::<serde_json::Value>::None);
-            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            // Envelope arity, but `agent_name` is absent and has no serde default.
+            let bad = serde_json::json!({});
+            let payload = ctx.converter.to_payload(ctx, &bad).expect("encode");
             let err = ctx
                 .converter
-                .from_payloads::<RenderInstructionsInput>(ctx, payloads)
-                .expect_err("a non-String agent_name must fail");
+                .from_payloads::<RenderInstructionsInput>(ctx, vec![payload])
+                .expect_err("a missing agent_name must fail");
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),
                 "expected EncodingError, got {err:?}"
@@ -789,14 +795,21 @@ mod tests {
         });
     }
 
+    /// A recognized arity (1, the envelope) whose content is wrong must be
+    /// `EncodingError` — see `render_instructions_content_failure_is_encoding_error`.
+    ///
+    /// Corrupts exactly one field of an otherwise-valid envelope, so the failure
+    /// is unambiguously the **wrong type** on `agent_name` rather than a missing
+    /// `request`.
     #[test]
     fn call_model_content_failure_is_encoding_error() {
         with_ctx(|ctx| {
-            let bad = MultiArgs2(42_u32, ModelRequest::new());
-            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            let mut bad = serde_json::to_value(call_model_args()).expect("to_value");
+            bad["agent_name"] = serde_json::json!(42);
+            let payload = ctx.converter.to_payload(ctx, &bad).expect("encode");
             let err = ctx
                 .converter
-                .from_payloads::<CallModelInput>(ctx, payloads)
+                .from_payloads::<CallModelInput>(ctx, vec![payload])
                 .expect_err("a non-String agent_name must fail");
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),
@@ -964,14 +977,21 @@ mod tests {
         });
     }
 
+    /// A recognized arity (1, the envelope) whose content is wrong must be
+    /// `EncodingError` — see `render_instructions_content_failure_is_encoding_error`.
+    ///
+    /// Corrupts exactly one field of an otherwise-valid envelope, so the failure
+    /// is unambiguously the **wrong type** on `agent_name` rather than a missing
+    /// `call`.
     #[test]
     fn invoke_tool_content_failure_is_encoding_error() {
         with_ctx(|ctx| {
-            let bad = MultiArgs3(42_u32, tool_call(), Option::<serde_json::Value>::None);
-            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            let mut bad = serde_json::to_value(invoke_tool_args()).expect("to_value");
+            bad["agent_name"] = serde_json::json!(42);
+            let payload = ctx.converter.to_payload(ctx, &bad).expect("encode");
             let err = ctx
                 .converter
-                .from_payloads::<InvokeToolInput>(ctx, payloads)
+                .from_payloads::<InvokeToolInput>(ctx, vec![payload])
                 .expect_err("a non-String agent_name must fail");
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),
