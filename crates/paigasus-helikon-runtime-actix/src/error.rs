@@ -113,7 +113,12 @@ impl ResponseError for ServerError {
                 Some(PUBLIC_INTERNAL_ERROR)
             }
             ServerError::Unavailable(_) => {
-                tracing::error!(error = %self, "service unavailable");
+                // `warn`, not `error`: load shedding is an expected,
+                // self-healing condition (the registry already logs the
+                // admission rejection at `warn` in `RunRegistry::create`), and
+                // a caller looping requests against a saturated server must
+                // not be able to drive unbounded error-level log volume.
+                tracing::warn!(error = %self, "service unavailable");
                 Some(PUBLIC_UNAVAILABLE)
             }
             _ => None,

@@ -879,15 +879,22 @@ impl<'a> SessionKey<'a> {
     /// Returns `None` for an anonymous request (`id` is `None`), which must not
     /// be stored at all.
     ///
-    /// The principal is length-prefixed so that no two distinct
-    /// `(principal, id)` pairs can produce the same string. A plain
-    /// `format!("{principal}:{id}")` would let `("a:b", "c")` and
-    /// `("a", "b:c")` collide, reintroducing the very IDOR this type exists to
-    /// close.
+    /// `Some(p)` renders as `p<len>:<principal>:<id>`. The length prefix is
+    /// what makes it unambiguous — a plain `format!("{principal}:{id}")`
+    /// would let `("a:b", "c")` and `("a", "b:c")` collide, reintroducing the
+    /// very IDOR this type exists to close. `None` renders as `a:<id>` — `a`
+    /// for *absent* — and that tag is what keeps it apart from every `Some`
+    /// form, `Some("")` included: folding an absent principal into `""`
+    /// before the length prefix would render `(None, "s1")` and
+    /// `(Some(""), "s1")` — a principal-less caller and one whose token
+    /// carries an empty subject claim, two genuinely different callers — onto
+    /// one row.
     pub fn storage_key(&self) -> Option<String> {
         let id = self.id?;
-        let principal = self.principal.unwrap_or("");
-        Some(format!("{}:{}:{}", principal.len(), principal, id))
+        Some(match self.principal {
+            None => format!("a:{id}"),
+            Some(principal) => format!("p{}:{}:{}", principal.len(), principal, id),
+        })
     }
 }
 

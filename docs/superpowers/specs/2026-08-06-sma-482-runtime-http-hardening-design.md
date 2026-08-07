@@ -39,7 +39,7 @@ in both runtimes in the same change**, or it silently breaks the wire/API parity
 
 ## Goals
 
-- Close all three findings in `runtime-axum` and `runtime-actix` with no behavioural divergence.
+- Close all four findings in `runtime-axum` and `runtime-actix` with no behavioural divergence.
 - Keep the redacted detail — route it to `tracing` rather than dropping it.
 - Extend the conformance suite so the new behaviours are *asserted* across runtimes, not assumed.
 - Carry the breaking API change with a `BREAKING CHANGE:` footer and a migration guide.
@@ -215,12 +215,18 @@ impl<'a> SessionKey<'a> {
     /// (Postgres, Redis, a filesystem path). `None` for an anonymous request,
     /// which must not be stored at all.
     ///
-    /// The principal is length-prefixed, so no `(principal, id)` pair can
-    /// produce the same string as any other.
+    /// `Some(p)` renders as `p<len>:<principal>:<id>` — the length prefix is
+    /// what makes it unambiguous — and `None` renders as `a:<id>` (`a` for
+    /// *absent*). The tag is what keeps an absent principal apart from every
+    /// `Some` form, `Some("")` included: folding `None` into `""` before the
+    /// length prefix would render `(None, "s1")` and `(Some(""), "s1")` — two
+    /// genuinely different callers — onto the same string.
     pub fn storage_key(&self) -> Option<String> {
         let id = self.id?;
-        let p = self.principal.unwrap_or("");
-        Some(format!("{}:{}:{}", p.len(), p, id))
+        Some(match self.principal {
+            None => format!("a:{id}"),
+            Some(principal) => format!("p{}:{}:{}", principal.len(), principal, id),
+        })
     }
 }
 
@@ -289,7 +295,8 @@ middleware and sets `require_principal(true)`.
 
 | `require_principal` | `Principal` | `X-Session-Id` | Behaviour |
 |---|---|---|---|
-| false | — | any | `principal: None`, one shared namespace (today's behaviour) |
+| false | present | any | session namespaced to the principal (the key stays compound; no 403) |
+| false | absent | any | `principal: None`, one shared namespace (today's behaviour; no 403) |
 | true | present | present | session namespaced to the principal |
 | true | present | absent | fresh, unshared, unstored session |
 | true | **absent** | **present** | **403** |
@@ -502,7 +509,7 @@ serialising against every concurrent `get` from the WebSocket endpoint and every
 and the counter provably cannot drift.
 
 ```rust
-pub fn create(&self, agent_name: String, cancel: CancellationToken)
+pub fn create(&self, agent_name: String, principal: Option<String>, cancel: CancellationToken)
     -> Result<(Uuid, Arc<RunHandle>), ServerError>
 {
     let mut inner = self.inner.write().expect("RunRegistry RwLock poisoned");
@@ -511,7 +518,7 @@ pub fn create(&self, agent_name: String, cancel: CancellationToken)
                        "rejecting run: in-flight limit reached");
         return Err(ServerError::Unavailable("in-flight run limit reached".to_owned()));
     }
-    /* … mint id, build handle with created_at, insert, inner.live += 1 … */
+    /* … mint id, build handle with created_at and principal, insert, inner.live += 1 … */
 }
 ```
 

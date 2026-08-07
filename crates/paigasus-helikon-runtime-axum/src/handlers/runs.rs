@@ -203,6 +203,16 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    into the writer task and released when the run completes.
     let guard: OwnedMutexGuard<()> = state.locks.lock_for(key).lock_owned().await;
 
+    // Start the reclaiming sweeper if it isn't already running. `router()` and
+    // `serve_with_listener` already do this, but a host that builds the router
+    // outside an ambient Tokio runtime (see `router`'s docs) skips it there,
+    // with nothing left to retry the spawn. This request handler runs by
+    // construction inside the serving runtime, so it is a reliable backstop:
+    // reclamation starts no later than the first admitted run.
+    // `spawn_sweeper` is `OnceCell`-guarded, so after the first call this is a
+    // cheap atomic load, not a repeated spawn.
+    state.registry.spawn_sweeper();
+
     // 5. Build the run context, then register the run. Building the context
     //    before registering avoids leaking a never-terminal registry entry if
     //    the context provider fails.

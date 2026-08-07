@@ -400,7 +400,10 @@ impl<Ctx: Send + Sync + 'static> AgentServer<Ctx> {
     /// assembling its router before ever running it), the spawn is skipped and
     /// a `tracing::warn!` is logged — call `router()` again from within a
     /// runtime, or call `serve_with_listener` (always async), to actually start
-    /// reclamation.
+    /// reclamation. As a backstop, the request handler that admits a run also
+    /// spawns the sweeper (idempotently) before doing so, so even a `router()`
+    /// that only ever ran outside a runtime still gets reclamation started —
+    /// no later than the first admitted run.
     ///
     /// Otherwise pure: builds and returns a router with no side effects beyond
     /// that one-time sweeper spawn. Suitable for embedding into a larger router
@@ -504,11 +507,12 @@ async fn auth_middleware<Ctx: Send + Sync + 'static>(
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 //
-// Crate-internal (not `tests/server.rs`) specifically so these two can reach
+// Crate-internal (not `tests/server.rs`) specifically so these three can reach
 // `server.state.registry.sweeper_is_spawned()` — a `pub(crate)` peek at the
-// registry's sweeper `OnceCell` that lets them prove `router()` alone spawns
-// or skips spawning the sweeper, without waiting out its real 30-second tick
-// interval or reaching into private state from an external integration test.
+// registry's sweeper `OnceCell` that lets them prove `router()` (and, for the
+// third, the request path in `handlers::runs::create_run`) spawns or skips
+// spawning the sweeper, without waiting out its real 30-second tick interval
+// or reaching into private state from an external integration test.
 
 #[cfg(test)]
 mod tests {
@@ -558,6 +562,92 @@ mod tests {
         assert!(
             !server.state.registry.sweeper_is_spawned(),
             "with no ambient runtime, router() must not have spawned the sweeper"
+        );
+    }
+
+    /// A minimal [`Agent`] that emits no events, so an async run started
+    /// against it returns `202` without waiting on any real work.
+    struct NoopAgent;
+
+    #[async_trait::async_trait]
+    impl Agent<()> for NoopAgent {
+        fn name(&self) -> &str {
+            "noop"
+        }
+
+        fn description(&self) -> &str {
+            "does nothing"
+        }
+
+        async fn run(
+            &self,
+            _ctx: paigasus_helikon_core::RunContext<()>,
+            _input: paigasus_helikon_core::AgentInput,
+        ) -> Result<
+            futures_util::stream::BoxStream<'static, paigasus_helikon_core::AgentEvent>,
+            paigasus_helikon_core::AgentError,
+        > {
+            use futures_util::stream::StreamExt as _;
+            Ok(futures_util::stream::iter(Vec::new()).boxed())
+        }
+    }
+
+    /// The bug this backstop closes: `router()` called with no ambient Tokio
+    /// runtime (proven by the test just above) skips spawning the sweeper,
+    /// and — before this change — nothing else ever retried, so a host that
+    /// only ever assembles its router that way would never reclaim an
+    /// overdue run, turning `max_in_flight` into a permanent-outage vector.
+    /// `create_run` (`handlers/runs.rs`) now spawns the sweeper itself before
+    /// admitting a run, so the first admitted run starts reclamation
+    /// regardless of how the router was assembled.
+    ///
+    /// This proves the backstop actually fires end-to-end, not just that it
+    /// compiles: the router is built with no ambient runtime exactly like the
+    /// test above, then served on a runtime created afterwards, and one real
+    /// run is driven through the handler before the assertion.
+    #[test]
+    fn request_path_starts_the_sweeper_even_when_router_was_built_outside_a_runtime() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .agent(Arc::new(NoopAgent))
+            .build()
+            .expect("server builds");
+
+        // Build the router with NO ambient Tokio runtime — same setup as
+        // `router_without_a_runtime_does_not_panic_and_does_not_claim_the_slot`.
+        let router = server.router();
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "router() built outside a runtime must not have spawned the sweeper"
+        );
+
+        // Enter a runtime created here (not via #[tokio::test]), so the
+        // router above is provably unaffected by it, and drive one run
+        // through the request path.
+        let rt = tokio::runtime::Runtime::new().expect("build a runtime to serve on");
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind ephemeral port");
+            let addr = listener.local_addr().expect("local addr");
+            tokio::spawn(async move {
+                axum::serve(listener, router).await.expect("serve loop");
+            });
+
+            let resp = reqwest::Client::new()
+                .post(format!("http://{addr}/agents/noop/runs?mode=async"))
+                .header("content-type", "application/json")
+                .body(r#"{"input":"test"}"#)
+                .send()
+                .await
+                .expect("async run request");
+            assert_eq!(resp.status(), 202, "expected 202 Accepted");
+        });
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "the request path must spawn the sweeper once a run is admitted, \
+             even though router() itself never spawned it"
         );
     }
 }

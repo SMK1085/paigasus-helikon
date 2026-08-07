@@ -547,6 +547,30 @@ async fn unbound_run_is_subscribable_without_a_principal() {
     );
 }
 
+/// A run started with NO principal (create request carries no
+/// `X-Test-Principal` header, so the run's owning principal is `None`)
+/// subscribed to WITH credentials (`Some("alice")`) must still be denied —
+/// `None != Some("alice")`. `cross_principal_subscription_is_404` above covers
+/// `Some != Some` and `unbound_run_is_subscribable_without_a_principal` covers
+/// `None == None`; this is the remaining combination. Without it, a future
+/// change that treated an absent owner as a wildcard matching any principal
+/// would widen access to every unbound run while every existing principal
+/// test stayed green.
+#[tokio::test]
+async fn anonymous_run_subscribed_with_credentials_is_404() {
+    let base = spawn_authed_echo_server();
+    // No `x-test-principal` header on create: the run's owning principal is
+    // `None`, even though the server has an `AuthLayer` configured.
+    let run_id = support::create_async_run(&base, "echo").await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let request = ws_request_as(&ws_url(&base, "echo", &run_id), Some("alice"));
+    let err = tokio_tungstenite::connect_async(request).await.expect_err(
+        "subscribing with credentials to an anonymous run must fail the handshake (404, not 101)",
+    );
+    assert_handshake_status(err, 404);
+}
+
 /// The agent-name mismatch check still returns 404 independently of principals.
 #[tokio::test]
 async fn agent_name_mismatch_is_still_404() {

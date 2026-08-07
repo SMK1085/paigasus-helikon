@@ -637,4 +637,59 @@ mod tests {
             "configure() alone must spawn the reclaiming sweeper"
         );
     }
+
+    /// Symmetric with axum's backstop (`request_path_starts_the_sweeper_even_when_router_was_built_outside_a_runtime`
+    /// in `paigasus-helikon-runtime-axum`), added for the same reason: a
+    /// future refactor of `configure()` — this crate's own embed path — must
+    /// not be able to silently drop the sweeper spawn without a test failing.
+    ///
+    /// Unlike axum, `configure()`'s own `spawn_sweeper` call here does not
+    /// depend on an ambient runtime (it spawns onto the explicit
+    /// process-wide handle from `crate::runtime::shared_handle()`, not onto
+    /// whatever runtime happens to be current), so there is no "outside a
+    /// runtime" state to reproduce here — `configure_spawns_the_sweeper`
+    /// above already proves that. What this test proves instead: `create_run`
+    /// spawns the sweeper on its own, independent of `configure()` ever
+    /// having run at all. The route below is wired directly to
+    /// `handlers::runs::create_run`, bypassing `configure()` entirely, so
+    /// `configure()`'s own spawn call never fires — the sweeper being spawned
+    /// afterward can only be `create_run`'s doing.
+    #[actix_web::test]
+    async fn request_path_starts_the_sweeper_even_without_configure_ever_running() {
+        let server = AgentServer::<()>::builder()
+            .with_default_context()
+            .agent(agent("noop"))
+            .build()
+            .expect("server builds");
+
+        assert!(
+            !server.state.registry.sweeper_is_spawned(),
+            "the sweeper must not be spawned before anything runs"
+        );
+
+        let state = server.state.clone();
+        let app = actix_web::test::init_service(App::new().app_data(Data::new(state)).route(
+            "/agents/{name}/runs",
+            web::post().to(handlers::runs::create_run::<()>),
+        ))
+        .await;
+
+        let req = actix_web::test::TestRequest::post()
+            .uri("/agents/noop/runs?mode=async")
+            .insert_header(("content-type", "application/json"))
+            .set_payload(r#"{"input":"test"}"#)
+            .to_request();
+        let resp = actix_web::test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            actix_web::http::StatusCode::ACCEPTED,
+            "expected 202 Accepted"
+        );
+
+        assert!(
+            server.state.registry.sweeper_is_spawned(),
+            "the request path must spawn the sweeper once a run is admitted, \
+             even though configure() was never called"
+        );
+    }
 }

@@ -236,6 +236,18 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    into the writer task and released when the run completes.
     let guard: OwnedMutexGuard<()> = state.locks.lock_for(key).lock_owned().await;
 
+    // Start the reclaiming sweeper if it isn't already running, on the same
+    // process-wide runtime `configure()` uses. actix's embed path already
+    // guarantees a runtime is running by the time a request reaches this
+    // handler — `configure()`'s own spawn call already covers it — but this
+    // call keeps the two runtimes' request handlers symmetric and protects
+    // against a future `configure()` refactor silently dropping the spawn.
+    // `spawn_sweeper` is `OnceCell`-guarded, so after the first call this is a
+    // cheap atomic load, not a repeated spawn.
+    state
+        .registry
+        .spawn_sweeper(&crate::runtime::shared_handle());
+
     // 5. Build the run context, then register the run. Building the context
     //    before registering avoids leaking a never-terminal registry entry if
     //    the context provider fails. `build` borrows the `!Send` `HttpRequest`,

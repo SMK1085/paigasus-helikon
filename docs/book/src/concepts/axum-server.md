@@ -79,6 +79,8 @@ By default — whenever `.auth(...)` is configured on the builder — a request 
 
 Requests without `X-Session-Id` receive a fresh anonymous session that is never stored, regardless of principal.
 
+Principal scoping extends to the WebSocket events endpoint too: a run's event stream is readable only by the principal that started it. Another principal who reaches the same run id — a leaked link, a guessed UUID, anything short of owning the run — receives a plain `404`, deliberately indistinguishable from a run that never existed, so the endpoint cannot be used to confirm which run ids exist. There is no administrative override; not even an operator can subscribe to a run they did not start.
+
 ## Replayable runs
 
 Every run — regardless of the transport used to start it — drains into an in-memory `EventLog`. The key properties:
