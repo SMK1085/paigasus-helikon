@@ -6,6 +6,12 @@
 **Crate:** `paigasus-helikon-runtime-temporal` (self-contained; no `paigasus-helikon-core` change)
 **SDK baseline:** `temporalio-* = 0.5.0`. Every citation below is against that exact version; a bump requires re-verification (§11).
 
+> **Superseded in part by [SMA-484](https://linear.app/smaschek/issue/SMA-484).** The legacy
+> pre-envelope decode arms this design added were removed in 0.3.0; §4.7's warning-goes-silent
+> exit criterion was never met and was retired as unobservable to a telemetry-free crates.io
+> library. Every claim below about decoding the 0.2.x positional shapes — §2, §4.4, §4.7, §6.1,
+> §7 and §10 — describes 0.2.2 only. The envelope design itself stands.
+
 ## 1. Context & problem
 
 SMA-455 threaded a request-scoped `ctx_seed` into the durable runtime by adding a **new
@@ -451,8 +457,11 @@ defeated). release-plz bumps a `feat` on a `0.x` crate as a **patch**.
 
 ## 10. Follow-up issues to file
 
-1. **Remove the 0.2.x legacy decode arms** — triggered by the §4.7 warning going silent for
-   a full retention window.
+> **Historical — this follow-up is done.** Item 1 was filed as SMA-484 and completed in 0.3.0.
+> Its stated trigger never fired and was retired as unobservable; see the banner at the top.
+
+1. ~~**Remove the 0.2.x legacy decode arms** — triggered by the §4.7 warning going silent for
+   a full retention window.~~ Done in 0.3.0 (SMA-484).
 
 ## 11. Open risks
 

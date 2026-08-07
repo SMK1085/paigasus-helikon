@@ -11,10 +11,18 @@
 //!
 //! # Wire shapes
 //!
-//! Each wrapper encodes to **one** JSON-object payload, and decodes from either
-//! that or the legacy pre-envelope (0.2.0–0.2.1) positional arity (2 payloads
-//! for `render_instructions` / `call_model`, 3 for `invoke_tool`). Both paths
-//! build the same `*Args` value, so everything downstream is shape-agnostic.
+//! Each wrapper encodes to — and decodes from — **one** JSON-object payload.
+//! The pre-envelope positional arities (2 payloads for `render_instructions` /
+//! `call_model`, 3 for `invoke_tool`) are still recognized, but only to produce
+//! a named [`reject_legacy`] error; they are no longer decoded. Upgrading a
+//! fleet from 0.2.0 or 0.2.1 therefore requires a stop at 0.2.2, which decodes
+//! both shapes; 0.1.x cannot use that bridge and must drain outright — see the
+//! crate docs, § "Upgrade Discipline and Determinism".
+//!
+//! Note the two version scopes are not interchangeable: [`reject_legacy`]'s own
+//! message says "0.2.1 and earlier" because it describes the shape that
+//! *arrived* (`call_model`'s 2-payload shape dates back to 0.1.x), whereas the
+//! supported *migration* path is 0.2.0/0.2.1 only.
 //!
 //! # Why the hand-written impls are reached at all
 //!
@@ -68,7 +76,7 @@ use temporalio_common::data_converters::{
 };
 use temporalio_common::protos::temporal::api::common::v1::Payload;
 
-/// Activity name used in decode diagnostics and legacy-shape warnings.
+/// Activity name used in decode diagnostics and pre-envelope rejections.
 ///
 /// Fully qualified to match the `ActivityType` Temporal actually registers:
 /// `#[activities]` with no name override derives it as
@@ -78,17 +86,38 @@ use temporalio_common::protos::temporal::api::common::v1::Payload;
 /// Temporal Web UI or an `ActivityTaskFailed` history event.
 const ACT_RENDER: &str = "AgentActivities::render_instructions";
 
-/// Warn that a pre-envelope activity input was decoded.
+/// Reject a pre-envelope activity input with an actionable diagnostic.
 ///
-/// This is the operator's "safe to remove the legacy decode arms" signal: once
-/// no such warning has appeared for a full retention window, no worker on
-/// 0.2.0 or 0.2.1 is scheduling tasks any more and the arms can go.
-fn warn_legacy(activity: &str, arity: usize) {
-    tracing::warn!(
+/// `EncodingError` rather than `WrongEncoding` is deliberate and load-bearing:
+/// the composite converter treats `WrongEncoding` as "not my encoding" and falls
+/// through to the next converter, swallowing the message; any other error is
+/// returned immediately, so this is what actually reaches the
+/// `ActivityTaskFailed` history event.
+///
+/// The `tracing::error!` is not redundant with that event: the history event is
+/// visible only to someone querying Temporal, whereas this reaches the worker's
+/// own log pipeline, where alerting lives. Under an unbounded retry policy this
+/// logs once per attempt — accepted deliberately, since the volume is itself the
+/// signal for a condition that requires operator intervention.
+///
+/// The message carries the activity name and the payload *count* only, never
+/// payload bytes: it lands in Temporal history, a persistence boundary.
+fn reject_legacy(activity: &str, arity: usize) -> PayloadConversionError {
+    tracing::error!(
         activity,
         legacy_arity = arity,
-        "decoded a pre-envelope activity input; a worker on 0.2.0 or 0.2.1 is still scheduling tasks"
+        "refused a pre-envelope activity input; a worker on 0.2.1 or earlier queued this task"
     );
+    PayloadConversionError::EncodingError(
+        format!(
+            "{activity}: received {arity} payloads — the pre-envelope positional shape \
+             (0.2.1 and earlier). This worker decodes only the single-payload envelope. \
+             Recovery: re-join a worker built against `paigasus-helikon-runtime-temporal` \
+             0.2.2, which decodes both shapes, to this task queue and let in-flight runs \
+             drain."
+        )
+        .into(),
+    )
 }
 
 /// Decode one payload, mapping any failure to a **payload-free**
@@ -196,35 +225,15 @@ impl TemporalDeserializable for RenderInstructionsInput {
                 )?;
                 Ok(Self(args))
             }
-            // Legacy pre-envelope (0.2.0–0.2.1): (agent_name, ctx_seed) as two payloads.
-            2 => {
-                warn_legacy(ACT_RENDER, 2);
-                let mut it = payloads.into_iter();
-                let agent_name = decode_arg(
-                    ctx,
-                    it.next().expect("length checked above"),
-                    ACT_RENDER,
-                    0,
-                    "String",
-                )?;
-                let ctx_seed = decode_arg(
-                    ctx,
-                    it.next().expect("length checked above"),
-                    ACT_RENDER,
-                    1,
-                    "Option<serde_json::Value>",
-                )?;
-                Ok(Self(RenderInstructionsArgs {
-                    agent_name,
-                    ctx_seed,
-                }))
-            }
+            // Pre-envelope (0.2.1 and earlier): (agent_name, ctx_seed) as two
+            // payloads. Recognized only to produce a named error — SMA-484.
+            2 => Err(reject_legacy(ACT_RENDER, 2)),
             _ => Err(PayloadConversionError::WrongEncoding),
         }
     }
 }
 
-/// Activity name used in decode diagnostics and legacy-shape warnings. Fully
+/// Activity name used in decode diagnostics and pre-envelope rejections. Fully
 /// qualified to match the registered `ActivityType` — see `ACT_RENDER`'s doc.
 const ACT_CALL_MODEL: &str = "AgentActivities::call_model";
 
@@ -283,36 +292,16 @@ impl TemporalDeserializable for CallModelInput {
                 )?;
                 Ok(Self(args))
             }
-            // Legacy pre-envelope (0.2.0–0.2.1): (agent_name, request) as two
-            // payloads. Unchanged since 0.1.x, but still pre-envelope.
-            2 => {
-                warn_legacy(ACT_CALL_MODEL, 2);
-                let mut it = payloads.into_iter();
-                let agent_name = decode_arg(
-                    ctx,
-                    it.next().expect("length checked above"),
-                    ACT_CALL_MODEL,
-                    0,
-                    "String",
-                )?;
-                let request = decode_arg(
-                    ctx,
-                    it.next().expect("length checked above"),
-                    ACT_CALL_MODEL,
-                    1,
-                    "ModelRequest",
-                )?;
-                Ok(Self(CallModelArgs {
-                    agent_name,
-                    request,
-                }))
-            }
+            // Pre-envelope (0.2.1 and earlier): (agent_name, request) as two
+            // payloads — this shape is unchanged since 0.1.x. Recognized only to
+            // produce a named error — SMA-484.
+            2 => Err(reject_legacy(ACT_CALL_MODEL, 2)),
             _ => Err(PayloadConversionError::WrongEncoding),
         }
     }
 }
 
-/// Activity name used in decode diagnostics and legacy-shape warnings. Fully
+/// Activity name used in decode diagnostics and pre-envelope rejections. Fully
 /// qualified to match the registered `ActivityType` — see `ACT_RENDER`'s doc.
 const ACT_INVOKE_TOOL: &str = "AgentActivities::invoke_tool";
 
@@ -373,37 +362,9 @@ impl TemporalDeserializable for InvokeToolInput {
                 )?;
                 Ok(Self(args))
             }
-            // Legacy pre-envelope (0.2.0–0.2.1): (agent_name, call, ctx_seed) as three payloads.
-            3 => {
-                warn_legacy(ACT_INVOKE_TOOL, 3);
-                let mut it = payloads.into_iter();
-                let agent_name = decode_arg(
-                    ctx,
-                    it.next().expect("length checked above"),
-                    ACT_INVOKE_TOOL,
-                    0,
-                    "String",
-                )?;
-                let call = decode_arg(
-                    ctx,
-                    it.next().expect("length checked above"),
-                    ACT_INVOKE_TOOL,
-                    1,
-                    "ToolCallRequest",
-                )?;
-                let ctx_seed = decode_arg(
-                    ctx,
-                    it.next().expect("length checked above"),
-                    ACT_INVOKE_TOOL,
-                    2,
-                    "Option<serde_json::Value>",
-                )?;
-                Ok(Self(InvokeToolArgs {
-                    agent_name,
-                    call,
-                    ctx_seed,
-                }))
-            }
+            // Pre-envelope (0.2.1 and earlier): (agent_name, call, ctx_seed) as
+            // three payloads. Recognized only to produce a named error — SMA-484.
+            3 => Err(reject_legacy(ACT_INVOKE_TOOL, 3)),
             _ => Err(PayloadConversionError::WrongEncoding),
         }
     }
@@ -465,8 +426,15 @@ mod tests {
         });
     }
 
+    /// The pre-envelope two-payload shape must now be **refused**, not decoded.
+    ///
+    /// Asserts the message's content, not merely that an error occurred: a
+    /// variant-only assertion would still pass if the arm returned
+    /// `WrongEncoding` (letting the composite silently fall through and losing
+    /// the diagnostic in production), or if a copy-paste error passed the wrong
+    /// `ACT_*` constant or arity into `reject_legacy`.
     #[test]
-    fn render_instructions_decodes_legacy_two_payload_shape() {
+    fn render_instructions_rejects_legacy_two_payload_shape() {
         with_ctx(|ctx| {
             let legacy = MultiArgs2(
                 "agent-1".to_owned(),
@@ -478,11 +446,21 @@ mod tests {
                 .expect("encode legacy");
             assert_eq!(payloads.len(), 2, "legacy shape is two payloads");
 
-            let decoded: RenderInstructionsInput = ctx
+            let err = ctx
                 .converter
-                .from_payloads(ctx, payloads)
-                .expect("a task queued by a worker on 0.2.0 or 0.2.1 must decode");
-            assert_eq!(decoded.0, render_args());
+                .from_payloads::<RenderInstructionsInput>(ctx, payloads)
+                .expect_err("the pre-envelope shape must no longer decode");
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError, got {err:?}"
+            );
+            let msg = err.to_string();
+            assert!(msg.contains(ACT_RENDER), "must name the activity: {msg}");
+            assert!(msg.contains("2 payloads"), "must name the count: {msg}");
+            assert!(
+                msg.contains("0.2.2"),
+                "must name the recovery version: {msg}"
+            );
         });
     }
 
@@ -546,6 +524,10 @@ mod tests {
         });
     }
 
+    /// Arity 2 is deliberately absent here: it is `render_instructions`'
+    /// former legacy arity and now yields `EncodingError` from `reject_legacy`,
+    /// not `WrongEncoding`. Covered by
+    /// `render_instructions_rejects_legacy_two_payload_shape`.
     #[test]
     fn render_instructions_rejects_unrecognized_arity() {
         with_ctx(|ctx| {
@@ -572,16 +554,22 @@ mod tests {
     /// A recognized arity whose content is wrong must be `EncodingError`, not
     /// `WrongEncoding` — the former short-circuits the composite converter and
     /// surfaces the real diagnostic.
+    ///
+    /// Since SMA-484 the only **decodable** arity is 1, so this feeds a single
+    /// payload. The bad-content case is a **missing required field**, kept
+    /// deliberately distinct from `decode_diagnostics_never_leak_payload_bytes`
+    /// (which feeds a bare JSON string at the same arity) so the two tests do
+    /// not collapse into duplicates.
     #[test]
     fn render_instructions_content_failure_is_encoding_error() {
         with_ctx(|ctx| {
-            // Legacy arity, but argument 0 is a number where a String is required.
-            let bad = MultiArgs2(42_u32, Option::<serde_json::Value>::None);
-            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            // Envelope arity, but `agent_name` is absent and has no serde default.
+            let bad = serde_json::json!({});
+            let payload = ctx.converter.to_payload(ctx, &bad).expect("encode");
             let err = ctx
                 .converter
-                .from_payloads::<RenderInstructionsInput>(ctx, payloads)
-                .expect_err("a non-String agent_name must fail");
+                .from_payloads::<RenderInstructionsInput>(ctx, vec![payload])
+                .expect_err("a missing agent_name must fail");
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),
                 "expected EncodingError, got {err:?}"
@@ -600,15 +588,16 @@ mod tests {
     /// so such a test passes whether or not `decode_arg` discards its source
     /// error.
     ///
-    /// This is also the only test that exercises the **envelope** arm's
-    /// (arity 1) error path — every `*_content_failure_is_encoding_error` test
-    /// feeds a legacy `MultiArgs{N}` shape instead. So it additionally asserts
-    /// the error variant is `EncodingError`, not just sentinel-absent: if the
-    /// envelope arm ever regressed to returning `WrongEncoding`, the composite
-    /// converter would silently fall through to the `serde_json` arm (which
-    /// also yields `WrongEncoding`), and production would lose this
-    /// diagnostic — a bare "Wrong encoding" in Temporal history — while every
-    /// other test here kept passing.
+    /// Since SMA-484 the sibling `*_content_failure_is_encoding_error` tests
+    /// also exercise the **envelope** arm's (arity 1) error path, but each
+    /// feeds a struct with a missing or wrong-typed field; this test is the
+    /// one that feeds a bare string instead, for the leak-surfacing reason
+    /// above. It additionally asserts the error variant is `EncodingError`,
+    /// not just sentinel-absent: if the envelope arm ever regressed to
+    /// returning `WrongEncoding`, the composite converter would silently fall
+    /// through to the `serde_json` arm (which also yields `WrongEncoding`),
+    /// and production would lose this diagnostic — a bare "Wrong encoding" in
+    /// Temporal history — while every other test here kept passing.
     #[test]
     fn decode_diagnostics_never_leak_payload_bytes() {
         const SENTINEL: &str = "super-secret-tenant-token";
@@ -625,6 +614,51 @@ mod tests {
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),
                 "expected EncodingError from the envelope arm, got {err:?}"
+            );
+
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(SENTINEL),
+                "Display leaked payload bytes: {display}"
+            );
+            assert!(
+                !debug.contains(SENTINEL),
+                "Debug leaked payload bytes: {debug}"
+            );
+        });
+    }
+
+    /// Spec §7.3: the **rejection** diagnostic must be payload-free too.
+    ///
+    /// `decode_diagnostics_never_leak_payload_bytes` covers only the arity-1
+    /// envelope arm. `reject_legacy` is a separate error path whose input
+    /// carries real content, so without this test a later edit appending the
+    /// offending payload's bytes to the message would ship silently into
+    /// Temporal history.
+    ///
+    /// Also asserts the error variant, same as its arity-1 sibling: without
+    /// it, deleting the `2 =>` rejection arm would leave this test passing
+    /// against the fallback `WrongEncoding` case, whose `Display` ("Wrong
+    /// encoding") is sentinel-free by construction — silently testing
+    /// nothing about `reject_legacy` at all.
+    #[test]
+    fn rejection_diagnostics_never_leak_payload_bytes() {
+        const SENTINEL: &str = "super-secret-tenant-token";
+        with_ctx(|ctx| {
+            let legacy = MultiArgs2(SENTINEL.to_owned(), Option::<serde_json::Value>::None);
+            let payloads = ctx
+                .converter
+                .to_payloads(ctx, &legacy)
+                .expect("encode legacy");
+            let err = ctx
+                .converter
+                .from_payloads::<RenderInstructionsInput>(ctx, payloads)
+                .expect_err("the pre-envelope shape must no longer decode");
+
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError from reject_legacy, got {err:?}"
             );
 
             let display = err.to_string();
@@ -671,8 +705,11 @@ mod tests {
         });
     }
 
+    /// The pre-envelope two-payload shape must now be refused — see
+    /// `render_instructions_rejects_legacy_two_payload_shape` on why the
+    /// message content is asserted rather than just the error variant.
     #[test]
-    fn call_model_decodes_legacy_two_payload_shape() {
+    fn call_model_rejects_legacy_two_payload_shape() {
         with_ctx(|ctx| {
             let legacy = MultiArgs2("agent-1".to_owned(), ModelRequest::new());
             let payloads = ctx
@@ -681,11 +718,24 @@ mod tests {
                 .expect("encode legacy");
             assert_eq!(payloads.len(), 2, "legacy shape is two payloads");
 
-            let decoded: CallModelInput = ctx
+            let err = ctx
                 .converter
-                .from_payloads(ctx, payloads)
-                .expect("a task queued by a worker on 0.2.0 or 0.2.1 must decode");
-            assert_eq!(json_of(&decoded.0), json_of(&call_model_args()));
+                .from_payloads::<CallModelInput>(ctx, payloads)
+                .expect_err("the pre-envelope shape must no longer decode");
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError, got {err:?}"
+            );
+            let msg = err.to_string();
+            assert!(
+                msg.contains(ACT_CALL_MODEL),
+                "must name the activity: {msg}"
+            );
+            assert!(msg.contains("2 payloads"), "must name the count: {msg}");
+            assert!(
+                msg.contains("0.2.2"),
+                "must name the recovery version: {msg}"
+            );
         });
     }
 
@@ -740,6 +790,9 @@ mod tests {
         });
     }
 
+    /// Arity 2 is deliberately absent here: it is `call_model`'s former legacy
+    /// arity and now yields `EncodingError` from `reject_legacy`, not
+    /// `WrongEncoding`. Covered by `call_model_rejects_legacy_two_payload_shape`.
     #[test]
     fn call_model_rejects_unrecognized_arity() {
         with_ctx(|ctx| {
@@ -760,14 +813,21 @@ mod tests {
         });
     }
 
+    /// A recognized arity (1, the envelope) whose content is wrong must be
+    /// `EncodingError` — see `render_instructions_content_failure_is_encoding_error`.
+    ///
+    /// Corrupts exactly one field of an otherwise-valid envelope, so the failure
+    /// is unambiguously the **wrong type** on `agent_name` rather than a missing
+    /// `request`.
     #[test]
     fn call_model_content_failure_is_encoding_error() {
         with_ctx(|ctx| {
-            let bad = MultiArgs2(42_u32, ModelRequest::new());
-            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            let mut bad = serde_json::to_value(call_model_args()).expect("to_value");
+            bad["agent_name"] = serde_json::json!(42);
+            let payload = ctx.converter.to_payload(ctx, &bad).expect("encode");
             let err = ctx
                 .converter
-                .from_payloads::<CallModelInput>(ctx, payloads)
+                .from_payloads::<CallModelInput>(ctx, vec![payload])
                 .expect_err("a non-String agent_name must fail");
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),
@@ -812,8 +872,11 @@ mod tests {
         });
     }
 
+    /// The pre-envelope three-payload shape must now be refused — see
+    /// `render_instructions_rejects_legacy_two_payload_shape` on why the
+    /// message content is asserted rather than just the error variant.
     #[test]
-    fn invoke_tool_decodes_legacy_three_payload_shape() {
+    fn invoke_tool_rejects_legacy_three_payload_shape() {
         with_ctx(|ctx| {
             let legacy = MultiArgs3(
                 "agent-1".to_owned(),
@@ -826,11 +889,24 @@ mod tests {
                 .expect("encode legacy");
             assert_eq!(payloads.len(), 3, "legacy shape is three payloads");
 
-            let decoded: InvokeToolInput = ctx
+            let err = ctx
                 .converter
-                .from_payloads(ctx, payloads)
-                .expect("a task queued by a worker on 0.2.0 or 0.2.1 must decode");
-            assert_eq!(json_of(&decoded.0), json_of(&invoke_tool_args()));
+                .from_payloads::<InvokeToolInput>(ctx, payloads)
+                .expect_err("the pre-envelope shape must no longer decode");
+            assert!(
+                matches!(err, PayloadConversionError::EncodingError(_)),
+                "expected EncodingError, got {err:?}"
+            );
+            let msg = err.to_string();
+            assert!(
+                msg.contains(ACT_INVOKE_TOOL),
+                "must name the activity: {msg}"
+            );
+            assert!(msg.contains("3 payloads"), "must name the count: {msg}");
+            assert!(
+                msg.contains("0.2.2"),
+                "must name the recovery version: {msg}"
+            );
         });
     }
 
@@ -889,6 +965,12 @@ mod tests {
         });
     }
 
+    /// Arity 3 is deliberately absent here: it is `invoke_tool`'s former legacy
+    /// arity and now yields `EncodingError` from `reject_legacy`, not
+    /// `WrongEncoding`. Covered by
+    /// `invoke_tool_rejects_legacy_three_payload_shape`. The arity-2 probe below
+    /// stays `WrongEncoding` — 2 is `invoke_tool`'s 0.1.x shape, outside the
+    /// support window.
     #[test]
     fn invoke_tool_rejects_unrecognized_arity() {
         with_ctx(|ctx| {
@@ -913,14 +995,21 @@ mod tests {
         });
     }
 
+    /// A recognized arity (1, the envelope) whose content is wrong must be
+    /// `EncodingError` — see `render_instructions_content_failure_is_encoding_error`.
+    ///
+    /// Corrupts exactly one field of an otherwise-valid envelope, so the failure
+    /// is unambiguously the **wrong type** on `agent_name` rather than a missing
+    /// `call`.
     #[test]
     fn invoke_tool_content_failure_is_encoding_error() {
         with_ctx(|ctx| {
-            let bad = MultiArgs3(42_u32, tool_call(), Option::<serde_json::Value>::None);
-            let payloads = ctx.converter.to_payloads(ctx, &bad).expect("encode");
+            let mut bad = serde_json::to_value(invoke_tool_args()).expect("to_value");
+            bad["agent_name"] = serde_json::json!(42);
+            let payload = ctx.converter.to_payload(ctx, &bad).expect("encode");
             let err = ctx
                 .converter
-                .from_payloads::<InvokeToolInput>(ctx, payloads)
+                .from_payloads::<InvokeToolInput>(ctx, vec![payload])
                 .expect_err("a non-String agent_name must fail");
             assert!(
                 matches!(err, PayloadConversionError::EncodingError(_)),

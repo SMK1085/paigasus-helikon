@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- *(runtime-temporal)* SMA-484 activity inputs are **envelope-only**
+  - The pre-envelope positional decode arms are removed. A worker on this version that **is** handed one of those payloads logs at `ERROR` and fails the attempt with a decode error naming the activity, the payload count, and the recovery version, rather than executing it.
+  - No public Rust API change — the envelope types are crate-internal. The break is on the wire only.
+
+### Upgrade notes
+
+- **Upgrading from 0.2.0 or 0.2.1 requires a stop at 0.2.2.** That release decodes both the envelope and those two releases' pre-envelope positional shapes, so it is the migration bridge: land the fleet on 0.2.2, **drain in-flight runs while it is there**, then take this version. *Drain* means every workflow execution on the task queue has reached a terminal state — not merely that new runs have been paused.
+- **0.1.x cannot use the bridge.** 0.2.2 decodes the 0.2.0/0.2.1 arities specifically; only `call_model`'s 2-payload shape happens to be unchanged since 0.1.x. A 0.1.x `render_instructions` task (1 payload) and `invoke_tool` task (2 payloads) both fail closed on 0.2.2 as well, so a 0.1.x fleet must drain or terminate its in-flight runs outright rather than hopping through 0.2.2. The decode error's own wording says "0.2.1 and earlier" because it describes the shape that arrived, not the supported upgrade path.
+- **0.2.2 ↔ this version is compatible in both directions for activity inputs.** Both encode and decode the envelope, so a rolling 0.2.2 → 0.3.0 upgrade needs no drain on account of this change. (Scope: activity inputs. `WorkflowInput` and activity outputs are unchanged here and carry their own compatibility story.)
+- **If a worker on this version meets a pre-envelope task anyway**, the attempt fails *retryably* and Temporal re-dispatches it. Any 0.2.2 worker still polling the queue will decode and execute it — so the recovery is to re-join one, let in-flight runs drain, then remove it. For a run that cannot be drained in an acceptable window, use a blue-green task queue or terminate the execution.
+- **Do not expect the failure to self-terminate.** `render_instructions` is built with no retry policy, so the server default of unlimited attempts applies, and `WorkflowInput::timeout_ms` is `None` unless set. On a default configuration the retry loop is unbounded and recovery is operator action. The opposite hazard also applies: a **finite** `maximum_attempts` on `model_retry_policy` / `tool_retry_policy` does bound the retry, so on a `call_model` / `invoke_tool` rejection the window to re-join a 0.2.2 worker can be seconds — see [docs.rs, § "Upgrade Discipline and Determinism"](https://docs.rs/paigasus-helikon-runtime-temporal) for all four bounds.
+- **Rolling back below 0.2.2 still requires a drain**, unchanged: a queued envelope payload is frozen in history and re-delivered on every retry. Rolling back to 0.2.2 is safe.
+
 ## [0.2.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.2.1...paigasus-helikon-runtime-temporal-v0.2.2) - 2026-08-07
 
 ### Added
