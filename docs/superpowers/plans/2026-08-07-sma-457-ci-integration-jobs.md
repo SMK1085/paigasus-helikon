@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Commit format:** `<type>(<scope>): SMA-457 <lowercase message>`. Allowed scopes are in `.versionrc`; this plan uses `ci`, `workflows`, `runtime-temporal`, `runtime-agentcore`, `docs`, `claude`, `contributing`, `readme`, `plan`. A local `commit-msg` hook runs `convco check` and will reject anything else.
-- **PR title must be `ci(...)` or `ci(workflows): ...`** — never `feat`/`fix`. `ci` carries `increment: None` in `.versionrc`, so release-plz attributes no version bump. A `feat`/`fix` title would bump `runtime-temporal` and `runtime-agentcore` for a CI-only change.
+- **PR title must be `ci(...)` or `ci(workflows): ...`** — never `feat`/`fix`. Note what this does and does not buy: `.versionrc`'s `increment: None` for `ci` governs **convco** (the `commits` gate and the local hook), *not* release-plz. release-plz has its own logic and attributes by file path, so it will still open a `chore: release` PR patch-bumping `runtime-temporal` and `runtime-agentcore` — every crate here is 0.x, where feat also maps to patch. The `ci` type therefore changes the changelog section, not the bump.
 - **Never `git add -A`** — `.env` and `.claude` are untracked but not gitignored. Stage explicit paths and verify with `git show --stat`.
 - **Never move HEAD or switch branches.** This worktree is shared with other sessions.
 - **Reuse the action SHAs already pinned in `ci.yml`.** Do not look up newer ones: Dependabot's `github-actions` group bumps all occurrences together, and introducing a second pin for the same action fragments that. The exact pins are listed in Task 4.

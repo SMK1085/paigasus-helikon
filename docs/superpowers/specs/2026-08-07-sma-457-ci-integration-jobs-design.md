@@ -48,7 +48,7 @@ Established by direct check on 2026-08-07, not assumed:
 | A skipped `gate()` test **passes silently** | `temporal_live.rs:45-56` — `eprintln!` then `return`; `cargo test` captures a passing test's output | Drives §5.1, the central correctness fix in this revision |
 | The repo already has a green-by-skip guard idiom | `HELIKON_REQUIRE_SANDBOX=1` → `panic!` at `crates/paigasus-helikon-tools/tests/os_sandbox.rs:21` and `os_sandbox_seatbelt.rs:19`, set at `ci.yml:67-69` | §5.1 follows an established in-repo pattern, not a new invention |
 | `$GITHUB_STEP_SUMMARY` output has precedent, with a local fallback | `scripts/check-doc-coverage.sh:85` — `>> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"` | §6.1's summary reporting reuses the idiom verbatim |
-| `ci` and `workflows` are allowed commit/PR-title scopes; `ci` carries `increment: None` | `.versionrc` `types`/`scopeRegex`, `pr-title.yml` `scopes:` | §8's release-plz reasoning holds |
+| `ci` and `workflows` are allowed commit/PR-title scopes; `ci` carries `increment: None` | `.versionrc` `types`/`scopeRegex`, `pr-title.yml` `scopes:` | Commits and the PR title pass the `commits` and `pr-title` gates. Note `increment: None` binds **convco only** — §8 explains why it does *not* stop a release-plz bump |
 
 ## 3. Where the jobs live — a new `integration.yml`
 
