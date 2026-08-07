@@ -33,6 +33,10 @@ use paigasus_helikon_core::{
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::ApplicationFailure;
 
+use crate::activity_input::{
+    CallModelArgs, CallModelInput, InvokeToolArgs, InvokeToolInput, RenderInstructionsArgs,
+    RenderInstructionsInput,
+};
 use crate::driver::AgentPlan;
 use crate::error::ErrorKindPayload;
 use crate::payloads::ModelTurnResult;
@@ -363,8 +367,6 @@ pub(crate) fn build_activities<Ctx: Send + Sync + 'static>(
 impl AgentActivities {
     /// Render the named agent's system-prompt text.
     ///
-    /// Render the named agent's system-prompt text.
-    ///
     /// `pub(crate)` so `#[activities]` emits a `pub(crate)` associated const
     /// (`AgentActivities::render_instructions`) — the typed activity marker
     /// SMA-332 Task 8's workflow passes to `WorkflowContext::start_activity`
@@ -373,9 +375,12 @@ impl AgentActivities {
     pub(crate) async fn render_instructions(
         self: Arc<Self>,
         ctx: ActivityContext,
-        agent_name: String,
-        ctx_seed: Option<serde_json::Value>,
+        input: RenderInstructionsInput,
     ) -> Result<String, ActivityError> {
+        let RenderInstructionsArgs {
+            agent_name,
+            ctx_seed,
+        } = input.0;
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,
@@ -395,9 +400,12 @@ impl AgentActivities {
     pub(crate) async fn call_model(
         self: Arc<Self>,
         ctx: ActivityContext,
-        agent_name: String,
-        request: ModelRequest,
+        input: CallModelInput,
     ) -> Result<ModelTurnResult, ActivityError> {
+        let CallModelArgs {
+            agent_name,
+            request,
+        } = input.0;
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,
@@ -416,10 +424,13 @@ impl AgentActivities {
     pub(crate) async fn invoke_tool(
         self: Arc<Self>,
         ctx: ActivityContext,
-        agent_name: String,
-        call: ToolCallRequest,
-        ctx_seed: Option<serde_json::Value>,
+        input: InvokeToolInput,
     ) -> Result<ToolCallOutcome, ActivityError> {
+        let InvokeToolArgs {
+            agent_name,
+            call,
+            ctx_seed,
+        } = input.0;
         let cancel = CancellationToken::new();
         race_with_activity_cancellation(
             &ctx,

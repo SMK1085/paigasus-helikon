@@ -156,7 +156,9 @@ Each activity payload includes the full conversation-so-far. Typical budget: ~**
 
 ### Upgrade Discipline
 
-Replaying workflows against a different version of `paigasus-helikon-core` or this crate can cause non-determinism errors. Drain in-flight runs before redeploying, or use blue-green task queues. See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Upgrade Discipline and Determinism").
+Replaying workflows against a different version of `paigasus-helikon-core` or this crate can cause non-determinism errors. Activity **input encoding** is not among those hazards — Temporal's replay check compares an activity's id and type only, never its payloads.
+
+Activity inputs are a single self-describing envelope payload as of SMA-462, and this version also decodes the previous pre-envelope (0.2.0–0.2.1) positional shapes. A 0.2.1-and-earlier worker cannot decode the new shape, so **upgrade one release at a time and keep the mixed-fleet window short**; and because a queued envelope payload is frozen in history, **drain in-flight runs before rolling back** to 0.2.1 and earlier. Blue-green task queues remain available. See the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal) (§ "Upgrade Discipline and Determinism").
 
 ## Links
 

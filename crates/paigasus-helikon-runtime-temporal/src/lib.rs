@@ -329,28 +329,60 @@
 //! cause non-determinism errors (the workflow's replayed decisions don't match the new code's
 //! logic).
 //!
-//! **SMA-455 wire additions (additive, not an unqualified "replay-breaking" change).** The
-//! worker-posture, `Ctx`-seed, and heartbeat features added a `#[serde(default)] ctx_seed` field
-//! to [`payloads::WorkflowInput`] and an optional `heartbeat_timeout` to the model/tool
-//! `ActivityOptions`. Both are additive by construction: `#[serde(default)]` means a
-//! `WorkflowInput` serialized by an older worker still deserializes on a newer one (the field
-//! defaults to `None`), and the changed activity-input tuple only affects **newly-scheduled**
-//! `render_instructions`/`invoke_tool` activities — an activity that already completed replays
-//! its recorded result from history rather than re-executing against the new code. This is a
-//! reasoned, honest claim, not a guarantee proven against every upgrade path; **drain-before-
-//! upgrade / blue-green task queues (below) remain the conservative, recommended path** regardless
-//! of how additive a given change looks on paper.
+//! **Activity input encoding is not a replay hazard.** Temporal's replay check compares an
+//! activity's **id** and **type** only — never its input payloads
+//! (`temporalio-sdk-core-0.5.0`, `activity_state_machine.rs`, the
+//! `IdAndTypeDeterminismChecks` gate). Changing how an activity's arguments are encoded
+//! therefore cannot trip the non-determinism checker; *renaming* an activity would. This
+//! statement is pinned to `temporalio-* = 0.5.0` and must be re-verified on any SDK bump.
 //!
-//! **Operational guidance for v0 (machinery deferred to a future release):**
+//! **SMA-462 wire change (activity inputs are now a single envelope payload).** Each of
+//! `render_instructions` / `call_model` / `invoke_tool` takes one self-describing JSON-object
+//! payload instead of positional arguments. Workers on this version also decode the previous
+//! pre-envelope positional shapes from 0.2.0 or 0.2.1 specifically, so activity tasks queued by
+//! a worker on either of those two versions execute normally. 0.1.x is outside the support
+//! window: its `render_instructions` and `invoke_tool` shapes fail closed with a decode error
+//! rather than being silently misread.
 //!
-//! 1. **Drain in-flight runs before redeploying.** Agent runs are typically minutes-to-hours, not
-//!    months. Before deploying a new worker version with a bumped core/temporal crate:
-//!    - Wait for existing workflows to complete, or
-//!    - Use blue-green task queues: point the old worker to `"queue-v1"` and the runner to
-//!      `"queue-v2"`, run new workflows on v2 while old ones drain from v1, then decommission v1.
-//! 2. **Check the CHANGELOG.** Any release of this crate whose transition behavior changed is
-//!    flagged as replay-breaking.
-//! 3. **Production path:** [Temporal Worker Versioning (Build IDs)](https://docs.temporal.io/workers#worker-versioning)
+//! The reverse does not hold, and it matters during a rolling deploy: a **0.2.1-and-earlier**
+//! worker handed one of the new envelope payloads cannot decode it. It fails the attempt
+//! retryably and Temporal re-dispatches until a worker on this version takes it. Four things
+//! bound that recovery:
+//!
+//! 1. A finite `maximum_attempts` on `model_retry_policy` / `tool_retry_policy` can be exhausted.
+//! 2. `WorkflowInput::timeout_ms` interrupts the whole run on its own schedule, regardless of
+//!    retry policy — so `render_instructions`' unlimited default retries are not the safety net
+//!    they appear to be.
+//! 3. A terminal `render_instructions` failure ends the run; it is not a degraded step.
+//! 4. Exhausted `invoke_tool` retries are folded into a tool-error result and fed to the model
+//!    rather than failing loudly.
+//!
+//! So: **keep the mixed-fleet window short**, and either drain in-flight runs first or ensure
+//! retry caps are unlimited and run deadlines generous for the duration of the rollout.
+//!
+//! **Rolling back.** Once a worker on this version has queued an envelope-shaped activity task,
+//! that payload is frozen in the `ActivityTaskScheduled` event and every retry re-delivers it. A
+//! rollback to 0.2.1 and earlier leaves those activities undecodable until the run deadline.
+//! **Drain in-flight runs before rolling back.**
+//!
+//! **What this buys.** Future additive changes to an activity's input are compatible in both
+//! directions, because the envelope is self-describing: unknown fields are ignored and absent
+//! fields default. That guarantee is scoped to **the envelope's own field set**. It does *not*
+//! extend to the `paigasus-helikon-core` types nested inside those envelopes (`ModelRequest`,
+//! `ToolCallRequest`), nor to activity **outputs** — a serde change in any of those breaks the
+//! wire exactly as before.
+//!
+//! **Operational guidance:**
+//!
+//! 1. **Upgrade one release at a time.** Skipping a release skips the overlap window in which
+//!    both shapes are readable.
+//! 2. **Drain in-flight runs before redeploying** when in doubt. Agent runs are typically
+//!    minutes-to-hours, not months. Alternatively use blue-green task queues: point the old
+//!    worker to `"queue-v1"` and the runner to `"queue-v2"`, run new workflows on v2 while old
+//!    ones drain from v1, then decommission v1.
+//! 3. **Check the CHANGELOG.** Any release whose transition behavior changed is flagged as
+//!    replay-breaking.
+//! 4. **Production path:** [Temporal Worker Versioning (Build IDs)](https://docs.temporal.io/workers#worker-versioning)
 //!    is the long-term solution for zero-downtime updates; support is pending in the Rust SDK.
 //!
 //! # Links
@@ -366,6 +398,11 @@
 /// why). Private: every externally-relevant type it defines is re-exported
 /// or consumed through [`worker`].
 mod activities;
+/// Wire codec for activity inputs: one self-describing envelope payload per
+/// activity, decoding both that and the legacy pre-envelope (0.2.0–0.2.1)
+/// positional shapes. Private — the envelope types never cross the public API
+/// boundary.
+mod activity_input;
 /// The pure durable-loop step machine.
 ///
 /// [`driver::DurableDriver`] wraps [`paigasus_helikon_core::transition`] with
