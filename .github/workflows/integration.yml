@@ -41,6 +41,13 @@ concurrency:
 
 permissions:
   contents: read
+  # dorny/paths-filter resolves a pull_request's changed files through
+  # `pulls.listFiles` (visible in the job log as "Fetching list of changed files
+  # for PR#N from GitHub API"), which is what this grants. It is not currently
+  # load-bearing — PR metadata on a public repo is readable without it, and the
+  # filter demonstrably works today — but it is what the action documents as
+  # required, and it keeps the workflow correct independent of repo visibility.
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -67,8 +74,8 @@ jobs:
       TEMPORAL_CLI_VERSION: "1.8.2"
       TEMPORAL_CLI_SHA256: "d8421bda989e6514b4bdb4d63a9012a8a05a806892e881a5aad8510496349a94"
     steps:
-      # actions/checkout v6.0.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # dorny/paths-filter v4.0.1 — needs a base to diff against, which schedule
@@ -220,8 +227,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
-      # actions/checkout v6.0.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # dorny/paths-filter v4.0.1

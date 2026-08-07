@@ -16,7 +16,7 @@
 - **PR title must be `ci(...)` or `ci(workflows): ...`** — never `feat`/`fix`. Note what this does and does not buy: `.versionrc`'s `increment: None` for `ci` governs **convco** (the `commits` gate and the local hook), *not* release-plz. release-plz has its own logic and attributes by file path, so it will still open a `chore: release` PR patch-bumping `runtime-temporal` and `runtime-agentcore` — every crate here is 0.x, where feat also maps to patch. The `ci` type therefore changes the changelog section, not the bump.
 - **Never `git add -A`** — `.env` and `.claude` are untracked but not gitignored. Stage explicit paths and verify with `git show --stat`.
 - **Never move HEAD or switch branches.** This worktree is shared with other sessions.
-- **Reuse the action SHAs already pinned in `ci.yml`.** Do not look up newer ones: Dependabot's `github-actions` group bumps all occurrences together, and introducing a second pin for the same action fragments that. The exact pins are listed in Task 4.
+- **Action pins: latest stable major wins over consistency with `ci.yml`.** An earlier draft of this constraint said "reuse `ci.yml`'s SHAs, do not look up newer ones" — that was wrong, and CodeRabbit caught it. CLAUDE.md is explicit: *"Always implement GitHub Actions against the latest stable major … Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately."* A **major** bump also never arrives through Dependabot's grouped PR (the `github-actions` group covers patch + minor only), so deferring to it means shipping a knowingly stale pin. `actions/checkout` is therefore pinned to **v7.0.1** (`3d3c42e5aac5ba805825da76410c181273ba90b1`) here, while `ci.yml` still sits on v6.0.2 — a pre-existing staleness this PR does not own. For every other action, `ci.yml`'s pin *is* current; reuse it. The exact pins are listed in Task 4.
 - **Run `cargo fmt --all` before committing any hand-edited Rust.** The `pre-commit` hook is a deliberate no-op; `pre-push` catches it, but only at push time (and takes 5+ minutes — background it or use `--no-verify` if the gates already ran).
 - **Both jobs stay out of `.github/rulesets/main-protection-checks.json`.** Signal-only means "not listed as required" — never `continue-on-error`.
 
@@ -412,7 +412,7 @@ git show --stat HEAD
 
 | Action | SHA | Comment to keep above the `uses:` |
 | --- | --- | --- |
-| `actions/checkout` | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` | `# actions/checkout v6.0.2` |
+| `actions/checkout` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | `# actions/checkout v7.0.1` |
 | `dorny/paths-filter` | `7b450fff21473bca461d4b92ce414b9d0420d706` | `# dorny/paths-filter v4.0.1` |
 | `dtolnay/rust-toolchain` | `2c7215f132e9ebf062739d9130488b56d53c060c` | `# dtolnay/rust-toolchain master (no tagged releases)` |
 | `arduino/setup-protoc` | `c65c819552d16ad3c9b72d9dfd5ba5237b9c906b` | `# arduino/setup-protoc v3.0.0` |
@@ -490,8 +490,8 @@ jobs:
       TEMPORAL_CLI_VERSION: "1.8.2"
       TEMPORAL_CLI_SHA256: "d8421bda989e6514b4bdb4d63a9012a8a05a806892e881a5aad8510496349a94"
     steps:
-      # actions/checkout v6.0.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # dorny/paths-filter v4.0.1 — needs a base to diff against, which schedule
@@ -690,8 +690,8 @@ Add under `jobs:`, after `temporal-it`:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
-      # actions/checkout v6.0.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       # dorny/paths-filter v4.0.1
