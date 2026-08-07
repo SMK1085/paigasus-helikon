@@ -564,11 +564,48 @@ async fn anonymous_run_subscribed_with_credentials_is_404() {
     let run_id = support::create_async_run(&base, "echo").await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
+    // alice reaches the anonymous run — denied.
     let request = ws_request_as(&ws_url(&base, "echo", &run_id), Some("alice"));
     let err = tokio_tungstenite::connect_async(request).await.expect_err(
         "subscribing with credentials to an anonymous run must fail the handshake (404, not 101)",
     );
-    assert_handshake_status(err, 404);
+    let (anonymous_status, anonymous_body) = handshake_failure_status_and_body(err);
+    assert_eq!(anonymous_status, 404, "anonymous-run denial must be 404");
+
+    // alice reaches a run id that never existed — same agent name, same
+    // principal, only the id differs.
+    let never_existed_id = uuid::Uuid::new_v4().to_string();
+    let never_existed_request =
+        ws_request_as(&ws_url(&base, "echo", &never_existed_id), Some("alice"));
+    let err = tokio_tungstenite::connect_async(never_existed_request)
+        .await
+        .expect_err("an unknown run id must also fail the handshake (404, not 101)");
+    let (never_existed_status, never_existed_body) = handshake_failure_status_and_body(err);
+    assert_eq!(never_existed_status, 404, "unknown-run denial must be 404");
+
+    // Pin down what we can actually rely on before comparing: a non-empty
+    // body carrying the expected error shape (see `handshake_failure_status_and_body`
+    // for why the tail is not guaranteed non-empty in general).
+    assert!(
+        anonymous_body.contains("unknown agent"),
+        "anonymous-run denial body must carry the `unknown agent` shape, got {anonymous_body:?}"
+    );
+    assert!(
+        never_existed_body.contains("unknown agent"),
+        "unknown-run denial body must carry the `unknown agent` shape, got {never_existed_body:?}"
+    );
+
+    // Both bodies embed their own (necessarily different) run id
+    // (`unknown agent: echo/<id>`); normalize each out to a fixed token before
+    // comparing, so the equality check is over everything EXCEPT the one piece
+    // of data that must legitimately differ.
+    let normalize = |body: &str, id: &str| body.replace(id, "<RUN_ID>");
+    assert_eq!(
+        normalize(&anonymous_body, &run_id),
+        normalize(&never_existed_body, &never_existed_id),
+        "an anonymous-run denial must be indistinguishable from an unknown-run denial — \
+         any difference would reveal that the run id exists but belongs to no principal"
+    );
 }
 
 /// The agent-name mismatch check still returns 404 independently of principals.
