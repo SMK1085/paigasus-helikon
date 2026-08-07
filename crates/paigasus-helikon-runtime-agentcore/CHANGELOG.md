@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.0...paigasus-helikon-runtime-agentcore-v0.2.1) - 2026-08-07
+
+### Other
+
+- *(workflows)* SMA-457 add temporal-it and agentcore-image integration jobs ([#181](https://github.com/SMK1085/paigasus-helikon/pull/181))
+
 ## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.1.6...paigasus-helikon-runtime-agentcore-v0.2.0) - 2026-08-07
 
 ### Added
