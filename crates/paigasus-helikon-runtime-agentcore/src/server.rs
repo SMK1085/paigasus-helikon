@@ -284,6 +284,19 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
         Arc::clone(&self.state.agent)
     }
 
+    /// Return a clone of the shared [`AppState`] (an `Arc` increment, not a deep copy).
+    ///
+    /// `pub(crate)`: an internal wiring seam for the AG-UI protocol mode's (feature
+    /// `ag-ui`) own router, which — unlike [`crate::mcp`]'s ping-only need — requires
+    /// the full state (agent, runner, context provider, run config) rather than just
+    /// [`PingState`]. A named accessor rather than exposing the field directly, matching
+    /// this crate's existing [`agent`](AgentCoreServer::agent)/
+    /// [`ping_state`](AgentCoreServer::ping_state) style.
+    #[cfg_attr(not(feature = "ag-ui"), allow(dead_code))]
+    pub(crate) fn state_for_agui(&self) -> AppState<Ctx> {
+        self.state.clone()
+    }
+
     /// Bind `0.0.0.0:8080` — the fixed port AgentCore's HTTP-protocol contract expects —
     /// and serve until the process is terminated.
     ///

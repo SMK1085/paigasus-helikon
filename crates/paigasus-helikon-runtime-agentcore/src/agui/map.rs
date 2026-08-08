@@ -103,11 +103,9 @@ pub(crate) struct EventMapper {
 
 impl EventMapper {
     /// Create a mapper for one run.
-    // Constructed by the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) and
-    // the AG-UI WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs) for each run.
-    // Until either lands, only this module's own tests construct one. Remove this
-    // `allow` once either caller lands.
-    #[allow(dead_code)]
+    // Constructed by the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) for
+    // each run. The AG-UI WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs) will
+    // construct one too once it lands.
     pub(crate) fn new(thread_id: String, run_id: String) -> Self {
         Self {
             thread_id,
@@ -125,11 +123,9 @@ impl EventMapper {
     }
 
     /// Map one event, emitting any bracketing frames it implies.
-    // Called per event by the AG-UI SSE endpoint (SMA-461 Task 6) and WebSocket
-    // endpoint (SMA-461 Task 7) as they drain an `Agent` run. Until either lands,
-    // only this module's own tests call it. Remove this `allow` once either
-    // caller lands.
-    #[allow(dead_code)]
+    // Called per event by the AG-UI SSE endpoint (SMA-461 Task 6) as it drains an
+    // `Agent` run. The AG-UI WebSocket endpoint (SMA-461 Task 7) will call it too
+    // once it lands.
     pub(crate) fn push(&mut self, ev: &AgentEvent) -> Vec<Value> {
         let mut out = Vec::new();
         match ev {
@@ -309,11 +305,10 @@ impl EventMapper {
 
     /// Close any pairs still open. Only needed when a stream ends without a terminal
     /// event; the terminal arms already close every open pair themselves.
-    // Called by the AG-UI SSE endpoint (SMA-461 Task 6) and WebSocket endpoint
-    // (SMA-461 Task 7) if the underlying `Agent` stream ends without a terminal
-    // event (e.g. the connection drops mid-run). Until either lands, only this
-    // module's own tests call it. Remove this `allow` once either caller lands.
-    #[allow(dead_code)]
+    // Called by the AG-UI SSE endpoint (SMA-461 Task 6) once its channel from the
+    // underlying `Agent` stream closes, in case that stream ended without a
+    // terminal event (e.g. a misbehaving agent, or a connection dropped mid-run).
+    // The AG-UI WebSocket endpoint (SMA-461 Task 7) will call it too once it lands.
     pub(crate) fn finish(&mut self) -> Vec<Value> {
         let mut out = Vec::new();
         self.close_all(&mut out);

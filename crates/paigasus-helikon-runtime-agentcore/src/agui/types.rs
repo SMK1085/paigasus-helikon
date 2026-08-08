@@ -17,18 +17,14 @@ use serde::Deserialize;
 pub(crate) struct RunAgentInput {
     /// Client-supplied conversation id. Used only when the platform session header is
     /// absent, and never for persistence — AG-UI mode is stateless per request.
-    // The AG-UI SSE endpoint (SMA-461 Task 6) reads this to fall back to a
-    // client-supplied thread id when the platform session header is absent. Until
-    // that lands, only this module's own tests read the field. Remove this `allow`
-    // once that caller lands.
-    #[allow(dead_code)]
+    // The AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) reads this to fall
+    // back to a client-supplied thread id when the platform session header is
+    // absent.
     #[serde(default)]
     pub(crate) thread_id: Option<String>,
     /// Client-supplied run id, echoed back in `RUN_STARTED`/`RUN_FINISHED`.
-    // The AG-UI mapper (SMA-461 Task 5) reads this to echo the client's run id back
-    // in `RUN_STARTED`/`RUN_FINISHED`. Until that lands, only this module's own tests
-    // read the field. Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // The AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) reads this and hands
+    // it to `EventMapper::new`, which echoes it in `RUN_STARTED`/`RUN_FINISHED`.
     #[serde(default)]
     pub(crate) run_id: Option<String>,
     /// The full conversation. AG-UI clients resend the entire history each request.
@@ -58,10 +54,8 @@ impl RunAgentInput {
     ///
     /// AG-UI mode is stateless per request (the client owns thread state), so *every*
     /// message becomes part of the input rather than only the newest turn.
-    // The AG-UI mapper (SMA-461 Task 5) calls this to seed the agent run from the
-    // decoded request body. Until that lands, only this module's own tests call it.
-    // Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // The AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) calls this to seed
+    // the agent run from the decoded request body.
     pub(crate) fn into_agent_input(self) -> AgentInput {
         let mut input = AgentInput::new();
         input.messages = self
