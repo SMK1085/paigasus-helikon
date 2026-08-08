@@ -1,0 +1,106 @@
+<task-notification>
+<task-id>a367942c86ed5fc95</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a367942c86ed5fc95.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 1: feature gates" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, both commits in place.
+
+**Status:** DONE
+- Commit: `bd8a61a` — `docs(runtime-agentcore): SMA-461 drop broken TaskStore intra-doc link`
+- Test summary: `RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-runtime-agentcore --all-features --no-deps` succeeded (docs gate now clean); `cargo test -p paigasus-helikon-runtime-agentcore --no-default-features not_found_maps_to_404` — 1 passed, 0 failed
+- Concerns: none
+- Report file: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-1-report.md`</result>
+<usage><subagent_tokens>145715</subagent_tokens><tool_uses>14</tool_uses><duration_ms>121343</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a985bdf78d3d5cec0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a985bdf78d3d5cec0.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: FrameBudget" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean, commit is in place, and the report has been appended with full evidence.
+
+**Status:** DONE_WITH_CONCERNS
+
+- Commit: `b878d40` fix(runtime-agentcore): SMA-461 close FrameBudget rate-window and empty-split-field gaps
+- Tests: 11/11 `frame::` tests pass (8 original + 2 required by findings + 1 I added); full `cargo test --workspace --all-features` green (159 ok, 0 failed); `cargo clippy --workspace --all-features --all-targets -- -D warnings` clean
+- Concerns: the review's own suggested sliding-window test (`no_trailing_one_second_window_exceeds_the_rate_cap`) does NOT actually fail against the old buggy code — verified by running it, not by inspection — because the deterministic paused clock lands both fixed windows exactly 1.000s apart with no jitter, and the test's strict `&lt;` comparison never sees overlap. I kept it (still a valid regression guard, doc comment now explains this) and added a second test that manually drives the clock to genuinely reproduce the bug (201 frames in one trailing second, cap 200) for real RED→GREEN proof. Full details, including a second minor finding (one of the five per-item `#[allow(dead_code)]` attributes is redundant with another), are in the report.
+- Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-2-report.md`</result>
+<usage><subagent_tokens>196379</subagent_tokens><tool_uses>45</tool_uses><duration_ms>695293</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2770a71a21e94c94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a2770a71a21e94c94.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: HTTP-mode /ws" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+- Commits: `ca4534b feat(runtime-agentcore): SMA-461 add http-protocol websocket endpoint`, `3d6169f fix(runtime-agentcore): SMA-461 drain the in-flight run's channel while joining it`
+- Tests: 7/7 in `ws::tests` pass (added `interrupting_a_chatty_run_does_not_deadlock_the_connection` and `a_binary_frame_cancels_the_in_flight_run_before_closing`, both reproduced RED empirically first); 50/50 in the crate with `--features ws`; 30/30 with `--no-default-features`; full workspace `cargo test --workspace --all-features` green (159 test-result blocks, 0 failures); clippy/fmt/docs all clean
+- Concerns: none new — the four Minor findings were left untouched per instructions
+- Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-3-report.md`</result>
+<usage><subagent_tokens>354625</subagent_tokens><tool_uses>66</tool_uses><duration_ms>889530</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9913e2f4596af8ab</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a9913e2f4596af8ab.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 4: AG-UI wire types" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean, both commits present. Fix round complete.
+
+Status: DONE
+Commits: `1bca2f0` feat(runtime-agentcore): SMA-461 add ag-ui wire types; `fc18f21` refactor(runtime-agentcore): SMA-461 split the event module's blanket dead_code allow per-function
+Tests: 5/5 `agui::types::*` pass; full workspace `cargo test --workspace --all-features` green (exit 0, 0 FAILED); all six requested gates (test, `--no-default-features` build, `cargo doc -D warnings`, fmt, clippy `-D warnings`, and `--features ag-ui --no-default-features` build) re-verified clean after the fix
+Concerns: the `--features ag-ui --no-default-features` build shows 5 warnings, all in `frame.rs` (none in `agui/types.rs`) — confirmed pre-existing and unchanged before/after this fix by diffing against commit `1bca2f0`; it's Task 3's already-documented, self-disclosed gap (no required CI gate compiles that exact feature combination), not something introduced or owed by this task
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-4-report.md`</result>
+<usage><subagent_tokens>156840</subagent_tokens><tool_uses>35</tool_uses><duration_ms>421304</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6c8394a473f75731</task-id>
+<tool-use-id>toolu_01S7weaeLfjEuCL6sewyhEeQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a6c8394a473f75731.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 5: AG-UI mapper" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Status: DONE
+Commits: `69f92b7` feat(runtime-agentcore): SMA-461 add ag-ui event mapper with bracketing; `8432648` fix(runtime-agentcore): SMA-461 close every tool-call and text pair correctly
+Tests: all 5 new regressions RED-confirmed against unfixed code then GREEN after fixing; 17/17 mapper tests, 30/30 no-default-features, full workspace `cargo test --workspace --all-features` all pass; clippy/fmt/doc clean
+Concerns: none
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-5-report.md`</result>
+<usage><subagent_tokens>268227</subagent_tokens><tool_uses>28</tool_uses><duration_ms>467539</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6c8394a473f75731</task-id>
+<tool-use-id>toolu_01HRJswrkKvStHdXtMwQXmVT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a6c8394a473f75731.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 5: AG-UI mapper" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Status: DONE
+Commits: `69f92b7` feat add ag-ui event mapper; `8432648` fix round 1 (4 Important); `6b73996` fix round 2 (1 escalated Important + 2 Minor)
+Tests: all 3 new round-2 regressions RED-confirmed against round-1 code then GREEN after fixing; all 17 pre-existing mapper tests pass unmodified (20/20 total); full workspace `cargo test --workspace --all-features`, `--no-default-features`, clippy, fmt, and doc all clean
+Concerns: none
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-5-report.md`</result>
+<usage><subagent_tokens>305635</subagent_tokens><tool_uses>19</tool_uses><duration_ms>373499</duration_ms></usage>
+</task-notification>
