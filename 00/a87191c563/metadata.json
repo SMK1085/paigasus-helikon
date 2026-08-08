@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "00a87191c563",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-487-ci-grant-pull-requests-read-to-sessions-its-paths-filter-in",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/00/a87191c563/0/metadata.json",
+      "transcript": "/00/a87191c563/0/full.jsonl",
+      "compact_transcript": "/00/a87191c563/0/transcript.jsonl",
+      "content_hash": "/00/a87191c563/0/content_hash.txt",
+      "prompt": "/00/a87191c563/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 126576,
+    "cache_read_tokens": 302343,
+    "output_tokens": 5299,
+    "api_call_count": 3
+  }
+}
