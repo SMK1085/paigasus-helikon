@@ -27,6 +27,8 @@ tracing                              = { workspace = true }
 futures-util                         = { workspace = true }
 async-trait                          = { workspace = true, optional = true }
 rmcp                                 = { workspace = true, optional = true }
+uuid                                 = { workspace = true, optional = true }
+jiff                                 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio              = { workspace = true }
@@ -34,13 +36,20 @@ async-trait        = { workspace = true }
 tower              = { workspace = true }
 anyhow             = { workspace = true }
 tracing-subscriber = { workspace = true }
+tokio-tungstenite  = { workspace = true }
 
 [features]
-default           = ["mcp"]
+default           = ["mcp", "a2a", "ag-ui", "ws"]
 # rmcp's streamable-HTTP server transport, used to expose the configured agent
 # as an MCP tool (`AgentCoreServer::serve_mcp`, `src/mcp.rs`) instead of the
 # AgentCore HTTP-protocol contract.
 mcp               = ["dep:paigasus-helikon-mcp", "dep:rmcp", "dep:async-trait"]
+# AgentCore's A2A runtime type: JSON-RPC 2.0 on port 9000 with agent-card discovery.
+a2a               = ["dep:async-trait", "dep:uuid", "dep:jiff"]
+# AgentCore's AG-UI runtime type: SSE + WebSocket event streams on port 8080.
+ag-ui             = ["axum/ws", "dep:uuid"]
+# The optional `GET /ws` endpoint on the HTTP-protocol contract.
+ws                = ["axum/ws"]
 # Pulls in the Anthropic provider for `examples/agent_http.rs` only; there is
 # no non-example code behind it, so library consumers never need it.
 example-anthropic = ["dep:paigasus-helikon-providers-anthropic"]
@@ -52,6 +61,14 @@ required-features = ["example-anthropic"]
 [[example]]
 name              = "mcp_server"
 required-features = ["mcp"]
+
+[[example]]
+name              = "a2a_server"
+required-features = ["a2a"]
+
+[[example]]
+name              = "agui_server"
+required-features = ["ag-ui"]
 
 [lints]
 workspace = true

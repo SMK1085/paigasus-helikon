@@ -41,6 +41,11 @@ pub enum AgentCoreError {
     /// [`AgentCoreServerBuilder`](crate::AgentCoreServerBuilder) (HTTP 500).
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// The addressed resource does not exist — currently only an unknown A2A task id
+    /// reaching a [`TaskStore`](crate::TaskStore) method that requires one (HTTP 404).
+    #[error("not found: {0}")]
+    NotFound(String),
 }
 
 /// Adapts a [`paigasus_helikon_runtime_axum::ServerError`] — raised by the reused
@@ -68,6 +73,7 @@ impl IntoResponse for AgentCoreError {
     fn into_response(self) -> Response {
         let status = match &self {
             AgentCoreError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AgentCoreError::NotFound(_) => StatusCode::NOT_FOUND,
             AgentCoreError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -97,5 +103,11 @@ mod tests {
                 .status(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    #[test]
+    fn not_found_maps_to_404() {
+        let resp = AgentCoreError::NotFound("task nope".to_owned()).into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -77,3 +77,15 @@ mod session;
 
 mod server;
 pub use server::{AgentCoreServer, AgentCoreServerBuilder};
+
+#[cfg(feature = "a2a")]
+mod a2a;
+
+#[cfg(feature = "ag-ui")]
+mod agui;
+
+#[cfg(any(feature = "ws", feature = "ag-ui"))]
+mod frame;
+
+#[cfg(feature = "ws")]
+mod ws;
