@@ -103,9 +103,8 @@ pub(crate) struct EventMapper {
 
 impl EventMapper {
     /// Create a mapper for one run.
-    // Constructed by the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) for
-    // each run. The AG-UI WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs) will
-    // construct one too once it lands.
+    // Constructed by the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) and the
+    // AG-UI WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs), one per run in both.
     pub(crate) fn new(thread_id: String, run_id: String) -> Self {
         Self {
             thread_id,
@@ -123,9 +122,8 @@ impl EventMapper {
     }
 
     /// Map one event, emitting any bracketing frames it implies.
-    // Called per event by the AG-UI SSE endpoint (SMA-461 Task 6) as it drains an
-    // `Agent` run. The AG-UI WebSocket endpoint (SMA-461 Task 7) will call it too
-    // once it lands.
+    // Called per event by both the AG-UI SSE endpoint (SMA-461 Task 6) and the AG-UI
+    // WebSocket endpoint (SMA-461 Task 7) as each drains an `Agent` run.
     pub(crate) fn push(&mut self, ev: &AgentEvent) -> Vec<Value> {
         let mut out = Vec::new();
         match ev {
@@ -305,10 +303,10 @@ impl EventMapper {
 
     /// Close any pairs still open. Only needed when a stream ends without a terminal
     /// event; the terminal arms already close every open pair themselves.
-    // Called by the AG-UI SSE endpoint (SMA-461 Task 6) once its channel from the
-    // underlying `Agent` stream closes, in case that stream ended without a
-    // terminal event (e.g. a misbehaving agent, or a connection dropped mid-run).
-    // The AG-UI WebSocket endpoint (SMA-461 Task 7) will call it too once it lands.
+    // Called by both the AG-UI SSE endpoint (SMA-461 Task 6) and the AG-UI WebSocket
+    // endpoint (SMA-461 Task 7) once their channel from the underlying `Agent` stream
+    // closes, in case that stream ended without a terminal event (e.g. a misbehaving
+    // agent, or a connection dropped mid-run).
     pub(crate) fn finish(&mut self) -> Vec<Value> {
         let mut out = Vec::new();
         self.close_all(&mut out);

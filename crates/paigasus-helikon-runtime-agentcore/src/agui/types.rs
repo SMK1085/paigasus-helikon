@@ -17,14 +17,15 @@ use serde::Deserialize;
 pub(crate) struct RunAgentInput {
     /// Client-supplied conversation id. Used only when the platform session header is
     /// absent, and never for persistence — AG-UI mode is stateless per request.
-    // The AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) reads this to fall
-    // back to a client-supplied thread id when the platform session header is
-    // absent.
+    // Both the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) and the AG-UI
+    // WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs) read this to fall back to a
+    // client-supplied thread id when the platform session header is absent.
     #[serde(default)]
     pub(crate) thread_id: Option<String>,
     /// Client-supplied run id, echoed back in `RUN_STARTED`/`RUN_FINISHED`.
-    // The AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) reads this and hands
-    // it to `EventMapper::new`, which echoes it in `RUN_STARTED`/`RUN_FINISHED`.
+    // Both the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) and the AG-UI
+    // WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs) read this and hand it to
+    // `EventMapper::new`, which echoes it in `RUN_STARTED`/`RUN_FINISHED`.
     #[serde(default)]
     pub(crate) run_id: Option<String>,
     /// The full conversation. AG-UI clients resend the entire history each request.
@@ -54,8 +55,9 @@ impl RunAgentInput {
     ///
     /// AG-UI mode is stateless per request (the client owns thread state), so *every*
     /// message becomes part of the input rather than only the newest turn.
-    // The AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) calls this to seed
-    // the agent run from the decoded request body.
+    // Both the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) and the AG-UI
+    // WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs) call this to seed the agent
+    // run from the decoded request body.
     pub(crate) fn into_agent_input(self) -> AgentInput {
         let mut input = AgentInput::new();
         input.messages = self
@@ -99,8 +101,10 @@ pub(crate) mod event {
 
     /// `RUN_ERROR`.
     // Called by `EventMapper::push` (src/agui/map.rs) for an in-stream
-    // `AGENT_ERROR`. A second future caller, `error_stream` (SMA-461 Task 6,
-    // src/agui/sse.rs), will also use this for a pre-stream HTTP error.
+    // `AGENT_ERROR`; by `error_stream` (SMA-461 Task 6, src/agui/sse.rs) for a
+    // pre-stream HTTP error; and directly by the AG-UI WebSocket endpoint (SMA-461
+    // Task 7, src/agui/ws.rs) for a malformed inbound frame or a session/context
+    // failure, neither of which closes the connection.
     pub(crate) fn run_error(code: &str, message: &str) -> Value {
         json!({"type": "RUN_ERROR", "code": code, "message": message})
     }

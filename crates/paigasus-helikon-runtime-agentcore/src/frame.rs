@@ -29,11 +29,8 @@ pub(crate) enum SplitStrategy {
     /// result is N valid protocol events, so a client needs no reassembly logic.
     // The HTTP-protocol `/ws` endpoint (SMA-461 Task 3) uses only `Envelope` — no
     // event type it streams has a single dominant text field worth splitting in
-    // place. The AG-UI `/ws` endpoint (a later task in this plan) is the real caller
-    // of this variant, for its `TEXT_MESSAGE_CONTENT` delta events. Until it lands,
-    // only this module's own tests construct `Content`. Remove this `allow` once
-    // that caller lands.
-    #[allow(dead_code)]
+    // place. The AG-UI `/ws` endpoint (SMA-461 Task 7, src/agui/ws.rs) is the real
+    // caller of this variant, for its `TEXT_MESSAGE_CONTENT` delta events.
     Content {
         /// Name of the string field to split (e.g. `"delta"`).
         field: &'static str,

@@ -38,7 +38,7 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
         Router::new()
             .route("/ping", get(ping::ping))
             .route("/invocations", post(sse::invocations::<Ctx>))
-            .route("/ws", get(ws::ws_upgrade))
+            .route("/ws", get(ws::ws_upgrade::<Ctx>))
             .with_state(self.state_for_agui())
     }
 
