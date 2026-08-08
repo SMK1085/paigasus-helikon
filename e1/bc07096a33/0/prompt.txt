@@ -104,3 +104,20 @@ Concerns: none
 Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-5-report.md`</result>
 <usage><subagent_tokens>305635</subagent_tokens><tool_uses>19</tool_uses><duration_ms>373499</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a6c8394a473f75731</task-id>
+<tool-use-id>toolu_01EYVY3jzP7vPhkQgRQYwH41</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a6c8394a473f75731.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 5: AG-UI mapper" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Status: DONE
+Commits: `69f92b7` feat add ag-ui event mapper; `8432648` fix round 1 (4 Important); `6b73996` fix round 2 (1 escalated Important + 2 Minor); `bb7154f` fix round 3 (replaced close-and-resume with buffering)
+Tests: RED confirmed against round-2 code for 3 of 4 prescribed/rewritten tests; 1 (`a_buffered_call_is_flushed...`) already passed on round-2 code and I said so rather than hiding it; all 23 mapper tests green, full workspace `cargo test --workspace --all-features`, `--no-default-features`, clippy, fmt, doc all clean
+Concerns: flagged one interpretation call in the report — dropped an internally-inconsistent "proactively flush the next buffered call" sentence in favor of the design's own authoritative two-flush-point enumeration, verified against all scenarios but worth a second look
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-5-report.md`</result>
+<usage><subagent_tokens>390021</subagent_tokens><tool_uses>33</tool_uses><duration_ms>743298</duration_ms></usage>
+</task-notification>
