@@ -33,6 +33,17 @@ enum OpenText {
     Thinking,
 }
 
+/// Which text-like pair [`EventMapper::open_text`] should open. Two variants, not
+/// [`OpenText`]'s three — opening "no block" is not a request this method can be asked
+/// to satisfy, so the type itself rules that call out rather than the body handling it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextKind {
+    /// Open a `TEXT_MESSAGE_START` … `TEXT_MESSAGE_END` pair.
+    Message,
+    /// Open a `THINKING_TEXT_MESSAGE_START` … `THINKING_TEXT_MESSAGE_END` pair.
+    Thinking,
+}
+
 /// Stateful `AgentEvent` → AG-UI frame mapper for exactly one run.
 pub(crate) struct EventMapper {
     /// Client-supplied (or generated) thread id, echoed in `RUN_STARTED`/`RUN_FINISHED`.
@@ -46,8 +57,22 @@ pub(crate) struct EventMapper {
     /// Monotonic counter behind `msg-N` ids. Stream-local uniqueness is all AG-UI
     /// requires, and deterministic ids let tests assert exact frame sequences.
     next_message: u32,
-    /// Call ids that have had a `TOOL_CALL_START` emitted.
-    started_calls: HashSet<String>,
+    /// Whether the current turn's assistant text has already been streamed via
+    /// `TokenDelta`. Distinct from `open_text == OpenText::Message`: a `ToolCallDelta`
+    /// closes the text block (via `close_text`) well before the matching
+    /// `MessageOutput` arrives, so checking "is a message open right now" would miss
+    /// that this text was already streamed and re-emit it.
+    streamed_text: bool,
+    /// Id of the call whose `TOOL_CALL_START` has been emitted and whose
+    /// `TOOL_CALL_END` has not — `None` if no call is currently open. At most one call
+    /// is ever open at a time, even under parallel tool calling: a second call's first
+    /// delta closes the first before opening the second, so spans never overlap.
+    open_call: Option<String>,
+    /// Every call id that has had a `TOOL_CALL_START` emitted (via a delta or, for a
+    /// non-streaming provider, a synthesized triple). Lets `ToolCallItem` distinguish
+    /// "no deltas were seen, synthesize the triple" from "deltas already handled
+    /// this — just close it (or it's already closed)".
+    emitted_calls: HashSet<String>,
     /// Whether a `STEP_STARTED` is currently unmatched.
     step_open: bool,
 }
@@ -66,7 +91,9 @@ impl EventMapper {
             open_text: OpenText::None,
             current_message: String::new(),
             next_message: 0,
-            started_calls: HashSet::new(),
+            streamed_text: false,
+            open_call: None,
+            emitted_calls: HashSet::new(),
             step_open: false,
         }
     }
@@ -86,16 +113,22 @@ impl EventMapper {
             AgentEvent::TurnStarted { .. } => {
                 self.close_text(&mut out);
                 self.close_step(&mut out);
+                self.streamed_text = false;
                 self.step_open = true;
                 out.push(event::step_started("turn"));
             }
             AgentEvent::TokenDelta { text } => {
-                self.open_text(OpenText::Message, &mut out);
-                out.push(event::text_message_content(&self.current_message, text));
+                self.open_text(TextKind::Message, &mut out);
+                self.streamed_text = true;
+                if !text.is_empty() {
+                    out.push(event::text_message_content(&self.current_message, text));
+                }
             }
             AgentEvent::ReasoningDelta { text } => {
-                self.open_text(OpenText::Thinking, &mut out);
-                out.push(event::thinking_content(&self.current_message, text));
+                self.open_text(TextKind::Thinking, &mut out);
+                if !text.is_empty() {
+                    out.push(event::thinking_content(&self.current_message, text));
+                }
             }
             AgentEvent::ToolCallDelta {
                 call_id,
@@ -103,12 +136,17 @@ impl EventMapper {
                 args_delta,
             } => {
                 self.close_text(&mut out);
-                if self.started_calls.insert(call_id.clone()) {
+                if self.open_call.as_deref() != Some(call_id.as_str()) {
+                    // A different call (or none) is open: close it before opening this
+                    // one, so two calls' spans never overlap.
+                    self.close_call(&mut out);
                     out.push(event::tool_call_start(
                         call_id,
                         name.as_deref().unwrap_or("unknown"),
                         &self.current_message,
                     ));
+                    self.open_call = Some(call_id.clone());
+                    self.emitted_calls.insert(call_id.clone());
                 }
                 out.push(event::tool_call_args(call_id, args_delta));
             }
@@ -120,15 +158,25 @@ impl EventMapper {
                     args,
                 } = item
                 {
-                    // No deltas streamed for this call (non-streaming provider):
-                    // synthesize the whole triple so the client sees a complete call.
-                    if self.started_calls.insert(call_id.clone()) {
+                    if !self.emitted_calls.contains(call_id) {
+                        // No deltas streamed for this call (non-streaming provider):
+                        // synthesize the whole triple so the client sees a complete
+                        // call. Close whatever call is open first, so spans still
+                        // never overlap.
+                        self.close_call(&mut out);
                         out.push(event::tool_call_start(call_id, name, &self.current_message));
                         out.push(event::tool_call_args(call_id, &args.to_string()));
+                        out.push(event::tool_call_end(call_id));
+                        self.emitted_calls.insert(call_id.clone());
+                    } else if self.open_call.as_deref() == Some(call_id.as_str()) {
+                        // Deltas already streamed this call and it's still open: close it.
+                        out.push(event::tool_call_end(call_id));
+                        self.open_call = None;
                     }
-                    out.push(event::tool_call_end(call_id));
+                    // Else: a later call's first delta already closed this one
+                    // (`close_call` above) — nothing left to emit.
                 } else {
-                    out.push(event::custom("helikon.unknown", to_value(ev)));
+                    out.push(self.custom("helikon.unknown", ev));
                 }
             }
             AgentEvent::ToolOutputItem { item } => {
@@ -136,26 +184,31 @@ impl EventMapper {
                 if let Item::ToolResult { call_id, content } = item {
                     out.push(event::tool_call_result(call_id, &text_of(content)));
                 } else {
-                    out.push(event::custom("helikon.unknown", to_value(ev)));
+                    out.push(self.custom("helikon.unknown", ev));
                 }
             }
             AgentEvent::MessageOutput { item } => {
-                if self.open_text == OpenText::Message {
+                if self.streamed_text {
                     // Deltas already streamed this text; only close it.
                     self.close_text(&mut out);
                 } else {
                     // No deltas were emitted (non-streaming provider, workflow agent):
                     // synthesize the full triple, or the client renders nothing at all.
+                    // Also closes any dangling thinking block if only `ReasoningDelta`s
+                    // preceded this `MessageOutput` with no `TokenDelta` at all.
                     self.close_text(&mut out);
                     let content = match item {
                         Item::AssistantMessage { content, .. } => text_of(content),
                         _ => String::new(),
                     };
-                    let id = self.new_message_id();
-                    out.push(event::text_message_start(&id));
-                    out.push(event::text_message_content(&id, &content));
-                    out.push(event::text_message_end(&id));
+                    if !content.is_empty() {
+                        let id = self.new_message_id();
+                        out.push(event::text_message_start(&id));
+                        out.push(event::text_message_content(&id, &content));
+                        out.push(event::text_message_end(&id));
+                    }
                 }
+                self.streamed_text = false;
             }
             AgentEvent::HandoffItem { .. } => out.push(self.custom("helikon.handoff", ev)),
             AgentEvent::AgentUpdated { .. } => out.push(self.custom("helikon.agent_updated", ev)),
@@ -170,10 +223,12 @@ impl EventMapper {
             }
             AgentEvent::RunCompleted { .. } => {
                 self.close_all(&mut out);
+                self.streamed_text = false;
                 out.push(event::run_finished(&self.thread_id, &self.run_id));
             }
             AgentEvent::RunFailed { error } => {
                 self.close_all(&mut out);
+                self.streamed_text = false;
                 out.push(event::run_error("AGENT_ERROR", error));
             }
             // `AgentEvent` is `#[non_exhaustive]`: a variant added to core later must
@@ -210,19 +265,22 @@ impl EventMapper {
 
     /// Ensure a text-like pair of kind `kind` is open, closing any different kind
     /// that is currently open first. A no-op if `kind` is already open.
-    fn open_text(&mut self, kind: OpenText, out: &mut Vec<Value>) {
-        if self.open_text == kind {
+    fn open_text(&mut self, kind: TextKind, out: &mut Vec<Value>) {
+        let target = match kind {
+            TextKind::Message => OpenText::Message,
+            TextKind::Thinking => OpenText::Thinking,
+        };
+        if self.open_text == target {
             return;
         }
         self.close_text(out);
         let id = self.new_message_id();
         self.current_message = id.clone();
         match kind {
-            OpenText::Message => out.push(event::text_message_start(&id)),
-            OpenText::Thinking => out.push(event::thinking_start(&id)),
-            OpenText::None => return,
+            TextKind::Message => out.push(event::text_message_start(&id)),
+            TextKind::Thinking => out.push(event::thinking_start(&id)),
         }
-        self.open_text = kind;
+        self.open_text = target;
     }
 
     /// Close whichever text-like pair is currently open, if any.
@@ -235,6 +293,13 @@ impl EventMapper {
         self.open_text = OpenText::None;
     }
 
+    /// Close whichever tool call is currently open, if any.
+    fn close_call(&mut self, out: &mut Vec<Value>) {
+        if let Some(id) = self.open_call.take() {
+            out.push(event::tool_call_end(&id));
+        }
+    }
+
     /// Close a still-open `STEP_STARTED`, if any.
     fn close_step(&mut self, out: &mut Vec<Value>) {
         if self.step_open {
@@ -243,9 +308,10 @@ impl EventMapper {
         }
     }
 
-    /// Close every still-open pair: text/thinking, then the step.
+    /// Close every still-open pair: text/thinking, the tool call, then the step.
     fn close_all(&mut self, out: &mut Vec<Value>) {
         self.close_text(out);
+        self.close_call(out);
         self.close_step(out);
     }
 }
@@ -676,5 +742,151 @@ mod tests {
                 "no frame produced for {event:?} — the wildcard arm must not drop events"
             );
         }
+    }
+
+    /// Regression (review round 1, Important 1): a turn that narrates before calling a
+    /// tool streams `TokenDelta`s, then a `ToolCallDelta` closes the text block, then
+    /// `MessageOutput` + `ToolCallItem` both arrive from `transition()`. The mapper must
+    /// recognize the text was already streamed and not re-synthesize it.
+    #[test]
+    fn message_output_after_deltas_with_an_intervening_tool_call_is_not_repeated() {
+        let t = types(&[
+            AgentEvent::TokenDelta {
+                text: "narrating".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "tc1".to_owned(),
+                name: Some("search".to_owned()),
+                args_delta: "{}".to_owned(),
+            },
+            AgentEvent::MessageOutput {
+                item: assistant("narrating"),
+            },
+            AgentEvent::ToolCallItem {
+                item: Item::ToolCall {
+                    call_id: "tc1".to_owned(),
+                    name: "search".to_owned(),
+                    args: serde_json::json!({}),
+                },
+            },
+        ]);
+        let content_count = t.iter().filter(|k| *k == "TEXT_MESSAGE_CONTENT").count();
+        assert_eq!(
+            content_count, 1,
+            "assistant text must not be emitted twice: {t:?}"
+        );
+    }
+
+    /// Regression (review round 1, Important 2): a tool call whose deltas streamed but
+    /// whose `ToolCallItem` never arrives (the run fails first) must still have its
+    /// `TOOL_CALL_START` closed — the mapper's own closing-invariant applies to tool
+    /// calls exactly as it does to text/thinking/step.
+    #[test]
+    fn run_failed_closes_an_open_tool_call() {
+        let t = types(&[
+            AgentEvent::ToolCallDelta {
+                call_id: "tc1".to_owned(),
+                name: Some("search".to_owned()),
+                args_delta: "{}".to_owned(),
+            },
+            AgentEvent::RunFailed {
+                error: "boom".to_owned(),
+            },
+        ]);
+        assert_eq!(
+            t,
+            vec![
+                "TOOL_CALL_START",
+                "TOOL_CALL_ARGS",
+                "TOOL_CALL_END",
+                "RUN_ERROR"
+            ]
+        );
+    }
+
+    /// Regression (review round 1, Important 4): two tool calls whose deltas and items
+    /// interleave must never have overlapping START/END spans — AG-UI's reference
+    /// client tracks a single active tool call and rejects a second START while one is
+    /// open.
+    #[test]
+    fn parallel_tool_calls_do_not_overlap() {
+        let t = types(&[
+            AgentEvent::ToolCallDelta {
+                call_id: "tc1".to_owned(),
+                name: Some("a".to_owned()),
+                args_delta: "{".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "tc2".to_owned(),
+                name: Some("b".to_owned()),
+                args_delta: "{".to_owned(),
+            },
+            AgentEvent::ToolCallItem {
+                item: Item::ToolCall {
+                    call_id: "tc1".to_owned(),
+                    name: "a".to_owned(),
+                    args: serde_json::json!({}),
+                },
+            },
+            AgentEvent::ToolCallItem {
+                item: Item::ToolCall {
+                    call_id: "tc2".to_owned(),
+                    name: "b".to_owned(),
+                    args: serde_json::json!({}),
+                },
+            },
+        ]);
+        assert_eq!(
+            t,
+            vec![
+                "TOOL_CALL_START",
+                "TOOL_CALL_ARGS",
+                "TOOL_CALL_END",
+                "TOOL_CALL_START",
+                "TOOL_CALL_ARGS",
+                "TOOL_CALL_END",
+            ],
+            "no overlap: the first call's END must land before the second call's START: {t:?}"
+        );
+        let first_end = t.iter().position(|x| x == "TOOL_CALL_END").unwrap();
+        let second_start = t.iter().rposition(|x| x == "TOOL_CALL_START").unwrap();
+        assert!(first_end < second_start, "spans overlap: {t:?}");
+    }
+
+    /// Regression (review round 1, Important 3): `ContentPart::ToolUse` is a supported,
+    /// text-free `AssistantMessage` shape (Anthropic-style tool_use blocks). Synthesizing
+    /// a triple for it would burn a message id and render a blank bubble with an empty
+    /// `delta`, which AG-UI's `TEXT_MESSAGE_CONTENT` schema forbids.
+    #[test]
+    fn message_output_with_only_non_text_content_does_not_synthesize_a_blank_bubble() {
+        let mut m = mapper();
+        let frames = m.push(&AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: vec![ContentPart::ToolUse {
+                    call_id: "tc1".to_owned(),
+                    name: "search".to_owned(),
+                    args: serde_json::json!({}),
+                }],
+                agent: None,
+            },
+        });
+        assert!(
+            frames.is_empty(),
+            "no TEXT_MESSAGE_* frames for text-free content: {frames:?}"
+        );
+    }
+
+    /// Regression (review round 1, Important 3): an empty `TokenDelta` must not emit an
+    /// empty `TEXT_MESSAGE_CONTENT` frame — AG-UI's schema constrains `delta` to be
+    /// non-empty.
+    #[test]
+    fn empty_token_delta_does_not_emit_an_empty_content_frame() {
+        let t = types(&[AgentEvent::TokenDelta {
+            text: String::new(),
+        }]);
+        assert!(
+            !t.iter().any(|k| k == "TEXT_MESSAGE_CONTENT"),
+            "empty delta must not produce a CONTENT frame: {t:?}"
+        );
     }
 }
