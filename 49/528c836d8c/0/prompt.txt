@@ -1,0 +1,36 @@
+<task-notification>
+<task-id>a367942c86ed5fc95</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a367942c86ed5fc95.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 1: feature gates" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, both commits in place.
+
+**Status:** DONE
+- Commit: `bd8a61a` — `docs(runtime-agentcore): SMA-461 drop broken TaskStore intra-doc link`
+- Test summary: `RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-runtime-agentcore --all-features --no-deps` succeeded (docs gate now clean); `cargo test -p paigasus-helikon-runtime-agentcore --no-default-features not_found_maps_to_404` — 1 passed, 0 failed
+- Concerns: none
+- Report file: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-1-report.md`</result>
+<usage><subagent_tokens>145715</subagent_tokens><tool_uses>14</tool_uses><duration_ms>121343</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a985bdf78d3d5cec0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a985bdf78d3d5cec0.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: FrameBudget" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean, commit is in place, and the report has been appended with full evidence.
+
+**Status:** DONE_WITH_CONCERNS
+
+- Commit: `b878d40` fix(runtime-agentcore): SMA-461 close FrameBudget rate-window and empty-split-field gaps
+- Tests: 11/11 `frame::` tests pass (8 original + 2 required by findings + 1 I added); full `cargo test --workspace --all-features` green (159 ok, 0 failed); `cargo clippy --workspace --all-features --all-targets -- -D warnings` clean
+- Concerns: the review's own suggested sliding-window test (`no_trailing_one_second_window_exceeds_the_rate_cap`) does NOT actually fail against the old buggy code — verified by running it, not by inspection — because the deterministic paused clock lands both fixed windows exactly 1.000s apart with no jitter, and the test's strict `&lt;` comparison never sees overlap. I kept it (still a valid regression guard, doc comment now explains this) and added a second test that manually drives the clock to genuinely reproduce the bug (201 frames in one trailing second, cap 200) for real RED→GREEN proof. Full details, including a second minor finding (one of the five per-item `#[allow(dead_code)]` attributes is redundant with another), are in the report.
+- Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-2-report.md`</result>
+<usage><subagent_tokens>196379</subagent_tokens><tool_uses>45</tool_uses><duration_ms>695293</duration_ms></usage>
+</task-notification>
