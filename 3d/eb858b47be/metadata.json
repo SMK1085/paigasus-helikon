@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3deb858b47be",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-487-ci-grant-pull-requests-read-to-sessions-its-paths-filter-in",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-08-sma-487-ci-pull-requests-read-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3d/eb858b47be/0/metadata.json",
+      "transcript": "/3d/eb858b47be/0/full.jsonl",
+      "compact_transcript": "/3d/eb858b47be/0/transcript.jsonl",
+      "content_hash": "/3d/eb858b47be/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 25597,
+    "cache_read_tokens": 841510,
+    "output_tokens": 16710,
+    "api_call_count": 7
+  }
+}
