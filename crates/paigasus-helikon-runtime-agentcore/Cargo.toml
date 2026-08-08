@@ -31,7 +31,7 @@ uuid                                 = { workspace = true, optional = true }
 jiff                                 = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio              = { workspace = true }
+tokio              = { workspace = true, features = ["test-util"] }
 async-trait        = { workspace = true }
 tower              = { workspace = true }
 anyhow             = { workspace = true }
