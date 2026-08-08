@@ -64,6 +64,57 @@ async fn recv_in_flight(in_flight: &mut Option<InFlight>) -> Option<AgentEvent> 
     }
 }
 
+/// Cancel an in-flight run, flush what it already produced, and wait for its detached
+/// task to finish.
+///
+/// Draining *while* waiting is load-bearing twice over. The driver task parks on
+/// `tx.send` once the bounded channel fills (a real burst of events comfortably
+/// exceeds the 64-slot capacity before the pacer can drain it), so awaiting
+/// `run.handle` without concurrently polling `run.rx` deadlocks the connection: nobody
+/// ever frees a channel slot, the driver never returns, and the join never resolves —
+/// cancelling the token does not help, since the driver is blocked *downstream* of the
+/// (now-cancelled) stream and never polls it again to notice. And the buffered events
+/// are the interrupted turn's tail, which the client should still receive rather than
+/// lose silently — a lost tail (possibly including the turn's own terminal event)
+/// would leave the client's transcript misattributing the next turn's frames to this
+/// one, with no run id on the wire to tell them apart.
+async fn finish_run<S>(sink: &mut S, budget: &mut FrameBudget, run: InFlight)
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    let InFlight {
+        cancel,
+        mut handle,
+        mut rx,
+    } = run;
+    cancel.cancel();
+    loop {
+        tokio::select! {
+            maybe_ev = rx.recv() => match maybe_ev {
+                Some(ev) => send_event(sink, budget, ev).await,
+                // The channel closed with the join not yet observed as complete —
+                // fall through to reap the (by now certainly-finished) task below.
+                None => break,
+            },
+            // `&mut handle` (not `handle`) so a loop iteration that takes the
+            // `rx.recv()` branch instead can poll the same handle again next time
+            // rather than having moved it away.
+            result = &mut handle => {
+                let _ = result;
+                // The task is done, so `tx` (owned by its async block) has already
+                // been dropped; drain whatever it buffered before returning. Do not
+                // await `handle` again afterward — a `JoinHandle` panics if polled
+                // past completion.
+                while let Some(ev) = rx.recv().await {
+                    send_event(sink, budget, ev).await;
+                }
+                return;
+            }
+        }
+    }
+    let _ = handle.await;
+}
+
 /// Drive one upgraded connection: read requests, run them, stream events back.
 ///
 /// **One run at a time, with a genuine mid-run interrupt.** Reading the next inbound
@@ -74,10 +125,11 @@ async fn recv_in_flight(in_flight: &mut Option<InFlight>) -> Option<AgentEvent> 
 /// actually happen — a connection handler that only calls `stream.next()` again once
 /// the current run's channel has already closed will never notice a message that
 /// arrives mid-run; it just sits unread in the socket buffer until the run ends on its
-/// own. A new message arriving while a run is in flight cancels that run and *awaits
-/// its task* before starting the successor — the run's finalize (and therefore its
-/// session write) happens inside that task, so starting the next run first would let
-/// it load history without the interrupted turn.
+/// own. A new message arriving while a run is in flight — or a binary frame, or the
+/// connection itself ending — cancels that run and, via [`finish_run`], flushes its
+/// buffered tail and *awaits its task* before starting the successor — the run's
+/// finalize (and therefore its session write) happens inside that task, so starting
+/// the next run first would let it load history without the interrupted turn.
 async fn connection<Ctx: Send + Sync + 'static>(
     socket: WebSocket,
     state: AppState<Ctx>,
@@ -95,6 +147,9 @@ async fn connection<Ctx: Send + Sync + 'static>(
                 let text = match msg {
                     Message::Text(t) => t,
                     Message::Binary(_) => {
+                        if let Some(prev) = in_flight.take() {
+                            finish_run(&mut sink, &mut budget, prev).await;
+                        }
                         let _ = close_unsupported(&mut sink).await;
                         return;
                     }
@@ -102,11 +157,11 @@ async fn connection<Ctx: Send + Sync + 'static>(
                     Message::Ping(_) | Message::Pong(_) => continue,
                 };
 
-                // Interrupt: cancel the previous run (if any) and await its task —
-                // its finalize step must land before the next run's context is built.
+                // Interrupt: cancel the previous run (if any), flush its buffered
+                // tail, and await its task — its finalize step must land before the
+                // next run's context is built.
                 if let Some(prev) = in_flight.take() {
-                    prev.cancel.cancel();
-                    let _ = prev.handle.await;
+                    finish_run(&mut sink, &mut budget, prev).await;
                 }
 
                 let request: InvocationRequest = match serde_json::from_str(&text) {
@@ -168,9 +223,10 @@ async fn connection<Ctx: Send + Sync + 'static>(
 
                 // Detached driver, exactly as `invoke.rs` does: the runner's finalize
                 // step only runs when its stream is driven to termination, so drain
-                // unconditionally. Dropping `rx` (e.g. when this run is itself
-                // interrupted before its channel is drained here) unblocks any send
-                // this loop is parked on rather than deadlocking it.
+                // unconditionally. `tx.send` blocks once the 64-slot channel fills, so
+                // whoever supersedes this run must keep draining `rx` (see
+                // `finish_run`) rather than just awaiting `handle` — otherwise nobody
+                // ever frees a slot and this task never returns.
                 let handle = tokio::spawn(async move {
                     let mut events = match runner
                         .run_streamed(agent.as_ref(), ctx, input, run_config)
@@ -196,8 +252,7 @@ async fn connection<Ctx: Send + Sync + 'static>(
     }
 
     if let Some(prev) = in_flight {
-        prev.cancel.cancel();
-        let _ = prev.handle.await;
+        finish_run(&mut sink, &mut budget, prev).await;
     }
 }
 
@@ -238,7 +293,8 @@ mod tests {
         SinkExt as _,
     };
     use paigasus_helikon_core::{
-        Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext, TokenUsage,
+        Agent, AgentError, AgentEvent, AgentInput, CancellationToken, ContentPart, Item,
+        RunContext, TokenUsage,
     };
     use tokio_tungstenite::tungstenite::Message;
 
@@ -505,15 +561,185 @@ mod tests {
             .await
             .unwrap();
 
-        let frames = tokio::time::timeout(
+        // The interrupted first turn's own buffered tail — here, its synthetic
+        // cancellation terminal — is flushed to the client before the second turn
+        // starts (see `finish_run`'s doc comment: silently dropping it would leave
+        // the client's transcript misattributing the second turn's frames to the
+        // first, with no run id on the wire to tell them apart). So this must read
+        // *two* terminal frames, not one.
+        let first_terminal = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             read_until_terminal(&mut sock),
         )
         .await
         .expect("the second message must interrupt the first turn's hang, not wait behind it");
         assert!(
-            frames.iter().any(|f| f.to_string().contains("second")),
-            "expected the second turn's echoed text among the post-interrupt frames, got {frames:?}"
+            first_terminal
+                .iter()
+                .any(|f| f["type"] == "run_completed" || f["type"] == "run_failed"),
+            "expected the interrupted first turn's own terminal frame, got {first_terminal:?}"
         );
+
+        let second_terminal = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            read_until_terminal(&mut sock),
+        )
+        .await
+        .expect("the second turn must complete promptly once the first turn is flushed");
+        assert!(
+            second_terminal
+                .iter()
+                .any(|f| f.to_string().contains("second")),
+            "expected the second turn's echoed text, got {second_terminal:?}"
+        );
+    }
+
+    /// Emits ~200 events with no per-item delay, so the driver task's `tx.send` fills
+    /// the connection's bounded (64-slot) channel and parks well before the pacer
+    /// (`FrameBudget`, capped at `FRAME_RATE_CAP` per second) can drain it.
+    struct ChattyAgent;
+
+    #[async_trait]
+    impl Agent<()> for ChattyAgent {
+        fn name(&self) -> &str {
+            "chatty"
+        }
+        fn description(&self) -> &str {
+            "test-only agent that floods the bounded event channel"
+        }
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            let mut events: Vec<AgentEvent> = (0..200)
+                .map(|i| AgentEvent::TokenDelta {
+                    text: format!("t{i}"),
+                })
+                .collect();
+            events.push(AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            });
+            Ok(stream::iter(events).boxed())
+        }
+    }
+
+    /// Regression for a deadlock: interrupting (or otherwise tearing down) a run whose
+    /// driver task is parked on a full `tx.send` must not block the connection task
+    /// forever. Awaiting the previous run's `JoinHandle` without concurrently draining
+    /// its `rx` leaves nobody polling the channel the driver is blocked on, so the
+    /// driver never returns and the await never resolves — cancelling the token does
+    /// not help, since the driver is blocked *downstream* of the cancelled stream and
+    /// never polls it again to notice.
+    ///
+    /// Wrapped in a `tokio::time::timeout`: without the fix this hangs rather than
+    /// fails, so the wrapper turns that into a clean, bounded test failure instead of
+    /// an indefinitely stuck test run.
+    #[tokio::test]
+    async fn interrupting_a_chatty_run_does_not_deadlock_the_connection() {
+        let server = AgentCoreServer::builder()
+            .agent(Arc::new(ChattyAgent))
+            .with_default_context()
+            .build()
+            .expect("server builds");
+        let router = server.router();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let url = format!("ws://{addr}/ws");
+
+        let (mut sock, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        sock.send(Message::text(r#"{"prompt":"a"}"#)).await.unwrap();
+        sock.send(Message::text(r#"{"prompt":"b"}"#)).await.unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            read_until_terminal(&mut sock),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "connection deadlocked interrupting a chatty run (timed out waiting for a terminal frame)"
+        );
+    }
+
+    /// Reports the [`CancellationToken`] this run was given, via a side channel, so a
+    /// test can assert on cancellation directly rather than inferring it from the
+    /// agent's own behaviour (which would also depend on the runner's independent
+    /// cancellation racing, an orthogonal concern this test does not need to exercise).
+    struct TokenCapturingAgent {
+        started: tokio::sync::mpsc::UnboundedSender<CancellationToken>,
+    }
+
+    #[async_trait]
+    impl Agent<()> for TokenCapturingAgent {
+        fn name(&self) -> &str {
+            "token-capturing"
+        }
+        fn description(&self) -> &str {
+            "test-only agent that reports its cancellation token then hangs"
+        }
+        async fn run(
+            &self,
+            ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            let _ = self.started.send(ctx.cancel().clone());
+            Ok(stream::once(async {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                }
+            })
+            .boxed())
+        }
+    }
+
+    /// Regression: a binary frame must cancel the in-flight run before closing the
+    /// connection, not just close it and leave the run to complete unattended in the
+    /// background (a real model call nobody reads the output of).
+    #[tokio::test]
+    async fn a_binary_frame_cancels_the_in_flight_run_before_closing() {
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let server = AgentCoreServer::builder()
+            .agent(Arc::new(TokenCapturingAgent {
+                started: started_tx,
+            }))
+            .with_default_context()
+            .build()
+            .expect("server builds");
+        let router = server.router();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let url = format!("ws://{addr}/ws");
+
+        let (mut sock, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        sock.send(Message::text(r#"{"prompt":"hi"}"#))
+            .await
+            .unwrap();
+
+        let token = tokio::time::timeout(std::time::Duration::from_secs(5), started_rx.recv())
+            .await
+            .expect("timed out waiting for the run to start")
+            .expect("agent reported its cancellation token");
+        assert!(
+            !token.is_cancelled(),
+            "sanity: the token must not already be cancelled"
+        );
+
+        sock.send(Message::binary(vec![0u8, 1, 2])).await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !token.is_cancelled() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the in-flight run's token must be cancelled when a binary frame arrives");
     }
 }
