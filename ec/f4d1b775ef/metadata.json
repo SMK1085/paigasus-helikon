@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "ecf4d1b775ef",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-461-runtime-agentcore-a2a-and-ag-ui-protocol-shims",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-08-sma-461-agentcore-a2a-agui-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/f4d1b775ef/0/metadata.json",
+      "transcript": "/ec/f4d1b775ef/0/full.jsonl",
+      "compact_transcript": "/ec/f4d1b775ef/0/transcript.jsonl",
+      "content_hash": "/ec/f4d1b775ef/0/content_hash.txt",
+      "prompt": "/ec/f4d1b775ef/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 378,
+    "cache_creation_tokens": 505320,
+    "cache_read_tokens": 4917881,
+    "output_tokens": 50604,
+    "api_call_count": 39
+  }
+}
