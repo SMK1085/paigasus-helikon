@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "279bcbb1146e",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-461-runtime-agentcore-a2a-and-ag-ui-protocol-shims",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-agentcore/src/error.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/27/9bcbb1146e/0/metadata.json",
+      "transcript": "/27/9bcbb1146e/0/full.jsonl",
+      "compact_transcript": "/27/9bcbb1146e/0/transcript.jsonl",
+      "content_hash": "/27/9bcbb1146e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 22304,
+    "cache_read_tokens": 3266205,
+    "output_tokens": 9231,
+    "api_call_count": 9
+  }
+}
