@@ -1,11 +1,7 @@
 //! `FrameBudget` — keeps outbound WebSocket traffic inside AgentCore's frame-size and
 //! frame-rate quotas. Shared by the HTTP-protocol and AG-UI `/ws` endpoints.
 
-// This module's items are pub(crate) API for the `/ws` endpoints landing in later
-// tasks of this plan (SMA-461) and, until one of those endpoints exists, are
-// exercised only by this module's own tests — hence the otherwise-unused warning.
-#![allow(dead_code)]
-
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -15,16 +11,26 @@ use serde_json::Value;
 /// AgentCore closes the connection when a frame exceeds its documented **64 KB** limit.
 /// AWS does not state whether "64 KB" means 65 536 or 64 000 bytes, so this budgets
 /// against the smaller reading and leaves headroom on top of that.
+// Consumed by the `/ws` endpoints landing in later tasks of this plan (SMA-461);
+// until one exists, only this module's own tests reach it. Remove this `allow` once
+// a real caller lands.
+#[allow(dead_code)]
 pub(crate) const MAX_FRAME_BYTES: usize = 60_000;
 
 /// Maximum frames emitted per second.
 ///
-/// AgentCore closes the connection above **250 frames/second**. AWS does not state
-/// whether that is a one-second average or a shorter sliding window, so this paces
-/// against the hostile reading: a burst cannot trip a sliding window either.
+/// AgentCore closes the connection above **250 frames/second**. `FrameBudget` enforces
+/// this as a true trailing window — no rolling one-second span, evaluated at any
+/// instant, ever contains more than this many admitted frames — rather than a fixed
+/// window that resets to zero on a clock tick, which would let two capfuls land back
+/// to back across a reset and double the effective rate right at the boundary.
+// See `MAX_FRAME_BYTES` above for why this carries an interim `allow`.
+#[allow(dead_code)]
 pub(crate) const FRAME_RATE_CAP: u32 = 200;
 
 /// How an oversize frame is broken up.
+// See `MAX_FRAME_BYTES` above for why this carries an interim `allow`.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SplitStrategy {
     /// Split one string field's value across several otherwise-identical frames. The
@@ -41,17 +47,20 @@ pub(crate) enum SplitStrategy {
 /// Paces and splits outbound WebSocket frames to stay inside AgentCore's quotas.
 ///
 /// One instance per connection; not `Clone`, because the rate budget is per-connection.
+// See `MAX_FRAME_BYTES` above for why this (and its impl block below) carries an
+// interim `allow`.
+#[allow(dead_code)]
 pub(crate) struct FrameBudget {
     /// How an oversize frame is broken up.
     split: SplitStrategy,
-    /// Frames emitted in the current one-second window.
-    emitted: u32,
-    /// Start of the current window, on the tokio clock (so `tokio::time::pause` works).
-    window_start: tokio::time::Instant,
+    /// Emission timestamps inside the trailing one-second window, oldest first.
+    /// Bounded at `FRAME_RATE_CAP` entries by construction.
+    recent: VecDeque<tokio::time::Instant>,
     /// Monotonic id for chunk groups, so a client can tell two interleaved groups apart.
     chunk_group: u64,
 }
 
+#[allow(dead_code)]
 impl FrameBudget {
     /// A budget that wraps oversize frames in `helikon.chunk` envelopes.
     pub(crate) fn new() -> Self {
@@ -62,8 +71,7 @@ impl FrameBudget {
     pub(crate) fn new_with_splitter(split: SplitStrategy) -> Self {
         Self {
             split,
-            emitted: 0,
-            window_start: tokio::time::Instant::now(),
+            recent: VecDeque::with_capacity(FRAME_RATE_CAP as usize),
             chunk_group: 0,
         }
     }
@@ -81,19 +89,33 @@ impl FrameBudget {
         frames
     }
 
-    /// Consume one frame from the rate budget, sleeping until the next window if this
-    /// window is exhausted.
+    /// Consume one frame from the rate budget, sleeping until the trailing
+    /// one-second window has room.
+    ///
+    /// A trailing window (rather than a fixed resetting window) is required: a
+    /// fixed window admits up to 2x the cap across a reset boundary, which a real
+    /// sliding-window limiter on AgentCore's side would reject.
     async fn tick(&mut self) {
-        let elapsed = self.window_start.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            self.window_start = tokio::time::Instant::now();
-            self.emitted = 0;
-        } else if self.emitted >= FRAME_RATE_CAP {
-            tokio::time::sleep(Duration::from_secs(1) - elapsed).await;
-            self.window_start = tokio::time::Instant::now();
-            self.emitted = 0;
+        const WINDOW: Duration = Duration::from_secs(1);
+        loop {
+            let now = tokio::time::Instant::now();
+            while let Some(&front) = self.recent.front() {
+                if now.duration_since(front) >= WINDOW {
+                    self.recent.pop_front();
+                } else {
+                    break;
+                }
+            }
+            if self.recent.len() < FRAME_RATE_CAP as usize {
+                self.recent.push_back(now);
+                return;
+            }
+            let front = *self
+                .recent
+                .front()
+                .expect("non-empty: len >= FRAME_RATE_CAP >= 1");
+            tokio::time::sleep(WINDOW - now.duration_since(front)).await;
         }
-        self.emitted += 1;
     }
 
     fn split(&mut self, frame: Value) -> Vec<String> {
@@ -109,10 +131,16 @@ impl FrameBudget {
 
     /// Split `field`'s string value across several copies of the same event.
     ///
-    /// Falls back to the envelope strategy when the field is absent or not a string —
-    /// the frame is oversize either way and must not go out whole.
+    /// Falls back to the envelope strategy when the field is absent, not a string, or
+    /// empty — in each case there is no field content to split, but the frame is
+    /// oversize (for some other reason, e.g. another field) and must still reach the
+    /// wire rather than being silently dropped.
     fn split_content(&mut self, frame: Value, field: &str) -> Vec<String> {
-        let Some(text) = frame.get(field).and_then(Value::as_str) else {
+        let Some(text) = frame
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
             return self.split_envelope(&frame.to_string());
         };
         // Budget for the envelope around the field: serialize the event with the field
@@ -300,6 +328,28 @@ mod tests {
         assert_eq!(inner["type"], "TOOL_CALL_RESULT");
     }
 
+    /// An oversize frame whose split field is empty must still reach the wire:
+    /// returning zero frames would drop the event silently.
+    #[tokio::test]
+    async fn an_oversize_frame_with_an_empty_split_field_still_emits() {
+        let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
+        let out = b
+            .admit(json!({
+                "type": "TEXT_MESSAGE_CONTENT",
+                "messageId": big_text(200_000),
+                "delta": ""
+            }))
+            .await;
+        assert!(!out.is_empty(), "an oversize frame must never be dropped");
+        for f in &out {
+            assert!(
+                f.len() <= MAX_FRAME_BYTES,
+                "frame of {} bytes too large",
+                f.len()
+            );
+        }
+    }
+
     /// Deterministic pacing: with the clock paused, admitting more frames than the
     /// per-second cap must have awaited a total delay of at least one second. Asserting
     /// on the virtual clock (not wall time) keeps this stable across the CI matrix.
@@ -328,5 +378,68 @@ mod tests {
                 .await;
         }
         assert!(start.elapsed() >= std::time::Duration::from_secs(1));
+    }
+
+    /// No trailing one-second window may ever contain more than the cap. A fixed
+    /// resetting window passes the two burst tests above but fails this one.
+    #[tokio::test(start_paused = true)]
+    async fn no_trailing_one_second_window_exceeds_the_rate_cap() {
+        let mut b = FrameBudget::new();
+        let mut stamps = Vec::new();
+        for i in 0..(FRAME_RATE_CAP * 2 + 5) {
+            b.admit(json!({"type": "STEP_STARTED", "n": i})).await;
+            stamps.push(tokio::time::Instant::now());
+        }
+        for (i, t) in stamps.iter().enumerate() {
+            let in_window = stamps[..=i]
+                .iter()
+                .filter(|s| t.duration_since(**s) < std::time::Duration::from_secs(1))
+                .count();
+            assert!(
+                in_window <= FRAME_RATE_CAP as usize,
+                "frame {i}: {in_window} frames inside the trailing second, cap is {FRAME_RATE_CAP}"
+            );
+        }
+    }
+
+    /// A deliberately-constructed boundary straddle: land a capful 900ms into the
+    /// first window (a manual clock advance, not incidental scheduling, puts it
+    /// exactly there), then burst a second capful the instant the window resets.
+    ///
+    /// This is the scenario `no_trailing_one_second_window_exceeds_the_rate_cap`
+    /// above was meant to catch, but under a fully deterministic paused clock with
+    /// no artificial jitter, consecutive fixed-window resets land exactly 1.000s
+    /// apart and that test's strict `<` comparison never sees them overlap — so it
+    /// passes even against the old fixed-window `tick`, and doesn't by itself prove
+    /// anything. Forcing the first batch away from the t=0 origin is what actually
+    /// exposes the bug: the fixed window resets at t=1.0s regardless, so the second
+    /// batch's t=1.0s frames sit only 100ms after the first batch's t=0.9s frames —
+    /// both inside one real trailing second — and together exceed the cap.
+    #[tokio::test(start_paused = true)]
+    async fn a_boundary_straddling_burst_still_respects_the_trailing_window() {
+        let mut b = FrameBudget::new();
+        let mut stamps = Vec::new();
+
+        tokio::time::advance(Duration::from_millis(900)).await;
+        for i in 0..FRAME_RATE_CAP {
+            b.admit(json!({"type": "STEP_STARTED", "n": i})).await;
+            stamps.push(tokio::time::Instant::now());
+        }
+        for i in 0..FRAME_RATE_CAP {
+            b.admit(json!({"type": "STEP_STARTED", "n": FRAME_RATE_CAP + i}))
+                .await;
+            stamps.push(tokio::time::Instant::now());
+        }
+
+        for (i, t) in stamps.iter().enumerate() {
+            let in_window = stamps[..=i]
+                .iter()
+                .filter(|s| t.duration_since(**s) < Duration::from_secs(1))
+                .count();
+            assert!(
+                in_window <= FRAME_RATE_CAP as usize,
+                "frame {i}: {in_window} frames inside the trailing second, cap is {FRAME_RATE_CAP}"
+            );
+        }
     }
 }
