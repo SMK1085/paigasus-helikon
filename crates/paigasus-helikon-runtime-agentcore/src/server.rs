@@ -244,13 +244,24 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
     /// independent of the agent/runner/session state) and `POST /invocations` (accepts
     /// [`InvocationRequest`](crate::InvocationRequest)'s three body shapes and serves
     /// both the buffered-JSON and Server-Sent-Events response modes — see the crate's
-    /// top-level docs for the full request/response contract). Suitable for embedding
-    /// into a larger router or for testing with `tower`'s `ServiceExt::oneshot`.
+    /// top-level docs for the full request/response contract). Also mounts the optional
+    /// `GET /ws` WebSocket endpoint when the `ws` feature is enabled (default on),
+    /// carrying the same request vocabulary as `POST /invocations` over a persistent
+    /// connection. Suitable for embedding into a larger router or for testing with
+    /// `tower`'s `ServiceExt::oneshot` (except `/ws`, which needs a real listener — see
+    /// `src/ws.rs`'s tests).
     pub fn router(&self) -> Router {
-        Router::new()
+        #[allow(unused_mut)]
+        let mut router = Router::new()
             .route("/ping", get(ping::ping))
-            .route("/invocations", post(invoke::invocations::<Ctx>))
-            .with_state(self.state.clone())
+            .route("/invocations", post(invoke::invocations::<Ctx>));
+
+        #[cfg(feature = "ws")]
+        {
+            router = router.route("/ws", get(crate::ws::ws_upgrade::<Ctx>));
+        }
+
+        router.with_state(self.state.clone())
     }
 
     /// Return a handle to the shared health-check state backing `GET /ping`.

@@ -11,10 +11,6 @@ use serde_json::Value;
 /// AgentCore closes the connection when a frame exceeds its documented **64 KB** limit.
 /// AWS does not state whether "64 KB" means 65 536 or 64 000 bytes, so this budgets
 /// against the smaller reading and leaves headroom on top of that.
-// Consumed by the `/ws` endpoints landing in later tasks of this plan (SMA-461);
-// until one exists, only this module's own tests reach it. Remove this `allow` once
-// a real caller lands.
-#[allow(dead_code)]
 pub(crate) const MAX_FRAME_BYTES: usize = 60_000;
 
 /// Maximum frames emitted per second.
@@ -24,17 +20,20 @@ pub(crate) const MAX_FRAME_BYTES: usize = 60_000;
 /// instant, ever contains more than this many admitted frames — rather than a fixed
 /// window that resets to zero on a clock tick, which would let two capfuls land back
 /// to back across a reset and double the effective rate right at the boundary.
-// See `MAX_FRAME_BYTES` above for why this carries an interim `allow`.
-#[allow(dead_code)]
 pub(crate) const FRAME_RATE_CAP: u32 = 200;
 
 /// How an oversize frame is broken up.
-// See `MAX_FRAME_BYTES` above for why this carries an interim `allow`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SplitStrategy {
     /// Split one string field's value across several otherwise-identical frames. The
     /// result is N valid protocol events, so a client needs no reassembly logic.
+    // The HTTP-protocol `/ws` endpoint (SMA-461 Task 3) uses only `Envelope` — no
+    // event type it streams has a single dominant text field worth splitting in
+    // place. The AG-UI `/ws` endpoint (a later task in this plan) is the real caller
+    // of this variant, for its `TEXT_MESSAGE_CONTENT` delta events. Until it lands,
+    // only this module's own tests construct `Content`. Remove this `allow` once
+    // that caller lands.
+    #[allow(dead_code)]
     Content {
         /// Name of the string field to split (e.g. `"delta"`).
         field: &'static str,
@@ -47,9 +46,6 @@ pub(crate) enum SplitStrategy {
 /// Paces and splits outbound WebSocket frames to stay inside AgentCore's quotas.
 ///
 /// One instance per connection; not `Clone`, because the rate budget is per-connection.
-// See `MAX_FRAME_BYTES` above for why this (and its impl block below) carries an
-// interim `allow`.
-#[allow(dead_code)]
 pub(crate) struct FrameBudget {
     /// How an oversize frame is broken up.
     split: SplitStrategy,
@@ -60,7 +56,6 @@ pub(crate) struct FrameBudget {
     chunk_group: u64,
 }
 
-#[allow(dead_code)]
 impl FrameBudget {
     /// A budget that wraps oversize frames in `helikon.chunk` envelopes.
     pub(crate) fn new() -> Self {
