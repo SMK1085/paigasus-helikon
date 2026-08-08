@@ -11,6 +11,14 @@ concurrency:
 
 permissions:
   contents: read
+  # Required by dorny/paths-filter in sessions-it — do not remove. On a
+  # pull_request it resolves changed files through `pulls.listFiles` (job log:
+  # "Fetching list of changed files for PR#N from GitHub API"). It looks
+  # removable because it is: the repo is public, so that call succeeds without
+  # the scope and has since SMA-330. That is an accident of repository
+  # visibility, not a property of the workflow — and sessions-it is a
+  # *required* check, so the cost of being wrong is every PR blocked.
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
