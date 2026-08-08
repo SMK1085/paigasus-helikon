@@ -43,7 +43,7 @@ pub enum AgentCoreError {
     Internal(String),
 
     /// The addressed resource does not exist — currently only an unknown A2A task id
-    /// reaching a [`TaskStore`](crate::TaskStore) method that requires one (HTTP 404).
+    /// reaching a `TaskStore` method that requires one (HTTP 404).
     #[error("not found: {0}")]
     NotFound(String),
 }
