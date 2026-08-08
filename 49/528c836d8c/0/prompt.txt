@@ -34,3 +34,20 @@
 - Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-2-report.md`</result>
 <usage><subagent_tokens>196379</subagent_tokens><tool_uses>45</tool_uses><duration_ms>695293</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a2770a71a21e94c94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a2770a71a21e94c94.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: HTTP-mode /ws" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+- Commits: `ca4534b feat(runtime-agentcore): SMA-461 add http-protocol websocket endpoint`, `3d6169f fix(runtime-agentcore): SMA-461 drain the in-flight run's channel while joining it`
+- Tests: 7/7 in `ws::tests` pass (added `interrupting_a_chatty_run_does_not_deadlock_the_connection` and `a_binary_frame_cancels_the_in_flight_run_before_closing`, both reproduced RED empirically first); 50/50 in the crate with `--features ws`; 30/30 with `--no-default-features`; full workspace `cargo test --workspace --all-features` green (159 test-result blocks, 0 failures); clippy/fmt/docs all clean
+- Concerns: none new — the four Minor findings were left untouched per instructions
+- Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-3-report.md`</result>
+<usage><subagent_tokens>354625</subagent_tokens><tool_uses>66</tool_uses><duration_ms>889530</duration_ms></usage>
+</task-notification>
