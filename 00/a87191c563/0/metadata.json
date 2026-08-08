@@ -105,6 +105,37 @@
         "label": "Skill: superpowers:writing-plans",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01VZZ48hpHbMzmiGvLydgdzM",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:executing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "574b891552e2",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 223,
+        "end": 224,
+        "entry_ids": [
+          "cd3e77ef-b8f5-4c15-b5e2-ade7bee60ed2"
+        ],
+        "tool_use_id": "toolu_01VZZ48hpHbMzmiGvLydgdzM"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VZZ48hpHbMzmiGvLydgdzM"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:executing-plans",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
