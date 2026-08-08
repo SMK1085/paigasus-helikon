@@ -2,10 +2,11 @@
 //!
 //! Same connection lifecycle as the HTTP-protocol `GET /ws` (`crate::ws`): a
 //! `tokio::select!` loop races reading the next inbound frame against draining the
-//! in-flight run's events, a fresh [`CancellationToken`] and [`RunContext`] per run (a
-//! token is one-shot, so a per-connection context would leave the *second* message on
-//! any connection starting already-cancelled), a 2 MiB inbound cap, and binary frames
-//! closed with 1003. See `crate::ws`'s module docs for why each of those is load-bearing.
+//! in-flight run's events, a fresh [`CancellationToken`] and run context per run (a
+//! cancellation token is one-shot, so a per-connection context would leave the *second*
+//! message on any connection starting already-cancelled), a 2 MiB inbound cap, and
+//! binary frames closed with 1003. See `crate::ws`'s module docs for why each of those
+//! is load-bearing.
 //!
 //! It differs in exactly four ways:
 //!
@@ -23,6 +24,28 @@
 //!    rather than raw [`AgentEvent`] JSON, paced through a [`FrameBudget`] that splits
 //!    oversize frames on their `delta` field rather than wrapping them in
 //!    `helikon.chunk` envelopes.
+//!
+//! # Every run emits exactly one `RUN_STARTED`
+//!
+//! Exactly the same contract point `agui::sse` documents, and for the same reason:
+//! nothing in `Agent` requires an implementation to emit the core
+//! `AgentEvent::RunStarted` convention most (not all) agents follow, but AG-UI's
+//! contract opens every run with `RUN_STARTED` regardless. `connection` emits the
+//! frame itself, unconditionally, as the first frame of each run — before the agent has
+//! produced anything — and [`send_mapped`] discards any `AgentEvent::RunStarted` the
+//! agent's own stream produces, so a well-behaved agent's own signal never produces a
+//! second, duplicate frame.
+//!
+//! # A run that ends without a terminal event still closes cleanly
+//!
+//! [`Runner::run_streamed`] usually guarantees a terminal `RunCompleted`/`RunFailed` —
+//! synthesizing one on cancellation or timeout — but an agent whose stream simply ends
+//! with neither a terminal event nor a cancellation in flight defeats even that. This
+//! is what [`InFlightOutcome::Closed`] exists for: `connection` calls
+//! [`EventMapper::finish`] the moment that run's channel closes, whether or not another
+//! inbound message ever arrives, so a text or tool-call span left open by such a stream
+//! is closed on the wire promptly rather than only at connection teardown (which may be
+//! never).
 //!
 //! A body that fails to parse sends a `RUN_ERROR` frame (`VALIDATION_ERROR`) and keeps
 //! the connection open, exactly like a run whose input is otherwise invalid — a
@@ -282,7 +305,17 @@ async fn connection<Ctx: Send + Sync + 'static>(
                     }
                 });
 
+                // AG-UI's contract opens every run with `RUN_STARTED`, but nothing in
+                // `Agent` requires an implementation to emit the core
+                // `AgentEvent::RunStarted` convention most (not all) agents follow —
+                // see `agui::sse`'s module docs for the full rationale, which applies
+                // identically here. Emit it ourselves, before the agent has produced
+                // anything; `send_mapped` discards any `AgentEvent::RunStarted` this
+                // run's own stream produces, so a well-behaved agent's own signal never
+                // produces a duplicate.
+                let start_frame = event::run_started(&thread_id, &run_id);
                 let mapper = EventMapper::new(thread_id, run_id);
+                send_frames(&mut sink, &mut budget, vec![start_frame]).await;
                 in_flight = Some(InFlight { cancel, handle, rx, mapper });
             }
             outcome = recv_in_flight(&mut in_flight) => {
@@ -316,6 +349,11 @@ async fn connection<Ctx: Send + Sync + 'static>(
 }
 
 /// Map one event through `mapper` and send every resulting frame.
+///
+/// Drops the agent's own `AgentEvent::RunStarted`, if it emits one: the transport
+/// already sent its own synthetic `RUN_STARTED` before this run's driver was spawned
+/// (see `connection`), and the two map to the identical frame — forwarding the
+/// agent's copy too would duplicate it on the wire.
 async fn send_mapped<S>(
     sink: &mut S,
     budget: &mut FrameBudget,
@@ -324,6 +362,9 @@ async fn send_mapped<S>(
 ) where
     S: futures_util::Sink<Message> + Unpin,
 {
+    if matches!(ev, AgentEvent::RunStarted { .. }) {
+        return;
+    }
     send_frames(sink, budget, mapper.push(&ev)).await;
 }
 
@@ -363,7 +404,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use futures_util::{
@@ -488,5 +530,303 @@ mod tests {
             }
         }
         assert_eq!(code, Some(1003));
+    }
+
+    // ── Regressions found in review round 1 ────────────────────────────────────
+
+    /// Regression: AG-UI's contract opens every run with `RUN_STARTED`
+    /// (`agui::sse`'s module docs), but nothing in `Agent` requires an
+    /// implementation to emit the core `AgentEvent::RunStarted` convention.
+    /// `TinyAgent` (like the AG-UI contract itself) does not, so the very first
+    /// frame on the wire must still be a synthesized `RUN_STARTED` — not
+    /// `TEXT_MESSAGE_START`, which a conformant client verifying the first event
+    /// would reject.
+    #[tokio::test]
+    async fn first_frame_is_run_started() {
+        let url = spawn().await;
+        let (mut sock, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        sock.send(Message::text(
+            r#"{"threadId":"t1","runId":"r1","messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .await
+        .unwrap();
+        let Some(Ok(Message::Text(t))) = sock.next().await else {
+            panic!("expected a text frame first");
+        };
+        let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+        assert_eq!(
+            v["type"], "RUN_STARTED",
+            "the first frame on the wire must be RUN_STARTED: {v:?}"
+        );
+        assert_eq!(v["threadId"], "t1");
+        assert_eq!(v["runId"], "r1");
+    }
+
+    /// Echoes its own `RunStarted`, like a real `LlmAgent` that follows the core
+    /// convention this transport must not require.
+    struct SelfAnnouncingAgent;
+
+    #[async_trait]
+    impl Agent<()> for SelfAnnouncingAgent {
+        fn name(&self) -> &str {
+            "self-announcing"
+        }
+        fn description(&self) -> &str {
+            "emits its own RunStarted, like a real LlmAgent"
+        }
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            Ok(stream::iter(vec![
+                AgentEvent::RunStarted {
+                    agent: "self-announcing".to_owned(),
+                },
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                },
+            ])
+            .boxed())
+        }
+    }
+
+    /// Regression: the transport's own synthetic `RUN_STARTED` and a well-behaved
+    /// agent's own `AgentEvent::RunStarted` both map to the identical frame — only
+    /// one may reach the wire.
+    #[tokio::test]
+    async fn an_agents_own_run_started_event_does_not_duplicate_the_frame() {
+        let server = AgentCoreServer::<()>::builder()
+            .agent(Arc::new(SelfAnnouncingAgent))
+            .with_default_context()
+            .build()
+            .unwrap();
+        let router = server.agui_router();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let url = format!("ws://{addr}/ws");
+        let (mut sock, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        sock.send(Message::text(
+            r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .await
+        .unwrap();
+        let kinds = read_until_finished(&mut sock).await;
+        let count = kinds.iter().filter(|k| *k == "RUN_STARTED").count();
+        assert_eq!(
+            count, 1,
+            "exactly one RUN_STARTED frame, got {count} in {kinds:?}"
+        );
+    }
+
+    /// Opens a text span and ends its stream with no terminal event at all — no
+    /// real `RunCompleted`/`RunFailed`, and no cancellation/timeout for
+    /// `TokioRunner` to synthesize one from.
+    struct TrailsOffAgent;
+
+    #[async_trait]
+    impl Agent<()> for TrailsOffAgent {
+        fn name(&self) -> &str {
+            "trails-off"
+        }
+        fn description(&self) -> &str {
+            "streams one token then ends its stream with no terminal event"
+        }
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            Ok(stream::iter(vec![AgentEvent::TokenDelta {
+                text: "partial".to_owned(),
+            }])
+            .boxed())
+        }
+    }
+
+    /// Regression (review round 1, Important 2, mutation-checked): this is the
+    /// property `InFlightOutcome::Closed` exists for. A run whose channel closes
+    /// with no terminal event must still have its dangling `TEXT_MESSAGE` span
+    /// closed — promptly, with no further frame sent by the client, and without
+    /// the connection itself closing. Deleting the `Closed` arm (reverting to
+    /// `crate::ws`'s bare `Option<AgentEvent>` shape) leaves this dangling forever,
+    /// since nothing else in this run's lifecycle ever calls `EventMapper::finish`
+    /// again absent a second inbound message. Wrapped in a timeout because that
+    /// regression manifests as a hang, not a failure.
+    #[tokio::test]
+    async fn a_run_that_ends_without_a_terminal_event_closes_its_span_without_a_further_frame_or_closing(
+    ) {
+        let server = AgentCoreServer::<()>::builder()
+            .agent(Arc::new(TrailsOffAgent))
+            .with_default_context()
+            .build()
+            .unwrap();
+        let router = server.agui_router();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let url = format!("ws://{addr}/ws");
+        let (mut sock, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        sock.send(Message::text(
+            r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .await
+        .unwrap();
+
+        let kinds = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut kinds = Vec::new();
+            for _ in 0..4 {
+                let Some(Ok(Message::Text(t))) = sock.next().await else {
+                    break;
+                };
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                kinds.push(v["type"].as_str().unwrap().to_owned());
+            }
+            kinds
+        })
+        .await
+        .expect(
+            "the dangling span must close once the run's channel ends, not hang \
+             waiting for a terminal event that will never arrive",
+        );
+        assert_eq!(
+            kinds,
+            vec![
+                "RUN_STARTED",
+                "TEXT_MESSAGE_START",
+                "TEXT_MESSAGE_CONTENT",
+                "TEXT_MESSAGE_END",
+            ],
+            "the span must close with no fabricated terminal event: {kinds:?}"
+        );
+
+        // No further frame was sent by the client, and the connection must not
+        // have closed on its own: nothing should arrive within a short window.
+        let further = tokio::time::timeout(Duration::from_millis(300), sock.next()).await;
+        assert!(
+            further.is_err(),
+            "expected no further frame (in particular no Close) once the span \
+             closed, got {further:?}"
+        );
+    }
+
+    /// Regression: a body that fails to parse must surface as a `RUN_ERROR` frame
+    /// (never a raw disconnect) and must leave the connection open for a
+    /// subsequent, valid request.
+    #[tokio::test]
+    async fn a_malformed_body_yields_a_validation_error_frame_and_keeps_the_connection_open() {
+        let url = spawn().await;
+        let (mut sock, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        sock.send(Message::text("not json at all")).await.unwrap();
+
+        let mut code = None;
+        while let Some(Ok(msg)) = sock.next().await {
+            if let Message::Text(t) = msg {
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                if v["type"] == "RUN_ERROR" {
+                    code = v["code"].as_str().map(str::to_owned);
+                    break;
+                }
+            }
+        }
+        assert_eq!(
+            code.as_deref(),
+            Some("VALIDATION_ERROR"),
+            "a malformed body must yield a VALIDATION_ERROR RUN_ERROR frame"
+        );
+
+        // The connection must still be open: a subsequent valid request completes.
+        sock.send(Message::text(
+            r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .await
+        .unwrap();
+        let kinds = read_until_finished(&mut sock).await;
+        assert_eq!(
+            kinds.last().unwrap(),
+            "RUN_FINISHED",
+            "the connection must stay open after a validation error: {kinds:?}"
+        );
+    }
+
+    /// Records how many messages each run was given, so a test can prove turn 2
+    /// was not handed the conversation twice.
+    struct CountingAgent {
+        seen: Arc<Mutex<Vec<usize>>>,
+    }
+
+    #[async_trait]
+    impl Agent<()> for CountingAgent {
+        fn name(&self) -> &str {
+            "counting"
+        }
+        fn description(&self) -> &str {
+            "records input message counts"
+        }
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            self.seen.lock().unwrap().push(input.messages.len());
+            Ok(stream::iter(vec![AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            }])
+            .boxed())
+        }
+    }
+
+    /// Regression for the double-counting bug `agui::sse` also guards against:
+    /// AG-UI clients resend the full conversation each turn, so a second request
+    /// on the *same connection* carrying 3 messages must reach the agent as
+    /// exactly 3 — not 3 plus a replayed session history from turn 1's run.
+    #[tokio::test]
+    async fn turn_two_on_one_connection_does_not_double_count_history() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let server = AgentCoreServer::<()>::builder()
+            .agent(Arc::new(CountingAgent {
+                seen: Arc::clone(&seen),
+            }))
+            .with_default_context()
+            .build()
+            .unwrap();
+        let router = server.agui_router();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let url = format!("ws://{addr}/ws");
+        let (mut sock, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+
+        sock.send(Message::text(
+            r#"{"threadId":"t1","runId":"r1","messages":[{"role":"user","content":"one"}]}"#,
+        ))
+        .await
+        .unwrap();
+        let _ = read_until_finished(&mut sock).await;
+
+        sock.send(Message::text(
+            r#"{"threadId":"t1","runId":"r2","messages":[
+                {"role":"user","content":"one"},
+                {"role":"assistant","content":"ok"},
+                {"role":"user","content":"two"}
+            ]}"#,
+        ))
+        .await
+        .unwrap();
+        let _ = read_until_finished(&mut sock).await;
+
+        let counts = seen.lock().unwrap().clone();
+        assert_eq!(
+            counts,
+            vec![1, 3],
+            "turn 2 must see exactly the client's 3 messages, not a doubled history: {counts:?}"
+        );
     }
 }
