@@ -173,19 +173,35 @@ verification and the only check that distinguishes this change from its absence.
 - Consumes: the scope added in Task 1.
 - Produces: the evidence quoted in the PR body.
 
+**Each step below is a separate shell invocation, so every block re-resolves
+`RUN` and `JOB` and validates them before use.** Do not assume a variable
+assigned in one step survives into the next — it does not, and a bare
+`$JOB` would expand to the empty string, turning the API path into
+`/actions/jobs//logs`, which returns nothing and reads exactly like a check
+that found no problem. The four-line prelude is repeated verbatim on purpose.
+
 - [ ] **Step 1: Locate this PR's `sessions-it` job**
 
 ```bash
 RUN=$(gh run list --workflow=ci.yml --branch=feature/sma-487-ci-grant-pull-requests-read-to-sessions-its-paths-filter-in \
   --limit 1 --json databaseId --jq '.[0].databaseId')
-JOB=$(gh api repos/SMK1085/paigasus-helikon/actions/runs/$RUN/jobs \
+JOB=$(gh api repos/SMK1085/paigasus-helikon/actions/runs/$RUN/jobs --paginate \
   --jq '.jobs[] | select(.name=="sessions-it") | .id')
+[ -n "$RUN" ] && [ -n "$JOB" ] || { echo "FAILED to resolve RUN/JOB"; exit 1; }
 echo "run=$RUN job=$JOB"
 ```
+
+Expected: both values non-empty. If `JOB` is empty the run has not scheduled
+`sessions-it` yet — wait and re-run rather than proceeding.
 
 - [ ] **Step 2: Read the token-permissions block — the actual verification**
 
 ```bash
+RUN=$(gh run list --workflow=ci.yml --branch=feature/sma-487-ci-grant-pull-requests-read-to-sessions-its-paths-filter-in \
+  --limit 1 --json databaseId --jq '.[0].databaseId')
+JOB=$(gh api repos/SMK1085/paigasus-helikon/actions/runs/$RUN/jobs --paginate \
+  --jq '.jobs[] | select(.name=="sessions-it") | .id')
+[ -n "$JOB" ] || { echo "FAILED to resolve JOB"; exit 1; }
 gh api repos/SMK1085/paigasus-helikon/actions/jobs/$JOB/logs 2>/dev/null \
   | grep -A4 'GITHUB_TOKEN Permissions'
 ```
@@ -206,6 +222,11 @@ not take effect and Task 1 is wrong.
 - [ ] **Step 3: Regression check — the filter still works**
 
 ```bash
+RUN=$(gh run list --workflow=ci.yml --branch=feature/sma-487-ci-grant-pull-requests-read-to-sessions-its-paths-filter-in \
+  --limit 1 --json databaseId --jq '.[0].databaseId')
+JOB=$(gh api repos/SMK1085/paigasus-helikon/actions/runs/$RUN/jobs --paginate \
+  --jq '.jobs[] | select(.name=="sessions-it") | .id')
+[ -n "$JOB" ] || { echo "FAILED to resolve JOB"; exit 1; }
 gh api repos/SMK1085/paigasus-helikon/actions/jobs/$JOB/logs 2>/dev/null \
   | grep -E 'changed files|listFiles|No session-related'
 ```
@@ -223,7 +244,10 @@ ticket is done.
 - [ ] **Step 4: Confirm `sessions-it` concluded green**
 
 ```bash
-gh run view $RUN --json jobs --jq '.jobs[] | select(.name=="sessions-it") | {name, conclusion}'
+RUN=$(gh run list --workflow=ci.yml --branch=feature/sma-487-ci-grant-pull-requests-read-to-sessions-its-paths-filter-in \
+  --limit 1 --json databaseId --jq '.[0].databaseId')
+[ -n "$RUN" ] || { echo "FAILED to resolve RUN"; exit 1; }
+gh run view "$RUN" --json jobs --jq '.jobs[] | select(.name=="sessions-it") | {name, conclusion}'
 ```
 
 Expected: `"conclusion": "success"`.
@@ -248,9 +272,14 @@ No gaps.
 **2. Placeholder scan.** No TBD/TODO. Every step has the literal text to write or
 the exact command to run with its expected output.
 
-**3. Type consistency.** No types. The two cross-task references — the log string
-`GitHub API` and the shell variable `$JOB` — are consistent between Task 1 Step 1
-and Task 2 Steps 1-3.
+**3. Type consistency.** No types. The one cross-task reference is the log string
+`GitHub API`, identical in Task 1 Step 1 and Task 2 Step 3. There are deliberately
+**no** cross-step variable references: each Task 2 block re-resolves `RUN`/`JOB`
+and guards on them, because the steps run as separate shell invocations. An
+earlier draft assigned them once in Step 1 and used a bare `$JOB` thereafter,
+which would have silently produced an empty-path API call — a failure that reads
+like a clean result. Caught by CodeRabbit on #184 and confirmed against the real
+execution, where the variables had to be recomputed inline.
 
 **One deliberate deviation from the skill's template:** there are no
 write-failing-test-first steps, because there is no test framework that can
