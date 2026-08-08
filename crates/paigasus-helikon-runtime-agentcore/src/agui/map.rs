@@ -15,8 +15,6 @@
 //! which is exactly the START payload — and never from `ToolCallItem`, which would
 //! put START after the ARGS frames it must precede.
 
-use std::collections::HashSet;
-
 use paigasus_helikon_core::{AgentEvent, ContentPart, Item};
 use serde_json::Value;
 
@@ -63,16 +61,16 @@ pub(crate) struct EventMapper {
     /// `MessageOutput` arrives, so checking "is a message open right now" would miss
     /// that this text was already streamed and re-emit it.
     streamed_text: bool,
-    /// Id of the call whose `TOOL_CALL_START` has been emitted and whose
-    /// `TOOL_CALL_END` has not — `None` if no call is currently open. At most one call
-    /// is ever open at a time, even under parallel tool calling: a second call's first
-    /// delta closes the first before opening the second, so spans never overlap.
+    /// Id of the call currently being streamed — has an open `TOOL_CALL_START` and no
+    /// `TOOL_CALL_END` yet. `None` if no call is currently open.
     open_call: Option<String>,
-    /// Every call id that has had a `TOOL_CALL_START` emitted (via a delta or, for a
-    /// non-streaming provider, a synthesized triple). Lets `ToolCallItem` distinguish
-    /// "no deltas were seen, synthesize the triple" from "deltas already handled
-    /// this — just close it (or it's already closed)".
-    emitted_calls: HashSet<String>,
+    /// Calls whose deltas arrived while a *different* call was open: `(call_id,
+    /// name, accumulated args)`. AG-UI permits only one active tool-call span at a
+    /// time, while core's `ToolCallDelta`s for different ids may interleave freely
+    /// (`paigasus-helikon-core/src/model.rs:56`) — buffering instead of closing and
+    /// resuming preserves every args chunk exactly once and never emits an unmatched
+    /// `TOOL_CALL_END`. A `Vec`, not a map, so flush order is deterministic.
+    buffered_calls: Vec<(String, Option<String>, String)>,
     /// Whether a `STEP_STARTED` is currently unmatched.
     step_open: bool,
 }
@@ -93,7 +91,7 @@ impl EventMapper {
             next_message: 0,
             streamed_text: false,
             open_call: None,
-            emitted_calls: HashSet::new(),
+            buffered_calls: Vec::new(),
             step_open: false,
         }
     }
@@ -138,23 +136,36 @@ impl EventMapper {
                 args_delta,
             } => {
                 self.close_text(&mut out);
-                if self.open_call.as_deref() != Some(call_id.as_str()) {
-                    // A different call (or none) is open: close it before opening this
-                    // one, so two calls' spans never overlap.
-                    self.close_call(&mut out);
-                    // Only a genuinely new id gets a START; an id already in
-                    // `emitted_calls` was started (and closed) earlier — this delta is
-                    // a continuation of that same call, not a second one.
-                    if self.emitted_calls.insert(call_id.clone()) {
-                        out.push(event::tool_call_start(
-                            call_id,
-                            name.as_deref().unwrap_or("unknown"),
-                            &self.current_message,
-                        ));
-                    }
+                if self.open_call.is_none() {
+                    // Nothing else is streaming: open this call now.
+                    out.push(event::tool_call_start(
+                        call_id,
+                        name.as_deref().unwrap_or("unknown"),
+                        &self.current_message,
+                    ));
+                    out.push(event::tool_call_args(call_id, args_delta));
                     self.open_call = Some(call_id.clone());
+                } else if self.open_call.as_deref() == Some(call_id.as_str()) {
+                    // A continuation of the currently-open call.
+                    out.push(event::tool_call_args(call_id, args_delta));
+                } else {
+                    // A different call is streaming: AG-UI permits only one active
+                    // span, so buffer this id's content rather than interleaving a
+                    // second START — it is flushed as a complete span once its own
+                    // `ToolCallItem` arrives, or at the latest when the run ends.
+                    match self
+                        .buffered_calls
+                        .iter_mut()
+                        .find(|(id, _, _)| id == call_id)
+                    {
+                        Some(entry) => entry.2.push_str(args_delta),
+                        None => self.buffered_calls.push((
+                            call_id.clone(),
+                            name.clone(),
+                            args_delta.clone(),
+                        )),
+                    }
                 }
-                out.push(event::tool_call_args(call_id, args_delta));
             }
             AgentEvent::ToolCallItem { item } => {
                 self.close_text(&mut out);
@@ -164,23 +175,34 @@ impl EventMapper {
                     args,
                 } = item
                 {
-                    if !self.emitted_calls.contains(call_id) {
-                        // No deltas streamed for this call (non-streaming provider):
-                        // synthesize the whole triple so the client sees a complete
-                        // call. Close whatever call is open first, so spans still
-                        // never overlap.
-                        self.close_call(&mut out);
+                    if self.open_call.as_deref() == Some(call_id.as_str()) {
+                        // The call this item describes is the one currently open.
+                        out.push(event::tool_call_end(call_id));
+                        self.open_call = None;
+                    } else if let Some(pos) = self
+                        .buffered_calls
+                        .iter()
+                        .position(|(id, _, _)| id == call_id)
+                    {
+                        // Deltas for this call were buffered while another call was
+                        // open: flush the whole thing now as one complete,
+                        // self-contained span.
+                        let (id, buffered_name, buffered_args) = self.buffered_calls.remove(pos);
+                        out.push(event::tool_call_start(
+                            &id,
+                            buffered_name.as_deref().unwrap_or("unknown"),
+                            &self.current_message,
+                        ));
+                        out.push(event::tool_call_args(&id, &buffered_args));
+                        out.push(event::tool_call_end(&id));
+                    } else {
+                        // No deltas were streamed for this call (non-streaming
+                        // provider): synthesize the whole triple from the item's own
+                        // args so the client still sees a complete call.
                         out.push(event::tool_call_start(call_id, name, &self.current_message));
                         out.push(event::tool_call_args(call_id, &args.to_string()));
                         out.push(event::tool_call_end(call_id));
-                        self.emitted_calls.insert(call_id.clone());
-                    } else if self.open_call.as_deref() == Some(call_id.as_str()) {
-                        // Deltas already streamed this call and it's still open: close it.
-                        out.push(event::tool_call_end(call_id));
-                        self.open_call = None;
                     }
-                    // Else: a later call's first delta already closed this one
-                    // (`close_call` above) — nothing left to emit.
                 } else {
                     out.push(self.custom("helikon.unknown", ev));
                 }
@@ -315,10 +337,21 @@ impl EventMapper {
         }
     }
 
-    /// Close every still-open pair: text/thinking, the tool call, then the step.
+    /// Close every still-open pair: text/thinking, the open tool call, every
+    /// still-buffered tool call (each as a complete span), then the step. Nothing
+    /// may be left buffered once a run terminates.
     fn close_all(&mut self, out: &mut Vec<Value>) {
         self.close_text(out);
         self.close_call(out);
+        for (id, name, args) in std::mem::take(&mut self.buffered_calls) {
+            out.push(event::tool_call_start(
+                &id,
+                name.as_deref().unwrap_or("unknown"),
+                &self.current_message,
+            ));
+            out.push(event::tool_call_args(&id, &args));
+            out.push(event::tool_call_end(&id));
+        }
         self.close_step(out);
     }
 }
@@ -362,6 +395,49 @@ mod tests {
             out.push(f["type"].as_str().unwrap().to_owned());
         }
         out
+    }
+
+    /// Like [`types`] but keeps the full frame, not just its `type` — for tests that
+    /// need other fields (`toolCallId`, `delta`, …).
+    fn frames_of(events: &[AgentEvent]) -> Vec<Value> {
+        let mut m = mapper();
+        let mut out = Vec::new();
+        for e in events {
+            out.extend(m.push(e));
+        }
+        out.extend(m.finish());
+        out
+    }
+
+    /// Assert that `TOOL_CALL_START`/`TOOL_CALL_END` frames in `frames` form a
+    /// properly nested, non-overlapping sequence: at most one call open at a time,
+    /// every `END` matches whichever call is currently open, and nothing is left
+    /// open by the end of the sequence.
+    fn assert_tool_call_spans_are_well_formed(frames: &[Value]) {
+        let mut open: Option<&str> = None;
+        for f in frames {
+            match f["type"].as_str().unwrap() {
+                "TOOL_CALL_START" => {
+                    let id = f["toolCallId"].as_str().unwrap();
+                    assert!(
+                        open.is_none(),
+                        "TOOL_CALL_START for {id:?} while {open:?} is still open: {frames:?}"
+                    );
+                    open = Some(id);
+                }
+                "TOOL_CALL_END" => {
+                    let id = f["toolCallId"].as_str().unwrap();
+                    assert_eq!(
+                        open,
+                        Some(id),
+                        "TOOL_CALL_END for {id:?} does not match the open call {open:?}: {frames:?}"
+                    );
+                    open = None;
+                }
+                _ => {}
+            }
+        }
+        assert!(open.is_none(), "a tool call was left open: {frames:?}");
     }
 
     fn assistant(text: &str) -> Item {
@@ -925,29 +1001,40 @@ mod tests {
         assert_eq!(content_frames[0]["delta"], "real text");
     }
 
-    /// Regression (review round 2, Minor): a delta for a call id that was already
-    /// started *and closed* (because a different id's delta closed it) must not
-    /// re-emit `TOOL_CALL_START` — it is a continuation of the same call, not a second
-    /// one.
+    /// Regression (review round 3, replaces round 2's Minor fix): round 2's "close
+    /// and resume" fix re-opened an already-closed id with a bogus `"unknown"` name
+    /// and, worse, could later orphan its `TOOL_CALL_END` (round 3's own Important
+    /// finding). Round 3 replaces closing-and-resuming with buffering: a delta for a
+    /// different id while one call is open is buffered rather than interleaved, so
+    /// `delta(a) delta(b) delta(a)` streams only `a` — `b`'s chunk sits buffered
+    /// until its own `ToolCallItem` or the run's terminal flushes it.
     #[test]
-    fn a_delta_for_an_already_closed_call_id_does_not_re_start_it() {
-        let mut m = mapper();
-        let mut frames = Vec::new();
-        frames.extend(m.push(&AgentEvent::ToolCallDelta {
-            call_id: "a".to_owned(),
-            name: Some("first".to_owned()),
-            args_delta: "1".to_owned(),
-        }));
-        frames.extend(m.push(&AgentEvent::ToolCallDelta {
-            call_id: "b".to_owned(),
-            name: Some("second".to_owned()),
-            args_delta: "2".to_owned(),
-        }));
-        frames.extend(m.push(&AgentEvent::ToolCallDelta {
-            call_id: "a".to_owned(),
-            name: None,
-            args_delta: "3".to_owned(),
-        }));
+    fn a_delta_for_a_different_id_is_buffered_not_interleaved() {
+        let frames = frames_of(&[
+            AgentEvent::ToolCallDelta {
+                call_id: "a".to_owned(),
+                name: Some("first".to_owned()),
+                args_delta: "1".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "b".to_owned(),
+                name: Some("second".to_owned()),
+                args_delta: "2".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "a".to_owned(),
+                name: None,
+                args_delta: "3".to_owned(),
+            },
+        ]);
+        // `finish()` (via `frames_of`) drains the still-buffered "b" at the end, so
+        // check only the frames up to that drain for the "streaming" assertion.
+        let kinds: Vec<&str> = frames.iter().map(|f| f["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            kinds[..3],
+            ["TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_ARGS"],
+            "only a streams; b is buffered, not interleaved: {frames:?}"
+        );
         let start_ids: Vec<&str> = frames
             .iter()
             .filter(|f| f["type"] == "TOOL_CALL_START")
@@ -956,8 +1043,227 @@ mod tests {
         assert_eq!(
             start_ids,
             vec!["a", "b"],
-            "each id must be started exactly once: {frames:?}"
+            "each id must be started exactly once overall (a while streaming, b when \
+             flushed at the terminal): {frames:?}"
         );
+        let a_args: Vec<&str> = frames
+            .iter()
+            .filter(|f| f["type"] == "TOOL_CALL_ARGS" && f["toolCallId"] == "a")
+            .map(|f| f["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(a_args, vec!["1", "3"], "a's own args, in order: {frames:?}");
+        assert_tool_call_spans_are_well_formed(&frames);
+    }
+
+    /// Regression (review round 3, Important — controller-escalated): round 2's
+    /// "close and resume" design could emit a `TOOL_CALL_END` with no matching open
+    /// `TOOL_CALL_START` once an id was revisited after closing, silently losing the
+    /// args chunk that triggered it. Buffering must never orphan an `END` or drop a
+    /// chunk, however text/tool-call events interleave.
+    #[test]
+    fn interleaved_deltas_then_a_token_delta_never_orphan_a_tool_call_end() {
+        let frames = frames_of(&[
+            AgentEvent::ToolCallDelta {
+                call_id: "a".to_owned(),
+                name: Some("first".to_owned()),
+                args_delta: "1".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "b".to_owned(),
+                name: Some("second".to_owned()),
+                args_delta: "2".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "a".to_owned(),
+                name: None,
+                args_delta: "3".to_owned(),
+            },
+            AgentEvent::TokenDelta {
+                text: "hi".to_owned(),
+            },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ]);
+        assert_tool_call_spans_are_well_formed(&frames);
+        let a_start = frames
+            .iter()
+            .position(|f| f["type"] == "TOOL_CALL_START" && f["toolCallId"] == "a")
+            .unwrap();
+        let a_end = frames
+            .iter()
+            .position(|f| f["type"] == "TOOL_CALL_END" && f["toolCallId"] == "a")
+            .unwrap();
+        let a_args: Vec<&str> = frames
+            .iter()
+            .enumerate()
+            .filter(|(i, f)| {
+                *i > a_start
+                    && *i < a_end
+                    && f["type"] == "TOOL_CALL_ARGS"
+                    && f["toolCallId"] == "a"
+            })
+            .map(|(_, f)| f["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            a_args,
+            vec!["1", "3"],
+            "both of a's chunks must land inside its own span: {frames:?}"
+        );
+    }
+
+    /// Regression (review round 3): a call buffered while another streamed, with no
+    /// `ToolCallItem` of its own before the run ends, must be flushed as a complete
+    /// span before the terminal frame — never silently dropped.
+    #[test]
+    fn a_buffered_call_is_flushed_as_a_complete_span_before_the_run_finishes() {
+        let frames = frames_of(&[
+            AgentEvent::ToolCallDelta {
+                call_id: "a".to_owned(),
+                name: Some("first".to_owned()),
+                args_delta: "1".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "b".to_owned(),
+                name: Some("second".to_owned()),
+                args_delta: "2".to_owned(),
+            },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ]);
+        assert_tool_call_spans_are_well_formed(&frames);
+        let kinds: Vec<&str> = frames.iter().map(|f| f["type"].as_str().unwrap()).collect();
+        let finished_at = kinds.iter().position(|k| *k == "RUN_FINISHED").unwrap();
+        assert!(
+            kinds[..finished_at].contains(&"TOOL_CALL_END")
+                && kinds[..finished_at]
+                    .iter()
+                    .filter(|k| **k == "TOOL_CALL_END")
+                    .count()
+                    == 2,
+            "both a and b must be fully closed before RUN_FINISHED: {frames:?}"
+        );
+        let b_frames: Vec<&Value> = frames
+            .iter()
+            .filter(|f| f.get("toolCallId") == Some(&Value::String("b".to_owned())))
+            .collect();
+        assert_eq!(
+            b_frames
+                .iter()
+                .map(|f| f["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END"],
+            "b flushed as one complete, self-contained span: {frames:?}"
+        );
+    }
+
+    /// Regression (review round 3): a cheap general invariant check across several
+    /// representative tool-call orderings — sequential, interleaved-then-both-items,
+    /// buffered-until-terminal, and non-streaming — `TOOL_CALL_START`/`TOOL_CALL_END`
+    /// must always form a properly nested, non-overlapping sequence.
+    #[test]
+    fn tool_call_spans_are_always_well_formed() {
+        let scenarios: Vec<Vec<AgentEvent>> = vec![
+            vec![
+                AgentEvent::ToolCallDelta {
+                    call_id: "x".to_owned(),
+                    name: Some("n".to_owned()),
+                    args_delta: "1".to_owned(),
+                },
+                AgentEvent::ToolCallItem {
+                    item: Item::ToolCall {
+                        call_id: "x".to_owned(),
+                        name: "n".to_owned(),
+                        args: serde_json::json!({}),
+                    },
+                },
+            ],
+            vec![
+                AgentEvent::ToolCallDelta {
+                    call_id: "a".to_owned(),
+                    name: Some("a".to_owned()),
+                    args_delta: "1".to_owned(),
+                },
+                AgentEvent::ToolCallDelta {
+                    call_id: "b".to_owned(),
+                    name: Some("b".to_owned()),
+                    args_delta: "2".to_owned(),
+                },
+                AgentEvent::ToolCallItem {
+                    item: Item::ToolCall {
+                        call_id: "a".to_owned(),
+                        name: "a".to_owned(),
+                        args: serde_json::json!({}),
+                    },
+                },
+                AgentEvent::ToolCallItem {
+                    item: Item::ToolCall {
+                        call_id: "b".to_owned(),
+                        name: "b".to_owned(),
+                        args: serde_json::json!({}),
+                    },
+                },
+            ],
+            vec![
+                AgentEvent::ToolCallDelta {
+                    call_id: "a".to_owned(),
+                    name: Some("a".to_owned()),
+                    args_delta: "1".to_owned(),
+                },
+                AgentEvent::ToolCallDelta {
+                    call_id: "b".to_owned(),
+                    name: Some("b".to_owned()),
+                    args_delta: "2".to_owned(),
+                },
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                },
+            ],
+            vec![AgentEvent::ToolCallItem {
+                item: Item::ToolCall {
+                    call_id: "z".to_owned(),
+                    name: "z".to_owned(),
+                    args: serde_json::json!({}),
+                },
+            }],
+            // A revisited id, terminated via its own item rather than a terminal
+            // event — the scenario round 2's "close and resume" design fails on.
+            vec![
+                AgentEvent::ToolCallDelta {
+                    call_id: "a".to_owned(),
+                    name: Some("a".to_owned()),
+                    args_delta: "1".to_owned(),
+                },
+                AgentEvent::ToolCallDelta {
+                    call_id: "b".to_owned(),
+                    name: Some("b".to_owned()),
+                    args_delta: "2".to_owned(),
+                },
+                AgentEvent::ToolCallDelta {
+                    call_id: "a".to_owned(),
+                    name: None,
+                    args_delta: "3".to_owned(),
+                },
+                AgentEvent::ToolCallItem {
+                    item: Item::ToolCall {
+                        call_id: "a".to_owned(),
+                        name: "a".to_owned(),
+                        args: serde_json::json!({}),
+                    },
+                },
+                AgentEvent::ToolCallItem {
+                    item: Item::ToolCall {
+                        call_id: "b".to_owned(),
+                        name: "b".to_owned(),
+                        args: serde_json::json!({}),
+                    },
+                },
+            ],
+        ];
+        for events in scenarios {
+            assert_tool_call_spans_are_well_formed(&frames_of(&events));
+        }
     }
 
     /// Regression (review round 2, Minor): the single-active-span invariant that
