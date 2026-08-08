@@ -51,3 +51,22 @@
 - Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-3-report.md`</result>
 <usage><subagent_tokens>354625</subagent_tokens><tool_uses>66</tool_uses><duration_ms>889530</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a9913e2f4596af8ab</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/fb5be476-1a7e-4921-bb0b-37f0a3daa098/tasks/a9913e2f4596af8ab.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 4: AG-UI wire types" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean, both commits present. Fix round complete.
+
+Status: DONE
+Commits: `1bca2f0` feat(runtime-agentcore): SMA-461 add ag-ui wire types; `fc18f21` refactor(runtime-agentcore): SMA-461 split the event module's blanket dead_code allow per-function
+Tests: 5/5 `agui::types::*` pass; full workspace `cargo test --workspace --all-features` green (exit 0, 0 FAILED); all six requested gates (test, `--no-default-features` build, `cargo doc -D warnings`, fmt, clippy `-D warnings`, and `--features ag-ui --no-default-features` build) re-verified clean after the fix
+Concerns: the `--features ag-ui --no-default-features` build shows 5 warnings, all in `frame.rs` (none in `agui/types.rs`) — confirmed pre-existing and unchanged before/after this fix by diffing against commit `1bca2f0`; it's Task 3's already-documented, self-disclosed gap (no required CI gate compiles that exact feature combination), not something introduced or owed by this task
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-461/.superpowers/sdd/2026-08-08-sma-461-agentcore-a2a-agui/task-4-report.md`</result>
+<usage><subagent_tokens>156840</subagent_tokens><tool_uses>35</tool_uses><duration_ms>421304</duration_ms></usage>
+</task-notification>
