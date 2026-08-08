@@ -92,110 +92,79 @@ pub(crate) mod event {
     use serde_json::{json, Value};
 
     /// `RUN_STARTED`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this on the run's
-    // first event. Until it lands, only this module's own tests call it. Remove
-    // this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) on the run's first event.
     pub(crate) fn run_started(thread_id: &str, run_id: &str) -> Value {
         json!({"type": "RUN_STARTED", "threadId": thread_id, "runId": run_id})
     }
 
     /// `RUN_FINISHED`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this on the run's
-    // terminal event. Until it lands, only this module's own tests call it. Remove
-    // this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) on the run's terminal event.
     pub(crate) fn run_finished(thread_id: &str, run_id: &str) -> Value {
         json!({"type": "RUN_FINISHED", "threadId": thread_id, "runId": run_id})
     }
 
     /// `RUN_ERROR`.
-    // Two future callers: `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) for
-    // an in-stream `AGENT_ERROR`, and `error_stream` (SMA-461 Task 6,
-    // src/agui/sse.rs) for a pre-stream HTTP error. Until they land, only this
-    // module's own tests call it. Remove this `allow` once those callers land.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) for an in-stream
+    // `AGENT_ERROR`. A second future caller, `error_stream` (SMA-461 Task 6,
+    // src/agui/sse.rs), will also use this for a pre-stream HTTP error.
     pub(crate) fn run_error(code: &str, message: &str) -> Value {
         json!({"type": "RUN_ERROR", "code": code, "message": message})
     }
 
     /// `STEP_STARTED`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this when a turn
-    // opens. Until it lands, only this module's own tests call it. Remove this
-    // `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) when a turn opens.
     pub(crate) fn step_started(name: &str) -> Value {
         json!({"type": "STEP_STARTED", "stepName": name})
     }
 
     /// `STEP_FINISHED`.
-    // `EventMapper::push`/`finish` (SMA-461 Task 5, src/agui/map.rs) call this when
-    // a turn closes. Until it lands, only this module's own tests call it. Remove
-    // this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push`/`finish` (src/agui/map.rs) when a turn closes.
     pub(crate) fn step_finished(name: &str) -> Value {
         json!({"type": "STEP_FINISHED", "stepName": name})
     }
 
     /// `TEXT_MESSAGE_START`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this when a text
-    // block opens. Until it lands, only this module's own tests call it. Remove
-    // this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) when a text block opens.
     pub(crate) fn text_message_start(message_id: &str) -> Value {
         json!({"type": "TEXT_MESSAGE_START", "messageId": message_id, "role": "assistant"})
     }
 
     /// `TEXT_MESSAGE_CONTENT`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this per text
-    // delta. Until it lands, only this module's own tests call it. Remove this
-    // `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) per text delta.
     pub(crate) fn text_message_content(message_id: &str, delta: &str) -> Value {
         json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": delta})
     }
 
     /// `TEXT_MESSAGE_END`.
-    // `EventMapper::push`/`finish` (SMA-461 Task 5, src/agui/map.rs) call this when
-    // a text block closes. Until it lands, only this module's own tests call it.
-    // Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push`/`finish` (src/agui/map.rs) when a text block
+    // closes.
     pub(crate) fn text_message_end(message_id: &str) -> Value {
         json!({"type": "TEXT_MESSAGE_END", "messageId": message_id})
     }
 
     /// `THINKING_TEXT_MESSAGE_START`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this when a
-    // thinking block opens. Until it lands, only this module's own tests call it.
-    // Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) when a thinking block opens.
     pub(crate) fn thinking_start(message_id: &str) -> Value {
         json!({"type": "THINKING_TEXT_MESSAGE_START", "messageId": message_id})
     }
 
     /// `THINKING_TEXT_MESSAGE_CONTENT`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this per thinking
-    // delta. Until it lands, only this module's own tests call it. Remove this
-    // `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) per thinking delta.
     pub(crate) fn thinking_content(message_id: &str, delta: &str) -> Value {
         json!({"type": "THINKING_TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": delta})
     }
 
     /// `THINKING_TEXT_MESSAGE_END`.
-    // `EventMapper::push`/`finish` (SMA-461 Task 5, src/agui/map.rs) call this when
-    // a thinking block closes. Until it lands, only this module's own tests call
-    // it. Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push`/`finish` (src/agui/map.rs) when a thinking
+    // block closes.
     pub(crate) fn thinking_end(message_id: &str) -> Value {
         json!({"type": "THINKING_TEXT_MESSAGE_END", "messageId": message_id})
     }
 
     /// `TOOL_CALL_START`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this on the first
-    // delta for a call id. Until it lands, only this module's own tests call it.
-    // Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) on the first delta for a
+    // call id (or, absent any deltas, when a `ToolCallItem` synthesizes the
+    // whole triple).
     pub(crate) fn tool_call_start(call_id: &str, name: &str, parent: &str) -> Value {
         json!({
             "type": "TOOL_CALL_START",
@@ -206,37 +175,28 @@ pub(crate) mod event {
     }
 
     /// `TOOL_CALL_ARGS`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this per
-    // tool-call argument delta. Until it lands, only this module's own tests call
-    // it. Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) per tool-call argument
+    // delta.
     pub(crate) fn tool_call_args(call_id: &str, delta: &str) -> Value {
         json!({"type": "TOOL_CALL_ARGS", "toolCallId": call_id, "delta": delta})
     }
 
     /// `TOOL_CALL_END`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this once a
-    // tool-call item is materialized. Until it lands, only this module's own tests
-    // call it. Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) once a tool-call item is
+    // materialized.
     pub(crate) fn tool_call_end(call_id: &str) -> Value {
         json!({"type": "TOOL_CALL_END", "toolCallId": call_id})
     }
 
     /// `TOOL_CALL_RESULT`.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this on a
-    // `ToolResult` item. Until it lands, only this module's own tests call it.
-    // Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) on a `ToolResult` item.
     pub(crate) fn tool_call_result(call_id: &str, content: &str) -> Value {
         json!({"type": "TOOL_CALL_RESULT", "toolCallId": call_id, "content": content})
     }
 
     /// `CUSTOM` — the escape hatch for Helikon events AG-UI has no native type for.
-    // `EventMapper::push` (SMA-461 Task 5, src/agui/map.rs) calls this for any
-    // `AgentEvent` with no direct AG-UI equivalent. Until it lands, only this
-    // module's own tests call it. Remove this `allow` once that caller lands.
-    #[allow(dead_code)]
+    // Called by `EventMapper::push` (src/agui/map.rs) for any `AgentEvent` with no
+    // direct AG-UI equivalent, including unknown (`#[non_exhaustive]`) variants.
     pub(crate) fn custom(name: &str, value: Value) -> Value {
         json!({"type": "CUSTOM", "name": name, "value": value})
     }
