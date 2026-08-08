@@ -118,13 +118,15 @@ impl EventMapper {
                 out.push(event::step_started("turn"));
             }
             AgentEvent::TokenDelta { text } => {
+                self.close_call(&mut out);
                 self.open_text(TextKind::Message, &mut out);
-                self.streamed_text = true;
                 if !text.is_empty() {
+                    self.streamed_text = true;
                     out.push(event::text_message_content(&self.current_message, text));
                 }
             }
             AgentEvent::ReasoningDelta { text } => {
+                self.close_call(&mut out);
                 self.open_text(TextKind::Thinking, &mut out);
                 if !text.is_empty() {
                     out.push(event::thinking_content(&self.current_message, text));
@@ -140,13 +142,17 @@ impl EventMapper {
                     // A different call (or none) is open: close it before opening this
                     // one, so two calls' spans never overlap.
                     self.close_call(&mut out);
-                    out.push(event::tool_call_start(
-                        call_id,
-                        name.as_deref().unwrap_or("unknown"),
-                        &self.current_message,
-                    ));
+                    // Only a genuinely new id gets a START; an id already in
+                    // `emitted_calls` was started (and closed) earlier — this delta is
+                    // a continuation of that same call, not a second one.
+                    if self.emitted_calls.insert(call_id.clone()) {
+                        out.push(event::tool_call_start(
+                            call_id,
+                            name.as_deref().unwrap_or("unknown"),
+                            &self.current_message,
+                        ));
+                    }
                     self.open_call = Some(call_id.clone());
-                    self.emitted_calls.insert(call_id.clone());
                 }
                 out.push(event::tool_call_args(call_id, args_delta));
             }
@@ -180,6 +186,7 @@ impl EventMapper {
                 }
             }
             AgentEvent::ToolOutputItem { item } => {
+                self.close_call(&mut out);
                 self.close_text(&mut out);
                 if let Item::ToolResult { call_id, content } = item {
                     out.push(event::tool_call_result(call_id, &text_of(content)));
@@ -887,6 +894,99 @@ mod tests {
         assert!(
             !t.iter().any(|k| k == "TEXT_MESSAGE_CONTENT"),
             "empty delta must not produce a CONTENT frame: {t:?}"
+        );
+    }
+
+    /// Regression (review round 2, controller-escalated Important): an empty
+    /// `TokenDelta` must not mark the turn as "already streamed" — doing so suppresses
+    /// `MessageOutput`'s synthesis branch and the entire assistant message vanishes.
+    #[test]
+    fn empty_token_delta_does_not_suppress_message_output_synthesis() {
+        let mut m = mapper();
+        let mut frames = Vec::new();
+        frames.extend(m.push(&AgentEvent::TokenDelta {
+            text: String::new(),
+        }));
+        frames.extend(m.push(&AgentEvent::MessageOutput {
+            item: assistant("real text"),
+        }));
+        frames.extend(m.push(&AgentEvent::RunCompleted {
+            usage: TokenUsage::default(),
+        }));
+        let content_frames: Vec<&Value> = frames
+            .iter()
+            .filter(|f| f["type"] == "TEXT_MESSAGE_CONTENT")
+            .collect();
+        assert_eq!(
+            content_frames.len(),
+            1,
+            "assistant text must not be dropped: {frames:?}"
+        );
+        assert_eq!(content_frames[0]["delta"], "real text");
+    }
+
+    /// Regression (review round 2, Minor): a delta for a call id that was already
+    /// started *and closed* (because a different id's delta closed it) must not
+    /// re-emit `TOOL_CALL_START` — it is a continuation of the same call, not a second
+    /// one.
+    #[test]
+    fn a_delta_for_an_already_closed_call_id_does_not_re_start_it() {
+        let mut m = mapper();
+        let mut frames = Vec::new();
+        frames.extend(m.push(&AgentEvent::ToolCallDelta {
+            call_id: "a".to_owned(),
+            name: Some("first".to_owned()),
+            args_delta: "1".to_owned(),
+        }));
+        frames.extend(m.push(&AgentEvent::ToolCallDelta {
+            call_id: "b".to_owned(),
+            name: Some("second".to_owned()),
+            args_delta: "2".to_owned(),
+        }));
+        frames.extend(m.push(&AgentEvent::ToolCallDelta {
+            call_id: "a".to_owned(),
+            name: None,
+            args_delta: "3".to_owned(),
+        }));
+        let start_ids: Vec<&str> = frames
+            .iter()
+            .filter(|f| f["type"] == "TOOL_CALL_START")
+            .map(|f| f["toolCallId"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            start_ids,
+            vec!["a", "b"],
+            "each id must be started exactly once: {frames:?}"
+        );
+    }
+
+    /// Regression (review round 2, Minor): the single-active-span invariant that
+    /// applies to a second tool call's START must also apply to a foreign event type —
+    /// a `TokenDelta` (or `ReasoningDelta`/`ToolOutputItem`) arriving while a tool call
+    /// is open must close that call first.
+    #[test]
+    fn a_token_delta_closes_any_open_tool_call_first() {
+        let t = types(&[
+            AgentEvent::ToolCallDelta {
+                call_id: "tc1".to_owned(),
+                name: Some("search".to_owned()),
+                args_delta: "{}".to_owned(),
+            },
+            AgentEvent::TokenDelta {
+                text: "x".to_owned(),
+            },
+        ]);
+        let end = t
+            .iter()
+            .position(|k| k == "TOOL_CALL_END")
+            .expect("the open tool call must close");
+        let start = t
+            .iter()
+            .position(|k| k == "TEXT_MESSAGE_START")
+            .expect("text must open");
+        assert!(
+            end < start,
+            "TOOL_CALL_END must precede TEXT_MESSAGE_START: {t:?}"
         );
     }
 }
