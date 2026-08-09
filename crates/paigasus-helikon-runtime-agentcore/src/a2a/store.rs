@@ -54,8 +54,14 @@ pub const MAX_EVENTS_PER_TASK: usize = 512;
 
 /// Storage for A2A tasks and their event logs.
 ///
-/// Implementations must be safe to share across concurrent requests. See the
-/// [module docs](self) for the `subscribe` ordering requirement.
+/// Implementations must be safe to share across concurrent requests.
+///
+/// The subtle requirement is [`subscribe`](TaskStore::subscribe)'s: it replays a
+/// backlog and then tails live appends, and an event appended between those two phases
+/// must still be delivered. An implementation registers its wakeup *before* reading the
+/// backlog, never after — reading first leaves a window in which an append fires a
+/// notification nobody is waiting on yet, and that event is then lost until the next
+/// one happens to arrive.
 #[async_trait]
 pub trait TaskStore: Send + Sync {
     /// Insert a newly-created task.

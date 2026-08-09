@@ -110,13 +110,16 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 # user isn't resolvable, but the kernel only needs a numeric UID/GID — no NSS
 # lookup happens. The copied binary and CA bundle are world-readable/executable
 # (preserved root:root ownership, default mode from the builder stage), and both
-# HTTP ports (8080/8000) are unprivileged, so no capability is lost by dropping root.
+# protocol ports (8080/8000/9000) are unprivileged, so no capability is lost by dropping root.
 USER 65532:65532
 
-# 8080: the AgentCore HTTP-protocol contract's fixed port (AgentCoreServer::serve).
+# 8080: the HTTP-protocol contract's fixed port (AgentCoreServer::serve), and also
+#       AG-UI mode's (AgentCoreServer::serve_agui, feature `ag-ui`) — AWS gives the two
+#       protocols the same port, which is why they cannot both run in one container.
 # 8000: MCP-protocol mode's fixed port (AgentCoreServer::serve_mcp, feature `mcp`).
-# A given example binary only ever listens on one of the two at a time; both are
-# declared so the same Dockerfile documents either mode's contract.
-EXPOSE 8080 8000
+# 9000: A2A-protocol mode's fixed port (AgentCoreServer::serve_a2a, feature `a2a`).
+# A given example binary only ever listens on one of these at a time; all are declared
+# so the same Dockerfile documents every mode's contract.
+EXPOSE 8080 8000 9000
 
 ENTRYPOINT ["/agentcore-example"]
