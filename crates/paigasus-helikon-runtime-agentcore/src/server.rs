@@ -24,6 +24,13 @@ use crate::{
 /// [`AgentCoreServerBuilder::session_provider`].
 const DEFAULT_MAX_SESSIONS: usize = 4096;
 
+/// Capacity of the default [`InMemoryTaskStore`](crate::InMemoryTaskStore) when the
+/// caller does not supply one via
+/// [`AgentCoreServerBuilder::task_store`]. Smaller than
+/// [`DEFAULT_MAX_SESSIONS`] because a task retains its whole event log, not just a key.
+#[cfg(feature = "a2a")]
+const DEFAULT_MAX_TASKS: usize = 1024;
+
 // ── AppState ──────────────────────────────────────────────────────────────────
 
 /// Inner shared state; allocated once per [`AgentCoreServer`] and reference-counted.
@@ -45,6 +52,18 @@ pub(crate) struct AppStateInner<Ctx> {
     pub(crate) context: Arc<dyn ContextProvider<Ctx>>,
     /// Default run configuration applied to every invocation.
     pub(crate) run_config: RunConfig,
+    /// A2A task store backing `tasks/*`. Defaults to a bounded in-memory store.
+    #[cfg(feature = "a2a")]
+    pub(crate) tasks: Arc<dyn crate::TaskStore>,
+    /// Live-run cancellation tokens, keyed by A2A task id.
+    #[cfg(feature = "a2a")]
+    pub(crate) cancels: Arc<crate::a2a::cancel::CancelRegistry>,
+    /// Caller-supplied agent card, overriding the card derived from the agent.
+    #[cfg(feature = "a2a")]
+    pub(crate) card: Option<crate::AgentCard>,
+    /// Caller-supplied agent-card URL, used when `AGENTCORE_RUNTIME_URL` is unset.
+    #[cfg(feature = "a2a")]
+    pub(crate) card_url: Option<String>,
     /// Shared health-check state backing `GET /ping`.
     ping: Arc<PingState>,
 }
@@ -97,6 +116,12 @@ pub struct AgentCoreServerBuilder<Ctx> {
     sessions: Option<Arc<dyn SessionProvider>>,
     context: Option<Arc<dyn ContextProvider<Ctx>>>,
     run_config: RunConfig,
+    #[cfg(feature = "a2a")]
+    tasks: Option<Arc<dyn crate::TaskStore>>,
+    #[cfg(feature = "a2a")]
+    card: Option<crate::AgentCard>,
+    #[cfg(feature = "a2a")]
+    card_url: Option<String>,
 }
 
 impl<Ctx: Send + Sync + 'static> AgentCoreServerBuilder<Ctx> {
@@ -107,6 +132,12 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServerBuilder<Ctx> {
             sessions: None,
             context: None,
             run_config: RunConfig::default(),
+            #[cfg(feature = "a2a")]
+            tasks: None,
+            #[cfg(feature = "a2a")]
+            card: None,
+            #[cfg(feature = "a2a")]
+            card_url: None,
         }
     }
 
@@ -189,10 +220,56 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServerBuilder<Ctx> {
                     sessions,
                     context,
                     run_config: self.run_config,
+                    #[cfg(feature = "a2a")]
+                    tasks: self.tasks.unwrap_or_else(|| {
+                        Arc::new(crate::InMemoryTaskStore::new(DEFAULT_MAX_TASKS))
+                    }),
+                    #[cfg(feature = "a2a")]
+                    cancels: Arc::new(crate::a2a::cancel::CancelRegistry::default()),
+                    #[cfg(feature = "a2a")]
+                    card: self.card,
+                    #[cfg(feature = "a2a")]
+                    card_url: self.card_url,
                     ping: Arc::new(PingState::default()),
                 }),
             },
         })
+    }
+}
+
+/// A2A builder configuration. Gated on the `a2a` feature so the whole surface — fields,
+/// setters, and their `build()` initializers — compiles out together.
+#[cfg(feature = "a2a")]
+impl<Ctx: Send + Sync + 'static> AgentCoreServerBuilder<Ctx> {
+    /// Override the A2A task store. Defaults to a bounded
+    /// [`InMemoryTaskStore`](crate::InMemoryTaskStore).
+    ///
+    /// Supply a durable store to survive AgentCore's abrupt container termination — the
+    /// default loses every task with the microVM, which makes `tasks/get` and
+    /// `tasks/resubscribe` useless across a restart.
+    pub fn task_store(mut self, store: Arc<dyn crate::TaskStore>) -> Self {
+        self.tasks = Some(store);
+        self
+    }
+
+    /// Replace the agent card derived from the configured agent.
+    ///
+    /// Use this when the derived card is wrong for the deployment — most often to
+    /// publish the real agent version (the derived card reports *this crate's* version,
+    /// since a library cannot read its host binary's) or a curated skill list.
+    pub fn agent_card(mut self, card: crate::AgentCard) -> Self {
+        self.card = Some(card);
+        self
+    }
+
+    /// Set the agent card's `url` explicitly, for deployments where
+    /// `AGENTCORE_RUNTIME_URL` is not set.
+    ///
+    /// Ignored when [`agent_card`](AgentCoreServerBuilder::agent_card) supplies a
+    /// complete card, which carries its own url.
+    pub fn agent_card_url(mut self, url: impl Into<String>) -> Self {
+        self.card_url = Some(url.into());
+        self
     }
 }
 
@@ -294,6 +371,16 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
     /// [`ping_state`](AgentCoreServer::ping_state) style.
     #[cfg_attr(not(feature = "ag-ui"), allow(dead_code))]
     pub(crate) fn state_for_agui(&self) -> AppState<Ctx> {
+        self.state.clone()
+    }
+
+    /// Return a clone of the shared [`AppState`] for the A2A protocol mode's router.
+    ///
+    /// The A2A counterpart of [`state_for_agui`](AgentCoreServer::state_for_agui): its
+    /// handlers need the full state, including the `a2a`-gated task store, cancel
+    /// registry, and agent-card overrides.
+    #[cfg(feature = "a2a")]
+    pub(crate) fn state_for_a2a(&self) -> AppState<Ctx> {
         self.state.clone()
     }
 
