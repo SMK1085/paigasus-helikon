@@ -9,8 +9,10 @@
 //! `messages` as the whole conversation — the same shape MCP mode uses, and with the
 //! same consequence: AG-UI mode cannot use a persistent session backend in v0. The
 //! `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` header is still validated (a malformed
-//! header is a contract violation regardless of mode) and, when present, used only as a
-//! fallback source for the AG-UI `threadId` — never to look up a stored session.
+//! header is a contract violation regardless of mode) and, when present, takes
+//! precedence over the body's `threadId` as this run's thread id — platform-authoritative
+//! beats client-supplied, matching `crate::agui::ws` and A2A's `contextId` rule. It is
+//! never used to look up a stored session.
 //!
 //! [`Runner::run_streamed`]: paigasus_helikon_core::Runner::run_streamed
 //!

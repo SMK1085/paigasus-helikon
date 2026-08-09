@@ -43,7 +43,8 @@ pub(crate) struct AgUiMessage {
     #[allow(dead_code)]
     #[serde(default)]
     pub(crate) id: Option<String>,
-    /// `"user"`, `"assistant"`, `"system"`, or anything else (ignored).
+    /// `"user"`, `"assistant"`, `"system"`/`"developer"`. Any other role — including
+    /// AG-UI's `"tool"` — is dropped; see [`RunAgentInput::into_agent_input`].
     pub(crate) role: String,
     /// Message text. A message without content contributes nothing.
     #[serde(default)]
@@ -55,6 +56,15 @@ impl RunAgentInput {
     ///
     /// AG-UI mode is stateless per request (the client owns thread state), so *every*
     /// message becomes part of the input rather than only the newest turn.
+    ///
+    /// # Unmodelled roles are dropped, not reassigned
+    ///
+    /// AG-UI defines `tool` (tool results) and `developer` alongside the three roles
+    /// this runtime models. `developer` maps onto [`Item::System`]; everything else —
+    /// `tool` included — is dropped. Folding an unrecognised role into a user message
+    /// would be worse than losing it: a tool result relabelled as user input changes
+    /// the conversation the model actually sees, and attributes to the user something
+    /// they never said.
     // Both the AG-UI SSE endpoint (SMA-461 Task 6, src/agui/sse.rs) and the AG-UI
     // WebSocket endpoint (SMA-461 Task 7, src/agui/ws.rs) call this to seed the agent
     // run from the decoded request body.
@@ -67,12 +77,14 @@ impl RunAgentInput {
                 let text = m.content?;
                 let content = vec![ContentPart::Text { text }];
                 Some(match m.role.as_str() {
+                    "user" => Item::UserMessage { content },
                     "assistant" => Item::AssistantMessage {
                         content,
                         agent: None,
                     },
-                    "system" => Item::System { content },
-                    _ => Item::UserMessage { content },
+                    "system" | "developer" => Item::System { content },
+                    // Dropped rather than misattributed — see the method docs.
+                    _ => return None,
                 })
             })
             .collect();
@@ -163,13 +175,22 @@ pub(crate) mod event {
     // Called by `EventMapper::push` (src/agui/map.rs) on the first delta for a
     // call id (or, absent any deltas, when a `ToolCallItem` synthesizes the
     // whole triple).
+    ///
+    /// `parentMessageId` is **omitted** when no message is open rather than emitted as
+    /// `""`. A tool call can precede any assistant text, and AG-UI treats the field as
+    /// optional; an empty string is a present-but-unresolvable reference, so a client
+    /// resolving the parent by id would find nothing where absence would have told it
+    /// there is no parent.
     pub(crate) fn tool_call_start(call_id: &str, name: &str, parent: &str) -> Value {
-        json!({
+        let mut frame = json!({
             "type": "TOOL_CALL_START",
             "toolCallId": call_id,
             "toolCallName": name,
-            "parentMessageId": parent,
-        })
+        });
+        if !parent.is_empty() {
+            frame["parentMessageId"] = Value::String(parent.to_owned());
+        }
+        frame
     }
 
     /// `TOOL_CALL_ARGS`.

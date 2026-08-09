@@ -264,7 +264,10 @@ where
     let Ok(value) = serde_json::to_value(&event) else {
         return;
     };
-    for frame in budget.admit(value).await {
+    // Pace immediately before each write, never once for the whole batch — see
+    // `FrameBudget::frames`.
+    for frame in budget.frames(value) {
+        budget.tick().await;
         if sink.send(Message::text(frame)).await.is_err() {
             return;
         }

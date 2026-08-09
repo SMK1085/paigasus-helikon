@@ -132,6 +132,9 @@ impl EventMapper {
             }
             AgentEvent::TurnStarted { .. } => {
                 self.close_text(&mut out);
+                // A tool-call span must not cross the `STEP_FINISHED`/`STEP_STARTED`
+                // boundary below — it would close inside the *next* step.
+                self.close_call(&mut out);
                 self.close_step(&mut out);
                 self.streamed_text = false;
                 self.step_open = true;
@@ -251,6 +254,10 @@ impl EventMapper {
                 }
             }
             AgentEvent::MessageOutput { item } => {
+                // Take the single active span before emitting anything: a synthesized
+                // text triple nested inside an open `TOOL_CALL_START` would break
+                // AG-UI's one-active-span rule.
+                self.close_call(&mut out);
                 if self.streamed_text {
                     // Deltas already streamed this text; only close it.
                     self.close_text(&mut out);
@@ -497,6 +504,47 @@ mod tests {
     /// that cannot satisfy the stronger one: a delta revisiting an id whose span a
     /// foreign event already closed can only be rendered as a *second* span for that
     /// id (see `a_delta_revisiting_a_closed_id_keeps_its_args_and_its_name`).
+    /// Regression (CodeRabbit, PR #186): a `MessageOutput` synthesizing its own text
+    /// triple must not nest that triple inside a still-open tool call. Reachable today
+    /// with a `ToolCallDelta` followed by a `MessageOutput` that streamed no deltas.
+    #[test]
+    fn a_synthesized_message_does_not_nest_inside_an_open_tool_call() {
+        let mut m = EventMapper::new("t".to_owned(), "r".to_owned());
+        let mut frames = Vec::new();
+        frames.extend(m.push(&AgentEvent::ToolCallDelta {
+            call_id: "tc1".to_owned(),
+            name: Some("search".to_owned()),
+            args_delta: "{}".to_owned(),
+        }));
+        frames.extend(m.push(&AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: vec![ContentPart::Text {
+                    text: "done".to_owned(),
+                }],
+                agent: None,
+            },
+        }));
+        frames.extend(m.finish());
+        assert_tool_call_nesting(&frames);
+    }
+
+    /// Regression (CodeRabbit, PR #186): a tool-call span must not cross a
+    /// `STEP_FINISHED`/`STEP_STARTED` boundary.
+    #[test]
+    fn a_tool_call_span_does_not_cross_a_turn_boundary() {
+        let mut m = EventMapper::new("t".to_owned(), "r".to_owned());
+        let mut frames = Vec::new();
+        frames.extend(m.push(&AgentEvent::TurnStarted { turn: 1 }));
+        frames.extend(m.push(&AgentEvent::ToolCallDelta {
+            call_id: "tc1".to_owned(),
+            name: Some("search".to_owned()),
+            args_delta: "{}".to_owned(),
+        }));
+        frames.extend(m.push(&AgentEvent::TurnStarted { turn: 2 }));
+        frames.extend(m.finish());
+        assert_tool_call_nesting(&frames);
+    }
+
     fn assert_tool_call_nesting(frames: &[Value]) {
         let mut open: Option<&str> = None;
         for f in frames {
@@ -527,7 +575,16 @@ mod tests {
                     );
                     open = None;
                 }
-                _ => {}
+                // Nothing else may appear inside a call's span. Checking only the
+                // `TOOL_CALL_*` frames would let a text triple or a step boundary nest
+                // inside an open call and still pass — which is exactly how two
+                // missing `close_call`s once went unnoticed here.
+                other => {
+                    assert!(
+                        open.is_none(),
+                        "{other} emitted while tool call {open:?} is still open: {frames:?}"
+                    );
+                }
             }
         }
         assert!(open.is_none(), "a tool call was left open: {frames:?}");

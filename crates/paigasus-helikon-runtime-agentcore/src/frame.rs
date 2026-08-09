@@ -22,6 +22,10 @@ pub(crate) const MAX_FRAME_BYTES: usize = 60_000;
 /// to back across a reset and double the effective rate right at the boundary.
 pub(crate) const FRAME_RATE_CAP: u32 = 200;
 
+/// Slack left around a split field's own quotes and separators, on top of the measured
+/// envelope, so a chunk cannot overrun the cap through JSON punctuation alone.
+const SPLIT_HEADROOM_BYTES: usize = 16;
+
 /// How an oversize frame is broken up.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SplitStrategy {
@@ -68,26 +72,34 @@ impl FrameBudget {
         }
     }
 
-    /// Turn one logical event into the wire-ready text frames for it, awaiting any
-    /// pacing delay first.
+    /// Turn one logical event into the wire-ready text frames for it.
     ///
     /// Always returns at least one frame. Every returned frame is at most
     /// `MAX_FRAME_BYTES` serialized bytes.
-    pub(crate) async fn admit(&mut self, frame: Value) -> Vec<String> {
-        let frames = self.split(frame);
-        for _ in 0..frames.len() {
-            self.tick().await;
-        }
-        frames
+    ///
+    /// **Deliberately synchronous, and deliberately not paced.** Call
+    /// [`tick`](FrameBudget::tick) immediately *before writing each* returned frame, so
+    /// the delay lands between writes. An earlier version did all the waiting inside
+    /// this method and handed back the whole batch, which meant the caller then wrote
+    /// every frame back to back: the connection slept for the accumulated delay and
+    /// then put the entire burst on the wire in one go — precisely the shape
+    /// `FRAME_RATE_CAP` exists to prevent, since the pacer's bookkeeping stayed correct
+    /// while the wire timing did not. Splitting the two makes that mistake unavailable:
+    /// this function cannot await, so pacing can only happen at the send site.
+    pub(crate) fn frames(&mut self, frame: Value) -> Vec<String> {
+        self.split(frame)
     }
 
     /// Consume one frame from the rate budget, sleeping until the trailing
     /// one-second window has room.
     ///
+    /// Call immediately before writing the frame this reserves capacity for — see
+    /// [`frames`](FrameBudget::frames).
+    ///
     /// A trailing window (rather than a fixed resetting window) is required: a
     /// fixed window admits up to 2x the cap across a reset boundary, which a real
     /// sliding-window limiter on AgentCore's side would reject.
-    async fn tick(&mut self) {
+    pub(crate) async fn tick(&mut self) {
         const WINDOW: Duration = Duration::from_secs(1);
         loop {
             let now = tokio::time::Instant::now();
@@ -140,8 +152,15 @@ impl FrameBudget {
         let mut probe = frame.clone();
         probe[field] = Value::String(String::new());
         let overhead = probe.to_string().len();
+        // The event's *other* fields already fill the frame: there is no budget left to
+        // put content in. Splitting in place would emit one still-oversize frame per
+        // character, breaking the documented size guarantee and exploding the frame count.
+        // The envelope strategy is the only one that can bound this.
+        if overhead + SPLIT_HEADROOM_BYTES >= MAX_FRAME_BYTES {
+            return self.split_envelope(&frame.to_string());
+        }
         // Worst case each char serializes to 6 bytes ("\uXXXX"), so budget conservatively.
-        let budget = MAX_FRAME_BYTES.saturating_sub(overhead + 16) / 6;
+        let budget = MAX_FRAME_BYTES.saturating_sub(overhead + SPLIT_HEADROOM_BYTES) / 6;
         let budget = budget.max(1);
 
         let mut out = Vec::new();
@@ -214,10 +233,82 @@ mod tests {
         "a".repeat(n)
     }
 
+    /// Regression (CodeRabbit, PR #186): when the event's *other* fields alone fill the
+    /// frame, in-place splitting has no budget left — it emitted one still-oversize
+    /// frame per character. The envelope strategy has to take over.
+    #[tokio::test]
+    async fn a_split_field_with_no_room_left_falls_back_to_the_envelope() {
+        let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
+        // `messageId` alone exceeds the cap, so no chunk of `delta` can ever fit
+        // alongside it.
+        let out = b.frames(json!({
+            "type": "TEXT_MESSAGE_CONTENT",
+            "messageId": big_text(MAX_FRAME_BYTES + 5_000),
+            "delta": big_text(50_000),
+        }));
+
+        assert!(out.len() > 1, "an oversize frame must be split");
+        for f in &out {
+            assert!(
+                f.len() <= MAX_FRAME_BYTES,
+                "emitted frame of {} bytes exceeds the cap",
+                f.len()
+            );
+        }
+        assert!(
+            out.len() < 10_000,
+            "one frame per character means the budget collapsed: {} frames",
+            out.len()
+        );
+        let reassembled: String = out
+            .iter()
+            .map(|f| {
+                let v: Value = serde_json::from_str(f).unwrap();
+                assert_eq!(v["type"], "helikon.chunk");
+                v["data"].as_str().unwrap().to_owned()
+            })
+            .collect();
+        let inner: Value = serde_json::from_str(&reassembled).unwrap();
+        assert_eq!(inner["type"], "TEXT_MESSAGE_CONTENT");
+    }
+
+    /// Regression (CodeRabbit, PR #186): splitting must not consume the rate budget.
+    /// Pacing belongs at the send site, one `tick` per write — if `frames` charged the
+    /// budget itself, the caller would sleep for the whole batch and then burst every
+    /// frame onto the wire at once.
+    #[tokio::test(start_paused = true)]
+    async fn splitting_does_not_consume_the_rate_budget() {
+        let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
+        let start = tokio::time::Instant::now();
+
+        // Split several oversize events without writing any of them.
+        for _ in 0..5 {
+            let out = b.frames(
+                json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": big_text(500_000)}),
+            );
+            assert!(out.len() > 1);
+        }
+        assert_eq!(
+            start.elapsed(),
+            Duration::ZERO,
+            "splitting must not await anything"
+        );
+
+        // A full window's worth of writes is still available afterwards.
+        for _ in 0..FRAME_RATE_CAP {
+            b.tick().await;
+        }
+        assert_eq!(
+            start.elapsed(),
+            Duration::ZERO,
+            "splitting must not have charged the rate budget"
+        );
+    }
+
     #[tokio::test]
     async fn small_frame_passes_through_unwrapped() {
         let mut b = FrameBudget::new();
-        let out = b.admit(json!({"type": "RUN_STARTED", "runId": "r1"})).await;
+        let out = b.frames(json!({"type": "RUN_STARTED", "runId": "r1"}));
         assert_eq!(out.len(), 1);
         let parsed: serde_json::Value = serde_json::from_str(&out[0]).unwrap();
         assert_eq!(parsed["type"], "RUN_STARTED");
@@ -230,9 +321,9 @@ mod tests {
     #[tokio::test]
     async fn every_emitted_frame_is_within_the_size_cap() {
         let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
-        let out = b
-            .admit(json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": big_text(500_000)}))
-            .await;
+        let out = b.frames(
+            json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": big_text(500_000)}),
+        );
         assert!(out.len() > 1, "an oversize frame must be split");
         for f in &out {
             assert!(
@@ -247,9 +338,8 @@ mod tests {
     async fn content_split_preserves_the_payload_and_the_event_type() {
         let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
         let original = big_text(200_000);
-        let out = b
-            .admit(json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": original}))
-            .await;
+        let out =
+            b.frames(json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": original}));
         let mut reassembled = String::new();
         for f in &out {
             let v: serde_json::Value = serde_json::from_str(f).unwrap();
@@ -269,9 +359,8 @@ mod tests {
     async fn content_split_never_lands_mid_codepoint() {
         let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
         let original = "→".repeat(100_000); // 3 bytes each
-        let out = b
-            .admit(json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": original}))
-            .await;
+        let out =
+            b.frames(json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": original}));
         let mut reassembled = String::new();
         for f in &out {
             let v: serde_json::Value = serde_json::from_str(f).unwrap();
@@ -288,9 +377,8 @@ mod tests {
         let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
         // 20k control chars -> "" (6 bytes) each -> ~120 KB serialized.
         let payload: String = "\u{1}".repeat(20_000);
-        let out = b
-            .admit(json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": payload}))
-            .await;
+        let out =
+            b.frames(json!({"type": "TEXT_MESSAGE_CONTENT", "messageId": "m0", "delta": payload}));
         assert!(out.len() > 1, "escaping must be accounted for");
         for f in &out {
             assert!(
@@ -304,9 +392,7 @@ mod tests {
     #[tokio::test]
     async fn unsplittable_events_fall_back_to_the_chunk_envelope() {
         let mut b = FrameBudget::new_with_splitter(SplitStrategy::Envelope);
-        let out = b
-            .admit(json!({"type": "TOOL_CALL_RESULT", "content": big_text(200_000)}))
-            .await;
+        let out = b.frames(json!({"type": "TOOL_CALL_RESULT", "content": big_text(200_000)}));
         assert!(out.len() > 1);
         let mut reassembled = String::new();
         for (i, f) in out.iter().enumerate() {
@@ -325,13 +411,11 @@ mod tests {
     #[tokio::test]
     async fn an_oversize_frame_with_an_empty_split_field_still_emits() {
         let mut b = FrameBudget::new_with_splitter(SplitStrategy::Content { field: "delta" });
-        let out = b
-            .admit(json!({
-                "type": "TEXT_MESSAGE_CONTENT",
-                "messageId": big_text(200_000),
-                "delta": ""
-            }))
-            .await;
+        let out = b.frames(json!({
+            "type": "TEXT_MESSAGE_CONTENT",
+            "messageId": big_text(200_000),
+            "delta": ""
+        }));
         assert!(!out.is_empty(), "an oversize frame must never be dropped");
         for f in &out {
             assert!(
@@ -350,7 +434,8 @@ mod tests {
         let mut b = FrameBudget::new();
         let start = tokio::time::Instant::now();
         for i in 0..(FRAME_RATE_CAP + 1) {
-            b.admit(json!({"type": "STEP_STARTED", "n": i})).await;
+            b.tick().await;
+            let _ = b.frames(json!({"type": "STEP_STARTED", "n": i}));
         }
         assert!(
             start.elapsed() >= std::time::Duration::from_secs(1),
@@ -366,8 +451,8 @@ mod tests {
         let mut b = FrameBudget::new();
         let start = tokio::time::Instant::now();
         for i in 0..(FRAME_RATE_CAP + 1) {
-            b.admit(json!({"type": "TOOL_CALL_RESULT", "toolCallId": format!("t{i}")}))
-                .await;
+            b.tick().await;
+            let _ = b.frames(json!({"type": "TOOL_CALL_RESULT", "toolCallId": format!("t{i}")}));
         }
         assert!(start.elapsed() >= std::time::Duration::from_secs(1));
     }
@@ -379,7 +464,8 @@ mod tests {
         let mut b = FrameBudget::new();
         let mut stamps = Vec::new();
         for i in 0..(FRAME_RATE_CAP * 2 + 5) {
-            b.admit(json!({"type": "STEP_STARTED", "n": i})).await;
+            b.tick().await;
+            let _ = b.frames(json!({"type": "STEP_STARTED", "n": i}));
             stamps.push(tokio::time::Instant::now());
         }
         for (i, t) in stamps.iter().enumerate() {
@@ -414,12 +500,13 @@ mod tests {
 
         tokio::time::advance(Duration::from_millis(900)).await;
         for i in 0..FRAME_RATE_CAP {
-            b.admit(json!({"type": "STEP_STARTED", "n": i})).await;
+            b.tick().await;
+            let _ = b.frames(json!({"type": "STEP_STARTED", "n": i}));
             stamps.push(tokio::time::Instant::now());
         }
         for i in 0..FRAME_RATE_CAP {
-            b.admit(json!({"type": "STEP_STARTED", "n": FRAME_RATE_CAP + i}))
-                .await;
+            b.tick().await;
+            let _ = b.frames(json!({"type": "STEP_STARTED", "n": FRAME_RATE_CAP + i}));
             stamps.push(tokio::time::Instant::now());
         }
 

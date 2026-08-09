@@ -382,7 +382,10 @@ where
     S: futures_util::Sink<Message> + Unpin,
 {
     for frame in frames {
-        for wire_frame in budget.admit(frame).await {
+        // Pace immediately before each write, never once for the whole batch — see
+        // `FrameBudget::frames`.
+        for wire_frame in budget.frames(frame) {
+            budget.tick().await;
             if sink.send(Message::text(wire_frame)).await.is_err() {
                 return;
             }

@@ -378,12 +378,26 @@ async fn tasks_cancel<Ctx: Send + Sync + 'static>(
         );
     }
 
-    match state
+    // Both non-terminal states are legal starting points. `resolve_task` creates a task
+    // `submitted` and `start_run` registers its cancel token *before* the driver swaps
+    // to `working`, so a cancel landing in that window finds `submitted` — swapping only
+    // from `working` would refuse it and report a terminal state the task never reached.
+    let swapped = match state
         .tasks
         .update_state(&task_id, TaskState::Working, TaskState::Canceled)
         .await
     {
-        // Refused: the run reached its own terminal first. Leave it alone.
+        Ok(false) => {
+            state
+                .tasks
+                .update_state(&task_id, TaskState::Submitted, TaskState::Canceled)
+                .await
+        }
+        other => other,
+    };
+
+    match swapped {
+        // Refused from both: the run reached its own terminal first. Leave it alone.
         Ok(false) => rpc_err(
             id,
             rpc_error::TASK_NOT_CANCELABLE,
@@ -1159,6 +1173,57 @@ mod tests {
         assert_eq!(
             v["result"]["status"]["state"], "canceled",
             "a live task must cancel: {v}"
+        );
+    }
+
+    /// Regression (CodeRabbit, PR #186): `resolve_task` creates a task `submitted` and
+    /// `start_run` registers its cancel token *before* the driver swaps it to `working`.
+    /// A cancel landing in that window used to fire the token, fail the
+    /// `working -> canceled` swap, and answer "-32002 reached a terminal state" about a
+    /// task that was not terminal — leaving it anything but `canceled`.
+    #[tokio::test]
+    async fn cancelling_a_task_still_in_submitted_reports_canceled() {
+        let store = Arc::new(crate::InMemoryTaskStore::new(8));
+        store
+            .create(crate::Task {
+                id: "pending".to_owned(),
+                context_id: "ctx".to_owned(),
+                status: crate::TaskStatus {
+                    state: crate::TaskState::Submitted,
+                    timestamp: "2026-08-08T00:00:00Z".to_owned(),
+                },
+                artifacts: vec![],
+                kind: crate::TaskKind::Task,
+            })
+            .await
+            .unwrap();
+        let s = AgentCoreServer::builder()
+            .agent(Arc::new(SlowAgent))
+            .with_default_context()
+            .task_store(Arc::clone(&store) as Arc<dyn crate::TaskStore>)
+            .build()
+            .expect("server builds");
+
+        // Register a live token for the task without letting a driver advance it past
+        // `submitted` — exactly the window between registration and the first swap.
+        s.state_for_a2a().cancels.register(
+            "pending".to_owned(),
+            paigasus_helikon_core::CancellationToken::new(),
+        );
+
+        let v = post_rpc(
+            &s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tasks/cancel","params":{"id":"pending"}}"#,
+        )
+        .await;
+        assert_eq!(
+            v["result"]["status"]["state"], "canceled",
+            "a submitted task with a live run must cancel, not report a false error: {v}"
+        );
+        assert_eq!(
+            store.get("pending").await.unwrap().unwrap().status.state,
+            crate::TaskState::Canceled,
+            "the stored state must reflect the cancellation"
         );
     }
 

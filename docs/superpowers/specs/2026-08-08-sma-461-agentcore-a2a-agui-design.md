@@ -376,6 +376,14 @@ pub trait TaskStore: Send + Sync {
     /// Returns the sequence number **assigned to this event**.
     async fn append_event(&self, id: &str, event: TaskEvent) -> Result<u64, AgentCoreError>;
 
+    /// Replace a task's artifacts, so a later `tasks/get` reports the same output the
+    /// original `message/send` returned.
+    async fn set_artifacts(
+        &self,
+        id: &str,
+        artifacts: Vec<Artifact>,
+    ) -> Result<(), AgentCoreError>;
+
     /// Replay from `from` (**inclusive**), then live-tail until the task is terminal.
     async fn subscribe(
         &self,
@@ -384,6 +392,11 @@ pub trait TaskStore: Send + Sync {
     ) -> Result<BoxStream<'static, TaskEvent>, AgentCoreError>;
 }
 ```
+
+**`set_artifacts` was added during implementation.** `message/send` returns the finished `Task`,
+and that task has to carry its artifacts; none of the other five methods can write them, so
+`tasks/get` would otherwise report an artifact-less copy of the task the caller had just been
+handed. It is part of the trait a custom durable store must implement.
 
 **`subscribe` replaces the earlier draft's `events_since`**, which was a snapshot read with no
 wakeup primitive — "replay then live-tail" had no mechanism behind it, and any implementation
