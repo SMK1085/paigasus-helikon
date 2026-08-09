@@ -121,9 +121,8 @@ jobs:
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      # Swatinem/rust-cache v2.9.1 — cache-on-failure because this job is expected
+      # Swatinem/rust-cache v2.9.2 — cache-on-failure because this job is expected
       # to go red sometimes, and a red run must still warm the cache for the next.
-      # Swatinem/rust-cache v2.9.2
       - if: steps.decide.outputs.run == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:

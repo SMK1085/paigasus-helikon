@@ -35,9 +35,9 @@ The ticket also states `commits`/`msrv` use `fetch-depth: 0`. Only two sites in 
 
 ### 1.2 The real finding: moving tags
 
-CLAUDE.md is unambiguous — *"pin to its commit SHA (never a moving `@vN` tag)"*. Six sites
-violate this today, all outside the SMA-457 blast radius and therefore never reviewed against
-that rule:
+CLAUDE.md is unambiguous — *"pin to its commit SHA (never a moving `@vN` tag)"*. Nine `uses:`
+sites violate this today — four in `msrv.yml`, five in `sbom.yml` — all outside the SMA-457 blast
+radius and therefore never reviewed against that rule:
 
 | Site | Ref | Class |
 | --- | --- | --- |
@@ -102,7 +102,8 @@ or the step breaks. This is the one edit in this PR that is not purely textual.
 
 ### D4 — Add `persist-credentials: false` to the two swept checkouts
 
-All 13 other checkout sites set it; `msrv.yml` and `sbom.yml` are the only omissions. Neither
+The repo has 18 checkout sites; the other 16 all set it, and `msrv.yml`/`sbom.yml` are the only
+omissions. Neither
 job pushes or otherwise uses the git credential afterwards (`cargo msrv verify`;
 `cargo cyclonedx` + an API-based release upload), so persisting the token is exposure with no
 benefit — and `sbom.yml` holds `contents: write`. Confirmed in scope with the ticket owner.

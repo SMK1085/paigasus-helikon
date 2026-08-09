@@ -92,6 +92,15 @@ Run all of these before committing; every one must pass.
    via `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` that the tag resolves to the pinned SHA
    (dereferencing annotated tags). `dtolnay/rust-toolchain` is exempt — its comment names a branch
    and a date, not a tag (D2).
+
+   **Do not anchor the comment regex at `$`.** Several comments carry the version inside prose —
+   `# Swatinem/rust-cache v2.9.1 — cache-on-failure because this job is expected to go red…` — and
+   an end-anchored pattern silently skips every one of them. The first pass did exactly that: it
+   reported 46/46 green while a stale `v2.9.1` sat in `integration.yml`, and it also failed to
+   notice that the edit had *stacked a duplicate* comment above the step rather than updating the
+   existing one. CodeRabbit caught it on PR #185. Allow a trailing `\s` or end-of-line after the
+   version, and scan ~6 lines ahead for the `uses:` line so a multi-line comment plus an `- if:`
+   guard still resolves. Correctly scoped, the check covers 56 pairs, not 46.
 3. **YAML parses** for all nine workflows.
 4. **`actionlint`** clean if available (`brew install actionlint`); it independently flags unpinned
    actions and bad `with:` keys — notably it would catch a missing `toolchain:` input.
