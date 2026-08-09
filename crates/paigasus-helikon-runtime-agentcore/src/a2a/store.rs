@@ -94,6 +94,21 @@ pub trait TaskStore: Send + Sync {
         next: TaskState,
     ) -> Result<bool, AgentCoreError>;
 
+    /// Replace a task's artifacts.
+    ///
+    /// Called once a run has produced its output, so that a task fetched later by
+    /// `tasks/get` carries the same artifacts the original `message/send` returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentCoreError::NotFound`] if the task does not exist, or
+    /// [`AgentCoreError::Internal`] if the backing store fails.
+    async fn set_artifacts(
+        &self,
+        id: &str,
+        artifacts: Vec<crate::Artifact>,
+    ) -> Result<(), AgentCoreError>;
+
     /// Append one event to a task's log, returning the sequence number assigned to it.
     ///
     /// The `seq` field of the supplied event is ignored; the store assigns it.
@@ -233,6 +248,20 @@ impl TaskStore for InMemoryTaskStore {
         record.task.status.timestamp = now_rfc3339();
         record.notify.notify_waiters();
         Ok(true)
+    }
+
+    async fn set_artifacts(
+        &self,
+        id: &str,
+        artifacts: Vec<crate::Artifact>,
+    ) -> Result<(), AgentCoreError> {
+        let mut inner = self.inner.lock().await;
+        let record = inner
+            .tasks
+            .get_mut(id)
+            .ok_or_else(|| AgentCoreError::NotFound(format!("task {id}")))?;
+        record.task.artifacts = artifacts;
+        Ok(())
     }
 
     async fn append_event(&self, id: &str, event: TaskEvent) -> Result<u64, AgentCoreError> {
@@ -513,6 +542,38 @@ mod tests {
         assert_eq!(events.len(), 4, "backlog plus live events, no gap");
         let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
         assert_eq!(seqs, vec![0, 1, 2, 3], "no duplicates and no gaps");
+    }
+
+    /// A `tasks/get` after a `message/send` must report the same artifacts the send
+    /// returned, so the store — not just the response — has to carry them.
+    #[tokio::test]
+    async fn set_artifacts_is_visible_to_a_later_get() {
+        use crate::a2a::types::{Artifact, Part};
+
+        let s = InMemoryTaskStore::new(8);
+        s.create(task("t")).await.unwrap();
+        s.set_artifacts(
+            "t",
+            vec![Artifact {
+                artifact_id: "a1".to_owned(),
+                name: "agent_response".to_owned(),
+                parts: vec![Part::Text {
+                    text: "hello".to_owned(),
+                }],
+            }],
+        )
+        .await
+        .unwrap();
+
+        let got = s.get("t").await.unwrap().unwrap();
+        assert_eq!(got.artifacts.len(), 1);
+        assert!(matches!(
+            &got.artifacts[0].parts[0],
+            Part::Text { text } if text == "hello"
+        ));
+
+        let err = s.set_artifacts("nope", vec![]).await.unwrap_err();
+        assert!(matches!(err, AgentCoreError::NotFound(_)));
     }
 
     #[tokio::test]
