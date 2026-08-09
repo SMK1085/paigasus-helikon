@@ -58,8 +58,8 @@ releases.
 
 Where a moving tag forces a SHA choice, the sibling SHA-pinned sites of that same action are
 brought to the same (latest) version rather than left behind. Pinning `msrv.yml`'s
-`rust-cache@v2` to v2.9.2 while nine other sites sit on v2.9.1 would replace one inconsistency
-with another. Resolved at implementation time on 2026-08-09:
+`rust-cache@v2` to v2.9.2 while the ten SHA-pinned sites sit on v2.9.1 would replace one
+inconsistency with another. Resolved at implementation time on 2026-08-09:
 
 | Action | Before | After |
 | --- | --- | --- |
