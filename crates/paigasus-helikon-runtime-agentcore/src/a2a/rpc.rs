@@ -25,7 +25,10 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Request, State},
-    response::{IntoResponse as _, Response},
+    response::{
+        sse::{Event, KeepAlive},
+        IntoResponse as _, Response, Sse,
+    },
     Json,
 };
 use futures_util::StreamExt as _;
@@ -133,7 +136,9 @@ pub(crate) async fn dispatch<Ctx: Send + Sync + 'static>(
     match req.method.as_str() {
         M_MESSAGE_SEND => send(&state, &parts, session_id, id, req.params).await,
         M_TASKS_GET => tasks_get(&state, id, req.params).await,
-        M_MESSAGE_STREAM | M_TASKS_CANCEL | M_TASKS_RESUBSCRIBE => rpc_err(
+        M_MESSAGE_STREAM => stream_message(&state, &parts, session_id, id, req.params).await,
+        M_TASKS_RESUBSCRIBE => resubscribe(&state, id, req.params).await,
+        M_TASKS_CANCEL => rpc_err(
             id,
             rpc_error::METHOD_NOT_FOUND,
             format!("method not found: {}", req.method),
@@ -208,6 +213,87 @@ async fn send<Ctx: Send + Sync + 'static>(
             id,
             rpc_error::INTERNAL_ERROR,
             "the task disappeared while it was running",
+        ),
+        Err(e) => rpc_err(id, rpc_error::INTERNAL_ERROR, e.to_string()),
+    }
+}
+
+/// `message/stream` — start a run and stream its task updates as SSE.
+///
+/// Identical to [`send`] up to the point the driver is spawned; instead of awaiting it,
+/// the task's event log is streamed. **No drop-guard is attached** — see the
+/// [module docs](self).
+async fn stream_message<Ctx: Send + Sync + 'static>(
+    state: &AppState<Ctx>,
+    parts: &axum::http::request::Parts,
+    session_id: Option<String>,
+    id: Value,
+    params: Option<Value>,
+) -> Response {
+    let params = match parse_params::<MessageSendParams>(params) {
+        Ok(p) => p,
+        Err(msg) => return rpc_err(id, rpc_error::INVALID_PARAMS, msg),
+    };
+
+    if params.message.has_non_text_parts() {
+        return rpc_err(
+            id,
+            rpc_error::CONTENT_TYPE_NOT_SUPPORTED,
+            "only text parts are supported; file and data parts are not accepted",
+        );
+    }
+
+    let context_id = session_id
+        .clone()
+        .or_else(|| params.message.context_id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    let task_id = match resolve_task(state, &params.message.task_id, &context_id).await {
+        Ok(t) => t,
+        Err(failure) => return failure.into_rpc(id),
+    };
+
+    let text = params.message.text();
+    // The handle is deliberately dropped: the driver is detached and owns the run's
+    // lifetime. Nothing here waits for it, and nothing cancels it.
+    if let Err(msg) = start_run(state, parts, session_id, &task_id, &context_id, text).await {
+        return rpc_err(id, rpc_error::INTERNAL_ERROR, msg);
+    }
+
+    // `from = 0` replays the whole log, so subscribing after the driver started cannot
+    // miss an event it already appended.
+    sse_for_task(state, id, &task_id).await
+}
+
+/// `tasks/resubscribe` — reattach to a task's event stream without starting a run.
+async fn resubscribe<Ctx: Send + Sync + 'static>(
+    state: &AppState<Ctx>,
+    id: Value,
+    params: Option<Value>,
+) -> Response {
+    let params = match parse_params::<TaskIdParams>(params) {
+        Ok(p) => p,
+        Err(msg) => return rpc_err(id, rpc_error::INVALID_PARAMS, msg),
+    };
+    sse_for_task(state, id, &params.id).await
+}
+
+/// Stream a task's event log as SSE, or answer `-32001` when the task is unknown.
+async fn sse_for_task<Ctx: Send + Sync + 'static>(
+    state: &AppState<Ctx>,
+    id: Value,
+    task_id: &str,
+) -> Response {
+    match state.tasks.subscribe(task_id, 0).await {
+        Ok(events) => Sse::new(events.map(|ev| {
+            Ok::<Event, std::convert::Infallible>(Event::default().data(ev.payload.to_string()))
+        }))
+        .keep_alive(KeepAlive::default())
+        .into_response(),
+        Err(crate::AgentCoreError::NotFound(_)) => rpc_err(
+            id,
+            rpc_error::TASK_NOT_FOUND,
+            format!("task not found: {task_id}"),
         ),
         Err(e) => rpc_err(id, rpc_error::INTERNAL_ERROR, e.to_string()),
     }
@@ -757,6 +843,185 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// Streams a token delta, pauses, then completes — long enough that a test can drop
+    /// the response while the run is still in flight.
+    struct SlowAgent;
+
+    #[async_trait]
+    impl Agent<()> for SlowAgent {
+        fn name(&self) -> &str {
+            "slow"
+        }
+        fn description(&self) -> &str {
+            "test-only agent that pauses mid-run"
+        }
+        async fn run(
+            &self,
+            _ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            Ok(stream::once(async {
+                AgentEvent::TokenDelta {
+                    text: "partial".to_owned(),
+                }
+            })
+            .chain(stream::once(async {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                }
+            }))
+            .boxed())
+        }
+    }
+
+    /// POST a JSON-RPC body and return the raw SSE body text.
+    async fn post_sse(server: &AgentCoreServer<()>, body: &str) -> String {
+        let resp = server
+            .a2a_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// Parse every `data:` line of an SSE body into JSON.
+    fn sse_frames(body: &str) -> Vec<serde_json::Value> {
+        body.lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(|d| serde_json::from_str(d).expect("each data: frame is JSON"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn message_stream_emits_status_then_artifact_then_final_status() {
+        let body = post_sse(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":1,"method":"message/stream",
+            "params":{"message":{"role":"user","parts":[{"kind":"text","text":"hi"}],
+            "messageId":"m1"}}}"#,
+        )
+        .await;
+        let frames = sse_frames(&body);
+        assert!(!frames.is_empty(), "body: {body}");
+
+        assert_eq!(frames[0]["kind"], "status-update");
+        assert_eq!(frames[0]["status"]["state"], "working");
+        assert_eq!(frames[0]["final"], false);
+
+        assert!(
+            frames.iter().any(|f| f["kind"] == "artifact-update"),
+            "expected an artifact-update, got {frames:?}"
+        );
+
+        let last = frames.last().unwrap();
+        assert_eq!(last["kind"], "status-update");
+        assert_eq!(last["status"]["state"], "completed");
+        assert_eq!(last["final"], true);
+    }
+
+    #[tokio::test]
+    async fn resubscribe_replays_a_completed_task_from_the_start() {
+        let s = server();
+        let sent = post_rpc(&s, SEND_HI).await;
+        let id = sent["result"]["id"].as_str().unwrap();
+
+        let body = post_sse(
+            &s,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"tasks/resubscribe","params":{{"id":"{id}"}}}}"#
+            ),
+        )
+        .await;
+        let frames = sse_frames(&body);
+        assert!(!frames.is_empty(), "a completed task replays its log");
+        let last = frames.last().unwrap();
+        assert_eq!(last["kind"], "status-update");
+        assert_eq!(last["final"], true, "the replayed stream terminates");
+    }
+
+    #[tokio::test]
+    async fn resubscribe_on_an_unknown_task_is_task_not_found() {
+        let v = post_rpc(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":1,"method":"tasks/resubscribe","params":{"id":"ghost"}}"#,
+        )
+        .await;
+        assert_eq!(v["error"]["code"], -32001);
+    }
+
+    /// Regression for the disconnect semantics: dropping a `message/stream` response
+    /// must leave the task reachable and NOT cancelled, or `tasks/resubscribe` could
+    /// only ever find cancelled tasks.
+    #[tokio::test]
+    async fn dropping_a_stream_leaves_the_task_resubscribable() {
+        let store = Arc::new(crate::InMemoryTaskStore::new(8));
+        store
+            .create(crate::Task {
+                id: "streamed".to_owned(),
+                context_id: "ctx".to_owned(),
+                status: crate::TaskStatus {
+                    state: crate::TaskState::Working,
+                    timestamp: "2026-08-08T00:00:00Z".to_owned(),
+                },
+                artifacts: vec![],
+                kind: crate::TaskKind::Task,
+            })
+            .await
+            .unwrap();
+        let s = AgentCoreServer::builder()
+            .agent(Arc::new(SlowAgent))
+            .with_default_context()
+            .task_store(Arc::clone(&store) as Arc<dyn crate::TaskStore>)
+            .build()
+            .expect("server builds");
+
+        // Drop the response without reading its body — a client disconnecting mid-stream.
+        let resp = s
+            .a2a_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"jsonrpc":"2.0","id":1,"method":"message/stream",
+                        "params":{"message":{"role":"user",
+                        "parts":[{"kind":"text","text":"hi"}],
+                        "messageId":"m","taskId":"streamed"}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        drop(resp);
+
+        // The detached driver must still reach its terminal.
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let state = store.get("streamed").await.unwrap().unwrap().status.state;
+            assert_ne!(
+                state,
+                crate::TaskState::Canceled,
+                "a disconnect must never cancel an A2A task"
+            );
+            if state == crate::TaskState::Completed {
+                return;
+            }
+        }
+        panic!("the detached driver never completed the task after the client disconnected");
     }
 
     /// Seed a non-terminal task directly so an inbound `taskId` has something live to
