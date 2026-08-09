@@ -80,6 +80,15 @@ pub use server::{AgentCoreServer, AgentCoreServerBuilder};
 
 #[cfg(feature = "a2a")]
 mod a2a;
+/// A2A wire types: the task lifecycle, its artifacts, and the agent card served for
+/// discovery. Public because they appear in the
+/// [`TaskStore`](crate::TaskStore) trait's signature and in
+/// [`AgentCoreServerBuilder::agent_card`].
+#[cfg(feature = "a2a")]
+pub use a2a::types::{
+    AgentCapabilities, AgentCard, AgentSkill, Artifact, Part, Task, TaskEvent, TaskKind, TaskState,
+    TaskStatus,
+};
 
 #[cfg(feature = "ag-ui")]
 mod agui;
