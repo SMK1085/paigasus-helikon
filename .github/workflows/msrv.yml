@@ -16,15 +16,25 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md).
+      # A SHA ref carries no toolchain name, so `toolchain:` is required here;
+      # it is what the bare `@stable` ref used to supply (SMA-486).
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
       # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
       # build time (prost-build); a system protoc is required (SMA-332).
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2.85.5
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      # taiki-e/install-action v2.85.11
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026
         with:
           tool: cargo-msrv
       # cargo-msrv has no --workspace flag; verify one representative crate
