@@ -172,6 +172,11 @@ pub struct TaskEvent {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct A2aMessage {
     /// Sender role, e.g. `"user"`.
+    // Never read: an inbound `message/send` is a turn *from* the client by definition,
+    // so this runtime treats every request message as user input regardless of the
+    // declared role. Kept because it is a required field of A2A's message shape and a
+    // test asserts it round-trips.
+    #[allow(dead_code)]
     pub(crate) role: String,
     /// The message content.
     #[serde(default)]

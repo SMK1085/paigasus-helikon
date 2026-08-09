@@ -138,11 +138,7 @@ pub(crate) async fn dispatch<Ctx: Send + Sync + 'static>(
         M_TASKS_GET => tasks_get(&state, id, req.params).await,
         M_MESSAGE_STREAM => stream_message(&state, &parts, session_id, id, req.params).await,
         M_TASKS_RESUBSCRIBE => resubscribe(&state, id, req.params).await,
-        M_TASKS_CANCEL => rpc_err(
-            id,
-            rpc_error::METHOD_NOT_FOUND,
-            format!("method not found: {}", req.method),
-        ),
+        M_TASKS_CANCEL => tasks_cancel(&state, id, req.params).await,
         m if m.starts_with(M_PUSH_CONFIG_PREFIX) => rpc_err(
             id,
             rpc_error::PUSH_NOTIFICATION_NOT_SUPPORTED,
@@ -316,6 +312,92 @@ async fn tasks_get<Ctx: Send + Sync + 'static>(
             rpc_error::TASK_NOT_FOUND,
             format!("task not found: {}", params.id),
         ),
+        Err(e) => rpc_err(id, rpc_error::INTERNAL_ERROR, e.to_string()),
+    }
+}
+
+/// `tasks/cancel` — cancel an in-flight task.
+///
+/// The taxonomy, in order:
+///
+/// | Condition | Answer |
+/// | --- | --- |
+/// | unknown task | `-32001` TaskNotFound |
+/// | already terminal | `-32002` TaskNotCancelable |
+/// | no live token in this container | `-32002`, naming the reason |
+/// | the `working` → `canceled` swap is refused | `-32002`, stored state untouched |
+/// | otherwise | the task, now `canceled` |
+///
+/// The last row is the race this method exists to get right: the run's driver may write
+/// its terminal state between the terminal check above and the swap below. `update_state`
+/// is a compare-and-swap precisely so the loser finds out, and a refused swap here means
+/// the run finished first — so the answer is "not cancelable" and the stored state is
+/// left exactly as the driver wrote it, never overwritten with `canceled`.
+async fn tasks_cancel<Ctx: Send + Sync + 'static>(
+    state: &AppState<Ctx>,
+    id: Value,
+    params: Option<Value>,
+) -> Response {
+    let params = match parse_params::<TaskIdParams>(params) {
+        Ok(p) => p,
+        Err(msg) => return rpc_err(id, rpc_error::INVALID_PARAMS, msg),
+    };
+    let task_id = params.id;
+
+    let task = match state.tasks.get(&task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return rpc_err(
+                id,
+                rpc_error::TASK_NOT_FOUND,
+                format!("task not found: {task_id}"),
+            );
+        }
+        Err(e) => return rpc_err(id, rpc_error::INTERNAL_ERROR, e.to_string()),
+    };
+
+    if task.status.state.is_terminal() {
+        return rpc_err(
+            id,
+            rpc_error::TASK_NOT_CANCELABLE,
+            format!(
+                "task {task_id} is already in terminal state {:?}",
+                task.status.state
+            ),
+        );
+    }
+
+    if !state.cancels.cancel(&task_id) {
+        return rpc_err(
+            id,
+            rpc_error::TASK_NOT_CANCELABLE,
+            format!(
+                "task {task_id} has no live run in this container; \
+                 with a durable task store it may be running elsewhere"
+            ),
+        );
+    }
+
+    match state
+        .tasks
+        .update_state(&task_id, TaskState::Working, TaskState::Canceled)
+        .await
+    {
+        // Refused: the run reached its own terminal first. Leave it alone.
+        Ok(false) => rpc_err(
+            id,
+            rpc_error::TASK_NOT_CANCELABLE,
+            format!("task {task_id} reached a terminal state before it could be cancelled"),
+        ),
+        Ok(true) => match state.tasks.get(&task_id).await {
+            Ok(Some(task)) => rpc_ok(id, task),
+            Ok(None) => rpc_err(
+                id,
+                rpc_error::INTERNAL_ERROR,
+                "the task disappeared while it was being cancelled",
+            ),
+            Err(e) => rpc_err(id, rpc_error::INTERNAL_ERROR, e.to_string()),
+        },
         Err(e) => rpc_err(id, rpc_error::INTERNAL_ERROR, e.to_string()),
     }
 }
@@ -676,7 +758,7 @@ mod tests {
                     ),
                     _ => None,
                 })
-                .last()
+                .next_back()
                 .unwrap_or_default();
             Ok(stream::iter(vec![
                 AgentEvent::MessageOutput {
@@ -1022,6 +1104,135 @@ mod tests {
             }
         }
         panic!("the detached driver never completed the task after the client disconnected");
+    }
+
+    /// The happy path: a live run, cancelled through a task id known up front.
+    /// The id has to be seeded rather than minted, because `message/stream`
+    /// returns an SSE body and never reports the task id in its headers.
+    #[tokio::test]
+    async fn cancelling_a_live_task_reports_canceled() {
+        let store = Arc::new(crate::InMemoryTaskStore::new(8));
+        store
+            .create(crate::Task {
+                id: "live".to_owned(),
+                context_id: "ctx".to_owned(),
+                status: crate::TaskStatus {
+                    state: crate::TaskState::Working,
+                    timestamp: "2026-08-08T00:00:00Z".to_owned(),
+                },
+                artifacts: vec![],
+                kind: crate::TaskKind::Task,
+            })
+            .await
+            .unwrap();
+        let s = AgentCoreServer::builder()
+            .agent(Arc::new(SlowAgent))
+            .with_default_context()
+            .task_store(Arc::clone(&store) as Arc<dyn crate::TaskStore>)
+            .build()
+            .expect("server builds");
+
+        let resp = s
+            .a2a_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"jsonrpc":"2.0","id":1,"method":"message/stream",
+                        "params":{"message":{"role":"user",
+                        "parts":[{"kind":"text","text":"hi"}],
+                        "messageId":"m","taskId":"live"}}}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        drop(resp);
+
+        let v = post_rpc(
+            &s,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tasks/cancel","params":{"id":"live"}}"#,
+        )
+        .await;
+        assert_eq!(
+            v["result"]["status"]["state"], "canceled",
+            "a live task must cancel: {v}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_unknown_task_is_task_not_found() {
+        let v = post_rpc(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":1,"method":"tasks/cancel","params":{"id":"ghost"}}"#,
+        )
+        .await;
+        assert_eq!(v["error"]["code"], -32001);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_terminal_task_is_not_cancelable() {
+        let s = server();
+        let sent = post_rpc(&s, SEND_HI).await;
+        let id = sent["result"]["id"].as_str().unwrap();
+        let v = post_rpc(
+            &s,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"tasks/cancel","params":{{"id":"{id}"}}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(v["error"]["code"], -32002);
+    }
+
+    /// Regression for the CAS race (§5.7): a cancel that loses to a completed run must
+    /// report -32002 AND leave the stored state `completed` — never overwrite it.
+    #[tokio::test]
+    async fn a_cancel_losing_the_race_leaves_the_task_completed() {
+        let s = server();
+        let sent = post_rpc(&s, SEND_HI).await;
+        let id = sent["result"]["id"].as_str().unwrap().to_owned();
+
+        let cancelled = post_rpc(
+            &s,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":2,"method":"tasks/cancel","params":{{"id":"{id}"}}}}"#
+            ),
+        )
+        .await;
+        assert_eq!(cancelled["error"]["code"], -32002);
+
+        let got = post_rpc(
+            &s,
+            &format!(r#"{{"jsonrpc":"2.0","id":3,"method":"tasks/get","params":{{"id":"{id}"}}}}"#),
+        )
+        .await;
+        assert_eq!(
+            got["result"]["status"]["state"], "completed",
+            "a losing cancel must not overwrite the run's own terminal state"
+        );
+    }
+
+    /// A task in the store with no live token (a durable store, another microVM) is not
+    /// cancellable from here, and must say so rather than silently succeed.
+    #[tokio::test]
+    async fn a_task_with_no_live_token_is_not_cancelable() {
+        let s = server_with_working_task("orphan").await;
+        let v = post_rpc(
+            &s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tasks/cancel","params":{"id":"orphan"}}"#,
+        )
+        .await;
+        assert_eq!(v["error"]["code"], -32002);
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no live run"),
+            "the reason must be stated, not implied: {v}"
+        );
     }
 
     /// Seed a non-terminal task directly so an inbound `taskId` has something live to
