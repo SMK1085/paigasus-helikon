@@ -80,6 +80,11 @@ pub use server::{AgentCoreServer, AgentCoreServerBuilder};
 
 #[cfg(feature = "a2a")]
 mod a2a;
+/// The A2A task-persistence seam and its bounded in-memory default. Implement
+/// [`TaskStore`] over a database to let tasks survive AgentCore's abrupt container
+/// termination.
+#[cfg(feature = "a2a")]
+pub use a2a::store::{InMemoryTaskStore, TaskStore, MAX_EVENTS_PER_TASK};
 /// A2A wire types: the task lifecycle, its artifacts, and the agent card served for
 /// discovery. Public because they appear in the
 /// [`TaskStore`](crate::TaskStore) trait's signature and in
