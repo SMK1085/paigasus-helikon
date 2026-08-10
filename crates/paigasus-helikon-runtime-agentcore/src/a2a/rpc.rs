@@ -378,23 +378,24 @@ async fn tasks_cancel<Ctx: Send + Sync + 'static>(
         );
     }
 
-    // Both non-terminal states are legal starting points. `resolve_task` creates a task
-    // `submitted` and `start_run` registers its cancel token *before* the driver swaps
-    // to `working`, so a cancel landing in that window finds `submitted` — swapping only
-    // from `working` would refuse it and report a terminal state the task never reached.
-    let swapped = match state
-        .tasks
-        .update_state(&task_id, TaskState::Working, TaskState::Canceled)
-        .await
-    {
-        Ok(false) => {
-            state
-                .tasks
-                .update_state(&task_id, TaskState::Submitted, TaskState::Canceled)
-                .await
+    // Try every non-terminal state, not a guessed one. The task's own driver advances it
+    // concurrently — `resolve_task` creates it `submitted` and `start_run` registers the
+    // cancel token *before* the driver swaps to `working` — so the state read above may
+    // already be stale by the time the swap runs. Walking `NON_TERMINAL` also means a
+    // state added later cannot be silently skipped here.
+    let mut swapped = Ok(false);
+    for from in TaskState::NON_TERMINAL {
+        swapped = state
+            .tasks
+            .update_state(&task_id, *from, TaskState::Canceled)
+            .await;
+        match swapped {
+            // Won the swap, or the store itself failed: either way, stop.
+            Ok(true) | Err(_) => break,
+            // Not in this state; try the next one.
+            Ok(false) => {}
         }
-        other => other,
-    };
+    }
 
     match swapped {
         // Refused from both: the run reached its own terminal first. Leave it alone.
@@ -1224,6 +1225,55 @@ mod tests {
             store.get("pending").await.unwrap().unwrap().status.state,
             crate::TaskState::Canceled,
             "the stored state must reflect the cancellation"
+        );
+    }
+
+    /// Regression (CodeRabbit round 2, PR #186): `input-required` is non-terminal too.
+    /// The round-1 fix added `submitted` but stopped there, so a task in this state
+    /// passed the terminal check, had its token fired, failed both swaps, and was left
+    /// uncancelled behind a `-32002`. This runtime never produces `input-required`, but
+    /// a custom `TaskStore` that models an interrupt seam does — which is the whole
+    /// reason the variant exists.
+    #[tokio::test]
+    async fn cancelling_an_input_required_task_reports_canceled() {
+        let store = Arc::new(crate::InMemoryTaskStore::new(8));
+        store
+            .create(crate::Task {
+                id: "waiting".to_owned(),
+                context_id: "ctx".to_owned(),
+                status: crate::TaskStatus {
+                    state: crate::TaskState::InputRequired,
+                    timestamp: "2026-08-08T00:00:00Z".to_owned(),
+                },
+                artifacts: vec![],
+                kind: crate::TaskKind::Task,
+            })
+            .await
+            .unwrap();
+        let s = AgentCoreServer::builder()
+            .agent(Arc::new(SlowAgent))
+            .with_default_context()
+            .task_store(Arc::clone(&store) as Arc<dyn crate::TaskStore>)
+            .build()
+            .expect("server builds");
+
+        s.state_for_a2a().cancels.register(
+            "waiting".to_owned(),
+            paigasus_helikon_core::CancellationToken::new(),
+        );
+
+        let v = post_rpc(
+            &s,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tasks/cancel","params":{"id":"waiting"}}"#,
+        )
+        .await;
+        assert_eq!(
+            v["result"]["status"]["state"], "canceled",
+            "every non-terminal state must be cancellable: {v}"
+        );
+        assert_eq!(
+            store.get("waiting").await.unwrap().unwrap().status.state,
+            crate::TaskState::Canceled
         );
     }
 

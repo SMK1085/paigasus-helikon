@@ -75,6 +75,18 @@ pub enum TaskState {
 }
 
 impl TaskState {
+    /// Every non-terminal state — equivalently, every state a task can legally be
+    /// cancelled *from*.
+    ///
+    /// `tasks/cancel` walks this list rather than naming states inline, because it
+    /// cannot know which one a task is in: the run's own driver advances the task
+    /// concurrently, so a single compare-and-swap against a guessed state loses the
+    /// race. Enumerating them in one place is also what stops a state being forgotten —
+    /// an earlier fix handled `Submitted` and silently missed `InputRequired`, leaving
+    /// such tasks uncancellable behind a "not cancelable" error.
+    pub const NON_TERMINAL: &'static [TaskState] =
+        &[Self::Submitted, Self::Working, Self::InputRequired];
+
     /// Whether this state is final — no further transition is legal from here, and a
     /// `subscribe` stream ends once the task reaches one.
     pub fn is_terminal(self) -> bool {
@@ -384,6 +396,39 @@ mod tests {
         assert_eq!(v["artifacts"][0]["artifactId"], "art-1");
         assert_eq!(v["artifacts"][0]["parts"][0]["kind"], "text");
         assert_eq!(v["artifacts"][0]["parts"][0]["text"], "hello");
+    }
+
+    /// `NON_TERMINAL` and `is_terminal` must stay exact complements. The `match` below
+    /// is exhaustive on purpose: adding a variant to [`TaskState`] fails to compile
+    /// here, which is the reminder to classify it in both places.
+    #[test]
+    fn non_terminal_is_exactly_the_complement_of_is_terminal() {
+        fn terminal_by_exhaustive_match(s: TaskState) -> bool {
+            match s {
+                TaskState::Submitted | TaskState::Working | TaskState::InputRequired => false,
+                TaskState::Completed | TaskState::Canceled | TaskState::Failed => true,
+            }
+        }
+
+        for state in [
+            TaskState::Submitted,
+            TaskState::Working,
+            TaskState::InputRequired,
+            TaskState::Completed,
+            TaskState::Canceled,
+            TaskState::Failed,
+        ] {
+            assert_eq!(
+                state.is_terminal(),
+                terminal_by_exhaustive_match(state),
+                "{state:?}: is_terminal disagrees with the exhaustive classification"
+            );
+            assert_eq!(
+                TaskState::NON_TERMINAL.contains(&state),
+                !state.is_terminal(),
+                "{state:?}: NON_TERMINAL membership disagrees with is_terminal"
+            );
+        }
     }
 
     #[test]

@@ -412,7 +412,7 @@ cannot be lost in the window between them.
 | Situation | Result |
 | --- | --- |
 | `get` on an unknown id | `Ok(None)` |
-| `update_state` / `append_event` / `subscribe` on an unknown id | `Err(AgentCoreError::NotFound)` |
+| `update_state` / `append_event` / `subscribe` / `set_artifacts` on an unknown id | `Err(AgentCoreError::NotFound)` |
 | `update_state` where current state ≠ `expected` | `Ok(false)` — caller decides |
 | `subscribe` with a `from` older than the oldest retained event | Stream starts at the oldest retained event; the gap is logged, not silently hidden |
 
