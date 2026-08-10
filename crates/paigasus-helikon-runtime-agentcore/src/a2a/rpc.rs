@@ -398,7 +398,8 @@ async fn tasks_cancel<Ctx: Send + Sync + 'static>(
     }
 
     match swapped {
-        // Refused from both: the run reached its own terminal first. Leave it alone.
+        // Refused from every non-terminal state: the run reached its own terminal
+        // first. Leave whatever it wrote alone.
         Ok(false) => rpc_err(
             id,
             rpc_error::TASK_NOT_CANCELABLE,
