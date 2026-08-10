@@ -20,12 +20,12 @@ jobs:
   book-build:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v6.0.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # taiki-e/install-action v2.79.3
-      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf
+      # taiki-e/install-action v2.85.11
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }}
       - name: Build mdBook (HTML + linkcheck)

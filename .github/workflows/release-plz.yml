@@ -20,12 +20,12 @@ jobs:
     name: release-plz
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v6.0.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0          # release-plz needs full history
           persist-credentials: false
-      # dtolnay/rust-toolchain master (no tagged releases)
+      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
@@ -43,14 +43,14 @@ jobs:
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
-      # release-plz/action v0.5.130
+      # release-plz/action v0.5.131
       - uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      # release-plz/action v0.5.130
+      # release-plz/action v0.5.131
       - uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9
         with:
           command: release-pr

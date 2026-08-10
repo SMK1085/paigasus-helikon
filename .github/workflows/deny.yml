@@ -36,16 +36,16 @@ jobs:
       # one gate green and the other red on main (SMA-479).
       - name: Check advisory ignore lists are in sync
         run: ./scripts/check-advisory-ignore-sync.sh
-      # dtolnay/rust-toolchain master (no tagged releases)
+      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.1
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           cache-directories: "~/.cargo/advisory-dbs"
-      # taiki-e/install-action v2.85.7
-      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+      # taiki-e/install-action v2.85.11
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026
         with:
           tool: cargo-deny
       # cargo-deny fetches the advisory DB unless -d/--disable-fetch or the

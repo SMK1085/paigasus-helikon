@@ -19,10 +19,20 @@ jobs:
   sbom:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2.85.5
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md).
+      # A SHA ref carries no toolchain name, so `toolchain:` is required here;
+      # it is what the bare `@stable` ref used to supply (SMA-486).
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      # taiki-e/install-action v2.85.11
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026
         with:
           tool: cargo-cyclonedx
 
@@ -53,8 +63,9 @@ jobs:
           jq -e '.bomFormat == "CycloneDX" and .specVersion == "1.5"' \
             "paigasus-helikon-${REF_NAME}-cyclonedx.json"
 
+      # softprops/action-gh-release v3.0.2
       - name: Upload SBOM to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: "paigasus-helikon-${{ github.ref_name }}-cyclonedx.json"
           fail_on_unmatched_files: true

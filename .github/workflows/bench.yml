@@ -10,15 +10,15 @@ jobs:
   tool-dispatch:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v6.0.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain master (no tagged releases)
+      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.1
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - name: Run tool-dispatch benchmark
         run: cargo bench -p paigasus-helikon --bench tool_dispatch
