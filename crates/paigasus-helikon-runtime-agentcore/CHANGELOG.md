@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.1...paigasus-helikon-runtime-agentcore-v0.2.2) - 2026-08-13
+
+### Added
+
+- *(runtime-agentcore)* SMA-461 add a2a and ag-ui protocol modes ([#186](https://github.com/SMK1085/paigasus-helikon/pull/186))
+
 ## [0.2.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.0...paigasus-helikon-runtime-agentcore-v0.2.1) - 2026-08-07
 
 ### Other
