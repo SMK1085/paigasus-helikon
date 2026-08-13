@@ -41,14 +41,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::FutureExt as _;
-use paigasus_helikon_core::{TokenUsage, ToolCallOutcome, ToolCallRequest};
+use paigasus_helikon_core::{RunInterrupt, TokenUsage, ToolCallOutcome, ToolCallRequest};
 use temporalio_common::protos::temporal::api::common::v1::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityExecutionError, ActivityOptions, WorkflowContext, WorkflowResult};
 
 use crate::activities::AgentActivities;
 use crate::activity_input::{CallModelArgs, InvokeToolArgs, RenderInstructionsArgs};
-use crate::driver::{AgentPlan, DriverEffect, DurableDriver, InterruptKind};
+use crate::driver::{AgentPlan, DriverEffect, DurableDriver};
 use crate::error::ErrorKindPayload;
 use crate::payloads::{DurableRunOutcome, RunStatusPayload, WorkflowInput};
 use crate::worker::RetryPolicyConfig;
@@ -274,8 +274,8 @@ async fn drive(
 
         temporalio_sdk::workflows::select! {
             outcome = effects => return outcome,
-            _ = deadline => InterruptKind::TimedOut,
-            _ = cancelled => InterruptKind::Cancelled,
+            _ = deadline => RunInterrupt::TimedOut,
+            _ = cancelled => RunInterrupt::Cancelled,
         }
     };
 
