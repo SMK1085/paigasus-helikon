@@ -48,12 +48,19 @@ if [ -z "${resolved}" ]; then
   exit 1
 fi
 
-# Same-file (-ef) OR exact string match, deliberately not string equality alone:
-# on Windows `command -v` and the cygpath'd PROTOC can spell the same file
-# differently (.exe resolution, drive-letter case), so a strict string compare
-# would fail a CORRECT install — the same class of trap as the trailing \r
-# below. A genuinely different binary fails both tests, so nothing is weakened.
-if [ "${resolved}" != "${protoc_bin}" ] && [ ! "${resolved}" -ef "${protoc_bin}" ]; then
+# Deliberately NOT a bare string compare, which would fail a CORRECT install on
+# Windows. Observed in CI run 31730653599, job `test (windows-latest, stable)`:
+#
+#   PROTOC   D:\a\_temp\protoc-35.1\bin\protoc.exe   (-> protoc_bin ...protoc.exe)
+#   resolved /d/a/_temp/protoc-35.1/bin/protoc       (no .exe)
+#
+# Same file, two spellings. So compare with the `.exe` suffix normalised away,
+# and keep `-ef` (same device+inode) as a second chance for any other spelling
+# difference. A genuinely different binary fails both, so nothing is weakened —
+# this is the same class of trap as the trailing \r handled below.
+resolved_norm="${resolved%.exe}"
+protoc_bin_norm="${protoc_bin%.exe}"
+if [ "${resolved_norm}" != "${protoc_bin_norm}" ] && [ ! "${resolved}" -ef "${protoc_bin}" ]; then
   echo "::error::PATH resolves protoc to '${resolved}', expected the pinned install at '${protoc_bin}' — the GITHUB_PATH export did not take effect."
   exit 1
 fi
