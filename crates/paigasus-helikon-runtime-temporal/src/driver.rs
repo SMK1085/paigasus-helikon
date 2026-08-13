@@ -88,6 +88,10 @@ pub struct AgentPlan {
 /// `InterruptKind::Cancelled` variant access, which resolves through a type
 /// alias) keep working. The rule this type participates in now lives in core
 /// (SMA-422).
+///
+/// Note the alias is not a perfect source-compatibility shim: because
+/// `RunInterrupt` is `#[non_exhaustive]` and foreign, a downstream exhaustive
+/// `match` on it now requires a wildcard arm.
 #[deprecated(note = "renamed; use `paigasus_helikon_core::RunInterrupt` instead")]
 pub type InterruptKind = paigasus_helikon_core::RunInterrupt;
 
