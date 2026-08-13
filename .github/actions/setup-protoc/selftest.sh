@@ -141,28 +141,28 @@ assert "extracts nothing"               test ! -e "${t4}/protoc-${version}/bin"
 # having exported PROTOC/PROTOC_INCLUDE into this shell.
 echo "5. decoy protoc on PATH is rejected"
 if [ -n "${PROTOC:-}" ]; then
-  t6="$(mktemp -d)"
-  mkdir -p "${t6}/decoy"
-  printf '#!/usr/bin/env bash\necho "libprotoc 35.1"\n' > "${t6}/decoy/protoc"
-  chmod +x "${t6}/decoy/protoc"
-  env RUNNER_OS="${native_os}" PATH="${t6}/decoy:${PATH}" \
-      bash "${here}/verify.sh" > "${t6}/out.log" 2>&1
+  t5="$(mktemp -d)"
+  mkdir -p "${t5}/decoy"
+  printf '#!/usr/bin/env bash\necho "libprotoc 35.1"\n' > "${t5}/decoy/protoc"
+  chmod +x "${t5}/decoy/protoc"
+  env RUNNER_OS="${native_os}" PATH="${t5}/decoy:${PATH}" \
+      bash "${here}/verify.sh" > "${t5}/out.log" 2>&1
   rc=$?
   assert "exits non-zero when PATH resolves elsewhere" test "${rc}" -ne 0
-  assert "error names the PATH export" grep -q "GITHUB_PATH export did not take effect" "${t6}/out.log"
+  assert "error names the PATH export" grep -q "GITHUB_PATH export did not take effect" "${t5}/out.log"
 else
   fail "case 2 did not export PROTOC; cannot run the decoy check"
 fi
 
 # --- 6. an unsupported platform fails loudly --------------------------------
 echo "6. unsupported platform fails loudly"
-t5="$(mktemp -d)"
-env RUNNER_OS=Plan9 RUNNER_ARCH=X64 RUNNER_TEMP="${t5}" \
-    GITHUB_PATH="${t5}/gh_path" GITHUB_ENV="${t5}/gh_env" \
-    bash "${here}/install.sh" > "${t5}/out.log" 2>&1
+t6="$(mktemp -d)"
+env RUNNER_OS=Plan9 RUNNER_ARCH=X64 RUNNER_TEMP="${t6}" \
+    GITHUB_PATH="${t6}/gh_path" GITHUB_ENV="${t6}/gh_env" \
+    bash "${here}/install.sh" > "${t6}/out.log" 2>&1
 rc=$?
 assert "exits non-zero on an unknown platform" test "${rc}" -ne 0
-assert "error names the file to edit"          grep -q "install.sh" "${t5}/out.log"
+assert "error names the file to edit"          grep -q "install.sh" "${t6}/out.log"
 
 echo
 if [ "${failures}" -eq 0 ]; then
