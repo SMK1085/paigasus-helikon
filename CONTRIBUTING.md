@@ -155,7 +155,9 @@ sudo apt-get install protobuf-compiler  # Debian/Ubuntu
 choco install protoc                  # Windows
 ```
 
-If `protoc` is installed somewhere non-standard, point the `PROTOC` environment variable at the binary. CI installs it via `arduino/setup-protoc` in every job that compiles the workspace.
+If `protoc` is installed somewhere non-standard, point the `PROTOC` environment variable at the binary.
+
+CI installs **protoc 35.1** in every job that compiles the workspace, via the repo-local `.github/actions/setup-protoc` action, which verifies the download against a pinned SHA-256 before extracting it. Distribution packages often lag several majors behind — `apt-get install protobuf-compiler` on Ubuntu 24.04 is one example — so to match CI exactly, take the archive for your platform from the [protobuf v35.1 release](https://github.com/protocolbuffers/protobuf/releases/tag/v35.1) rather than relying on the package manager. Matching exactly is rarely necessary; it is worth doing when you are chasing a protoc-related failure that reproduces in CI but not locally.
 
 ## MSRV
 
