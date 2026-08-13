@@ -8,10 +8,41 @@
 ## Problem
 
 SMA-332 added `arduino/setup-protoc` to every workflow that compiles the
-workspace, SHA-pinned to v3.0.0 but with **no `version:` input**. The action
-therefore resolves *the latest stable protoc release* at run time. A protoc
-release can break CI days after any repo change, unrelated to that change and
-un-pinned — while the rest of the repo pins SHAs and digests everywhere.
+workspace, SHA-pinned to v3.0.0 but with **no `version:` input**.
+
+**The ticket's stated premise is wrong, and this was checked rather than
+assumed.** The ticket asserts the action "defaults to the latest protoc
+release." It does not. Its `action.yml` at the pinned SHA declares:
+
+```yaml
+inputs:
+  version:
+    description: 'Version to use. Example: 23.2'
+    default: '23.x'
+```
+
+The action's README claims otherwise ("To get the latest stable version of
+`protoc` just add this step") — the README is wrong, the `action.yml` is
+authoritative. CI confirms it. From `ci.yml` run `31697089240` on `main`
+(2026-08-13), identically across `clippy`, `docs`, `doc-coverage`,
+`sessions-it`, and `test (windows-latest, stable)`:
+
+```
+Getting protoc version: v23.4
+Downloading archive: https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip
+```
+
+**So CI has been running protoc 23.4, and 23.x is EOL** — 23.4 was the last of
+that line, so the `23.x` wildcard is already frozen in practice. The
+"a future protoc release could break CI days later" risk the ticket describes
+therefore does not exist as stated.
+
+**The real residual risk is narrower, and still worth closing.** The repo
+implicitly depends on a *third-party action's default value*. A future
+`arduino/setup-protoc` release could change that default and silently move the
+compiler — and Dependabot's `github-actions` group would deliver exactly such a
+bump. Alongside that, the download has no integrity verification at all. Those
+two are what this change closes.
 
 The ticket describes 8 sites. **There are 9**: `integration.yml` gained one in
 SMA-457, after the ticket was filed.
@@ -84,11 +115,41 @@ changes — not patch-only, as the ticket's "pin the major" framing implies. The
 ticket's literal `31.x` example is four majors stale and would be an unvalidated
 downgrade.
 
-`35.1` is believed to be what CI resolves today, which would make this a
-semantic no-op. **That is not cited and will age**, so the implementer must
-re-confirm it against a current CI job log before landing, and record which it
-is: a knowing no-op, or a knowing freeze at a version CI has not been running.
-Either is acceptable; not knowing which is not.
+**This is a deliberate upgrade, not a no-op.** An earlier draft of this spec
+claimed `35.1` was "what CI resolves today … a semantic no-op with zero
+validation risk." That was wrong — CI runs 23.4 (see Problem). Pinning 35.1 is a
+**12-major upgrade**, 23.4 → 35.1, and this PR carries it.
+
+Evidence that the upgrade is viable, gathered before the decision:
+
+```console
+$ PROTOC=…/protoc-35.1/bin/protoc PROTOC_INCLUDE=…/protoc-35.1/include \
+    cargo check -p paigasus-helikon-runtime-temporal
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.47s
+```
+
+That is the workspace's heaviest protoc consumer building clean on 35.1 — but on
+**macOS-arm64 only**. Linux and Windows remain unproven until CI runs.
+
+**The approver accepted a known trade-off here.** Combining the mechanism change
+with the compiler upgrade means a red CI job is ambiguous between the two, and
+the two least-gated surfaces — Windows (no merge gate) and `release-plz.yml`
+(never exercised pre-merge) — are exactly where that ambiguity is most
+expensive. The alternative (pin 23.4 now, upgrade in a follow-up) was offered and
+declined in favour of one PR.
+
+**Mitigation: bisecting is a two-line edit, because the 23.4 digests are banked
+here.** To isolate mechanism from compiler, set `PROTOC_VERSION="23.4"` and swap
+in:
+
+| asset | protoc 23.4 SHA-256 |
+| --- | --- |
+| `protoc-23.4-linux-x86_64.zip` | `0502f286ac9ed860b629a7965a14527b1f2dd131e4283fa23c2d7f184672aa9a` |
+| `protoc-23.4-osx-aarch_64.zip` | `8c7afae8626b6811e7b5897d16d940c2dbf50b1e135ed958a01db6566bdda726` |
+| `protoc-23.4-win64.zip` | `a309c39442fb75f0db343cb22c111a00f91cdf0767f332e170644b9378e2bcc6` |
+
+Green on 23.4 and red on 35.1 means the compiler; red on both means the
+mechanism. Derived the same way and on the same date as the 35.1 digests below.
 
 **One composite action, not 9 inline blocks.** With three platform digests in
 play, repeating the install at 9 sites would mean 9 copies to keep in sync —
