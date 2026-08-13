@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "d456df87f47f",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-422-hoist-the-terminal-vs-cancel-precedence-resolver-into-core",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/runner.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d4/56df87f47f/0/metadata.json",
+      "transcript": "/d4/56df87f47f/0/full.jsonl",
+      "compact_transcript": "/d4/56df87f47f/0/transcript.jsonl",
+      "content_hash": "/d4/56df87f47f/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 6496,
+    "cache_read_tokens": 1040740,
+    "output_tokens": 4701,
+    "api_call_count": 4
+  }
+}
