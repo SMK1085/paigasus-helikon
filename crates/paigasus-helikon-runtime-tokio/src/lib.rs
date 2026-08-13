@@ -12,53 +12,37 @@ use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use futures_util::stream::StreamExt as _;
 use paigasus_helikon_core::{
-    Agent, AgentEvent, AgentInput, CancellationToken, RunConfig, RunContext, RunError, RunResult,
-    RunResultStreaming, Runner, Session, SessionRecorder,
+    effective_interrupt, Agent, AgentEvent, AgentInput, CancellationToken, RunConfig, RunContext,
+    RunError, RunInterrupt, RunResult, RunResultStreaming, Runner, Session, SessionRecorder,
 };
 
 pub mod retry;
 pub use retry::{RetryPolicy, RetryingModel};
 
-/// How a controlled run ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Outcome {
-    Completed,
-    Cancelled,
-    TimedOut,
-}
+/// Read handle for the interrupt committed by [`controlled`], if any.
+struct InterruptHandle(Arc<Mutex<Option<RunInterrupt>>>);
 
-/// Read handle for the outcome committed by [`controlled`].
-struct OutcomeHandle(Arc<Mutex<Outcome>>);
-
-impl OutcomeHandle {
-    fn get(&self) -> Outcome {
+impl InterruptHandle {
+    fn get(&self) -> Option<RunInterrupt> {
         *self.0.lock().unwrap()
     }
-}
-
-/// Did the run reach a terminal event? Used to decide whether a late
-/// cancel/timeout may override the collected outcome (SMA-421).
-fn is_terminal(ev: &AgentEvent) -> bool {
-    matches!(
-        ev,
-        AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
-    )
 }
 
 /// Wrap an agent event stream with cancel/deadline control.
 ///
 /// Passes agent events through. On cancellation or deadline it commits the
 /// reason into the returned handle and ends the stream (dropping the inner
-/// stream cancels nested in-flight awaits within one poll). The outcome is
-/// committed *before* the terminating `None`, so a caller reading the handle
-/// after draining never sees a stale value.
+/// stream cancels nested in-flight awaits within one poll). The interrupt, if
+/// any, is committed *before* the terminating `None`, so a caller reading the
+/// handle after draining never sees a stale value. A run that ends naturally
+/// commits nothing and the handle stays `None`.
 fn controlled(
     mut stream: BoxStream<'static, AgentEvent>,
     cancel: CancellationToken,
     timeout: Option<Duration>,
-) -> (BoxStream<'static, AgentEvent>, OutcomeHandle) {
-    let cell = Arc::new(Mutex::new(Outcome::Completed));
-    let handle = OutcomeHandle(Arc::clone(&cell));
+) -> (BoxStream<'static, AgentEvent>, InterruptHandle) {
+    let cell = Arc::new(Mutex::new(None));
+    let handle = InterruptHandle(Arc::clone(&cell));
     let out = async_stream::stream! {
         let sleep = async move {
             match timeout {
@@ -73,15 +57,15 @@ fn controlled(
                 maybe_ev = stream.next() => {
                     match maybe_ev {
                         Some(ev) => yield ev,
-                        None => break, // inner stream done => Completed (default)
+                        None => break, // inner stream done => no interrupt
                     }
                 }
                 () = cancel.cancelled() => {
-                    *cell.lock().unwrap() = Outcome::Cancelled;
+                    *cell.lock().unwrap() = Some(RunInterrupt::Cancelled);
                     break;
                 }
                 () = &mut sleep => {
-                    *cell.lock().unwrap() = Outcome::TimedOut;
+                    *cell.lock().unwrap() = Some(RunInterrupt::TimedOut);
                     break;
                 }
             }
@@ -154,7 +138,7 @@ where
         let (merged, recorder) = load_and_record(&session, agent.name(), input).await?;
 
         let stream = agent.run(ctx, merged).await?;
-        let (controlled_stream, outcome) = controlled(stream, cancel, timeout);
+        let (controlled_stream, interrupt) = controlled(stream, cancel, timeout);
         let rec_inspect = Arc::clone(&recorder);
         let recorded = controlled_stream
             .inspect(move |ev| {
@@ -172,22 +156,19 @@ where
         finalize(&session, &recorder).await;
 
         // A genuine terminal event (RunCompleted/RunFailed) is the run's true
-        // outcome; a cancel/timeout overrides ONLY when no terminal was observed
-        // — i.e. it actually aborted the run in-flight. This closes the window
-        // where a late cancel (e.g. during a suspending OnRunComplete hook) fires
-        // after the terminal already went out. Cancellation is best-effort and
-        // loses to a terminal that already occurred — see the Runner::run docs.
-        // (SMA-421; deliberately revisits the SMA-321 precedence. The shared-core
-        // hoist for durable runners is tracked as SMA-422.)
+        // outcome; a cancel/timeout overrides ONLY when no terminal was
+        // observed — i.e. it actually aborted the run in-flight. The rule
+        // itself lives in core as `effective_interrupt` so every runner applies
+        // one definition (SMA-422); see `Runner::run`'s docs for the contract
+        // and SMA-421 for the bug it closes.
         let saw_terminal = collected
             .as_ref()
-            .map(|r| r.events.iter().any(is_terminal))
+            .map(|r| r.events.iter().any(AgentEvent::is_terminal))
             .unwrap_or(true); // Err(_) from collect() ⇔ a RunFailed was observed
 
-        match outcome.get() {
-            Outcome::Cancelled if !saw_terminal => Err(RunError::Cancelled),
-            Outcome::TimedOut if !saw_terminal => Err(RunError::Timeout),
-            _ => collected,
+        match effective_interrupt(interrupt.get(), saw_terminal).map(RunInterrupt::run_error) {
+            Some(err) => Err(err),
+            None => collected,
         }
     }
 
@@ -207,7 +188,7 @@ where
         let (merged, recorder) = load_and_record(&session, agent.name(), input).await?;
 
         let stream = agent.run(ctx, merged).await?;
-        let (controlled_stream, outcome) = controlled(stream, cancel, timeout);
+        let (controlled_stream, interrupt) = controlled(stream, cancel, timeout);
         let rec_inspect = Arc::clone(&recorder);
         let mut recorded = controlled_stream
             .inspect(move |ev| {
@@ -225,7 +206,7 @@ where
                 // Finalize BEFORE exposing a terminal event: a consumer may stop
                 // polling (and drop the stream) the moment it sees the terminal,
                 // so anything after the `yield` could never run.
-                if is_terminal(&ev) {
+                if AgentEvent::is_terminal(&ev) {
                     if !finalized {
                         finalize(&session, &recorder).await;
                         finalized = true;
@@ -235,23 +216,17 @@ where
                 yield ev;
             }
             // Synthesize a terminal ONLY when the run aborted in-flight (no real
-            // terminal was ever yielded). Reaching here with `!saw_terminal` means
-            // the loop never finalized, so finalize directly. A late cancel/timeout
-            // that fired AFTER a real terminal — e.g. during a suspending
-            // OnRunComplete hook — must NOT emit a second, synthetic terminal.
-            // (SMA-421)
-            if !saw_terminal {
-                match outcome.get() {
-                    Outcome::Cancelled => {
-                        finalize(&session, &recorder).await;
-                        yield AgentEvent::RunFailed { error: "run cancelled".to_owned() };
-                    }
-                    Outcome::TimedOut => {
-                        finalize(&session, &recorder).await;
-                        yield AgentEvent::RunFailed { error: "run timed out".to_owned() };
-                    }
-                    Outcome::Completed => {}
-                }
+            // terminal was ever yielded). Reaching here with `!saw_terminal`
+            // means the loop never finalized, so finalize directly. A late
+            // cancel/timeout that fired AFTER a real terminal — e.g. during a
+            // suspending OnRunComplete hook — must NOT emit a second, synthetic
+            // terminal; `effective_interrupt` is what decides that (SMA-422,
+            // closing SMA-421). Note the natural-completion case (no terminal,
+            // no interrupt) deliberately does not finalize here — pre-existing
+            // behaviour, preserved.
+            if let Some(i) = effective_interrupt(interrupt.get(), saw_terminal) {
+                finalize(&session, &recorder).await;
+                yield AgentEvent::RunFailed { error: i.terminal_message().to_owned() };
             }
         };
         Ok(RunResultStreaming::with_failure(Box::pin(out), failure))
