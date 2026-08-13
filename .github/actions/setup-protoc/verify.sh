@@ -38,11 +38,23 @@ if [ "${exported_version}" != "${EXPECTED_VERSION}" ]; then
   exit 1
 fi
 
-# 2. The PATH fallback resolves, and resolves to the same version. A version
-#    check alone would pass if some other 35.1 protoc were first on PATH, so
-#    the resolved location is logged for exactly that case.
+# 2. The PATH fallback resolves, resolves to *this* install, and reports the
+#    pinned version. Identity is checked as well as version: a different protoc
+#    35.1 sitting earlier on PATH would satisfy a version-only check while the
+#    $GITHUB_PATH export had silently failed — which is the failure this whole
+#    step exists to catch.
 if [ -z "${resolved}" ]; then
   echo "::error::protoc is not on PATH — GITHUB_PATH did not propagate."
+  exit 1
+fi
+
+# Same-file (-ef) OR exact string match, deliberately not string equality alone:
+# on Windows `command -v` and the cygpath'd PROTOC can spell the same file
+# differently (.exe resolution, drive-letter case), so a strict string compare
+# would fail a CORRECT install — the same class of trap as the trailing \r
+# below. A genuinely different binary fails both tests, so nothing is weakened.
+if [ "${resolved}" != "${protoc_bin}" ] && [ ! "${resolved}" -ef "${protoc_bin}" ]; then
+  echo "::error::PATH resolves protoc to '${resolved}', expected the pinned install at '${protoc_bin}' — the GITHUB_PATH export did not take effect."
   exit 1
 fi
 

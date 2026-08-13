@@ -210,6 +210,7 @@ jobs:
               - 'Cargo.lock'
       - if: steps.filter.outputs.sessions == 'false'
         run: echo "No session-related changes; nothing to run."
+      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
       - if: steps.filter.outputs.sessions == 'true'
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
