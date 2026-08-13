@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3ee8ea05514c",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-458-ci-pin-an-explicit-protoc-version-in-setup-protoc-steps",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-13-sma-458-protoc-checksum-pin-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3e/e8ea05514c/0/metadata.json",
+      "transcript": "/3e/e8ea05514c/0/full.jsonl",
+      "compact_transcript": "/3e/e8ea05514c/0/transcript.jsonl",
+      "content_hash": "/3e/e8ea05514c/0/content_hash.txt",
+      "prompt": "/3e/e8ea05514c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 119,
+    "cache_creation_tokens": 231869,
+    "cache_read_tokens": 4251689,
+    "output_tokens": 41799,
+    "api_call_count": 41
+  }
+}
