@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use futures_util::stream::{self, StreamExt as _};
 use paigasus_helikon_core::{
     Agent, AgentEvent, AgentInput, CancellationToken, FailureSlot, RunConfig, RunContext, RunError,
-    RunResult, RunResultStreaming, Runner, Session, SessionRecorder,
+    RunInterrupt, RunResult, RunResultStreaming, Runner, Session, SessionRecorder,
 };
 use temporalio_client::{
     Client, WorkflowCancelOptions, WorkflowGetResultOptions, WorkflowStartOptions,
@@ -258,15 +258,12 @@ where
         let (mut events, result) = self.run_inner(agent, ctx, input, config).await?;
 
         let failure = FailureSlot::new();
-        let terminal_message = match result {
-            Ok(_) => None,
-            Err(RunError::Agent(err)) => {
-                let message = err.to_string();
-                failure.set(err);
-                Some(message)
-            }
-            Err(other) => Some(other.to_string()),
-        };
+        let terminal_message = synthetic_terminal_message(&result);
+        // Move the structured error into the slot only for an agent failure;
+        // the message itself was already taken above.
+        if let Err(RunError::Agent(err)) = result {
+            failure.set(err);
+        }
 
         // `collect()` only reads the failure slot once it observes a terminal
         // `RunFailed` in the stream. The durable event log already carries one
@@ -286,6 +283,28 @@ where
             stream::iter(events).boxed(),
             failure,
         ))
+    }
+}
+
+/// The `error` text for the terminal frame [`Runner::run_streamed`] synthesizes
+/// when a run ends without one of its own, or `None` when the run succeeded.
+///
+/// Cancellation and timeout render through [`RunInterrupt::terminal_message`],
+/// **not** through [`RunError`]'s `Display`. The two disagree — `RunError::Cancelled`
+/// displays as `"cancelled"` while the canonical synthesized frame says
+/// `"run cancelled"` — so going through `Display` here would make this runner emit
+/// different text than `TokioRunner` for the same event. One rendering, one place
+/// (SMA-422).
+fn synthetic_terminal_message(result: &Result<RunResult, RunError>) -> Option<String> {
+    match result {
+        Ok(_) => None,
+        Err(RunError::Agent(err)) => Some(err.to_string()),
+        Err(RunError::Cancelled) => Some(RunInterrupt::Cancelled.terminal_message().to_owned()),
+        Err(RunError::Timeout) => Some(RunInterrupt::TimedOut.terminal_message().to_owned()),
+        // `RunError` is `#[non_exhaustive]` and foreign, so this arm is required.
+        // Infrastructure failures have no canonical interrupt text; their own
+        // message is the most informative thing available.
+        Err(other) => Some(other.to_string()),
     }
 }
 
@@ -330,6 +349,7 @@ async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecord
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paigasus_helikon_core::AgentError;
 
     #[test]
     fn with_ctx_seed_stores_seed() {
@@ -341,5 +361,54 @@ mod tests {
     #[test]
     fn ctx_seed_defaults_none() {
         assert_eq!(TemporalRunnerConfig::new("q").ctx_seed, None);
+    }
+
+    /// A cancelled run's synthesized terminal must carry the *canonical*
+    /// interrupt text, so this runner and `TokioRunner` are indistinguishable
+    /// to a stream consumer. Routing through `RunError`'s `Display` instead
+    /// would silently emit "cancelled" here and "run cancelled" there.
+    #[test]
+    fn cancelled_renders_the_canonical_interrupt_message() {
+        let message = synthetic_terminal_message(&Err(RunError::Cancelled));
+        assert_eq!(
+            message.as_deref(),
+            Some(RunInterrupt::Cancelled.terminal_message())
+        );
+        assert_eq!(message.as_deref(), Some("run cancelled"));
+        assert_ne!(
+            message,
+            Some(RunError::Cancelled.to_string()),
+            "must not fall through to RunError's Display, which says \"cancelled\""
+        );
+    }
+
+    #[test]
+    fn timed_out_renders_the_canonical_interrupt_message() {
+        assert_eq!(
+            synthetic_terminal_message(&Err(RunError::Timeout)).as_deref(),
+            Some(RunInterrupt::TimedOut.terminal_message())
+        );
+    }
+
+    #[test]
+    fn success_synthesizes_no_terminal_message() {
+        assert_eq!(
+            synthetic_terminal_message(&Ok(RunResult::default())),
+            None,
+            "a completed run already carries its own terminal"
+        );
+    }
+
+    /// An agent failure keeps its own structured message rather than being
+    /// flattened into an interrupt's canonical text.
+    #[test]
+    fn agent_failure_keeps_its_own_message() {
+        let message =
+            synthetic_terminal_message(&Err(RunError::Agent(AgentError::MaxTurnsExceeded(3))))
+                .expect("an agent failure always has a message");
+        assert!(
+            message.contains('3'),
+            "expected the AgentError's own text, got {message:?}"
+        );
     }
 }
