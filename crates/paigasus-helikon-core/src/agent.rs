@@ -1555,10 +1555,15 @@ mod terminal_tests {
 
     #[test]
     fn every_variant_covers_the_whole_enum() {
+        // Assert on *distinct* discriminants, not length: a plain count would
+        // also pass for 17 copies of one variant, letting a newly added variant
+        // slip past `is_terminal_agrees_with_the_exhaustive_classification`.
+        let discriminants: std::collections::HashSet<_> =
+            every_variant().iter().map(std::mem::discriminant).collect();
         assert_eq!(
-            every_variant().len(),
+            discriminants.len(),
             17,
-            "every_variant() must construct one instance of each AgentEvent variant"
+            "every_variant() must construct one instance of each distinct AgentEvent variant"
         );
     }
 

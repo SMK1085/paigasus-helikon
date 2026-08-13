@@ -272,9 +272,12 @@ where
         // `RunFailed` in the stream. The durable event log already carries one
         // for `AgentFailed` runs; synthesize one for the terminal states that
         // do not (cancellation/timeout/infra), so a failed run never collects
-        // as `Ok`.
+        // as `Ok`. The guard tests for *any* terminal via
+        // `AgentEvent::is_terminal`, not just `RunFailed`: a status that mapped
+        // to `Err` while the event log ended in `RunCompleted` would otherwise
+        // append a second terminal (SMA-422).
         if let Some(message) = terminal_message {
-            if !matches!(events.last(), Some(AgentEvent::RunFailed { .. })) {
+            if !events.last().is_some_and(AgentEvent::is_terminal) {
                 events.push(AgentEvent::RunFailed { error: message });
             }
         }

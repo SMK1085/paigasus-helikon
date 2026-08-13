@@ -771,7 +771,8 @@ mod tests {
         assert_eq!(
             paigasus_helikon_core::effective_interrupt(Some(RunInterrupt::Cancelled), saw_terminal),
             None,
-            "core's rule must agree with the driver's Phase::Done short-circuit"
+            "core's rule must agree with the driver's Phase::Done short-circuit \
+             on every path that records a terminal event"
         );
     }
 

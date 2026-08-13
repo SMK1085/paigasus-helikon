@@ -735,4 +735,24 @@ mod interrupt_tests {
         assert_eq!(RunInterrupt::Cancelled.terminal_message(), "run cancelled");
         assert_eq!(RunInterrupt::TimedOut.terminal_message(), "run timed out");
     }
+
+    /// `terminal_message` and `RunError`'s `Display` deliberately do NOT agree
+    /// on every variant: `TimedOut` renders identically through both, while
+    /// `Cancelled` is `"run cancelled"` here versus `RunError::Cancelled`'s
+    /// `"cancelled"`. Pin both facts, so a future edit to either rendering has
+    /// to confront the asymmetry rather than assume it away.
+    #[test]
+    fn terminal_message_versus_run_error_display() {
+        assert_eq!(
+            RunInterrupt::TimedOut.terminal_message(),
+            RunError::Timeout.to_string(),
+            "TimedOut must render identically through both paths"
+        );
+        assert_ne!(
+            RunInterrupt::Cancelled.terminal_message(),
+            RunError::Cancelled.to_string(),
+            "Cancelled deliberately differs: the synthesized terminal frame says \
+             \"run cancelled\", RunError's Display says \"cancelled\""
+        );
+    }
 }
