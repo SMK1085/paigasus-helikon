@@ -95,7 +95,7 @@ impl InvocationRequest {
     /// Convert this request into an [`AgentInput`] ready to pass to a [`Runner`].
     ///
     /// [`Runner`]: paigasus_helikon_core::Runner
-    fn into_agent_input(self) -> AgentInput {
+    pub(crate) fn into_agent_input(self) -> AgentInput {
         match self {
             InvocationRequest::Messages { messages } => {
                 let mut input = AgentInput::new();

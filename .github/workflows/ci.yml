@@ -114,6 +114,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo build -p paigasus-helikon-runtime-axum --no-default-features
       - run: cargo build -p paigasus-helikon-runtime-actix --no-default-features
+      # SMA-461: every agentcore protocol mode (mcp/a2a/ag-ui/ws) is default-on and
+      # `#[cfg]`-gated down to individual AppState fields and builder methods, so a
+      # missed gate only ever shows up with default features off. Tests run too — the
+      # gating reaches test modules as well, and a build alone would not catch that.
+      - run: cargo build -p paigasus-helikon-runtime-agentcore --no-default-features
+      - run: cargo test -p paigasus-helikon-runtime-agentcore --no-default-features
       - name: Assert no axum leakage under runtime-actix
         run: |
           if cargo tree -p paigasus-helikon --features runtime-actix -e no-dev | grep -qE '(^|[^-])axum v'; then

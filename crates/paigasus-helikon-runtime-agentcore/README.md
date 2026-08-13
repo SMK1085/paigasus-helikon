@@ -1,6 +1,6 @@
 # paigasus-helikon-runtime-agentcore
 
-AWS Bedrock AgentCore runtime shim for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `AgentCoreServer` wraps a `paigasus-helikon-core` [`Agent`](https://docs.rs/paigasus-helikon-core/latest/paigasus_helikon_core/trait.Agent.html) in an [axum](https://crates.io/crates/axum) app that satisfies AWS Bedrock AgentCore's Runtime container contract — either its default **HTTP protocol** (port 8080) or its **MCP protocol** (port 8000) — so the same agent can be deployed as a managed AgentCore Runtime without hand-rolling the contract's endpoints. It delegates execution to [`paigasus-helikon-runtime-tokio`](https://crates.io/crates/paigasus-helikon-runtime-tokio)'s `TokioRunner` by default and reuses `paigasus-helikon-runtime-axum`'s `SessionProvider`/`ContextProvider` traits, so a self-hosted deployment and an AgentCore deployment of the same agent share one provider vocabulary.
+AWS Bedrock AgentCore runtime shim for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `AgentCoreServer` wraps a `paigasus-helikon-core` [`Agent`](https://docs.rs/paigasus-helikon-core/latest/paigasus_helikon_core/trait.Agent.html) in an [axum](https://crates.io/crates/axum) app that satisfies AWS Bedrock AgentCore's Runtime container contract — its default **HTTP protocol** (port 8080, with an optional WebSocket), its **MCP protocol** (port 8000), its **A2A protocol** (port 9000), or its **AG-UI protocol** (port 8080) — so the same agent can be deployed as a managed AgentCore Runtime without hand-rolling the contract's endpoints. It delegates execution to [`paigasus-helikon-runtime-tokio`](https://crates.io/crates/paigasus-helikon-runtime-tokio)'s `TokioRunner` by default and reuses `paigasus-helikon-runtime-axum`'s `SessionProvider`/`ContextProvider` traits, so a self-hosted deployment and an AgentCore deployment of the same agent share one provider vocabulary.
 
 ## Install
 
@@ -86,6 +86,109 @@ Session resolution — an optional request header pins the invocation to a sessi
 | --- | --- | --- |
 | `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` | 33–256 characters (rejected with `400` otherwise) | Fresh, unshared session (one microVM instance is, by AgentCore's execution model, already one session) |
 
+### `GET /ws` (feature `ws`, default on)
+
+An optional endpoint of the HTTP-protocol contract, carrying the same request vocabulary as `POST /invocations` over a persistent connection.
+
+| | |
+| --- | --- |
+| Inbound | One **text** frame per request, each a JSON `InvocationRequest` (the same three body shapes) |
+| Outbound | One JSON text frame per `AgentEvent`, terminated by `run_completed`/`run_failed` |
+| Binary frames | Unsupported — the connection closes with code `1003` |
+| Malformed JSON | A `run_failed` frame; the connection stays open |
+| Concurrency | One run at a time. A request arriving mid-run cancels the in-flight run and **waits for it to finish** before starting the next, so the interrupted turn's session write lands first |
+| Session | Read once from the upgrade request's headers, validated exactly as `/invocations` does |
+
+## A2A-protocol mode (feature `a2a`, default on; `AgentCoreServer::serve_a2a`)
+
+AgentCore's **A2A runtime type**: JSON-RPC 2.0 on port 9000 with agent-card discovery.
+
+| | |
+| --- | --- |
+| Bind address | `0.0.0.0:9000` (fixed, distinct from HTTP/AG-UI's 8080 and MCP's 8000) |
+| Endpoints | `POST /` (JSON-RPC 2.0), `GET /.well-known/agent-card.json`, `GET /ping` |
+
+| Method | Transport | Behaviour |
+| --- | --- | --- |
+| `message/send` | JSON | Runs to completion; returns the finished `Task` with its artifacts |
+| `message/stream` | SSE | Same run, streamed as `status-update` / `artifact-update` events |
+| `tasks/get` | JSON | Store lookup |
+| `tasks/cancel` | JSON | Cancels a live run — see the taxonomy below |
+| `tasks/resubscribe` | SSE | Replays a task's event log, then live-tails it to the terminal |
+| `tasks/pushNotificationConfig/*` | JSON error | `-32003` PushNotificationNotSupported |
+| authenticated extended card | JSON error | `-32004` UnsupportedOperation |
+| anything else | JSON error | `-32601` MethodNotFound |
+
+**Error codes are A2A-specification codes carried on an HTTP `200`, never AWS's platform table.** AWS documents `-32051`…`-32055` for conditions its *platform* reports to a client in front of the container (throttling, runtime unavailable). Those are never emitted from inside it. What this crate emits is the specification's taxonomy — `-32001` TaskNotFound, `-32002` TaskNotCancelable, `-32005` ContentTypeNotSupported, plus the JSON-RPC core codes.
+
+Inbound `taskId` / `contextId` on `message/send` and `message/stream`:
+
+| Inbound | Behaviour |
+| --- | --- |
+| `taskId` absent | Mint a new task (the common case) |
+| `taskId` names a known, non-terminal task | Continue it |
+| `taskId` names a known, terminal task | `-32602` — a terminal task cannot take more input |
+| `taskId` names an unknown task | `-32001` |
+| `contextId` present, session header absent | Use it as the context |
+| `contextId` disagrees with the session header | **Header wins** — platform-authoritative beats client-supplied |
+
+Request parts are text-only; a `file` or `data` part answers `-32005` rather than being silently dropped.
+
+`tasks/cancel` answers `-32001` for an unknown task, `-32002` for one already terminal, `-32002` for one with no live run in this container, and `-32002` when the run reaches its own terminal first — in that last case the stored state is left exactly as the run wrote it, never overwritten with `canceled`.
+
+**A client disconnect does not cancel an A2A task.** This is deliberately the opposite of `/invocations`' behaviour: `tasks/resubscribe` exists precisely so a dropped stream can be reattached, and cancelling on disconnect would mean a resubscribing client could only ever find cancelled tasks. Only `tasks/cancel` produces `canceled`.
+
+**Tasks live in memory by default and are lost when the container stops.** `AgentCoreServerBuilder::task_store` takes any `TaskStore` implementation — back it with a database for deployments whose clients rely on `tasks/get`/`tasks/resubscribe` across container lifetimes.
+
+The agent card is derived from the configured agent (name, description, one matching skill), reports *this crate's* version — a library cannot read its host binary's — and **omits `url`** unless `AGENTCORE_RUNTIME_URL` or `AgentCoreServerBuilder::agent_card_url` supplies one, since `0.0.0.0` is a bind address rather than somewhere a client can connect. `AgentCoreServerBuilder::agent_card` replaces the derived card wholesale.
+
+```bash
+cargo run -p paigasus-helikon-runtime-agentcore --example a2a_server --features a2a
+```
+
+## AG-UI-protocol mode (feature `ag-ui`, default on; `AgentCoreServer::serve_agui`)
+
+AgentCore's **AG-UI runtime type**: AG-UI's event vocabulary over SSE and WebSocket.
+
+| | |
+| --- | --- |
+| Bind address | `0.0.0.0:8080` — the same port as the HTTP protocol, per AWS's contract |
+| Endpoints | `POST /invocations` (SSE), `GET /ws`, `GET /ping` |
+| Request body | AG-UI's `RunAgentInput`. Unknown fields (`tools`, `context`, `state`, `forwardedProps`) are accepted and ignored |
+| Response | AG-UI events: `RUN_STARTED`, `TEXT_MESSAGE_*`, `THINKING_TEXT_MESSAGE_*`, `TOOL_CALL_*`, `STEP_*`, `RUN_FINISHED`/`RUN_ERROR` |
+
+AG-UI and the HTTP protocol are alternative `serverProtocol` settings for one container and share both port and path, so a deployment runs one or the other — and `agui_router()`/`router()` must never both be merged into one app.
+
+`/invocations` here is **SSE only**: it does not honour `Accept: application/json`, because the AG-UI contract defines no buffered form.
+
+**AG-UI mode is stateless per request and cannot use a persistent session backend in v0.** AG-UI clients resend the whole conversation each request while the runner seeds the model with `history ++ input.messages`, so pairing a persisted session with a full client history would double-count every prior turn. Each request therefore gets a fresh, unshared session, and `messages` is treated as the entire conversation. The session header is still validated and used only as a fallback source for `threadId`.
+
+**Concurrent agents map imperfectly.** AG-UI's text and tool-call events assume one active span at a time, so an agent interleaving two tool calls has its spans serialized onto the wire rather than genuinely nested.
+
+```bash
+cargo run -p paigasus-helikon-runtime-agentcore --example agui_server --features ag-ui
+```
+
+## WebSocket frame quotas
+
+Both WebSocket endpoints pace and split outbound frames to stay inside AgentCore's documented limits (64 KB per frame, 250 frames/second), budgeting against the conservative reading of each. Splitting keeps a frame a valid protocol event wherever it can — a long text delta becomes several smaller deltas — and falls back to `helikon.chunk` envelopes only for events whose payload cannot be split into several valid events. A client that never sends oversize payloads never sees an envelope; one that might must reassemble `helikon.chunk` frames in `seq` order until `final` is `true`.
+
+## Feature flags
+
+| Feature | Default | Enables |
+| --- | --- | --- |
+| `mcp` | ✅ | MCP-protocol mode (`serve_mcp`, port 8000) |
+| `a2a` | ✅ | A2A-protocol mode (`serve_a2a`, port 9000) + `TaskStore` |
+| `ag-ui` | ✅ | AG-UI-protocol mode (`serve_agui`, port 8080) |
+| `ws` | ✅ | The optional `GET /ws` endpoint on the HTTP protocol |
+| `example-anthropic` | | Pulls the Anthropic provider in for `examples/agent_http.rs` only |
+
+A deployment serving one protocol pays for all four by default. Opt out to compile the rest away:
+
+```bash
+cargo add paigasus-helikon-runtime-agentcore --no-default-features --features a2a
+```
+
 ## MCP-protocol mode (feature `mcp`, default on; `AgentCoreServer::serve_mcp`)
 
 AgentCore also supports an **MCP runtime type**: instead of the HTTP-protocol contract above, the container serves the configured agent as a single MCP tool over rmcp's streamable-HTTP transport.
@@ -161,14 +264,16 @@ runtime.addEndpoint('production', {
   description: 'Stable production endpoint — pinned to v1',
 });
 
-// MCP-protocol mode (`AgentCoreServer::serve_mcp`, port 8000) instead sets:
-//   protocolConfiguration: agentcore.ProtocolType.MCP,
-// on the `Runtime` props above — everything else (artifact, endpoint) is unchanged.
+// A non-default protocol instead sets `protocolConfiguration` on the `Runtime`
+// props above — everything else (artifact, endpoint) is unchanged:
+//   protocolConfiguration: agentcore.ProtocolType.MCP,    // serve_mcp,  port 8000
+//   protocolConfiguration: agentcore.ProtocolType.A2A,    // serve_a2a,  port 9000
+//   protocolConfiguration: agentcore.ProtocolType.AG_UI,  // serve_agui, port 8080
 ```
 
 ## Abrupt termination and session persistence
 
-AgentCore gives no documented `SIGTERM` contract — termination (idle timeout, max lifetime, or scale-down) can be abrupt. **In HTTP-protocol mode**, durable conversation state belongs in the configured `Session` backend (e.g. `paigasus-helikon-sessions-sqlite`/`-postgres`/`-redis` via a custom `SessionProvider`), never in container memory — the default `InMemorySessionProvider` loses everything on termination, same as any in-process cache. **In MCP-protocol mode**, this guidance does not apply: `AgentCoreServer::mcp_router`/`serve_mcp` always give the wrapped `McpAgentServer` a fresh, unshared in-memory session per call (mirroring `paigasus-helikon-mcp`'s own per-call-context design) and do not consult this server's configured session/context providers at all — MCP mode cannot use a persistent session backend in v0.
+AgentCore gives no documented `SIGTERM` contract — termination (idle timeout, max lifetime, or scale-down) can be abrupt. **In HTTP-protocol mode**, durable conversation state belongs in the configured `Session` backend (e.g. `paigasus-helikon-sessions-sqlite`/`-postgres`/`-redis` via a custom `SessionProvider`), never in container memory — the default `InMemorySessionProvider` loses everything on termination, same as any in-process cache. **In A2A-protocol mode**, the same applies twice over: conversation state belongs in the `Session` backend, and A2A *tasks* belong in a durable `TaskStore` (`AgentCoreServerBuilder::task_store`) if clients rely on `tasks/get`/`tasks/resubscribe` surviving a restart — the default `InMemoryTaskStore` loses every task with the microVM. **In AG-UI-protocol mode**, persistence is unavailable in v0: every request gets a fresh, unshared session (see that section above). **In MCP-protocol mode**, this guidance likewise does not apply: `AgentCoreServer::mcp_router`/`serve_mcp` always give the wrapped `McpAgentServer` a fresh, unshared in-memory session per call (mirroring `paigasus-helikon-mcp`'s own per-call-context design) and do not consult this server's configured session/context providers at all — MCP mode cannot use a persistent session backend in v0.
 
 ## Session keys carry no principal in this runtime
 

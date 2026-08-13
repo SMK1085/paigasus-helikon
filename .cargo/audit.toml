@@ -26,4 +26,10 @@ ignore = [
     # exists yet. Compile-time proc-macro only; revisit when arrow-rs drops it
     # upstream. Accepted at SMA-333. Mirrored in /deny.toml.
     "RUSTSEC-2024-0436",
+    # smartstring is unmaintained (no vulnerability), transitive via rhai
+    # (paigasus-helikon-cli's scripting engine). rhai 1.25.1 is the latest release
+    # and still depends on it non-optionally, so no upgrade path exists. Revisit on
+    # every rhai bump, or if the CLI drops rhai. Noticed on SMA-461 when the
+    # advisory landed mid-PR and reddened main too. Mirrored in /deny.toml.
+    "RUSTSEC-2026-0249",
 ]

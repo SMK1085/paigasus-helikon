@@ -59,6 +59,80 @@
 //! `/mcp` plus a trivial `/ping` (not part of MCP; cheap insurance). See
 //! `AgentCoreServer::mcp_router` for the stateless/allowed-hosts configuration this
 //! requires and why.
+//!
+//! # WebSocket on the HTTP protocol (feature `ws`, default on)
+//!
+//! `GET /ws` is an optional endpoint of AgentCore's HTTP-protocol contract, carrying the
+//! same request vocabulary as `POST /invocations` over a persistent connection: each
+//! inbound **text** frame is one `InvocationRequest`, and every `AgentEvent` of the
+//! resulting run goes back as one JSON text frame. Binary frames are unsupported and
+//! close the connection with code `1003`.
+//!
+//! One run at a time per connection. A request arriving mid-run cancels the in-flight
+//! run and *waits for it to finish* before starting its successor — the run's session
+//! write happens inside that task, so starting the next run first would let it load
+//! history without the interrupted turn.
+//!
+//! # A2A-protocol mode (feature `a2a`, default on)
+//!
+//! `AgentCoreServer::serve_a2a` binds `0.0.0.0:9000` and speaks JSON-RPC 2.0 at the root
+//! path, with an agent card at `/.well-known/agent-card.json` for discovery. Methods:
+//! `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, and
+//! `tasks/resubscribe`; the push-notification-config family answers `-32003` and the
+//! authenticated-extended-card method `-32004`.
+//!
+//! **Error codes are A2A-*specification* codes, never AWS's platform table.** AWS
+//! documents a `-32051`…`-32055` range for conditions its platform reports to a client
+//! (throttling, runtime unavailable, and so on) in front of the container. Those are
+//! never emitted from inside it; a container that returned one would be claiming a
+//! platform condition that did not happen. What this crate emits is the specification's
+//! own taxonomy (`-32001` TaskNotFound, `-32002` TaskNotCancelable, and the JSON-RPC
+//! core codes), and, per the specification, every such error rides an HTTP `200`.
+//!
+//! **Tasks are lost when the container stops.** The default [`InMemoryTaskStore`] is
+//! bounded and in-process, but `tasks/get` and `tasks/resubscribe` exist so a client can
+//! come back to a task after a disconnect — which only means something across container
+//! lifetimes if tasks outlive one, and AgentCore terminates containers abruptly.
+//! [`TaskStore`] is the seam: implement it over a database and install it with
+//! [`AgentCoreServerBuilder::task_store`] for any deployment whose clients rely on
+//! resubscription. Relatedly, a task present in a durable store but with no live run in
+//! *this* container cannot be cancelled from here, and `tasks/cancel` answers `-32002`
+//! rather than pretending otherwise.
+//!
+//! A client disconnect does **not** cancel an A2A task — the opposite of
+//! `/invocations`' behaviour, and deliberately so: resubscription exists precisely to
+//! survive a dropped stream. Only `tasks/cancel` produces `canceled`.
+//!
+//! # AG-UI-protocol mode (feature `ag-ui`, default on)
+//!
+//! `AgentCoreServer::serve_agui` binds `0.0.0.0:8080` and serves AG-UI's event
+//! vocabulary over SSE at `POST /invocations` plus a WebSocket at `GET /ws`. AG-UI and
+//! the HTTP protocol are alternative `serverProtocol` settings for one container and
+//! share both the port and the path, so a deployment runs one or the other.
+//!
+//! **AG-UI mode is stateless per request and cannot use a persistent session backend in
+//! v0.** AG-UI clients resend the entire conversation in `messages` on every request,
+//! while the runner seeds the model with `history ++ input.messages`; pairing a
+//! persisted session with a full client history would double-count every prior turn. So
+//! each request gets a fresh, unshared session and `messages` is treated as the whole
+//! conversation. The session header is still validated, and used only as a fallback
+//! source for the AG-UI `threadId`.
+//!
+//! **Concurrent agents map imperfectly.** AG-UI's text and tool-call events assume one
+//! active span at a time, so an agent interleaving two tool calls has its spans
+//! serialized onto the wire rather than genuinely nested.
+//!
+//! # WebSocket frame quotas
+//!
+//! Both WebSocket endpoints pace and split outbound frames to stay inside AgentCore's
+//! documented limits (64 KB per frame, 250 frames/second), budgeting against the
+//! conservative reading of each. Splitting keeps a frame a valid protocol event where it
+//! can — a long text delta becomes several smaller deltas — and falls back to
+//! `helikon.chunk` envelopes only for events whose payload cannot be split into several
+//! valid events (currently AG-UI's `TOOL_CALL_RESULT` and the HTTP protocol's
+//! `AgentEvent` frames). A client that never sends oversize payloads never sees an
+//! envelope; one that might must reassemble `helikon.chunk` frames in `seq` order until
+//! `final` is `true`.
 #![forbid(unsafe_code)]
 
 mod error;
@@ -77,3 +151,29 @@ mod session;
 
 mod server;
 pub use server::{AgentCoreServer, AgentCoreServerBuilder};
+
+#[cfg(feature = "a2a")]
+mod a2a;
+/// The A2A task-persistence seam and its bounded in-memory default. Implement
+/// [`TaskStore`] over a database to let tasks survive AgentCore's abrupt container
+/// termination.
+#[cfg(feature = "a2a")]
+pub use a2a::store::{InMemoryTaskStore, TaskStore, MAX_EVENTS_PER_TASK};
+/// A2A wire types: the task lifecycle, its artifacts, and the agent card served for
+/// discovery. Public because they appear in the
+/// [`TaskStore`](crate::TaskStore) trait's signature and in
+/// [`AgentCoreServerBuilder::agent_card`].
+#[cfg(feature = "a2a")]
+pub use a2a::types::{
+    AgentCapabilities, AgentCard, AgentSkill, Artifact, Part, Task, TaskEvent, TaskKind, TaskState,
+    TaskStatus,
+};
+
+#[cfg(feature = "ag-ui")]
+mod agui;
+
+#[cfg(any(feature = "ws", feature = "ag-ui"))]
+mod frame;
+
+#[cfg(feature = "ws")]
+mod ws;
