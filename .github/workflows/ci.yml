@@ -51,11 +51,10 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332).
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332). The
+      # version and its digests live in the action (SMA-458).
+      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
@@ -84,12 +83,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: ${{ matrix.toolchain }}
-      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332).
-      # Cross-platform: downloads prebuilt protoc for ubuntu/macos/windows.
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332). The
+      # version and its digests live in the action (SMA-458).
+      # Cross-platform: this is the only site exercising the macOS and Windows
+      # branches of the action, so it carries all three pinned digests.
+      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo test ${{ matrix.test_args }}
@@ -105,11 +104,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332).
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332). The
+      # version and its digests live in the action (SMA-458).
+      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo build -p paigasus-helikon-runtime-axum --no-default-features
@@ -140,11 +138,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332).
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332). The
+      # version and its digests live in the action (SMA-458).
+      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: cargo doc --workspace --all-features --no-deps
@@ -164,11 +161,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
-      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332).
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332). The
+      # version and its digests live in the action (SMA-458).
+      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       - run: bash scripts/check-doc-coverage.sh
@@ -207,6 +203,10 @@ jobs:
               - 'crates/paigasus-helikon-sessions-**'
               - 'crates/paigasus-helikon-core/src/session.rs'
               - '.github/workflows/ci.yml'
+              # The protoc install lives here since SMA-458. Without this entry a
+              # protoc bump would skip this REQUIRED job, reporting green having
+              # run nothing.
+              - '.github/actions/**'
               - 'Cargo.lock'
       - if: steps.filter.outputs.sessions == 'false'
         run: echo "No session-related changes; nothing to run."
@@ -214,12 +214,11 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332).
+      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332). The
+      # version and its digests live in the action (SMA-458).
       - if: steps.filter.outputs.sessions == 'true'
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       - if: steps.filter.outputs.sessions == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6

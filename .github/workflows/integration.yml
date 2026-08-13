@@ -93,6 +93,9 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/integration.yml'
+              # The protoc install lives here since SMA-458; without this entry a
+              # protoc bump would skip this job entirely.
+              - '.github/actions/**'
       - id: decide
         env:
           EVENT: ${{ github.event_name }}
@@ -114,13 +117,13 @@ jobs:
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      # arduino/setup-protoc v3.0.0 — temporalio-protos compiles .proto at build
-      # time (prost-build); a system protoc is required (SMA-332). repo-token
-      # avoids unauthenticated GitHub API rate limits.
+      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
+      # build time (prost-build); a system protoc is required (SMA-332). The
+      # version and its digests live in the action (SMA-458). No token needed:
+      # the action builds the asset URL from a hardcoded version and makes no
+      # GitHub API call, so the unauthenticated API rate limit does not apply.
       - if: steps.decide.outputs.run == 'true'
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2 — cache-on-failure because this job is expected
       # to go red sometimes, and a red run must still warm the cache for the next.
       - if: steps.decide.outputs.run == 'true'
