@@ -99,6 +99,8 @@ where
     /// `Err(RunError::Timeout)`. The cancel/timeout wins only when it aborted the
     /// run in-flight, before any terminal event. A caller therefore cannot assume
     /// "I called `cancel()` ⇒ I get `Cancelled`".
+    /// Implementors must apply this rule via [`effective_interrupt`] rather
+    /// than re-deriving it; [`RunInterrupt`] names the two boundary interrupts.
     async fn run(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -117,6 +119,8 @@ where
     /// The same cancellation precedence as [`Runner::run`] applies: once a real
     /// terminal event has been yielded, a late cancel/timeout does not append a
     /// second, synthetic terminal — the stream ends after the real one.
+    /// Gate the synthetic terminal on [`effective_interrupt`], and render it
+    /// with [`RunInterrupt::terminal_message`].
     async fn run_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -488,6 +492,84 @@ pub enum RunError {
     Other(#[from] anyhow::Error),
 }
 
+/// Why a runner's control boundary aborted a run before its natural end.
+///
+/// A runner that wraps the agent's event stream with cancellation and/or a
+/// deadline observes at most one of these. Whether it actually *wins* — that
+/// is, overrides the run's own outcome — is decided by [`effective_interrupt`],
+/// never by the runner on its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RunInterrupt {
+    /// The run's [`crate::CancellationToken`] fired.
+    Cancelled,
+    /// The run exceeded its [`RunConfig::timeout`].
+    TimedOut,
+}
+
+impl RunInterrupt {
+    /// The [`RunError`] this interrupt surfaces at the runner boundary.
+    #[must_use]
+    pub fn run_error(self) -> RunError {
+        // No wildcard arm: `#[non_exhaustive]` does not apply inside the
+        // defining crate, so a new variant breaks this match at compile time —
+        // which is the point.
+        match self {
+            Self::Cancelled => RunError::Cancelled,
+            Self::TimedOut => RunError::Timeout,
+        }
+    }
+
+    /// Canonical `error` text for the terminal [`crate::AgentEvent::RunFailed`]
+    /// a streaming runner synthesizes when this interrupt wins.
+    #[must_use]
+    pub fn terminal_message(self) -> &'static str {
+        match self {
+            Self::Cancelled => "run cancelled",
+            Self::TimedOut => "run timed out",
+        }
+    }
+}
+
+/// Apply the runner-boundary precedence rule: **a genuine terminal event beats
+/// a late cancel/timeout.**
+///
+/// `interrupt` is what the runner's control boundary observed (`None` if it
+/// never fired). `saw_terminal` is whether the run produced a genuine
+/// terminal event — see [`crate::AgentEvent::is_terminal`]. Returns the
+/// interrupt only when it *wins*: when it aborted the run in-flight, before any
+/// terminal.
+///
+/// This is the executable form of the contract [`Runner::run`] states in prose.
+/// It exists so that every `Runner` — third-party implementations especially,
+/// which are its main audience — applies one shared rule instead of re-deriving
+/// it. The window it closes: a cancel that fires *after* the terminal already
+/// went out (during a suspending `OnRunComplete` hook, say) must not
+/// retroactively turn a completed run into a cancelled one.
+///
+/// ```
+/// use paigasus_helikon_core::{effective_interrupt, RunInterrupt};
+///
+/// // Aborted in-flight: the interrupt wins.
+/// assert_eq!(
+///     effective_interrupt(Some(RunInterrupt::Cancelled), false),
+///     Some(RunInterrupt::Cancelled)
+/// );
+/// // A terminal already occurred: the interrupt loses.
+/// assert_eq!(effective_interrupt(Some(RunInterrupt::Cancelled), true), None);
+/// ```
+#[must_use]
+pub fn effective_interrupt(
+    interrupt: Option<RunInterrupt>,
+    saw_terminal: bool,
+) -> Option<RunInterrupt> {
+    if saw_terminal {
+        None
+    } else {
+        interrupt
+    }
+}
+
 #[cfg(test)]
 mod resume_tests {
     use super::*;
@@ -599,5 +681,58 @@ mod runconfig_tests {
 
         let c = RunConfig::new().with_max_agent_depth(3);
         assert_eq!(c.max_agent_depth, 3);
+    }
+}
+
+#[cfg(test)]
+mod interrupt_tests {
+    use super::*;
+
+    /// The complete truth table for the precedence rule:
+    /// `{None, Cancelled, TimedOut} × {saw_terminal, !saw_terminal}`.
+    #[test]
+    fn interrupt_wins_only_when_no_terminal_was_seen() {
+        assert_eq!(effective_interrupt(None, false), None);
+        assert_eq!(effective_interrupt(None, true), None);
+
+        assert_eq!(
+            effective_interrupt(Some(RunInterrupt::Cancelled), false),
+            Some(RunInterrupt::Cancelled),
+            "a cancel that aborted the run in-flight must win"
+        );
+        assert_eq!(
+            effective_interrupt(Some(RunInterrupt::Cancelled), true),
+            None,
+            "a genuine terminal must beat a late cancel"
+        );
+
+        assert_eq!(
+            effective_interrupt(Some(RunInterrupt::TimedOut), false),
+            Some(RunInterrupt::TimedOut),
+            "a deadline that aborted the run in-flight must win"
+        );
+        assert_eq!(
+            effective_interrupt(Some(RunInterrupt::TimedOut), true),
+            None,
+            "a genuine terminal must beat a late timeout"
+        );
+    }
+
+    #[test]
+    fn run_error_rendering() {
+        assert!(matches!(
+            RunInterrupt::Cancelled.run_error(),
+            RunError::Cancelled
+        ));
+        assert!(matches!(
+            RunInterrupt::TimedOut.run_error(),
+            RunError::Timeout
+        ));
+    }
+
+    #[test]
+    fn terminal_message_rendering() {
+        assert_eq!(RunInterrupt::Cancelled.terminal_message(), "run cancelled");
+        assert_eq!(RunInterrupt::TimedOut.terminal_message(), "run timed out");
     }
 }
