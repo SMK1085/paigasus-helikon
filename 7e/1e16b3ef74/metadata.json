@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "7e1e16b3ef74",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-458-ci-pin-an-explicit-protoc-version-in-setup-protoc-steps",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/actions/setup-protoc/action.yml",
+    ".github/actions/setup-protoc/install.sh",
+    ".github/actions/setup-protoc/selftest.sh",
+    ".github/actions/setup-protoc/verify.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7e/1e16b3ef74/0/metadata.json",
+      "transcript": "/7e/1e16b3ef74/0/full.jsonl",
+      "compact_transcript": "/7e/1e16b3ef74/0/transcript.jsonl",
+      "content_hash": "/7e/1e16b3ef74/0/content_hash.txt",
+      "prompt": "/7e/1e16b3ef74/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 39037,
+    "cache_read_tokens": 11155291,
+    "output_tokens": 26139,
+    "api_call_count": 45
+  }
+}
