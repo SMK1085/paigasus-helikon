@@ -3,7 +3,7 @@
   "checkpoint_id": "7a5a75e66435",
   "strategy": "manual-commit",
   "branch": "feature/sma-422-hoist-the-terminal-vs-cancel-precedence-resolver-into-core",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "docs/superpowers/specs/2026-08-13-sma-422-terminal-precedence-resolver-design.md"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/7a/5a75e66435/0/transcript.jsonl",
       "content_hash": "/7a/5a75e66435/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/7a/5a75e66435/1/metadata.json",
+      "transcript": "/7a/5a75e66435/1/full.jsonl",
+      "compact_transcript": "/7a/5a75e66435/1/transcript.jsonl",
+      "content_hash": "/7a/5a75e66435/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 2,
-    "cache_creation_tokens": 252,
-    "cache_read_tokens": 143415,
-    "output_tokens": 147,
-    "api_call_count": 1
+    "input_tokens": 4,
+    "cache_creation_tokens": 1151,
+    "cache_read_tokens": 304846,
+    "output_tokens": 395,
+    "api_call_count": 2
   }
 }
