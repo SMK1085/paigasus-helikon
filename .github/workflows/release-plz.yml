@@ -29,12 +29,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      # arduino/setup-protoc v3.0.0 — `cargo publish --verify` compiles the
+      # Pinned, checksum-verified protoc — `cargo publish --verify` compiles the
       # workspace (temporalio-protos → prost-wkt-types build.rs needs protoc);
       # without this the runtime-temporal tarball verify fails (seen 2026-07-06).
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # The version and its digests live in the action (SMA-458). NB: this
+      # workflow runs only on push to main, so a change here is never exercised
+      # by the PR that makes it.
+      - uses: ./.github/actions/setup-protoc
       # actions/create-github-app-token v3.2.0
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         id: app-token

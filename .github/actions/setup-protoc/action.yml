@@ -1,0 +1,18 @@
+name: "Setup protoc"
+description: >-
+  Install a pinned, checksum-verified protoc and expose it to later steps via
+  PROTOC, PROTOC_INCLUDE and PATH. Replaces arduino/setup-protoc (SMA-458).
+
+runs:
+  using: composite
+  steps:
+    # Composite actions have NO default shell: `shell:` is mandatory on every
+    # run step or the runner rejects the action outright.
+    - name: Download and verify protoc
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/install.sh"
+
+    # Deliberately a separate step — see the header comment in verify.sh.
+    - name: Assert the pinned protoc is in effect
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/verify.sh"
