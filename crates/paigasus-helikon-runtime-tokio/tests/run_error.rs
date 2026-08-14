@@ -32,7 +32,7 @@ async fn run_surfaces_model_error_as_run_error_agent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_still_maps_to_run_error_cancelled() {
-    // Cancel/timeout stay runner-level (sourced from Outcome, not the slot).
+    // Cancel/timeout stay runner-level (sourced from the runner's RunInterrupt, not the slot).
     let cancel = CancellationToken::new();
     let ctx = run_context_with_cancel(cancel.clone());
     let agent = text_agent(std::sync::Arc::new(PendingModel), Vec::new());

@@ -55,7 +55,7 @@ use crate::{
     auth::Principal,
     dto::{AsyncAccepted, RunRequest, RunResponse},
     error::{AuthRejection, ServerError},
-    event_log::{is_terminal, EventLog},
+    event_log::EventLog,
     registry::{RunHandle, RunRegistry},
     server::AppState,
     session::SessionKey,
@@ -414,7 +414,7 @@ fn sse_response(run_id: Uuid, handle: &Arc<RunHandle>) -> Response {
             }
             match state.events.next().await {
                 Some(ev) => {
-                    state.saw_terminal |= is_terminal(&ev);
+                    state.saw_terminal |= ev.is_terminal();
                     let frame = to_sse_event(&ev);
                     Some((Ok::<Event, Infallible>(frame), state))
                 }

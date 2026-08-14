@@ -25,10 +25,7 @@ use axum::{
 use futures_util::StreamExt;
 use uuid::Uuid;
 
-use crate::{
-    auth::Principal, error::ServerError, event_log::is_terminal, registry::RunHandle,
-    server::AppState,
-};
+use crate::{auth::Principal, error::ServerError, registry::RunHandle, server::AppState};
 
 /// `GET /agents/{name}/runs/{id}/events` — subscribe to run events via WebSocket.
 ///
@@ -108,7 +105,7 @@ async fn handle_socket(mut socket: WebSocket, handle: Arc<RunHandle>) {
             ev = sub.next() => {
                 match ev {
                     Some(ev) => {
-                        if is_terminal(&ev) {
+                        if ev.is_terminal() {
                             saw_terminal = true;
                         }
                         let text = match serde_json::to_string(&ev) {

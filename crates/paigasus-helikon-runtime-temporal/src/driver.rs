@@ -34,7 +34,7 @@
 
 use paigasus_helikon_core::{
     transition, AgentEvent, ContentPart, Item, LoopState, ModelRequest, ModelSettings, NextAction,
-    OutputType, TokenUsage, ToolCallOutcome, ToolCallRequest, ToolDef, TransitionCtx,
+    OutputType, RunInterrupt, TokenUsage, ToolCallOutcome, ToolCallRequest, ToolDef, TransitionCtx,
     TransitionInput, TransitionOutcome,
 };
 
@@ -81,15 +81,19 @@ pub struct AgentPlan {
     pub output: Option<OutputType>,
 }
 
-/// Why the workflow is tearing the driver down before a natural terminal
-/// state.
-#[derive(Debug, Clone, Copy)]
-pub enum InterruptKind {
-    /// The workflow (or its caller) was cancelled.
-    Cancelled,
-    /// The run exceeded [`WorkflowInput::timeout_ms`].
-    TimedOut,
-}
+/// Former name of [`paigasus_helikon_core::RunInterrupt`].
+///
+/// `driver` is a `pub mod`, so this name is public API; it is kept as an alias
+/// so downstream `crate::driver::InterruptKind` paths (and
+/// `InterruptKind::Cancelled` variant access, which resolves through a type
+/// alias) keep working. The rule this type participates in now lives in core
+/// (SMA-422).
+///
+/// Note the alias is not a perfect source-compatibility shim: because
+/// `RunInterrupt` is `#[non_exhaustive]` and foreign, a downstream exhaustive
+/// `match` on it now requires a wildcard arm.
+#[deprecated(note = "renamed; use `paigasus_helikon_core::RunInterrupt` instead")]
+pub type InterruptKind = paigasus_helikon_core::RunInterrupt;
 
 /// Internal driving phase. Not part of the public API.
 #[derive(Debug)]
@@ -337,13 +341,22 @@ impl DurableDriver {
     /// `next_effect` call returned `Finished`), that outcome is returned
     /// unchanged instead of being overwritten with `Cancelled`/`TimedOut` —
     /// a completed run's status is not retroactively an interruption.
-    pub fn interrupt(self, kind: InterruptKind) -> DurableRunOutcome {
+    pub fn interrupt(self, kind: RunInterrupt) -> DurableRunOutcome {
         if let Phase::Done(outcome) = self.phase {
             return outcome;
         }
         let status = match kind {
-            InterruptKind::Cancelled => RunStatusPayload::Cancelled,
-            InterruptKind::TimedOut => RunStatusPayload::TimedOut,
+            RunInterrupt::Cancelled => RunStatusPayload::Cancelled,
+            RunInterrupt::TimedOut => RunStatusPayload::TimedOut,
+            // `RunInterrupt` is `#[non_exhaustive]`, so a wildcard is required
+            // here. An interrupt kind this crate does not know is still a run
+            // that did not finish, so surface it as a failure rather than
+            // mislabeling it as one of the two known interrupts. Panicking is
+            // not an option: this runs inside a Temporal workflow, where a
+            // workflow-task failure retries indefinitely.
+            other => RunStatusPayload::AgentFailed(ErrorKindPayload::Other {
+                message: format!("unhandled run interrupt: {other:?}"),
+            }),
         };
         DurableRunOutcome {
             status,
@@ -719,7 +732,7 @@ mod tests {
         )));
         assert_matches!(d.next_effect(), DriverEffect::ExecuteTools(_));
 
-        let outcome = d.interrupt(InterruptKind::Cancelled);
+        let outcome = d.interrupt(RunInterrupt::Cancelled);
         assert_matches!(outcome.status, RunStatusPayload::Cancelled);
         assert!(!outcome.events.is_empty());
         assert_matches!(outcome.events.first(), Some(AgentEvent::RunStarted { .. }));
@@ -733,6 +746,55 @@ mod tests {
             .any(|e| matches!(e, AgentEvent::MessageOutput { .. })));
         assert_eq!(outcome.usage.input_tokens, 3);
         assert_eq!(outcome.usage.output_tokens, 4);
+    }
+
+    /// SMA-422 / SMA-421 for the durable driver: once the driver has reached a
+    /// terminal outcome, a later `interrupt` must NOT retroactively relabel the
+    /// run as cancelled. This is the `Phase::Done` short-circuit — temporal's
+    /// equivalent of `TokioRunner`'s `saw_terminal` gate — which had no test.
+    #[test]
+    fn terminal_wins_over_late_interrupt() {
+        let mut d = DurableDriver::new(input(vec![user("hi")]), plan_no_tools());
+        assert_matches!(d.next_effect(), DriverEffect::RenderInstructions);
+        d.apply_instructions("sys".to_owned());
+        assert_matches!(d.next_effect(), DriverEffect::CallModel(_));
+        d.apply_model(model_text_turn("hello"));
+        assert_matches!(d.next_effect(), DriverEffect::Finished(_));
+
+        // The interrupt arrives AFTER the run already finished.
+        let outcome = d.interrupt(RunInterrupt::Cancelled);
+        assert_matches!(&outcome.status, RunStatusPayload::Completed(_));
+
+        // The driver's structural gate and core's scanning gate must agree.
+        let saw_terminal = outcome.events.iter().any(AgentEvent::is_terminal);
+        assert!(saw_terminal, "a finished run must carry a terminal event");
+        assert_eq!(
+            paigasus_helikon_core::effective_interrupt(Some(RunInterrupt::Cancelled), saw_terminal),
+            None,
+            "core's rule must agree with the driver's Phase::Done short-circuit \
+             on every path that records a terminal event"
+        );
+    }
+
+    /// The same precedence for a terminal *failure*: a late timeout must not
+    /// mask the run's real `AgentFailed` status.
+    #[test]
+    fn terminal_failure_wins_over_late_interrupt() {
+        let mut d = DurableDriver::new(input(vec![user("hi")]), plan_no_tools());
+        assert_matches!(d.next_effect(), DriverEffect::RenderInstructions);
+        d.apply_instructions("sys".to_owned());
+        assert_matches!(d.next_effect(), DriverEffect::CallModel(_));
+        d.apply_model_failure(ErrorKindPayload::Model {
+            message: "connection lost".to_owned(),
+        });
+        assert_matches!(d.next_effect(), DriverEffect::Finished(_));
+
+        let outcome = d.interrupt(RunInterrupt::TimedOut);
+        assert_matches!(
+            &outcome.status,
+            RunStatusPayload::AgentFailed(ErrorKindPayload::Model { .. })
+        );
+        assert!(outcome.events.iter().any(AgentEvent::is_terminal));
     }
 
     #[test]

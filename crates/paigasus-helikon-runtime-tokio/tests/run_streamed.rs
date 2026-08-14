@@ -142,6 +142,41 @@ async fn streamed_cancel_emits_terminal_runfailed() {
     );
 }
 
+/// The streamed **timeout** counterpart of
+/// `streamed_cancel_emits_terminal_runfailed`. Pins the synthesized terminal's
+/// message for the deadline arm, which nothing else covers. (SMA-422)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streamed_timeout_emits_terminal_runfailed() {
+    let ctx = noop_run_context();
+    let agent = text_agent(Arc::new(PendingModel), Vec::new());
+
+    let rs = TokioRunner
+        .run_streamed(
+            &agent,
+            ctx,
+            AgentInput::from_user_text("go"),
+            RunConfig::new().with_timeout(Duration::from_millis(50)),
+        )
+        .await
+        .expect("stream starts");
+
+    let events = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut s = rs.events;
+        let mut evs = Vec::new();
+        while let Some(ev) = s.next().await {
+            evs.push(ev);
+        }
+        evs
+    })
+    .await
+    .expect("stream must end within 5s of the deadline");
+
+    assert!(
+        matches!(events.last(), Some(AgentEvent::RunFailed { error }) if error == "run timed out"),
+        "last event must be RunFailed(run timed out): {events:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn finalize_runs_on_streamed_exits() {
     // normal

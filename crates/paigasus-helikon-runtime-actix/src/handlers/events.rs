@@ -24,7 +24,7 @@ use actix_web::{
 use futures_util::StreamExt;
 use uuid::Uuid;
 
-use crate::{auth::Principal, error::ServerError, event_log::is_terminal, server::AppState};
+use crate::{auth::Principal, error::ServerError, server::AppState};
 
 /// `GET /agents/{name}/runs/{id}/events` — subscribe to run events via WebSocket.
 ///
@@ -113,7 +113,7 @@ pub(crate) async fn events<Ctx: Send + Sync + 'static>(
                 // Next event from the log (replay + live tail).
                 ev = sub.next() => match ev {
                     Some(ev) => {
-                        if is_terminal(&ev) {
+                        if ev.is_terminal() {
                             saw_terminal = true;
                         }
                         let Ok(text) = serde_json::to_string(&ev) else { break };

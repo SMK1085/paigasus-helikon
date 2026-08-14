@@ -54,8 +54,12 @@ pub(crate) fn outcome_to_run_result(
         RunStatusPayload::AgentFailed(kind) => Err(paigasus_helikon_core::RunError::Agent(
             kind.into_agent_error(),
         )),
-        RunStatusPayload::Cancelled => Err(paigasus_helikon_core::RunError::Cancelled),
-        RunStatusPayload::TimedOut => Err(paigasus_helikon_core::RunError::Timeout),
+        RunStatusPayload::Cancelled => {
+            Err(paigasus_helikon_core::RunInterrupt::Cancelled.run_error())
+        }
+        RunStatusPayload::TimedOut => {
+            Err(paigasus_helikon_core::RunInterrupt::TimedOut.run_error())
+        }
     }
 }
 

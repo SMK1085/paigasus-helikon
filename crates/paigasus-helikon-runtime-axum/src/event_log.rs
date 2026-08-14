@@ -13,17 +13,6 @@ use std::{
 };
 use tokio::sync::Notify;
 
-/// Returns `true` for events that signal end-of-run.
-///
-/// Only [`AgentEvent::RunCompleted`] and [`AgentEvent::RunFailed`] are terminal;
-/// all other variants are non-terminal.
-pub(crate) fn is_terminal(ev: &AgentEvent) -> bool {
-    matches!(
-        ev,
-        AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. }
-    )
-}
-
 /// Mutable state inside [`EventLog`], protected by a [`Mutex`].
 struct EventLogInner {
     /// Retained events. May be shorter than total appended events due to ring eviction.
@@ -104,7 +93,7 @@ impl EventLog {
     /// Automatically sets the terminal flag when `ev` is `RunCompleted` or `RunFailed`.
     /// Always wakes all live subscribers via [`Notify::notify_waiters`] after appending.
     pub fn append(&self, ev: AgentEvent) {
-        let terminal = is_terminal(&ev);
+        let terminal = ev.is_terminal();
         let mut inner = self.inner.lock().expect("EventLog mutex poisoned");
         inner.events.push_back(ev);
         while inner.events.len() > self.max_events {
@@ -202,7 +191,7 @@ impl EventLog {
                     }
                     // Fast path: drain the previously-read batch first.
                     if let Some(ev) = state.pending.next() {
-                        state.done = is_terminal(&ev);
+                        state.done = ev.is_terminal();
                         return Some((ev, state));
                     }
                     loop {
@@ -218,7 +207,7 @@ impl EventLog {
                             state.cursor = slice.next_cursor;
                             state.pending = slice.events.into_iter();
                             let ev = state.pending.next().expect("slice.events non-empty");
-                            state.done = is_terminal(&ev);
+                            state.done = ev.is_terminal();
                             return Some((ev, state));
                         }
                         if slice.terminal {

@@ -345,7 +345,7 @@ impl LlmAgent<(), (), String> {
 
 /// The unified event stream emitted by an [`Agent`].
 ///
-/// Fourteen variants spanning lifecycle, raw streaming deltas,
+/// Seventeen variants spanning lifecycle, raw streaming deltas,
 /// post-aggregation semantic items, agent transitions, control signals,
 /// and terminal outcomes. The semantic-item variants
 /// (`MessageOutput`, `ToolCallItem`, `ToolOutputItem`) carry a full
@@ -479,6 +479,20 @@ pub enum AgentEvent {
         /// Human-readable error message.
         error: String,
     },
+}
+
+impl AgentEvent {
+    /// `true` for the two events that end a run: [`AgentEvent::RunCompleted`]
+    /// and [`AgentEvent::RunFailed`].
+    ///
+    /// This is the single definition of "terminal" every runner shares. A
+    /// runner's cancel/timeout boundary loses to a terminal that already
+    /// occurred; the `terminal_tests::classify` guard keeps a newly added
+    /// variant from silently defaulting to non-terminal here.
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::RunCompleted { .. } | Self::RunFailed { .. })
+    }
 }
 
 // ── Private helpers for the LlmAgent driver ─────────────────────────────────
@@ -1431,6 +1445,149 @@ mod redaction_e2e_tests {
         assert!(
             !rendered.contains("supersecretvalue"),
             "secret leaked into tool output: {rendered}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+
+    /// Independent classification of every [`AgentEvent`] variant.
+    ///
+    /// The `match` is deliberately **exhaustive, with no wildcard arm**.
+    /// `#[non_exhaustive]` has no effect inside the defining crate, so adding a
+    /// variant to `AgentEvent` fails to compile *here* until someone makes an
+    /// explicit terminal / non-terminal decision for it. That is what stops a
+    /// newly added terminal variant from silently defaulting to non-terminal
+    /// inside `AgentEvent::is_terminal`'s `matches!`.
+    fn classify(ev: &AgentEvent) -> bool {
+        match ev {
+            AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. } => true,
+            AgentEvent::RunStarted { .. }
+            | AgentEvent::TurnStarted { .. }
+            | AgentEvent::TokenDelta { .. }
+            | AgentEvent::ReasoningDelta { .. }
+            | AgentEvent::ToolCallDelta { .. }
+            | AgentEvent::MessageOutput { .. }
+            | AgentEvent::ToolCallItem { .. }
+            | AgentEvent::ToolOutputItem { .. }
+            | AgentEvent::HandoffItem { .. }
+            | AgentEvent::AgentUpdated { .. }
+            | AgentEvent::GuardrailTriggered { .. }
+            | AgentEvent::ApprovalRequested { .. }
+            | AgentEvent::PermissionDenied { .. }
+            | AgentEvent::RepairStarted { .. }
+            | AgentEvent::StructuredOutputFailed { .. } => false,
+        }
+    }
+
+    fn sample_item() -> Item {
+        Item::AssistantMessage {
+            content: vec![crate::ContentPart::Text {
+                text: "hi".to_owned(),
+            }],
+            agent: None,
+        }
+    }
+
+    /// One instance of every variant, so the two classifications are compared
+    /// across the whole surface rather than a hand-picked sample.
+    fn every_variant() -> Vec<AgentEvent> {
+        vec![
+            AgentEvent::RunStarted {
+                agent: "a".to_owned(),
+            },
+            AgentEvent::TurnStarted { turn: 0 },
+            AgentEvent::TokenDelta {
+                text: "t".to_owned(),
+            },
+            AgentEvent::ReasoningDelta {
+                text: "r".to_owned(),
+            },
+            AgentEvent::ToolCallDelta {
+                call_id: "c".to_owned(),
+                name: None,
+                args_delta: "{}".to_owned(),
+            },
+            AgentEvent::MessageOutput {
+                item: sample_item(),
+            },
+            AgentEvent::ToolCallItem {
+                item: sample_item(),
+            },
+            AgentEvent::ToolOutputItem {
+                item: sample_item(),
+            },
+            AgentEvent::HandoffItem {
+                from: "a".to_owned(),
+                to: "b".to_owned(),
+            },
+            AgentEvent::AgentUpdated {
+                agent: "b".to_owned(),
+            },
+            AgentEvent::GuardrailTriggered {
+                kind: GuardrailKind::InputPolicy,
+                info: serde_json::Value::Null,
+            },
+            AgentEvent::ApprovalRequested {
+                call_id: "c".to_owned(),
+                tool: "t".to_owned(),
+                args: serde_json::Value::Null,
+            },
+            AgentEvent::PermissionDenied {
+                tool: "t".to_owned(),
+                reason: "no".to_owned(),
+            },
+            AgentEvent::RepairStarted { attempt: 1 },
+            AgentEvent::StructuredOutputFailed {
+                schema_errors: vec!["e".to_owned()],
+                final_text: "x".to_owned(),
+            },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+            AgentEvent::RunFailed {
+                error: "boom".to_owned(),
+            },
+        ]
+    }
+
+    #[test]
+    fn every_variant_covers_the_whole_enum() {
+        // Assert on *distinct* discriminants, not length: a plain count would
+        // also pass for 17 copies of one variant, letting a newly added variant
+        // slip past `is_terminal_agrees_with_the_exhaustive_classification`.
+        let discriminants: std::collections::HashSet<_> =
+            every_variant().iter().map(std::mem::discriminant).collect();
+        assert_eq!(
+            discriminants.len(),
+            17,
+            "every_variant() must construct one instance of each distinct AgentEvent variant"
+        );
+    }
+
+    #[test]
+    fn is_terminal_agrees_with_the_exhaustive_classification() {
+        for ev in &every_variant() {
+            assert_eq!(
+                ev.is_terminal(),
+                classify(ev),
+                "{ev:?}: is_terminal disagrees with the exhaustive classification"
+            );
+        }
+    }
+
+    #[test]
+    fn exactly_two_variants_are_terminal() {
+        let terminal: Vec<_> = every_variant()
+            .into_iter()
+            .filter(AgentEvent::is_terminal)
+            .collect();
+        assert_eq!(
+            terminal.len(),
+            2,
+            "expected exactly RunCompleted + RunFailed: {terminal:?}"
         );
     }
 }
