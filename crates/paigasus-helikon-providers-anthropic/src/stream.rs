@@ -587,4 +587,136 @@ mod tests {
             "a repeated message_stop must not emit a second Finish, got {second_stop:?}"
         );
     }
+
+    /// The core flush: a stop reason buffered with no `message_stop` following.
+    #[test]
+    fn finish_flushes_pending_stop_reason() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: Some(MessageDeltaUsage { output_tokens: 5 }),
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Ok(ModelEvent::Finish { reason }) => assert_eq!(reason, FinishReason::Stop),
+            other => panic!("expected Ok(Finish::Stop), got {other:?}"),
+        }
+    }
+
+    /// The highest-consequence `Ok` variant: the agent loop will execute tool
+    /// calls assembled from a stream that was cut short.
+    #[test]
+    fn finish_flushes_tool_use_as_tool_calls() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("tool_use".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Ok(ModelEvent::Finish { reason }) => assert_eq!(reason, FinishReason::ToolCalls),
+            other => panic!("expected Ok(Finish::ToolCalls), got {other:?}"),
+        }
+    }
+
+    /// Truncation before any stop reason: never reported as a clean `Stop`.
+    #[test]
+    fn finish_is_none_when_no_stop_reason_observed() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t.consume(AnthropicEvent::ContentBlockStart {
+            index: 0,
+            content_block: ContentBlockHead::Text,
+        });
+        assert!(
+            t.finish().is_none(),
+            "no stop reason was observed; nothing to flush"
+        );
+    }
+
+    /// The well-formed path: `message_stop` already emitted, so the EOF flush
+    /// is a no-op — and stays one on a repeated call.
+    #[test]
+    fn finish_is_none_after_message_stop_drained_it() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        assert_eq!(t.consume(AnthropicEvent::MessageStop).unwrap().len(), 1);
+        assert!(
+            t.finish().is_none(),
+            "message_stop already emitted the terminal event"
+        );
+        assert!(t.finish().is_none(), "finish() must be idempotent");
+    }
+
+    /// A refusal observed before truncation surfaces as an error, not silence.
+    #[test]
+    fn finish_surfaces_refusal_as_error() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("refusal".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Err(ModelError::Refused { .. }) => {}
+            other => panic!("expected Err(Refused), got {other:?}"),
+        }
+    }
+
+    /// The second `Err` outcome: synthesis mode with both a real and the
+    /// synthesized tool fired. Mirrors bedrock's
+    /// `finish_surfaces_both_tools_error_without_metadata`.
+    #[test]
+    fn finish_surfaces_both_tools_error() {
+        let mut t = MessageTranslator::new(true);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t.consume(AnthropicEvent::ContentBlockStart {
+            index: 0,
+            content_block: ContentBlockHead::ToolUse {
+                id: "tu_s".to_owned(),
+                name: SYNTHESIZED_TOOL_NAME.to_owned(),
+                input: serde_json::json!({}),
+            },
+        });
+        let _ = t.consume(AnthropicEvent::ContentBlockStart {
+            index: 1,
+            content_block: ContentBlockHead::ToolUse {
+                id: "tu_r".to_owned(),
+                name: "search".to_owned(),
+                input: serde_json::json!({}),
+            },
+        });
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("tool_use".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Err(ModelError::Other(_)) => {}
+            other => panic!("expected Err(Other), got {other:?}"),
+        }
+    }
 }
