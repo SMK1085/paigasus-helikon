@@ -55,7 +55,12 @@ pub(crate) struct Config {
 /// Header names whose values must never appear in `Debug` output.
 fn is_secret_header(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    n == "authorization" || n == "api-key" || n == "x-api-key" || n.starts_with("x-litellm-key")
+    n == "authorization"
+        || n == "proxy-authorization"
+        || n == "api-key"
+        || n == "x-api-key"
+        || n == "x-litellm-api-key"
+        || n.starts_with("x-litellm-key")
 }
 
 /// Render `endpoint` with any URL userinfo (`user:pass@…`) blanked.
@@ -64,8 +69,18 @@ fn is_secret_header(name: &str) -> bool {
 /// is a supported deployment shape — `normalise_endpoint` doesn't reject
 /// userinfo, and reqwest honours it — so the credential must be stripped
 /// here rather than assumed absent. Falls back to the raw string if
-/// `endpoint` doesn't reparse (it always should, having come from
-/// `normalise_endpoint`'s own `Url::to_string()`).
+/// `endpoint` doesn't reparse.
+///
+/// Two call sites, two different guarantees about that fallback: [`Config`]'s
+/// `Debug` impl calls this on an already-`normalise_endpoint`d string, which
+/// always reparses (it came from that function's own `Url::to_string()`).
+/// `build()`'s `InvalidBaseUrl` error path calls this on the *raw,
+/// unvalidated* `base_url` input — which may be genuinely unparseable (e.g.
+/// `"not a url"`) — precisely because that input already failed
+/// `normalise_endpoint`. The fallback exists for that second case: it cannot
+/// panic on unparseable input (`Url::parse` returns `Result`, never panics),
+/// and a string with no parseable userinfo has no credential to leak in the
+/// first place, so returning it verbatim is safe.
 fn redact_endpoint(endpoint: &str) -> String {
     match reqwest::Url::parse(endpoint) {
         Ok(mut url) => {
@@ -138,6 +153,12 @@ pub enum BuildError {
     MissingBaseUrl,
     /// `base_url` was unparseable, used a scheme other than http/https, or
     /// carried a query string or fragment.
+    ///
+    /// The carried string has any URL userinfo (`user:pass@…`) redacted —
+    /// `redact_endpoint` is applied to the raw `base_url` input before it is
+    /// stored here, so a basic-auth-fronted proxy URL that was rejected for
+    /// an unrelated reason (e.g. a query string) does not leak its password
+    /// into an error a caller will log.
     #[error("invalid base URL: {0}")]
     InvalidBaseUrl(String),
     /// `.extra_body()` set a key the provider computes per-request.
@@ -234,6 +255,11 @@ impl LiteLlmModelBuilder {
     }
 
     /// Add an arbitrary request header, e.g. `x-litellm-tags`.
+    ///
+    /// Accumulates: each call adds another header rather than replacing an
+    /// earlier one. A later call using the same name still wins on the wire,
+    /// since headers are applied via a replacing `HeaderMap::insert` (see
+    /// `model.rs::build_headers`), not appended.
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
         self
@@ -253,6 +279,9 @@ impl LiteLlmModelBuilder {
     }
 
     /// LiteLLM router fallback model names, tried in order.
+    ///
+    /// Replaces: only the most recent call's list is used. Calling this
+    /// twice discards the first call's list entirely rather than merging.
     pub fn fallbacks<I, S>(mut self, models: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -274,12 +303,19 @@ impl LiteLlmModelBuilder {
     /// Add a LiteLLM `metadata` entry (spend logs, tracing correlation).
     ///
     /// The key `tags` is reserved — use [`Self::tags`].
+    ///
+    /// Accumulates: each call adds another metadata entry. A later call
+    /// using the same key overwrites the earlier value for that key rather
+    /// than being rejected.
     pub fn metadata(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
         self.metadata_pairs.push((key.into(), value.into()));
         self
     }
 
     /// LiteLLM routing/spend tags, emitted as `metadata.tags`.
+    ///
+    /// Replaces: only the most recent call's list is used. Calling this
+    /// twice discards the first call's list entirely rather than merging.
     pub fn tags<I, S>(mut self, tags: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -293,6 +329,10 @@ impl LiteLlmModelBuilder {
     ///
     /// Rejected at build time if it sets a key the provider computes
     /// per-request. The LiteLLM extras are *not* reserved.
+    ///
+    /// Replaces: only the most recent call's JSON object is used. Calling
+    /// this twice discards the first call's object entirely rather than
+    /// merging the two.
     pub fn extra_body(mut self, value: Value) -> Self {
         self.extra_body_raw = Some(value);
         self
@@ -307,7 +347,7 @@ impl LiteLlmModelBuilder {
             .ok_or(BuildError::MissingBaseUrl)?;
 
         let endpoint = normalise_endpoint(&base, &self.chat_path)
-            .map_err(|_| BuildError::InvalidBaseUrl(base.clone()))?;
+            .map_err(|_| BuildError::InvalidBaseUrl(redact_endpoint(&base)))?;
 
         // Auth: explicit wins; empty/whitespace is treated as absent so we
         // never emit a malformed `Bearer ` header, and so an
@@ -467,6 +507,44 @@ mod tests {
             b().base_url("localhost:4000").build(),
             Err(BuildError::InvalidBaseUrl(_))
         ));
+    }
+
+    /// `BuildError::InvalidBaseUrl` must not leak a basic-auth password from
+    /// a rejected `base_url` — the crate redacts endpoint credentials
+    /// everywhere else (`Config`'s `Debug` impl), and a caller logging this
+    /// error must get the same guarantee.
+    #[test]
+    fn invalid_base_url_error_redacts_userinfo_credentials() {
+        let _g = env_lock().lock().unwrap();
+        clear_env();
+        // Rejected for carrying a query string, not for the userinfo — the
+        // password must still not survive into the rendered error.
+        let err = b()
+            .base_url("http://admin:s3cret@gw:4000/x?k=1")
+            .build()
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("s3cret"),
+            "InvalidBaseUrl must not leak the endpoint's basic-auth password: {msg}"
+        );
+        assert!(
+            matches!(err, BuildError::InvalidBaseUrl(_)),
+            "expected InvalidBaseUrl, got {err:?}"
+        );
+    }
+
+    /// `redact_endpoint`'s fallback branch (raw string, unparseable input)
+    /// must not panic when reached via the `InvalidBaseUrl` path — unlike
+    /// `Config`'s `Debug` impl, which only ever calls it on an
+    /// already-`normalise_endpoint`d string, `build()` calls it on the raw,
+    /// unvalidated `base_url`, which can be genuinely unparseable.
+    #[test]
+    fn invalid_base_url_error_does_not_panic_on_unparseable_input() {
+        let _g = env_lock().lock().unwrap();
+        clear_env();
+        let err = b().base_url("not a url").build().unwrap_err();
+        assert!(matches!(err, BuildError::InvalidBaseUrl(_)));
     }
 
     #[test]
@@ -658,5 +736,44 @@ mod tests {
             dbg.contains("api_key"),
             "extra_body key name should still be visible for debugging: {dbg}"
         );
+    }
+
+    /// Table-driven over every entry `is_secret_header` recognizes (plus a
+    /// mixed-case spelling and a non-exact `x-litellm-key*` prefix match), so
+    /// no entry can be silently deleted from the list without a test
+    /// noticing. Regression for `proxy-authorization` and
+    /// `x-litellm-api-key` — LiteLLM's documented alternate key header —
+    /// which were previously missing while only `authorization` had test
+    /// coverage.
+    #[test]
+    fn debug_output_redacts_every_secret_header_entry() {
+        let _g = env_lock().lock().unwrap();
+        clear_env();
+        const SECRET_HEADER_NAMES: &[&str] = &[
+            "authorization",
+            "Authorization",
+            "proxy-authorization",
+            "api-key",
+            "x-api-key",
+            "x-litellm-api-key",
+            "x-litellm-key",
+            "x-litellm-key-alt",
+        ];
+        for name in SECRET_HEADER_NAMES {
+            let secret_value = format!(
+                "secret-value-for-{}",
+                name.to_ascii_lowercase().replace(['-', ' '], "_")
+            );
+            let m = b()
+                .base_url("http://p:4000")
+                .header(*name, secret_value.clone())
+                .build()
+                .unwrap();
+            let dbg = format!("{m:?}");
+            assert!(
+                !dbg.contains(&secret_value),
+                "header `{name}` was not redacted in Debug output: {dbg}"
+            );
+        }
     }
 }
