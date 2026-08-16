@@ -49,6 +49,12 @@ Both `http://host:4000` and `http://host:4000/v1` work. If your gateway is
 mounted somewhere the `/v1` heuristic gets wrong, override the whole path with
 `.chat_completions_path()`.
 
+Pass the proxy's **base** URL, not a full endpoint: `normalise_endpoint`
+appends the chat-completions path unconditionally, so pasting
+`http://host/v1/chat/completions` produces
+`.../v1/chat/completions/v1/chat/completions` — a loud 404 at request time,
+not silent breakage, but worth knowing before you hit it.
+
 ## Capabilities are your declaration
 
 A LiteLLM alias (`prod-fast`, `team-a/gpt`) carries no information the SDK can
