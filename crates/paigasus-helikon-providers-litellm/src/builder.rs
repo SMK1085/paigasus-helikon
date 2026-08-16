@@ -428,7 +428,7 @@ fn default_http_client() -> reqwest::Client {
         .connect_timeout(std::time::Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_default()
+        .expect("reqwest client with connect timeout and no redirects")
 }
 
 #[cfg(test)]

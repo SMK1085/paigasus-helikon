@@ -300,6 +300,30 @@ fn build_headers(cfg: &Config) -> Result<reqwest::header::HeaderMap, ModelError>
     Ok(headers)
 }
 
+/// Cap on how much of a response body survives into the whole-body fallback
+/// message (see [`truncated_body`]).
+const MAX_FALLBACK_BODY_BYTES: usize = 512;
+
+/// Render `bytes` as lossy UTF-8, truncated to [`MAX_FALLBACK_BODY_BYTES`]
+/// with an explicit elision marker.
+///
+/// Used only on `error_from_body`'s whole-body fallback path (no parseable
+/// `error` key). A gateway returning an HTML interstitial or another large
+/// payload must not turn a routine error into an unbounded `ModelError`
+/// message that gets logged in full — but the truncation must be
+/// unmistakable, so a caller can never read a cut-off body as a genuinely
+/// short one.
+fn truncated_body(bytes: &[u8]) -> String {
+    if bytes.len() <= MAX_FALLBACK_BODY_BYTES {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    format!(
+        "{}... [truncated, {} bytes total]",
+        String::from_utf8_lossy(&bytes[..MAX_FALLBACK_BODY_BYTES]),
+        bytes.len()
+    )
+}
+
 /// Extract LiteLLM's error envelope and classify it.
 ///
 /// `content_type` is the response's actual `content-type` header. It is only
@@ -342,7 +366,7 @@ fn error_from_body(
             (
                 None,
                 None,
-                format!("{} (content-type: {ct})", String::from_utf8_lossy(bytes)),
+                format!("{} (content-type: {ct})", truncated_body(bytes)),
             )
         });
 
@@ -480,5 +504,58 @@ mod tests {
             matches!(err, ModelError::Other(_)),
             "expected ModelError::Other, got {err:?}"
         );
+    }
+
+    /// A gateway returning an HTML interstitial or another large,
+    /// non-`error`-shaped body must not become an unbounded `ModelError`
+    /// message — `error_from_body`'s whole-body fallback must truncate it
+    /// with an unmistakable elision marker, while still reporting the
+    /// content-type and (when present) the call id.
+    #[test]
+    fn whole_body_fallback_is_truncated_with_an_elision_marker() {
+        let huge_body = "z".repeat(4096);
+        let err = error_from_body(400, huge_body.as_bytes(), None, "call-123", "text/html");
+        match err {
+            ModelError::Other(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.len() < huge_body.len(),
+                    "message must be truncated well below the body size, got {} bytes: {msg}",
+                    msg.len()
+                );
+                assert!(
+                    msg.contains("truncated"),
+                    "truncated message must carry an explicit elision marker: {msg}"
+                );
+                assert!(
+                    msg.contains("text/html"),
+                    "content-type must still be reported: {msg}"
+                );
+                assert!(
+                    msg.contains("call-123"),
+                    "x-litellm-call-id must still be appended: {msg}"
+                );
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+    }
+
+    /// A body at or under the truncation bound must be passed through
+    /// verbatim — no elision marker on a genuinely short body.
+    #[test]
+    fn short_whole_body_fallback_is_not_truncated() {
+        let body = "not json";
+        let err = error_from_body(400, body.as_bytes(), None, "", "text/plain");
+        match err {
+            ModelError::Other(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains(body));
+                assert!(
+                    !msg.contains("truncated"),
+                    "a short body must not carry an elision marker: {msg}"
+                );
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
     }
 }

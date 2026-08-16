@@ -7,7 +7,24 @@
 //! backend behind the proxy may omit more than that, and a single missing
 //! field would otherwise fail the whole chunk. See the SMA-451 design §9.1.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// Deserialize `T`, treating an explicit JSON `null` the same as an absent
+/// key: both fall through to `T::default()`.
+///
+/// `#[serde(default)]` on a struct only covers a **missing** key — an
+/// explicit `null` for a non-`Option` field (a `u32`, a `Vec<T>`) has no
+/// built-in fallback the way `Option<T>` does, so it would otherwise fail
+/// the whole chunk. Pair with `#[serde(deserialize_with = "null_as_default")]`
+/// on any such field that a backend has been observed to send as an
+/// explicit `null` rather than omitting.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 /// One `data:` frame of a LiteLLM Chat Completions SSE stream.
 #[derive(Debug, Default, Deserialize)]
@@ -16,6 +33,11 @@ pub(crate) struct StreamChunk {
     /// Per-response choices. Only the first is read (see the design's
     /// single-choice rationale); a proxy configured with `n > 1` returns
     /// more, but that is not this crate's use case.
+    ///
+    /// `deserialize_with` covers an explicit `"choices": null` — observed
+    /// alongside the other permissive-shape quirks noted at module level —
+    /// which `#[serde(default)]` alone would not.
+    #[serde(deserialize_with = "null_as_default")]
     pub(crate) choices: Vec<Choice>,
     /// Token-usage snapshot, present only on the trailing usage chunk when
     /// `stream_options.include_usage` is set.
@@ -84,8 +106,15 @@ pub(crate) struct FunctionChunk {
 #[serde(default)]
 pub(crate) struct Usage {
     /// Prompt / input tokens consumed.
+    ///
+    /// `deserialize_with` covers an explicit `"prompt_tokens": null`, which
+    /// `#[serde(default)]` alone would not (see [`null_as_default`]) —
+    /// defaults to `0`.
+    #[serde(deserialize_with = "null_as_default")]
     pub(crate) prompt_tokens: u32,
-    /// Completion / output tokens generated.
+    /// Completion / output tokens generated. Same explicit-`null` handling
+    /// as `prompt_tokens`.
+    #[serde(deserialize_with = "null_as_default")]
     pub(crate) completion_tokens: u32,
     /// Absent entirely in observed LiteLLM traffic — the whole object, not
     /// just the field.
@@ -142,5 +171,23 @@ mod tests {
         )
         .expect("must deserialize");
         assert!(c.error.as_ref().is_some_and(|e| !e.is_null()));
+    }
+
+    /// `#[serde(default)]` alone only covers a *missing* key. An explicit
+    /// JSON `null` for `choices` (a `Vec`) or `prompt_tokens` /
+    /// `completion_tokens` (both `u32`) has no built-in `null` handling —
+    /// unlike `Option<T>` fields — and would otherwise fail the whole
+    /// chunk. Pins that `null_as_default` closes that gap and that the
+    /// numeric fields fall back to `0`.
+    #[test]
+    fn explicit_nulls_on_non_option_fields_still_deserialize() {
+        let c: StreamChunk = serde_json::from_str(
+            r#"{"choices":null,"usage":{"prompt_tokens":null,"completion_tokens":null}}"#,
+        )
+        .expect("explicit nulls on non-Option fields must still deserialize");
+        assert!(c.choices.is_empty());
+        let usage = c.usage.expect("the usage object itself was present");
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
     }
 }
