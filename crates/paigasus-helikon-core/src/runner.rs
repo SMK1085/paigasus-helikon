@@ -549,6 +549,36 @@ impl RunInterrupt {
     }
 }
 
+/// Delegates to [`RunInterrupt::run_error`], which stays the canonical,
+/// documented name for this mapping.
+///
+/// The `.into()` form is for runner implementations reporting an interrupt that
+/// won at the control boundary:
+///
+/// ```
+/// use paigasus_helikon_core::{effective_interrupt, RunError, RunInterrupt};
+///
+/// fn report(interrupt: Option<RunInterrupt>, saw_terminal: bool) -> Result<(), RunError> {
+///     if let Some(i) = effective_interrupt(interrupt, saw_terminal) {
+///         return Err(i.into());
+///     }
+///     Ok(())
+/// }
+///
+/// // The interrupt aborted the run in-flight: it wins and converts.
+/// assert!(matches!(
+///     report(Some(RunInterrupt::TimedOut), false),
+///     Err(RunError::Timeout)
+/// ));
+/// // A genuine terminal already occurred: the interrupt loses.
+/// assert!(report(Some(RunInterrupt::TimedOut), true).is_ok());
+/// ```
+impl From<RunInterrupt> for RunError {
+    fn from(interrupt: RunInterrupt) -> Self {
+        interrupt.run_error()
+    }
+}
+
 /// Apply the runner-boundary precedence rule: **a genuine terminal event beats
 /// a late cancel/timeout.**
 ///
@@ -829,6 +859,22 @@ mod interrupt_tests {
             assert!(
                 i.terminal_event().is_terminal(),
                 "{i:?}: the synthesized frame must satisfy AgentEvent::is_terminal"
+            );
+        }
+    }
+
+    /// `From` must delegate to `run_error`, not re-derive the mapping.
+    ///
+    /// `RunError` is not `PartialEq` (its `Agent`/`Other` payloads are not), and
+    /// `Display` would compare rendered text rather than the mapping — so compare
+    /// discriminants, which is exactly what the delegation is responsible for.
+    #[test]
+    fn from_delegates_to_run_error() {
+        for i in every_interrupt() {
+            assert_eq!(
+                std::mem::discriminant(&RunError::from(i)),
+                std::mem::discriminant(&i.run_error()),
+                "{i:?}: From must agree with run_error"
             );
         }
     }
