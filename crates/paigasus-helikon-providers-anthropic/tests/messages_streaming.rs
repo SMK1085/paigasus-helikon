@@ -320,3 +320,45 @@ async fn body_cut_inside_message_stop_emits_finish() {
     );
     assert_exactly_one_terminal_finish(&oks);
 }
+
+/// SMA-531: no stop reason was ever observed, so a body that ends early must
+/// NOT be reported as a clean `Stop`. Guards the flush against over-firing.
+#[tokio::test]
+async fn eof_mid_content_block_emits_no_finish() {
+    let server = MockServer::start().await;
+    let fixture = include_str!("fixtures/eof_mid_content_block.txt");
+    let events = run_stream(&server, fixture).await;
+    let oks: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
+
+    assert!(
+        !oks.iter().any(|e| matches!(e, ModelEvent::Finish { .. })),
+        "a stream with no observed stop reason must emit no Finish, got {oks:#?}"
+    );
+    assert_eq!(
+        oks.len(),
+        2,
+        "expected Usage + one TokenDelta -- got {oks:#?}"
+    );
+}
+
+/// SMA-531: a stop reason buffered by `message_delta` must be DISCARDED when a
+/// mid-stream error follows, never flushed after the `Err`. The existing
+/// `stream_error.txt` cannot catch this — that fixture has no `message_delta`,
+/// so nothing is ever buffered there.
+#[tokio::test]
+async fn error_after_buffered_stop_reason_emits_no_finish() {
+    let server = MockServer::start().await;
+    let fixture = include_str!("fixtures/error_after_message_delta.txt");
+    let events = run_stream(&server, fixture).await;
+
+    assert!(
+        !events
+            .iter()
+            .any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))),
+        "a buffered stop reason must be discarded on the error path, got {events:#?}"
+    );
+    assert!(
+        matches!(events.last().unwrap(), Err(ModelError::Unavailable)),
+        "the in-band error must be terminal, got {events:#?}"
+    );
+}
