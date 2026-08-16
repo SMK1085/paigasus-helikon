@@ -214,3 +214,56 @@ async fn trailing_usage_with_empty_choices_finishes_last() {
         "expected Usage {{ input_tokens: 8, output_tokens: 6 }}, got {events:#?}"
     );
 }
+
+/// SMA-522: when the stream errors AFTER the finish chunk, the buffered
+/// Finish is discarded. Yielding `Finish` and then `Err` would place an item
+/// after the terminal event — the exact thing this fix exists to prevent.
+#[tokio::test]
+async fn parse_error_after_finish_chunk_yields_err_and_no_finish() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
+        "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
+        "\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        // Trailing usage chunk missing the required `object` field.
+        "data: {\"id\":\"x\",\"created\":1,\"model\":\"gpt-4o\",",
+        "\"choices\":[{\"index\":0,\"delta\":{}}],\"usage\":{\"prompt_tokens\":1,",
+        "\"completion_tokens\":1,\"total_tokens\":2}}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.as_bytes(), "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let model = OpenAiModel::chat("gpt-4o")
+        .api_key("sk-test")
+        .base_url(server.uri())
+        .build()
+        .unwrap();
+
+    let mut req = ModelRequest::new();
+    req.messages = vec![user("hi")];
+
+    let items: Vec<_> = model
+        .invoke(req, CancellationToken::new())
+        .await
+        .unwrap()
+        .collect()
+        .await;
+
+    assert!(
+        items.iter().any(|r| r.is_err()),
+        "expected a transport/parse error, got {items:#?}"
+    );
+    assert!(
+        !items
+            .iter()
+            .filter_map(|r| r.as_ref().ok())
+            .any(|e| matches!(e, ModelEvent::Finish { .. })),
+        "buffered Finish must be discarded when the stream errors, got {items:#?}"
+    );
+}
