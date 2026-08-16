@@ -1,0 +1,97 @@
+<task-notification>
+<task-id>af532222455b64fd4</task-id>
+<tool-use-id>toolu_0126MUC7M8MJ8tExb9ujG2VM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/af532222455b64fd4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 8 error classification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean, both commits landed.
+
+## Summary
+
+**STATUS: DONE**
+
+**Commit SHAs:** `cfe310cb` (initial Task 8 implementation), `c3072e86` (fix: added `context_overflow_check_is_not_gated_on_status` test)
+
+**Test results:** 14/14 `error::tests::*` pass (13 original + 1 new coverage test); full suite 16 passed / 0 failed.
+
+**Mutation check (as required):** Temporarily moved the context-overflow check inside the match (`400 if is_context_overflow(...) =&gt; ...`), re-ran — exactly one test failed: `context_overflow_check_is_not_gated_on_status` (all 15 others still green), confirming it's the sole guard for this invariant. Reverted; suite green again. `git diff` against `cfe310cb` confirms the fix commit is test-only — `classify`'s logic and rule ordering are byte-identical to the original.
+
+**Concerns:**
+- `cargo clippy --all-targets -- -D warnings` still fails with 31 dead_code diagnostics (unchanged by this fix, as expected — no new production item added); no `#[allow(dead_code)]` added, per instruction.
+- The budget-exhaustion 429 test shape is inferred (not live-captured); accepted per reviewer note, failure mode is benign (falls through to `RateLimited`, still status-correct). Noted a possible future robustness improvement (keying on the `litellm.BudgetExceededError` class-name marker) in the report but did not implement it, since it wasn't requested and would need a live capture to confirm the shape first.
+
+Full details (including exact command output for both the pass and the mutation-induced failure) are in `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-451-providers-litellm/.superpowers/sdd/2026-08-16-sma-451-litellm-provider/task-8-report.md`.</result>
+<usage><subagent_tokens>95026</subagent_tokens><tool_uses>16</tool_uses><duration_ms>95943</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8a8c6a9f4a7673a1</task-id>
+<tool-use-id>toolu_01QZwubTWTYFzuSeY85151Xv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a8a8c6a9f4a7673a1.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 9 Model impl" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All fixed, tested, and committed.
+
+**STATUS: DONE**
+
+**Commit SHA:** `a0c3f563` (on top of `4a58ef9d`) — `fix(providers): SMA-451 fix header override and null-error mid-stream`
+
+**Test results:** `cargo test -p paigasus-helikon-providers-litellm` → 116/116 unit tests + 1/1 new integration test pass (up from 111; added 5 unit tests + 1 wiremock integration test)
+
+**Clippy hard gate:** `cargo clippy -p paigasus-helikon-providers-litellm --all-targets -- -D warnings` → **exit 0, still clean.** No regression.
+
+**Fixes:**
+- Finding 1: extracted `build_headers(cfg: &amp;Config) -&gt; HeaderMap` in `model.rs`; caller headers now applied via `.headers(map)` (replace semantics) instead of chained `.header()` calls (append semantics) — verified against vendored `reqwest-0.13.4`/`http-1.5.0` source.
+- Finding 2: folded `error: Option&lt;serde_json::Value&gt;` into `sse::StreamChunk`; mid-stream check is now `chunk.error.as_ref().is_some_and(|e| !e.is_null())` on a single parse (removes the prior double-parse).
+
+**Covering tests, confirmed to fail pre-fix (verified by hand-reverting in place, not via git, then restoring):**
+- `model::tests::caller_authorization_header_overrides_not_duplicates` (+ a `content-type` sibling) — pre-fix (append instead of insert) produced `["Bearer sk-provider", "Bearer caller-override"]`, 2 headers.
+- `tests/streaming.rs::null_error_field_alongside_choices_is_not_fatal` (new wiremock integration test, first for this crate) — pre-fix produced `[Err(Unavailable)]` instead of a `TokenDelta`.
+- 3 supporting unit tests in `sse.rs` pin `StreamChunk::error`'s null/absent/present deserialization.
+
+**Deviation from brief:** none of the original brief's code remains unfixed — both changes are structural fixes to defects the brief itself contained, not further transcription changes.
+
+**Concern (flagged for coordinator, not blocking):** the deferred-minors list says leave "the Bearer HeaderValue validation" alone. I read that as "don't add build-time validation in `builder.rs`" (didn't touch it), but restructuring to a `HeaderMap` still required *some* runtime fallback if `HeaderValue::try_from(format!("Bearer {key}"))` fails — I chose warn+send-unauthenticated, matching the caller-header loop's pattern. Full detail in the report if this needs revisiting.
+
+Full fix report appended to `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-451-providers-litellm/.superpowers/sdd/2026-08-16-sma-451-litellm-provider/task-9-report.md`.</result>
+<usage><subagent_tokens>199433</subagent_tokens><tool_uses>61</tool_uses><duration_ms>637741</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8a8c6a9f4a7673a1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a8a8c6a9f4a7673a1.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 9 Model impl" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All work is committed and verified. Final summary for the coordinator:
+
+**STATUS: DONE**
+
+**Commit SHA:** `93813c12` (on top of `a0c3f563` and `4a58ef9d`) — `fix(providers): SMA-451 fail invoke eagerly on an invalid bearer header`. Scope: only `model.rs` touched, exactly as instructed.
+
+**Test results:** `cargo test -p paigasus-helikon-providers-litellm` → 117/117 unit tests + 1/1 integration test pass (up from 116; added 1 new regression test)
+
+**Clippy hard gate:** `cargo clippy -p paigasus-helikon-providers-litellm --all-targets -- -D warnings` → **exit 0, still clean.** No regression.
+
+**Fix, exactly per the 4-point spec:**
+1. `build_headers` now returns `Result&lt;HeaderMap, ModelError&gt;`
+2. Call hoisted above the `stream!` block in `invoke` — `invoke` now returns `Err` eagerly
+3. Bearer-conversion failure produces `ModelError::Other(anyhow!(...))`, not `Transport`; message names the problem, never interpolates the key itself
+4. Caller-header loop (`cfg.headers`) left untouched as warn-and-skip
+
+**Covering test:** `model::tests::invalid_api_key_header_value_fails_invoke_not_silently` — builds a model with a trailing-newline API key, asserts `build_headers` returns `Err` and the variant is not `Transport`. Confirmed to fail against the round-1 code by temporarily reverting the bearer arm in place (not via git): it returned `Ok` with `authorization` silently absent from the header map — exactly the finding. Restored and re-verified clean afterward.
+
+**Also confirmed clean:** `cargo fmt --all -- --check` (one formatting diff found and applied), `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`.
+
+**Concerns:** none — all four deferred-minors items were left untouched as instructed, and no new judgment calls were required this round.
+
+Full fix-round-2 section prepended to `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-451-providers-litellm/.superpowers/sdd/2026-08-16-sma-451-litellm-provider/task-9-report.md`.</result>
+<usage><subagent_tokens>236732</subagent_tokens><tool_uses>27</tool_uses><duration_ms>228996</duration_ms></usage>
+</task-notification>

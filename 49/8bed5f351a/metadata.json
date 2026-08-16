@@ -3,8 +3,18 @@
   "checkpoint_id": "498bed5f351a",
   "strategy": "manual-commit",
   "branch": "feature/sma-451-provider-crate-paigasus-helikon-providers-litellm",
-  "checkpoints_count": 1,
-  "files_touched": null,
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".gitattributes",
+    "crates/paigasus-helikon-providers-litellm/tests/cancellation.rs",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/text_then_trailing_usage.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/truncated_no_finish.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/unknown_finish_reason.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/unparseable_frame.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/litellm_wire.rs",
+    "crates/paigasus-helikon-providers-litellm/tests/live.rs",
+    "crates/paigasus-helikon-providers-litellm/tests/streaming.rs"
+  ],
   "sessions": [
     {
       "metadata": "/49/8bed5f351a/0/metadata.json",
@@ -12,6 +22,13 @@
       "compact_transcript": "/49/8bed5f351a/0/transcript.jsonl",
       "content_hash": "/49/8bed5f351a/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/49/8bed5f351a/1/metadata.json",
+      "transcript": "/49/8bed5f351a/1/full.jsonl",
+      "compact_transcript": "/49/8bed5f351a/1/transcript.jsonl",
+      "content_hash": "/49/8bed5f351a/1/content_hash.txt",
+      "prompt": "/49/8bed5f351a/1/prompt.txt"
     }
   ],
   "token_usage": {
