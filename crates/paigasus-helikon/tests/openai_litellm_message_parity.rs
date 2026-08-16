@@ -43,16 +43,23 @@ use paigasus_helikon_core::{
     CancellationToken, ContentPart, Item, MediaSource, Model, ModelRequest,
 };
 
-/// Drop a literal JSON `null` `content` key from every message object, so
-/// the documented `content: null` vs. omitted-key divergence (see module
-/// docs) doesn't fail the comparison. Every other field, including a
-/// present-but-different `content` value, is left untouched.
+/// Drop a literal JSON `null` `content` key from every **assistant-role**
+/// message object, so the documented `content: null` vs. omitted-key
+/// divergence (see module docs) doesn't fail the comparison. Every other
+/// field, including a present-but-different `content` value, is left
+/// untouched.
+///
+/// Scoped to `role == "assistant"` — the only role either translator emits
+/// a literal `content: null` for — rather than to "any message with a null
+/// content", so the masking set stays exactly as wide as the documented
+/// justification above it, not wider.
 fn normalize(messages: &serde_json::Value) -> serde_json::Value {
     let mut messages = messages.clone();
     if let Some(arr) = messages.as_array_mut() {
         for msg in arr {
             if let Some(obj) = msg.as_object_mut() {
-                if obj.get("content").is_some_and(|c| c.is_null()) {
+                let is_assistant = obj.get("role").and_then(|r| r.as_str()) == Some("assistant");
+                if is_assistant && obj.get("content").is_some_and(|c| c.is_null()) {
                     obj.remove("content");
                 }
             }
@@ -120,6 +127,27 @@ fn fixtures() -> Vec<(&'static str, Vec<Item>)> {
                     name: "g".into(),
                     args: serde_json::json!({}),
                 }],
+                agent: None,
+            }],
+        ),
+        // Positive control: exercises `assistant_message`'s string-content
+        // branch alongside `tool_calls`, so the comparison is demonstrably
+        // still sensitive to a real (non-null) `content` value — the other
+        // two assistant-message fixtures both produce null content, which
+        // `normalize` removes, so neither on its own proves that.
+        (
+            "assistant with text and nested tool_use",
+            vec![Item::AssistantMessage {
+                content: vec![
+                    ContentPart::Text {
+                        text: "let me check".into(),
+                    },
+                    ContentPart::ToolUse {
+                        call_id: "c3".into(),
+                        name: "h".into(),
+                        args: serde_json::json!({"x": 2}),
+                    },
+                ],
                 agent: None,
             }],
         ),
@@ -195,8 +223,43 @@ async fn openai_and_litellm_translate_messages_identically() {
         let ll_body: serde_json::Value =
             serde_json::from_slice(&ll_server.received_requests().await.unwrap()[0].body).unwrap();
 
+        // Self-check the module docs' load-bearing claim: the OpenAI
+        // provider's wire output never contains a literal null `content`
+        // (the `async-openai` typed round-trip drops it). If that ever
+        // stops being true — e.g. `providers-openai` drops the round-trip —
+        // `normalize` would start silently masking a real divergence rather
+        // than the documented cosmetic one. Fail loudly here instead of
+        // letting that drift unnoticed.
+        assert!(
+            oa_body["messages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|m| !m.get("content").is_some_and(|c| c.is_null())),
+            "fixture `{label}`: openai body contained a literal null `content` \
+             — the async-openai round-trip assumption in this file's module \
+             docs no longer holds; re-derive `normalize`'s masking set: {}",
+            oa_body["messages"]
+        );
+
         let oa_messages = normalize(&oa_body["messages"]);
         let ll_messages = normalize(&ll_body["messages"]);
+
+        // Guard against a vacuous pass: `Value` indexing returns `Null` for
+        // a missing key, and `normalize` returns its input unchanged when
+        // it is not an array, so if `messages` ever disappeared from both
+        // bodies (e.g. a body-shape change on both sides) this would
+        // silently compare `Null == Null` and report green rather than
+        // failing on a hollowed-out drift detector.
+        assert!(
+            oa_messages.as_array().is_some_and(|a| !a.is_empty()),
+            "openai body had no messages array for fixture `{label}`: {oa_body}"
+        );
+        assert!(
+            ll_messages.as_array().is_some_and(|a| !a.is_empty()),
+            "litellm body had no messages array for fixture `{label}`: {ll_body}"
+        );
+
         assert_eq!(
             oa_messages, ll_messages,
             "messages diverged for fixture `{label}`\n  openai (raw):    {}\n  litellm (raw):   {}\n  openai (norm):   {oa_messages}\n  litellm (norm):  {ll_messages}",
