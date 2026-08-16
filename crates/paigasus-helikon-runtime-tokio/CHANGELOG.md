@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.20](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.19...paigasus-helikon-runtime-tokio-v0.1.20) - 2026-08-16
+
+### Added
+
+- *(core)* SMA-515 add terminal_event and From<RunInterrupt> for RunError ([#195](https://github.com/SMK1085/paigasus-helikon/pull/195))
+
 ## [0.1.19](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.18...paigasus-helikon-runtime-tokio-v0.1.19) - 2026-08-14
 
 ### Added
