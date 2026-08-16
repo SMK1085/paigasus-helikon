@@ -1,6 +1,6 @@
 # Crate overview
 
-The workspace is **20 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
+The workspace is **21 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
 
 For orientation — how to pick crates and add them to your `Cargo.toml` — see [workspace layout](../getting-started/workspace-layout.md). For the rendered rustdoc, see [API docs](./api-docs.md).
 
@@ -25,6 +25,7 @@ Versions below are **current as of 2026-07-06** and move every release — read 
 | [`paigasus-helikon-providers-anthropic`](https://docs.rs/paigasus-helikon-providers-anthropic) | Anthropic model adapter (`AnthropicModel`) | published | `0.1.10` |
 | [`paigasus-helikon-providers-bedrock`](https://docs.rs/paigasus-helikon-providers-bedrock) | Amazon Bedrock Converse API model adapter (`BedrockModel`) | published | `0.1.0` |
 | [`paigasus-helikon-providers-gemini`](https://docs.rs/paigasus-helikon-providers-gemini) | Google Gemini model adapter (`GeminiModel`; Developer API + Vertex AI) | published | `0.1.0` |
+| [`paigasus-helikon-providers-litellm`](https://docs.rs/paigasus-helikon-providers-litellm) | LiteLLM proxy adapter (`LiteLlmModel`; OpenAI-compatible gateway) | published | `0.1.0` |
 | [`paigasus-helikon-sessions-sqlite`](https://docs.rs/paigasus-helikon-sessions-sqlite) | SQLite-backed `Session` backend | published | `0.1.11` |
 | [`paigasus-helikon-sessions-postgres`](https://docs.rs/paigasus-helikon-sessions-postgres) | PostgreSQL-backed `Session` backend (`PostgresSession`) | published | `0.1.0` |
 | [`paigasus-helikon-sessions-redis`](https://docs.rs/paigasus-helikon-sessions-redis) | Redis Streams-backed `Session` backend (`RedisSession`) | published | `0.1.0` |
@@ -55,6 +56,7 @@ Add the facade and turn on the features you need. Each feature gates one sibling
 | `anthropic` | `paigasus_helikon::anthropic` | `paigasus-helikon-providers-anthropic` |
 | `bedrock` | `paigasus_helikon::bedrock` | `paigasus-helikon-providers-bedrock` |
 | `gemini` | `paigasus_helikon::gemini` | `paigasus-helikon-providers-gemini` |
+| `litellm` | `paigasus_helikon::litellm` | `paigasus-helikon-providers-litellm` |
 | `mcp` | `paigasus_helikon::mcp` | `paigasus-helikon-mcp` |
 | `tools` | `paigasus_helikon::tools` | `paigasus-helikon-tools` |
 | `tools-web` | adds `WebFetch`/`WebSearch` | enables `paigasus-helikon-tools/web` |

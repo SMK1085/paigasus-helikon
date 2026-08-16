@@ -26,16 +26,16 @@ Paigasus is the umbrella; Helikon is the spring. The SDK is the artifact you dra
 cargo add paigasus-helikon --features openai,macros
 ```
 
-Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `sessions-postgres`, `sessions-redis`, `runtime-tokio`, `runtime-axum`, `runtime-actix`, `runtime-temporal`, `runtime-agentcore`, `evals`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
+Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `litellm`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `sessions-postgres`, `sessions-redis`, `runtime-tokio`, `runtime-axum`, `runtime-actix`, `runtime-temporal`, `runtime-agentcore`, `evals`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
 
 ## Workspace at a glance
 
-Twenty crates under `crates/`. Nineteen are published to crates.io; one is an internal test harness (`publish = false`); one of the published crates (the CLI) is binary-only, publishing a lib target with no stability guarantees purely so `cargo install` resolves.
+Twenty-one crates under `crates/`. Twenty are published to crates.io; one is an internal test harness (`publish = false`); one of the published crates (the CLI) is binary-only, publishing a lib target with no stability guarantees purely so `cargo install` resolves.
 
 - **`paigasus-helikon`** — facade re-exporting `core` plus opt-in sibling crates by feature flag.
 - **`paigasus-helikon-core`** — type system, traits, the agent loop, runtime-agnostic primitives.
 - **`paigasus-helikon-macros`** — the `#[tool]` attribute and `tools!` proc macros.
-- **`paigasus-helikon-providers-openai`**, **`-anthropic`**, **`-bedrock`**, **`-gemini`** — LLM provider adapters.
+- **`paigasus-helikon-providers-openai`**, **`-anthropic`**, **`-bedrock`**, **`-gemini`**, **`-litellm`** — LLM provider adapters.
 - **`paigasus-helikon-sessions-sqlite`** — SQLite-backed session persistence.
 - **`paigasus-helikon-sessions-postgres`** — PostgreSQL-backed session persistence (JSONB event log, advisory-lock concurrency, aws-lc-rs TLS).
 - **`paigasus-helikon-sessions-redis`** — Redis Streams-backed session persistence (atomic Lua append, BYO-`ConnectionManager` for TLS).
