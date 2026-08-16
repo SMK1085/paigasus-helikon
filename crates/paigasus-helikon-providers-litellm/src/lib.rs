@@ -22,6 +22,7 @@
 
 mod builder;
 mod capabilities;
+mod error;
 mod sse;
 mod stream;
 mod translate;
