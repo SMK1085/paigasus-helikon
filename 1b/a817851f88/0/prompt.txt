@@ -1,0 +1,27 @@
+<task-notification>
+<task-id>a321024c80d68ba3a</task-id>
+<tool-use-id>toolu_01XP1Qvbnu9Jaei9y9NptBWc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a321024c80d68ba3a.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 11 facade wiring" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+**STATUS: DONE**
+
+**Commit SHAs (round 3, project-owner decision to strip the null in the provider):**
+- `b2e075418cefa9ff4795bf9df5bd086f144f2ef9` — `fix(providers): SMA-451 strip null content from litellm assistant tool calls`
+- `9b2975f9a8bcb0423a167db672935ed81e84cc9f` — `fix(facade): SMA-451 drop normalize() now that litellm matches openai's wire shape`
+
+**Test results:** provider crate full suite 118+1+8+1+5 passed, 0 failed; parity test 6/6 fixtures pass via a plain `assert_eq!` (no `normalize()`); clippy exit 0 for both `paigasus-helikon-providers-litellm --all-targets` and `paigasus-helikon --features openai,litellm --all-targets` (and `--all-features`); doc gates clean.
+
+**Snapshot changed:** exactly one — `crates/paigasus-helikon-providers-litellm/src/translate/snapshots/paigasus_helikon_providers_litellm__translate__tests__snap_tool_call_and_result.snap`. Read in full: `"content": null` line is gone from the assistant tool-call message, `tool_calls` (id/name/arguments) is byte-for-byte unchanged, nothing else in the file moved.
+
+**What was done:**
+1. TDD: added `assistant_tool_call_turn_emits_no_content_key` to `translate::tests`, confirmed it failed first (`got: {"content":null,...}`), then implemented `strip_null_assistant_content` in `translate/mod.rs` as a post-processing step called from `build_request` — `translate/request.rs` (the shared, byte-identical-to-openai translator) was not touched.
+2. Regenerated snapshots with `INSTA_UPDATE=always cargo test -p paigasus-helikon-providers-litellm --lib`; grepped for `"content": null` before and after to confirm exactly one snapshot was affected; read it fully before accepting.
+3. Deleted `normalize()` from the parity test, compared `messages` byte-identically, rewrote the module docs into a "History" section, and kept the vacuous-pass guard, the positive-control fixture, and the null-content invariant (now a genuine invariant, not a normalization precondition) from round 2.
+
+**Concerns:** None. Full command transcript and reasoning is in `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-451-providers-litellm/.superpowers/sdd/2026-08-16-sma-451-litellm-provider/task-11-report.md`.</result>
+<usage><subagent_tokens>225222</subagent_tokens><tool_uses>48</tool_uses><duration_ms>323489</duration_ms></usage>
+</task-notification>
