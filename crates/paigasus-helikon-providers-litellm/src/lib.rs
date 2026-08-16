@@ -21,3 +21,4 @@
 //! [SMA-451]: https://linear.app/smaschek/issue/SMA-451
 
 mod capabilities;
+mod transport;
