@@ -3875,6 +3875,7 @@ dependencies = [
  "paigasus-helikon-providers-anthropic",
  "paigasus-helikon-providers-bedrock",
  "paigasus-helikon-providers-gemini",
+ "paigasus-helikon-providers-litellm",
  "paigasus-helikon-providers-openai",
  "paigasus-helikon-runtime-actix",
  "paigasus-helikon-runtime-agentcore",
@@ -3893,6 +3894,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "trybuild",
+ "wiremock",
 ]
 
 [[package]]

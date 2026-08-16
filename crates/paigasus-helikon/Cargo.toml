@@ -29,6 +29,7 @@ paigasus-helikon-sessions-redis      = { workspace = true, optional = true }
 paigasus-helikon-evals               = { workspace = true, optional = true }
 paigasus-helikon-providers-bedrock   = { workspace = true, optional = true }
 paigasus-helikon-providers-gemini    = { workspace = true, optional = true }
+paigasus-helikon-providers-litellm   = { workspace = true, optional = true }
 
 [features]
 default            = []
@@ -52,6 +53,7 @@ sessions-postgres  = ["dep:paigasus-helikon-sessions-postgres"]
 sessions-redis     = ["dep:paigasus-helikon-sessions-redis"]
 bedrock            = ["dep:paigasus-helikon-providers-bedrock"]
 gemini             = ["dep:paigasus-helikon-providers-gemini"]
+litellm            = ["dep:paigasus-helikon-providers-litellm"]
 
 [dev-dependencies]
 # Installs git hooks from .cargo-husky/hooks/ when this crate's
@@ -80,6 +82,8 @@ opentelemetry         = { workspace = true }
 opentelemetry_sdk     = { workspace = true }
 opentelemetry-otlp    = { workspace = true }
 base64                = { workspace = true }
+# Required by the openai_litellm_message_parity cross-crate test (SMA-451).
+wiremock              = { workspace = true }
 
 [[example]]
 name              = "structured_output"
