@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "bd4690c14753",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-451-provider-crate-paigasus-helikon-providers-litellm",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bd/4690c14753/0/metadata.json",
+      "transcript": "/bd/4690c14753/0/full.jsonl",
+      "compact_transcript": "/bd/4690c14753/0/transcript.jsonl",
+      "content_hash": "/bd/4690c14753/0/content_hash.txt",
+      "prompt": "/bd/4690c14753/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 604,
+    "cache_creation_tokens": 2066298,
+    "cache_read_tokens": 35375946,
+    "output_tokens": 232930,
+    "api_call_count": 153
+  }
+}
