@@ -3,7 +3,17 @@
 **Date:** 2026-08-16
 **Issue:** [SMA-522](https://linear.app/smaschek/issue/SMA-522/openai-provider-emits-finish-before-usage-violating-the-core-event)
 **Crate:** `paigasus-helikon-providers-openai`
-**Status:** approved
+**Status:** revised after adversarial review — awaiting approval
+
+**Review history.** A first draft was attacked by an independent reviewer that
+cross-checked every load-bearing claim against the code. It refuted four of
+them: the Bedrock comparison that justified the design choice, the stated
+SMA-402 impact, the "multi-choice preserved exactly" equivalence, and the
+Bedrock follow-up ticket. All four are corrected in place below, with the
+original claim named rather than quietly deleted — a spec whose rationale was
+wrong should show that, because the corrections are the most useful thing in
+it. The chosen implementation survived unchanged; only its justification and
+scope did not.
 
 ## Problem
 
@@ -24,8 +34,30 @@ it arrives on a **separate trailing chunk**. The provider therefore emits
 `Finish` and then `Usage`, on every streaming turn.
 
 A consumer that stops reading at `Finish` — which the contract explicitly
-licenses — drops the turn's only usage snapshot. SMA-402's cross-turn token
-summing then silently under-counts every OpenAI turn.
+licenses — drops the turn's only usage snapshot.
+
+### Impact, stated accurately
+
+The issue claims SMA-402's cross-turn token summing "silently under-counts
+every OpenAI turn". **That is not true of any consumer in this repository**,
+and the spec should not repeat it. Every in-repo consumer drains the stream to
+`None` before reading usage:
+
+- `crates/paigasus-helikon-core/src/agent.rs:941` — `while let Some(evt) =
+  model_stream.next().await { … acc.observe(&ev); … }`, then `acc.finish()`
+- `crates/paigasus-helikon-runtime-temporal/src/activities.rs:98`
+- `crates/paigasus-helikon-runtime-tokio/src/retry.rs:222-232` (verbatim
+  forward)
+
+So the trailing `Usage` *is* observed today and nothing under-counts. This is a
+**contract-conformance fix for external consumers**, plus a genuine secondary
+repair (duplicate `Finish` emission — see "Multi-choice" below).
+
+The "stops reading at `Finish`" pattern is nonetheless real, not hypothetical,
+and there is an in-repo witness: `crates/paigasus-helikon-core/src/compacting_session.rs:237`
+does `ModelEvent::Finish { .. } => break`. It happens to ignore `Usage`
+(`_ => {}`), so it is unaffected today — but it is the honest evidence that a
+contract-abiding consumer written tomorrow would lose the snapshot.
 
 ## Evidence
 
@@ -43,8 +75,18 @@ Two details the issue does not record, both confirmed by capture:
 1. The usage-bearing chunk still carries `choices: [{index:0, delta:{}}]`, and
    omits the `finish_reason` key entirely (it is absent, not `null`).
 2. With `include_usage` omitted, **no trailing usage chunk appears at all** —
-   the stream ends `finish_reason` chunk → `[DONE]`. This case decides the
-   design (below).
+   the stream ends `finish_reason` chunk → `[DONE]`. This case is why the
+   terminal event must be anchored to EOF.
+
+**Provenance limit, stated up front.** This was confirmed against LiteLLM's
+mock backend, **not** against `api.openai.com` — no first-party key was
+available. The issue and this spec both generalise to "OpenAI"; the direct
+evidence is one proxy. Two things keep that from undermining the work: the
+trailing-usage split is what the OpenAI Chat Completions streaming spec
+describes for `include_usage`, and the fix is strictly more permissive — it is
+correct whether usage arrives on the finish chunk, on a trailing chunk, or
+never. Confirming against the first-party API remains worthwhile and is noted
+in the follow-ups.
 
 ## Why the current tests do not catch it
 
@@ -75,30 +117,61 @@ reason instead of appending `Finish`. A new `finish()` takes the stash and
 returns `vec![ModelEvent::Finish{..}]`, or an empty vec when no `finish_reason`
 was ever observed.
 
-Multi-choice last-wins semantics are preserved: today the loop overwrites
-`finish_event` per choice, and the stash overwrites identically.
+### Multi-choice: a behaviour change, not a preserved invariant
+
+An earlier draft claimed last-wins is "preserved exactly". It is not, and the
+difference is worth stating because it is an unclaimed *benefit*.
+
+`finish_event` today is a **per-`consume` local** (`chat.rs:244`, pushed at
+`:298`), so the current code emits one `Finish` **per chunk carrying any
+`finish_reason`**. Moving the stash to a struct field collapses that to exactly
+one `Finish` at EOF. Concretely, for chunks
+
+```text
+A: choices:[{index:0, delta:{},            finish_reason:"stop"}]
+B: choices:[{index:1, delta:{content:"x"}}]
+C: choices:[{index:1, delta:{},            finish_reason:"length"}]
+```
+
+old emits `Finish(Stop), TokenDelta, Finish(Length)`; new emits
+`TokenDelta, Finish(Length)`. The old sequence puts a `TokenDelta` *after* a
+`Finish` — itself a contract violation. The same divergence appears in the far
+likelier single-choice case where a proxy repeats `finish_reason` on the usage
+chunk (LiteLLM does not, per Appendix A.1 — but that is one proxy).
+
+New semantics, stated plainly: **exactly one `Finish` per stream; the last
+`finish_reason` observed anywhere in the stream wins.** Pinned by a unit test.
+
+`ModelSettings` exposes no `n` field and `build_request` never sets one, so
+`n > 1` can only arrive from a nonstandard proxy. The translator emits a
+`tracing::debug!` when it observes a *second, distinct* `finish_reason`, so
+genuinely ambiguous multi-choice is visible in a trace rather than silently
+resolved.
 
 ### Rejected: pair `[Usage, Finish]` on the usage event (the Bedrock pattern)
 
-`paigasus-helikon-providers-bedrock/src/stream.rs:14-22` solves the same
-problem by buffering the stop reason and emitting `Usage` immediately followed
-by `Finish` when the `Metadata` event lands.
+**Correction to an earlier draft of this spec.** It asserted that Bedrock emits
+no `Finish` when the trailing `Metadata` event never arrives, and used that as
+the reason to reject its pattern. **That is false.** Bedrock already has the
+same EOF flush proposed here: `providers-bedrock/src/stream.rs:262`
+(`pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>>`,
+documented as flushing "when the Bedrock stream ends normally (EOF) without
+having emitted a `Metadata` event"), driven from
+`providers-bedrock/src/model.rs:107-112`, and covered by
+`finish_flushes_pending_stop_reason_without_metadata` (`stream.rs:768`).
+Bedrock is a **hybrid** — pair-on-`Metadata` *plus* EOF flush — and is not
+vulnerable to the failure the earlier table attributed to it.
 
-Captured evidence rules this out for OpenAI. The two patterns diverge exactly
-when the trailing event never arrives:
+The real reason to prefer the Gemini shape for OpenAI is **simplicity**: one
+emission site and one piece of state, versus Bedrock's `pending_stop_reason` /
+`metadata_seen` interaction, which exists because Bedrock must also handle
+`Metadata` arriving *before* `MessageStop`. The OpenAI wire has no such
+reordering, so that machinery would be dead weight.
 
-| Pattern | Normal stream | No usage chunk (Appendix A.2) |
-| --- | --- | --- |
-| Gemini — buffer reason, emit `Finish` at EOF | `…Usage, Finish` ✅ | `…Finish` ✅ |
-| Bedrock — emit `[Usage, Finish]` on usage | `…Usage, Finish` ✅ | **no `Finish` at all** ❌ |
-
-Adopting Bedrock's shape would trade an ordering violation for a missing
-terminal event. That matters concretely: SMA-451 targets third-party
-OpenAI-compatible proxies, which may ignore `stream_options` entirely.
-
-The same reasoning implies a latent gap in the Bedrock provider itself — a
-stream ending after `MessageStop` without a `Metadata` event emits no `Finish`.
-Out of scope here; filed as a follow-up.
+Appendix A.2 (no usage chunk at all) still matters — it is why the terminal
+event must be anchored to EOF rather than to the usage chunk — but it
+discriminates against a *naive* pair-on-usage design, not against Bedrock as
+actually implemented.
 
 ### Rejected: a generic reordering combinator in core
 
@@ -131,39 +204,93 @@ follow-up.
    the single finish site — the OpenAI analogue of Gemini's two
    (`providers-gemini/src/model.rs:150,156`).
 
-5. Correct the doc comment at `chat.rs:237-241`. It asserts a "Usage before
+5. Emit a `tracing::debug!(target: "paigasus::openai::chat", …)` when `finish()`
+   returns empty. That is the one silent exit producing a turn with no terminal
+   event; a trace should distinguish truncation from a clean stop.
+
+6. Correct the doc comment at `chat.rs:237-241`. It asserts a "Usage before
    Finish contract"; core states no such rule. That misreading is what made
    inline `Finish` look correct. Replace with the real invariant: `Finish` is
    terminal and emitted at end-of-stream; `Usage` flows through as it arrives.
 
-The `Some(Err(_))` and cancellation arms deliberately do **not** call
-`finish()`. An errored stream has no clean terminal event, and the contract
-requires cancellation to end the stream *without* `Finish`
-(`core/src/model.rs:65-67`).
+7. Correct the **byte-identical misreading** at `backend/responses.rs:274-278`,
+   which repeats "Event ordering follows the 'Usage before Finish' contract".
+   Same crate, same PR, one line — leaving the root-cause misstatement in place
+   next to its own fix makes no sense. (The same text at
+   `providers-bedrock/src/stream.rs:14` and `:439` is deferred to the
+   follow-up.)
+
+8. Sweep the stale "async-openai 0.40" references at `chat.rs:120` and
+   `chat.rs:179`; `Cargo.lock` pins 0.41.3. Free, since item 6 already edits
+   comments in this file.
+
+### The error arm discards a buffered `Finish` — a deliberate behaviour change
+
+The `Some(Err(_))` and cancellation arms do **not** call `finish()`. For
+cancellation this is mandated (`core/src/model.rs:65-67`). For the error arm it
+is a **change from today's behaviour** and must be recorded as one: currently,
+a stream that errors *after* the finish chunk has already delivered `Finish`
+inline, so the consumer sees `Finish, Err`; afterwards it sees `Err` alone.
+
+This is not hypothetical for the proxy audience motivating this work.
+`CreateChatCompletionStreamResponse` declares `id`, `choices`, `created`,
+`model`, and `object` as non-`Option`, so a proxy omitting `object` on its
+trailing usage chunk yields a mid-stream deserialization error — exactly the
+shape where the buffered `Finish` is now dropped.
+
+**Decision: discard.** Yielding `Finish` and then `Err` would put an item after
+the terminal event, which is the very thing this ticket exists to stop; and a
+stream that errored did not complete cleanly, so reporting a clean terminal
+reason would be a lie. Pinned by a test with a malformed trailing chunk.
 
 ### Exit-path semantics
 
-| Exit | Emitted tail | Rationale |
-| --- | --- | --- |
-| Normal, usage present | `…Usage, Finish` | contract satisfied |
-| Usage chunk absent | `…Finish` | terminal event still emitted |
-| Truncated, no `finish_reason` | `…` (no `Finish`) | not a clean stop |
-| Transport error | `…Err(_)` | error is terminal |
-| Cancelled | `…` (nothing) | mandated by the contract |
+Δ marks a change from current behaviour.
+
+| Exit | Emitted tail | Δ | Rationale |
+| --- | --- | --- | --- |
+| Normal, usage present | `…Usage, Finish` | Δ (was `…Finish, Usage`) | the fix |
+| Usage chunk absent | `…Finish` | — | terminal event still emitted |
+| Truncated, no `finish_reason` | `…` (no `Finish`) | — | not a clean stop |
+| Transport / parse error after finish chunk | `…Err(_)` | Δ (was `…Finish, Err`) | see above |
+| Cancelled after finish chunk | `…` (nothing) | Δ (was `…Finish`) | contract mandates no `Finish` |
+| Multi-`finish_reason` stream | one `Finish`, last wins | Δ (was one per chunk) | removes post-`Finish` deltas |
 
 ### Fixtures
 
-`tests/fixtures/chat_text_usage_trailing.txt` — **new**, transcribed verbatim
-from the capture in Appendix A.1. This is the provenance anchor and the
-regression test's target.
+`tests/fixtures/chat_text_usage_trailing.txt` — **new**. The finish chunk,
+usage chunk, and `[DONE]` are transcribed byte-for-byte from Appendix A.1; the
+ten content deltas are reconstructed by hand in the same shape (the appendix
+elides them). The provenance comment must say exactly that — "transcribed
+verbatim" would overclaim.
 
 `chat_parallel_tool_calls.txt` and `chat_content_filter.txt` — restructured so
 `usage` sits on its own trailing chunk matching the captured envelope (empty
 `delta`, no `finish_reason` key), with the tool-call and content-filter
 payloads otherwise unchanged.
 
-Each fixture gets a leading comment recording provenance — what was captured
-and what was hand-authored.
+`tests/chat_wire.rs:34-41` — **the third instance, and the one that states the
+falsehood in English.** It builds an inline SSE body welding `usage` onto the
+`finish_reason` chunk, under the comment *"Usage arrives on the same chunk as
+`finish_reason` (per OpenAI's `stream_options.include_usage: true`
+behaviour)"* — precisely what Appendix A refutes. Restructure the body to the
+captured envelope and delete the comment. A spec arguing "the fixtures are the
+entire regression signal" cannot leave the written-down false belief in place.
+
+**Provenance comments are SSE comment lines.** These files are fed to a real
+SSE parser via wiremock, so each provenance note must be a `:`-prefixed line.
+A `#` or `//` line would parse as an unknown field — harmless but silently
+wrong, and a bad precedent for the Anthropic fixtures, whose tests do split on
+literal `\n`.
+
+**Envelope caveat.** The capture is LiteLLM's mock, not `api.openai.com`. Its
+usage chunk carries `"choices":[{"index":0,"delta":{}}]`; OpenAI's own API
+sends `"choices":[]` (async-openai documents the field as *"Can also be empty
+for the last chunk if you set `stream_options: {"include_usage": true}`"*).
+Both parse identically — the choices loop simply does not run — but the anchor
+fixture must not silently claim first-party provenance. Record the limitation
+in its comment and add a second hand-authored variant with `"choices":[]` so
+both envelopes are covered.
 
 **Capture limits, established empirically.** A keyless LiteLLM mock cannot
 provoke either non-happy path:
@@ -194,29 +321,67 @@ fix for a present failure.
 
 ### Tests
 
-1. **Regression (the load-bearing one).** Against
-   `chat_text_usage_trailing.txt`, assert `Finish` is the final event and that
-   a `Usage` event precedes it.
-2. **Mutation check.** Confirm the test genuinely **fails** against the
-   pre-fix translator, not merely that it passes after. A test that cannot fail
-   on the broken code is the precise failure mode that let this ship — the
-   existing fixtures already demonstrate it. Verified by reverting the
-   translator locally and observing a red test; recorded in the PR body.
-3. **No-usage stream.** A stream ending `finish_reason` → EOF with no usage
-   chunk still emits exactly one `Finish`.
-4. **Truncated stream.** A stream ending with no `finish_reason` emits no
-   `Finish`.
-5. Existing tests over the restructured fixtures must continue to pass on their
+Tests are labelled by what they can actually catch. Only the first is a
+regression test in the strict sense; conflating the two categories is how the
+original blind spot was rationalised.
+
+**Regression — fails on pre-fix code:**
+
+1. Against `chat_text_usage_trailing.txt`: assert `Finish` is the final event,
+   that a `Usage` precedes it, that there is **exactly one** `Finish`, and that
+   the usage carries the real captured counts (`input_tokens: 8`,
+   `output_tokens: 6`). The count assertions matter — without them a translator
+   emitting a zeroed `Usage` would pass.
+2. **Multi-choice / repeated `finish_reason`:** a `ChatTranslator` unit test
+   asserting exactly one `Finish` with last-wins, using the A/B/C chunk
+   sequence above. Fails pre-fix, which emits two.
+
+**New-code guards — pass both before and after; they protect the *fix* from
+regressing, and are not evidence the bug existed:**
+
+3. No-usage stream (`finish_reason` → EOF) still emits exactly one `Finish`.
+4. Truncated stream (no `finish_reason`) emits no `Finish`.
+5. Cancellation fired **after** the finish chunk emits no `Finish`. The
+   existing `tests/cancellation.rs:22` cancels before the first chunk and does
+   not cover this race.
+6. Malformed trailing chunk (mid-stream parse error after the finish chunk)
+   emits `Err` and no `Finish`, pinning the discard decision above.
+
+**Mutation check.** Tests 1 and 2 must be observed **failing** against the
+pre-fix translator, not merely passing after it. Verified by reverting the
+translator locally and recording the red output in the PR body. This is the
+whole lesson of the ticket: the existing fixtures demonstrate that a test which
+cannot fail on broken code is worse than no test, because it reads as coverage.
+
+7. Existing tests over the restructured fixtures must continue to pass on their
    original assertions (finish reasons, tool-call assembly, usage values).
+
+Unit tests 2-4 belong beside the existing `ChatTranslator` tests at
+`chat.rs:378-541`, where they need no wiremock; only the fixture-driven and
+cancellation cases need the integration harness.
 
 ### Responses backend
 
 Verified immune by inspection, no code change. `ResponseCompleted` and
 `ResponseIncomplete` both route through `terminal_events()`
 (`backend/responses.rs:441-483`), which builds `Usage` and `Finish` from a
-single event's own data. They cannot be split across chunks, so the
-cross-chunk failure mode does not exist there. Recorded here as the issue's
-"should be checked" item, discharged with its reasoning.
+single event's own data. They cannot be split across chunks.
+
+State the invariant in its durable form rather than the incidental one:
+**`Usage` is constructed only inside `terminal_events`, which unconditionally
+appends `Finish` before returning** (`responses.rs:455-462`, `:481`). "They
+happen to arrive on the same event" is true but fragile; the above is what a
+future arm emitting partial usage would have to break. Record it as a comment
+on `terminal_events` so the guarantee is stated where it can be violated.
+
+`ResponseFailed` and `ResponseError` yield `Err` with no `Finish` at all
+(`responses.rs:408-426`). This is consistent with the contract, which mandates
+that `Finish` be *terminal*, never that it be *mandatory* — the same reasoning
+as the Chat error arm above. Stated explicitly because "is there a path with no
+terminal event?" is precisely what the issue asked to discharge.
+
+Its misread doc comment at `responses.rs:274-278` is fixed here (change 7);
+that is the only edit this backend receives.
 
 ## Verification
 
@@ -234,12 +399,32 @@ written, not per-crate.
 
 Filed as separate Linear issues:
 
-1. **Bedrock truncation gap** — no `Metadata` after `MessageStop` yields no
-   `Finish`. Includes the same misread "Usage must precede Finish" comment at
-   `providers-bedrock/src/stream.rs:14`.
-2. **Cross-provider conformance** — a shared assertion that every provider's
-   stream ends with `Finish`, and that `Usage`, when present, precedes it.
-   Would have caught this class across all five providers.
+1. **Anthropic truncation gap** (retargeted — an earlier draft wrongly named
+   Bedrock). `providers-anthropic/src/stream.rs:161-169` buffers `stop_reason`
+   from `message_delta` and emits `Finish` only on `message_stop`, and its
+   driver at `providers-anthropic/src/model.rs:113` is a bare `None => return`
+   with no EOF flush — its only `fn finish*` is `finish_or_error`, a mapping
+   helper that is never called from the driver. A stream truncated between
+   `message_delta` and `message_stop` therefore emits `Usage` and no `Finish`,
+   where Gemini, Bedrock, and post-fix OpenAI all emit one. Anthropic is the
+   sole remaining provider with this gap.
+2. **Misread contract comments in Bedrock** — `providers-bedrock/src/stream.rs:14`
+   and `:439` repeat the "Usage must precede Finish" misstatement. The code is
+   correct; only the prose is wrong.
+3. **Cross-provider conformance** — a shared assertion across all five
+   providers that a stream is `Finish`-terminated, that `Usage` (when present)
+   precedes it, and specifically that **EOF after an observed stop reason emits
+   `Finish`** — the last clause being the one that catches item 1. The
+   follow-up should also settle the `finish()` return shape, which currently
+   differs three ways: `Vec<Result<ModelEvent, ModelError>>` (Gemini),
+   `Option<Result<ModelEvent, ModelError>>` (Bedrock), and `Vec<ModelEvent>`
+   (proposed here, matching this crate's infallible `consume`).
+
+Deliberately **not** taken on here, but worth recording as a real question: the
+Gemini driver logs and `continue`s on an unparseable chunk
+(`providers-gemini/src/model.rs:159-169`) whereas OpenAI terminates the stream.
+Given that proxy compatibility is this design's stated motivation, that
+asymmetry deserves its own decision rather than an incidental one.
 
 ## Release
 
