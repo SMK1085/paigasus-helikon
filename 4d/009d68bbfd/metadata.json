@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "4d009d68bbfd",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-522-openai-provider-emits-finish-before-usage-violating-the-core",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/4d/009d68bbfd/0/metadata.json",
+      "transcript": "/4d/009d68bbfd/0/full.jsonl",
+      "compact_transcript": "/4d/009d68bbfd/0/transcript.jsonl",
+      "content_hash": "/4d/009d68bbfd/0/content_hash.txt",
+      "prompt": "/4d/009d68bbfd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 222,
+    "cache_creation_tokens": 445260,
+    "cache_read_tokens": 19993767,
+    "output_tokens": 122738,
+    "api_call_count": 112
+  }
+}

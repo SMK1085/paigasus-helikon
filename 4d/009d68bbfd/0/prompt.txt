@@ -1,0 +1,32 @@
+approved
+
+---
+
+proceed subagent-driven
+
+---
+
+<task-notification>
+<task-id>abda95c263010cbbd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/52c8ec20-9a55-4f0b-9c00-5787ad50044f/tasks/abda95c263010cbbd.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All fixes verified, committed, and the report file updated. Working tree is clean.
+
+## Summary
+
+**Status:** DONE
+
+**Commit:** `53bf242b14f210db615c0caa366ecd5a4d2d7974` — `test(providers-openai): SMA-522 assert consume never leaks an inline Finish`
+
+**Test result:** `cargo test -p paigasus-helikon-providers-openai --lib` → 61 passed, 0 failed (full green, before and after the fix).
+
+**Mutation A** (inline `Finish` leak in `consume`) — now correctly FAILS (`consume must not emit Finish inline, got [Finish { reason: Stop }]`), caught by the new `first` assertion; fully reverted.
+
+**Mutation B** (first-wins buffer guard) — still correctly FAILS (`last observed finish_reason must win, got [Finish { reason: Stop }]`), caught by the pre-existing `fin` assertion; fully reverted.
+
+`git diff` confirmed only the intended 10-insertion/2-deletion change (binding `first`/`last` and their two new `!... .any(Finish)` assertions) remained before staging; `cargo fmt --all` made no further changes. Full details and verbatim output appended to `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-522-openai-finish-usage-order/.superpowers/sdd/2026-08-16-sma-522-openai-finish-usage-ordering/task-2-report.md` under a new "Fix round 1/5" section.</result>
+<usage><subagent_tokens>120098</subagent_tokens><tool_uses>20</tool_uses><duration_ms>126237</duration_ms></usage>
+</task-notification>
