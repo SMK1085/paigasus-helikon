@@ -115,6 +115,13 @@ mod tests {
         ContentPart, Item, MediaSource, ModelRequest, ResponseFormat, ToolDef,
     };
 
+    // Every `build()` call in this file sets `.api_key(...)` explicitly.
+    // Without it, an unset key falls through `build()`'s auth resolution to
+    // `std::env::var("LITELLM_API_KEY")` — a bare `getenv`, unsynchronized
+    // with `builder.rs`'s own env-mutating tests, which take `env_lock()`
+    // before `set_var`/`remove_var`. Same test binary, multi-threaded
+    // harness: that's a genuine data race across two test modules, not a
+    // hypothetical one.
     fn cfg() -> Config {
         crate::LiteLlmModel::chat("prod-fast")
             .base_url("http://p:4000")
@@ -248,6 +255,7 @@ mod tests {
     fn snap_litellm_extras() {
         let model = crate::LiteLlmModel::chat("prod-fast")
             .base_url("http://p:4000")
+            .api_key("sk-test")
             .fallbacks(["backup-a", "backup-b"])
             .num_retries(2)
             .tags(["team:research"])
@@ -338,6 +346,7 @@ mod tests {
 
         let model = crate::LiteLlmModel::chat("prod-fast")
             .base_url("http://p:4000")
+            .api_key("sk-test")
             .fallbacks(["b"])
             .num_retries(1)
             .tags(["t"])
