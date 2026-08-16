@@ -10,7 +10,14 @@
 //!    contract on every turn.
 //! 2. **Tool-call `name`/`arguments` are buffered until the `id` is known**,
 //!    because the id is not guaranteed to arrive first, and both fields
-//!    fragment across deltas.
+//!    fragment across deltas. A delta that carries neither `index` nor `id`
+//!    is correlated by its position within `delta.tool_calls`, but only
+//!    when *no* entry in that same array carries an explicit `index` — a
+//!    synthesized positional key must never be allowed to collide with a
+//!    genuine explicit index elsewhere in the array, which would silently
+//!    merge two distinct calls. A mixed array (some entries indexed, one
+//!    not) is non-conforming for OpenAI-compatible streaming; the
+//!    ambiguous entry is skipped with a loud warning rather than guessed.
 
 use std::collections::{HashMap, HashSet};
 
@@ -101,8 +108,14 @@ impl ChatTranslator {
                     });
                 }
                 if let Some(tcs) = &delta.tool_calls {
+                    // A positional key is only safe to synthesize when no
+                    // entry in *this* array carries an explicit `index` —
+                    // otherwise a synthesized `Key::Index(pos)` can collide
+                    // with a genuine explicit index elsewhere in the same
+                    // array. See the module docs.
+                    let any_explicit_index = tcs.iter().any(|tc| tc.index.is_some());
                     for (pos, tc) in tcs.iter().enumerate() {
-                        self.handle_tool_call(tc, pos, &mut out);
+                        self.handle_tool_call(tc, pos, any_explicit_index, &mut out);
                     }
                 }
             }
@@ -130,10 +143,32 @@ impl ChatTranslator {
         out
     }
 
-    fn handle_tool_call(&mut self, tc: &ToolCallChunk, pos: usize, out: &mut Vec<ModelEvent>) {
+    fn handle_tool_call(
+        &mut self,
+        tc: &ToolCallChunk,
+        pos: usize,
+        any_explicit_index: bool,
+        out: &mut Vec<ModelEvent>,
+    ) {
         let key = match (tc.index, tc.id.as_deref()) {
             (Some(i), _) => Key::Index(i),
             (None, Some(id)) => Key::Id(id.to_owned()),
+            (None, None) if any_explicit_index => {
+                // A synthesized positional key would risk colliding with a
+                // genuine explicit `index` elsewhere in this same array
+                // (e.g. entry 0 explicitly `index: 1`, entry 1 has neither
+                // — pos 1 would collide with `Key::Index(1)`). That mixes
+                // two distinct calls into one and corrupts both, which is
+                // worse than dropping this entry, so skip it loudly.
+                tracing::warn!(
+                    target: "paigasus::litellm::stream",
+                    pos,
+                    "tool-call delta at this position has neither index nor id, and \
+                     another entry in the same array carries an explicit index; \
+                     skipping to avoid a key collision"
+                );
+                return;
+            }
             (None, None) => {
                 tracing::debug!(
                     target: "paigasus::litellm::stream",
@@ -566,6 +601,81 @@ mod tests {
         assert_eq!(calls[0].0, "call_positional");
         assert_eq!(calls[0].1, Some("f".to_owned()));
         assert_eq!(calls[0].2, "{}");
+    }
+
+    #[test]
+    fn mixed_explicit_and_positional_entries_do_not_collide() {
+        // Entry 0 has an explicit index (1) that numerically equals entry
+        // 1's array position (1). A naive positional fallback would
+        // synthesize Key::Index(1) for entry 1 too, colliding with entry
+        // 0's genuine Key::Index(1) and corrupting call "y" with entry 1's
+        // fragments while losing entry 1's own name entirely. The
+        // index-less entry must be skipped, not merged.
+        let mut t = ChatTranslator::new();
+        let evs = t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 1, "id": "y", "function": {"name": "g", "arguments": "{}"}},
+                {"function": {"name": "f", "arguments": "{}"}}
+            ]}}]
+        })));
+
+        let calls: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name,
+                    args_delta,
+                } => Some((call_id.clone(), name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "the ambiguous entry must be skipped, not merged into another call"
+        );
+        assert_eq!(calls[0].0, "y");
+        assert_eq!(calls[0].1, Some("g".to_owned()));
+        assert!(
+            !calls[0].2.contains('f'),
+            "call y's args must not absorb the other entry's fragment, got {:?}",
+            calls[0].2
+        );
+    }
+
+    #[test]
+    fn unindexed_continuation_after_an_indexed_first_delta_still_joins() {
+        // Regression guard on the human's ruling: a genuine continuation
+        // chunk — one whose tool_calls array has no explicit index at all
+        // — must still correlate by position against an earlier chunk that
+        // did carry an explicit index for that same call.
+        let mut t = ChatTranslator::new();
+        let mut evs = t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "a", "function": {"name": "f", "arguments": "{\""}}
+            ]}}]
+        })));
+        evs.extend(t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"function": {"arguments": "x\": 1}"}}
+            ]}}]
+        }))));
+
+        let calls: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    args_delta,
+                    ..
+                } => Some((call_id.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .collect();
+        assert!(calls.iter().all(|(id, _)| id == "a"));
+        let joined: String = calls.iter().map(|(_, a)| a.clone()).collect();
+        assert_eq!(joined, "{\"x\": 1}");
     }
 
     #[test]
