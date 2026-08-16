@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "2a423222d240",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-531-anthropic-provider-emits-no-finish-when-a-stream-truncates",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/2a/423222d240/0/metadata.json",
+      "transcript": "/2a/423222d240/0/full.jsonl",
+      "compact_transcript": "/2a/423222d240/0/transcript.jsonl",
+      "content_hash": "/2a/423222d240/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 145,
+    "cache_creation_tokens": 360604,
+    "cache_read_tokens": 13729099,
+    "output_tokens": 111371,
+    "api_call_count": 76
+  }
+}
