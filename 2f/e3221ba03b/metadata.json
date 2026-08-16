@@ -3,7 +3,7 @@
   "checkpoint_id": "2fe3221ba03b",
   "strategy": "manual-commit",
   "branch": "feature/sma-515-runinterrupt-ergonomics-add-terminal_event-and",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": null,
   "sessions": [
     {
@@ -12,13 +12,20 @@
       "compact_transcript": "/2f/e3221ba03b/0/transcript.jsonl",
       "content_hash": "/2f/e3221ba03b/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/2f/e3221ba03b/1/metadata.json",
+      "transcript": "/2f/e3221ba03b/1/full.jsonl",
+      "compact_transcript": "/2f/e3221ba03b/1/transcript.jsonl",
+      "content_hash": "/2f/e3221ba03b/1/content_hash.txt",
+      "prompt": "/2f/e3221ba03b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 407,
-    "cache_creation_tokens": 381511,
-    "cache_read_tokens": 6529756,
-    "output_tokens": 50561,
-    "api_call_count": 54
+    "input_tokens": 415,
+    "cache_creation_tokens": 406539,
+    "cache_read_tokens": 7160974,
+    "output_tokens": 72178,
+    "api_call_count": 58
   }
 }
