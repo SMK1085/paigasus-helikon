@@ -54,7 +54,12 @@ impl MessageTranslator {
 
     /// Consume one event. Returns the emitted ModelEvents (most calls
     /// emit zero or one; `message_delta` carrying both stop_reason and
-    /// usage emits one Usage followed by Finish on `message_stop`).
+    /// usage emits one Usage followed by Finish on `message_stop`). A
+    /// terminal event (`Finish` or an `Err`) is emitted at most once per
+    /// stream; anything after it — including a later `message_delta`'s
+    /// `Usage` — is suppressed. A clean end-of-stream flush of a buffered
+    /// stop reason with no terminal event yet is handled separately by
+    /// `finish()`.
     pub(crate) fn consume(
         &mut self,
         event: AnthropicEvent,
@@ -152,13 +157,21 @@ impl MessageTranslator {
                 tracing::debug!(target: "paigasus::anthropic::stream", "content_block_stop");
             }
             AnthropicEvent::MessageDelta { delta, usage } => {
-                if let Some(MessageDeltaUsage { output_tokens }) = usage {
-                    out.push(Ok(ModelEvent::Usage {
-                        input_tokens: self.last_input_tokens,
-                        output_tokens,
-                        cached_input_tokens: self.last_cached_input_tokens,
-                        reasoning_tokens: None,
-                    }));
+                // A `message_delta` after the terminal event is a protocol
+                // violation (e.g. a second `message_delta` re-arming
+                // `stop_reason` post-`message_stop`, see
+                // `second_message_delta_after_message_stop_does_not_double_finish`).
+                // Emitting its `Usage` would put an event after `Finish`,
+                // which the core contract forbids.
+                if !self.terminal_emitted {
+                    if let Some(MessageDeltaUsage { output_tokens }) = usage {
+                        out.push(Ok(ModelEvent::Usage {
+                            input_tokens: self.last_input_tokens,
+                            output_tokens,
+                            cached_input_tokens: self.last_cached_input_tokens,
+                            reasoning_tokens: None,
+                        }));
+                    }
                 }
                 if let Some(reason) = delta.stop_reason {
                     self.stop_reason = Some(reason);
@@ -542,14 +555,20 @@ mod tests {
         assert_eq!(stop_out.len(), 1, "message_stop emits the terminal Finish");
 
         // Protocol violation: a second stop reason after the terminal event.
-        let _ = t
+        // A real `message_delta` always carries `usage`, so exercise that
+        // shape rather than sidestepping it with `usage: None`.
+        let second_delta_out = t
             .consume(AnthropicEvent::MessageDelta {
                 delta: MessageDeltaPayload {
                     stop_reason: Some("max_tokens".to_owned()),
                 },
-                usage: None,
+                usage: Some(MessageDeltaUsage { output_tokens: 99 }),
             })
             .unwrap();
+        assert!(
+            second_delta_out.is_empty(),
+            "nothing may follow the terminal event, got {second_delta_out:?}"
+        );
         assert!(
             t.finish().is_none(),
             "a second stop reason must not yield a second terminal event"

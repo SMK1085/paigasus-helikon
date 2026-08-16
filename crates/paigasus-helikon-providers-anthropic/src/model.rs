@@ -113,8 +113,8 @@ impl Model for AnthropicModel {
                     // Stream exhausted normally (clean EOF). Flush a stop
                     // reason buffered by `message_delta` when `message_stop`
                     // never arrived, so the consumer always sees a terminal
-                    // event. Deliberately NOT done on the cancellation
-                    // (`:109`) or transport-error (below) arms.
+                    // event. Deliberately NOT done on the cancellation arm
+                    // above or the transport-error arm (below).
                     None => {
                         if let Some(terminal) = translator.finish() {
                             yield terminal;
