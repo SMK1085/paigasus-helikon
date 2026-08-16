@@ -35,6 +35,7 @@ pub(crate) struct MessageTranslator {
     synthesizing_output: bool,
     synthesized_tool_index: Option<u32>,
     other_tool_fired: bool,
+    terminal_emitted: bool,
 }
 
 impl MessageTranslator {
@@ -47,6 +48,7 @@ impl MessageTranslator {
             synthesizing_output,
             synthesized_tool_index: None,
             other_tool_fired: false,
+            terminal_emitted: false,
         }
     }
 
@@ -164,7 +166,10 @@ impl MessageTranslator {
             }
             AnthropicEvent::MessageStop => {
                 if let Some(reason) = self.stop_reason.take() {
-                    out.push(self.finish_or_error(&reason));
+                    if !self.terminal_emitted {
+                        self.terminal_emitted = true;
+                        out.push(self.finish_or_error(&reason));
+                    }
                 }
             }
             AnthropicEvent::Ping => {}
@@ -178,17 +183,26 @@ impl MessageTranslator {
     /// Flush a stop reason buffered from `message_delta` when the response
     /// body ends cleanly before `message_stop` arrived.
     ///
-    /// Returns `None` when `message_stop` already drained the buffer (the
-    /// well-formed path) or when no stop reason was ever observed. A stream
-    /// that ended *before* `message_delta` is never reported as a clean
-    /// `Stop`; one that ended *after* it is, because `message_delta`'s
-    /// `stop_reason` is the model's own authoritative decision and
-    /// `message_stop` is only a frame terminator.
+    /// Returns `None` when a terminal event was already emitted — the
+    /// well-formed path, where `message_stop` drained the buffer — or when no
+    /// stop reason was ever observed. A stream that ended *before*
+    /// `message_delta` is never reported as a clean `Stop`; one that ended
+    /// *after* it is, because `message_delta`'s `stop_reason` is the model's
+    /// own authoritative decision and `message_stop` is only a frame
+    /// terminator.
+    ///
+    /// `terminal_emitted` — not `stop_reason` being `Some` — is the guard.
+    /// A second `message_delta` can re-arm the buffer after `message_stop`
+    /// already emitted, and that must not produce a second terminal event.
     ///
     /// **Clean-EOF path only.** Never call this on the cancellation or
     /// transport-error paths — see `model.rs`.
     pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
+        if self.terminal_emitted {
+            return None;
+        }
         let reason = self.stop_reason.take()?;
+        self.terminal_emitted = true;
         tracing::warn!(
             target: "paigasus::anthropic::stream",
             stop_reason = %reason,
@@ -506,5 +520,71 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, ModelError::Unavailable));
+    }
+
+    /// A second `message_delta` re-arms `stop_reason` after `message_stop`
+    /// already emitted the terminal event. The EOF flush must not turn that
+    /// into a second `Finish` — `core::Model::invoke` guarantees nothing
+    /// follows `Finish`.
+    #[test]
+    fn second_message_delta_after_message_stop_does_not_double_finish() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        let stop_out = t.consume(AnthropicEvent::MessageStop).unwrap();
+        assert_eq!(stop_out.len(), 1, "message_stop emits the terminal Finish");
+
+        // Protocol violation: a second stop reason after the terminal event.
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("max_tokens".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        assert!(
+            t.finish().is_none(),
+            "a second stop reason must not yield a second terminal event"
+        );
+    }
+
+    /// The same guard on the inline path. This case is a pre-existing defect,
+    /// independent of the EOF flush: today the second `message_stop` emits a
+    /// second `Finish`.
+    #[test]
+    fn repeated_message_stop_emits_one_finish() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        assert_eq!(t.consume(AnthropicEvent::MessageStop).unwrap().len(), 1);
+
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        let second_stop = t.consume(AnthropicEvent::MessageStop).unwrap();
+        assert!(
+            second_stop.is_empty(),
+            "a repeated message_stop must not emit a second Finish, got {second_stop:?}"
+        );
     }
 }
