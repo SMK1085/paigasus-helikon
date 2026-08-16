@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "2fe3221ba03b",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-515-runinterrupt-ergonomics-add-terminal_event-and",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/2f/e3221ba03b/0/metadata.json",
+      "transcript": "/2f/e3221ba03b/0/full.jsonl",
+      "compact_transcript": "/2f/e3221ba03b/0/transcript.jsonl",
+      "content_hash": "/2f/e3221ba03b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 407,
+    "cache_creation_tokens": 381511,
+    "cache_read_tokens": 6529756,
+    "output_tokens": 50561,
+    "api_call_count": 54
+  }
+}
