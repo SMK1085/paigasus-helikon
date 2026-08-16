@@ -4,6 +4,21 @@
 //! OpenAI-compatible Chat Completions endpoint, adding LiteLLM's own router
 //! and observability fields. See [SMA-451] for the design.
 //!
+//! # When to use this instead of the OpenAI provider
+//!
+//! `OpenAiModel::base_url()` can also point at a LiteLLM proxy, and is the
+//! better choice when the proxy simply fronts OpenAI models. Reach for this
+//! crate when you need LiteLLM's router fallbacks and retries, spend/trace
+//! metadata, reasoning streaming from non-OpenAI backends, or arbitrary
+//! operator-chosen model aliases.
+//!
+//! # Capabilities are your declaration
+//!
+//! A LiteLLM alias (`prod-fast`, `team-a/gpt`) carries no information the SDK
+//! can act on, so [`LiteLlmModel`] defaults to a conservative
+//! streaming + tools capability set. Declare what the backend actually
+//! supports with `with_capabilities`.
+//!
 //! # Quick start
 //!
 //! ```ignore
@@ -14,56 +29,29 @@
 //! let _model = LiteLlmModel::chat("claude-sonnet-4")
 //!     .base_url("http://litellm:4000")
 //!     .api_key("sk-…")
+//!     .fallbacks(["gpt-4o-mini"])
+//!     .num_retries(2)
 //!     .build()?;
 //! # Ok(()) }
 //! ```
+//!
+//! # Limitations
+//!
+//! Chat Completions only — there is no Responses backend, and
+//! `ModelSettings::previous_response_id` is ignored. The provider always
+//! streams. Multi-choice responses (`n > 1`) are not supported: only the first
+//! choice is read.
 //!
 //! [SMA-451]: https://linear.app/smaschek/issue/SMA-451
 
 mod builder;
 mod capabilities;
 mod error;
+mod model;
 mod sse;
 mod stream;
 mod translate;
 mod transport;
 
 pub use builder::{BuildError, LiteLlmModelBuilder};
-
-/// LiteLLM proxy provider.
-#[derive(Debug, Clone)]
-pub struct LiteLlmModel(std::sync::Arc<builder::Config>);
-
-impl LiteLlmModel {
-    /// Chat Completions builder for a proxy model alias.
-    pub fn chat(model_id: impl Into<String>) -> LiteLlmModelBuilder {
-        LiteLlmModelBuilder::new(model_id)
-    }
-
-    pub(crate) fn from_config(cfg: builder::Config) -> Self {
-        Self(std::sync::Arc::new(cfg))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn endpoint(&self) -> &str {
-        &self.0.endpoint
-    }
-
-    #[cfg(test)]
-    pub(crate) fn auth(&self) -> Option<&str> {
-        self.0.auth.as_deref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn config_for_test(&self) -> builder::Config {
-        builder::Config {
-            http: self.0.http.clone(),
-            endpoint: self.0.endpoint.clone(),
-            model_id: self.0.model_id.clone(),
-            auth: self.0.auth.clone(),
-            headers: self.0.headers.clone(),
-            capabilities: self.0.capabilities,
-            extras: self.0.extras.clone(),
-        }
-    }
-}
+pub use model::LiteLlmModel;
