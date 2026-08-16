@@ -10,63 +10,42 @@
 //! (LiteLLM fronts backends OpenAI does not) — in which case move the case to
 //! a documented-divergence list here — or it is a drift bug.
 //!
-//! ## Documented divergence: explicit `content: null` vs. an omitted key
+//! ## History: the `content: null` wire divergence (resolved)
 //!
-//! When the translated conversation puts `content: null` on an
-//! assistant-role message (an assistant turn with tool calls but no text —
-//! `to_chat_messages`'s `flush_pending`/`assistant_message` helpers, which
-//! are byte-identical between the two crates, both do this deliberately),
-//! the OpenAI provider's wire output never actually contains a literal
-//! `null`: `openai/src/backend/chat.rs` round-trips the translated
+//! This test originally found a real, if cosmetic, wire divergence: an
+//! assistant turn synthesized purely from pending tool calls (no preceding
+//! text) sets `content: Value::Null` in `to_chat_messages`'s
+//! `flush_pending`/`assistant_message` helpers — identically in both crates,
+//! so this was never duplication drift. But the OpenAI provider's *wire*
+//! output never actually showed that literal `null`:
+//! `providers-openai/src/backend/chat.rs` round-trips the translated
 //! `serde_json::Value` through `async-openai`'s typed
 //! `ChatCompletionRequestAssistantMessage`, whose `content` field is
 //! `Option<_>` with `#[serde(skip_serializing_if = "Option::is_none")]` —
 //! deserializing `null` yields `None`, which is then omitted on
-//! serialization. The LiteLLM provider does not depend on `async-openai` by
+//! serialization. `providers-litellm` has no `async-openai` dependency by
 //! design (SMA-451 design doc D2: "own reqwest + eventsource-stream client")
-//! and serializes the translated `Value` directly, so its literal
-//! `content: null` survives to the wire unchanged.
+//! and, until this was fixed, serialized the translated `Value` directly, so
+//! its literal `content: null` survived to the wire unchanged.
 //!
-//! This is **not** duplication drift — the shared translation helpers agree
-//! byte-for-byte — and it is semantically inert: the OpenAI Chat Completions
-//! API documents `content` as nullable for the assistant role, so `null` and
-//! an absent key mean the same thing to a conformant backend. `normalize`
-//! below drops a literal JSON `null` `content` key from both sides
-//! (symmetric, and a no-op for OpenAI's output, which never contains one) so
-//! this one documented shape doesn't spuriously fail the test while any
-//! other difference — including a *non-null* `content` mismatch, or any
-//! divergence in `tool_calls`, roles, or ordering — still does.
+//! The project owner decided to close the gap in the LiteLLM provider rather
+//! than carry a permanent normalization step in this test: the shape had
+//! never been exercised end-to-end against a real backend, and it was the
+//! only reason this drift detector needed anything beyond a plain
+//! `assert_eq!`. `providers-litellm::translate::build_request` now strips a
+//! literal `content: null` from assistant messages as a post-processing step
+//! (`translate/mod.rs::strip_null_assistant_content`) — the shared
+//! `to_chat_messages` translator itself is untouched and stays
+//! byte-identical to the OpenAI crate's copy, which is what this test and
+//! the SMA-451 design's D6 duplication decision both rest on. With the wire
+//! divergence gone, the comparison below is a plain `assert_eq!` on the raw
+//! `messages` arrays — there is nothing left to mask.
 #![cfg(all(feature = "openai", feature = "litellm"))]
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, Item, MediaSource, Model, ModelRequest,
 };
-
-/// Drop a literal JSON `null` `content` key from every **assistant-role**
-/// message object, so the documented `content: null` vs. omitted-key
-/// divergence (see module docs) doesn't fail the comparison. Every other
-/// field, including a present-but-different `content` value, is left
-/// untouched.
-///
-/// Scoped to `role == "assistant"` — the only role either translator emits
-/// a literal `content: null` for — rather than to "any message with a null
-/// content", so the masking set stays exactly as wide as the documented
-/// justification above it, not wider.
-fn normalize(messages: &serde_json::Value) -> serde_json::Value {
-    let mut messages = messages.clone();
-    if let Some(arr) = messages.as_array_mut() {
-        for msg in arr {
-            if let Some(obj) = msg.as_object_mut() {
-                let is_assistant = obj.get("role").and_then(|r| r.as_str()) == Some("assistant");
-                if is_assistant && obj.get("content").is_some_and(|c| c.is_null()) {
-                    obj.remove("content");
-                }
-            }
-        }
-    }
-    messages
-}
 
 fn fixtures() -> Vec<(&'static str, Vec<Item>)> {
     vec![
@@ -132,9 +111,9 @@ fn fixtures() -> Vec<(&'static str, Vec<Item>)> {
         ),
         // Positive control: exercises `assistant_message`'s string-content
         // branch alongside `tool_calls`, so the comparison is demonstrably
-        // still sensitive to a real (non-null) `content` value — the other
-        // two assistant-message fixtures both produce null content, which
-        // `normalize` removes, so neither on its own proves that.
+        // still sensitive to a real `content` value — the other two
+        // assistant-message fixtures both produce a tool-calls-only turn
+        // (no text), so neither on its own proves that.
         (
             "assistant with text and nested tool_use",
             vec![Item::AssistantMessage {
@@ -223,34 +202,33 @@ async fn openai_and_litellm_translate_messages_identically() {
         let ll_body: serde_json::Value =
             serde_json::from_slice(&ll_server.received_requests().await.unwrap()[0].body).unwrap();
 
-        // Self-check the module docs' load-bearing claim: the OpenAI
-        // provider's wire output never contains a literal null `content`
-        // (the `async-openai` typed round-trip drops it). If that ever
-        // stops being true — e.g. `providers-openai` drops the round-trip —
-        // `normalize` would start silently masking a real divergence rather
-        // than the documented cosmetic one. Fail loudly here instead of
-        // letting that drift unnoticed.
+        let oa_messages = &oa_body["messages"];
+        let ll_messages = &ll_body["messages"];
+
+        // Genuine invariant, not a precondition for normalizing anymore:
+        // `providers-litellm::translate::build_request` now strips a
+        // literal `content: null` from assistant messages
+        // (`strip_null_assistant_content`) to match the OpenAI provider's
+        // wire shape (see module docs). Both sides should therefore never
+        // carry a literal null `content` at all; assert that on the OpenAI
+        // side to catch a regression in the `async-openai` round-trip
+        // assumption this test's history documents.
         assert!(
-            oa_body["messages"]
+            oa_messages
                 .as_array()
                 .into_iter()
                 .flatten()
                 .all(|m| !m.get("content").is_some_and(|c| c.is_null())),
             "fixture `{label}`: openai body contained a literal null `content` \
              — the async-openai round-trip assumption in this file's module \
-             docs no longer holds; re-derive `normalize`'s masking set: {}",
-            oa_body["messages"]
+             docs no longer holds: {oa_messages}"
         );
 
-        let oa_messages = normalize(&oa_body["messages"]);
-        let ll_messages = normalize(&ll_body["messages"]);
-
         // Guard against a vacuous pass: `Value` indexing returns `Null` for
-        // a missing key, and `normalize` returns its input unchanged when
-        // it is not an array, so if `messages` ever disappeared from both
-        // bodies (e.g. a body-shape change on both sides) this would
-        // silently compare `Null == Null` and report green rather than
-        // failing on a hollowed-out drift detector.
+        // a missing key, so if `messages` ever disappeared from both bodies
+        // (e.g. a body-shape change on both sides) this would silently
+        // compare `Null == Null` and report green rather than failing on a
+        // hollowed-out drift detector.
         assert!(
             oa_messages.as_array().is_some_and(|a| !a.is_empty()),
             "openai body had no messages array for fixture `{label}`: {oa_body}"
@@ -262,8 +240,7 @@ async fn openai_and_litellm_translate_messages_identically() {
 
         assert_eq!(
             oa_messages, ll_messages,
-            "messages diverged for fixture `{label}`\n  openai (raw):    {}\n  litellm (raw):   {}\n  openai (norm):   {oa_messages}\n  litellm (norm):  {ll_messages}",
-            oa_body["messages"], ll_body["messages"]
+            "messages diverged for fixture `{label}`\n  openai:  {oa_messages}\n  litellm: {ll_messages}"
         );
         compared += 1;
     }
