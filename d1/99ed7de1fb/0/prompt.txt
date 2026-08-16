@@ -1,0 +1,27 @@
+<task-notification>
+<task-id>bhxbe9biy</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/52c8ec20-9a55-4f0b-9c00-5787ad50044f/tasks/bhxbe9biy.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CodeRabbit and CI to settle" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bytizaspq</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/52c8ec20-9a55-4f0b-9c00-5787ad50044f/tasks/bytizaspq.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for all CI checks to settle" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bkl5gyjvx</task-id>
+<tool-use-id>toolu_01UD8992sZsG5TG4tovf3Swg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/52c8ec20-9a55-4f0b-9c00-5787ad50044f/tasks/bkl5gyjvx.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for release-plz PR and its checks" completed (exit code 0)</summary>
+</task-notification>
