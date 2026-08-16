@@ -81,25 +81,12 @@ impl Model for LiteLlmModel {
         let body = crate::translate::build_request(&cfg, &request);
 
         let s = stream! {
-            let mut req = cfg.http
+            let headers = build_headers(&cfg);
+            let send_fut = cfg.http
                 .post(&cfg.endpoint)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .header(reqwest::header::ACCEPT, "text/event-stream");
-
-            if let Some(key) = &cfg.auth {
-                req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}"));
-            }
-            if let Some(n) = cfg.extras.num_retries {
-                // Also sent in the body. Upstream documents the header as
-                // outranking the body, so the two cannot disagree.
-                req = req.header("x-litellm-num-retries", n.to_string());
-            }
-            // Caller headers last, so `.header()` is a genuine escape hatch.
-            for (name, value) in &cfg.headers {
-                req = req.header(name.as_str(), value.as_str());
-            }
-
-            let send_fut = req.json(&body).send();
+                .headers(headers)
+                .json(&body)
+                .send();
 
             let response = tokio::select! {
                 biased;
@@ -168,17 +155,6 @@ impl Model for LiteLlmModel {
                             for ev in translator.finish() { yield Ok(ev); }
                             return;
                         }
-                        // Defensive: a backend failing mid-generation can emit
-                        // an error frame. Unverified — every reproducible
-                        // failure returns non-2xx JSON before the stream opens.
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&event.data) {
-                            if v.get("error").is_some() {
-                                yield Err(error_from_body(
-                                    500, event.data.as_bytes(), None, &call_id,
-                                ));
-                                return;
-                            }
-                        }
                         let chunk: StreamChunk = match serde_json::from_str(&event.data) {
                             Ok(c) => c,
                             Err(parse_err) => {
@@ -191,6 +167,21 @@ impl Model for LiteLlmModel {
                                 continue;
                             }
                         };
+                        // Defensive: a backend failing mid-generation can emit
+                        // an error frame. Unverified — every reproducible
+                        // failure returns non-2xx JSON before the stream
+                        // opens. A JSON-null `error` — a shape several
+                        // OpenAI-compatible backends emit on an otherwise
+                        // healthy chunk — is NOT an error: serde already maps
+                        // `null` to `None` for `Option<T>`, and the explicit
+                        // `is_null()` guard here is defense in depth against
+                        // that invariant ever drifting.
+                        if chunk.error.as_ref().is_some_and(|e| !e.is_null()) {
+                            yield Err(error_from_body(
+                                500, event.data.as_bytes(), None, &call_id,
+                            ));
+                            return;
+                        }
                         for ev in translator.consume(chunk) {
                             yield Ok(ev);
                         }
@@ -213,6 +204,78 @@ impl Model for LiteLlmModel {
     fn model(&self) -> &str {
         &self.0.model_id
     }
+}
+
+/// Build the request header set: provider-computed headers first, caller
+/// headers (`cfg.headers`) inserted last so they can *override* — not
+/// duplicate — a same-named provider header.
+///
+/// Assembled as a [`reqwest::header::HeaderMap`] and applied to the request
+/// via `.headers()`, which has replace semantics
+/// (`http::HeaderMap::Entry::Occupied::insert` collapses to the newly
+/// inserted single value). Chaining `.header()` calls on the
+/// `RequestBuilder` instead would use append semantics
+/// (`RequestBuilder::header_sensitive` always calls `HeaderMap::append`), so
+/// a caller `.header("authorization", …)` would add a *second*
+/// `Authorization` header rather than replacing the provider's. LiteLLM (a
+/// Starlette app) reads only the first occurrence of a header, so that
+/// second header would be silently ignored — defeating the escape hatch.
+fn build_headers(cfg: &Config) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("text/event-stream"),
+    );
+
+    if let Some(key) = &cfg.auth {
+        match reqwest::header::HeaderValue::try_from(format!("Bearer {key}")) {
+            Ok(v) => {
+                headers.insert(reqwest::header::AUTHORIZATION, v);
+            }
+            Err(e) => tracing::warn!(
+                target: "paigasus::litellm::http",
+                %e,
+                "configured api key is not a valid header value; sending unauthenticated"
+            ),
+        }
+    }
+    if let Some(n) = cfg.extras.num_retries {
+        // Also sent in the body. Upstream documents the header as
+        // outranking the body, so the two cannot disagree. A `u8`'s
+        // `Display` is always ASCII digits, so this cannot fail.
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-litellm-num-retries"),
+            reqwest::header::HeaderValue::try_from(n.to_string())
+                .expect("u8 Display is always a valid header value"),
+        );
+    }
+    // Caller headers last: `.insert()` replaces a provider-set header of the
+    // same name instead of duplicating it. `build()` already validated
+    // every caller header name/value (builder.rs), so this conversion
+    // should never fail — but don't unwrap blindly; skip and warn rather
+    // than panic if it somehow does.
+    for (name, value) in &cfg.headers {
+        match (
+            reqwest::header::HeaderName::try_from(name.as_str()),
+            reqwest::header::HeaderValue::try_from(value.as_str()),
+        ) {
+            (Ok(name), Ok(value)) => {
+                headers.insert(name, value);
+            }
+            _ => tracing::warn!(
+                target: "paigasus::litellm::http",
+                header = %name,
+                "header is not a valid HTTP header at request time; skipping \
+                 (should have been rejected at build())"
+            ),
+        }
+    }
+
+    headers
 }
 
 /// Extract LiteLLM's error envelope and classify it.
@@ -275,5 +338,63 @@ mod tests {
         assert!(m.capabilities().streaming);
         assert!(m.capabilities().tools);
         assert!(!m.capabilities().vision);
+    }
+
+    /// A caller `.header("authorization", …)` must replace the provider's
+    /// resolved auth header, not sit alongside it as a second
+    /// `Authorization` header.
+    ///
+    /// Regression for the pre-fix behavior: chaining `.header()` calls on
+    /// `RequestBuilder` appends (`HeaderMap::append`), so the override
+    /// produced two `Authorization` headers on the wire. A Starlette-based
+    /// proxy like LiteLLM reads only the first occurrence — the provider's
+    /// own — so the caller's override was silently ignored. `build_headers`
+    /// now assembles a `HeaderMap` with caller headers inserted last
+    /// (`HeaderMap::insert` replaces), which this test asserts directly on
+    /// the constructed map rather than on wire bytes a mock server would
+    /// receive, since header multiplicity collapses before serialization on
+    /// the wire and isn't reliably observable server-side.
+    #[test]
+    fn caller_authorization_header_overrides_not_duplicates() {
+        let m = LiteLlmModel::chat("prod-fast")
+            .base_url("http://p:4000")
+            .api_key("sk-provider")
+            .header("authorization", "Bearer caller-override")
+            .build()
+            .unwrap();
+        let headers = build_headers(&m.config_for_test());
+
+        let values: Vec<_> = headers
+            .get_all(reqwest::header::AUTHORIZATION)
+            .iter()
+            .collect();
+        assert_eq!(
+            values.len(),
+            1,
+            "expected exactly one Authorization header, got {values:?}"
+        );
+        assert_eq!(values[0], "Bearer caller-override");
+    }
+
+    /// Same override behavior for a non-auth provider-computed header.
+    #[test]
+    fn caller_content_type_header_overrides_not_duplicates() {
+        let m = LiteLlmModel::chat("prod-fast")
+            .base_url("http://p:4000")
+            .header("content-type", "application/json; charset=utf-8")
+            .build()
+            .unwrap();
+        let headers = build_headers(&m.config_for_test());
+
+        let values: Vec<_> = headers
+            .get_all(reqwest::header::CONTENT_TYPE)
+            .iter()
+            .collect();
+        assert_eq!(
+            values.len(),
+            1,
+            "expected exactly one Content-Type header, got {values:?}"
+        );
+        assert_eq!(values[0], "application/json; charset=utf-8");
     }
 }

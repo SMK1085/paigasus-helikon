@@ -20,6 +20,14 @@ pub(crate) struct StreamChunk {
     /// Token-usage snapshot, present only on the trailing usage chunk when
     /// `stream_options.include_usage` is set.
     pub(crate) usage: Option<Usage>,
+    /// Defensive: a backend failing mid-generation can emit an error frame
+    /// instead of (or alongside) a normal delta. Several OpenAI-compatible
+    /// backends emit `"error": null` on an otherwise healthy chunk — serde's
+    /// standard `null` → `None` mapping for `Option<T>` already treats that
+    /// the same as an absent key, so only a non-null value here is a real
+    /// error. Unverified against LiteLLM itself: every reproducible failure
+    /// returns non-2xx JSON before the stream opens.
+    pub(crate) error: Option<serde_json::Value>,
 }
 
 /// One entry of [`StreamChunk::choices`].
@@ -100,4 +108,39 @@ pub(crate) struct PromptTokensDetails {
 pub(crate) struct CompletionTokensDetails {
     /// Tokens spent on reasoning/thinking, separate from visible output.
     pub(crate) reasoning_tokens: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the invariant `model.rs`'s mid-stream error check relies on:
+    /// a JSON-null `error` deserializes to `None`, indistinguishable from an
+    /// absent key — not to `Some(Value::Null)`.
+    #[test]
+    fn null_error_field_deserializes_to_none() {
+        let c: StreamChunk = serde_json::from_str(
+            r#"{"choices":[{"index":0,"delta":{"content":"hi"}}],"error":null}"#,
+        )
+        .expect("must deserialize");
+        assert!(c.error.is_none());
+        assert_eq!(c.choices.len(), 1);
+    }
+
+    #[test]
+    fn absent_error_field_deserializes_to_none() {
+        let c: StreamChunk =
+            serde_json::from_str(r#"{"choices":[{"index":0,"delta":{"content":"hi"}}]}"#)
+                .expect("must deserialize");
+        assert!(c.error.is_none());
+    }
+
+    #[test]
+    fn populated_error_field_deserializes_to_some() {
+        let c: StreamChunk = serde_json::from_str(
+            r#"{"choices":[],"error":{"message":"boom","type":"server_error","code":"500"}}"#,
+        )
+        .expect("must deserialize");
+        assert!(c.error.as_ref().is_some_and(|e| !e.is_null()));
+    }
 }
