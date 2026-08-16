@@ -1,18 +1,22 @@
 # paigasus-helikon-providers-litellm
 
-LiteLLM proxy provider for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK.
+LiteLLM proxy provider for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `LiteLlmModel` implements [`paigasus-helikon-core`](https://crates.io/crates/paigasus-helikon-core)'s `Model` trait against a [LiteLLM](https://docs.litellm.ai) proxy's OpenAI-compatible Chat Completions endpoint, adding LiteLLM's own router and observability fields.
 
-Talks to a [LiteLLM](https://docs.litellm.ai) proxy over its OpenAI-compatible
-Chat Completions endpoint, adding LiteLLM's own router and observability
-fields.
+## Install
 
-```sh
+```bash
 cargo add paigasus-helikon-providers-litellm
 ```
 
-## Quick start
+Most users enable the `litellm` feature on the [`paigasus-helikon`](https://crates.io/crates/paigasus-helikon) facade instead, which re-exports this crate as `paigasus_helikon::litellm`.
 
-```rust,ignore
+```bash
+cargo add paigasus-helikon --features litellm
+```
+
+## Example
+
+```ignore
 use paigasus_helikon_providers_litellm::LiteLlmModel;
 
 let model = LiteLlmModel::chat("claude-sonnet-4")   // your proxy's alias
@@ -24,6 +28,8 @@ let model = LiteLlmModel::chat("claude-sonnet-4")   // your proxy's alias
     .metadata("trace_id", trace_id)
     .build()?;
 ```
+
+Pass `model` to `LlmAgent::builder::<()>().model(model)`. Everything downstream (the `#[tool]` functions, the builder, the run loop) is provider-agnostic.
 
 ## When to use this instead of the OpenAI provider
 
@@ -49,7 +55,7 @@ A LiteLLM alias (`prod-fast`, `team-a/gpt`) carries no information the SDK can
 act on, so the model defaults to a conservative `streaming + tools` capability
 set. Declare what the backend actually supports:
 
-```rust,ignore
+```ignore
 use paigasus_helikon_core::ModelCapabilities;
 
 let model = LiteLlmModel::chat("prod-fast")
@@ -74,11 +80,13 @@ keys are treated as absent rather than sent as a malformed `Bearer `.
 
 ## Retries multiply
 
-`.num_retries(n)` is a **server-side** retry count. Wrapping the model in a
-client-side retry decorator multiplies with it, and each client attempt re-runs
-the entire fallback chain. A 3-attempt client policy around `.num_retries(2)`
-with two fallbacks is up to 18 upstream calls per turn. Treat server-side and
-client-side retry as mutually exclusive unless you have measured otherwise.
+`.num_retries(n)` is a **server-side** retry count, and LiteLLM composes it
+with `.fallbacks()` under router semantics this crate does not implement or
+model. Wrapping the model in a client-side retry decorator multiplies with
+both: each client attempt re-runs the entire server-side retry-and-fallback
+chain, so the total upstream call count grows multiplicatively with client
+attempts. Treat server-side and client-side retry as mutually exclusive unless
+you have measured the composition against your own proxy configuration.
 
 ## Escape hatches
 
@@ -86,7 +94,7 @@ Not every LiteLLM parameter is modelled. `.extra_body()` merges arbitrary JSON
 into the request root and `.header()` adds arbitrary request headers, so you
 are never blocked waiting on a release:
 
-```rust,ignore
+```ignore
 let model = LiteLlmModel::chat("prod-fast")
     .base_url("http://litellm:4000")
     .extra_body(serde_json::json!({"guardrails": ["pii-check"]}))
@@ -96,8 +104,10 @@ let model = LiteLlmModel::chat("prod-fast")
 
 Keys the provider computes per-request (`model`, `messages`, `stream`,
 `tools`, `temperature`, …) are rejected at build time rather than silently
-dropped. Do not put secrets in `extra_body` — it is serialised into request
-snapshots in tests.
+dropped. Do not put secrets in `extra_body`: its contents flow through the
+same request path as the rest of the payload, so they can be captured by a
+tracing subscriber or HTTP logging middleware, and can land in your own
+recorded test fixtures or request logs.
 
 ## Limitations
 
@@ -107,6 +117,12 @@ snapshots in tests.
 - A backend that emits per-chunk *delta* usage (rather than cumulative
   snapshots) will under-count tokens.
 
+## Links
+
+- [API reference (docs.rs)](https://docs.rs/paigasus-helikon-providers-litellm)
+- [Guide & concepts](https://smk1085.github.io/paigasus-helikon/) — see [model providers](https://smk1085.github.io/paigasus-helikon/concepts/model-providers.html)
+- [Source & issues](https://github.com/SMK1085/paigasus-helikon)
+
 ## License
 
-Apache-2.0 OR MIT.
+Licensed under either of [Apache-2.0](https://github.com/SMK1085/paigasus-helikon/blob/main/LICENSE-APACHE) or [MIT](https://github.com/SMK1085/paigasus-helikon/blob/main/LICENSE-MIT), at your option.
