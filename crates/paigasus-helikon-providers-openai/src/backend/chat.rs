@@ -605,10 +605,14 @@ mod tests {
     fn repeated_finish_reasons_yield_one_finish_last_wins() {
         let mut t = ChatTranslator::new();
 
-        t.consume(stream_chunk(
+        let first = t.consume(stream_chunk(
             r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
                 "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
         ));
+        assert!(
+            !first.iter().any(|e| matches!(e, ModelEvent::Finish { .. })),
+            "consume must not emit Finish inline, got {first:?}"
+        );
         let mid = t.consume(stream_chunk(
             r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
                 "choices":[{"index":1,"delta":{"content":"x"}}]}"#,
@@ -618,10 +622,14 @@ mod tests {
                 .any(|e| matches!(e, ModelEvent::TokenDelta { .. })),
             "expected the interleaved TokenDelta, got {mid:?}"
         );
-        t.consume(stream_chunk(
+        let last = t.consume(stream_chunk(
             r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
                 "choices":[{"index":1,"delta":{},"finish_reason":"length"}]}"#,
         ));
+        assert!(
+            !last.iter().any(|e| matches!(e, ModelEvent::Finish { .. })),
+            "consume must not emit Finish inline, got {last:?}"
+        );
 
         let fin = t.finish();
         assert_eq!(
