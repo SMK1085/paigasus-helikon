@@ -1,0 +1,87 @@
+<task-notification>
+<task-id>a321024c80d68ba3a</task-id>
+<tool-use-id>toolu_01XP1Qvbnu9Jaei9y9NptBWc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a321024c80d68ba3a.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 11 facade wiring" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+**STATUS: DONE**
+
+**Commit SHAs (round 3, project-owner decision to strip the null in the provider):**
+- `b2e075418cefa9ff4795bf9df5bd086f144f2ef9` — `fix(providers): SMA-451 strip null content from litellm assistant tool calls`
+- `9b2975f9a8bcb0423a167db672935ed81e84cc9f` — `fix(facade): SMA-451 drop normalize() now that litellm matches openai's wire shape`
+
+**Test results:** provider crate full suite 118+1+8+1+5 passed, 0 failed; parity test 6/6 fixtures pass via a plain `assert_eq!` (no `normalize()`); clippy exit 0 for both `paigasus-helikon-providers-litellm --all-targets` and `paigasus-helikon --features openai,litellm --all-targets` (and `--all-features`); doc gates clean.
+
+**Snapshot changed:** exactly one — `crates/paigasus-helikon-providers-litellm/src/translate/snapshots/paigasus_helikon_providers_litellm__translate__tests__snap_tool_call_and_result.snap`. Read in full: `"content": null` line is gone from the assistant tool-call message, `tool_calls` (id/name/arguments) is byte-for-byte unchanged, nothing else in the file moved.
+
+**What was done:**
+1. TDD: added `assistant_tool_call_turn_emits_no_content_key` to `translate::tests`, confirmed it failed first (`got: {"content":null,...}`), then implemented `strip_null_assistant_content` in `translate/mod.rs` as a post-processing step called from `build_request` — `translate/request.rs` (the shared, byte-identical-to-openai translator) was not touched.
+2. Regenerated snapshots with `INSTA_UPDATE=always cargo test -p paigasus-helikon-providers-litellm --lib`; grepped for `"content": null` before and after to confirm exactly one snapshot was affected; read it fully before accepting.
+3. Deleted `normalize()` from the parity test, compared `messages` byte-identically, rewrote the module docs into a "History" section, and kept the vacuous-pass guard, the positive-control fixture, and the null-content invariant (now a genuine invariant, not a normalization precondition) from round 2.
+
+**Concerns:** None. Full command transcript and reasoning is in `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-451-providers-litellm/.superpowers/sdd/2026-08-16-sma-451-litellm-provider/task-11-report.md`.</result>
+<usage><subagent_tokens>225222</subagent_tokens><tool_uses>48</tool_uses><duration_ms>323489</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9656afda194a98f4</task-id>
+<tool-use-id>toolu_01SsdAK6k9UzY1ckgscdQ79R</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a9656afda194a98f4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 12 documentation" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All findings addressed. Summary for the coordinator:
+
+**STATUS:** DONE
+
+**Commit SHA:** `a38518dd` — `docs(providers): SMA-451 fix litellm README review findings` (on top of `88722fa0`)
+
+**mdbook result:** Re-ran `cd docs/book &amp;&amp; mdbook build` — exit code 0, clean (html + linkcheck backends both ran, no warnings/errors). Only the crate README changed, so this re-confirms nothing else regressed.
+
+**Scope:** Only `crates/paigasus-helikon-providers-litellm/README.md` was touched — nothing outside it.
+
+**Fixes applied:**
+- **Important 1 (structural parity):** Read `openai`/`gemini`/`bedrock` READMEs first, then added the missing pieces in their conventional spots — install-via-facade sentence + a second `cargo add paigasus-helikon --features litellm` snippet, a `## Links` section (docs.rs / guide+concepts / source &amp; issues), and the full dual-license sentence. Kept the intro paragraph in the same "`X` implements `paigasus-helikon-core`'s `Model` trait against ..." phrasing pattern as siblings.
+- **Important 2 (extra_body rationale) — quoted replacement:** "Do not put secrets in `extra_body`: its contents flow through the same request path as the rest of the payload, so they can be captured by a tracing subscriber or HTTP logging middleware, and can land in your own recorded test fixtures or request logs."
+- **Important 3 (retries figure) — quoted replacement:** "`.num_retries(n)` is a **server-side** retry count, and LiteLLM composes it with `.fallbacks()` under router semantics this crate does not implement or model. Wrapping the model in a client-side retry decorator multiplies with both: each client attempt re-runs the entire server-side retry-and-fallback chain, so the total upstream call count grows multiplicatively with client attempts. Treat server-side and client-side retry as mutually exclusive unless you have measured the composition against your own proxy configuration." No specific number substituted.
+- **Minors:** ` ```bash ` for install (was ` ```sh `), bare ` ```ignore ` for all three example fences (was ` ```rust,ignore `), `## Example` heading (was `## Quick start`).
+
+**Concerns:** None.</result>
+<usage><subagent_tokens>148907</subagent_tokens><tool_uses>12</tool_uses><duration_ms>96273</duration_ms></usage>
+</task-notification>
+
+---
+
+unlocked
+
+---
+
+<task-notification>
+<task-id>a2480ea1112114066</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a2480ea1112114066.output</output-file>
+<status>completed</status>
+<summary>Agent "Final review fix wave" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean, all 8 commits landed successfully with valid signatures (no signing errors).
+
+**STATUS**: All 8 commits from the planned fix-wave sequence landed successfully. Working tree is clean.
+
+**Commit SHAs in order** (oldest → newest, all descendants of `a38518dd`):
+1. `d66ffb78` — fix(providers): SMA-451 gate the sse response on content-type and scope error-prose matching
+2. `3ddae98e` — fix(providers): SMA-451 preserve an explicit v1 base segment for custom chat paths
+3. `c53675d2` — fix(providers): SMA-451 close credential-redaction and builder-doc gaps
+4. `d58dc91a` — test(providers): SMA-451 ignore and gate the live litellm suite
+5. `60aca439` — test(providers): SMA-451 avoid an env race in translate request tests
+6. `5722229d` — docs(docs): SMA-451 bump stale facade version pins in model-providers.md
+7. `9e8a02e1` — build(providers): SMA-451 drop the unused tokio-util dependency
+8. `eb57d545` — docs(providers): SMA-451 clarify base_url expects the proxy base, not a full endpoint
+
+**Working tree**: confirmed clean via `git status` ("nothing to commit, working tree clean"). No signing failures on any of the 8 commits.</result>
+<usage><subagent_tokens>242457</subagent_tokens><tool_uses>17</tool_uses><duration_ms>126577</duration_ms></usage>
+</task-notification>

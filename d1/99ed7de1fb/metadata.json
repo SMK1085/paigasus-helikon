@@ -3,7 +3,7 @@
   "checkpoint_id": "d199ed7de1fb",
   "strategy": "manual-commit",
   "branch": "feature/sma-451-provider-crate-paigasus-helikon-providers-litellm",
-  "checkpoints_count": 7,
+  "checkpoints_count": 8,
   "files_touched": [
     "docs/superpowers/plans/2026-08-16-sma-522-openai-finish-usage-ordering.md",
     "docs/superpowers/specs/2026-08-16-sma-522-openai-finish-usage-ordering-design.md"
@@ -15,13 +15,20 @@
       "compact_transcript": "/d1/99ed7de1fb/0/transcript.jsonl",
       "content_hash": "/d1/99ed7de1fb/0/content_hash.txt",
       "prompt": "/d1/99ed7de1fb/0/prompt.txt"
+    },
+    {
+      "metadata": "/d1/99ed7de1fb/1/metadata.json",
+      "transcript": "/d1/99ed7de1fb/1/full.jsonl",
+      "compact_transcript": "/d1/99ed7de1fb/1/transcript.jsonl",
+      "content_hash": "/d1/99ed7de1fb/1/content_hash.txt",
+      "prompt": "/d1/99ed7de1fb/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 104,
-    "cache_creation_tokens": 450834,
-    "cache_read_tokens": 20615170,
-    "output_tokens": 33316,
-    "api_call_count": 54
+    "input_tokens": 976,
+    "cache_creation_tokens": 2781342,
+    "cache_read_tokens": 134617818,
+    "output_tokens": 430606,
+    "api_call_count": 341
   }
 }
