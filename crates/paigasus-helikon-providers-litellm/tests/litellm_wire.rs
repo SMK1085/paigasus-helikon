@@ -192,6 +192,96 @@ async fn non_sse_error_response_yields_a_single_classified_error() {
     assert!(s.next().await.is_none(), "error must terminate the stream");
 }
 
+/// A 200 with `content-type: application/json` — the realistic shape for a
+/// gateway that silently doesn't stream, or a corporate proxy returning a
+/// JSON interstitial — must be rejected by the `is_sse` half of the response
+/// gate, not treated as an empty SSE stream.
+///
+/// Without `|| !is_sse` in `model.rs`'s response gate, `eventsource()` would
+/// find no `data:` frames in this body, hit EOF immediately, and
+/// `ChatTranslator::finish()` would yield an empty stream — no error, no
+/// `Finish` event, silent data loss that every other test in this file
+/// cannot detect (they all exercise the gate via a non-2xx status, the one
+/// case where gated and un-gated behaviour coincide).
+#[tokio::test]
+async fn success_status_with_non_sse_content_type_yields_a_single_classified_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(
+                    r#"{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}"#,
+                    "application/json",
+                ),
+        )
+        .mount(&server)
+        .await;
+
+    let model = LiteLlmModel::chat("prod-fast")
+        .base_url(server.uri())
+        .build()
+        .unwrap();
+    let mut s = model
+        .invoke(user("hi"), CancellationToken::new())
+        .await
+        .unwrap();
+
+    let first = s.next().await.expect("one event");
+    match first {
+        Err(paigasus_helikon_core::ModelError::Other(e)) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("application/json"),
+                "the error must report the content-type actually received so an \
+                 operator can diagnose a misconfigured gateway: {msg}"
+            );
+        }
+        other => panic!("expected a classified Other error, got {other:?}"),
+    }
+    assert!(s.next().await.is_none(), "error must terminate the stream");
+}
+
+/// A non-`{"error":...}` failure body containing incidental prose like
+/// "context window" (e.g. an echoed prompt on an unrelated 4xx) must not be
+/// misclassified as `ContextLengthExceeded` — the prose match only applies
+/// to a genuinely parsed `error.message` field, never to the whole-body
+/// fallback used when the response carries no `error` key at all.
+#[tokio::test]
+async fn unrelated_error_body_mentioning_context_window_is_not_misclassified() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .insert_header("content-type", "application/json")
+                .set_body_raw(
+                    r#"{"prompt_echo":"please discuss expanding the context window of the office"}"#,
+                    "application/json",
+                ),
+        )
+        .mount(&server)
+        .await;
+
+    let model = LiteLlmModel::chat("prod-fast")
+        .base_url(server.uri())
+        .build()
+        .unwrap();
+    let mut s = model
+        .invoke(user("hi"), CancellationToken::new())
+        .await
+        .unwrap();
+
+    let first = s.next().await.expect("one event");
+    assert!(
+        !matches!(
+            first,
+            Err(paigasus_helikon_core::ModelError::ContextLengthExceeded)
+        ),
+        "an unrelated error body must not be misclassified as \
+         ContextLengthExceeded: {first:?}"
+    );
+}
+
 #[tokio::test]
 async fn rate_limit_carries_retry_after() {
     let server = MockServer::start().await;

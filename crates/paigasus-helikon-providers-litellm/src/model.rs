@@ -124,15 +124,19 @@ impl Model for LiteLlmModel {
 
             // A failing request returns non-2xx JSON, NOT an SSE stream —
             // check before entering the framing loop.
-            let is_sse = headers
+            let content_type = headers
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
-                .is_some_and(|ct| ct.starts_with("text/event-stream"));
+                .unwrap_or("")
+                .to_owned();
+            let is_sse = content_type.starts_with("text/event-stream");
 
             if !status.is_success() || !is_sse {
                 let retry_after_ms = parse_retry_after_ms(&headers);
                 let bytes = response.bytes().await.unwrap_or_default();
-                let err = error_from_body(status.as_u16(), &bytes, retry_after_ms, &call_id);
+                let err = error_from_body(
+                    status.as_u16(), &bytes, retry_after_ms, &call_id, &content_type,
+                );
                 yield Err(err);
                 return;
             }
@@ -183,7 +187,7 @@ impl Model for LiteLlmModel {
                         // that invariant ever drifting.
                         if chunk.error.as_ref().is_some_and(|e| !e.is_null()) {
                             yield Err(error_from_body(
-                                500, event.data.as_bytes(), None, &call_id,
+                                500, event.data.as_bytes(), None, &call_id, &content_type,
                             ));
                             return;
                         }
@@ -297,16 +301,30 @@ fn build_headers(cfg: &Config) -> Result<reqwest::header::HeaderMap, ModelError>
 }
 
 /// Extract LiteLLM's error envelope and classify it.
+///
+/// `content_type` is the response's actual `content-type` header. It is only
+/// folded into the rendered message on the whole-body fallback path (no
+/// `error` key found) — the single realistic case this matters for is a 200
+/// with `content-type: application/json` that never enters the SSE framing
+/// loop (a gateway that silently doesn't stream, or a corporate proxy
+/// returning an interstitial), where the content-type actually received is
+/// the one fact an operator needs to diagnose a misconfigured gateway.
 fn error_from_body(
     status: u16,
     bytes: &[u8],
     retry_after_ms: Option<u64>,
     call_id: &str,
+    content_type: &str,
 ) -> ModelError {
     let parsed: Option<serde_json::Value> = serde_json::from_slice(bytes).ok();
-    let (code, err_type, message) = parsed
-        .as_ref()
-        .and_then(|v| v.get("error"))
+    let error_obj = parsed.as_ref().and_then(|v| v.get("error"));
+    // Whether `message` below came from a genuine parsed `error.message`
+    // field, as opposed to the whole-body fallback. Threaded through to
+    // `classify` so its context-overflow prose match — inherently unanchored
+    // substring matching — is never run against an arbitrary response body
+    // (see the C1 doc comment on `classify`).
+    let is_parsed_error_message = error_obj.is_some();
+    let (code, err_type, message) = error_obj
         .map(|e| {
             let as_str = |k: &str| e.get(k).and_then(|x| x.as_str()).map(str::to_owned);
             (
@@ -315,7 +333,18 @@ fn error_from_body(
                 as_str("message").unwrap_or_default(),
             )
         })
-        .unwrap_or_else(|| (None, None, String::from_utf8_lossy(bytes).into_owned()));
+        .unwrap_or_else(|| {
+            let ct = if content_type.is_empty() {
+                "none"
+            } else {
+                content_type
+            };
+            (
+                None,
+                None,
+                format!("{} (content-type: {ct})", String::from_utf8_lossy(bytes)),
+            )
+        });
 
     let message = if call_id.is_empty() {
         message
@@ -328,6 +357,7 @@ fn error_from_body(
         code.as_deref(),
         err_type.as_deref(),
         &message,
+        is_parsed_error_message,
         retry_after_ms,
     )
 }

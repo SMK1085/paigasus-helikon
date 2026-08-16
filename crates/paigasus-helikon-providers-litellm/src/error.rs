@@ -21,9 +21,24 @@ pub(crate) fn normalise_type(raw: Option<&str>) -> Option<&str> {
 }
 
 /// Does this message indicate a context-window overflow?
-fn is_context_overflow(message: &str) -> bool {
+///
+/// The `ContextWindowExceededError` class-name check is a stable token (the
+/// literal LiteLLM/Python exception class name, always class-name-prefixed
+/// onto `message` per the module doc) and applies unconditionally. The
+/// remaining checks are unanchored prose substring matches — they must only
+/// run against a genuinely parsed `error.message` field
+/// (`is_parsed_error_message`), never against `error_from_body`'s
+/// whole-response-body fallback (used when the response carries no `error`
+/// key at all). Without that gate, an unrelated 4xx whose body happens to
+/// echo caller-supplied text containing e.g. "context window" (a prompt
+/// discussing window sizing, verbatim in an echoed-request error) would
+/// misclassify as the specific, non-retryable `ContextLengthExceeded`.
+fn is_context_overflow(message: &str, is_parsed_error_message: bool) -> bool {
     if message.contains("ContextWindowExceededError") {
         return true;
+    }
+    if !is_parsed_error_message {
+        return false;
     }
     let lc = message.to_ascii_lowercase();
     lc.contains("context_window_exceeded")
@@ -46,16 +61,22 @@ fn is_budget_exhaustion(err_type: Option<&str>, message: &str) -> bool {
 /// Rules are evaluated top-down; the context-overflow check is deliberately
 /// **first** and not gated on status, because its measured status is 400 and
 /// keying it off a status would collide with every other 400.
+///
+/// `is_parsed_error_message` is `true` when `message` came from a genuine
+/// parsed `error.message` field, and `false` when it came from
+/// `error_from_body`'s whole-response-body fallback (no `error` key at all).
+/// See [`is_context_overflow`] for why that distinction matters.
 pub(crate) fn classify(
     status: u16,
     code: Option<&str>,
     err_type: Option<&str>,
     message: &str,
+    is_parsed_error_message: bool,
     retry_after_ms: Option<u64>,
 ) -> ModelError {
     let err_type = normalise_type(err_type);
 
-    if is_context_overflow(message) {
+    if is_context_overflow(message, is_parsed_error_message) {
         return ModelError::ContextLengthExceeded;
     }
 
@@ -119,7 +140,7 @@ mod tests {
         let m = "litellm.ContextWindowExceededError: litellm.BadRequestError: \
                  this is a mock context window exceeded error";
         assert!(matches!(
-            classify(400, Some("400"), None, m, None),
+            classify(400, Some("400"), None, m, true, None),
             ModelError::ContextLengthExceeded
         ));
     }
@@ -128,7 +149,7 @@ mod tests {
     fn context_length_exceeded_prose_fallback_still_works() {
         let m = "This model's maximum context length is 8192 tokens";
         assert!(matches!(
-            classify(400, Some("400"), None, m, None),
+            classify(400, Some("400"), None, m, true, None),
             ModelError::ContextLengthExceeded
         ));
     }
@@ -146,7 +167,7 @@ mod tests {
         let m = "litellm.ContextWindowExceededError: litellm.BadRequestError: \
                  this is a mock context window exceeded error";
         assert!(matches!(
-            classify(500, Some("500"), None, m, None),
+            classify(500, Some("500"), None, m, true, None),
             ModelError::ContextLengthExceeded
         ));
     }
@@ -154,7 +175,14 @@ mod tests {
     #[test]
     fn rate_limit_maps_with_retry_after() {
         let m = "litellm.RateLimitError: this is a mock rate limit error";
-        match classify(429, Some("429"), Some("throttling_error"), m, Some(1500)) {
+        match classify(
+            429,
+            Some("429"),
+            Some("throttling_error"),
+            m,
+            true,
+            Some(1500),
+        ) {
             ModelError::RateLimited { retry_after_ms } => assert_eq!(retry_after_ms, Some(1500)),
             other => panic!("expected RateLimited, got {other:?}"),
         }
@@ -166,7 +194,14 @@ mod tests {
         // never clear.
         let m = "litellm.BudgetExceededError: Budget has been exceeded for key";
         assert!(matches!(
-            classify(429, Some("429"), Some("budget_exceeded"), m, Some(1000)),
+            classify(
+                429,
+                Some("429"),
+                Some("budget_exceeded"),
+                m,
+                true,
+                Some(1000)
+            ),
             ModelError::Refused { .. }
         ));
     }
@@ -179,7 +214,7 @@ mod tests {
         for status in [500, 502, 503, 504] {
             assert!(
                 matches!(
-                    classify(status, Some("500"), None, m, None),
+                    classify(status, Some("500"), None, m, true, None),
                     ModelError::Unavailable
                 ),
                 "status {status} must map to Unavailable"
@@ -190,11 +225,11 @@ mod tests {
     #[test]
     fn auth_failures_are_refused() {
         assert!(matches!(
-            classify(401, Some("401"), None, "invalid key", None),
+            classify(401, Some("401"), None, "invalid key", true, None),
             ModelError::Refused { .. }
         ));
         assert!(matches!(
-            classify(403, Some("403"), None, "forbidden", None),
+            classify(403, Some("403"), None, "forbidden", true, None),
             ModelError::Refused { .. }
         ));
     }
@@ -209,6 +244,7 @@ mod tests {
                 Some("400"),
                 Some("no_db_connection"),
                 "No connected db.",
+                true,
                 None
             ),
             ModelError::Refused { .. }
@@ -223,6 +259,7 @@ mod tests {
                 Some("400"),
                 Some("content_policy_violation"),
                 "blocked",
+                true,
                 None
             ),
             ModelError::Refused { .. }
@@ -232,10 +269,37 @@ mod tests {
     #[test]
     fn unknown_model_400_falls_through_to_other() {
         let m = "/chat/completions: Invalid model name passed in model=does-not-exist";
-        match classify(400, Some("400"), Some("None"), m, None) {
+        match classify(400, Some("400"), Some("None"), m, true, None) {
             ModelError::Other(e) => assert!(e.to_string().contains("does-not-exist")),
             other => panic!("expected Other, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn context_overflow_prose_match_only_applies_to_a_parsed_error_message() {
+        // An unrelated failure whose fallback body happens to echo
+        // caller-supplied text containing "context window" must NOT
+        // misclassify as ContextLengthExceeded — the prose arms only apply
+        // to a genuinely parsed `error.message` field, never to
+        // `error_from_body`'s whole-body fallback.
+        let m = "Your request was rejected: the prompt discusses expanding the \
+                 context window of the office (content-type: application/json)";
+        assert!(!matches!(
+            classify(400, None, None, m, false, None),
+            ModelError::ContextLengthExceeded
+        ));
+    }
+
+    #[test]
+    fn context_overflow_class_name_still_applies_even_to_the_fallback_body() {
+        // The class-name token is stable (a Python exception class name), so
+        // it stays active regardless of whether `message` is a parsed
+        // `error.message` or the whole-body fallback.
+        let m = "litellm.ContextWindowExceededError: some body echoed verbatim";
+        assert!(matches!(
+            classify(400, None, None, m, false, None),
+            ModelError::ContextLengthExceeded
+        ));
     }
 
     #[test]
