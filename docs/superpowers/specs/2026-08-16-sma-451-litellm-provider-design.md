@@ -114,7 +114,7 @@ crates/paigasus-helikon-providers-litellm/
       snapshots/            insta
   tests/
     litellm_wire.rs
-    litellm_streaming.rs
+    streaming.rs
     cancellation.rs
     live.rs
     fixtures/*.txt
@@ -745,7 +745,7 @@ SDK can act on.
 2. **`tests/litellm_wire.rs`** (wiremock) — every row of §6.1's URL table
    including the two rejection rows; `Accept`/`Content-Type`;
    `x-litellm-num-retries`; `.header()` passthrough; and the auth cases below.
-3. **`tests/litellm_streaming.rs`** — SSE fixtures → `ModelEvent` sequences:
+3. **`tests/streaming.rs`** — SSE fixtures → `ModelEvent` sequences:
    multi-chunk text; interleaved tool-call deltas across two indices;
    **`id`-arrives-late** and **fragmented `function.name`** (ported from the
    OpenAI crate's tests at `backend/chat.rs:402,447,484,516`);
