@@ -1,10 +1,23 @@
 //! Wire-format / transport tests for the LiteLLM provider.
 
+use std::sync::{Mutex, OnceLock};
+
 use futures_util::StreamExt;
 use paigasus_helikon_core::{CancellationToken, ContentPart, Item, Model, ModelRequest};
 use paigasus_helikon_providers_litellm::LiteLlmModel;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Serializes tests in this binary that mutate the LiteLLM auth env vars,
+/// matching the pattern in `src/builder.rs`'s test module.
+static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+fn env_lock() -> &'static Mutex<()> {
+    ENV_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Env vars that can supply an auth key, checked/cleared/restored by
+/// [`no_authorization_header_when_no_key_is_configured`].
+const AUTH_ENV_KEYS: [&str; 2] = ["LITELLM_API_KEY", "LITELLM_PROXY_API_KEY"];
 
 fn sse_ok() -> ResponseTemplate {
     ResponseTemplate::new(200)
@@ -93,16 +106,28 @@ async fn authorization_header_is_sent_when_a_key_is_configured() {
 /// sent auth would pass such a test.
 #[tokio::test]
 async fn no_authorization_header_when_no_key_is_configured() {
+    // Ensure ambient env vars cannot supply a key, guarded against other
+    // tests in this binary that might read/set them concurrently, and
+    // restore whatever was there afterward. A std::sync::Mutex guard must
+    // not be held across an .await, so the lock only brackets the env
+    // mutation and its restoration, not the async body in between.
+    let saved: Vec<(&str, Option<String>)> = {
+        let _g = env_lock().lock().unwrap();
+        let saved = AUTH_ENV_KEYS
+            .iter()
+            .map(|k| (*k, std::env::var(k).ok()))
+            .collect();
+        for k in AUTH_ENV_KEYS {
+            std::env::remove_var(k);
+        }
+        saved
+    };
+
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(sse_ok())
         .mount(&server)
         .await;
-
-    // Ensure ambient env vars cannot supply a key.
-    for k in ["LITELLM_API_KEY", "LITELLM_PROXY_API_KEY"] {
-        std::env::remove_var(k);
-    }
 
     let model = LiteLlmModel::chat("prod-fast")
         .base_url(server.uri())
@@ -116,6 +141,14 @@ async fn no_authorization_header_when_no_key_is_configured() {
         requests[0].headers.get("authorization").is_none(),
         "no Authorization header must be sent when no key is configured"
     );
+
+    let _g = env_lock().lock().unwrap();
+    for (k, v) in saved {
+        match v {
+            Some(val) => std::env::set_var(k, val),
+            None => std::env::remove_var(k),
+        }
+    }
 }
 
 #[tokio::test]

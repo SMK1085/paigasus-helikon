@@ -55,6 +55,14 @@ fn model_id() -> String {
 async fn live_streaming_turn_ends_with_finish_after_usage() {
     let Some(base) = gate() else { return };
 
+    // No `.api_key(...)` call here is intentional, not an oversight: when
+    // `.api_key()`/`.bearer()` is never called, `LiteLlmModelBuilder::build`
+    // (src/builder.rs) falls back to `LITELLM_API_KEY`, then
+    // `LITELLM_PROXY_API_KEY`, from the ambient environment on its own —
+    // independently of whether `base_url` came from an explicit call (as
+    // here) or from its own env fallback. So an authenticated proxy is
+    // still exercised correctly as long as `LITELLM_API_KEY` is set
+    // alongside `LITELLM_API_BASE`; see the module doc above.
     let model = LiteLlmModel::chat(model_id())
         .base_url(base)
         .build()
