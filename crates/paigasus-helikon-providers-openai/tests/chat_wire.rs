@@ -27,15 +27,18 @@ fn user_msg(text: &str) -> Item {
 async fn happy_path_text_completion() {
     let server = MockServer::start().await;
 
-    // SSE body: a content-delta chunk then a finish chunk with usage.
-    // async-openai 0.40 requires `id`, `created`, `model`, and `object` on
-    // every chunk. Usage arrives on the same chunk as `finish_reason` (per
-    // OpenAI's `stream_options.include_usage: true` behaviour).
+    // SSE body: a content-delta chunk, then a finish chunk, then a SEPARATE
+    // trailing chunk carrying usage — the shape real OpenAI-compatible
+    // servers emit with `stream_options.include_usage: true`. Captured from
+    // LiteLLM; see the spec's Appendix A. async-openai requires `id`,
+    // `created`, `model`, and `object` on every chunk.
     let body = concat!(
         "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
         "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
         "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
-        "\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],",
+        "\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
+        "\"choices\":[{\"index\":0,\"delta\":{}}],",
         "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}\n\n",
         "data: [DONE]\n\n",
     );

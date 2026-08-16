@@ -74,7 +74,15 @@ pub(crate) async fn invoke(
                 n = upstream.next() => n,
             };
             match next {
-                None => return,
+                None => {
+                    // `async-openai`'s `create_stream` consumes `[DONE]`
+                    // internally and ends iteration, so this is the single
+                    // end-of-stream site.
+                    for ev in translator.finish() {
+                        yield Ok(ev);
+                    }
+                    return;
+                }
                 Some(Err(e)) => {
                     yield Err(map_openai_error(e));
                     return;
@@ -117,7 +125,7 @@ fn build_request(
         });
     }
 
-    // Tools: async-openai 0.40 uses `ChatCompletionTools::Function(ChatCompletionTool)`
+    // Tools: async-openai 0.41 uses `ChatCompletionTools::Function(ChatCompletionTool)`
     // as the wrapper enum; `ChatCompletionTool` holds just `function: FunctionObject`.
     if !request.tools.is_empty() {
         let tools: Vec<ChatCompletionTools> = request
@@ -175,7 +183,7 @@ fn build_request(
 /// Translate a [`ToolChoice`] into async-openai's
 /// [`ChatCompletionToolChoiceOption`].
 ///
-/// In async-openai 0.40, the string variants (`"none"`, `"auto"`,
+/// In async-openai 0.41, the string variants (`"none"`, `"auto"`,
 /// `"required"`) are wrapped in `ChatCompletionToolChoiceOption::Mode(
 /// ToolChoiceOptions::*)`.
 fn translate_tool_choice(tc: &ToolChoice) -> ChatCompletionToolChoiceOption {
@@ -220,6 +228,9 @@ pub(crate) struct ChatTranslator {
     name_emitted: HashSet<u32>,
     /// index → buffered (name, args) that arrived before the call_id was known.
     pending: HashMap<u32, PendingToolCall>,
+    /// Finish reason observed so far, emitted only by [`Self::finish`] at
+    /// end-of-stream. Last observed value wins.
+    finish_reason: Option<FinishReason>,
 }
 
 impl ChatTranslator {
@@ -229,19 +240,20 @@ impl ChatTranslator {
             tool_calls: HashMap::new(),
             name_emitted: HashSet::new(),
             pending: HashMap::new(),
+            finish_reason: None,
         }
     }
 
     /// Consume one upstream SSE chunk and produce zero or more [`ModelEvent`]s.
     ///
-    /// Event ordering within a chunk follows the "Usage before Finish" contract
-    /// stated in [`paigasus_helikon_core::Model::invoke`]:
-    /// 1. `TokenDelta` / `ToolCallDelta` (generation deltas)
-    /// 2. `Usage` (when `chunk.usage` is present — final chunk only)
-    /// 3. `Finish` (terminal; always last)
+    /// `Usage` is emitted inline as it arrives. `Finish` is **never** emitted
+    /// here — the finish reason is buffered and released by [`Self::finish`]
+    /// at end-of-stream, because `usage` arrives on a chunk *after* the one
+    /// carrying `finish_reason`. Only `Finish` is positionally constrained by
+    /// the contract in `paigasus_helikon_core::Model::invoke`; `Usage` may
+    /// appear anywhere.
     pub(crate) fn consume(&mut self, chunk: CreateChatCompletionStreamResponse) -> Vec<ModelEvent> {
         let mut out: Vec<ModelEvent> = Vec::new();
-        let mut finish_event: Option<ModelEvent> = None;
 
         for choice in &chunk.choices {
             // Text deltas.
@@ -260,7 +272,8 @@ impl ChatTranslator {
                 }
             }
 
-            // Stash finish reason — emitted last (after Usage) below.
+            // Buffer the finish reason — emitted by `finish()` at end-of-stream,
+            // never inline, because `usage` arrives on a LATER chunk.
             if let Some(reason) = choice.finish_reason {
                 let mapped = match reason {
                     OaFinishReason::Stop => FinishReason::Stop,
@@ -268,11 +281,21 @@ impl ChatTranslator {
                     OaFinishReason::ToolCalls => FinishReason::ToolCalls,
                     OaFinishReason::ContentFilter => FinishReason::ContentFilter,
                     OaFinishReason::FunctionCall => FinishReason::Other("function_call".to_owned()),
-                    // OaFinishReason has no #[non_exhaustive] in 0.40 but guard for robustness.
+                    // OaFinishReason has no #[non_exhaustive] in 0.41 but guard for robustness.
                     #[allow(unreachable_patterns)]
                     other => FinishReason::Other(format!("{other:?}")),
                 };
-                finish_event = Some(ModelEvent::Finish { reason: mapped });
+                if let Some(prev) = self.finish_reason.as_ref() {
+                    if *prev != mapped {
+                        tracing::debug!(
+                            target: "paigasus::openai::chat",
+                            previous = ?prev,
+                            replacement = ?mapped,
+                            "second distinct finish_reason observed; last wins"
+                        );
+                    }
+                }
+                self.finish_reason = Some(mapped);
             }
         }
 
@@ -294,12 +317,22 @@ impl ChatTranslator {
             });
         }
 
-        // Append Finish last (terminal event).
-        if let Some(finish) = finish_event {
-            out.push(finish);
-        }
-
         out
+    }
+
+    /// Emit the terminal `Finish` at end-of-stream.
+    ///
+    /// Returns an empty vec when no `finish_reason` was ever observed, so a
+    /// truncated stream is never reported as a clean stop.
+    pub(crate) fn finish(&mut self) -> Vec<ModelEvent> {
+        let Some(reason) = self.finish_reason.take() else {
+            tracing::debug!(
+                target: "paigasus::openai::chat",
+                "stream ended without a finish_reason; emitting no Finish"
+            );
+            return Vec::new();
+        };
+        vec![ModelEvent::Finish { reason }]
     }
 
     fn handle_tool_call_chunk(
