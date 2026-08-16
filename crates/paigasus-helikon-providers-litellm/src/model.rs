@@ -79,9 +79,14 @@ impl Model for LiteLlmModel {
     ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
         let cfg = self.0.clone();
         let body = crate::translate::build_request(&cfg, &request);
+        // Hoisted above the stream so a malformed configured header (e.g. an
+        // API key with a trailing newline that survived `build()`, which only
+        // checks non-empty) fails `invoke` eagerly with a real `ModelError`
+        // instead of silently sending the request unauthenticated — see the
+        // SMA-451 Task 9 review, second fix round.
+        let headers = build_headers(&cfg)?;
 
         let s = stream! {
-            let headers = build_headers(&cfg);
             let send_fut = cfg.http
                 .post(&cfg.endpoint)
                 .headers(headers)
@@ -220,7 +225,19 @@ impl Model for LiteLlmModel {
 /// `Authorization` header rather than replacing the provider's. LiteLLM (a
 /// Starlette app) reads only the first occurrence of a header, so that
 /// second header would be silently ignored — defeating the escape hatch.
-fn build_headers(cfg: &Config) -> reqwest::header::HeaderMap {
+///
+/// Returns `Err` if the configured API key cannot become a valid header
+/// value (e.g. it carries a trailing newline from a pasted env value or a
+/// `fs::read_to_string`d file — `build()` only rejects an empty/whitespace
+/// key, it does not trim, so such a value survives construction). This must
+/// be a hard failure, not a skip-and-warn: silently omitting `Authorization`
+/// would send the request *unauthenticated* rather than with the intended
+/// key, which is indistinguishable from a correct config against a keyless
+/// or default-keyed proxy — wrong spend attribution and wrong routing with
+/// no error anywhere. Caller headers (`cfg.headers`), by contrast, are
+/// already validated at `build()` time (`builder.rs`), so a conversion
+/// failure there is unreachable and stays skip-and-warn as defense in depth.
+fn build_headers(cfg: &Config) -> Result<reqwest::header::HeaderMap, ModelError> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
@@ -232,16 +249,17 @@ fn build_headers(cfg: &Config) -> reqwest::header::HeaderMap {
     );
 
     if let Some(key) = &cfg.auth {
-        match reqwest::header::HeaderValue::try_from(format!("Bearer {key}")) {
-            Ok(v) => {
-                headers.insert(reqwest::header::AUTHORIZATION, v);
-            }
-            Err(e) => tracing::warn!(
-                target: "paigasus::litellm::http",
-                %e,
-                "configured api key is not a valid header value; sending unauthenticated"
-            ),
-        }
+        let value =
+            reqwest::header::HeaderValue::try_from(format!("Bearer {key}")).map_err(|e| {
+                // Never interpolate `key` itself into the message — this
+                // must not leak credential material into logs/error chains.
+                ModelError::Other(anyhow::anyhow!(
+                    "the configured api key could not be converted into a valid \
+                     Authorization header value ({e}); refusing to send the \
+                     request unauthenticated"
+                ))
+            })?;
+        headers.insert(reqwest::header::AUTHORIZATION, value);
     }
     if let Some(n) = cfg.extras.num_retries {
         // Also sent in the body. Upstream documents the header as
@@ -275,7 +293,7 @@ fn build_headers(cfg: &Config) -> reqwest::header::HeaderMap {
         }
     }
 
-    headers
+    Ok(headers)
 }
 
 /// Extract LiteLLM's error envelope and classify it.
@@ -362,7 +380,7 @@ mod tests {
             .header("authorization", "Bearer caller-override")
             .build()
             .unwrap();
-        let headers = build_headers(&m.config_for_test());
+        let headers = build_headers(&m.config_for_test()).unwrap();
 
         let values: Vec<_> = headers
             .get_all(reqwest::header::AUTHORIZATION)
@@ -384,7 +402,7 @@ mod tests {
             .header("content-type", "application/json; charset=utf-8")
             .build()
             .unwrap();
-        let headers = build_headers(&m.config_for_test());
+        let headers = build_headers(&m.config_for_test()).unwrap();
 
         let values: Vec<_> = headers
             .get_all(reqwest::header::CONTENT_TYPE)
@@ -396,5 +414,41 @@ mod tests {
             "expected exactly one Content-Type header, got {values:?}"
         );
         assert_eq!(values[0], "application/json; charset=utf-8");
+    }
+
+    /// A configured API key that cannot become a valid `Authorization`
+    /// header value must fail `invoke` loudly — not silently send the
+    /// request unauthenticated.
+    ///
+    /// `build()` only rejects an empty/whitespace key (`builder.rs`); it
+    /// does not trim, so a key with a trailing newline (e.g. from
+    /// `fs::read_to_string` on a file with a trailing newline, or a pasted
+    /// env value) survives construction and only fails here, at
+    /// `HeaderValue::try_from` time. Regression for the second fix round:
+    /// the intermediate fix (warn-and-skip on this specific conversion)
+    /// converted this into a silent credential drop — the request would
+    /// still be sent, just unauthenticated, which is indistinguishable from
+    /// a correct config against a keyless/default-keyed proxy.
+    ///
+    /// Also pins the error *variant*: `ModelError::Transport` reads as
+    /// retryable to a retry decorator, which would retry a malformed key
+    /// forever. This must not regress back to `Transport` (or to a silent
+    /// `Ok`) if the header-construction path is touched again.
+    #[test]
+    fn invalid_api_key_header_value_fails_invoke_not_silently() {
+        let m = LiteLlmModel::chat("prod-fast")
+            .base_url("http://p:4000")
+            .api_key("sk-trailing-newline\n")
+            .build()
+            .unwrap();
+        let err = build_headers(&m.config_for_test()).unwrap_err();
+        assert!(
+            !matches!(err, ModelError::Transport(_)),
+            "must not be classified as a retryable transport error, got {err:?}"
+        );
+        assert!(
+            matches!(err, ModelError::Other(_)),
+            "expected ModelError::Other, got {err:?}"
+        );
     }
 }
