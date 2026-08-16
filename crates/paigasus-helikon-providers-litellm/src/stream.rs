@@ -21,12 +21,14 @@ use crate::sse::{StreamChunk, ToolCallChunk};
 /// Correlation key for a streaming tool call.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Key {
-    /// Correlated by `delta.tool_calls[].index`, when present.
+    /// Correlated by `delta.tool_calls[].index`, when present — or, as a
+    /// last resort, by position within `delta.tool_calls` (in OpenAI-
+    /// compatible streaming the array position *is* the index, so a
+    /// positional continuation delta correctly joins a call already keyed
+    /// by `Index`).
     Index(u32),
     /// Correlated by `delta.tool_calls[].id`, when `index` is absent.
     Id(String),
-    /// Correlated by position within `delta.tool_calls`, as a last resort.
-    Position(usize),
 }
 
 /// Name/args fragments that arrived before the `id` was known.
@@ -138,7 +140,7 @@ impl ChatTranslator {
                     pos,
                     "tool-call delta has neither index nor id; correlating by position"
                 );
-                Key::Position(pos)
+                Key::Index(pos as u32)
             }
         };
 
@@ -198,6 +200,7 @@ impl ChatTranslator {
     /// and `ModelTurnAccumulator` defaults to `Stop`, so the truncated text
     /// would be committed to session history as final.
     pub(crate) fn finish(&mut self) -> Vec<ModelEvent> {
+        self.warn_unresolved_pending();
         let Some(raw) = self.finish_reason.take() else {
             return Vec::new();
         };
@@ -209,6 +212,25 @@ impl ChatTranslator {
             other => FinishReason::Other(other.to_owned()),
         };
         vec![ModelEvent::Finish { reason }]
+    }
+
+    /// Warn when tool-call fragments were buffered but never flushed.
+    ///
+    /// A call whose `id` never arrived stays in `pending` forever — fix (1)
+    /// for the dead `Key::Position` variant does not help a backend that
+    /// never sends an `id` at all. That stream still silently drops the
+    /// call, so this makes the loss loud instead of indistinguishable from
+    /// "the model didn't call a tool."
+    fn warn_unresolved_pending(&self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let keys: Vec<String> = self.pending.keys().map(|k| format!("{k:?}")).collect();
+        tracing::warn!(
+            target: "paigasus::litellm::stream",
+            keys = ?keys,
+            "stream ended with buffered tool-call fragments whose id was never resolved; dropping them"
+        );
     }
 }
 
@@ -503,6 +525,47 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(
             e, ModelEvent::ToolCallDelta { call_id, .. } if call_id == "only_id"
         )));
+    }
+
+    #[test]
+    fn tool_call_with_neither_index_nor_id_is_not_silently_dropped() {
+        // A backend may omit both `index` and `id` on the very first delta
+        // for a tool call. The array position doubles as an implicit
+        // index, so once a later delta restates that same index alongside
+        // the `id`, the fragments buffered under the positional key must
+        // be flushed — not silently lost because they were keyed
+        // differently from every later delta.
+        let mut t = ChatTranslator::new();
+        let mut evs = t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"function": {"name": "f", "arguments": "{}"}}
+            ]}}]
+        })));
+        evs.extend(t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "call_positional"}
+            ]}}]
+        }))));
+
+        let calls: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name,
+                    args_delta,
+                } => Some((call_id.clone(), name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "positional-only fragments must not be dropped"
+        );
+        assert_eq!(calls[0].0, "call_positional");
+        assert_eq!(calls[0].1, Some("f".to_owned()));
+        assert_eq!(calls[0].2, "{}");
     }
 
     #[test]
