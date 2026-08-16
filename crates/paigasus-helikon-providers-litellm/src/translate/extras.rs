@@ -39,20 +39,34 @@ pub(crate) fn apply(body: &mut Map<String, Value>, extras: &Extras) {
 
     for (k, v) in &extras.extra_body {
         if k == "metadata" {
-            // Deep-merge: caller keys win per key, but existing builder
-            // metadata survives.
-            let mut merged = body
-                .get("metadata")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            if let Some(obj) = v.as_object() {
-                for (mk, mv) in obj {
-                    merged.insert(mk.clone(), mv.clone());
+            match v.as_object() {
+                Some(obj) => {
+                    // Deep-merge: caller keys win per key, but existing
+                    // builder metadata survives.
+                    let mut merged = body
+                        .get("metadata")
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .unwrap_or_default();
+                    for (mk, mv) in obj {
+                        merged.insert(mk.clone(), mv.clone());
+                    }
+                    body.insert("metadata".to_owned(), Value::Object(merged));
                 }
-                body.insert("metadata".to_owned(), Value::Object(merged));
-                continue;
+                None => {
+                    // A non-object `extra_body.metadata` (e.g. a string) is
+                    // not mergeable. Warn and keep whatever builder
+                    // `.metadata()`/`.tags()` already produced rather than
+                    // silently clobbering it — `extra_body` stays a usable
+                    // escape hatch for the *object* form without being able
+                    // to blow away routing/spend tags with no signal.
+                    tracing::warn!(
+                        target: "paigasus::litellm::translate",
+                        "extra_body.metadata must be a JSON object; ignoring non-object value and keeping builder metadata/tags"
+                    );
+                }
             }
+            continue;
         }
         body.insert(k.clone(), v.clone());
     }
@@ -134,13 +148,14 @@ mod tests {
     }
 
     #[test]
-    fn extra_body_metadata_deep_merges_with_builder_metadata() {
+    fn extra_body_metadata_deep_merges_with_builder_metadata_and_tags() {
         let mut metadata = Map::new();
         metadata.insert("trace_id".into(), json!("t-1"));
         let mut extra_body = Map::new();
         extra_body.insert("metadata".into(), json!({"spend_logs_metadata": {"x": 1}}));
         let v = apply_to_empty(Extras {
             metadata,
+            tags: vec!["team:research".into()],
             extra_body,
             ..Default::default()
         });
@@ -148,7 +163,44 @@ mod tests {
             v["metadata"]["trace_id"], "t-1",
             "builder metadata survives"
         );
+        assert_eq!(
+            v["metadata"]["tags"],
+            json!(["team:research"]),
+            "metadata.tags survives a well-formed extra_body.metadata object"
+        );
         assert_eq!(v["metadata"]["spend_logs_metadata"]["x"], 1);
+    }
+
+    #[test]
+    fn extra_body_non_object_metadata_is_ignored_and_builder_metadata_and_tags_survive() {
+        // `builder.rs`'s `litellm_extras_are_not_reserved_in_extra_body` test
+        // asserts that `.extra_body(json!({"metadata": "x"}))` builds
+        // successfully — a non-object `metadata` is a legal build, so `apply`
+        // must not let it silently destroy builder-supplied metadata/tags
+        // with no signal.
+        let mut metadata = Map::new();
+        metadata.insert("trace_id".into(), json!("t-1"));
+        let mut extra_body = Map::new();
+        extra_body.insert("metadata".into(), json!("x"));
+        let v = apply_to_empty(Extras {
+            metadata,
+            tags: vec!["team:research".into()],
+            extra_body,
+            ..Default::default()
+        });
+        assert!(
+            v["metadata"].is_object(),
+            "a non-object extra_body.metadata must not overwrite the metadata object"
+        );
+        assert_eq!(
+            v["metadata"]["trace_id"], "t-1",
+            "builder metadata survives a non-object extra_body.metadata"
+        );
+        assert_eq!(
+            v["metadata"]["tags"],
+            json!(["team:research"]),
+            "metadata.tags survives a non-object extra_body.metadata"
+        );
     }
 
     #[test]
