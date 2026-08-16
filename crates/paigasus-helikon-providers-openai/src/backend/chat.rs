@@ -299,9 +299,9 @@ impl ChatTranslator {
             }
         }
 
-        // Usage arrives on the final chunk (after `include_usage: true`).
-        // Emitted after generation deltas but BEFORE the Finish event, per
-        // the ordering contract ("Usage MAY appear anywhere; Finish is terminal").
+        // Usage arrives on the final chunk (after `include_usage: true`) and
+        // is emitted inline as it arrives. Finish is deferred to finish() at
+        // end-of-stream — see this function's doc comment.
         if let Some(u) = chunk.usage.as_ref() {
             out.push(ModelEvent::Usage {
                 input_tokens: u.prompt_tokens,
