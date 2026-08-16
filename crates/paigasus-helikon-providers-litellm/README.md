@@ -25,7 +25,7 @@ let model = LiteLlmModel::chat("claude-sonnet-4")   // your proxy's alias
     .fallbacks(["gpt-4o-mini"])
     .num_retries(2)
     .tags(["team:research"])
-    .metadata("trace_id", trace_id)
+    .metadata("trace_id", "run-7f3a")
     .build()?;
 ```
 
