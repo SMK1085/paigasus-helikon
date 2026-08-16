@@ -3,7 +3,7 @@
   "checkpoint_id": "0967bfd1b80d",
   "strategy": "manual-commit",
   "branch": "feature/sma-515-runinterrupt-ergonomics-add-terminal_event-and",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
     "crates/paigasus-helikon-runtime-tokio/src/lib.rs"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/09/67bfd1b80d/0/transcript.jsonl",
       "content_hash": "/09/67bfd1b80d/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/09/67bfd1b80d/1/metadata.json",
+      "transcript": "/09/67bfd1b80d/1/full.jsonl",
+      "compact_transcript": "/09/67bfd1b80d/1/transcript.jsonl",
+      "content_hash": "/09/67bfd1b80d/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 8,
+    "cache_creation_tokens": 1329,
+    "cache_read_tokens": 742574,
+    "output_tokens": 984,
+    "api_call_count": 4
   }
 }
