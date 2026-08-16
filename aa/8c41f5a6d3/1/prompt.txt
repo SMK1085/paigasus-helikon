@@ -1,0 +1,26 @@
+<task-notification>
+<task-id>af532222455b64fd4</task-id>
+<tool-use-id>toolu_0126MUC7M8MJ8tExb9ujG2VM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/af532222455b64fd4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 8 error classification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean, both commits landed.
+
+## Summary
+
+**STATUS: DONE**
+
+**Commit SHAs:** `cfe310cb` (initial Task 8 implementation), `c3072e86` (fix: added `context_overflow_check_is_not_gated_on_status` test)
+
+**Test results:** 14/14 `error::tests::*` pass (13 original + 1 new coverage test); full suite 16 passed / 0 failed.
+
+**Mutation check (as required):** Temporarily moved the context-overflow check inside the match (`400 if is_context_overflow(...) =&gt; ...`), re-ran — exactly one test failed: `context_overflow_check_is_not_gated_on_status` (all 15 others still green), confirming it's the sole guard for this invariant. Reverted; suite green again. `git diff` against `cfe310cb` confirms the fix commit is test-only — `classify`'s logic and rule ordering are byte-identical to the original.
+
+**Concerns:**
+- `cargo clippy --all-targets -- -D warnings` still fails with 31 dead_code diagnostics (unchanged by this fix, as expected — no new production item added); no `#[allow(dead_code)]` added, per instruction.
+- The budget-exhaustion 429 test shape is inferred (not live-captured); accepted per reviewer note, failure mode is benign (falls through to `RateLimited`, still status-correct). Noted a possible future robustness improvement (keying on the `litellm.BudgetExceededError` class-name marker) in the report but did not implement it, since it wasn't requested and would need a live capture to confirm the shape first.
+
+Full details (including exact command output for both the pass and the mutation-induced failure) are in `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-451-providers-litellm/.superpowers/sdd/2026-08-16-sma-451-litellm-provider/task-8-report.md`.</result>
+<usage><subagent_tokens>95026</subagent_tokens><tool_uses>16</tool_uses><duration_ms>95943</duration_ms></usage>
+</task-notification>
