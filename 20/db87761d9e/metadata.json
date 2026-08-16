@@ -3,7 +3,7 @@
   "checkpoint_id": "20db87761d9e",
   "strategy": "manual-commit",
   "branch": "feature/sma-451-provider-crate-paigasus-helikon-providers-litellm",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "crates/paigasus-helikon-providers-litellm/src/lib.rs",
     "crates/paigasus-helikon-providers-litellm/src/translate/extras.rs",
@@ -25,13 +25,20 @@
       "compact_transcript": "/20/db87761d9e/0/transcript.jsonl",
       "content_hash": "/20/db87761d9e/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/20/db87761d9e/1/metadata.json",
+      "transcript": "/20/db87761d9e/1/full.jsonl",
+      "compact_transcript": "/20/db87761d9e/1/transcript.jsonl",
+      "content_hash": "/20/db87761d9e/1/content_hash.txt",
+      "prompt": "/20/db87761d9e/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 626,
+    "cache_creation_tokens": 2084134,
+    "cache_read_tokens": 40428433,
+    "output_tokens": 246303,
+    "api_call_count": 164
   }
 }
