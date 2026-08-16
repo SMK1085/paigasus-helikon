@@ -22,6 +22,8 @@
 
 mod builder;
 mod capabilities;
+mod sse;
+mod stream;
 mod translate;
 mod transport;
 
