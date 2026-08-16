@@ -53,6 +53,24 @@ async fn run_stream(
     out
 }
 
+/// Assert the sequence contains exactly one `Finish` and that it is the final
+/// event — the core contract at `paigasus_helikon_core::Model::invoke`
+/// ("`Finish` is the terminal event; nothing follows it").
+///
+/// Applied to every well-formed fixture so a regression that drops, doubles,
+/// or misplaces the terminal event cannot pass silently.
+fn assert_exactly_one_terminal_finish(oks: &[ModelEvent]) {
+    let finishes = oks
+        .iter()
+        .filter(|e| matches!(e, ModelEvent::Finish { .. }))
+        .count();
+    assert_eq!(finishes, 1, "expected exactly one Finish, got {oks:#?}");
+    assert!(
+        matches!(oks.last(), Some(ModelEvent::Finish { .. })),
+        "Finish must be the last event, got {oks:#?}"
+    );
+}
+
 #[tokio::test]
 async fn text_only_stream_emits_usage_token_deltas_usage_finish() {
     let server = MockServer::start().await;
@@ -81,6 +99,12 @@ async fn text_only_stream_emits_usage_token_deltas_usage_finish() {
         }
     ));
     assert!(matches!(&oks[4], ModelEvent::Finish { reason } if *reason == FinishReason::Stop));
+    assert_eq!(
+        oks.len(),
+        5,
+        "well-formed stream must emit exactly these five events, got {oks:#?}"
+    );
+    assert_exactly_one_terminal_finish(&oks);
 }
 
 #[tokio::test]
@@ -116,6 +140,7 @@ async fn parallel_tool_use_stream_emits_two_tool_call_deltas() {
             reason: FinishReason::ToolCalls
         },
     ));
+    assert_exactly_one_terminal_finish(&oks);
 }
 
 #[tokio::test]
@@ -137,6 +162,7 @@ async fn thinking_stream_emits_reasoning_delta_before_text_delta() {
         first_reasoning < first_text,
         "reasoning must precede text in this fixture"
     );
+    assert_exactly_one_terminal_finish(&oks);
 }
 
 #[tokio::test]
@@ -144,6 +170,12 @@ async fn stream_error_overloaded_terminates_with_unavailable() {
     let server = MockServer::start().await;
     let fixture = include_str!("fixtures/stream_error.txt");
     let events = run_stream(&server, fixture).await;
+    assert!(
+        !events
+            .iter()
+            .any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))),
+        "an error stream must emit no Finish, got {events:#?}"
+    );
     let last = events.into_iter().last().unwrap();
     assert!(matches!(last, Err(ModelError::Unavailable)));
 }
@@ -208,6 +240,7 @@ async fn multi_turn_tool_use_continuation() {
             reason: FinishReason::ToolCalls
         },
     ));
+    assert_exactly_one_terminal_finish(&events1);
 
     // Turn 2: append tool_result and re-invoke.
     let turn2_messages = vec![
@@ -244,4 +277,5 @@ async fn multi_turn_tool_use_continuation() {
             reason: FinishReason::Stop
         },
     ));
+    assert_exactly_one_terminal_finish(&events2);
 }
