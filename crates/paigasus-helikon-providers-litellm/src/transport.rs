@@ -1,4 +1,4 @@
-//! Endpoint URL construction and request headers.
+//! Endpoint URL construction.
 //!
 //! LiteLLM serves both `/chat/completions` and `/v1/chat/completions`, and
 //! operators write base URLs both ways, so [`normalise_endpoint`] accepts
@@ -24,9 +24,20 @@ pub(crate) struct UrlError;
 /// operator typo would sail through.
 ///
 /// A trailing `v1` segment on `base_url` is dropped before `path` is
-/// appended, so a base URL of either `http://host` or `http://host/v1`
-/// combined with the default `/v1/chat/completions` path lands on the same
-/// endpoint rather than doubling the `v1` segment.
+/// appended, but **only when `path` itself starts with a `v1` segment** — the
+/// default `path`, `/v1/chat/completions`, does — so a base URL of either
+/// `http://host` or `http://host/v1` combined with the default path lands on
+/// the same endpoint rather than doubling the `v1` segment.
+///
+/// A custom `path` (via
+/// [`LiteLlmModelBuilder::chat_completions_path`](crate::LiteLlmModelBuilder::chat_completions_path))
+/// that does *not* start with `v1` leaves a trailing `v1` on `base_url`
+/// untouched, so operators mounted at a gateway path like
+/// `/openai/deployments/x/chat/completions` under a base ending in `/v1` get
+/// exactly that base preserved — this is the escape hatch the builder method
+/// and the crate README document; popping unconditionally would silently
+/// delete an operator's explicit `v1` segment regardless of what `path` asked
+/// for.
 pub(crate) fn normalise_endpoint(base_url: &str, path: &str) -> Result<String, UrlError> {
     let mut url = reqwest::Url::parse(base_url).map_err(|_| UrlError)?;
 
@@ -41,10 +52,17 @@ pub(crate) fn normalise_endpoint(base_url: &str, path: &str) -> Result<String, U
         .path_segments()
         .map(|s| s.filter(|seg| !seg.is_empty()).map(str::to_owned).collect())
         .unwrap_or_default();
-    if segments.last().map(String::as_str) == Some("v1") {
+    let path_segments: Vec<String> = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if segments.last().map(String::as_str) == Some("v1")
+        && path_segments.first().map(String::as_str) == Some("v1")
+    {
         segments.pop();
     }
-    segments.extend(path.split('/').filter(|s| !s.is_empty()).map(str::to_owned));
+    segments.extend(path_segments);
 
     {
         let mut segs = url.path_segments_mut().map_err(|_| UrlError)?;
@@ -130,6 +148,24 @@ mod tests {
         assert_eq!(
             normalise_endpoint("http://gw:4000", "/openai/deployments/x/chat/completions").unwrap(),
             "http://gw:4000/openai/deployments/x/chat/completions"
+        );
+    }
+
+    /// A custom `.chat_completions_path()` that does NOT start with `v1` must
+    /// preserve a `/v1` already present on `base_url` — this is the escape
+    /// hatch the builder method and the crate README document
+    /// ("override the whole path"). Regression for the unconditional-pop
+    /// bug: `honours_a_custom_path` above uses a base with no `/v1` at all,
+    /// so it cannot see a base's `v1` being silently deleted.
+    #[test]
+    fn a_custom_path_preserves_an_explicit_v1_on_the_base() {
+        assert_eq!(
+            normalise_endpoint(
+                "https://gw.example.com/v1",
+                "/openai/deployments/x/chat/completions"
+            )
+            .unwrap(),
+            "https://gw.example.com/v1/openai/deployments/x/chat/completions"
         );
     }
 }
