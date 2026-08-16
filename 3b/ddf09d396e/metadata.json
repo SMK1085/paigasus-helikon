@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3bddf09d396e",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-515-runinterrupt-ergonomics-add-terminal_event-and",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/runner.rs",
+    "docs/book/src/concepts/core-primitives.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3b/ddf09d396e/0/metadata.json",
+      "transcript": "/3b/ddf09d396e/0/full.jsonl",
+      "compact_transcript": "/3b/ddf09d396e/0/transcript.jsonl",
+      "content_hash": "/3b/ddf09d396e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
