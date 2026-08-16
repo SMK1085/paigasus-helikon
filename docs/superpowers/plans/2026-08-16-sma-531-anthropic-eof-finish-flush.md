@@ -458,7 +458,9 @@ Append inside the existing `#[cfg(test)] mod tests` block in `src/stream.rs`:
 
 - [ ] **Step 2: Run them and confirm both FAIL**
 
-Run: `cargo test -p paigasus-helikon-providers-anthropic --lib second_message_delta_after_message_stop_does_not_double_finish repeated_message_stop_emits_one_finish`
+Run: `cargo test -p paigasus-helikon-providers-anthropic --lib message_stop`
+
+(`cargo test` accepts only ONE positional filter. `message_stop` is a substring of both new test names and of no pre-existing test in `stream.rs`, so it selects exactly the two.)
 
 Expected: both FAIL — the first on `a second stop reason must not yield a second terminal event`, the second on `a repeated message_stop must not emit a second Finish`. If either passes, the guard already exists somewhere; stop and report.
 
@@ -530,7 +532,9 @@ Replace the whole of `finish()` (doc comment included, as added in Task 2) with:
 
 - [ ] **Step 6: Run both tests — they must now PASS**
 
-Run: `cargo test -p paigasus-helikon-providers-anthropic --lib second_message_delta_after_message_stop_does_not_double_finish repeated_message_stop_emits_one_finish`
+Run: `cargo test -p paigasus-helikon-providers-anthropic --lib message_stop`
+
+(`cargo test` accepts only ONE positional filter. `message_stop` is a substring of both new test names and of no pre-existing test in `stream.rs`, so it selects exactly the two.)
 
 Expected: PASS, 2 tests.
 
@@ -655,7 +659,9 @@ async fn error_after_buffered_stop_reason_emits_no_finish() {
 
 - [ ] **Step 4: Run both — they must PASS**
 
-Run: `cargo test -p paigasus-helikon-providers-anthropic --test messages_streaming eof_mid_content_block_emits_no_finish error_after_buffered_stop_reason_emits_no_finish`
+Run: `cargo test -p paigasus-helikon-providers-anthropic --test messages_streaming emits_no_finish`
+
+(`cargo test` accepts only ONE positional filter. `emits_no_finish` is a substring of both new test names and of no pre-existing test in that file, so it selects exactly the two.)
 
 Expected: PASS, 2 tests.
 
