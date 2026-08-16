@@ -22,6 +22,7 @@
 
 mod builder;
 mod capabilities;
+mod translate;
 mod transport;
 
 pub use builder::{BuildError, LiteLlmModelBuilder};
