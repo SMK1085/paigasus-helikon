@@ -376,7 +376,7 @@ Expected: all four new tests pass.
 
 > **Corrected during execution.** An earlier draft of this step claimed the inline-`Finish` mutation fails `repeated_finish_reasons_yield_one_finish_last_wins`. It does not: that test discards the return values of the two `consume` calls carrying a `finish_reason`, so a leaked inline `Finish` is never observed and the test still passes. Each test needs the mutation that actually targets it.
 
-**Mutation A — inline `Finish` leak.** In `consume`, re-add `out.push(ModelEvent::Finish { reason: mapped.clone() });` immediately after `self.finish_reason = Some(mapped);`. Then:
+**Mutation A — inline `Finish` leak.** In `consume`, add `out.push(ModelEvent::Finish { reason: mapped.clone() });` immediately **before** `self.finish_reason = Some(mapped);`. (It must go before, not after: `FinishReason` is not `Copy`, so `Some(mapped)` moves the value and a later `mapped.clone()` will not compile.) Then:
 
 ```bash
 cargo test -p paigasus-helikon-providers-openai --lib finish_is_emitted_only_at_end_of_stream
@@ -580,7 +580,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Confirm both are real regression tests**
 
-Temporarily revert the driver: in `chat.rs`, change the `None` arm back to `None => return,` and re-add `out.push(ModelEvent::Finish { reason: mapped.clone() });` after `self.finish_reason = Some(mapped);` in `consume`. Then:
+Temporarily revert the driver: in `chat.rs`, change the `None` arm back to `None => return,` and add `out.push(ModelEvent::Finish { reason: mapped.clone() });` immediately **before** `self.finish_reason = Some(mapped);` in `consume`. (Before, not after — `FinishReason` is not `Copy`, so `Some(mapped)` moves the value and a trailing `mapped.clone()` will not compile.) Then:
 
 ```bash
 cargo test -p paigasus-helikon-providers-openai --test chat_streaming trailing_usage
