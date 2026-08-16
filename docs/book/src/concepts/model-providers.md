@@ -391,15 +391,15 @@ loop will drive it.
 
 ```toml
 [dependencies]
-paigasus-helikon = { version = "0.3", features = ["openai", "macros"] }
+paigasus-helikon = { version = "0.5", features = ["openai", "macros"] }
 # or, for Anthropic:
-# paigasus-helikon = { version = "0.3", features = ["anthropic", "macros"] }
+# paigasus-helikon = { version = "0.5", features = ["anthropic", "macros"] }
 # or, for Bedrock:
-# paigasus-helikon = { version = "0.3", features = ["bedrock", "macros"] }
+# paigasus-helikon = { version = "0.5", features = ["bedrock", "macros"] }
 # or, for Gemini:
-# paigasus-helikon = { version = "0.3", features = ["gemini", "macros"] }
+# paigasus-helikon = { version = "0.5", features = ["gemini", "macros"] }
 # or, for LiteLLM:
-# paigasus-helikon = { version = "0.3", features = ["litellm", "macros"] }
+# paigasus-helikon = { version = "0.5", features = ["litellm", "macros"] }
 ```
 
 Feature names are kebab-case (`openai`, `anthropic`); the `pub use` aliases are
