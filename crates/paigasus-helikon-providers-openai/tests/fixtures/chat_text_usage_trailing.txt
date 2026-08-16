@@ -1,0 +1,32 @@
+: Provenance: captured 2026-08-16 from ghcr.io/berriai/litellm:main-stable
+: serving the OpenAI Chat Completions wire shape, keyless mock backend.
+: The finish chunk, the trailing usage chunk and [DONE] are byte-for-byte
+: from that capture. The ten content deltas are reconstructed in the same
+: shape (the captured trace elided them). This is a PROXY capture, not
+: api.openai.com -- see the empty-choices variant for the first-party shape.
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"lo "}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"fro"}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"m t"}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"he "}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"moc"}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"k b"}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"ack"}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"end"}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"."}}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-1cc5e8c0","created":1786898631,"model":"mock-fast","object":"chat.completion.chunk","choices":[{"index":0,"delta":{}}],"usage":{"completion_tokens":6,"prompt_tokens":8,"total_tokens":14,"completion_tokens_details":{"reasoning_tokens":0}}}
+
+data: [DONE]
+
