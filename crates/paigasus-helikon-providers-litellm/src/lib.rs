@@ -50,4 +50,17 @@ impl LiteLlmModel {
     pub(crate) fn auth(&self) -> Option<&str> {
         self.0.auth.as_deref()
     }
+
+    #[cfg(test)]
+    pub(crate) fn config_for_test(&self) -> builder::Config {
+        builder::Config {
+            http: self.0.http.clone(),
+            endpoint: self.0.endpoint.clone(),
+            model_id: self.0.model_id.clone(),
+            auth: self.0.auth.clone(),
+            headers: self.0.headers.clone(),
+            capabilities: self.0.capabilities,
+            extras: self.0.extras.clone(),
+        }
+    }
 }

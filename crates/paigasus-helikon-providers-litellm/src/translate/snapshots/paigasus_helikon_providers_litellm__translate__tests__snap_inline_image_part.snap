@@ -1,0 +1,28 @@
+---
+source: crates/paigasus-helikon-providers-litellm/src/translate/mod.rs
+expression: "build_request(&cfg(), &r)"
+---
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "what is this?",
+          "type": "text"
+        },
+        {
+          "image_url": {
+            "url": "data:image/png;base64,AAAA"
+          },
+          "type": "image_url"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "prod-fast",
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}
