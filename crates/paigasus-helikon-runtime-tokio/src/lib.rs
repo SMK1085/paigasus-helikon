@@ -226,7 +226,7 @@ where
             // behaviour, preserved.
             if let Some(i) = effective_interrupt(interrupt.get(), saw_terminal) {
                 finalize(&session, &recorder).await;
-                yield AgentEvent::RunFailed { error: i.terminal_message().to_owned() };
+                yield i.terminal_event();
             }
         };
         Ok(RunResultStreaming::with_failure(Box::pin(out), failure))
