@@ -24,6 +24,7 @@ Feature names are kebab-case in `Cargo.toml`; the re-export module aliases are s
 | `macros` | `paigasus_helikon::macros`, plus `paigasus_helikon::tool` and `paigasus_helikon::tools` | `#[tool]` attribute + `tools!` macro |
 | `openai` *(alias `providers-openai`)* | `paigasus_helikon::openai` *(also `providers_openai`)* | `OpenAiModel` adapter |
 | `anthropic` | `paigasus_helikon::anthropic` | `AnthropicModel` adapter |
+| `litellm` | `paigasus_helikon::litellm` | `LiteLlmModel` adapter — LiteLLM proxy (OpenAI-compatible gateway) |
 | `mcp` | `paigasus_helikon::mcp` | rmcp-based MCP client/server |
 | `tools` | `paigasus_helikon::tools` | sandboxed Read/Write/Edit/Bash tools |
 | `tools-web` | *(extends `tools`)* | adds the WebFetch / WebSearch network tools |
