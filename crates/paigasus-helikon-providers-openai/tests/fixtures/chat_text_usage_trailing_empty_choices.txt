@@ -1,0 +1,13 @@
+: Provenance: HAND-AUTHORED, not captured. Same trailing-usage envelope as
+: chat_text_usage_trailing.txt, but with "choices":[] on the usage chunk --
+: the shape api.openai.com emits. async-openai documents the field as "Can
+: also be empty for the last chunk if you set stream_options:
+: {"include_usage": true}". Both shapes must translate identically.
+data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}
+
+data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":6,"total_tokens":14}}
+
+data: [DONE]
+

@@ -6,3 +6,9 @@ crates/paigasus-helikon-providers-anthropic/tests/fixtures/*.txt text eol=lf
 # pin LF for consistency with the convention above.
 crates/paigasus-helikon-tools/tests/fixtures/*.json text eol=lf
 crates/paigasus-helikon-tools/tests/fixtures/*.html text eol=lf
+
+# OpenAI SSE fixtures: served byte-for-byte to a real SSE parser by wiremock.
+# CRLF would still parse (SSE accepts \r\n), so this is consistency and
+# defence for a future test that splits on literal \n -- not a fix for a
+# present failure. See SMA-522.
+crates/paigasus-helikon-providers-openai/tests/fixtures/*.txt text eol=lf

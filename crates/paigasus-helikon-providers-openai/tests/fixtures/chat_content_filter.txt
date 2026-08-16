@@ -1,6 +1,11 @@
+: Provenance: HAND-AUTHORED. The trailing-usage envelope matches the live
+: capture in chat_text_usage_trailing.txt; the content_filter finish reason
+: is hand-built because it cannot be provoked on demand from any mock.
 data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"sorry, I can't"}}]}
 
-data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}],"usage":{"prompt_tokens":4,"completion_tokens":4,"total_tokens":8}}
+data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}
+
+data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":4,"completion_tokens":4,"total_tokens":8}}
 
 data: [DONE]
 
