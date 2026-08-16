@@ -56,10 +56,12 @@ impl MessageTranslator {
     /// emit zero or one; `message_delta` carrying both stop_reason and
     /// usage emits one Usage followed by Finish on `message_stop`). A
     /// terminal event (`Finish` or an `Err`) is emitted at most once per
-    /// stream; anything after it — including a later `message_delta`'s
-    /// `Usage` — is suppressed. A clean end-of-stream flush of a buffered
-    /// stop reason with no terminal event yet is handled separately by
-    /// `finish()`.
+    /// stream, and a later `message_delta`'s `Usage` is suppressed once one
+    /// has been emitted. Content deltas are deliberately *not* guarded: a
+    /// malformed stream that keeps sending `content_block_delta` after
+    /// `message_stop` would still yield them. A clean end-of-stream flush of
+    /// a buffered stop reason with no terminal event yet is handled
+    /// separately by `finish()`.
     pub(crate) fn consume(
         &mut self,
         event: AnthropicEvent,
