@@ -279,3 +279,44 @@ async fn multi_turn_tool_use_continuation() {
     ));
     assert_exactly_one_terminal_finish(&events2);
 }
+
+/// SMA-531: a response body that ends cleanly after `message_delta` — before
+/// `message_stop` — must still deliver the terminal `Finish`. Before the fix
+/// this stream emitted `[Usage, TokenDelta, TokenDelta, Usage]` and stopped.
+#[tokio::test]
+async fn clean_eof_after_message_delta_emits_finish() {
+    let server = MockServer::start().await;
+    let fixture = include_str!("fixtures/eof_after_message_delta.txt");
+    let events = run_stream(&server, fixture).await;
+    let oks: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
+
+    assert_eq!(
+        oks.len(),
+        5,
+        "expected Usage, TokenDelta, TokenDelta, Usage, Finish -- got {oks:#?}"
+    );
+    assert_exactly_one_terminal_finish(&oks);
+    assert!(
+        matches!(oks.last().unwrap(), ModelEvent::Finish { reason } if *reason == FinishReason::Stop),
+        "the buffered end_turn must flush as Finish::Stop, got {oks:#?}"
+    );
+}
+
+/// SMA-531: the same guarantee for a byte-level cut. The partial `message_stop`
+/// event has no blank-line terminator, so the SSE parser discards it at EOF and
+/// the translator sees the same prefix as `eof_after_message_delta.txt`.
+#[tokio::test]
+async fn body_cut_inside_message_stop_emits_finish() {
+    let server = MockServer::start().await;
+    let fixture = include_str!("fixtures/body_cut_inside_message_stop.txt");
+    let events = run_stream(&server, fixture).await;
+    let oks: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
+
+    assert_eq!(
+        oks.len(),
+        5,
+        "the partial message_stop must be discarded, leaving four events plus \
+         the flushed Finish -- got {oks:#?}"
+    );
+    assert_exactly_one_terminal_finish(&oks);
+}

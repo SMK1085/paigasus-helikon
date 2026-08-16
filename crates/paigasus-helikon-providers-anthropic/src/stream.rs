@@ -175,6 +175,28 @@ impl MessageTranslator {
         Ok(out)
     }
 
+    /// Flush a stop reason buffered from `message_delta` when the response
+    /// body ends cleanly before `message_stop` arrived.
+    ///
+    /// Returns `None` when `message_stop` already drained the buffer (the
+    /// well-formed path) or when no stop reason was ever observed. A stream
+    /// that ended *before* `message_delta` is never reported as a clean
+    /// `Stop`; one that ended *after* it is, because `message_delta`'s
+    /// `stop_reason` is the model's own authoritative decision and
+    /// `message_stop` is only a frame terminator.
+    ///
+    /// **Clean-EOF path only.** Never call this on the cancellation or
+    /// transport-error paths — see `model.rs`.
+    pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
+        let reason = self.stop_reason.take()?;
+        tracing::warn!(
+            target: "paigasus::anthropic::stream",
+            stop_reason = %reason,
+            "stream body ended without message_stop; flushing buffered stop reason",
+        );
+        Some(self.finish_or_error(&reason))
+    }
+
     fn finish_or_error(&self, reason: &str) -> Result<ModelEvent, ModelError> {
         match reason {
             "end_turn" | "stop_sequence" => Ok(ModelEvent::Finish {
