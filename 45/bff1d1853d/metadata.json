@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "45bff1d1853d",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-522-openai-provider-emits-finish-before-usage-violating-the-core",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-openai/src/backend/chat.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/45/bff1d1853d/0/metadata.json",
+      "transcript": "/45/bff1d1853d/0/full.jsonl",
+      "compact_transcript": "/45/bff1d1853d/0/transcript.jsonl",
+      "content_hash": "/45/bff1d1853d/0/content_hash.txt",
+      "prompt": "/45/bff1d1853d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 212,
+    "cache_creation_tokens": 438803,
+    "cache_read_tokens": 18571784,
+    "output_tokens": 117406,
+    "api_call_count": 107
+  }
+}
