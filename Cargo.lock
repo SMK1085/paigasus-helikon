@@ -4092,7 +4092,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-util",
  "tracing",
  "wiremock",
 ]
