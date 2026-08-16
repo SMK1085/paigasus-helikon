@@ -1,8 +1,9 @@
 : Provenance: captured 2026-08-16 from ghcr.io/berriai/litellm:main-stable
 : serving the OpenAI Chat Completions wire shape, keyless mock backend.
-: The finish chunk, the trailing usage chunk and [DONE] are byte-for-byte
-: from that capture. The ten content deltas are reconstructed in the same
-: shape (the captured trace elided them). This is a PROXY capture, not
+: The finish chunk, the trailing usage chunk and [DONE] are transcribed
+: from that capture, with the response id shortened. The ten content
+: deltas are reconstructed in the same shape (the captured trace elided
+: them). This is a PROXY capture, not
 : api.openai.com -- see the empty-choices variant for the first-party shape.
 data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}
 

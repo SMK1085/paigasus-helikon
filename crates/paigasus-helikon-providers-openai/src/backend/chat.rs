@@ -323,7 +323,8 @@ impl ChatTranslator {
     /// Emit the terminal `Finish` at end-of-stream.
     ///
     /// Returns an empty vec when no `finish_reason` was ever observed, so a
-    /// truncated stream is never reported as a clean stop.
+    /// truncated stream is never reported as a clean stop, or when an
+    /// earlier call already drained the buffer.
     pub(crate) fn finish(&mut self) -> Vec<ModelEvent> {
         let Some(reason) = self.finish_reason.take() else {
             tracing::debug!(

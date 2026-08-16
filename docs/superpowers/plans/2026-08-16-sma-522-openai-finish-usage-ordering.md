@@ -375,6 +375,8 @@ Expected: all four new tests pass.
 - [ ] **Step 4: Confirm the tests are real regression tests (two distinct mutations)**
 
 > **Corrected during execution.** An earlier draft of this step claimed the inline-`Finish` mutation fails `repeated_finish_reasons_yield_one_finish_last_wins`. It does not: that test discards the return values of the two `consume` calls carrying a `finish_reason`, so a leaked inline `Finish` is never observed and the test still passes. Each test needs the mutation that actually targets it.
+>
+> **Update, post-execution (commit `53bf242b`).** The test that shipped no longer matches the description above. It was strengthened to bind the `consume()` return values (`first`/`last`) and assert `!first.iter().any(|e| matches!(e, ModelEvent::Finish { .. }))` (and the same for `last`), specifically to close the gap this note describes. As shipped, `repeated_finish_reasons_yield_one_finish_last_wins` *does* fail under the inline-`Finish` mutation — the discard-the-return-value gap no longer exists in the code that merged.
 
 **Mutation A — inline `Finish` leak.** In `consume`, add `out.push(ModelEvent::Finish { reason: mapped.clone() });` immediately **before** `self.finish_reason = Some(mapped);`. (It must go before, not after: `FinishReason` is not `Copy`, so `Some(mapped)` moves the value and a later `mapped.clone()` will not compile.) Then:
 
