@@ -58,6 +58,48 @@ fn is_secret_header(name: &str) -> bool {
     n == "authorization" || n == "api-key" || n == "x-api-key" || n.starts_with("x-litellm-key")
 }
 
+/// Render `endpoint` with any URL userinfo (`user:pass@…`) blanked.
+///
+/// A basic-auth-fronted LiteLLM proxy (`http://admin:s3cret@litellm:4000`)
+/// is a supported deployment shape — `normalise_endpoint` doesn't reject
+/// userinfo, and reqwest honours it — so the credential must be stripped
+/// here rather than assumed absent. Falls back to the raw string if
+/// `endpoint` doesn't reparse (it always should, having come from
+/// `normalise_endpoint`'s own `Url::to_string()`).
+fn redact_endpoint(endpoint: &str) -> String {
+    match reqwest::Url::parse(endpoint) {
+        Ok(mut url) => {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.to_string()
+        }
+        Err(_) => endpoint.to_owned(),
+    }
+}
+
+/// `Debug` view of [`Extras`] that shows key names/counts, not values.
+///
+/// `metadata` and `extra_body` are arbitrary caller-supplied JSON — LiteLLM's
+/// own request passthrough accepts per-request provider credentials there
+/// (`api_key`, `aws_*`, `vertex_credentials`, …), none of which are in
+/// [`RESERVED_BODY_KEYS`], so a value-printing `Debug` would leak them.
+struct RedactedExtras<'a>(&'a Extras);
+
+impl std::fmt::Debug for RedactedExtras<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Extras")
+            .field("fallbacks", &self.0.fallbacks)
+            .field("num_retries", &self.0.num_retries)
+            .field("metadata_keys", &self.0.metadata.keys().collect::<Vec<_>>())
+            .field("tags", &self.0.tags)
+            .field(
+                "extra_body_keys",
+                &self.0.extra_body.keys().collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let headers: Vec<(&str, &str)> = self
@@ -75,12 +117,12 @@ impl std::fmt::Debug for Config {
             })
             .collect();
         f.debug_struct("Config")
-            .field("endpoint", &self.endpoint)
+            .field("endpoint", &redact_endpoint(&self.endpoint))
             .field("model_id", &self.model_id)
             .field("auth", &self.auth.as_ref().map(|_| "<redacted>"))
             .field("headers", &headers)
             .field("capabilities", &self.capabilities)
-            .field("extras", &self.extras)
+            .field("extras", &RedactedExtras(&self.extras))
             .finish()
     }
 }
@@ -260,20 +302,23 @@ impl LiteLlmModelBuilder {
     pub fn build(self) -> Result<crate::LiteLlmModel, BuildError> {
         let base = self
             .base_url
-            .or_else(|| std::env::var("LITELLM_API_BASE").ok())
-            .or_else(|| std::env::var("LITELLM_PROXY_API_BASE").ok())
+            .or_else(|| non_empty_env("LITELLM_API_BASE"))
+            .or_else(|| non_empty_env("LITELLM_PROXY_API_BASE"))
             .ok_or(BuildError::MissingBaseUrl)?;
 
         let endpoint = normalise_endpoint(&base, &self.chat_path)
             .map_err(|_| BuildError::InvalidBaseUrl(base.clone()))?;
 
         // Auth: explicit wins; empty/whitespace is treated as absent so we
-        // never emit a malformed `Bearer ` header.
+        // never emit a malformed `Bearer ` header, and so an
+        // unset-but-declared env var (e.g. `LITELLM_API_KEY=` from
+        // docker-compose/.env) doesn't shadow a real key further down the
+        // fallback chain.
         let auth = match self.auth {
             Auth::Key(k) => Some(k),
-            Auth::None => std::env::var("LITELLM_API_KEY")
-                .ok()
-                .or_else(|| std::env::var("LITELLM_PROXY_API_KEY").ok()),
+            Auth::None => {
+                non_empty_env("LITELLM_API_KEY").or_else(|| non_empty_env("LITELLM_PROXY_API_KEY"))
+            }
         }
         .filter(|k| !k.trim().is_empty());
 
@@ -321,6 +366,17 @@ impl LiteLlmModelBuilder {
             extras,
         }))
     }
+}
+
+/// Read an env var, treating unset *and* empty/whitespace-only as absent.
+///
+/// `std::env::var` returns `Ok("")` for a var declared but set to the empty
+/// string (the shape docker-compose/`.env` produce for an unset-but-declared
+/// variable) — filtering per-source here, before the fallback chain's
+/// `or_else`, keeps an empty first var from shadowing a real value in a
+/// later one.
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
 /// Default HTTP client: a connect timeout so a hung proxy cannot hang
@@ -389,6 +445,21 @@ mod tests {
     }
 
     #[test]
+    fn empty_api_base_env_falls_through_to_proxy_api_base_env() {
+        let _g = env_lock().lock().unwrap();
+        clear_env();
+        // The shape docker-compose/.env produce for an unset-but-declared
+        // variable: `Ok("")`, not "unset".
+        std::env::set_var("LITELLM_API_BASE", "");
+        std::env::set_var("LITELLM_PROXY_API_BASE", "http://p:4000");
+        let m = b()
+            .build()
+            .expect("empty LITELLM_API_BASE must fall through to the proxy env base");
+        assert_eq!(m.endpoint(), "http://p:4000/v1/chat/completions");
+        clear_env();
+    }
+
+    #[test]
     fn invalid_base_url_is_an_error() {
         let _g = env_lock().lock().unwrap();
         clear_env();
@@ -426,6 +497,21 @@ mod tests {
         std::env::set_var("LITELLM_PROXY_API_KEY", "sk-proxy");
         let m = b().base_url("http://p:4000").build().unwrap();
         assert_eq!(m.auth(), Some("sk-proxy"));
+        clear_env();
+    }
+
+    #[test]
+    fn empty_api_key_env_falls_through_to_proxy_api_key_env() {
+        let _g = env_lock().lock().unwrap();
+        clear_env();
+        std::env::set_var("LITELLM_API_KEY", "");
+        std::env::set_var("LITELLM_PROXY_API_KEY", "sk-real");
+        let m = b().base_url("http://p:4000").build().unwrap();
+        assert_eq!(
+            m.auth(),
+            Some("sk-real"),
+            "an empty LITELLM_API_KEY must not shadow a real LITELLM_PROXY_API_KEY"
+        );
         clear_env();
     }
 
@@ -539,6 +625,38 @@ mod tests {
         assert!(
             !dbg.contains("another-secret"),
             "auth header value leaked into Debug: {dbg}"
+        );
+    }
+
+    #[test]
+    fn debug_output_redacts_endpoint_userinfo_and_extra_body_values() {
+        let _g = env_lock().lock().unwrap();
+        clear_env();
+        // Basic-auth-fronted proxy: URL userinfo carries a credential too.
+        // extra_body's `api_key` is LiteLLM passthrough shape, not in
+        // RESERVED_BODY_KEYS, so it's a legal (and realistic) escape-hatch
+        // value that must not be printed.
+        let m = b()
+            .base_url("http://admin:s3cret-pw@p:4000")
+            .extra_body(serde_json::json!({ "api_key": "sk-passthrough-secret" }))
+            .build()
+            .unwrap();
+        let dbg = format!("{m:?}");
+        assert!(
+            !dbg.contains("s3cret-pw"),
+            "endpoint userinfo password leaked into Debug: {dbg}"
+        );
+        assert!(
+            !dbg.contains("admin"),
+            "endpoint userinfo username leaked into Debug: {dbg}"
+        );
+        assert!(
+            !dbg.contains("sk-passthrough-secret"),
+            "extra_body value leaked into Debug: {dbg}"
+        );
+        assert!(
+            dbg.contains("api_key"),
+            "extra_body key name should still be visible for debugging: {dbg}"
         );
     }
 }
