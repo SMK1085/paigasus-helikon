@@ -3214,7 +3214,7 @@ git commit -m "feat(providers): SMA-451 implement the litellm model trait"
 
 **Files:**
 - Create: `crates/paigasus-helikon-providers-litellm/tests/litellm_wire.rs`
-- Create: `crates/paigasus-helikon-providers-litellm/tests/litellm_streaming.rs`
+- Create: `crates/paigasus-helikon-providers-litellm/tests/streaming.rs`
 - Create: `crates/paigasus-helikon-providers-litellm/tests/cancellation.rs`
 - Create: `crates/paigasus-helikon-providers-litellm/tests/live.rs`
 - Create: `crates/paigasus-helikon-providers-litellm/tests/fixtures/*.txt`
@@ -3517,7 +3517,7 @@ async fn rate_limit_carries_retry_after() {
 }
 ```
 
-- [ ] **Step 4: Write `tests/litellm_streaming.rs`**
+- [ ] **Step 4: Write `tests/streaming.rs`**
 
 ```rust
 //! SSE → `ModelEvent` translation, driven through the real HTTP path.
