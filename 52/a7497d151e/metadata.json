@@ -3,7 +3,7 @@
   "checkpoint_id": "52a7497d151e",
   "strategy": "manual-commit",
   "branch": "feature/sma-451-provider-crate-paigasus-helikon-providers-litellm",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": null,
   "sessions": [
     {
@@ -11,6 +11,13 @@
       "transcript": "/52/a7497d151e/0/full.jsonl",
       "compact_transcript": "/52/a7497d151e/0/transcript.jsonl",
       "content_hash": "/52/a7497d151e/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/52/a7497d151e/1/metadata.json",
+      "transcript": "/52/a7497d151e/1/full.jsonl",
+      "compact_transcript": "/52/a7497d151e/1/transcript.jsonl",
+      "content_hash": "/52/a7497d151e/1/content_hash.txt",
       "prompt": ""
     }
   ],
