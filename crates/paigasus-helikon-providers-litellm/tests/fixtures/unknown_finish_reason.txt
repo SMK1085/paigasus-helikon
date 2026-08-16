@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"hi"}}]}
+
+data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{},"finish_reason":"guardrail_intervened"}]}
+
+data: [DONE]
+

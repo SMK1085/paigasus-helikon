@@ -1,0 +1,2 @@
+data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"partial"}}]}
+

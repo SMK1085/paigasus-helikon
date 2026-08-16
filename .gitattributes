@@ -1,6 +1,7 @@
 # SSE wire-format fixtures: parsed verbatim by tests, must stay LF
 # regardless of platform (Windows git defaults to CRLF on checkout).
 crates/paigasus-helikon-providers-anthropic/tests/fixtures/*.txt text eol=lf
+crates/paigasus-helikon-providers-litellm/tests/fixtures/*.txt text eol=lf
 
 # Web-tool fixtures (search-API JSON + the readability HTML): parsed by tests;
 # pin LF for consistency with the convention above.
