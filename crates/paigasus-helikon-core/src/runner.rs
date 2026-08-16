@@ -119,8 +119,8 @@ where
     /// The same cancellation precedence as [`Runner::run`] applies: once a real
     /// terminal event has been yielded, a late cancel/timeout does not append a
     /// second, synthetic terminal — the stream ends after the real one.
-    /// Gate the synthetic terminal on [`effective_interrupt`], and render it
-    /// with [`RunInterrupt::terminal_message`].
+    /// Gate the synthetic terminal on [`effective_interrupt`], and build it with
+    /// [`RunInterrupt::terminal_event`] rather than assembling the frame by hand.
     async fn run_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -522,11 +522,29 @@ impl RunInterrupt {
 
     /// Canonical `error` text for the terminal [`crate::AgentEvent::RunFailed`]
     /// a streaming runner synthesizes when this interrupt wins.
+    ///
+    /// This is the text alone. Use [`RunInterrupt::terminal_event`] when you
+    /// need the whole frame — a runner should not assemble one by hand.
     #[must_use]
     pub fn terminal_message(self) -> &'static str {
         match self {
             Self::Cancelled => "run cancelled",
             Self::TimedOut => "run timed out",
+        }
+    }
+
+    /// The terminal [`AgentEvent`] a streaming runner yields when this interrupt
+    /// wins — see [`effective_interrupt`].
+    ///
+    /// Renders through [`RunInterrupt::terminal_message`], so a runner never
+    /// assembles the frame itself and every runner emits identical bytes for the
+    /// same interrupt. There is deliberately no second `match self` here: one
+    /// wildcard-free match per rendering is what makes the `#[non_exhaustive]`
+    /// compile-break guard worth anything.
+    #[must_use]
+    pub fn terminal_event(self) -> AgentEvent {
+        AgentEvent::RunFailed {
+            error: self.terminal_message().to_owned(),
         }
     }
 }
@@ -754,5 +772,64 @@ mod interrupt_tests {
             "Cancelled deliberately differs: the synthesized terminal frame says \
              \"run cancelled\", RunError's Display says \"cancelled\""
         );
+    }
+
+    /// Every [`RunInterrupt`] variant, as the shared fixture for the tests
+    /// below. Mirrors `agent.rs`'s `terminal_tests::every_variant`.
+    ///
+    /// `_exhaustive`'s `match` is deliberately wildcard-free: `#[non_exhaustive]`
+    /// has no effect inside the defining crate, so adding a variant fails to
+    /// compile *here* — one place — until someone makes an explicit decision.
+    /// It cannot by itself force the new variant into the returned vec; that is
+    /// what `every_interrupt_covers_the_whole_enum` is the second nudge for.
+    fn every_interrupt() -> Vec<RunInterrupt> {
+        fn _exhaustive(i: RunInterrupt) {
+            match i {
+                RunInterrupt::Cancelled | RunInterrupt::TimedOut => {}
+            }
+        }
+        vec![RunInterrupt::Cancelled, RunInterrupt::TimedOut]
+    }
+
+    #[test]
+    fn every_interrupt_covers_the_whole_enum() {
+        // Distinct discriminants, not length: a plain count would also pass for
+        // two copies of the same variant.
+        let discriminants: std::collections::HashSet<_> = every_interrupt()
+            .iter()
+            .map(std::mem::discriminant)
+            .collect();
+        assert_eq!(
+            discriminants.len(),
+            2,
+            "every_interrupt() must construct one instance of each distinct RunInterrupt variant"
+        );
+    }
+
+    /// `terminal_event` must agree with `terminal_message` by construction.
+    /// Asserted against the accessor, never a restated literal — the literals
+    /// are already pinned by `terminal_message_rendering`.
+    #[test]
+    fn terminal_event_agrees_with_terminal_message() {
+        for i in every_interrupt() {
+            match i.terminal_event() {
+                AgentEvent::RunFailed { error } => {
+                    assert_eq!(error, i.terminal_message());
+                }
+                other => panic!("{i:?}: terminal_event must be RunFailed, got {other:?}"),
+            }
+        }
+    }
+
+    /// The synthesized frame must be classified terminal by the very predicate
+    /// runners use to compute `saw_terminal` for [`effective_interrupt`].
+    #[test]
+    fn terminal_event_is_terminal() {
+        for i in every_interrupt() {
+            assert!(
+                i.terminal_event().is_terminal(),
+                "{i:?}: the synthesized frame must satisfy AgentEvent::is_terminal"
+            );
+        }
     }
 }
