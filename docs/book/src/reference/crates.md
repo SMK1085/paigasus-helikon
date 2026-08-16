@@ -10,7 +10,7 @@ For orientation — how to pick crates and add them to your `Cargo.toml` — see
 - The provider, session, tool, MCP, and runtime crates each depend on `core` and on nothing else in the workspace (`-tools` carries a path-only dev-dep on `-providers-openai` for an example; it is stripped from the published manifest).
 - `paigasus-helikon-macros` is a proc-macro crate; its `#[tool]` expansion targets `core` types in the consumer's crate.
 - `paigasus-helikon` is the **facade**: it re-exports `core` unconditionally and the sibling crates behind Cargo features. Application crates normally depend on the facade alone and turn on the features they need.
-- `paigasus-helikon-cli` consumes `core` and the sibling crates it needs (`-evals`, `-runtime-tokio`, `-providers-openai`, `-providers-anthropic`, `-mcp`) directly — not the facade. It publishes to crates.io at `0.1.0` as a binary crate; its lib target is internal (`missing_docs` opted out) and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves.
+- `paigasus-helikon-cli` consumes `core` and the sibling crates it needs (`-evals`, `-runtime-tokio`, `-providers-openai`, `-providers-anthropic`, `-mcp`) directly — not the facade. It publishes to crates.io as a binary crate; its lib target is internal (`missing_docs` opted out) and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves.
 
 ## Crate table
 
