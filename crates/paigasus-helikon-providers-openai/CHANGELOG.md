@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.21](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.20...paigasus-helikon-providers-openai-v0.2.21) - 2026-08-16
+
+### Fixed
+
+- *(providers-openai)* SMA-522 emit finish as the terminal stream event ([#197](https://github.com/SMK1085/paigasus-helikon/pull/197))
+
+## [0.2.20](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.19...paigasus-helikon-providers-openai-v0.2.20) - 2026-08-16
+
+### Other
+
+- updated the following local packages: paigasus-helikon-core
+
 ## [0.2.19](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.18...paigasus-helikon-providers-openai-v0.2.19) - 2026-08-14
 
 ### Other

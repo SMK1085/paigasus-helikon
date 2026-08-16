@@ -271,11 +271,11 @@ impl ResponsesTranslator {
     /// Consume one upstream SSE event and produce zero or more [`ModelEvent`]s,
     /// or an error if the server emits a `response.failed` / `error` event.
     ///
-    /// Event ordering follows the "Usage before Finish" contract stated in
-    /// [`paigasus_helikon_core::Model::invoke`]:
-    /// 1. `TokenDelta` / `ReasoningDelta` / `ToolCallDelta` (generation deltas)
-    /// 2. `Usage` (when the terminal response event carries `usage`)
-    /// 3. `Finish` (terminal; always last)
+    /// Event ordering: `Usage` and `Finish` are built together from a single
+    /// terminal event's own data (see [`terminal_events`]), so they cannot be
+    /// split across chunks the way the Chat Completions backend's could.
+    /// Per `paigasus_helikon_core::Model::invoke`, only `Finish` is
+    /// positionally constrained — `Usage` may appear anywhere.
     pub(crate) fn consume(
         &mut self,
         event: ResponseStreamEvent,
@@ -445,6 +445,12 @@ impl ResponsesTranslator {
 /// - `"max_output_tokens"` → `Finish { Length }`
 /// - `"content_filter"` → `Finish { ContentFilter }`
 /// - other string → `Finish { Other(reason) }`
+///
+/// **Invariant (SMA-522):** `Usage` is constructed *only* here, and this
+/// function unconditionally appends `Finish` before returning. That — not the
+/// incidental fact that both derive from one event — is what keeps the
+/// backend's ordering correct. A future arm emitting `Usage` elsewhere would
+/// break it.
 fn terminal_events(
     usage: Option<ResponseUsage>,
     status: Status,

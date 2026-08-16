@@ -258,26 +258,20 @@ where
         let (mut events, result) = self.run_inner(agent, ctx, input, config).await?;
 
         let failure = FailureSlot::new();
-        let terminal_message = synthetic_terminal_message(&result);
+        let terminal = synthetic_terminal_event(&result);
         // Move the structured error into the slot only for an agent failure;
-        // the message itself was already taken above.
+        // the event itself was already rendered above.
         if let Err(RunError::Agent(err)) = result {
             failure.set(err);
         }
 
         // `collect()` only reads the failure slot once it observes a terminal
         // `RunFailed` in the stream. The durable event log already carries one
-        // for `AgentFailed` runs; synthesize one for the terminal states that
-        // do not (cancellation/timeout/infra), so a failed run never collects
-        // as `Ok`. The guard tests for *any* terminal via
-        // `AgentEvent::is_terminal`, not just `RunFailed`: a status that mapped
-        // to `Err` while the event log ended in `RunCompleted` would otherwise
-        // append a second terminal (SMA-422).
-        if let Some(message) = terminal_message {
-            if !events.last().is_some_and(AgentEvent::is_terminal) {
-                events.push(AgentEvent::RunFailed { error: message });
-            }
-        }
+        // for `AgentFailed` runs; synthesize one for the terminal states that do
+        // not (cancellation/timeout/infra), so a failed run never collects as
+        // `Ok`. `append_synthetic_terminal` owns the guard that stops this from
+        // appending a *second* terminal (SMA-422).
+        append_synthetic_terminal(&mut events, terminal);
 
         Ok(RunResultStreaming::with_failure(
             stream::iter(events).boxed(),
@@ -286,25 +280,45 @@ where
     }
 }
 
-/// The `error` text for the terminal frame [`Runner::run_streamed`] synthesizes
-/// when a run ends without one of its own, or `None` when the run succeeded.
+/// The terminal frame [`Runner::run_streamed`] synthesizes when a run ends
+/// without one of its own, or `None` when the run succeeded.
 ///
-/// Cancellation and timeout render through [`RunInterrupt::terminal_message`],
+/// Cancellation and timeout render through [`RunInterrupt::terminal_event`],
 /// **not** through [`RunError`]'s `Display`. The two disagree — `RunError::Cancelled`
 /// displays as `"cancelled"` while the canonical synthesized frame says
 /// `"run cancelled"` — so going through `Display` here would make this runner emit
 /// different text than `TokioRunner` for the same event. One rendering, one place
-/// (SMA-422).
-fn synthetic_terminal_message(result: &Result<RunResult, RunError>) -> Option<String> {
+/// (SMA-422, SMA-515).
+fn synthetic_terminal_event(result: &Result<RunResult, RunError>) -> Option<AgentEvent> {
     match result {
         Ok(_) => None,
-        Err(RunError::Agent(err)) => Some(err.to_string()),
-        Err(RunError::Cancelled) => Some(RunInterrupt::Cancelled.terminal_message().to_owned()),
-        Err(RunError::Timeout) => Some(RunInterrupt::TimedOut.terminal_message().to_owned()),
+        Err(RunError::Agent(err)) => Some(AgentEvent::RunFailed {
+            error: err.to_string(),
+        }),
+        Err(RunError::Cancelled) => Some(RunInterrupt::Cancelled.terminal_event()),
+        Err(RunError::Timeout) => Some(RunInterrupt::TimedOut.terminal_event()),
         // `RunError` is `#[non_exhaustive]` and foreign, so this arm is required.
         // Infrastructure failures have no canonical interrupt text; their own
-        // message is the most informative thing available.
-        Err(other) => Some(other.to_string()),
+        // message is the most informative thing available. Not a `RunInterrupt`,
+        // so the frame is built here rather than in core.
+        Err(other) => Some(AgentEvent::RunFailed {
+            error: other.to_string(),
+        }),
+    }
+}
+
+/// Append `event` as the run's terminal frame, unless the durable event log
+/// already ends in one.
+///
+/// The guard is load-bearing (SMA-422, closing SMA-421): a status that mapped to
+/// `Err` while the event log ended in `RunCompleted` must not append a second
+/// terminal. It tests for *any* terminal via [`AgentEvent::is_terminal`], not
+/// just `RunFailed`.
+fn append_synthetic_terminal(events: &mut Vec<AgentEvent>, event: Option<AgentEvent>) {
+    if let Some(event) = event {
+        if !events.last().is_some_and(AgentEvent::is_terminal) {
+            events.push(event);
+        }
     }
 }
 
@@ -349,7 +363,18 @@ async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecord
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paigasus_helikon_core::AgentError;
+    use paigasus_helikon_core::{AgentError, TokenUsage};
+
+    /// Unwrap a synthesized terminal to its message, asserting the variant on
+    /// the way through — something the old `-> Option<String>` signature made
+    /// impossible.
+    fn terminal_text(ev: Option<AgentEvent>) -> Option<String> {
+        match ev {
+            Some(AgentEvent::RunFailed { error }) => Some(error),
+            Some(other) => panic!("synthesized terminal must be RunFailed, got {other:?}"),
+            None => None,
+        }
+    }
 
     #[test]
     fn with_ctx_seed_stores_seed() {
@@ -369,7 +394,7 @@ mod tests {
     /// would silently emit "cancelled" here and "run cancelled" there.
     #[test]
     fn cancelled_renders_the_canonical_interrupt_message() {
-        let message = synthetic_terminal_message(&Err(RunError::Cancelled));
+        let message = terminal_text(synthetic_terminal_event(&Err(RunError::Cancelled)));
         assert_eq!(
             message.as_deref(),
             Some(RunInterrupt::Cancelled.terminal_message())
@@ -385,15 +410,15 @@ mod tests {
     #[test]
     fn timed_out_renders_the_canonical_interrupt_message() {
         assert_eq!(
-            synthetic_terminal_message(&Err(RunError::Timeout)).as_deref(),
+            terminal_text(synthetic_terminal_event(&Err(RunError::Timeout))).as_deref(),
             Some(RunInterrupt::TimedOut.terminal_message())
         );
     }
 
     #[test]
-    fn success_synthesizes_no_terminal_message() {
+    fn success_synthesizes_no_terminal_event() {
         assert_eq!(
-            synthetic_terminal_message(&Ok(RunResult::default())),
+            terminal_text(synthetic_terminal_event(&Ok(RunResult::default()))),
             None,
             "a completed run already carries its own terminal"
         );
@@ -403,12 +428,59 @@ mod tests {
     /// flattened into an interrupt's canonical text.
     #[test]
     fn agent_failure_keeps_its_own_message() {
-        let message =
-            synthetic_terminal_message(&Err(RunError::Agent(AgentError::MaxTurnsExceeded(3))))
-                .expect("an agent failure always has a message");
+        let message = terminal_text(synthetic_terminal_event(&Err(RunError::Agent(
+            AgentError::MaxTurnsExceeded(3),
+        ))))
+        .expect("an agent failure always has a message");
         assert!(
             message.contains('3'),
             "expected the AgentError's own text, got {message:?}"
         );
+    }
+
+    /// The SMA-421 regression guard: a durable log that already ends in a
+    /// terminal must not gain a second one, even when the run's status mapped
+    /// to `Err`. This test fails if the guard is dropped.
+    #[test]
+    fn guard_suppresses_a_second_terminal() {
+        let mut events = vec![AgentEvent::RunCompleted {
+            usage: TokenUsage::default(),
+        }];
+        append_synthetic_terminal(&mut events, Some(RunInterrupt::Cancelled.terminal_event()));
+        assert_eq!(
+            events.len(),
+            1,
+            "a log already ending in a terminal must not gain a second: {events:?}"
+        );
+        assert!(
+            matches!(events[0], AgentEvent::RunCompleted { .. }),
+            "the original terminal must survive untouched: {events:?}"
+        );
+    }
+
+    #[test]
+    fn guard_appends_when_the_log_has_no_terminal() {
+        let mut events = vec![AgentEvent::TurnStarted { turn: 0 }];
+        append_synthetic_terminal(&mut events, Some(RunInterrupt::TimedOut.terminal_event()));
+        assert_eq!(
+            events.len(),
+            2,
+            "a log with no terminal must receive the synthetic one: {events:?}"
+        );
+        assert_eq!(
+            terminal_text(events.pop()).as_deref(),
+            Some(RunInterrupt::TimedOut.terminal_message())
+        );
+    }
+
+    #[test]
+    fn no_event_appends_nothing() {
+        let mut events = vec![AgentEvent::TurnStarted { turn: 0 }];
+        append_synthetic_terminal(&mut events, None);
+        assert_eq!(events.len(), 1, "None must be a no-op: {events:?}");
+
+        let mut empty: Vec<AgentEvent> = Vec::new();
+        append_synthetic_terminal(&mut empty, None);
+        assert!(empty.is_empty(), "None must be a no-op on an empty log");
     }
 }

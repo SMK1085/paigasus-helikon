@@ -1354,9 +1354,9 @@ checksum = "7b02b629252fe8ef6460461409564e2c21d0c8e77e0944f3d189ff06c4e932ad"
 
 [[package]]
 name = "cc"
-version = "1.4.2"
+version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d262e149917187838d5b42777c8253bcb64500067342904e7d429499a6f277e"
+checksum = "509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2106,9 +2106,9 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26b73573e6edcd2af0cdf47bd6cb58f0b3839491263c314eaad1ccf24430e1de"
+checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "fixedbitset"
@@ -2913,9 +2913,9 @@ dependencies = [
 
 [[package]]
 name = "inotify"
-version = "0.11.4"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "153be1941a183ec9ccd095ddbe17a8b8d435ef6c76e9e02451b933c3999af2c8"
+checksum = "4cc00ea907cab49550b7da656f80ebb97be1b997d931fbcd28d39734e17ce592"
 dependencies = [
  "bitflags",
  "inotify-sys",
@@ -3857,7 +3857,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "paigasus-helikon"
-version = "0.5.3"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3899,7 +3899,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-cli"
-version = "0.1.11"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3924,7 +3924,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-core"
-version = "0.5.16"
+version = "0.5.17"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3948,7 +3948,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-evals"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "arrow",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-mcp"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4009,7 +4009,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-anthropic"
-version = "0.1.20"
+version = "0.1.21"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4031,7 +4031,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-bedrock"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4054,7 +4054,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-gemini"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4098,7 +4098,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-openai"
-version = "0.2.19"
+version = "0.2.21"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -4120,7 +4120,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-actix"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "actix-web",
  "actix-ws",
@@ -4142,7 +4142,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-agentcore"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4169,7 +4169,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-axum"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -4207,7 +4207,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-temporal"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4233,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-tokio"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4250,7 +4250,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-postgres"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "paigasus-helikon-core",
@@ -4262,7 +4262,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-redis"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "paigasus-helikon-core",
@@ -4275,7 +4275,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-sqlite"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "async-trait",
  "jiff",
@@ -4301,7 +4301,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-tools"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4534,9 +4534,9 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pkg-config"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "portable-atomic"
@@ -4949,9 +4949,9 @@ dependencies = [
 
 [[package]]
 name = "redis"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3257df217f7eab0044627a268c9cc6cdb60c0c421c88f83ac41c4e31520b6b84"
+checksum = "e37a4ca5c6ca42aa3e6df2fd32b987a65d32a4c2159a6f3fe0fd1df306a2658f"
 dependencies = [
  "arc-swap",
  "arcstr",
@@ -7011,9 +7011,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.24.0"
+version = "1.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
