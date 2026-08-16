@@ -134,6 +134,24 @@ mod tests {
     }
 
     #[test]
+    fn context_overflow_check_is_not_gated_on_status() {
+        // Not a realistic wire shape — the proxy was never observed to send
+        // this class name on a 500. This test exists purely to pin the
+        // ordering invariant: the context-overflow check runs before the
+        // status match, so it must fire even on a status (500) that the
+        // match would otherwise claim for `Unavailable`. A regression that
+        // moved the check inside the match as `400 if is_context_overflow(..)`
+        // would pass every other test here unchanged, since 400 is the only
+        // status exercised elsewhere.
+        let m = "litellm.ContextWindowExceededError: litellm.BadRequestError: \
+                 this is a mock context window exceeded error";
+        assert!(matches!(
+            classify(500, Some("500"), None, m, None),
+            ModelError::ContextLengthExceeded
+        ));
+    }
+
+    #[test]
     fn rate_limit_maps_with_retry_after() {
         let m = "litellm.RateLimitError: this is a mock rate limit error";
         match classify(429, Some("429"), Some("throttling_error"), m, Some(1500)) {
