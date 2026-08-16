@@ -372,15 +372,27 @@ cargo test -p paigasus-helikon-providers-openai --lib
 
 Expected: all four new tests pass.
 
-- [ ] **Step 4: Confirm `repeated_finish_reasons_yield_one_finish_last_wins` is a real regression test**
+- [ ] **Step 4: Confirm the tests are real regression tests (two distinct mutations)**
 
-Temporarily restore the old behaviour: in `consume`, re-add `out.push(ModelEvent::Finish { reason: mapped.clone() });` immediately after the `self.finish_reason = Some(mapped);` line. Then:
+> **Corrected during execution.** An earlier draft of this step claimed the inline-`Finish` mutation fails `repeated_finish_reasons_yield_one_finish_last_wins`. It does not: that test discards the return values of the two `consume` calls carrying a `finish_reason`, so a leaked inline `Finish` is never observed and the test still passes. Each test needs the mutation that actually targets it.
+
+**Mutation A — inline `Finish` leak.** In `consume`, re-add `out.push(ModelEvent::Finish { reason: mapped.clone() });` immediately after `self.finish_reason = Some(mapped);`. Then:
 
 ```bash
-cargo test -p paigasus-helikon-providers-openai --lib repeated_finish_reasons
+cargo test -p paigasus-helikon-providers-openai --lib finish_is_emitted_only_at_end_of_stream
 ```
 
-Expected: **FAIL** (two `Finish` events reach the consumer). Record the output, then **remove the temporary line** and re-run to confirm PASS.
+Expected: **FAIL** — `consume` emits `Finish` inline, which is exactly what that test asserts against. Record the output and revert the line.
+
+**Mutation B — first-wins instead of last-wins.** In `consume`, guard the buffer write so it only writes when empty: `if self.finish_reason.is_none() { self.finish_reason = Some(mapped); }`. Then:
+
+```bash
+cargo test -p paigasus-helikon-providers-openai --lib repeated_finish_reasons_yield_one_finish_last_wins
+```
+
+Expected: **FAIL** — the buffered reason stays `Stop` where the test requires `Length`. Record the output and revert the guard.
+
+After both, run `git diff` and confirm only the intended test additions remain, then re-run the full `--lib` suite to confirm green.
 
 - [ ] **Step 5: Commit**
 
