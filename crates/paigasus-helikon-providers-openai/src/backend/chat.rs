@@ -571,4 +571,99 @@ mod tests {
             other => panic!("expected ToolCallDelta, got {other:?}"),
         }
     }
+
+    /// Build a stream chunk from raw JSON, so tests state the wire shape
+    /// directly rather than constructing async-openai types field by field.
+    fn stream_chunk(json: &str) -> CreateChatCompletionStreamResponse {
+        serde_json::from_str(json).expect("fixture chunk must deserialize")
+    }
+
+    #[test]
+    fn finish_is_emitted_only_at_end_of_stream() {
+        let mut t = ChatTranslator::new();
+
+        let evs = t.consume(stream_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
+                "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ));
+        assert!(
+            !evs.iter().any(|e| matches!(e, ModelEvent::Finish { .. })),
+            "consume must not emit Finish inline, got {evs:?}"
+        );
+
+        let fin = t.finish();
+        assert_eq!(fin.len(), 1, "expected exactly one Finish, got {fin:?}");
+        assert!(matches!(
+            &fin[0],
+            ModelEvent::Finish {
+                reason: FinishReason::Stop
+            }
+        ));
+    }
+
+    #[test]
+    fn repeated_finish_reasons_yield_one_finish_last_wins() {
+        let mut t = ChatTranslator::new();
+
+        t.consume(stream_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
+                "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ));
+        let mid = t.consume(stream_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
+                "choices":[{"index":1,"delta":{"content":"x"}}]}"#,
+        ));
+        assert!(
+            mid.iter()
+                .any(|e| matches!(e, ModelEvent::TokenDelta { .. })),
+            "expected the interleaved TokenDelta, got {mid:?}"
+        );
+        t.consume(stream_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
+                "choices":[{"index":1,"delta":{},"finish_reason":"length"}]}"#,
+        ));
+
+        let fin = t.finish();
+        assert_eq!(
+            fin.len(),
+            1,
+            "exactly one Finish per stream, not one per chunk; got {fin:?}"
+        );
+        assert!(
+            matches!(
+                &fin[0],
+                ModelEvent::Finish {
+                    reason: FinishReason::Length
+                }
+            ),
+            "last observed finish_reason must win, got {fin:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_stream_emits_no_finish() {
+        let mut t = ChatTranslator::new();
+        t.consume(stream_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
+                "choices":[{"index":0,"delta":{"content":"partial"}}]}"#,
+        ));
+        assert!(
+            t.finish().is_empty(),
+            "a stream with no finish_reason must not report a clean stop"
+        );
+    }
+
+    #[test]
+    fn finish_is_idempotent_after_draining() {
+        let mut t = ChatTranslator::new();
+        t.consume(stream_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o",
+                "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ));
+        assert_eq!(t.finish().len(), 1);
+        assert!(
+            t.finish().is_empty(),
+            "finish() takes the buffer; a second call must yield nothing"
+        );
+    }
 }
