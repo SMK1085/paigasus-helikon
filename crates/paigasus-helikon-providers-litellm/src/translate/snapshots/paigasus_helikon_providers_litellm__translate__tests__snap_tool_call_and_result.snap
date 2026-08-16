@@ -9,7 +9,6 @@ expression: "build_request(&cfg(), &r)"
       "role": "user"
     },
     {
-      "content": null,
       "role": "assistant",
       "tool_calls": [
         {

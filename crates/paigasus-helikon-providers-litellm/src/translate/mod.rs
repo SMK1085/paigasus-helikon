@@ -24,7 +24,7 @@ pub(crate) fn build_request(cfg: &Config, req: &ModelRequest) -> Value {
     body.insert("model".to_owned(), Value::from(cfg.model_id.clone()));
     body.insert(
         "messages".to_owned(),
-        request::to_chat_messages(&req.messages),
+        strip_null_assistant_content(request::to_chat_messages(&req.messages)),
     );
     body.insert("stream".to_owned(), Value::Bool(true));
     body.insert(
@@ -64,6 +64,47 @@ pub(crate) fn build_request(cfg: &Config, req: &ModelRequest) -> Value {
 
     extras::apply(&mut body, &cfg.extras);
     Value::Object(body)
+}
+
+/// Drop a literal `content: null` from every assistant-role message.
+///
+/// This is a **post-processing step on the assembled body, not a change to
+/// the shared translator**: `translate::request::to_chat_messages` stays
+/// byte-identical to the OpenAI crate's copy of the same function (SMA-451
+/// design D6) — that identity is what the cross-crate parity test and the
+/// duplication decision both rest on, so it must not be touched here.
+///
+/// `to_chat_messages` sets `content: Value::Null` on an assistant message
+/// synthesized purely from pending tool calls (a turn with tool_calls but no
+/// text — see `flush_pending`/`assistant_message` in `request.rs`), and it
+/// does this identically in both crates. The OpenAI provider's wire output
+/// never actually shows that literal `null`: `providers-openai/src/backend/
+/// chat.rs` round-trips the translated `Value` through `async-openai`'s
+/// typed `ChatCompletionRequestAssistantMessage`, whose `content` field is
+/// `Option<_>` with `#[serde(skip_serializing_if = "Option::is_none")]` —
+/// deserializing `null` yields `None`, which is omitted on serialization.
+/// This crate has no `async-openai` dependency by design (SMA-451 design
+/// D2: "own reqwest + eventsource-stream client") and would otherwise send
+/// that null literally onto the wire — an artifact never exercised
+/// end-to-end against a real backend (the live-proxy capture in Appendix B
+/// could not provoke a tool-call turn). Stripping it here makes this
+/// provider's wire shape match the sibling provider's exactly, so nothing
+/// about "the OpenAI Chat Completions API treats `content: null` and an
+/// absent key the same" needs to be assumed by anyone sending these bytes.
+///
+/// Scoped to `role == "assistant"` — the only role either translator can
+/// produce a literal `content: null` for.
+fn strip_null_assistant_content(mut messages: Value) -> Value {
+    for m in messages.as_array_mut().into_iter().flatten() {
+        if m.get("role") == Some(&Value::from("assistant"))
+            && m.get("content") == Some(&Value::Null)
+        {
+            m.as_object_mut()
+                .expect("assistant message is an object")
+                .remove("content");
+        }
+    }
+    messages
 }
 
 #[cfg(test)]
@@ -215,6 +256,42 @@ mod tests {
             .build()
             .unwrap();
         insta::assert_json_snapshot!(build_request(&model.config_for_test(), &user("hi")));
+    }
+
+    /// An assistant turn synthesized purely from pending tool calls (no
+    /// preceding text) must omit `content` entirely on the wire — not send
+    /// it as `content: null`.
+    ///
+    /// `to_chat_messages` (duplicated byte-for-byte from
+    /// `providers-openai`, per SMA-451 design D6 — see
+    /// `translate/request.rs`) sets a literal `content: Value::Null` here;
+    /// the OpenAI provider never shows that on the wire because
+    /// `backend/chat.rs` round-trips the translated `Value` through
+    /// `async-openai`'s typed `ChatCompletionRequestAssistantMessage`
+    /// (`content: Option<_>` with `skip_serializing_if = "Option::is_none"`,
+    /// which drops a deserialized `null`). This crate has no `async-openai`
+    /// dependency (design D2) and would otherwise send the null literally —
+    /// `build_request` strips it in a post-processing step so the wire
+    /// shape matches the sibling provider's.
+    #[test]
+    fn assistant_tool_call_turn_emits_no_content_key() {
+        let mut r = ModelRequest::new();
+        r.messages = vec![Item::ToolCall {
+            call_id: "call_1".into(),
+            name: "get_weather".into(),
+            args: serde_json::json!({"city": "Berlin"}),
+        }];
+        let v = build_request(&cfg(), &r);
+        let messages = v["messages"].as_array().unwrap();
+        let assistant_msg = messages
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .expect("a synthesized assistant tool-call message");
+        assert!(
+            assistant_msg.get("content").is_none(),
+            "assistant tool-call turn must omit `content` entirely (not \
+             `null`, not `\"\"`), got: {assistant_msg}"
+        );
     }
 
     // ── Invariants ──────────────────────────────────────────────────────
