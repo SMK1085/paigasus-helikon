@@ -20,5 +20,33 @@
 //!
 //! [SMA-451]: https://linear.app/smaschek/issue/SMA-451
 
+mod builder;
 mod capabilities;
 mod transport;
+
+pub use builder::{BuildError, LiteLlmModelBuilder};
+
+/// LiteLLM proxy provider.
+#[derive(Debug, Clone)]
+pub struct LiteLlmModel(std::sync::Arc<builder::Config>);
+
+impl LiteLlmModel {
+    /// Chat Completions builder for a proxy model alias.
+    pub fn chat(model_id: impl Into<String>) -> LiteLlmModelBuilder {
+        LiteLlmModelBuilder::new(model_id)
+    }
+
+    pub(crate) fn from_config(cfg: builder::Config) -> Self {
+        Self(std::sync::Arc::new(cfg))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.0.endpoint
+    }
+
+    #[cfg(test)]
+    pub(crate) fn auth(&self) -> Option<&str> {
+        self.0.auth.as_deref()
+    }
+}
