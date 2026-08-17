@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "7a4e8574a111",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-549-migrate-the-temporalio-stack-from-05-to-07",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "Cargo.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7a/4e8574a111/0/metadata.json",
+      "transcript": "/7a/4e8574a111/0/full.jsonl",
+      "compact_transcript": "/7a/4e8574a111/0/transcript.jsonl",
+      "content_hash": "/7a/4e8574a111/0/content_hash.txt",
+      "prompt": "/7a/4e8574a111/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 160,
+    "cache_creation_tokens": 1687915,
+    "cache_read_tokens": 68050666,
+    "output_tokens": 57496,
+    "api_call_count": 85
+  }
+}
