@@ -110,7 +110,17 @@ impl Model for AnthropicModel {
                     n = event_stream.next() => n,
                 };
                 match next {
-                    None => return,
+                    // Stream exhausted normally (clean EOF). Flush a stop
+                    // reason buffered by `message_delta` when `message_stop`
+                    // never arrived, so the consumer always sees a terminal
+                    // event. Deliberately NOT done on the cancellation arm
+                    // above or the transport-error arm (below).
+                    None => {
+                        if let Some(terminal) = translator.finish() {
+                            yield terminal;
+                        }
+                        return;
+                    }
                     Some(Err(e)) => {
                         yield Err(ModelError::Transport(e.to_string()));
                         return;

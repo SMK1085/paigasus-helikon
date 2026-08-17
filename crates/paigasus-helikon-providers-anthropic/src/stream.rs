@@ -35,6 +35,7 @@ pub(crate) struct MessageTranslator {
     synthesizing_output: bool,
     synthesized_tool_index: Option<u32>,
     other_tool_fired: bool,
+    terminal_emitted: bool,
 }
 
 impl MessageTranslator {
@@ -47,12 +48,20 @@ impl MessageTranslator {
             synthesizing_output,
             synthesized_tool_index: None,
             other_tool_fired: false,
+            terminal_emitted: false,
         }
     }
 
     /// Consume one event. Returns the emitted ModelEvents (most calls
     /// emit zero or one; `message_delta` carrying both stop_reason and
-    /// usage emits one Usage followed by Finish on `message_stop`).
+    /// usage emits one Usage followed by Finish on `message_stop`). A
+    /// terminal event (`Finish` or an `Err`) is emitted at most once per
+    /// stream, and a later `message_delta`'s `Usage` is suppressed once one
+    /// has been emitted. Content deltas are deliberately *not* guarded: a
+    /// malformed stream that keeps sending `content_block_delta` after
+    /// `message_stop` would still yield them. A clean end-of-stream flush of
+    /// a buffered stop reason with no terminal event yet is handled
+    /// separately by `finish()`.
     pub(crate) fn consume(
         &mut self,
         event: AnthropicEvent,
@@ -150,13 +159,21 @@ impl MessageTranslator {
                 tracing::debug!(target: "paigasus::anthropic::stream", "content_block_stop");
             }
             AnthropicEvent::MessageDelta { delta, usage } => {
-                if let Some(MessageDeltaUsage { output_tokens }) = usage {
-                    out.push(Ok(ModelEvent::Usage {
-                        input_tokens: self.last_input_tokens,
-                        output_tokens,
-                        cached_input_tokens: self.last_cached_input_tokens,
-                        reasoning_tokens: None,
-                    }));
+                // A `message_delta` after the terminal event is a protocol
+                // violation (e.g. a second `message_delta` re-arming
+                // `stop_reason` post-`message_stop`, see
+                // `second_message_delta_after_message_stop_does_not_double_finish`).
+                // Emitting its `Usage` would put an event after `Finish`,
+                // which the core contract forbids.
+                if !self.terminal_emitted {
+                    if let Some(MessageDeltaUsage { output_tokens }) = usage {
+                        out.push(Ok(ModelEvent::Usage {
+                            input_tokens: self.last_input_tokens,
+                            output_tokens,
+                            cached_input_tokens: self.last_cached_input_tokens,
+                            reasoning_tokens: None,
+                        }));
+                    }
                 }
                 if let Some(reason) = delta.stop_reason {
                     self.stop_reason = Some(reason);
@@ -164,7 +181,10 @@ impl MessageTranslator {
             }
             AnthropicEvent::MessageStop => {
                 if let Some(reason) = self.stop_reason.take() {
-                    out.push(self.finish_or_error(&reason));
+                    if !self.terminal_emitted {
+                        self.terminal_emitted = true;
+                        out.push(self.finish_or_error(&reason));
+                    }
                 }
             }
             AnthropicEvent::Ping => {}
@@ -173,6 +193,37 @@ impl MessageTranslator {
             }
         }
         Ok(out)
+    }
+
+    /// Flush a stop reason buffered from `message_delta` when the response
+    /// body ends cleanly before `message_stop` arrived.
+    ///
+    /// Returns `None` when a terminal event was already emitted — the
+    /// well-formed path, where `message_stop` drained the buffer — or when no
+    /// stop reason was ever observed. A stream that ended *before*
+    /// `message_delta` is never reported as a clean `Stop`; one that ended
+    /// *after* it is, because `message_delta`'s `stop_reason` is the model's
+    /// own authoritative decision and `message_stop` is only a frame
+    /// terminator.
+    ///
+    /// `terminal_emitted` — not `stop_reason` being `Some` — is the guard.
+    /// A second `message_delta` can re-arm the buffer after `message_stop`
+    /// already emitted, and that must not produce a second terminal event.
+    ///
+    /// **Clean-EOF path only.** Never call this on the cancellation or
+    /// transport-error paths — see `model.rs`.
+    pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
+        if self.terminal_emitted {
+            return None;
+        }
+        let reason = self.stop_reason.take()?;
+        self.terminal_emitted = true;
+        tracing::warn!(
+            target: "paigasus::anthropic::stream",
+            stop_reason = %reason,
+            "stream body ended without message_stop; flushing buffered stop reason",
+        );
+        Some(self.finish_or_error(&reason))
     }
 
     fn finish_or_error(&self, reason: &str) -> Result<ModelEvent, ModelError> {
@@ -484,5 +535,209 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, ModelError::Unavailable));
+    }
+
+    /// A second `message_delta` re-arms `stop_reason` after `message_stop`
+    /// already emitted the terminal event. The EOF flush must not turn that
+    /// into a second `Finish` — `core::Model::invoke` guarantees nothing
+    /// follows `Finish`.
+    #[test]
+    fn second_message_delta_after_message_stop_does_not_double_finish() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        let stop_out = t.consume(AnthropicEvent::MessageStop).unwrap();
+        assert_eq!(stop_out.len(), 1, "message_stop emits the terminal Finish");
+
+        // Protocol violation: a second stop reason after the terminal event.
+        // A real `message_delta` always carries `usage`, so exercise that
+        // shape rather than sidestepping it with `usage: None`.
+        let second_delta_out = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("max_tokens".to_owned()),
+                },
+                usage: Some(MessageDeltaUsage { output_tokens: 99 }),
+            })
+            .unwrap();
+        assert!(
+            second_delta_out.is_empty(),
+            "nothing may follow the terminal event, got {second_delta_out:?}"
+        );
+        assert!(
+            t.finish().is_none(),
+            "a second stop reason must not yield a second terminal event"
+        );
+    }
+
+    /// The same guard on the inline path. This case is a pre-existing defect,
+    /// independent of the EOF flush: today the second `message_stop` emits a
+    /// second `Finish`.
+    #[test]
+    fn repeated_message_stop_emits_one_finish() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        assert_eq!(t.consume(AnthropicEvent::MessageStop).unwrap().len(), 1);
+
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        let second_stop = t.consume(AnthropicEvent::MessageStop).unwrap();
+        assert!(
+            second_stop.is_empty(),
+            "a repeated message_stop must not emit a second Finish, got {second_stop:?}"
+        );
+    }
+
+    /// The core flush: a stop reason buffered with no `message_stop` following.
+    #[test]
+    fn finish_flushes_pending_stop_reason() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: Some(MessageDeltaUsage { output_tokens: 5 }),
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Ok(ModelEvent::Finish { reason }) => assert_eq!(reason, FinishReason::Stop),
+            other => panic!("expected Ok(Finish::Stop), got {other:?}"),
+        }
+    }
+
+    /// The highest-consequence `Ok` variant: the agent loop will execute tool
+    /// calls assembled from a stream that was cut short.
+    #[test]
+    fn finish_flushes_tool_use_as_tool_calls() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("tool_use".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Ok(ModelEvent::Finish { reason }) => assert_eq!(reason, FinishReason::ToolCalls),
+            other => panic!("expected Ok(Finish::ToolCalls), got {other:?}"),
+        }
+    }
+
+    /// Truncation before any stop reason: never reported as a clean `Stop`.
+    #[test]
+    fn finish_is_none_when_no_stop_reason_observed() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t.consume(AnthropicEvent::ContentBlockStart {
+            index: 0,
+            content_block: ContentBlockHead::Text,
+        });
+        assert!(
+            t.finish().is_none(),
+            "no stop reason was observed; nothing to flush"
+        );
+    }
+
+    /// The well-formed path: `message_stop` already emitted, so the EOF flush
+    /// is a no-op — and stays one on a repeated call.
+    #[test]
+    fn finish_is_none_after_message_stop_drained_it() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("end_turn".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        assert_eq!(t.consume(AnthropicEvent::MessageStop).unwrap().len(), 1);
+        assert!(
+            t.finish().is_none(),
+            "message_stop already emitted the terminal event"
+        );
+        assert!(t.finish().is_none(), "finish() must be idempotent");
+    }
+
+    /// A refusal observed before truncation surfaces as an error, not silence.
+    #[test]
+    fn finish_surfaces_refusal_as_error() {
+        let mut t = MessageTranslator::new(false);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("refusal".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Err(ModelError::Refused { .. }) => {}
+            other => panic!("expected Err(Refused), got {other:?}"),
+        }
+    }
+
+    /// The second `Err` outcome: synthesis mode with both a real and the
+    /// synthesized tool fired. Mirrors bedrock's
+    /// `finish_surfaces_both_tools_error_without_metadata`.
+    #[test]
+    fn finish_surfaces_both_tools_error() {
+        let mut t = MessageTranslator::new(true);
+        let _ = t.consume(message_start(10, None)).unwrap();
+        let _ = t.consume(AnthropicEvent::ContentBlockStart {
+            index: 0,
+            content_block: ContentBlockHead::ToolUse {
+                id: "tu_s".to_owned(),
+                name: SYNTHESIZED_TOOL_NAME.to_owned(),
+                input: serde_json::json!({}),
+            },
+        });
+        let _ = t.consume(AnthropicEvent::ContentBlockStart {
+            index: 1,
+            content_block: ContentBlockHead::ToolUse {
+                id: "tu_r".to_owned(),
+                name: "search".to_owned(),
+                input: serde_json::json!({}),
+            },
+        });
+        let _ = t
+            .consume(AnthropicEvent::MessageDelta {
+                delta: MessageDeltaPayload {
+                    stop_reason: Some("tool_use".to_owned()),
+                },
+                usage: None,
+            })
+            .unwrap();
+        match t.finish().expect("a buffered reason must flush") {
+            Err(ModelError::Other(_)) => {}
+            other => panic!("expected Err(Other), got {other:?}"),
+        }
     }
 }
