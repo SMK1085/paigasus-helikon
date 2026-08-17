@@ -1,0 +1,27 @@
+subsgent
+
+---
+
+<task-notification>
+<task-id>a89fda80de1a33088</task-id>
+<tool-use-id>toolu_01XaJ7YmqtcKQKFrJJpYMiVK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a89fda80de1a33088.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2 litellm translator" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three review findings addressed and committed.
+
+**Status: DONE**
+
+**Commit SHA:** `f953368e` — `fix(providers): SMA-547 cover litellm dual-key dedup and args-guard order` (stacked on `620ea14c`)
+
+**Test summary:** 137 lib tests + 16 integration tests passed, 0 failed; clippy clean.
+
+**Fixes applied:**
+1. Added `one_call_id_under_two_keys_flushes_a_single_name` — mutation-checked by temporarily disabling the `already.insert` dedup skip (test failed with `left: 2, right: 1` as expected), then restoring it (test passed again).
+2. Added `buffered_args_survive_a_bare_id_delta`, mirroring openai's test, pinning the emit-nothing guard against the combined `args` value rather than `args_frag`.
+3. Reordered `already.insert(call_id.clone())` in `flush_buffered_names` to run after the `slot.name.is_empty()` check, removing the latent ordering coupling.
+
+Full details including verbatim mutation-check output are appended to `.superpowers/sdd/2026-08-17-streaming-tool-call-name-fragments/task-2-report.md`.</result>
+<usage><subagent_tokens>152881</subagent_tokens><tool_uses>22</tool_uses><duration_ms>170421</duration_ms></usage>
+</task-notification>
