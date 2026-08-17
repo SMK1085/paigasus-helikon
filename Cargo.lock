@@ -4197,7 +4197,7 @@ dependencies = [
  "serde_json",
  "temporalio-client",
  "temporalio-common",
- "temporalio-macros",
+ "temporalio-macros 0.6.0",
  "temporalio-sdk",
  "temporalio-sdk-core",
  "temporalio-workflow",
@@ -6173,6 +6173,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "temporalio-macros"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2805f9623bad84485f1336e2460d026c8d8b9129f3af58a75501798d14e9bf1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "temporalio-protos"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6213,7 +6224,7 @@ dependencies = [
  "serde",
  "temporalio-client",
  "temporalio-common",
- "temporalio-macros",
+ "temporalio-macros 0.5.0",
  "temporalio-sdk-core",
  "temporalio-workflow",
  "thiserror",
@@ -6259,7 +6270,7 @@ dependencies = [
  "sysinfo",
  "temporalio-client",
  "temporalio-common",
- "temporalio-macros",
+ "temporalio-macros 0.5.0",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -6285,7 +6296,7 @@ dependencies = [
  "prost-wkt-types",
  "serde",
  "temporalio-common-wasm",
- "temporalio-macros",
+ "temporalio-macros 0.5.0",
  "thiserror",
  "wit-bindgen",
 ]
