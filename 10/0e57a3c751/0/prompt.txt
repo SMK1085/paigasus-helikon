@@ -1,0 +1,47 @@
+<task-notification>
+<task-id>b8otfoxnh</task-id>
+<tool-use-id>toolu_01Ged8ywjjwcAwSoGbg45GSG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/52c8ec20-9a55-4f0b-9c00-5787ad50044f/tasks/b8otfoxnh.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI to complete" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+okay you might have to rebase this PR
+
+---
+
+<task-notification>
+<task-id>bntk2ve8d</task-id>
+<tool-use-id>toolu_012WWHDbKQUEfp11ArKGxD4d</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/52c8ec20-9a55-4f0b-9c00-5787ad50044f/tasks/bntk2ve8d.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on rebased branch" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+okay make sure to monitor the merge situation as the gh outage might affect it. there is also a release-plz PR stuck #202, not sure if you really rebased on that one
+
+---
+
+<task-notification>
+<task-id>bd2qw5oec</task-id>
+<summary>Monitor event: "PR #200 merge posture and GitHub API outages"</summary>
+<event>state=OPEN mergeable=MERGEABLE status=BLOCKED head=e9a85844</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b545fk9qd</task-id>
+<tool-use-id>toolu_01BoFFoidaTUt4xToPnF3Q6C</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/52c8ec20-9a55-4f0b-9c00-5787ad50044f/tasks/b545fk9qd.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI with error-resilient poller" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+linear shows connected in mcp
