@@ -3,7 +3,7 @@
   "checkpoint_id": "7a4e8574a111",
   "strategy": "manual-commit",
   "branch": "feature/sma-549-migrate-the-temporalio-stack-from-05-to-07",
-  "checkpoints_count": 5,
+  "checkpoints_count": 6,
   "files_touched": [
     "Cargo.toml"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/7a/4e8574a111/0/transcript.jsonl",
       "content_hash": "/7a/4e8574a111/0/content_hash.txt",
       "prompt": "/7a/4e8574a111/0/prompt.txt"
+    },
+    {
+      "metadata": "/7a/4e8574a111/1/metadata.json",
+      "transcript": "/7a/4e8574a111/1/full.jsonl",
+      "compact_transcript": "/7a/4e8574a111/1/transcript.jsonl",
+      "content_hash": "/7a/4e8574a111/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 160,
-    "cache_creation_tokens": 1687915,
-    "cache_read_tokens": 68050666,
-    "output_tokens": 57496,
-    "api_call_count": 85
+    "input_tokens": 164,
+    "cache_creation_tokens": 1691389,
+    "cache_read_tokens": 68597168,
+    "output_tokens": 59928,
+    "api_call_count": 87
   }
 }
