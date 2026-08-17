@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.5...paigasus-helikon-v0.5.6) - 2026-08-17
+
+### Added
+
+- *(providers)* SMA-451 add litellm proxy model provider ([#199](https://github.com/SMK1085/paigasus-helikon/pull/199))
+
 ## [0.5.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.4...paigasus-helikon-v0.5.5) - 2026-08-16
 
 ### Other
