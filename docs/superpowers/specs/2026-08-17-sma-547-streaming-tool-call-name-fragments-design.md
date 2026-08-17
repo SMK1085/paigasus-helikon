@@ -310,16 +310,36 @@ one `warn` per argument chunk. Two suppressions:
 Note the `target:` (colon) form — `target =` is the SMA-543 defect and must not
 be reintroduced by these new call sites.
 
-## 4. Core documentation
+## 4. Core documentation — deferred to SMA-533
 
-Doc-only; no behavioural change to `core`. Today's wording describes *position*
-("`Some` on the first delta only"), not *completeness*, which is why the
-defective emission read as conforming. Both sites are restated:
+**`core` is not touched by this change.** No file under
+`crates/paigasus-helikon-core/` is edited, so there is no core version bump and
+no facade cascade.
+
+Today's `ToolCallDelta.name` wording describes *position* ("`Some` on the first
+delta only") rather than *completeness*, which is why the defective emission
+read as conforming. Tightening it is genuinely worth doing, and an earlier draft
+of this spec did it here. It was dropped on the project owner's decision at
+GATE 1, for the reason SMA-533 itself states:
+
+> Land the wording alongside the suite that enforces it, so prose and test cannot
+> drift (compare SMA-532, where the Bedrock doc comments have already drifted
+> from the contract they describe).
+
+Adding a `MUST` here with nothing enforcing it is exactly that failure mode, and
+the facade cascade would be paid twice — once for this prose, once for
+SMA-533's.
+
+### Handoff to SMA-533
+
+SMA-533's "Also settle the contract wording" section currently names only
+`model.rs:55-63` (`Finish` *emission*). It should additionally carry the
+completeness wording at:
 
 - `crates/paigasus-helikon-core/src/model.rs` — `ModelEvent::ToolCallDelta.name`
 - `crates/paigasus-helikon-core/src/agent.rs` — `AgentEvent::ToolCallDelta.name`
 
-to say: `Some` exactly once per `call_id`, on the first delta for which the
+stating: `Some` exactly once per `call_id`, on the first delta for which the
 provider can establish the name is complete, `None` on every other delta; and
 that when `Some`, the value is the whole name so far as the provider can
 determine — a provider receiving the name in fragments MUST buffer and
@@ -329,20 +349,17 @@ The "can detect" qualifier is load-bearing and must survive into the doc
 comment. §1's args signal flushes on a single delta carrying both
 `{"name":"get_","arguments":"{\"ci"}`, emitting `Some("get_")` — a partial. No
 translator can rule that out without abandoning streaming names (§Alternatives).
-An unqualified "never emit a partial" would ship two providers that violate a
-contract added in the same change. The doc comment cross-references §3's warning
-as the detection-after-the-fact escape hatch.
+An unqualified "never emit a partial" would make the two providers this ticket
+fixes non-conformant with the contract. §3's warning is the
+detection-after-the-fact escape hatch and should be cross-referenced.
 
-> **Open decision — see GATE 1.** SMA-533 states the principle "land the wording
-> alongside the suite that enforces it, so prose and test cannot drift," and owns
-> a doc-only `core` edit of its own. Its target is `model.rs:55-63` (`Finish`
-> *emission*) — a different site and subject from this §4 — so there is no direct
-> collision. But the principle applies here too, and the facade cascade would be
-> paid twice. The alternative is to drop §4, land the provider fix alone, and let
-> SMA-533 carry this wording alongside its conformance suite.
+A conformance assertion belongs with it: **for every provider, at most one
+`ToolCallDelta` per `call_id` carries `Some(name)`.** That is mechanically
+checkable over SMA-533's existing synthetic-stream table, and it is the
+assertion that would have caught this defect.
 
-`ModelTurnAccumulator`'s keep-first behaviour is correct under this contract and
-is **not** changed.
+`ModelTurnAccumulator`'s keep-first behaviour is correct under that contract and
+is not changed by this ticket either.
 
 ## 5. Tests
 
@@ -438,8 +455,12 @@ found that way, and the first was missed on the first pass.
 
 ## 6. Docs and release mechanics
 
-- `docs/book/src/concepts/agent-loop.md:57` — note the completeness guarantee
-  where `ToolCallDelta` is listed under raw deltas for low-latency UIs.
+- `docs/book/src/concepts/agent-loop.md:57` — where `ToolCallDelta` is listed
+  under raw deltas for low-latency UIs, note that a provider may buffer a
+  fragmented tool name and that the name therefore arrives on the first delta the
+  provider can establish it from. **Word this as provider behaviour, not as a
+  core guarantee** — the guarantee is SMA-533's to state (§4), and the book must
+  not get ahead of the contract it documents.
 - **READMEs — neither has a "streaming" section today, so name the target
   precisely rather than inventing one.** The openai README is 32 lines
   (Install / Example / Links / License); it gains a short `## Streaming` section
@@ -447,12 +468,15 @@ found that way, and the first was missed on the first pass.
   complete and that the name arrives on the first delta the translator can
   establish it from. The litellm README gains one bullet under its existing
   `## Limitations` (`:118`) covering the same point plus §3's residual case.
-- **Version cascade, accepted:** touching `core/src/` even for doc comments makes
-  release-plz patch-bump `paigasus-helikon-core`, which cascades to the facade
-  and every dependent crate.
+- **No manual version work, and no core bump.** Both touched crates are already
+  released (`providers-openai` 0.2.21, `providers-litellm` 0.1.0), so release-plz
+  performs their bumps itself and its `dependencies_update` cascade updates the
+  facade automatically. The same-PR manual-bump ritual in CLAUDE.md applies to
+  crates *ascending from 0.0.0* and to same-PR `core` API additions — neither
+  applies here. A manual bump would in fact *defeat* the cascade.
 - **Commit scope:** `providers-litellm` is absent from `.versionrc`'s
-  `scopeRegex`. Commits touching it use the `providers` parent scope; the PR
-  title must too, since `pr-title.yml` runs on `pull_request_target` and reads
+  `scopeRegex` (`:18`). Commits touching it use the `providers` parent scope; the
+  PR title must too, since `pr-title.yml` runs on `pull_request_target` and reads
   the allowlist from `main`.
 
 ## Alternatives considered
@@ -479,6 +503,9 @@ cost.
   call produces no event at all in those providers. After §2 the two in-scope
   providers gain an end-of-stream flush the other two lack. That asymmetry is
   pre-existing and not made worse here, but it is worth a follow-up ticket.
+- **Any edit to `paigasus-helikon-core`.** The `ToolCallDelta.name` completeness
+  wording is deferred to **SMA-533**, which should be picked up next — see §4 for
+  the exact wording and the conformance assertion to land with it.
 - SMA-543 (`target =` → `target:`). Separate ticket; this design only requires
   that its *new* call sites use the correct form.
 - Re-capturing `providers-openai`'s hand-authored `chat_parallel_tool_calls.txt`
