@@ -1,0 +1,20 @@
+: Provenance: CAPTURED from LiteLLM 1.98.0 (ghcr.io/berriai/litellm:main-latest)
+: proxying a local fake OpenAI-compatible upstream over api_base. A keyless
+: mock_response proxy cannot emit streamed tool calls -- mock_tool_calls is
+: ignored on the streaming path -- so the upstream, not the mock, supplies the
+: shape. See the SMA-547 design doc, section "Evidence".
+:
+: Normal shape: the whole function name arrives in the delta carrying the id.
+
+data: {"id":"chatcmpl-fake","created":1786999072,"model":"shape-normal","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_abc","function":{"arguments":"","name":"get_weather"},"type":"function","index":0}]}}]}
+
+data: {"id":"chatcmpl-fake","created":1786999072,"model":"shape-normal","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"{\"city\":"},"type":"function","index":0}]}}]}
+
+data: {"id":"chatcmpl-fake","created":1786999072,"model":"shape-normal","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"\"Berlin\"}"},"type":"function","index":0}]}}]}
+
+data: {"id":"chatcmpl-fake","object":"chat.completion.chunk","created":1786999072,"model":"shape-normal","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"chatcmpl-fake","created":1786999072,"model":"shape-normal","object":"chat.completion.chunk","choices":[{"index":0,"delta":{}}],"usage":{"completion_tokens":27,"prompt_tokens":11,"total_tokens":38}}
+
+data: [DONE]
+
