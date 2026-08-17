@@ -26,7 +26,7 @@ use paigasus_helikon_core::{FinishReason, ModelEvent};
 use crate::sse::{StreamChunk, ToolCallChunk};
 
 /// Correlation key for a streaming tool call.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Key {
     /// Correlated by `delta.tool_calls[].index`, when present — or, as a
     /// last resort, by position within `delta.tool_calls` (in OpenAI-
@@ -55,9 +55,20 @@ struct Pending {
 pub(crate) struct ChatTranslator {
     /// Resolved call ids, keyed by correlation [`Key`].
     tool_calls: HashMap<Key, String>,
-    /// Keys for which a tool-call `name` has already been emitted.
-    name_emitted: HashSet<Key>,
-    /// Name/args fragments buffered until the call's `id` is known.
+    /// Key → the tool name already emitted to the consumer.
+    ///
+    /// Holds the *value*, not just the key, so a late fragment can be told
+    /// apart from a backend that repeats the whole name on every delta
+    /// (SMA-547 §3).
+    name_emitted: HashMap<Key, String>,
+    /// Keys for which the late-name-fragment warning has already fired, so a
+    /// chatty backend cannot produce one warn per argument chunk.
+    warned_late_name: HashSet<Key>,
+    /// Name/args fragments buffered per call.
+    ///
+    /// `args` is drain-once: taken on the first delta after the call's `id`
+    /// is known and never re-prepended. `name` accumulates across every delta
+    /// and is cleared only when the name flushes (SMA-547 §1).
     pending: HashMap<Key, Pending>,
     /// The most recent `finish_reason` observed, buffered until [`Self::finish`].
     finish_reason: Option<String>,
@@ -70,7 +81,8 @@ impl ChatTranslator {
     pub(crate) fn new() -> Self {
         Self {
             tool_calls: HashMap::new(),
-            name_emitted: HashSet::new(),
+            name_emitted: HashMap::new(),
+            warned_late_name: HashSet::new(),
             pending: HashMap::new(),
             finish_reason: None,
             warned_multi_choice: false,
@@ -179,8 +191,18 @@ impl ChatTranslator {
             }
         };
 
-        let name_frag = tc.function.as_ref().and_then(|f| f.name.as_deref());
-        let args_frag = tc.function.as_ref().and_then(|f| f.arguments.as_deref());
+        // Both signals test the effective fragment, so a backend sending
+        // `"name": ""` behaves like one omitting the field.
+        let name_frag = tc
+            .function
+            .as_ref()
+            .and_then(|f| f.name.as_deref())
+            .unwrap_or("");
+        let args_frag = tc
+            .function
+            .as_ref()
+            .and_then(|f| f.arguments.as_deref())
+            .unwrap_or("");
 
         if let Some(id) = tc.id.as_deref() {
             self.tool_calls
@@ -191,31 +213,53 @@ impl ChatTranslator {
         let Some(call_id) = self.tool_calls.get(&key).cloned() else {
             // No id yet — buffer both fragments.
             let slot = self.pending.entry(key).or_default();
-            if let Some(n) = name_frag {
-                slot.name.push_str(n);
-            }
-            if let Some(a) = args_frag {
-                slot.args.push_str(a);
-            }
+            slot.name.push_str(name_frag);
+            slot.args.push_str(args_frag);
             return;
         };
 
-        let buffered = self.pending.remove(&key).unwrap_or_default();
-        let mut name = buffered.name;
-        if let Some(n) = name_frag {
-            name.push_str(n);
-        }
-        let mut args = buffered.args;
-        if let Some(a) = args_frag {
-            args.push_str(a);
+        // A name fragment arriving after the name was emitted cannot be
+        // recovered — the event is already downstream. Warn once per call,
+        // and not at all when the fragment merely repeats what was emitted.
+        if let Some(emitted) = self.name_emitted.get(&key) {
+            if !name_frag.is_empty()
+                && !emitted.starts_with(name_frag)
+                && self.warned_late_name.insert(key.clone())
+            {
+                tracing::warn!(
+                    target: "paigasus::litellm::stream",
+                    %call_id,
+                    fragment = %name_frag,
+                    emitted = %emitted,
+                    "tool-call name fragment arrived after the name was emitted; \
+                     it cannot be recovered and is dropped"
+                );
+            }
         }
 
-        let emit_name = if self.name_emitted.contains(&key) || name.is_empty() {
-            None
-        } else {
-            self.name_emitted.insert(key.clone());
+        let slot = self.pending.entry(key.clone()).or_default();
+        slot.name.push_str(name_frag);
+        // `args` is drain-once.
+        let mut args = std::mem::take(&mut slot.args);
+        args.push_str(args_frag);
+
+        // The name is complete when either signal appears: this delta carried
+        // arguments, or this delta carried no name fragment.
+        let flush = !self.name_emitted.contains_key(&key)
+            && !slot.name.is_empty()
+            && (!args_frag.is_empty() || name_frag.is_empty());
+
+        let emit_name = if flush {
+            let name = std::mem::take(&mut slot.name);
+            self.name_emitted.insert(key.clone(), name.clone());
             Some(name)
+        } else {
+            None
         };
+
+        if slot.name.is_empty() && slot.args.is_empty() {
+            self.pending.remove(&key);
+        }
 
         if emit_name.is_none() && args.is_empty() {
             return;
@@ -228,16 +272,71 @@ impl ChatTranslator {
         });
     }
 
-    /// Emit the terminal `Finish`, if a `finish_reason` was ever observed.
+    /// Emit any tool name still buffered at end-of-stream.
     ///
-    /// Emits nothing on a truncated stream: fabricating `Finish::Stop` would
-    /// make a dropped connection indistinguishable from a clean completion,
-    /// and `ModelTurnAccumulator` defaults to `Stop`, so the truncated text
-    /// would be committed to session history as final.
+    /// Reached by the zero-argument shape, where no `arguments` fragment ever
+    /// arrives to signal the name is complete. Correctness, not diagnostics:
+    /// the agent loop dispatches on the presence of an `Item::ToolCall` and
+    /// reads the tool to run from its `name`.
+    ///
+    /// Skips entries whose `id` never resolved (nothing to emit under) and
+    /// entries whose resolved `call_id` already emitted a name. The latter is
+    /// not redundant with `name_emitted`: a call reached under both
+    /// `Key::Index` and `Key::Id` has two entries for one `call_id`, and the
+    /// contract allows only one name-carrying delta per call.
+    fn flush_buffered_names(&mut self) -> Vec<ModelEvent> {
+        let mut keys: Vec<Key> = self.pending.keys().cloned().collect();
+        keys.sort();
+
+        let mut already: std::collections::HashSet<String> = self
+            .name_emitted
+            .keys()
+            .filter_map(|k| self.tool_calls.get(k).cloned())
+            .collect();
+
+        let mut out = Vec::new();
+        for key in keys {
+            if self.name_emitted.contains_key(&key) {
+                continue;
+            }
+            let Some(call_id) = self.tool_calls.get(&key).cloned() else {
+                continue;
+            };
+            if !already.insert(call_id.clone()) {
+                continue;
+            }
+            let Some(slot) = self.pending.get_mut(&key) else {
+                continue;
+            };
+            if slot.name.is_empty() {
+                continue;
+            }
+            let name = std::mem::take(&mut slot.name);
+            self.name_emitted.insert(key, name.clone());
+            out.push(ModelEvent::ToolCallDelta {
+                call_id,
+                name: Some(name),
+                args_delta: String::new(),
+            });
+        }
+        out
+    }
+
+    /// Emit any buffered tool name, then the terminal `Finish`, if a
+    /// `finish_reason` was ever observed.
+    ///
+    /// Emits no `Finish` on a truncated stream: fabricating `Finish::Stop`
+    /// would make a dropped connection indistinguishable from a clean
+    /// completion, and `ModelTurnAccumulator` defaults to `Stop`, so the
+    /// truncated text would be committed to session history as final. A
+    /// buffered *name* is still flushed — the tool call is real, and the
+    /// truncation is signalled by the absent `Finish`.
     pub(crate) fn finish(&mut self) -> Vec<ModelEvent> {
+        let mut out = self.flush_buffered_names();
+        // After the flush, so entries it drained are not re-reported as lost.
         self.warn_unresolved_pending();
         let Some(raw) = self.finish_reason.take() else {
-            return Vec::new();
+            return out;
         };
         let reason = match raw.as_str() {
             "stop" => FinishReason::Stop,
@@ -246,21 +345,31 @@ impl ChatTranslator {
             "content_filter" => FinishReason::ContentFilter,
             other => FinishReason::Other(other.to_owned()),
         };
-        vec![ModelEvent::Finish { reason }]
+        out.push(ModelEvent::Finish { reason });
+        out
     }
 
     /// Warn when tool-call fragments were buffered but never flushed.
     ///
-    /// A call whose `id` never arrived stays in `pending` forever — fix (1)
-    /// for the dead `Key::Position` variant does not help a backend that
-    /// never sends an `id` at all. That stream still silently drops the
-    /// call, so this makes the loss loud instead of indistinguishable from
-    /// "the model didn't call a tool."
+    /// A call whose `id` never arrived stays in `pending` forever — a backend
+    /// that never sends an `id` at all silently drops the call, so this makes
+    /// the loss loud instead of indistinguishable from "the model didn't call
+    /// a tool."
+    ///
+    /// Only entries with **no resolved `call_id`** qualify. Since SMA-547
+    /// `pending` also holds entries for calls whose id *is* known (their name
+    /// is still accumulating), and reporting those would fire a false warning
+    /// on every healthy stream that buffers a name.
     fn warn_unresolved_pending(&self) {
-        if self.pending.is_empty() {
+        let keys: Vec<String> = self
+            .pending
+            .keys()
+            .filter(|k| !self.tool_calls.contains_key(k))
+            .map(|k| format!("{k:?}"))
+            .collect();
+        if keys.is_empty() {
             return;
         }
-        let keys: Vec<String> = self.pending.keys().map(|k| format!("{k:?}")).collect();
         tracing::warn!(
             target: "paigasus::litellm::stream",
             keys = ?keys,
@@ -530,6 +639,52 @@ mod tests {
         assert_eq!(calls[0].2, "{\"q\":1}");
     }
 
+    /// SMA-547: a name fragmented across deltas that arrive AFTER the id
+    /// resolves must be assembled, not truncated at the first fragment.
+    ///
+    /// Confirmed to FAIL against the pre-fix code: the `name_emitted` guard
+    /// suppressed "weather", yielding a tool named `get_`.
+    #[test]
+    fn name_fragments_after_id_are_assembled() {
+        let mut t = ChatTranslator::new();
+        let mut evs = t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "call_abc", "function": {"name": "get_", "arguments": ""}}
+            ]}}]
+        })));
+        evs.extend(t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"name": "weather", "arguments": ""}}
+            ]}}]
+        }))));
+        evs.extend(t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"arguments": "{\"city\":\"Berlin\"}"}}
+            ]}}]
+        }))));
+
+        let calls: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name,
+                    args_delta,
+                } => Some((call_id.clone(), name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(calls.len(), 1, "one delta, once the name is known complete");
+        assert_eq!(calls[0].0, "call_abc");
+        assert_eq!(
+            calls[0].1,
+            Some("get_weather".to_owned()),
+            "fragments must concatenate"
+        );
+        assert_eq!(calls[0].2, "{\"city\":\"Berlin\"}");
+    }
+
     #[test]
     fn two_tool_call_indices_stay_separate() {
         let mut t = ChatTranslator::new();
@@ -695,5 +850,138 @@ mod tests {
         // Error/keepalive frames omit `choices` entirely.
         let c: StreamChunk = serde_json::from_str("{}").expect("must not fail");
         assert!(c.choices.is_empty());
+    }
+
+    /// A single delta carrying id, name and non-empty args emits immediately.
+    #[test]
+    fn complete_single_delta_emits_name_with_no_added_latency() {
+        let mut t = ChatTranslator::new();
+        let evs = t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "get_time", "arguments": "{}"}}
+            ]}}]
+        })));
+        assert!(matches!(
+            &evs[0],
+            ModelEvent::ToolCallDelta { name: Some(n), args_delta, .. }
+                if n == "get_time" && args_delta == "{}"
+        ));
+    }
+
+    /// A zero-argument call flushes its name from finish(), before Finish.
+    #[test]
+    fn zero_argument_call_flushes_name_before_finish() {
+        let mut t = ChatTranslator::new();
+        let evs = t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "ping"}}
+            ]}, "finish_reason": "tool_calls"}]
+        })));
+        assert!(evs.is_empty(), "no completion signal during the stream");
+
+        let fin = t.finish();
+        assert_eq!(fin.len(), 2, "flushed name then Finish");
+        assert!(matches!(
+            &fin[0],
+            ModelEvent::ToolCallDelta { call_id, name: Some(n), args_delta }
+                if call_id == "c1" && n == "ping" && args_delta.is_empty()
+        ));
+        assert!(
+            matches!(fin[1], ModelEvent::Finish { .. }),
+            "Finish must stay terminal"
+        );
+    }
+
+    /// A truncated stream flushes the name but reports no clean stop.
+    #[test]
+    fn truncated_stream_flushes_name_but_emits_no_finish() {
+        let mut t = ChatTranslator::new();
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "ping"}}
+            ]}}]
+        })));
+        let fin = t.finish();
+        assert_eq!(fin.len(), 1);
+        assert!(matches!(
+            &fin[0],
+            ModelEvent::ToolCallDelta { name: Some(n), .. } if n == "ping"
+        ));
+    }
+
+    /// finish() takes its buffers, so a second call is a no-op.
+    #[test]
+    fn finish_is_idempotent_after_draining() {
+        let mut t = ChatTranslator::new();
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "ping"}}
+            ]}, "finish_reason": "stop"}]
+        })));
+        assert_eq!(t.finish().len(), 2);
+        assert!(
+            t.finish().is_empty(),
+            "a second finish() must yield nothing"
+        );
+    }
+
+    /// A repeat of the whole name is not a lost fragment and must not warn.
+    #[test]
+    fn repeated_whole_name_is_not_treated_as_a_late_fragment() {
+        let mut t = ChatTranslator::new();
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "search", "arguments": "{\"q\":"}}
+            ]}}]
+        })));
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"name": "search", "arguments": "1}"}}
+            ]}}]
+        })));
+        assert!(
+            t.warned_late_name.is_empty(),
+            "a repeat of the emitted name must not warn"
+        );
+    }
+
+    /// A genuine late fragment is recorded once and does not rewrite the
+    /// already-emitted name.
+    #[test]
+    fn late_name_fragment_warns_once() {
+        let mut t = ChatTranslator::new();
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "get_", "arguments": "{\"a\":"}}
+            ]}}]
+        })));
+        for frag in ["weather", "weather"] {
+            t.consume(chunk(serde_json::json!({
+                "choices": [{"index": 0, "delta": {"tool_calls": [
+                    {"index": 0, "function": {"name": frag, "arguments": "1"}}
+                ]}}]
+            })));
+        }
+        assert_eq!(t.warned_late_name.len(), 1, "at most one warning per call");
+        assert_eq!(
+            t.name_emitted.get(&Key::Index(0)).map(String::as_str),
+            Some("get_"),
+            "the already-emitted name is not retroactively changed"
+        );
+    }
+
+    /// An entry whose id never resolved is not flushed — there is no call_id
+    /// to emit under — and stays the domain of the unresolved-pending warning.
+    #[test]
+    fn unresolved_entries_are_not_flushed() {
+        let mut t = ChatTranslator::new();
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"name": "orphan"}}
+            ]}, "finish_reason": "stop"}]
+        })));
+        let fin = t.finish();
+        assert_eq!(fin.len(), 1, "only Finish; the orphan has no call_id");
+        assert!(matches!(fin[0], ModelEvent::Finish { .. }));
     }
 }
