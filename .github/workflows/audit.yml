@@ -39,7 +39,7 @@ jobs:
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
@@ -47,7 +47,7 @@ jobs:
         with:
           cache-directories: "~/.cargo/advisory-db"
       # taiki-e/install-action v2.85.11
-      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026
+      - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1
         with:
           tool: cargo-audit
       # cargo-audit fetches the advisory DB on every run unless -n/--no-fetch,
