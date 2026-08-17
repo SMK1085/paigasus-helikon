@@ -302,13 +302,16 @@ impl ChatTranslator {
             let Some(call_id) = self.tool_calls.get(&key).cloned() else {
                 continue;
             };
-            if !already.insert(call_id.clone()) {
-                continue;
-            }
             let Some(slot) = self.pending.get_mut(&key) else {
                 continue;
             };
             if slot.name.is_empty() {
+                continue;
+            }
+            // Claimed only once we know this key actually has a name to
+            // flush — claiming earlier would let an empty-name entry for a
+            // resolved call_id block a sibling key that does have one.
+            if !already.insert(call_id.clone()) {
                 continue;
             }
             let name = std::mem::take(&mut slot.name);
@@ -983,5 +986,70 @@ mod tests {
         let fin = t.finish();
         assert_eq!(fin.len(), 1, "only Finish; the orphan has no call_id");
         assert!(matches!(fin[0], ModelEvent::Finish { .. }));
+    }
+
+    /// One `call_id` reachable under both `Key::Index` and `Key::Id` must
+    /// still yield exactly one name-carrying delta. Guards the dedup set in
+    /// `flush_buffered_names`; without it this emits two.
+    #[test]
+    fn one_call_id_under_two_keys_flushes_a_single_name() {
+        let mut t = ChatTranslator::new();
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "get_"}}
+            ]}}]
+        })));
+        // No `index` -> keys as Key::Id("c1"): a second entry for one call.
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"id": "c1", "function": {"name": "weather"}}
+            ]}, "finish_reason": "tool_calls"}]
+        })));
+
+        let named: Vec<_> = t
+            .finish()
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name: Some(n),
+                    ..
+                } => Some((call_id.clone(), n.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named.len(), 1, "one name-carrying delta per call_id");
+        assert_eq!(
+            named[0],
+            ("c1".to_owned(), "get_".to_owned()),
+            "Key::Index sorts before Key::Id, so the winner is deterministic"
+        );
+    }
+
+    /// Buffered pre-id args followed by a bare id-carrying delta must still
+    /// emit those args. Testing the emit-nothing guard against this delta's
+    /// own fragment (rather than the combined value) would swallow them.
+    #[test]
+    fn buffered_args_survive_a_bare_id_delta() {
+        let mut t = ChatTranslator::new();
+        let mut evs = t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"arguments": "{\"a\":1}"}}
+            ]}}]
+        })));
+        assert!(evs.is_empty(), "buffered until the id arrives");
+
+        evs.extend(t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1"}
+            ]}}]
+        }))));
+
+        assert_eq!(evs.len(), 1, "the buffered args must not be swallowed");
+        assert!(matches!(
+            &evs[0],
+            ModelEvent::ToolCallDelta { call_id, name: None, args_delta }
+                if call_id == "c1" && args_delta == "{\"a\":1}"
+        ));
     }
 }
