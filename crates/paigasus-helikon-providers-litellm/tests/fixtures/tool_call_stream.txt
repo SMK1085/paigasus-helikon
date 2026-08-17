@@ -1,4 +1,6 @@
-: Provenance: CAPTURED from LiteLLM 1.98.0 (ghcr.io/berriai/litellm:main-latest)
+: Provenance: CAPTURED from LiteLLM 1.98.0 (ghcr.io/berriai/litellm@sha256:
+: 3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305 -- the
+: main-latest tag is mutable, so the digest pins the exact image used)
 : proxying a local fake OpenAI-compatible upstream over api_base. A keyless
 : mock_response proxy cannot emit streamed tool calls -- mock_tool_calls is
 : ignored on the streaming path -- so the upstream, not the mock, supplies the

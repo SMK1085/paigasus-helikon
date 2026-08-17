@@ -81,10 +81,17 @@ model_list:
       api_base: http://host.docker.internal:8099/v1
 ```
 
+`main-latest` is a mutable tag, so it alone does not pin what was actually
+run; the capture used the image at digest
+`sha256:3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305`,
+which at capture time resolved to LiteLLM 1.98.0. The `docker run` below
+pins that digest so the reproduction is reproducible:
+
 ```bash
 docker run -d --rm --name litellm -p 4000:4000 \
   -v "$PWD/litellm_config.yaml:/app/config.yaml" \
-  ghcr.io/berriai/litellm:main-latest --config /app/config.yaml --port 4000
+  ghcr.io/berriai/litellm@sha256:3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305 \
+  --config /app/config.yaml --port 4000
 curl -N -X POST http://127.0.0.1:4000/v1/chat/completions \
   -H 'content-type: application/json' -H 'authorization: Bearer sk-1234' \
   -d '{"model":"shape-fragment","stream":true,

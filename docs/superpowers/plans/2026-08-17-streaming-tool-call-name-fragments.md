@@ -1190,23 +1190,34 @@ Expected: PASS, including the pre-existing tests.
 
 - [ ] **Step 5: Confirm the fragmented test fails against pre-fix code**
 
-```bash
-git stash push -u -m "sma547-verify-fixture-fails"
-git stash list --format='%H %gs'   # capture YOUR entry's SHA
-```
+Do **not** use `git stash push -u` for this: `-u` stashes untracked files, which
+at this point in Task 3 includes the new fixtures and the new
+`tests/streaming.rs` — swap in the pre-fix `stream.rs` with those stashed away
+and the filtered test simply does not exist, so `cargo test` can exit 0 having
+run **zero** tests, reading as a false "verified" result. The stash stack is
+also shared with other worktrees and other Claude sessions, which is a second,
+independent reason never to use bare `git stash` / `git stash pop` here.
 
-Check out only the pre-fix `stream.rs` from `origin/main`, run the test, confirm FAIL, then restore:
+Use a path-limited checkout instead — it does not move `HEAD` and does not
+touch the new test files, only the one source file under test:
 
 ```bash
+git status --short          # must be empty before you start
 git checkout origin/main -- crates/paigasus-helikon-providers-litellm/src/stream.rs
 cargo test -p paigasus-helikon-providers-litellm --test streaming captured_fragmented_name
-# expect FAIL: name is Some("get_")
 git checkout HEAD -- crates/paigasus-helikon-providers-litellm/src/stream.rs
-git stash apply <sha-you-captured>
-git stash drop <its-current-stash@{n}, re-found by tag>
+git status --short          # must be empty again
 ```
 
-**Record the failure output for the PR body.** The stash stack is shared with other worktrees and other Claude sessions — never use bare `git stash` / `git stash pop`; always apply by the SHA you captured.
+Expected: FAIL, with `name` observed as `Some("get_")` rather than
+`Some("get_weather")`. The output must show **exactly one test ran and
+failed** — `0 passed; 0 failed; ... 0 filtered out` (or any count other than
+one test executed) means the filter matched nothing, the pre-fix `stream.rs`
+swap didn't take effect, or the new test wasn't compiled in, and proves
+nothing about pre-fix behaviour. Re-check the filter and the checkout before
+trusting the result.
+
+**Record the failure output for the PR body.**
 
 - [ ] **Step 6: Commit**
 
@@ -1347,7 +1358,17 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 git diff --stat origin/main...HEAD -- crates/paigasus-helikon-core/
 ```
 
-Expected: **empty output.** Any change here violates a global constraint — the spec defers all core edits to SMA-533. If this prints anything, stop and report.
+That command only compares committed history — it would miss an uncommitted
+or unstaged edit under `core/`. Also check the working tree directly:
+
+```bash
+git diff --name-only origin/main -- crates/paigasus-helikon-core/
+git status --short -- crates/paigasus-helikon-core/
+```
+
+Expected: **empty output from all three commands.** Any change here violates
+a global constraint — the spec defers all core edits to SMA-533. If any of
+them prints anything, stop and report.
 
 - [ ] **Step 3: Confirm the two translators stayed aligned**
 

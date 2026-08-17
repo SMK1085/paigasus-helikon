@@ -456,7 +456,23 @@ impl ChatTranslator {
         let already_emitted = self.name_emitted.contains_key(&index);
 
         let entry = self.pending.entry(index).or_default();
-        if !already_emitted {
+        // A name fragment identical to the name accumulated so far is treated
+        // as a whole-name repeat and skipped, not appended -- otherwise a
+        // backend that resends the complete function name on every delta
+        // (instead of incrementally fragmenting it) would double it, e.g.
+        // "search" + "search" -> "searchsearch". Pre-fix this case emitted
+        // "search" correctly, so appending unconditionally here would be a
+        // regression, not merely an unhandled edge.
+        //
+        // Known, accepted limitation: a tool genuinely named e.g. "aa" whose
+        // name fragments as "a" + "a" cannot be told apart from a repeat
+        // under this rule and assembles as "a", not "aa". This matches
+        // pre-SMA-547 behaviour (the old code emitted "a" on the first delta
+        // and suppressed the second as a duplicate), so it is not a new
+        // regression -- whereas omitting this guard regresses the
+        // repeated-whole-name case from correct to corrupted. Do not remove
+        // this guard without re-deciding that trade-off.
+        if !already_emitted && entry.name != name_frag {
             entry.name.push_str(name_frag);
         }
         // `args` is drain-once: buffered pre-id args are prepended exactly
@@ -959,6 +975,78 @@ mod tests {
             t.warned_late_name.is_empty(),
             "a repeat of the emitted name must not warn"
         );
+    }
+
+    /// Round-1 CodeRabbit regression: a backend that repeats the WHOLE
+    /// function name on a delta carrying no arguments must not have both
+    /// copies concatenated into the buffered name. The test above
+    /// (`repeated_whole_name_is_not_treated_as_a_late_fragment`) does not
+    /// catch this because its first delta carries non-empty `arguments`, so
+    /// the flush happens before the repeat ever arrives; here the first
+    /// delta carries none, so both deltas hit the accumulation path.
+    #[test]
+    fn repeated_whole_name_before_any_arguments_is_not_doubled() {
+        let mut t = ChatTranslator::new();
+        let mut out = Vec::new();
+
+        // Delta 1: id + whole name, empty args -> held, no completion signal.
+        t.handle_tool_call_chunk(
+            &make_chunk(0, Some("c1"), Some("search"), Some("")),
+            &mut out,
+        );
+        assert!(out.is_empty(), "no completion signal yet");
+
+        // Delta 2: the SAME whole name repeated, now with args -> flush.
+        t.handle_tool_call_chunk(&make_chunk(0, None, Some("search"), Some("{")), &mut out);
+        assert_eq!(out.len(), 1, "expected exactly one ToolCallDelta");
+        match &out[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "c1");
+                assert_eq!(
+                    name.as_deref(),
+                    Some("search"),
+                    "a repeated whole name must not be doubled to \"searchsearch\""
+                );
+                assert_eq!(args_delta, "{");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+    }
+
+    /// Companion guard on the fix above: distinct fragments arriving before
+    /// any arguments must still concatenate -- this is SMA-547's actual
+    /// target case, and the repeat-suppression fix must not over-suppress
+    /// it.
+    #[test]
+    fn distinct_fragments_before_any_arguments_still_concatenate() {
+        let mut t = ChatTranslator::new();
+        let mut out = Vec::new();
+
+        t.handle_tool_call_chunk(&make_chunk(0, Some("c1"), Some("get_"), Some("")), &mut out);
+        assert!(out.is_empty(), "no completion signal yet");
+
+        t.handle_tool_call_chunk(&make_chunk(0, None, Some("weather"), Some("{}")), &mut out);
+        assert_eq!(out.len(), 1, "expected exactly one ToolCallDelta");
+        match &out[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "c1");
+                assert_eq!(
+                    name.as_deref(),
+                    Some("get_weather"),
+                    "distinct fragments must still concatenate"
+                );
+                assert_eq!(args_delta, "{}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
     }
 
     /// A genuine late fragment is dropped (it cannot be un-emitted) but is
