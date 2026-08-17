@@ -269,7 +269,7 @@ pub struct TemporalAgentWorker {
     // Kept alive for the worker's lifetime; dropping this while `inner` is
     // still running risks silently losing telemetry/metrics the runtime
     // owns. Never read directly (hence the leading underscore), only held.
-    _runtime: temporalio_sdk_core::CoreRuntime,
+    _runtime: temporalio_sdk::Runtime,
 }
 
 impl TemporalAgentWorker {
@@ -536,19 +536,28 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         ));
 
         let telemetry_options = temporalio_common::telemetry::TelemetryOptions::builder().build();
-        let runtime_options = temporalio_sdk_core::RuntimeOptions::builder()
+        // 0.7: `Worker::new` takes the SDK's `Runtime` (a newtype over
+        // `CoreRuntime`), so build the SDK's `RuntimeOptions` rather than
+        // core's — `RuntimeOptions: Into<CoreRuntimeOptions>` handles the rest.
+        let runtime_options = temporalio_sdk::runtime::RuntimeOptions::builder()
             .telemetry_options(telemetry_options)
             .build()
             .map_err(WorkerBuildError::Runtime)?;
-        let runtime = temporalio_sdk_core::CoreRuntime::new_assume_tokio(runtime_options)
+        let runtime = temporalio_sdk::Runtime::new_assume_tokio(runtime_options)
             .map_err(|e| WorkerBuildError::Runtime(e.to_string()))?;
 
         // Serve both workflow and activity tasks: this worker now drives the
         // durable `DurableAgentWorkflow` (registered via factory below) in
         // addition to its activities. Registration is on the `WorkerOptions`
         // builder (returns a `Result`, hence the mid-chain `?`).
+        //
+        // 0.7 removed the `task_types` builder method and derives the value
+        // from what is actually registered, so registering a workflow and
+        // activities yields workflows + local + remote activities. The old
+        // explicit `WorkerTaskTypes::all()` additionally set `enable_nexus`,
+        // which this worker never used — nothing here registers a Nexus
+        // service — so the derived value is both correct and narrower.
         let worker_options = temporalio_sdk::WorkerOptions::new(task_queue)
-            .task_types(temporalio_common::worker::WorkerTaskTypes::all())
             .register_activities(activities)
             .register_workflow_with_factory::<crate::workflow::DurableAgentWorkflow, _>(move || {
                 crate::workflow::DurableAgentWorkflow::new(Arc::clone(&workflow_config))

@@ -275,12 +275,17 @@ fn error_kind_to_activity_error(kind: ErrorKindPayload) -> ActivityError {
 /// completion** (never drops it — no detached task leak). When
 /// `heartbeat_interval` is `Some`, `on_heartbeat` fires each tick until `work`
 /// completes.
+///
+/// `on_heartbeat` is an `AsyncFnMut` because temporalio 0.7 made
+/// `ActivityContext::record_heartbeat` async (it performs payload conversion).
+/// It is awaited inside the tick arm rather than spawned, so a slow heartbeat
+/// delays the next tick instead of leaking a detached task.
 async fn race_loop<T>(
     work: impl std::future::Future<Output = T>,
     cancelled: impl std::future::Future<Output = ()>,
     on_cancel: impl FnOnce(),
     heartbeat_interval: Option<Duration>,
-    mut on_heartbeat: impl FnMut(),
+    mut on_heartbeat: impl AsyncFnMut(),
 ) -> T {
     tokio::pin!(work, cancelled);
     let mut ticker = heartbeat_interval.map(tokio::time::interval);
@@ -302,7 +307,7 @@ async fn race_loop<T>(
                     None => std::future::pending::<()>().await,
                 }
             } => {
-                on_heartbeat();
+                on_heartbeat().await;
             }
         }
     }
@@ -327,7 +332,18 @@ async fn race_with_activity_cancellation<T>(
         activity_ctx.cancelled(),
         || cancel.cancel(),
         heartbeat,
-        || activity_ctx.record_heartbeat(Vec::new()),
+        // 0.7: `record_heartbeat` is async and fallible (payload conversion).
+        // A heartbeat is best-effort liveness signalling — a conversion failure
+        // on an empty payload is not actionable and must not abort the work.
+        async || {
+            if let Err(e) = activity_ctx.record_heartbeat(Vec::<u8>::new()).await {
+                tracing::debug!(
+                    target: "paigasus::temporal::activities",
+                    error = %e,
+                    "record_heartbeat failed; continuing",
+                );
+            }
+        },
     )
     .await
 }
@@ -776,7 +792,7 @@ mod tests {
                 let _ = tx.send(()); // let the work future wind down
             },
             None,
-            || {},
+            async || {},
         )
         .await;
 
@@ -803,7 +819,7 @@ mod tests {
             std::future::pending::<()>(), // never cancelled
             || {},
             Some(std::time::Duration::from_millis(10)),
-            move || {
+            async move || {
                 b2.fetch_add(1, Ordering::SeqCst);
             },
         )
