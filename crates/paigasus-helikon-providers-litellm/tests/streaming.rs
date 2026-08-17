@@ -3,7 +3,8 @@
 //! Combines two things: a regression test for the mid-stream error-frame
 //! heuristic (`null_error_field_alongside_choices_is_not_fatal`, added in
 //! Task 9), and the Task 10 fixture-driven streaming suite below, whose
-//! fixtures are transcribed from traffic captured against LiteLLM 1.97.0.
+//! fixtures are transcribed from traffic captured against LiteLLM 1.97.0
+//! (the tool-call fixtures, against 1.98.0).
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
@@ -66,8 +67,9 @@ async fn null_error_field_alongside_choices_is_not_fatal() {
 
 // ── Task 10: fixture-driven streaming suite ────────────────────────────────
 //
-// Fixtures are transcribed from traffic captured against LiteLLM 1.97.0 —
-// not hand-invented shapes. See `tests/fixtures/*.txt`.
+// Fixtures are transcribed from traffic captured against LiteLLM 1.97.0
+// (the tool-call fixtures, against 1.98.0) — not hand-invented shapes. See
+// `tests/fixtures/*.txt`.
 
 fn user(s: &str) -> ModelRequest {
     let mut r = ModelRequest::new();

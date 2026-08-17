@@ -8,9 +8,13 @@
 //!    *after* the one carrying `finish_reason`, so an inline `Finish` would be
 //!    followed by `Usage` and violate core's "Finish is the terminal event"
 //!    contract on every turn.
-//! 2. **Tool-call `name`/`arguments` are buffered until the `id` is known**,
-//!    because the id is not guaranteed to arrive first, and both fields
-//!    fragment across deltas. A delta that carries neither `index` nor `id`
+//! 2. **Tool-call `name`/`arguments` are buffered until the `id` is known,
+//!    and `name` keeps buffering past that point**, because the id is not
+//!    guaranteed to arrive first, and both fields fragment across deltas.
+//!    Once the id is known, `arguments` drains on every delta, but `name`
+//!    keeps accumulating until a completion signal (a delta carrying
+//!    arguments, or one carrying no name fragment) or the end-of-stream
+//!    flush releases it. A delta that carries neither `index` nor `id`
 //!    is correlated by its position within `delta.tool_calls`, but only
 //!    when *no* entry in that same array carries an explicit `index` — a
 //!    synthesized positional key must never be allowed to collide with a
@@ -26,6 +30,9 @@ use paigasus_helikon_core::{FinishReason, ModelEvent};
 use crate::sse::{StreamChunk, ToolCallChunk};
 
 /// Correlation key for a streaming tool call.
+// `PartialOrd`/`Ord`: `flush_buffered_names` sorts keys for a deterministic
+// end-of-stream flush order, and `Key::Index` sorting before `Key::Id` is
+// what makes the dual-key winner predictable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Key {
     /// Correlated by `delta.tool_calls[].index`, when present — or, as a
@@ -38,7 +45,13 @@ enum Key {
     Id(String),
 }
 
-/// Name/args fragments that arrived before the `id` was known.
+/// Buffered name and args fragments for a tool call.
+///
+/// Both fields start out buffered here regardless of whether the call's
+/// `id` is known yet. Once the id is known, `args` is drain-once — taken on
+/// the first delta after the id is observed and never re-prepended — while
+/// `name` keeps accumulating across every delta and is cleared only when it
+/// flushes (SMA-547 §1).
 #[derive(Default)]
 struct Pending {
     /// Accumulated function-name fragments.
@@ -237,8 +250,18 @@ impl ChatTranslator {
             }
         }
 
+        // Once a name has flushed, nothing reads `slot.name` again for the
+        // life of the stream — skip the accumulation so a backend that
+        // repeats the whole name on every delta doesn't grow an unread
+        // `String` for no reason (SMA-547 §4). Captured from the same
+        // `name_emitted` state the flush condition below re-derives, so it
+        // cannot change which deltas flush.
+        let already_emitted = self.name_emitted.contains_key(&key);
+
         let slot = self.pending.entry(key.clone()).or_default();
-        slot.name.push_str(name_frag);
+        if !already_emitted {
+            slot.name.push_str(name_frag);
+        }
         // `args` is drain-once.
         let mut args = std::mem::take(&mut slot.args);
         args.push_str(args_frag);
@@ -288,7 +311,7 @@ impl ChatTranslator {
         let mut keys: Vec<Key> = self.pending.keys().cloned().collect();
         keys.sort();
 
-        let mut already: std::collections::HashSet<String> = self
+        let mut already: HashSet<String> = self
             .name_emitted
             .keys()
             .filter_map(|k| self.tool_calls.get(k).cloned())
@@ -1023,6 +1046,49 @@ mod tests {
             named[0],
             ("c1".to_owned(), "get_".to_owned()),
             "Key::Index sorts before Key::Id, so the winner is deterministic"
+        );
+    }
+
+    /// Pins the `already` seed in `flush_buffered_names`. Without it, a
+    /// call_id that already flushed its name mid-stream under one key (here
+    /// `Key::Index(0)`) can still have a *second* name emitted for the same
+    /// call_id from a sibling key (`Key::Id("c1")`) that never got a chance
+    /// to flush mid-stream — the seed is what stops that second emission.
+    #[test]
+    fn flush_does_not_re_emit_a_name_already_flushed_under_another_key() {
+        let mut t = ChatTranslator::new();
+        // Non-empty args complete the name mid-stream under Key::Index(0),
+        // recording name_emitted[Key::Index(0)] = "get_".
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "function": {"name": "get_", "arguments": "{"}}
+            ]}}]
+        })));
+        // No `index` -> keys as Key::Id("c1"): a second entry for the same
+        // call_id, buffered but never flushed mid-stream (no args fragment
+        // on this delta to complete it).
+        t.consume(chunk(serde_json::json!({
+            "choices": [{"index": 0, "delta": {"tool_calls": [
+                {"id": "c1", "function": {"name": "weather"}}
+            ]}}]
+        })));
+
+        let named: Vec<_> = t
+            .finish()
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name: Some(n),
+                    ..
+                } => Some((call_id.clone(), n.clone())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            named.is_empty(),
+            "Key::Id(\"c1\")'s buffered name must not re-emit for call_id \"c1\", \
+             which already flushed under Key::Index(0); got {named:?}"
         );
     }
 

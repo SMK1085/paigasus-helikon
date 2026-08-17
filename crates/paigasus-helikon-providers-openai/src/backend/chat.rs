@@ -201,12 +201,15 @@ fn translate_tool_choice(tc: &ToolChoice) -> ChatCompletionToolChoiceOption {
     }
 }
 
-/// Buffered name and args that arrived before the `tool_calls[].id` was known.
+/// Buffered name and args for a tool call.
 ///
 /// OpenAI's Chat Completions streaming spec does not strictly guarantee that
 /// `tool_calls[].id` arrives before `function.name` or `function.arguments`
-/// deltas for the same `index`. Both fields are buffered here and flushed
-/// into the first [`ModelEvent::ToolCallDelta`] once the id is observed.
+/// deltas for the same `index`, so both fields start out buffered here
+/// regardless of whether the id is known yet. Once the id is known, `args`
+/// is drain-once — taken on the first delta after the id is observed and
+/// never re-prepended — while `name` keeps accumulating across every delta
+/// and is cleared only when it flushes (SMA-547 §1).
 ///
 /// Both `name` and `args` use `push_str` concatenation so that fragmented
 /// deltas (e.g. `"sea"` + `"rch"` → `"search"`) are assembled correctly.
@@ -444,8 +447,18 @@ impl ChatTranslator {
             }
         }
 
+        // Once a name has flushed, nothing reads `entry.name` again for the
+        // life of the stream — skip the accumulation so a backend that
+        // repeats the whole name on every delta doesn't grow an unread
+        // `String` for no reason (SMA-547 §4). Captured from the same
+        // `name_emitted` state the flush condition below re-derives, so it
+        // cannot change which deltas flush.
+        let already_emitted = self.name_emitted.contains_key(&index);
+
         let entry = self.pending.entry(index).or_default();
-        entry.name.push_str(name_frag);
+        if !already_emitted {
+            entry.name.push_str(name_frag);
+        }
         // `args` is drain-once: buffered pre-id args are prepended exactly
         // once and never re-emitted on later deltas.
         let mut args_out = std::mem::take(&mut entry.args);
