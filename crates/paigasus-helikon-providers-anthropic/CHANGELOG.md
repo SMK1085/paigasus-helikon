@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.21...paigasus-helikon-providers-anthropic-v0.1.22) - 2026-08-17
+
+### Fixed
+
+- *(providers-anthropic)* SMA-531 emit finish when a stream body ends before message_stop ([#200](https://github.com/SMK1085/paigasus-helikon/pull/200))
+
 ## [0.1.21](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.20...paigasus-helikon-providers-anthropic-v0.1.21) - 2026-08-16
 
 ### Other
