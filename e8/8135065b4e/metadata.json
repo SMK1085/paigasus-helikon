@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "e88135065b4e",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-547-streaming-tool-call-name-fragments-arriving-after-the-id",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e8/8135065b4e/0/metadata.json",
+      "transcript": "/e8/8135065b4e/0/full.jsonl",
+      "compact_transcript": "/e8/8135065b4e/0/transcript.jsonl",
+      "content_hash": "/e8/8135065b4e/0/content_hash.txt",
+      "prompt": "/e8/8135065b4e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2530,
+    "cache_creation_tokens": 282950,
+    "cache_read_tokens": 7277625,
+    "output_tokens": 46209,
+    "api_call_count": 59
+  }
+}
