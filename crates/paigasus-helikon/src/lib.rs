@@ -81,6 +81,10 @@ pub use paigasus_helikon_providers_bedrock as bedrock;
 #[cfg(feature = "gemini")]
 pub use paigasus_helikon_providers_gemini as gemini;
 
+/// LiteLLM proxy provider (OpenAI-compatible gateway). Enabled via the `litellm` feature.
+#[cfg(feature = "litellm")]
+pub use paigasus_helikon_providers_litellm as litellm;
+
 /// JSON Schema helpers.
 pub mod schema {
     /// OpenAI/JSON-Schema strict-mode normalizer — see

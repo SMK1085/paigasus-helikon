@@ -16,7 +16,7 @@ The single-facade crate `paigasus-helikon` re-exports `paigasus-helikon-core` un
 - **Multi-agent and MCP.** `Handoff::to(..)` wires triage-style delegation between agents; `paigasus_helikon::mcp` (feature `mcp`) is an rmcp-based MCP client/server wrapper. Guardrails, hooks, and permissions hang off the `HookRegistry` carried in every `RunContext`.
 - **Evals.** `paigasus_helikon::evals` (feature `evals`) is an evaluation harness: JSONL datasets, an `Evaluator` trait with four built-ins, a `MockModel` for deterministic replay, and SQLite/Parquet trace sinks — see [Observability & Evaluation](concepts/observability-evaluation.md).
 
-Nineteen crates are published to [crates.io](https://crates.io/crates/paigasus-helikon) with rustdoc on [docs.rs](https://docs.rs/paigasus-helikon).
+Twenty crates are published to [crates.io](https://crates.io/crates/paigasus-helikon) with rustdoc on [docs.rs](https://docs.rs/paigasus-helikon).
 
 A minimal run:
 

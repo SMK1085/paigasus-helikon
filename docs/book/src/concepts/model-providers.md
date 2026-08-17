@@ -3,9 +3,9 @@
 Every LLM in Helikon sits behind one trait: `Model`, from `paigasus-helikon-core`.
 There are no per-provider traits. Capability differences (streaming, tool calling,
 structured output, vision, prompt caching, …) are surfaced through a flag struct,
-`ModelCapabilities`, rather than split interfaces. Four adapters ship today —
-`OpenAiModel`, `AnthropicModel`, `BedrockModel`, and `GeminiModel` — and switching
-between them is a single line.
+`ModelCapabilities`, rather than split interfaces. Five adapters ship today —
+`OpenAiModel`, `AnthropicModel`, `BedrockModel`, `GeminiModel`, and
+`LiteLlmModel` — and switching between them is a single line.
 
 ## The `Model` trait
 
@@ -82,7 +82,7 @@ let caps = ModelCapabilities::empty()
 
 ## The shipped adapters
 
-Four provider adapters ship today. All are published on crates.io and reached
+Five provider adapters ship today. All are published on crates.io and reached
 through the facade behind a feature flag. Each exposes a `Model` implementation
 plus a builder.
 
@@ -293,6 +293,59 @@ is not yet emitted by this provider.
 
 > Model ids are illustrative — swap them for any model your account can reach.
 
+### LiteLLM — `paigasus-helikon-providers-litellm`
+
+Reached as `paigasus_helikon::litellm::LiteLlmModel` behind the `litellm`
+feature. Talks to a [LiteLLM](https://docs.litellm.ai) proxy over its
+OpenAI-compatible Chat Completions endpoint, adding LiteLLM's own router and
+observability fields (fallbacks, retries, tags, metadata).
+
+#### When to use this instead of the OpenAI provider
+
+`OpenAiModel::base_url()` can also point at a LiteLLM proxy, and is the better
+choice when the proxy simply fronts OpenAI models. Reach for `litellm` when you
+need LiteLLM's router fallbacks and retries, spend/trace metadata, reasoning
+streaming from non-OpenAI backends, or arbitrary operator-chosen model aliases.
+
+#### `base_url` is required
+
+There is no default — an unset base URL is a build error. It may also come
+from `LITELLM_API_BASE` (or `LITELLM_PROXY_API_BASE`).
+
+```rust,ignore
+use paigasus_helikon::litellm::LiteLlmModel;
+
+let model = LiteLlmModel::chat("claude-sonnet-4") // your proxy's alias
+    .base_url("http://litellm:4000")
+    .build()?;
+```
+
+#### Capabilities are your declaration
+
+A LiteLLM alias (`prod-fast`, `team-a/gpt`) carries no information the SDK can
+act on, so the model defaults to a conservative `streaming + tools` capability
+set. Declare what the backend actually supports with `.with_capabilities()`:
+
+```rust,ignore
+use paigasus_helikon::core::ModelCapabilities;
+use paigasus_helikon::litellm::LiteLlmModel;
+
+let model = LiteLlmModel::chat("prod-fast")
+    .base_url("http://litellm:4000")
+    .with_capabilities(
+        ModelCapabilities::empty()
+            .with_streaming()
+            .with_tools()
+            .with_vision(),
+    )
+    .build()?;
+```
+
+`streaming` is always forced on — this provider has no non-streaming path.
+
+> Model ids are illustrative — swap them for whatever alias your proxy operator
+> configured.
+
 ## Switching providers is one line
 
 Because all adapters implement the same `Model` trait, the *only* code that
@@ -314,6 +367,11 @@ let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").
 
 // Gemini Developer API
 let model = GeminiModel::from_env("gemini-2.5-flash")?;
+
+// LiteLLM proxy — alias is whatever the proxy operator configured
+let model = LiteLlmModel::chat("claude-sonnet-4")
+    .base_url("http://litellm:4000")
+    .build()?;
 ```
 
 ```rust
@@ -333,13 +391,15 @@ loop will drive it.
 
 ```toml
 [dependencies]
-paigasus-helikon = { version = "0.3", features = ["openai", "macros"] }
+paigasus-helikon = { version = "0.5", features = ["openai", "macros"] }
 # or, for Anthropic:
-# paigasus-helikon = { version = "0.3", features = ["anthropic", "macros"] }
+# paigasus-helikon = { version = "0.5", features = ["anthropic", "macros"] }
 # or, for Bedrock:
-# paigasus-helikon = { version = "0.3", features = ["bedrock", "macros"] }
+# paigasus-helikon = { version = "0.5", features = ["bedrock", "macros"] }
 # or, for Gemini:
-# paigasus-helikon = { version = "0.3", features = ["gemini", "macros"] }
+# paigasus-helikon = { version = "0.5", features = ["gemini", "macros"] }
+# or, for LiteLLM:
+# paigasus-helikon = { version = "0.5", features = ["litellm", "macros"] }
 ```
 
 Feature names are kebab-case (`openai`, `anthropic`); the `pub use` aliases are

@@ -1,0 +1,39 @@
+---
+source: crates/paigasus-helikon-providers-litellm/src/translate/mod.rs
+expression: "build_request(&cfg(), &r)"
+---
+{
+  "messages": [
+    {
+      "content": "weather?",
+      "role": "user"
+    }
+  ],
+  "model": "prod-fast",
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Look up weather",
+        "name": "get_weather",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

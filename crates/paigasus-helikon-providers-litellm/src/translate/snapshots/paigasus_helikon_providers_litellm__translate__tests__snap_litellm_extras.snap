@@ -1,0 +1,31 @@
+---
+source: crates/paigasus-helikon-providers-litellm/src/translate/mod.rs
+expression: "build_request(&model.config_for_test(), &user(\"hi\"))"
+---
+{
+  "fallbacks": [
+    "backup-a",
+    "backup-b"
+  ],
+  "guardrails": [
+    "pii-check"
+  ],
+  "messages": [
+    {
+      "content": "hi",
+      "role": "user"
+    }
+  ],
+  "metadata": {
+    "tags": [
+      "team:research"
+    ],
+    "trace_id": "t-123"
+  },
+  "model": "prod-fast",
+  "num_retries": 2,
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}

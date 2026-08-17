@@ -1,0 +1,36 @@
+---
+source: crates/paigasus-helikon-providers-litellm/src/translate/mod.rs
+expression: "build_request(&cfg(), &r)"
+---
+{
+  "messages": [
+    {
+      "content": "give me json",
+      "role": "user"
+    }
+  ],
+  "model": "prod-fast",
+  "response_format": {
+    "json_schema": {
+      "name": "Answer",
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "type": "object"
+      },
+      "strict": true
+    },
+    "type": "json_schema"
+  },
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}
