@@ -82,7 +82,7 @@ jobs:
       # and workflow_dispatch do not provide; hence the event guard here and the
       # `decide` step below.
       - if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
           filters: |
@@ -114,7 +114,7 @@ jobs:
       # moment this context is promoted to required. sessions-it does the same.
       - if: steps.decide.outputs.run == 'true'
         # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
       # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
@@ -236,7 +236,7 @@ jobs:
           persist-credentials: false
       # dorny/paths-filter v4.0.2
       - if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
           # Deliberately narrow. core/runtime-axum/runtime-tokio/mcp/
