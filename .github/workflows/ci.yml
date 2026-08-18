@@ -32,7 +32,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
+      # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
+      # below is mandatory, not stylistic -- see CLAUDE.md.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
@@ -46,7 +47,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
+      # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
+      # below is mandatory, not stylistic -- see CLAUDE.md.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
@@ -79,7 +81,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
+      # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
+      # below is mandatory, not stylistic -- see CLAUDE.md.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: ${{ matrix.toolchain }}
@@ -100,7 +103,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
+      # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
+      # below is mandatory, not stylistic -- see CLAUDE.md.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
@@ -134,7 +138,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
+      # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
+      # below is mandatory, not stylistic -- see CLAUDE.md.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: stable
@@ -157,7 +162,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
+      # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
+      # below is mandatory, not stylistic -- see CLAUDE.md.
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
@@ -210,7 +216,8 @@ jobs:
               - 'Cargo.lock'
       - if: steps.filter.outputs.sessions == 'false'
         run: echo "No session-related changes; nothing to run."
-      # dtolnay/rust-toolchain master (the v1 tag is stale — see CLAUDE.md)
+      # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
+      # below is mandatory, not stylistic -- see CLAUDE.md.
       - if: steps.filter.outputs.sessions == 'true'
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
