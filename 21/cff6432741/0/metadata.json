@@ -1,0 +1,186 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "21cff6432741",
+  "session_id": "47521580-6c34-4d1d-b721-4595a7163a4f",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-18T06:30:10.497512Z",
+  "branch": "feature/sma-549-migrate-the-temporalio-stack-from-05-to-07",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "Cargo.toml",
+    "crates/paigasus-helikon-runtime-temporal/src/activities.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/activity_input.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/lib.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/workflow.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "6eae1938a742",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1396,
+    "cache_creation_tokens": 1780137,
+    "cache_read_tokens": 107443215,
+    "output_tokens": 250261,
+    "api_call_count": 312
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01QAcbprGy7cd5nwNK7WcYmD",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6eae1938a742",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 70,
+        "end": 71,
+        "entry_ids": [
+          "ded6cf04-7309-4eb9-8a6f-b0942a48a9c9"
+        ],
+        "tool_use_id": "toolu_01QAcbprGy7cd5nwNK7WcYmD"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01QAcbprGy7cd5nwNK7WcYmD"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_012bVKGDeymgc5tcaqw6ddYn",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6eae1938a742",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 199,
+        "end": 200,
+        "entry_ids": [
+          "18cdeda2-020d-4c7a-bb56-d23e62e98b70"
+        ],
+        "tool_use_id": "toolu_012bVKGDeymgc5tcaqw6ddYn"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_012bVKGDeymgc5tcaqw6ddYn"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01XzuCpnqeX29Dnaq2BwUU7S",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6eae1938a742",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 237,
+        "end": 238,
+        "entry_ids": [
+          "86ee8129-7566-4a6a-afe7-2e20f58f58d9"
+        ],
+        "tool_use_id": "toolu_01XzuCpnqeX29Dnaq2BwUU7S"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XzuCpnqeX29Dnaq2BwUU7S"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01KYgFQG2tTFHJKJ17BBvs3d",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6eae1938a742",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 530,
+        "end": 531,
+        "entry_ids": [
+          "0ea7d337-55ab-4990-88a7-dabde937039a"
+        ],
+        "tool_use_id": "toolu_01KYgFQG2tTFHJKJ17BBvs3d"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01KYgFQG2tTFHJKJ17BBvs3d"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-18T06:30:10.374737Z",
+    "agent_lines": 130,
+    "agent_removed": 63,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 130,
+    "total_lines_changed": 193,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 130,
+      "agent_lines_removed": 63
+    }
+  ]
+}
