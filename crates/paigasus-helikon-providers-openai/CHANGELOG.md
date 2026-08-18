@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.21...paigasus-helikon-providers-openai-v0.2.22) - 2026-08-18
+
+### Fixed
+
+- *(providers)* SMA-547 defer streaming tool-call names until they are complete ([#204](https://github.com/SMK1085/paigasus-helikon/pull/204))
+
 ## [0.2.21](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.20...paigasus-helikon-providers-openai-v0.2.21) - 2026-08-16
 
 ### Fixed
