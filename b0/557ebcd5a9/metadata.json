@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "b0557ebcd5a9",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-549-migrate-the-temporalio-stack-from-05-to-07",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/audit.yml",
+    ".github/workflows/bench.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deny.yml",
+    ".github/workflows/integration.yml",
+    ".github/workflows/msrv.yml",
+    ".github/workflows/release-plz.yml",
+    ".github/workflows/sbom.yml",
+    "CLAUDE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b0/557ebcd5a9/0/metadata.json",
+      "transcript": "/b0/557ebcd5a9/0/full.jsonl",
+      "compact_transcript": "/b0/557ebcd5a9/0/transcript.jsonl",
+      "content_hash": "/b0/557ebcd5a9/0/content_hash.txt",
+      "prompt": "/b0/557ebcd5a9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 22277,
+    "cache_read_tokens": 12585836,
+    "output_tokens": 12255,
+    "api_call_count": 23
+  }
+}
