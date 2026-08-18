@@ -21,6 +21,15 @@ let model = OpenAiModel::chat("gpt-5-mini").build()?;
 
 Pass `model` to `LlmAgent::builder::<()>().model(model)`. The provider lives entirely in this one construction line — everything downstream (the `#[tool]` functions, the builder, the run loop) is provider-agnostic. See the [quickstart](https://smk1085.github.io/paigasus-helikon/getting-started/quickstart.html) for a full agent.
 
+## Streaming tool calls
+
+Chat Completions streams a tool call's function name as a per-delta fragment,
+and does not guarantee the whole name arrives in the delta carrying the call id.
+The translator therefore buffers name fragments and emits `ToolCallDelta.name`
+once, on the first delta it can establish the name is complete from — in
+practice the delta carrying the first arguments chunk. A tool call that never
+carries arguments has its name emitted at end-of-stream, before `Finish`.
+
 ## Links
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-providers-openai)

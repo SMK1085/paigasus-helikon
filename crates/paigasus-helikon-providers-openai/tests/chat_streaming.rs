@@ -98,11 +98,11 @@ async fn parallel_tool_calls_interleave_by_index() {
     }
     assert!(
         seen_c1_name,
-        "name 'a' should be emitted on c1's first delta"
+        "name 'a' should be emitted exactly once for c1"
     );
     assert!(
         seen_c2_name,
-        "name 'b' should be emitted on c2's first delta"
+        "name 'b' should be emitted exactly once for c2"
     );
     assert_eq!(c1_args, "{\"x\":1}");
     assert_eq!(c2_args, "{\"y\":2}");

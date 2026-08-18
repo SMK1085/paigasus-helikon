@@ -55,6 +55,11 @@ A typical run walks `CallingModel → ExecutingTools → CallingModel → … �
 
 - Lifecycle: `RunStarted { agent }`, `TurnStarted { turn }`.
 - Raw deltas (for low-latency UIs): `TokenDelta { text }`, `ReasoningDelta { text }`, `ToolCallDelta { call_id, name, args_delta }`.
+  A provider whose wire format splits a tool name across several deltas buffers
+  the fragments, so `name` is `Some` on the first delta the provider can
+  establish the whole name from — usually the one carrying the first arguments
+  chunk — and `None` on the rest. In those providers, a tool call that never
+  carries arguments has its name emitted at end-of-stream.
 - Semantic items (carry a full `Item`): `MessageOutput { item }`, `ToolCallItem { item }`, `ToolOutputItem { item }`, `HandoffItem { from, to }`.
 - Transitions: `AgentUpdated { agent }`.
 - Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }`, `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`.

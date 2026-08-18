@@ -4,7 +4,7 @@
 # CI round-trip:
 #   - cargo fmt --all -- --check
 #   - cargo clippy --workspace --all-features --all-targets -- -D warnings
-#   - convco check <upstream>..HEAD  (Conventional Commits scope allowlist)
+#   - convco check <merge-base>..HEAD  (Conventional Commits scope allowlist)
 #
 # Deliberately omits:
 #   - cargo test --workspace --all-features  (too slow per-push; CI catches)
@@ -26,15 +26,35 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
   any_real_push=1
 
-  # Pick an upstream baseline for convco. Prefer the remote's existing ref;
-  # otherwise try $remote/main (correct for fork-based contributors pushing
-  # to their own remote), then fall back to origin/main.
+  # Pick a baseline for convco. Prefer the remote's existing ref; otherwise
+  # try $remote/main (correct for fork-based contributors pushing to their
+  # own remote), then fall back to origin/main.
   if [ "$remote_sha" != "0000000000000000000000000000000000000000" ]; then
-    base="$remote_sha"
+    candidate="$remote_sha"
   else
-    base=$(git rev-parse --verify --quiet "$remote/main" \
-           || git rev-parse --verify --quiet origin/main \
-           || true)
+    candidate=$(git rev-parse --verify --quiet "$remote/main" \
+                || git rev-parse --verify --quiet origin/main \
+                || true)
+  fi
+
+  # Reduce the candidate to its merge-base with the ref being pushed.
+  #
+  # This is load-bearing, not tidiness: `convco check A..B` only walks the
+  # commits git would list when A is an ANCESTOR of B. Given a diverged A it
+  # silently falls back to the entire history instead — on this repo that is
+  # 220 commits reaching back to "Initial commit", three of which predate the
+  # scope allowlist and can never be made to pass. The candidate above is
+  # diverged in the ordinary case: any branch whose first push happens after
+  # `main` has moved ahead of its branch point. Feeding the tip directly
+  # therefore rejects perfectly good branches, which is what this hook did
+  # until SMA-547.
+  #
+  # A merge-base is an ancestor by construction, so the range is exactly the
+  # branch's own commits. Applied to `remote_sha` too, where it is a no-op
+  # unless a force-push left the old remote tip off the new history.
+  base=""
+  if [ -n "$candidate" ]; then
+    base=$(git merge-base "$candidate" "$local_sha" 2>/dev/null || true)
   fi
 
   if [ -n "$base" ] && command -v convco >/dev/null 2>&1; then

@@ -3,7 +3,8 @@
 //! Combines two things: a regression test for the mid-stream error-frame
 //! heuristic (`null_error_field_alongside_choices_is_not_fatal`, added in
 //! Task 9), and the Task 10 fixture-driven streaming suite below, whose
-//! fixtures are transcribed from traffic captured against LiteLLM 1.97.0.
+//! fixtures are transcribed from traffic captured against LiteLLM 1.97.0
+//! (the tool-call fixtures, against 1.98.0).
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
@@ -66,8 +67,9 @@ async fn null_error_field_alongside_choices_is_not_fatal() {
 
 // ── Task 10: fixture-driven streaming suite ────────────────────────────────
 //
-// Fixtures are transcribed from traffic captured against LiteLLM 1.97.0 —
-// not hand-invented shapes. See `tests/fixtures/*.txt`.
+// Fixtures are transcribed from traffic captured against LiteLLM 1.97.0
+// (the tool-call fixtures, against 1.98.0) — not hand-invented shapes. See
+// `tests/fixtures/*.txt`.
 
 fn user(s: &str) -> ModelRequest {
     let mut r = ModelRequest::new();
@@ -169,4 +171,79 @@ async fn an_unparseable_frame_is_skipped_without_killing_the_stream() {
         "text on both sides of the bad frame survives"
     );
     assert!(matches!(evs.last().unwrap(), ModelEvent::Finish { .. }));
+}
+
+/// Helper: collect the (call_id, name, args) of every ToolCallDelta.
+fn tool_calls(evs: &[ModelEvent]) -> Vec<(String, Option<String>, String)> {
+    evs.iter()
+        .filter_map(|e| match e {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => Some((call_id.clone(), name.clone(), args_delta.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The normal captured shape: one name-carrying delta, args concatenating to
+/// the whole JSON object, Usage before a terminal Finish.
+#[tokio::test]
+async fn captured_tool_call_stream_assembles_one_named_call() {
+    let evs = events_for(include_str!("fixtures/tool_call_stream.txt")).await;
+    let calls = tool_calls(&evs);
+
+    let named: Vec<_> = calls.iter().filter(|c| c.1.is_some()).collect();
+    assert_eq!(
+        named.len(),
+        1,
+        "exactly one delta carries the name, got {calls:?}"
+    );
+    assert_eq!(named[0].1.as_deref(), Some("get_weather"));
+    assert!(
+        calls.iter().all(|c| c.0 == "call_abc"),
+        "one call_id throughout"
+    );
+
+    let args: String = calls.iter().map(|c| c.2.clone()).collect();
+    assert_eq!(args, "{\"city\":\"Berlin\"}");
+
+    // Usage must precede Finish, but need NOT be adjacent to it: the
+    // end-of-stream name flush can sit between them (SMA-547 §2).
+    let usage_pos = evs
+        .iter()
+        .position(|e| matches!(e, ModelEvent::Usage { .. }))
+        .expect("Usage must be emitted");
+    let finish_pos = evs
+        .iter()
+        .position(|e| matches!(e, ModelEvent::Finish { .. }))
+        .expect("Finish must be emitted");
+    assert!(
+        usage_pos < finish_pos,
+        "Usage must precede Finish, got {evs:?}"
+    );
+    assert_eq!(finish_pos, evs.len() - 1, "Finish is terminal");
+}
+
+/// SMA-547 regression, end to end over a real captured LiteLLM stream: the
+/// name is split across two post-id deltas and must assemble to `get_weather`,
+/// not truncate to `get_`.
+#[tokio::test]
+async fn captured_fragmented_name_stream_assembles_the_whole_name() {
+    let evs = events_for(include_str!(
+        "fixtures/tool_call_stream_fragmented_name.txt"
+    ))
+    .await;
+    let calls = tool_calls(&evs);
+
+    let named: Vec<_> = calls.iter().filter_map(|c| c.1.as_deref()).collect();
+    assert_eq!(
+        named,
+        vec!["get_weather"],
+        "the name must assemble from both fragments, and be emitted once"
+    );
+
+    let args: String = calls.iter().map(|c| c.2.clone()).collect();
+    assert_eq!(args, "{\"city\":\"Berlin\"}");
 }

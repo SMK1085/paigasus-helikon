@@ -122,6 +122,13 @@ recorded test fixtures or request logs.
 - `n > 1` is unsupported — only the first choice is read.
 - A backend that emits per-chunk *delta* usage (rather than cumulative
   snapshots) will under-count tokens.
+- **Tool-call names are buffered until complete.** LiteLLM passes a backend's
+  function-name fragments through verbatim rather than reassembling them, so the
+  translator buffers them and emits `ToolCallDelta.name` once, on the first
+  delta it can establish the name is complete from. One shape is not
+  recoverable: a backend that emits a further name fragment *after* arguments
+  have already begun. That fragment is dropped and logged at `warn`, because the
+  name-carrying event has already been yielded downstream.
 
 ## Links
 
