@@ -5,14 +5,14 @@
 //! (or its parts) directly and contain no `temporalio-*` types. The
 //! `#[temporalio_macros::activities]` impl block at the bottom of this file is
 //! the thin Temporal-facing wrapper Task 8's workflow calls via
-//! `WorkflowContext::start_activity`.
+//! `WorkflowContext::execute_activity`.
 //!
 //! # Why the wrapper is `Ctx`-erased
 //!
 //! `temporalio_macros::activities` copies the annotated impl block's `Self`
 //! type verbatim into fresh, non-generic `ActivityDefinition`/
 //! `ActivityImplementer` impls — confirmed by reading
-//! `temporalio-macros-0.5.0/src/activities_definitions.rs`: its codegen never
+//! `temporalio-macros-0.7.0/src/activities_definitions.rs`: its codegen never
 //! threads `self.impl_block.generics` into the generated code. A literal
 //! `impl<Ctx> AgentActivities<Ctx> { #[activities] ... }` therefore does not
 //! compile (`Ctx` is unbound in the generated impls). [`DurableAgentRuntime`]
@@ -276,17 +276,28 @@ fn error_kind_to_activity_error(kind: ErrorKindPayload) -> ActivityError {
 /// `heartbeat_interval` is `Some`, `on_heartbeat` fires each tick until `work`
 /// completes.
 ///
-/// `on_heartbeat` is an `AsyncFnMut` because temporalio 0.7 made
+/// `on_heartbeat` returns a future because temporalio 0.7 made
 /// `ActivityContext::record_heartbeat` async (it performs payload conversion).
 /// It is awaited inside the tick arm rather than spawned, so a slow heartbeat
 /// delays the next tick instead of leaking a detached task.
-async fn race_loop<T>(
+///
+/// Deliberately `FnMut() -> Hb` with a concrete `Hb`, NOT `AsyncFnMut`. The
+/// latter desugars to a higher-ranked bound, and the `#[activities]` macro then
+/// fails with "implementation of `Send` is not general enough" — rustc cannot
+/// prove `&ActivityContext: Send` for *any* lifetime even though it holds for
+/// each concrete one. A single concrete `Hb` sidesteps the higher-ranked
+/// bound entirely; the returned future borrows the context from the enclosing
+/// scope, which outlives every call.
+async fn race_loop<T, Hb>(
     work: impl std::future::Future<Output = T>,
     cancelled: impl std::future::Future<Output = ()>,
     on_cancel: impl FnOnce(),
     heartbeat_interval: Option<Duration>,
-    mut on_heartbeat: impl AsyncFnMut(),
-) -> T {
+    mut on_heartbeat: impl FnMut() -> Hb,
+) -> T
+where
+    Hb: std::future::Future<Output = ()>,
+{
     tokio::pin!(work, cancelled);
     let mut ticker = heartbeat_interval.map(tokio::time::interval);
     loop {
@@ -335,7 +346,7 @@ async fn race_with_activity_cancellation<T>(
         // 0.7: `record_heartbeat` is async and fallible (payload conversion).
         // A heartbeat is best-effort liveness signalling — a conversion failure
         // on an empty payload is not actionable and must not abort the work.
-        async || {
+        || async {
             if let Err(e) = activity_ctx.record_heartbeat(Vec::<u8>::new()).await {
                 tracing::debug!(
                     target: "paigasus::temporal::activities",
@@ -385,7 +396,7 @@ impl AgentActivities {
     ///
     /// `pub(crate)` so `#[activities]` emits a `pub(crate)` associated const
     /// (`AgentActivities::render_instructions`) — the typed activity marker
-    /// SMA-332 Task 8's workflow passes to `WorkflowContext::start_activity`
+    /// SMA-332 Task 8's workflow passes to `WorkflowContext::execute_activity`
     /// from the sibling `workflow` module.
     #[activity]
     pub(crate) async fn render_instructions(
@@ -466,7 +477,7 @@ mod activity_marker_tests {
     /// `#[activities]` generates one associated const per `#[activity]`
     /// method (e.g. `AgentActivities::call_model`) as the typed marker
     /// `crate::workflow::DurableAgentWorkflow`'s `run_effects` passes to
-    /// `WorkflowContext::start_activity`. This test doubles as a
+    /// `WorkflowContext::execute_activity`. This test doubles as a
     /// compile-time check that the marker names match what this module's
     /// docs promise.
     #[test]
@@ -792,7 +803,7 @@ mod tests {
                 let _ = tx.send(()); // let the work future wind down
             },
             None,
-            async || {},
+            || async {},
         )
         .await;
 
@@ -819,8 +830,11 @@ mod tests {
             std::future::pending::<()>(), // never cancelled
             || {},
             Some(std::time::Duration::from_millis(10)),
-            async move || {
-                b2.fetch_add(1, Ordering::SeqCst);
+            move || {
+                let b2 = StdArc::clone(&b2);
+                async move {
+                    b2.fetch_add(1, Ordering::SeqCst);
+                }
             },
         )
         .await;

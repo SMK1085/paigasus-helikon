@@ -4,7 +4,7 @@
 //! wrapper defined here. That single-parameter shape is load-bearing:
 //! `#[activities]` derives `ActivityDefinition::Input` from the method's
 //! parameter list via `multi_args_input_type`
-//! (`temporalio-macros-0.5.0/src/activities_definitions.rs:265-278`), which maps
+//! (`temporalio-macros-0.7.0/src/activities_definitions.rs:265-278`), which maps
 //! `0 => ()`, `1 => the parameter's own type`, and `n => MultiArgs{n}`. There is
 //! no `MultiArgs1`, so a one-parameter activity's `Input` *is* our wrapper —
 //! which lets us supply a hand-written codec.
@@ -27,11 +27,11 @@
 //! # Why the hand-written impls are reached at all
 //!
 //! `PayloadConverter::default()` is `Composite([UseWrappers, serde_json()])`
-//! (`temporalio-common-wasm-0.5.0/src/data_converters.rs:200-206`). The
+//! (`temporalio-common-wasm-0.7.0/src/data_converters.rs:200-206`). The
 //! `Composite` arm tries each sub-converter in order, and `UseWrappers`
-//! dispatches to the **overridable** trait methods `T::to_payloads` (`:537`) and
-//! `T::from_payloads` (`:572`) *before* the `serde_json` arm applies its hard
-//! `payloads.len() != 1` check (`:567-570`). This is the same mechanism
+//! dispatches to the **overridable** trait methods `T::to_payloads` (`:541`) and
+//! `T::from_payloads` (`:576`) *before* the `serde_json` arm applies its hard
+//! `payloads.len() != 1` check (`:570-572`). This is the same mechanism
 //! `MultiArgs{N}` itself relies on.
 //!
 //! The re-entrant call inside [`TemporalSerializable::to_payloads`] terminates
@@ -80,7 +80,7 @@ use temporalio_common::protos::temporal::api::common::v1::Payload;
 ///
 /// Fully qualified to match the `ActivityType` Temporal actually registers:
 /// `#[activities]` with no name override derives it as
-/// `"{ImplType}::{method}"` (`temporalio-macros-0.5.0/src/activities_definitions.rs:556`),
+/// `"{ImplType}::{method}"` (`temporalio-macros-0.7.0/src/activities_definitions.rs:548`),
 /// i.e. `AgentActivities::render_instructions` here — not the bare method name
 /// — so this string is what an operator would actually grep for in the
 /// Temporal Web UI or an `ActivityTaskFailed` history event.

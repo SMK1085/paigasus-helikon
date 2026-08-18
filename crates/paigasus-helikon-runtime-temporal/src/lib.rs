@@ -331,10 +331,12 @@
 //!
 //! **Activity input encoding is not a replay hazard.** Temporal's replay check compares an
 //! activity's **id** and **type** only — never its input payloads
-//! (`temporalio-sdk-core-0.5.0`, `activity_state_machine.rs`, the
+//! (`temporalio-sdk-core-0.7.0`, `activity_state_machine.rs`, the
 //! `IdAndTypeDeterminismChecks` gate). Changing how an activity's arguments are encoded
 //! therefore cannot trip the non-determinism checker; *renaming* an activity would. This
-//! statement is pinned to `temporalio-* = 0.5.0` and must be re-verified on any SDK bump.
+//! statement is pinned to `temporalio-* = 0.7.0` and must be re-verified on any SDK bump.
+//! (Re-verified for 0.7 in SMA-549: `on_activity_task_scheduled` still compares only
+//! `act_id`/`activity_id` and `act_type`/`activity_type`, never payloads.)
 //!
 //! **SMA-484 wire change (activity inputs are envelope-only as of 0.3.0).** Each of
 //! `render_instructions` / `call_model` / `invoke_tool` takes one self-describing JSON-object
