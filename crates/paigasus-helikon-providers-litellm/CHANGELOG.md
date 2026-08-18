@@ -1,0 +1,14 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-litellm-v0.1.0...paigasus-helikon-providers-litellm-v0.1.1) - 2026-08-18
+
+### Fixed
+
+- *(providers)* SMA-547 defer streaming tool-call names until they are complete ([#204](https://github.com/SMK1085/paigasus-helikon/pull/204))
