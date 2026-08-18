@@ -103,16 +103,41 @@ pub(crate) struct WorkflowActivityConfig {
     /// Agent plans keyed by name, resolved by [`WorkflowInput::agent_name`]
     /// with a single [`HashMap::get`] (never iterated inside the workflow).
     plans: HashMap<String, AgentPlan>,
-    /// [`ActivityOptions`] for the `render_instructions` activity (no
-    /// caller-configurable retry policy in v0 — uses the Temporal server
-    /// default).
-    instructions_activity_opts: ActivityOptions,
-    /// [`ActivityOptions`] for the `call_model` activity, carrying the
-    /// worker's configured model retry policy.
-    model_activity_opts: ActivityOptions,
-    /// [`ActivityOptions`] for the `invoke_tool` activity, carrying the
-    /// worker's configured tool retry policy.
-    tool_activity_opts: ActivityOptions,
+    /// Activity settings for `render_instructions` (no caller-configurable
+    /// retry policy in v0 — uses the Temporal server default).
+    instructions_activity_spec: ActivitySpec,
+    /// Activity settings for `call_model`, carrying the worker's configured
+    /// model retry policy.
+    model_activity_spec: ActivitySpec,
+    /// Activity settings for `invoke_tool`, carrying the worker's configured
+    /// tool retry policy.
+    tool_activity_spec: ActivitySpec,
+}
+
+/// The plain, `Send`-safe ingredients of an [`ActivityOptions`].
+///
+/// temporalio 0.7 added an `Option<WorkflowCancellationToken>` field to
+/// [`ActivityOptions`], and that token holds an `Rc` — so `ActivityOptions` is
+/// neither `Send` nor `Sync` and cannot live in the process-wide config the
+/// worker's factory closure captures (`register_workflow_with_factory` requires
+/// `F: Send + Sync`). Store the ingredients here instead and build the options
+/// inside the workflow via [`ActivitySpec::to_options`], which is where the
+/// workflow-scoped cancellation token belongs anyway.
+#[derive(Clone)]
+pub(crate) struct ActivitySpec {
+    start_to_close: Duration,
+    retry_policy: Option<RetryPolicy>,
+    heartbeat_timeout: Option<Duration>,
+}
+
+impl ActivitySpec {
+    /// Materialize the [`ActivityOptions`]. Call this inside the workflow.
+    fn to_options(&self) -> ActivityOptions {
+        ActivityOptions::with_start_to_close_timeout(self.start_to_close)
+            .maybe_retry_policy(self.retry_policy.clone())
+            .maybe_heartbeat_timeout(self.heartbeat_timeout)
+            .build()
+    }
 }
 
 /// Assemble the [`WorkflowActivityConfig`] the worker's
@@ -135,13 +160,13 @@ pub(crate) fn build_activity_config(
 ) -> WorkflowActivityConfig {
     WorkflowActivityConfig {
         plans,
-        instructions_activity_opts: activity_opts(timeouts.instructions, None, None),
-        model_activity_opts: activity_opts(
+        instructions_activity_spec: activity_spec(timeouts.instructions, None, None),
+        model_activity_spec: activity_spec(
             timeouts.model,
             to_proto_retry_policy(model_retry),
             heartbeat_timeout,
         ),
-        tool_activity_opts: activity_opts(
+        tool_activity_spec: activity_spec(
             timeouts.tool,
             to_proto_retry_policy(tool_retry),
             heartbeat_timeout,
@@ -149,17 +174,18 @@ pub(crate) fn build_activity_config(
     }
 }
 
-/// Build [`ActivityOptions`] with the given start-to-close timeout, an
+/// Build an [`ActivitySpec`] with the given start-to-close timeout, an
 /// optional retry policy, and an optional heartbeat timeout.
-fn activity_opts(
+fn activity_spec(
     start_to_close: Duration,
     retry_policy: Option<RetryPolicy>,
     heartbeat_timeout: Option<Duration>,
-) -> ActivityOptions {
-    ActivityOptions::with_start_to_close_timeout(start_to_close)
-        .maybe_retry_policy(retry_policy)
-        .maybe_heartbeat_timeout(heartbeat_timeout)
-        .build()
+) -> ActivitySpec {
+    ActivitySpec {
+        start_to_close,
+        retry_policy,
+        heartbeat_timeout,
+    }
 }
 
 /// Convert a [`RetryPolicyConfig`] into the proto retry policy Temporal's
@@ -307,13 +333,13 @@ async fn run_effects(
         match driver.next_effect() {
             DriverEffect::RenderInstructions => {
                 match ctx
-                    .start_activity(
+                    .execute_activity(
                         AgentActivities::render_instructions,
                         RenderInstructionsArgs {
                             agent_name: agent_name.to_owned(),
                             ctx_seed: ctx_seed.clone(),
                         },
-                        config.instructions_activity_opts.clone(),
+                        config.instructions_activity_spec.to_options(),
                     )
                     .await
                 {
@@ -326,13 +352,13 @@ async fn run_effects(
             }
             DriverEffect::CallModel(request) => {
                 match ctx
-                    .start_activity(
+                    .execute_activity(
                         AgentActivities::call_model,
                         CallModelArgs {
                             agent_name: agent_name.to_owned(),
                             request,
                         },
-                        config.model_activity_opts.clone(),
+                        config.model_activity_spec.to_options(),
                     )
                     .await
                 {
@@ -374,12 +400,12 @@ async fn execute_tools(
         let started = chunk.iter().map(|call| {
             let call = call.clone();
             let call_id = call.call_id.clone();
-            let opts = config.tool_activity_opts.clone();
+            let opts = config.tool_activity_spec.to_options();
             let agent_name = agent_name.to_owned();
             let ctx_seed_cloned = ctx_seed.clone();
             async move {
                 match ctx
-                    .start_activity(
+                    .execute_activity(
                         AgentActivities::invoke_tool,
                         InvokeToolArgs {
                             agent_name,
@@ -525,24 +551,30 @@ mod tests {
 
         assert_eq!(
             config
-                .model_activity_opts
+                .model_activity_spec
+                .to_options()
                 .retry_policy
                 .as_ref()
                 .expect("model retry policy present")
-                .maximum_attempts,
+                .maximum_attempts(),
             3
         );
         assert_eq!(
             config
-                .tool_activity_opts
+                .tool_activity_spec
+                .to_options()
                 .retry_policy
                 .as_ref()
                 .expect("tool retry policy present")
-                .maximum_attempts,
+                .maximum_attempts(),
             1
         );
         // The instructions activity gets no explicit retry policy (server default).
-        assert!(config.instructions_activity_opts.retry_policy.is_none());
+        assert!(config
+            .instructions_activity_spec
+            .to_options()
+            .retry_policy
+            .is_none());
     }
 
     #[test]
@@ -563,15 +595,18 @@ mod tests {
         );
 
         assert_eq!(
-            config.tool_activity_opts.close_timeouts,
+            config.tool_activity_spec.to_options().close_timeouts,
             ActivityCloseTimeouts::StartToClose(Duration::from_secs(5))
         );
         assert_eq!(
-            config.model_activity_opts.close_timeouts,
+            config.model_activity_spec.to_options().close_timeouts,
             ActivityCloseTimeouts::StartToClose(Duration::from_secs(10))
         );
         assert_eq!(
-            config.instructions_activity_opts.close_timeouts,
+            config
+                .instructions_activity_spec
+                .to_options()
+                .close_timeouts,
             ActivityCloseTimeouts::StartToClose(Duration::from_secs(30))
         );
     }
@@ -586,14 +621,20 @@ mod tests {
             Some(Duration::from_secs(4)),
         );
         assert_eq!(
-            config.model_activity_opts.heartbeat_timeout,
+            config.model_activity_spec.to_options().heartbeat_timeout,
             Some(Duration::from_secs(4))
         );
         assert_eq!(
-            config.tool_activity_opts.heartbeat_timeout,
+            config.tool_activity_spec.to_options().heartbeat_timeout,
             Some(Duration::from_secs(4))
         );
-        assert_eq!(config.instructions_activity_opts.heartbeat_timeout, None);
+        assert_eq!(
+            config
+                .instructions_activity_spec
+                .to_options()
+                .heartbeat_timeout,
+            None
+        );
     }
 
     #[test]
@@ -605,7 +646,13 @@ mod tests {
             &ActivityTimeouts::default(),
             None,
         );
-        assert_eq!(config.model_activity_opts.heartbeat_timeout, None);
-        assert_eq!(config.tool_activity_opts.heartbeat_timeout, None);
+        assert_eq!(
+            config.model_activity_spec.to_options().heartbeat_timeout,
+            None
+        );
+        assert_eq!(
+            config.tool_activity_spec.to_options().heartbeat_timeout,
+            None
+        );
     }
 }

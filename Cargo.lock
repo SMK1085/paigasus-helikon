@@ -563,7 +563,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "rand 0.9.5",
- "reqwest 0.13.4",
+ "reqwest",
  "secrecy",
  "serde",
  "serde_json",
@@ -1137,17 +1137,6 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
-]
-
-[[package]]
-name = "backoff"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
-dependencies = [
- "getrandom 0.2.17",
- "instant",
- "rand 0.8.7",
 ]
 
 [[package]]
@@ -2945,15 +2934,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "instant"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
 name = "inventory"
 version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3796,7 +3776,7 @@ dependencies = [
  "bytes",
  "http 1.5.0",
  "opentelemetry",
- "reqwest 0.13.4",
+ "reqwest",
 ]
 
 [[package]]
@@ -3811,7 +3791,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
- "reqwest 0.13.4",
+ "reqwest",
  "thiserror",
  "tokio",
  "tonic",
@@ -3999,7 +3979,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "paigasus-helikon-core",
- "reqwest 0.13.4",
+ "reqwest",
  "rmcp",
  "serde_json",
  "thiserror",
@@ -4019,7 +3999,7 @@ dependencies = [
  "futures-util",
  "insta",
  "paigasus-helikon-core",
- "reqwest 0.13.4",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -4065,7 +4045,7 @@ dependencies = [
  "gcp_auth",
  "insta",
  "paigasus-helikon-core",
- "reqwest 0.13.4",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -4087,7 +4067,7 @@ dependencies = [
  "futures-util",
  "insta",
  "paigasus-helikon-core",
- "reqwest 0.13.4",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -4108,7 +4088,7 @@ dependencies = [
  "futures-util",
  "insta",
  "paigasus-helikon-core",
- "reqwest 0.13.4",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -4128,7 +4108,7 @@ dependencies = [
  "futures-util",
  "paigasus-helikon-core",
  "paigasus-helikon-runtime-tokio",
- "reqwest 0.13.4",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -4176,7 +4156,7 @@ dependencies = [
  "futures-util",
  "paigasus-helikon-core",
  "paigasus-helikon-runtime-tokio",
- "reqwest 0.13.4",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -4199,7 +4179,7 @@ dependencies = [
  "paigasus-helikon-core",
  "paigasus-helikon-runtime-actix",
  "paigasus-helikon-runtime-axum",
- "reqwest 0.13.4",
+ "reqwest",
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.30.0",
@@ -4315,7 +4295,7 @@ dependencies = [
  "paigasus-helikon-core",
  "paigasus-helikon-providers-openai",
  "rcgen",
- "reqwest 0.13.4",
+ "reqwest",
  "schemars",
  "seccompiler",
  "serde",
@@ -4850,22 +4830,11 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.8.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
-dependencies = [
- "libc",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
- "rand_chacha 0.9.0",
+ "rand_chacha",
  "rand_core 0.9.5",
 ]
 
@@ -4882,31 +4851,12 @@ dependencies = [
 
 [[package]]
 name = "rand_chacha"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand_chacha"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-dependencies = [
- "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -5057,43 +5007,6 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reqwest"
-version = "0.12.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-core",
- "http 1.5.0",
- "http-body 1.1.0",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "js-sys",
- "log",
- "percent-encoding",
- "pin-project-lite",
- "rustls",
- "rustls-native-certs",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tokio-rustls",
- "tower",
- "tower-http",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "reqwest"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
@@ -5209,7 +5122,7 @@ dependencies = [
  "pin-project-lite",
  "process-wrap",
  "rand 0.10.2",
- "reqwest 0.13.4",
+ "reqwest",
  "schemars",
  "serde",
  "serde_json",
@@ -6096,13 +6009,13 @@ dependencies = [
 
 [[package]]
 name = "temporalio-client"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "257e69cdc823bfd0707d4daac7470451d59d31aefe519c4eb60d4ceeb77c443e"
+checksum = "749e987bf8895c2c1e04d87c2cda31b81191fbfa555555210c81c774b943d4ea"
 dependencies = [
  "anyhow",
  "async-trait",
- "backoff",
+ "backon",
  "base64 0.22.1",
  "bon",
  "bytes",
@@ -6116,6 +6029,7 @@ dependencies = [
  "hyper-util",
  "parking_lot",
  "rand 0.10.2",
+ "serde_json",
  "temporalio-common",
  "thiserror",
  "tokio",
@@ -6129,9 +6043,9 @@ dependencies = [
 
 [[package]]
 name = "temporalio-common"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6988555678e6177c08553aece24312643b714d35983ad9bf383c9f9eb77ea6ec"
+checksum = "a5fb31f018bb56a490834e07d3a4cf03cacd076b9a41cbad8d0daa1bfb1abc2d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6145,7 +6059,7 @@ dependencies = [
  "parking_lot",
  "prost",
  "prost-types",
- "reqwest 0.12.28",
+ "reqwest",
  "ringbuf",
  "serde",
  "serde_json",
@@ -6162,19 +6076,21 @@ dependencies = [
 
 [[package]]
 name = "temporalio-common-wasm"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d5dba313ccb58da518e23f85557e7cb9d5a1298fd7d8935328521ca641a4b11"
+checksum = "554221c08d489f4aee18432b4d5bfbc6e3b78d6738251424ac717e91475d68ea"
 dependencies = [
  "anyhow",
  "async-trait",
  "bon",
+ "chrono",
  "crc32fast",
  "derive_more",
  "erased-serde",
  "futures",
  "parking_lot",
  "prost",
+ "prost-wkt-types",
  "serde",
  "serde_json",
  "temporalio-protos",
@@ -6187,9 +6103,9 @@ dependencies = [
 
 [[package]]
 name = "temporalio-macros"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80bd354f4226ade84d07266a21456553be402b2187ef72f263c334ec93a2109c"
+checksum = "a0204af3cafd33d1aac4bf6d998ba6c6070b1a1dc3e7331f8e3a1127bf0b8386"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6198,9 +6114,9 @@ dependencies = [
 
 [[package]]
 name = "temporalio-protos"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bce29ee903d46edec16df756e78e5ab125e4d342957174d4ac8ee30290ef249a"
+checksum = "8188305170ff0998c1c99ec8a62ef305b8d580efd32fe8ac7023bafc5a4191c7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6221,9 +6137,9 @@ dependencies = [
 
 [[package]]
 name = "temporalio-sdk"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "964d8c74815d169491e640e5688b7a37525641c59c683ea775a7bc9138c38b5c"
+checksum = "85efb98b1d7f198aa98b61a591f90bc64c04d537d749cb926bf084053a6afb0d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6250,13 +6166,13 @@ dependencies = [
 
 [[package]]
 name = "temporalio-sdk-core"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8498ec9d16b1ca9a85aaf622d7542f2bdefe82972e221f8026d1ddd18686591"
+checksum = "1f4f99b384438aad4656344b27e6ee6cb05e8ee568210a23d86836046eda0c9b"
 dependencies = [
  "anyhow",
  "async-trait",
- "backoff",
+ "backon",
  "bon",
  "crossbeam-channel",
  "crossbeam-utils",
@@ -6276,6 +6192,7 @@ dependencies = [
  "prost",
  "prost-wkt-types",
  "rand 0.10.2",
+ "reqwest",
  "serde",
  "serde_json",
  "siphasher",
@@ -6296,9 +6213,9 @@ dependencies = [
 
 [[package]]
 name = "temporalio-workflow"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "144d49f689bc594fbc81da9bf7989858b0e358b6aa28d47400ae822d3e0b559b"
+checksum = "2b3dfd064fd82be4b0ffefdaa1e7a0e7a0b8d1722d96bd59e9791585702b96e6"
 dependencies = [
  "anyhow",
  "bon",
@@ -6307,10 +6224,13 @@ dependencies = [
  "futures-util",
  "prost",
  "prost-wkt-types",
+ "rand 0.10.2",
+ "rand_pcg",
  "serde",
  "temporalio-common-wasm",
  "temporalio-macros",
  "thiserror",
+ "uuid",
  "wit-bindgen",
 ]
 
@@ -6780,6 +6700,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6790,12 +6720,15 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
