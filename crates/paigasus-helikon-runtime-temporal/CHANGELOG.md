@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.4.1...paigasus-helikon-runtime-temporal-v0.4.2) - 2026-08-18
+
+### Other
+
+- *(deps)* SMA-549 migrate the temporalio stack from 0.5 to 0.7 ([#205](https://github.com/SMK1085/paigasus-helikon/pull/205))
+
 ## [0.4.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.4.0...paigasus-helikon-runtime-temporal-v0.4.1) - 2026-08-16
 
 ### Added
