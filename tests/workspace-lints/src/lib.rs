@@ -46,11 +46,11 @@ const KEYWORDS: &[&str] = &["target", "parent"];
 /// trailing the invocation's own line.
 const ALLOW_MARKER: &str = "// allow(tracing-target-syntax)";
 
-/// An interior delimiter did not close the way [`collect_args`] expected
+/// An interior delimiter did not close the way the argument walker expected
 /// while walking a macro invocation's argument list. Well-formed Rust nests
 /// delimiters strictly, so this should be unreachable against real source —
-/// it exists to catch a future desync between [`mask_trivia`]'s masking and
-/// the depth-tracking in `collect_args`, surfaced as a value a caller can
+/// it exists to catch a future desync between the trivia masker and the
+/// walker's depth tracking, surfaced as a value a caller can
 /// attribute to the file it was reading rather than a `debug_assert_eq!`
 /// panic naming only a byte offset (second SMA-543 review wave).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
