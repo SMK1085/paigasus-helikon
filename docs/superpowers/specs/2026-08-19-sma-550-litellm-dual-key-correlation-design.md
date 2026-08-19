@@ -5,6 +5,27 @@
 **Ticket:** [SMA-550](https://linear.app/smaschek/issue/SMA-550/litellm-stream-translator-can-emit-two-name-carrying-deltas-for-one)
 **Related:** SMA-547 (which surfaced this and deliberately left it unfixed), SMA-533 (which will assert the invariant this violates)
 
+## Acceptance criteria (quoted verbatim from the ticket)
+
+> * A test drives the two-key sequence above through `consume` and asserts at
+>   most one `ToolCallDelta` per `call_id` carries `Some(name)`, mid-stream
+>   included.
+> * The test is verified to FAIL against the current translator.
+> * Whatever is chosen, `providers-openai`'s chat translator stays
+>   behaviourally aligned or the divergence is documented in a code comment —
+>   that alignment is an explicit constraint carried from SMA-547.
+
+And the three options it offers:
+
+> * **Re-key on the resolved** `call_id`**.** Once an id is known, migrate
+>   `pending` / `name_emitted` / `warned_late_name` entries from the `Key` to
+>   the `call_id`. Removes the hazard at the root; touches the most code.
+> * **Guard the mid-stream flush the same way the EOS flush is guarded** —
+>   check a `call_id`-keyed set before emitting `Some(name)`. Small and local,
+>   mirrors what SMA-547 already established.
+> * **Document it as a known limitation** and scope SMA-533's assertion
+>   accordingly.
+
 ## The defect
 
 `crates/paigasus-helikon-providers-litellm/src/stream.rs:178` correlates
@@ -19,8 +40,7 @@ let key = match (tc.index, tc.id.as_deref()) {
 ```
 
 `name_emitted`, `warned_late_name` and `pending` (`:76`, `:79`, `:85`) are all
-keyed by `Key`. A single `call_id` reached under **both** variants — one delta
-carrying `index` *and* `id`, a later delta carrying only `id` — therefore
+keyed by `Key`. A single `call_id` reached under **both** variants therefore
 produces two independent state entries, and each can independently satisfy the
 mid-stream flush condition at `:287`.
 
@@ -55,7 +75,7 @@ shape rather than disappearing:
 today -> ToolCallDelta{c1, Some("weather"), "{}"}
 ```
 
-Here `get_` buffers under `Key::Index(0)` and never flushes mid-stream (no args
+`get_` buffers under `Key::Index(0)` and never flushes mid-stream (no args
 fragment to complete it); `Key::Id("c1")` is a fresh slot that sees only
 `weather`, and its args fragment flushes it. At end-of-stream SMA-547's
 `already` guard (`:330`) correctly refuses to emit a second name for `c1`, so
@@ -66,6 +86,22 @@ the conformance assertion — it is simply, silently, the wrong name. This is th
 finding that decides the approach: a fix built on suppression cannot reach it,
 because suppression is already what discards `get_`.
 
+## The defect is broader than two sequences
+
+The adversarial review of this spec's first draft produced three further shapes.
+All three were **run against unmodified `stream.rs`** rather than reasoned
+about; these are captured outputs, not predictions.
+
+| # | Shape | Today | Silently lost |
+|---|---|---|---|
+| **C** | `{"id":"c1","name":"get_"}` → `{"index":0,"name":"weath"}` → `{"index":0,"id":"c1","name":"er","arguments":"{}"}` | `Some("weather")` | `get_` |
+| **D** | one array: `{"index":0,"id":"c1","name":"alpha"}`, `{"index":1,"id":"c1","name":"beta","arguments":"{}"}` | `Some("beta")` | `alpha` |
+| **E** | index-only, id-only, id-only, index-only, then both | `Some("IDXIDX")` | `ID` |
+
+Shape C matters most: it is the same "backend keys inconsistently" premise the
+whole ticket rests on, but with the id-keyed delta arriving **first**. It is the
+shape that decides the merge order below.
+
 ## Second defect: the loss is undiagnosed
 
 The ticket notes that in the dual-key case the fragment buffered under the
@@ -73,8 +109,9 @@ losing key is dropped with no diagnostic. The late-fragment `warn!` at `:237`
 keys on `Key`, and the losing key never emitted, so it never fires. The ticket
 proposes adding a `tracing::debug!` in the `flush_buffered_names` skip branch.
 
-**This design does not add one.** The chosen fix removes the losing key
-entirely, which restores the existing `warn!` on its own — see §Consequences.
+**This design does not add one there.** The chosen fix removes the losing key,
+which restores the existing `warn!` on its own for Sequence A. It adds a
+*different* diagnostic instead, on the new merge path — see §Design.
 
 ## Reachability
 
@@ -94,7 +131,10 @@ SMA-547's design doc states the position this ticket now reverses:
 > through this proxy — which is why §2 guards against it rather than
 > restructuring the keying.
 
-SMA-550 is that restructuring.
+SMA-550 is that restructuring. Consequently both committed fixtures
+(`tests/fixtures/tool_call_stream*.txt`) carry `index: 0` throughout and are
+**unaffected**; every shape in this design is synthetic by necessity, and no
+re-capture is planned or needed.
 
 ## Decision
 
@@ -103,57 +143,128 @@ Of the ticket's three options, this design takes **re-key on the resolved
 
 ### Rejected: guard the mid-stream flush the way the EOS flush is guarded
 
-Small and local (~10 lines), and it does fix Sequence A. It fails on two
-counts:
+Small and local (~10 lines), and it does fix Sequence A. It fails on two counts:
 
-1. **It cannot fix Sequence B.** A `call_id`-keyed suppression set stops the
-   *second* emission; it has no mechanism to reunite fragments that landed in
-   two slots. Sequence B would still yield `weather`.
+1. **It cannot fix Sequence B, C, D or E.** A `call_id`-keyed suppression set
+   stops the *second* emission; it has no mechanism to reunite fragments that
+   landed in two slots. All four would still lose a fragment silently.
 2. **It leaves the secondary defect open**, requiring the extra `debug!` the
    ticket describes, because the losing key still exists and still drops its
    buffer unheard.
 
-It also entrenches the dual-key structure that SMA-533's assertion will keep
-running into.
-
 ### Rejected: document as a known limitation
 
 Ruled out by the ticket's own acceptance criteria, which require a test
-verified to FAIL against the current translator. A documentation-only change
-cannot produce one.
+verified to FAIL against the current translator.
+
+### Rejected: split the maps by resolution state
+
+A structurally cleaner variant: keep `tool_calls: HashMap<Key, String>` as a
+pure wire→`call_id` resolver, and key all mutable state by `String`
+(`name_emitted: HashMap<String, String>`, `warned_late_name: HashSet<String>`,
+`unresolved: HashMap<Key, Pending>`, `resolved: HashMap<String, Pending>`).
+That makes the invariant true *by type* and needs no `tool_calls[Id(c)] → c`
+self-mapping.
+
+Rejected for this ticket on diff size: it rewrites every state access in
+`handle_tool_call`, `flush_buffered_names` and `warn_unresolved_pending`, and
+re-keys three fields, for a behavioural result identical to the chosen design —
+including the merge-ordering problem below, which it does **not** solve. It is
+worth revisiting if the keying grows a third variant. **It does not resolve the
+ambiguity in §Merge order**, which is intrinsic to the wire format rather than
+to the data structure.
 
 ## Design
 
-### Canonicalize the key on the resolved `call_id`
-
-In `handle_tool_call`, immediately after the `call_id` resolves at `:226`,
-rewrite the correlation key to a canonical `Key::Id(call_id)` and migrate any
-fragments buffered under the pre-canonical key:
+### `Pending` carries a creation sequence
 
 ```rust
-/// Rewrite `key` to the canonical slot for `call_id`, migrating any
-/// fragments buffered under the pre-canonical key.
+/// Buffered name and args fragments for a tool call.
+struct Pending {
+    /// Monotonic creation order, used to merge two buffers for one call in
+    /// wire order (§Merge order) and to give `flush_buffered_names` a
+    /// deterministic order.
+    seq: u64,
+    name: String,
+    args: String,
+}
+```
+
+**The `#[derive(Default)]` on `Pending` is removed** and replaced with
+`Pending::new(seq)`. This is deliberate and load-bearing: without `Default`,
+every existing `.or_default()` call site fails to compile, so the compiler —
+not review discipline — forces each one through the seq-assigning helper.
+
+```rust
+/// Get or create the buffer for `key`, assigning a creation `seq` on first use.
+fn pending_mut(&mut self, key: Key) -> &mut Pending {
+    let next = self.next_seq;
+    if !self.pending.contains_key(&key) {
+        self.next_seq += 1;
+    }
+    self.pending.entry(key).or_insert_with(|| Pending::new(next))
+}
+```
+
+`ChatTranslator` gains `next_seq: u64`, initialised to `0` in `new()`.
+
+### Canonicalize the key on the resolved `call_id`
+
+Inserted immediately after the `let Some(call_id) = ... else { ... }` block at
+`:226`:
+
+```rust
+let key = self.canonicalize(key, &call_id);
+```
+
+```rust
+/// Rewrite `key` to the canonical slot for `call_id`, migrating any fragments
+/// buffered under the pre-canonical key.
 ///
 /// Every delta for one call — however it was keyed on the wire — shares one
-/// state entry from this point on, which is what makes "at most one
-/// name-carrying delta per call_id" hold by construction rather than by
-/// guard.
+/// state entry from here on, which is what makes "at most one name-carrying
+/// delta per call_id" hold by construction rather than by guard.
 fn canonicalize(&mut self, key: Key, call_id: &str) -> Key {
-    let canonical = Key::Id(call_id.to_owned());
-    if key == canonical {
-        return canonical;
+    // Already canonical: return without allocating. This is the common path —
+    // LiteLLM itself keys every delta by `index`, so a stream that resolves
+    // once would otherwise pay a `String` allocation per args chunk.
+    if matches!(&key, Key::Id(id) if id == call_id) {
+        return key;
     }
-    // Fragments buffered under the pre-canonical key arrived first, so they
-    // lead whatever the canonical slot already holds.
+    let canonical = Key::Id(call_id.to_owned());
     if let Some(old) = self.pending.remove(&key) {
-        let slot = self.pending.entry(canonical.clone()).or_default();
-        slot.name.insert_str(0, &old.name);
+        let slot = self.pending_mut(canonical.clone());
+        // A resolved slot drains `args` on every delta (`:282`) and is removed
+        // when both fields empty (`:299`), so `slot.args` is always empty here
+        // and this is an assignment, not a splice. The assert pins that
+        // dependency: if drain-once is ever relaxed, this fails loudly instead
+        // of silently mis-ordering JSON.
+        debug_assert!(slot.args.is_empty(), "a resolved slot drains args each delta");
         slot.args.insert_str(0, &old.args);
+
+        if !old.name.is_empty() && !slot.name.is_empty() {
+            // Two buffers for one call both hold name fragments. Order by
+            // creation seq — see §Merge order for why neither a plain prepend
+            // nor a plain append is correct.
+            tracing::warn!(
+                target: "paigasus::litellm::stream",
+                %call_id,
+                "tool-call name fragments for one call arrived under two \
+                 correlation keys; merging in buffer-creation order, which \
+                 may misorder them if the keys interleaved"
+            );
+        }
+        if old.seq < slot.seq {
+            slot.name.insert_str(0, &old.name);
+            slot.seq = old.seq;
+        } else {
+            slot.name.push_str(&old.name);
+        }
     }
     // `flush_buffered_names` and `warn_unresolved_pending` both resolve a
-    // pending key through `tool_calls`; the canonical key must resolve too,
-    // or a canonicalized call would be skipped at flush and then reported as
-    // an unresolved loss.
+    // pending key through `tool_calls`; the canonical key must resolve too, or
+    // a canonicalized call is skipped at flush AND then falsely reported as an
+    // unresolved loss. Pinned by `canonical_key_resolves_through_tool_calls`.
     self.tool_calls
         .entry(canonical.clone())
         .or_insert_with(|| call_id.to_owned());
@@ -161,96 +272,144 @@ fn canonicalize(&mut self, key: Key, call_id: &str) -> Key {
 }
 ```
 
-Call site, replacing nothing and inserting directly after the `let Some(call_id)
-= ... else { ... }` block:
-
-```rust
-let key = self.canonicalize(key, &call_id);
-```
-
 Everything downstream — `name_emitted`, `warned_late_name`, `pending`, the
 `already_emitted` capture at `:259`, the flush condition at `:287` — then
-operates on the canonical key with **no change to its own type or logic**.
+operates on the canonical key with no change to its own logic.
 
-### Why this is complete
+### Merge order
 
-- Canonicalization runs *before* any emission on every delta, so `name_emitted`
-  only ever receives canonical keys. One `call_id` therefore has exactly one
-  entry in every map, and the at-most-one-name invariant holds structurally.
-- The original `Key::Index(i) → call_id` entry stays in `tool_calls`, so a
-  later index-only continuation delta still resolves.
-- **At most one buffer ever migrates per call.** The only unresolved state is
-  `Key::Index`-keyed: a `Key::Id` entry is unresolvable by definition, since it
-  is keyed *by* the id whose presence is what resolves it. So the prepend is
-  unambiguous in wire order — the migrating buffer is always the older one.
-- `warn_unresolved_pending` keeps working: it filters on
-  `!tool_calls.contains_key(k)`, and canonical keys are registered there, so a
-  canonicalized call is never falsely reported as lost, while a genuinely
-  id-less `Key::Index` buffer still is.
+The first draft of this spec claimed the migrating buffer "is always the older
+one", and merged with an unconditional `insert_str(0, ..)` prepend. **That claim
+was false**, and the adversarial review caught it. Both orderings are reachable:
 
-### Comments that must be rewritten, not left
+| | First buffer created | Second | Correct result |
+|---|---|---|---|
+| **Shape C** | `Key::Id("c1")` = `get_` | `Key::Index(0)` = `weath` | `get_weather` |
+| **Shape B′** | `Key::Index(0)` = `get_` | `Key::Id("c1")` = `weath` | `get_weather` |
 
-Two existing comments become false and are corrected in the same change.
+A plain prepend yields `weathget_er` on C; a plain append yields `weathget_er`
+on B′. **Only ordering by creation `seq` gets both right**, which is why
+`Pending` carries one.
 
-1. **`Key`'s `Ord` derive (`:33`)** is currently justified as "`Key::Index`
-   sorting before `Key::Id` is what makes the dual-key winner predictable".
-   There is no dual-key winner any more. The derive **stays** — `flush_buffered_names`
-   still sorts for a deterministic flush order *between different calls* — but
-   the stated reason is replaced. After this change all resolved pending keys
-   are `Key::Id`, so the sort is lexicographic by `call_id`.
+**Residual, stated rather than hidden.** `seq` orders *buffers*, not individual
+fragments. In shape E the two buffers interleave at fragment level (index-only,
+id-only, id-only, index-only), and no buffer-level order can reconstruct the
+true sequence; the merge yields `IDXIDXID`. That is still strictly better than
+today's `IDXIDX`, which *silently discards* `ID` — the merge is lossless and
+now carries a `warn!`. Reconstructing fragment order would require per-fragment
+sequencing, which is not worth it for a shape no conforming backend emits.
 
-2. **`flush_buffered_names`'s `already` guard (`:330`)** — see below.
+### `flush_buffered_names` sorts by `seq`, not by `Key`
+
+Today the sort is by `Key` (`:327`), which for resolved entries is
+`Key::Index(i)` — numeric, i.e. wire order. After canonicalization every
+resolved key is `Key::Id(call_id)`, so an unchanged sort silently becomes
+**lexicographic by call_id**: two parallel zero-argument calls with ids
+`call_z` (index 0) and `call_a` (index 1) would flip emission order.
+
+This is user-visible in the raw `ToolCallDelta` stream that `runtime-axum` /
+`runtime-actix` consumers see. (The *assembled* turn is unaffected —
+`ModelTurnAccumulator` uses a `BTreeMap<String, ToolCallAccum>`,
+`core/src/model.rs:494`, so it is already call_id-ordered.) Sorting by `seq`
+instead preserves today's order exactly:
+
+```rust
+keys.sort_by_key(|k| self.pending[k].seq);
+```
+
+`seq` is unique per buffer, so the order is total and deterministic.
+
+**Consequently `Key`'s `PartialOrd`/`Ord` derive (`:33-35`) is removed**, along
+with its comment — that sort was its only consumer, and its stated rationale
+("`Key::Index` sorting before `Key::Id` is what makes the dual-key winner
+predictable") describes a dual-key winner that no longer exists. The
+implementation must confirm by compilation that nothing else required it.
 
 ### Disposition of SMA-547's `already` guard
 
 Canonicalization makes the guard unreachable: distinct `pending` keys can no
 longer map to one `call_id`, so `already.insert(call_id)` can never return
-`false`.
+`false`. The adversarial review independently confirmed this by attempting four
+routes to reach it, and it held in all of them.
 
-**The guard is kept**, with its doc comment rewritten to state that it is now
-redundant given canonicalization and why it is retained anyway: it enforces the
-at-most-one-name invariant at the point of emission, independent of the keying
-discipline upstream of it — which is exactly the property SMA-533 will assert.
-Deleting it would remove tested behaviour and the last line of defence if the
-keying is ever loosened again.
+**The guard is kept**, with its doc comment rewritten to say it is now redundant
+and why it is retained: it enforces the at-most-one-name invariant at the point
+of emission, independent of the keying discipline upstream — exactly the
+property SMA-533 will assert.
+
+**Its `continue` gains a `tracing::error!`.** A silent defence is the wrong
+shape here: if a future change reintroduces dual keying, a bare `continue`
+drops a name without a word, which is *precisely* the "loss is undiagnosed"
+defect this ticket exists to fix. It must be loud.
 
 ### `providers-openai` alignment (AC #3)
 
-`providers-openai`'s chat translator is **structurally immune** to Sequence A
-and Sequence B: `async-openai` 0.41's `ChatCompletionMessageToolCallChunk.index`
-is a required `u32`, not an `Option<u32>` (verified in the vendored source at
-`async-openai-0.41.3/src/types/chat/chat_.rs:1124`). It therefore has a single
-`u32` key space (`chat.rs:229`, `:403`) and no `Key` enum at all.
+`providers-openai`'s chat translator cannot reach Sequences A–C or E:
+`ChatCompletionMessageToolCallChunk.index` is a required `u32`, not an
+`Option<u32>`. In-repo evidence: `chat.rs:229` declares
+`tool_calls: HashMap<u32, String>`, `chat.rs:403` binds `let index = tc.index;`
+with no `Option` handling, and the test helper at `chat.rs:528-537` constructs
+`index` as a bare `u32`.
 
-It is not *fully* aligned, and this change widens the gap by one shape. After
-canonicalization, two deltas carrying different `index` values but the **same**
-`id` merge into one call in litellm, whereas openai would keep them as two
-indexes and emit a name for each. That shape is malformed — an id identifies a
-call — and is not observed from any backend.
+It is **not** fully aligned, and two things must be recorded honestly:
 
-**Resolution: document the divergence in a code comment in
+1. **This change widens the gap on shape D.** After canonicalization litellm
+   emits `Some("alphabeta")` with both args streams merged into one buffer,
+   where today it emits `Some("beta")`. openai keeps two indexes. So the
+   divergence is "one lossy name → one merged name", not "two calls → one call"
+   as the first draft claimed.
+2. **openai *violates* SMA-533's assertion on shape D, and litellm does not.**
+   openai emits `Some("beta")` mid-stream for index 1 and then `Some("alpha")`
+   from `flush_buffered_names` for index 0 — **two name-carrying deltas for one
+   `call_id`**. `chat.rs:350-377` has no `already` equivalent and no
+   `call_id`-level dedup at all. This inverts the framing: after this change
+   litellm is the *stricter* translator.
+
+**Resolution: document both in a code comment in
 `providers-openai/src/backend/chat.rs`**, per the AC's second branch, rather
-than changing openai's behaviour. A maintainer reading `chat.rs` and wondering
-why it does not mirror litellm's canonicalization should find the answer there.
+than changing openai's behaviour here — shape D is malformed (an id identifies
+a call) and unobserved, and fixing openai is a separate change with its own
+blast radius. The comment is placed in `chat.rs` precisely *because* of point 2:
+a maintainer reading that file needs to find the known gap there. **SMA-533 must
+decide whether its suite covers shape D**; if it does, `providers-openai` goes
+red and needs its own ticket. This is called out in the handoff.
 
-Accepted consequence: that comment edits a packaged file, so release-plz will
-patch-bump `providers-openai` (0.2.22 → 0.2.23) and cascade the facade. This is
-expected and harmless — a `docs`-type change touching a packaged crate file
-still earns a bump.
+Accepted consequence: the comment edits a packaged file, so release-plz will
+patch-bump `providers-openai` (0.2.22 → 0.2.23) and cascade the facade.
+
+### Comments that must be rewritten, not left
+
+The first draft named two; the review found four more. All are false or
+misleading after this change:
+
+1. **`:33-35`** — `Key`'s `Ord` rationale. Removed with the derive.
+2. **`:44-45`** — `Key::Id`'s variant doc, "Correlated by `delta.tool_calls[].id`,
+   **when `index` is absent**". Post-fix `Key::Id` is the canonical state key
+   *even when index was present*. The most misleading one left.
+3. **`:69`, `:71`, `:80-85`** — `ChatTranslator` field docs ("keyed by
+   correlation `Key`"); `tool_calls` now also holds `Id(c) → c` self-mappings.
+4. **`:11-24`** — module invariant #2 documents the keying discipline in detail
+   and must gain canonicalization, which is now the load-bearing rule.
+5. **`:322-325`** — the whole "a call reached under both `Key::Index` and
+   `Key::Id` has two entries for one `call_id`" paragraph, not just the guard
+   sentence.
+6. **`:350-352`** — "claiming earlier would let an empty-name entry … block a
+   **sibling key**". There are no sibling keys post-fix.
 
 ## Consequences for behaviour
 
-| Sequence | Today | After |
+| Shape | Today | After |
 |---|---|---|
-| **A** (args on delta 1) | `Some("get_")` + `Some("weather")` — **contract violation** | `Some("get_")` then `None`; the late-fragment `warn!` at `:237` fires for `weather` |
-| **B** (no args on delta 1) | `Some("weather")` — one name, **silently wrong** | `Some("get_weather")` — fragments reunited |
+| **A** | `Some("get_")` + `Some("weather")` — **contract violation** | `Some("get_")` then `None`; late-fragment `warn!` (`:237`) fires for `weather` |
+| **B** | `Some("weather")` — silently wrong | `Some("get_weather")` — reunited |
+| **C** | `Some("weather")` — silently loses `get_` | `Some("get_weather")` — reunited |
+| **D** | `Some("beta")` — silently loses `alpha` | `Some("alphabeta")` — merged, one name, `warn!` |
+| **E** | `Some("IDXIDX")` — silently loses `ID` | `Some("IDXIDXID")` — lossless but misordered, `warn!` |
 
-Sequence A still loses `weather`, and that is correct and intended. Once
-`arguments` arrive, SMA-547's design treats the name as complete and emits it;
-a fragment arriving after that is genuinely unrecoverable because the event is
-already downstream. What changes is that the loss is now **loud** rather than
-silent — which is precisely the secondary defect the ticket asked to fix, and
-it is fixed by removing the losing key rather than by adding a `debug!`.
+Sequence A still loses `weather`, and that is correct and intended: once
+`arguments` arrive, SMA-547's design treats the name as complete and emits it,
+and a fragment arriving after that is genuinely unrecoverable. What changes is
+that every loss above is now either **repaired** or **loud**.
 
 ## Testing
 
@@ -259,49 +418,76 @@ already sit.
 
 | Test | Asserts | Fails today? |
 |---|---|---|
-| `dual_key_call_emits_at_most_one_name_mid_stream` | Sequence A driven through `consume`; exactly one `Some(name)` per `call_id`, **mid-stream** — not merely after `finish()` | **yes** — the AC's required failing test |
-| `name_fragments_split_across_the_key_boundary_reassemble` | Sequence B yields `get_weather` | **yes** — today yields `weather` |
-| `dual_key_late_fragment_is_reported` | `warned_late_name` records the dropped `weather` in Sequence A, closing the secondary defect | yes |
-| `one_call_id_under_two_keys_flushes_a_single_name` | **retargeted**: still one name-carrying delta, now `get_weather` not `get_`; the obsolete "Key::Index sorts before Key::Id" rationale removed from its assertion message | assertion updated |
-| `flush_does_not_re_emit_a_name_already_flushed_under_another_key` | unchanged assertion; **docstring corrected** — it passes now because `name_emitted[canonical]` suppresses the second flush, not because of a sibling-key seed | no |
-| `buffered_args_survive_a_bare_id_delta` | unchanged — pins that migration preserves drain-once args semantics across canonicalization | no |
+| `dual_key_call_emits_at_most_one_name_mid_stream` | Sequence A: over **every event from every `consume` call plus `finish()`**, exactly one carries `Some(name)` for `c1` | **yes** — the AC's required failing test |
+| `name_fragments_split_across_the_key_boundary_reassemble` | Sequence B yields `get_weather` | **yes** |
+| `id_keyed_buffer_created_before_the_index_keyed_one_merges_in_order` | Shape C yields `get_weather`, not `weathget_er` — pins the `seq` merge against a plain prepend | **yes** |
+| `index_keyed_buffer_created_first_merges_in_order` | Shape B′ yields `get_weather` — pins `seq` against a plain append | no (passes today by luck; guards the fix) |
+| `interleaved_dual_keying_is_lossless_and_misordered` | Shape E yields `IDXIDXID`; documents the accepted residual so an implementer cannot "discover" it and treat it as a bug | **yes** |
+| `two_indexes_with_one_id_merge_into_a_single_call` | Shape D yields exactly one `Some(name)` for `c1` | no (one name today too) |
+| `dual_key_late_fragment_is_reported` | after Sequence A, `warned_late_name` contains **`Key::Id("c1")`** (not `Key::Index(0)`) | yes |
+| `canonical_key_resolves_through_tool_calls` | `tool_calls` contains the canonical key after a canonicalized stream — pins the self-mapping a future "cleanup" would remove | yes |
+| `late_name_fragment_warns_once` (`:1078`) | **retarget**: `:1094` asserts `name_emitted.get(&Key::Index(0))`, which becomes `Key::Id("c1")` | assertion updated |
+| `one_call_id_under_two_keys_flushes_a_single_name` (`:1119`) | **retarget**: still one name, now `get_weather` not `get_`; drop the obsolete "Key::Index sorts before Key::Id" rationale | assertion updated |
+| `flush_does_not_re_emit_a_name_already_flushed_under_another_key` (`:1159`) | unchanged assertion; **docstring corrected** — it passes because `name_emitted[canonical]` suppresses the second flush, not because of a sibling-key seed | no |
+| `buffered_args_survive_a_bare_id_delta` (`:1200`) | unchanged — pins drain-once args across canonicalization | no |
 
-**The two `yes` rows must be observed failing against unmodified `stream.rs`
-before the fix lands**, and the observed failure output recorded in the
-implementation plan. A test that has never been seen to fail proves nothing.
+**Every row marked `yes` must be observed failing against unmodified
+`stream.rs`, and the failure output recorded in the implementation plan.** A
+test never seen to fail proves nothing.
 
-`dual_key_call_emits_at_most_one_name_mid_stream` must collect from the
-`consume` return values, not from `finish()`. Asserting on `finish()` alone
-would pass against today's code, because today's violation is two *mid-stream*
-emissions and `finish()` returns neither.
+Two rigour notes the review sharpened:
+
+- `dual_key_call_emits_at_most_one_name_mid_stream` must collect across **all
+  `consume` returns and `finish()`** — the invariant is per-stream. A
+  `finish()`-only assertion passes vacuously against today's code, because
+  today's violation is two *mid-stream* emissions and `finish()` returns
+  neither.
+- **Sweep criterion for the implementer:** grep `mod tests` for every assertion
+  naming `name_emitted`, `warned_late_name`, `pending` or `tool_calls` with a
+  `Key::` literal. The first draft missed `late_name_fragment_warns_once` by not
+  doing this. The openai counterpart (`chat.rs:1066-1072`) additionally asserts
+  `warned_late_name.contains(&0)`, which the litellm test lacks — mirror it
+  while retargeting.
 
 ## Documentation
 
-- **mdBook: no edit.** Conscious call, not a silent skip. `docs/book/src/`
-  mentions `ToolCallDelta` only as a `ModelEvent` variant name
-  (`concepts/model-providers.md:56`); it documents no per-`call_id` name
-  semantics, so nothing in the book becomes stale.
-- **READMEs: no edit.** No public API, feature flag, install story, or crate
-  roster change. `providers-litellm`'s public surface is untouched — this is
-  entirely inside a `pub(crate)` translator.
+- **mdBook: no edit.** Conscious call. Note the first draft's reasoning was
+  wrong: `docs/book/src/concepts/agent-loop.md:57-62` **does** document the
+  per-`call_id` name semantics ("`name` is `Some` on the first delta the
+  provider can establish the whole name from … and `None` on the rest"). No
+  edit is needed because that prose already describes **post-fix** behaviour —
+  it is today's code that deviates from the book, not the other way round.
+- **READMEs: no edit**, same reasoning. `providers-litellm/README.md:125-131`
+  already documents the buffering and the one unrecoverable shape (a fragment
+  after arguments have begun), which remains exactly true after this change.
 - **CHANGELOGs: none by hand.** release-plz generates them.
 
-## Release
+## Release and conventions
 
 `providers-litellm` is at **0.1.1** and `providers-openai` at **0.2.22** — both
-long since released, so this is release-plz's normal flow. No stub-ascend
-ritual, no manual `core` bump (nothing in `core` changes), and no manual facade
-bump (nothing here defeats the `dependencies_update` cascade).
+released, so this is release-plz's normal flow. No stub-ascend ritual, no manual
+`core` bump (nothing in `core` changes), no manual facade bump.
+
+**Commit and PR scope: use `providers`, not `providers-litellm`.**
+`.versionrc:18`'s `scopeRegex` allows `providers`, `providers-openai` and
+`providers-anthropic` but **not** `providers-litellm`. A
+`fix(providers-litellm): …` title is rejected by the local `commit-msg` hook and
+the `commits` CI job, and the PR title is validated against the allowlist as it
+exists on `main` (`pr-title.yml` runs on `pull_request_target`). SMA-547's PR
+used `fix(providers): …` for the same reason.
 
 ## Out of scope
 
-- The four non-fragmenting providers (Responses, Anthropic, Bedrock, Gemini) —
-  they receive a complete name in one typed field. Established in SMA-547's
-  blast-radius table.
-- `providers-openai`'s *behaviour*. Documented divergence only, per AC #3.
-- SMA-533's conformance suite itself. This change makes `providers-litellm`
-  pass the assertion SMA-533 will add; writing that suite is SMA-533's work.
-- The `or_insert` policy when one `index` reports two different `id`s
-  (`:220`). Pre-existing, unrelated to dual-keying, and unchanged here.
-- Re-capturing fixtures. No wire-format understanding changes; the existing
-  captured fixtures stay valid.
+- The four non-fragmenting providers (Responses, Anthropic, Bedrock, Gemini).
+  Established in SMA-547's blast-radius table.
+- `providers-openai`'s *behaviour*, including its shape-D violation of SMA-533's
+  assertion. Documented only; needs its own ticket if SMA-533 covers shape D.
+- SMA-533's conformance suite itself.
+- The `or_insert` policy when one `index` reports two different `id`s (`:220`).
+  Pre-existing and unchanged.
+- A pre-existing false positive in `warn_unresolved_pending`: a bare
+  `{"index":0}` delta with no id and no `function` creates an empty `Pending`
+  (`:228-230`) and then warns at EOS about "dropping" fragments that never
+  existed. Unchanged here; noted so the §Why-this-is-complete claim about that
+  function is not read as a clean bill of health.
+- Fixture re-capture. See §Reachability.
