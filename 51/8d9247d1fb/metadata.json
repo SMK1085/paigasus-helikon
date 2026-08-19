@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "518d9247d1fb",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-543-tracingwarn-uses-target-instead-of-target-in-both-providers",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-19-sma-543-tracing-target-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/51/8d9247d1fb/0/metadata.json",
+      "transcript": "/51/8d9247d1fb/0/full.jsonl",
+      "compact_transcript": "/51/8d9247d1fb/0/transcript.jsonl",
+      "content_hash": "/51/8d9247d1fb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 7630,
+    "cache_read_tokens": 606988,
+    "output_tokens": 6623,
+    "api_call_count": 5
+  }
+}
