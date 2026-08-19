@@ -26,7 +26,8 @@ dependencies.
 - **No `CHANGELOG` edits by hand** — release-plz generates them.
 - **No version bumps.** `providers-litellm` 0.1.1 and `providers-openai` 0.2.22 are both released; release-plz handles bumps.
 - Work **synchronously and in the foreground**. Do not background `cargo` runs and do not end a turn before the task reaches a terminal pass/fail.
-- MSRV is 1.94; workspace lints include `missing_docs = "warn"`, so every new item needs a doc comment (private items included, since the crate opts into `[lints] workspace = true`).
+- MSRV is 1.94; workspace lints include `missing_docs = "warn"`. That lint fires on items reachable from outside the crate, **not** on private ones — the translator here is `pub(crate)`, so its doc comments are a house convention rather than something the compiler demands. Write them anyway; just don't expect the build to catch a missing one.
+- **The `| grep` in the verification steps below is a readability filter, not the verdict.** A pipeline's exit status is the *last* command's, so `cargo test … | grep …` reports grep's success even when cargo failed, and `| tail -N` silently truncates the result lines you are counting. Read cargo's own status — run it unpiped, or capture `${PIPESTATUS[0]}`, or `set -o pipefail`. This is not hypothetical: during this plan's execution a backgrounded `cargo test --workspace … | tail -40` returned 0 from `tail` while presenting 6 truncated result lines that aggregated to a nonsense "5 passed", and the gate had to be re-run unpiped to get a real answer.
 
 ## File Structure
 
@@ -52,11 +53,18 @@ predictions.
 | **C** | `{"id":"c1","function":{"name":"get_"}}`, `{"index":0,"function":{"name":"weath"}}`, `{"index":0,"id":"c1","function":{"name":"er","arguments":"{}"}}` | `Some("weather")` | `Some("get_weather")` |
 | **B′** | `{"index":0,"function":{"name":"get_"}}`, `{"id":"c1","function":{"name":"weath"}}`, `{"index":0,"id":"c1","function":{"name":"er","arguments":"{}"}}` | `Some("get_er")` | `Some("get_weather")` |
 | **D** | one array: `{"index":0,"id":"c1","function":{"name":"alpha"}}`, `{"index":1,"id":"c1","function":{"name":"beta","arguments":"{}"}}` | `Some("beta")` | `Some("alphabeta")` |
-| **E** | `{"index":0,…"IDX"}`, `{"id":"c1",…"ID"}`, `{"id":"c1",…"ID"}`, `{"index":0,…"IDX"}`, `{"index":0,"id":"c1","arguments":"{}"}` | `Some("IDXIDX")` | `Some("IDXIDXID")` |
+| **E** | `{"index":0,…"IDX"}`, `{"id":"c1",…"ID"}`, `{"id":"c1",…"IE"}`, `{"index":0,…"IDX"}`, `{"index":0,"id":"c1","arguments":"{}"}` | `Some("IDXIDX")` | `Some("IDXIDXIDIE")` |
 
 **C and B′ are mirror images and they are why `seq` exists.** A plain
 `insert_str(0, …)` prepend gets B′ right and C wrong; a plain `push_str` append
 gets C right and B′ wrong. Only ordering by buffer-creation `seq` satisfies both.
+
+**Shape E's third fragment is `IE`, not a second `ID`.** The original fixture
+repeated `ID`, and SMA-547's whole-name-repeat guard silently swallowed the
+repeat — so the test fed 10 characters, pinned 8, and credited the difference to
+the merge rather than to the guard. Making the third fragment distinct is what
+lets the row's "lossless" claim actually hold. Keep every fragment in this shape
+distinct for the same reason.
 
 ---
 
@@ -400,7 +408,7 @@ The behavioural fix.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add all seven to `mod tests`.
+Add all eight to `mod tests`.
 
 ```rust
     /// SMA-550 acceptance criterion: one `call_id` reached under both `Key`
@@ -554,7 +562,7 @@ Add all seven to `mod tests`.
             vec![
                 tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "IDX"}}])),
                 tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "ID"}}])),
-                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "ID"}}])),
+                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "IE"}}])),
                 tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "IDX"}}])),
                 tc_chunk(serde_json::json!([
                     {"index": 0, "id": "c1", "function": {"arguments": "{}"}}
@@ -563,7 +571,7 @@ Add all seven to `mod tests`.
         );
         assert_eq!(
             named(&evs),
-            vec![("c1".to_owned(), "IDXIDXID".to_owned())],
+            vec![("c1".to_owned(), "IDXIDXIDIE".to_owned())],
             "lossless: every fragment survives, even though the order is not recoverable"
         );
     }
@@ -619,7 +627,7 @@ Add all seven to `mod tests`.
 cargo test -p paigasus-helikon-providers-litellm --lib 2>&1 | grep -E "^test .*(dual_key|reassemble|merges_in_order|two_indexes|interleaved|canonical_key) .*(ok|FAILED)"
 ```
 
-Expected: **all seven FAIL** (`parallel_zero_argument_calls_flush_in_wire_order`
+Expected: **all eight FAIL** (`parallel_zero_argument_calls_flush_in_wire_order`
 from Task 2 still passes). Capture the actual `left`/`right` values from the
 output — the acceptance criterion requires the test be *verified* to fail, and
 the recorded values are the evidence. Cross-check them against the "today"
@@ -1012,8 +1020,10 @@ Directly above `fn handle_tool_call_chunk(` at `chat.rs:398`, insert:
 ```
 
 If `fn handle_tool_call_chunk` already carries a doc comment, merge this text
-into it rather than stacking a second one — two `///` blocks on one item is a
-compile error.
+into it rather than stacking a second block above it. Consecutive `///` lines
+concatenate into one doc comment, so stacking compiles fine — it just reads as
+two disjoint openings on one item. (What *is* a compile error, `E0585`, is a
+`///` block with no item after it — so watch the placement, not the count.)
 
 - [ ] **Step 2: Verify the crate still builds and documents cleanly**
 
