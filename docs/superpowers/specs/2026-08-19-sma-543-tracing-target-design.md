@@ -291,7 +291,8 @@ the same `// allow(tracing-target-syntax)` marker.
 1. **The detector's unit tests** demonstrate it failing on bad input and
    passing on good input, on every CI run — a durable property, not a one-off
    manual demonstration.
-2. **Residual diff between the two `request.rs` files is exactly:**
+2. **Residual diff between the two `request.rs` files is exactly (re-verified
+   against the current tree, third review wave — see the note below):**
    - the module doc block (openai lines 1–6 vs litellm 1–8);
    - the four shared target strings (`paigasus::openai::translate` vs
      `paigasus::litellm::translate`) at openai 83/172/205/211 ↔ litellm
@@ -299,12 +300,35 @@ the same `// allow(tracing-target-syntax)` marker.
      172 / litellm 174, which was already correct. The fix substitutes
      characters in place and adds no lines, so these numbers hold before and
      after;
-   - openai-only `to_responses_input` (245–352), `mod responses_tests`
-     (564–630), and `mod tracing_target_tests` (632–686) — the §4.6
-     behavioural capture-`Layer` test added by this branch;
+   - openai-only `to_responses_input` (245–352) and `mod responses_tests`
+     (564–630);
+   - **both files now carry a `mod tracing_target_tests`** — the §4.6
+     behavioural capture-`Layer` test: openai (632–696) and litellm
+     (489–563). This is no longer openai-only: a later commit (plan Task 3's
+     post-execution note) mirrored the test into litellm too, because
+     nothing else pinned the *value* of the litellm target namespace — the
+     static guard only checks syntax and the cross-crate parity test only
+     compares translated `messages`, so a copy-paste regression that
+     reinstated the openai target string inside litellm's translator would
+     otherwise pass every other gate. The two copies differ in more than the
+     target-string literal: litellm's carries an extra doc-comment paragraph
+     (lines 493–502) explaining the mirroring and the regression it guards
+     against, which openai's copy does not have — so this is a content diff
+     as well as (now, after openai's module grew by ten lines) a line-count
+     diff;
    - litellm-only trailing `chat_tests`:
      `plain_text_user_turn_emits_string_content` (457–463) and
      `tool_call_then_result_round_trips` (465–486).
+
+   **This baseline has already gone stale once and been re-verified once
+   already** (this update, SMA-543 CodeRabbit fix wave, 2026-08-19): the
+   openai `mod tracing_target_tests` range grew from 632–686 to 632–696
+   between when this section was first written and when it was checked
+   again, and the list did not yet account for litellm gaining its own copy
+   of that module. Both are corrected above. As before, this list is a
+   *snapshot with no enforcement* (see the closing note of this section) —
+   expect it to need re-verification again after any further edit to either
+   file, not just trust the numbers on sight.
 
    **The ticket's stated expectation is wrong** — it predicts "the module doc
    block and the four target strings" plus the omitted `to_responses_input`,

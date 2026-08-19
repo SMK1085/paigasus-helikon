@@ -116,8 +116,8 @@ pub fn scan(src: &str) -> Vec<Offense> {
 /// failure to the file it was reading — something a panic raised from
 /// inside this `&str`-only function cannot do on its own.
 pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
-    let allow_lines = collect_allow_marker_lines(src);
-    let masked = mask_trivia(src);
+    let (masked, line_comment_ranges) = mask_trivia(src);
+    let allow_lines = collect_allow_marker_lines(src, &line_comment_ranges);
     let b = &masked[..];
     let aliases = collect_macro_aliases(b);
     let mut offenses = Vec::new();
@@ -193,15 +193,30 @@ fn ident_range_before(b: &[u8], at: usize) -> Option<(usize, usize)> {
 }
 
 /// Line numbers (1-based) in `src` that carry the [`ALLOW_MARKER`] opt-out,
-/// either as a standalone comment or trailing code. Collected from the raw,
-/// unmasked source: [`mask_trivia`] blanks comments before the rest of
-/// [`try_scan`] runs, so this must happen first, or the marker itself would
-/// be invisible to it.
-fn collect_allow_marker_lines(src: &str) -> std::collections::HashSet<usize> {
-    src.lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains(ALLOW_MARKER))
-        .map(|(idx, _)| idx + 1)
+/// either as a standalone comment or trailing code.
+///
+/// Matched against the *raw* source, because the marker text lives inside a
+/// comment and [`mask_trivia`] has already blanked comments to spaces by the
+/// time this runs. But raw-text matching alone cannot tell a genuine `//`
+/// comment from marker-shaped text that merely appears inside a string, a
+/// raw string, or a block comment — so an occurrence only counts when its
+/// byte range falls inside `line_comment_ranges`, the genuine line-comment
+/// spans [`mask_trivia`] already identified while masking. Re-deriving those
+/// boundaries independently here, instead of reusing them, would risk a
+/// second lexer disagreeing with the first about what counts as a comment.
+fn collect_allow_marker_lines(
+    src: &str,
+    line_comment_ranges: &[(usize, usize)],
+) -> std::collections::HashSet<usize> {
+    let bytes = src.as_bytes();
+    src.match_indices(ALLOW_MARKER)
+        .filter(|&(pos, _)| {
+            let end = pos + ALLOW_MARKER.len();
+            line_comment_ranges
+                .iter()
+                .any(|&(start, stop)| pos >= start && end <= stop)
+        })
+        .map(|(pos, _)| line_of(bytes, pos))
         .collect()
 }
 
@@ -279,9 +294,19 @@ fn blank(out: &mut [u8], from: usize, to: usize) {
 
 /// Replace every byte inside a comment or literal with a space, preserving
 /// length, byte offsets and newlines so offsets still map onto the original.
-fn mask_trivia(src: &str) -> Vec<u8> {
+///
+/// Also returns the byte ranges of every genuine **line comment** (`// …`
+/// through end-of-line, which includes doc comments `///`/`//!` — they open
+/// with the same two bytes this scan matches on). [`collect_allow_marker_lines`]
+/// reuses these ranges to tell a real `// allow(tracing-target-syntax)`
+/// comment apart from that same text merely appearing inside a string, a raw
+/// string, or a block comment — all of which this function also blanks, but
+/// does *not* record a range for, since only a line comment is a legitimate
+/// home for the marker.
+fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
     let b = src.as_bytes();
     let mut out = b.to_vec();
+    let mut line_comment_ranges = Vec::new();
     let mut i = 0;
     while i < b.len() {
         match b[i] {
@@ -291,6 +316,7 @@ fn mask_trivia(src: &str) -> Vec<u8> {
                     i += 1;
                 }
                 blank(&mut out, start, i);
+                line_comment_ranges.push((start, i));
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 let start = i;
@@ -345,7 +371,7 @@ fn mask_trivia(src: &str) -> Vec<u8> {
             _ => i += 1,
         }
     }
-    out
+    (out, line_comment_ranges)
 }
 
 /// End (exclusive) of a raw or byte string starting at `i`, if one does.
@@ -689,6 +715,45 @@ mod tests {
     fn allow_marker_silences_a_colliding_foreign_macro() {
         let src = r#"mycrate::warn!(target = "x", "m"); // allow(tracing-target-syntax)"#;
         assert_eq!(kinds(src), vec![]);
+    }
+
+    /// Regression test (third review wave): the marker's *text* appearing
+    /// inside a string literal on the same line as a real offense must not
+    /// suppress it. The previous implementation matched the marker as raw
+    /// text anywhere on the line, with no regard for whether that text was
+    /// actually inside a comment.
+    #[test]
+    fn allow_marker_text_inside_a_string_literal_does_not_suppress() {
+        let src =
+            "let s = \"// allow(tracing-target-syntax)\"; tracing::warn!(target = \"x\", \"m\");\n";
+        assert_eq!(
+            kinds(src),
+            vec![(1, "warn".to_owned(), "target".to_owned())]
+        );
+    }
+
+    /// Same false negative as above, but the marker text sits inside a block
+    /// comment rather than a genuine line comment. Block comments are
+    /// blanked by `mask_trivia` but deliberately not recorded as a home for
+    /// the marker — only `// …` line comments count.
+    #[test]
+    fn allow_marker_text_inside_a_block_comment_does_not_suppress() {
+        let src = "/* // allow(tracing-target-syntax) */ tracing::warn!(target = \"x\", \"m\");\n";
+        assert_eq!(
+            kinds(src),
+            vec![(1, "warn".to_owned(), "target".to_owned())]
+        );
+    }
+
+    /// Same false negative again, inside a raw string.
+    #[test]
+    fn allow_marker_text_inside_a_raw_string_does_not_suppress() {
+        let src =
+            "let s = r#\"// allow(tracing-target-syntax)\"#; tracing::warn!(target = \"x\", \"m\");\n";
+        assert_eq!(
+            kinds(src),
+            vec![(1, "warn".to_owned(), "target".to_owned())]
+        );
     }
 
     /// Regression test for the FIX B panic-message fix (second review

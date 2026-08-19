@@ -757,6 +757,19 @@ The static guard proves syntax. This proves meaning, and makes the spec §1.1 pr
 
 It goes in a new module at the **end** of the file, after `responses_tests` — not inside `chat_tests`, which is the block ported verbatim into the LiteLLM crate. Appending here follows the file's existing shape (both copies already carry their own tail-end additions) and leaves the D6 shared region untouched.
 
+> **Post-execution note (later review wave):** this task originally landed
+> openai-only, on the reasoning above — placing it outside `chat_tests` kept
+> that block a verbatim, symmetric copy between the two crates. A later
+> review wave added an equivalent `mod tracing_target_tests` to
+> `providers-litellm` as well, because that reasoning covered *where* the
+> test should live but not *whether* litellm needed one: nothing else pinned
+> the litellm target namespace's actual value — the static guard only checks
+> `target:` syntax and the cross-crate parity test only compares translated
+> `messages`, so a copy-paste regression reinstating the openai target
+> string inside litellm's translator would have passed every other gate.
+> Steps 1–6 below are left as originally executed (openai only); this note
+> records the follow-up rather than rewriting the task.
+
 **Files:**
 - Modify: `crates/paigasus-helikon-providers-openai/Cargo.toml` (`[dev-dependencies]`)
 - Modify: `crates/paigasus-helikon-providers-openai/src/translate/request.rs` (append a module at end of file)
