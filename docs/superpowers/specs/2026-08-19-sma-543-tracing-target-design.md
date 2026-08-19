@@ -130,20 +130,48 @@ never flagged, and a `)` inside a literal never miscounts paren depth:
 1. Find each `!` followed (modulo whitespace) by an opening delimiter —
    `(`, `[` or `{`, since macros accept all three with identical token trees
    and each equally reproduces the SMA-543 defect — whose preceding path
-   segment is one of `warn`, `info`, `debug`, `error`, `trace`, `event`,
-   `span`, `warn_span`, `info_span`, `debug_span`, `error_span`,
-   `trace_span`. If that segment is itself qualified (`some::path::warn!`),
-   the segment immediately before it must be `tracing`; an unqualified
-   (bare) macro name is still matched, since a legitimate call can reach the
-   macro via `use tracing::warn;`. This keeps an unrelated macro whose last
-   path segment merely collides with a tracing macro name — e.g.
-   `mycrate::warn!(target = "x", "m")` — from being false-flagged.
+   segment (the identifier immediately before the `!`, ignoring whatever
+   qualifier precedes it) is one of `warn`, `info`, `debug`, `error`,
+   `trace`, `event`, `span`, `warn_span`, `info_span`, `debug_span`,
+   `error_span`, `trace_span`, **or** a bare local name introduced by
+   `use <path>::<one of those> as <alias>;` (or the grouped
+   `use <path>::{<name> as <alias>, ...};` form). Matching is on this final
+   segment **alone, regardless of qualifier** — `tracing::warn!`,
+   `crate::obs::warn!`, `self::warn!`, `use tracing as t; t::warn!`, a bare
+   `warn!` reached via `use tracing::warn;`, and a bare alias reached via
+   `use tracing::warn as w; w!` are all matched, because a qualifier (or an
+   entire import path) can be renamed or re-exported through unrelated code
+   and still reach the exact same macro. An earlier draft of this rule
+   additionally required the segment immediately before the macro name, when
+   qualified, to read literally `tracing`; that requirement produced false
+   negatives against every one of the renamed/re-exported forms above and
+   was removed in the second review wave.
+
+   **Accepted cost:** an unrelated macro whose final segment merely collides
+   with a tracing macro name — e.g. `mycrate::warn!(target = "x", "m")` — is
+   now flagged too, where the qualifier-restricted first draft let it pass
+   silently. §4.7 covers the escape hatch this trades in return.
 2. Walk that invocation's argument list, tracking paren/bracket/brace depth
    (terminating on the delimiter matching whichever one opened the
    invocation) so only **top-level** arguments are considered.
 3. At the start of each top-level argument, flag it if it is the bare
    identifier `target` or `parent` followed (modulo whitespace) by `=` that is
-   not `==`.
+   not `==` — **unless** the call site carries the opt-out marker described
+   below.
+
+**Opt-out marker.** `target` and `parent` are also legal, ordinary field
+names — `tracing::info!(target: "paigasus::http", target = %uri, "req")` is
+correct, intentional code (the second `target` names a field, not the
+macro's target syntax), and the detection rule above cannot distinguish it
+from the defect syntactically. A call site opts out with a
+`// allow(tracing-target-syntax)` comment, placed either on the line
+immediately before the invocation or trailing the invocation's own line. The
+marker is collected from the file's raw, unmasked text — comment-blanking
+(step 1's masking pass) runs first, so the marker itself must be read before
+masking or it would be invisible to the rest of the scan. This is also the
+remedy for the accepted-cost collision above: a genuinely unrelated
+`mycrate::warn!` can be silenced explicitly, which the qualifier-restricted
+first draft offered no way to do short of editing this crate.
 
 The failure message lists every offending `file:line` with the argument index.
 
@@ -235,9 +263,28 @@ meaning. Precedent for the technique is `core/tests/workflow_tracing.rs`.
 ### 4.7 Accepted cost
 
 A future *legitimate* tracing field named `target` or `parent`, in any
-position, would trip the guard and have to be renamed. That is acceptable — and
-arguably correct, since such a field shadows the macro keyword and reads as a
-bug at every call site.
+position, would trip the guard. Since the second review wave this no longer
+forces a rename: the call site can instead carry the
+`// allow(tracing-target-syntax)` marker described in §4.3, so the field name
+is preserved when renaming it would be worse (e.g. it mirrors an external
+wire-format key). Renaming remains the better default where it costs
+nothing, since such a field shadows the macro keyword and reads as a bug at
+every call site.
+
+**Second, distinct accepted cost, also introduced in the second review
+wave.** Matching by final path segment alone — with no requirement that a
+qualifier read literally `tracing` — means an unrelated macro whose final
+segment merely collides with a tracing macro name, e.g.
+`mycrate::warn!(target = "x", "m")`, is now flagged as if it were a
+`tracing` call. The first draft of this rule avoided that false positive by
+requiring the segment immediately before the macro name, when qualified, to
+be `tracing`; that same requirement is what made
+`use tracing as t; t::warn!`, `crate::obs::warn!`, `self::warn!`, and a bare
+alias reached via `use tracing::warn as w; w!` all scan clean despite each
+one compiling and reproducing the exact SMA-543 defect (§4.3). Between a
+false negative on real tracing bugs and a false positive on a same-named
+foreign macro, the false positive is the one with a remedy: silence it with
+the same `// allow(tracing-target-syntax)` marker.
 
 ## 5. Verification
 

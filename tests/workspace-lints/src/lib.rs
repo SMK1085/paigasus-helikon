@@ -38,6 +38,41 @@ const TRACING_MACROS: &[&str] = &[
 /// Keywords that must be introduced with `:` and never with `=`.
 const KEYWORDS: &[&str] = &["target", "parent"];
 
+/// Opt-out marker for a call site where `target`/`parent` are legitimate
+/// field names, not the macro's target/parent syntax — e.g.
+/// `tracing::info!(target: "paigasus::http", target = %uri, "req")`, where
+/// the second `target` is an ordinary field. Written as a `// allow(...)`
+/// comment either on the line immediately before the macro invocation, or
+/// trailing the invocation's own line.
+const ALLOW_MARKER: &str = "// allow(tracing-target-syntax)";
+
+/// An interior delimiter did not close the way [`collect_args`] expected
+/// while walking a macro invocation's argument list. Well-formed Rust nests
+/// delimiters strictly, so this should be unreachable against real source —
+/// it exists to catch a future desync between [`mask_trivia`]'s masking and
+/// the depth-tracking in `collect_args`, surfaced as a value a caller can
+/// attribute to the file it was reading rather than a `debug_assert_eq!`
+/// panic naming only a byte offset (second SMA-543 review wave).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MismatchedDelimiter {
+    /// Byte offset into the masked source where the mismatch was found.
+    pub byte: usize,
+    /// The closing byte actually encountered.
+    pub found: u8,
+    /// The closing byte the invocation's own opening delimiter required.
+    pub expected: u8,
+}
+
+impl std::fmt::Display for MismatchedDelimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "mismatched delimiter ending macro invocation at byte {}: found {:?}, expected {:?}",
+            self.byte, self.found as char, self.expected as char
+        )
+    }
+}
+
 /// Scan Rust source for `tracing` macro arguments written `target = …` or
 /// `parent = …`, which the macros silently treat as ordinary fields.
 ///
@@ -45,11 +80,46 @@ const KEYWORDS: &[&str] = &["target", "parent"];
 /// event macros the correct syntax puts `target:` *before* the level or span
 /// name, so the erroneous form is only reachable in a later position.
 ///
+/// A macro invocation is recognised by its **final path segment** alone —
+/// `tracing::warn!`, `crate::obs::warn!`, `self::warn!`, a bare `warn!`
+/// reached via `use tracing::warn;`, and a bare alias reached via
+/// `use tracing::warn as w;` are all matched — because a qualifier (or an
+/// entire import path) can be renamed or re-exported and still reach the
+/// exact same macro; requiring the qualifier to read literally `tracing`
+/// produced false negatives (second review wave). The accepted cost (spec
+/// §4.7) is that an unrelated macro whose final segment merely collides
+/// with a tracing macro name, e.g. `mycrate::warn!(target = "x", "m")`, is
+/// now flagged too — silence a genuine collision with the
+/// `// allow(tracing-target-syntax)` escape hatch below.
+///
+/// `target`/`parent` are also legal field names in ordinary code. A call
+/// site may opt out of detection with a `// allow(tracing-target-syntax)`
+/// comment, either on the line immediately before the invocation or
+/// trailing the invocation's own line — e.g.
+/// `tracing::info!(target: "ns", target = %uri, "m"); // allow(tracing-target-syntax)`.
+///
 /// Comments and literals are blanked before scanning, so a macro written out
 /// inside a comment, doc example or string is never flagged.
+///
+/// # Panics
+///
+/// Panics, without file context, if the source contains a delimiter
+/// mismatch that should be unreachable against valid Rust — see [`try_scan`]
+/// for a form that surfaces this diagnosably instead.
 pub fn scan(src: &str) -> Vec<Offense> {
+    try_scan(src).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Fallible form of [`scan`]. Returns [`MismatchedDelimiter`] instead of
+/// panicking, so a caller walking many files (see
+/// `tests/workspace-lints/tests/tracing_target_syntax.rs`) can attribute the
+/// failure to the file it was reading — something a panic raised from
+/// inside this `&str`-only function cannot do on its own.
+pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
+    let allow_lines = collect_allow_marker_lines(src);
     let masked = mask_trivia(src);
     let b = &masked[..];
+    let aliases = collect_macro_aliases(b);
     let mut offenses = Vec::new();
     let mut i = 0;
     while i < b.len() {
@@ -82,24 +152,21 @@ pub fn scan(src: &str) -> Vec<Offense> {
                 continue;
             }
         };
-        // A qualified call (`tracing::warn!`, or `some::mod::tracing::warn!`)
-        // only counts if the segment immediately before the macro name is
-        // `tracing` — otherwise an unrelated macro whose last path segment
-        // happens to collide with a tracing macro name (e.g.
-        // `mycrate::warn!`) would be false-flagged. A bare, unqualified call
-        // (`warn!` after `use tracing::warn;`) is still matched: this repo's
-        // existing bare-macro tests rely on that, and bare imports of
-        // `tracing`'s macros are legitimate.
-        let qualified_to_tracing = match qualifier_before(b, name_start) {
-            Some(q) => q == "tracing",
-            None => true,
-        };
-        if qualified_to_tracing && TRACING_MACROS.contains(&name) {
-            collect_args(b, j, closer, name, &mut offenses);
+        let is_tracing_macro = TRACING_MACROS.contains(&name) || aliases.iter().any(|a| a == name);
+        if is_tracing_macro {
+            let macro_line = line_of(b, name_start);
+            // The marker suppresses the whole invocation, so this checks the
+            // invocation's own start line, not each offending keyword's line
+            // (an invocation can span many lines).
+            let suppressed = allow_lines.contains(&macro_line)
+                || (macro_line > 1 && allow_lines.contains(&(macro_line - 1)));
+            if !suppressed {
+                collect_args(b, j, closer, name, &mut offenses)?;
+            }
         }
         i = j + 1;
     }
-    offenses
+    Ok(offenses)
 }
 
 fn is_ident_byte(c: u8) -> bool {
@@ -125,32 +192,81 @@ fn ident_range_before(b: &[u8], at: usize) -> Option<(usize, usize)> {
     Some((s, e))
 }
 
-/// The path segment immediately before the identifier occupying
-/// `[name_start, ..)`, if that identifier is written `<segment>::name`
-/// (modulo whitespace on either side of the `::`). Returns `None` for a
-/// bare, unqualified identifier, e.g. `warn!` reached via
-/// `use tracing::warn;`.
-fn qualifier_before(b: &[u8], name_start: usize) -> Option<&str> {
-    let mut e = name_start;
-    while e > 0 && b[e - 1].is_ascii_whitespace() {
-        e -= 1;
+/// Line numbers (1-based) in `src` that carry the [`ALLOW_MARKER`] opt-out,
+/// either as a standalone comment or trailing code. Collected from the raw,
+/// unmasked source: [`mask_trivia`] blanks comments before the rest of
+/// [`try_scan`] runs, so this must happen first, or the marker itself would
+/// be invisible to it.
+fn collect_allow_marker_lines(src: &str) -> std::collections::HashSet<usize> {
+    src.lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(ALLOW_MARKER))
+        .map(|(idx, _)| idx + 1)
+        .collect()
+}
+
+/// Local names that resolve to a `tracing` macro via
+/// `use <path>::<macro> as <alias>;` (or the grouped form
+/// `use <path>::{<macro> as <alias>, ...};`), so a fully renamed bare call
+/// like `w!(target = "x", "m")` is still matched by its resolved identity.
+/// Operates on the masked buffer, so an alias mentioned only inside a
+/// comment or string is ignored.
+///
+/// A candidate word is only treated as an import alias when it sits
+/// immediately after `::`, `{` or `,` (modulo whitespace) and immediately
+/// before `as <ident>` (also modulo whitespace) — so an unrelated cast
+/// expression whose operand happens to be named e.g. `warn` is not mistaken
+/// for one.
+fn collect_macro_aliases(b: &[u8]) -> Vec<String> {
+    let mut aliases = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if !is_ident_byte(b[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_ident_byte(b[i]) {
+            i += 1;
+        }
+        let end = i;
+        let Ok(word) = std::str::from_utf8(&b[start..end]) else {
+            continue;
+        };
+        if !TRACING_MACROS.contains(&word) {
+            continue;
+        }
+        let mut p = start;
+        while p > 0 && b[p - 1].is_ascii_whitespace() {
+            p -= 1;
+        }
+        let in_import_position =
+            (p >= 2 && &b[p - 2..p] == b"::") || (p >= 1 && matches!(b[p - 1], b'{' | b','));
+        if !in_import_position {
+            continue;
+        }
+        let mut m = end;
+        while m < b.len() && b[m].is_ascii_whitespace() {
+            m += 1;
+        }
+        if !starts_with_ident(b, m, "as") {
+            continue;
+        }
+        m += 2;
+        while m < b.len() && b[m].is_ascii_whitespace() {
+            m += 1;
+        }
+        let alias_start = m;
+        while m < b.len() && is_ident_byte(b[m]) {
+            m += 1;
+        }
+        if m > alias_start {
+            if let Ok(alias) = std::str::from_utf8(&b[alias_start..m]) {
+                aliases.push(alias.to_owned());
+            }
+        }
     }
-    if e < 2 || &b[e - 2..e] != b"::" {
-        return None;
-    }
-    e -= 2;
-    while e > 0 && b[e - 1].is_ascii_whitespace() {
-        e -= 1;
-    }
-    let end = e;
-    let mut s = end;
-    while s > 0 && is_ident_byte(b[s - 1]) {
-        s -= 1;
-    }
-    if s == end {
-        return None;
-    }
-    std::str::from_utf8(&b[s..end]).ok()
+    aliases
 }
 
 fn blank(out: &mut [u8], from: usize, to: usize) {
@@ -335,7 +451,13 @@ fn line_of(b: &[u8], at: usize) -> usize {
 /// invocation's opening delimiter (`(`, `[` or `{`) and `closer` its matching
 /// close byte, so a `{`- or `[`-delimited invocation terminates on its own
 /// closer rather than on the first `)` it happens to contain.
-fn collect_args(b: &[u8], open: usize, closer: u8, macro_name: &str, out: &mut Vec<Offense>) {
+fn collect_args(
+    b: &[u8],
+    open: usize,
+    closer: u8,
+    macro_name: &str,
+    out: &mut Vec<Offense>,
+) -> Result<(), MismatchedDelimiter> {
     let mut k = open + 1;
     let mut depth = 0usize;
     let mut at_arg_start = true;
@@ -350,12 +472,17 @@ fn collect_args(b: &[u8], open: usize, closer: u8, macro_name: &str, out: &mut V
                 // matches the most recently opened group), so the closer
                 // reached at depth 0 must be this invocation's own —
                 // any interior groups, of any delimiter kind, were already
-                // closed by the depth count above.
-                debug_assert_eq!(
-                    c, closer,
-                    "mismatched delimiter ending macro invocation at byte {k}"
-                );
-                return;
+                // closed by the depth count above. A mismatch here means a
+                // future `mask_trivia` desync, not valid Rust; return it
+                // rather than panic so a multi-file caller can name the file.
+                if c != closer {
+                    return Err(MismatchedDelimiter {
+                        byte: k,
+                        found: c,
+                        expected: closer,
+                    });
+                }
+                return Ok(());
             }
             depth -= 1;
             at_arg_start = false;
@@ -383,6 +510,7 @@ fn collect_args(b: &[u8], open: usize, closer: u8, macro_name: &str, out: &mut V
         }
         k += 1;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -480,21 +608,103 @@ mod tests {
         );
     }
 
-    /// Matching on the final path segment alone would flag any unrelated
-    /// macro whose last segment collides with a tracing macro name. Only a
-    /// `tracing::` qualifier (or no qualifier at all, i.e. a bare macro
-    /// reached via `use tracing::warn;`) counts.
+    /// Matching is on the macro's final path segment alone, regardless of
+    /// qualifier — a qualifier can be arbitrarily renamed
+    /// (`use tracing as t; t::warn!`) or reached through an unrelated
+    /// module path (`crate::obs::warn!`, `self::warn!`) and still land on
+    /// the exact same macro, so requiring the qualifier to read literally
+    /// `tracing` produced false negatives (second review wave; spec
+    /// §4.3/§4.7).
     #[test]
-    fn requires_the_tracing_qualifier_when_one_is_present() {
-        assert_eq!(kinds(r#"mycrate::warn!(target = "x", "m");"#), vec![]);
+    fn matches_by_final_segment_regardless_of_qualifier() {
+        let cases: &[(&str, usize)] = &[
+            (r#"tracing::warn!(target = "x", "m");"#, 1),
+            (r#"warn!(target = "x", "m");"#, 1),
+            ("use tracing as t;\nt::warn!(target = \"x\", \"m\");\n", 2),
+            (r#"crate::obs::warn!(target = "x", "m");"#, 1),
+            (r#"self::warn!(target = "x", "m");"#, 1),
+        ];
+        for (src, line) in cases {
+            assert_eq!(
+                kinds(src),
+                vec![(*line, "warn".to_owned(), "target".to_owned())],
+                "expected exactly one offense for `{src}`"
+            );
+        }
+    }
+
+    /// A bare alias introduced by `use tracing::warn as w;` still reaches
+    /// `tracing::warn!` at the token level, so it must resolve the same way.
+    #[test]
+    fn matches_a_use_alias_of_a_tracing_macro() {
+        let src = "use tracing::warn as w;\nw!(target = \"x\", \"m\");\n";
+        assert_eq!(kinds(src), vec![(2, "w".to_owned(), "target".to_owned())]);
+    }
+
+    /// Accepted cost (spec §4.7) of matching by final segment alone: an
+    /// unrelated macro whose final path segment merely collides with a
+    /// tracing macro name is now flagged too — the previous
+    /// tracing-qualifier restriction let this case pass silently, with no
+    /// way to opt back in short of editing the lint crate itself.
+    #[test]
+    fn foreign_macro_colliding_with_a_tracing_name_is_now_flagged() {
         assert_eq!(
-            kinds(r#"tracing::warn!(target = "x", "m");"#),
+            kinds(r#"mycrate::warn!(target = "x", "m");"#),
             vec![(1, "warn".to_owned(), "target".to_owned())]
         );
+    }
+
+    /// The `// allow(tracing-target-syntax)` marker on the line immediately
+    /// before an invocation suppresses it — the escape hatch for a
+    /// legitimate `target =` / `parent =` *field* (as opposed to macro
+    /// syntax), which otherwise has no remedy short of editing this crate.
+    #[test]
+    fn allow_marker_on_the_preceding_line_suppresses_the_offense() {
+        let src = "// allow(tracing-target-syntax)\ntracing::warn!(target = \"x\", \"m\");\n";
+        assert_eq!(kinds(src), vec![]);
+    }
+
+    /// The marker also works trailing the invocation's own line.
+    #[test]
+    fn allow_marker_trailing_the_invocation_line_suppresses_the_offense() {
+        let src = r#"tracing::warn!(target = "x", "m"); // allow(tracing-target-syntax)"#;
+        assert_eq!(kinds(src), vec![]);
+    }
+
+    /// A marker suppressing one invocation must not suppress a different,
+    /// unmarked invocation elsewhere in the same file.
+    #[test]
+    fn allow_marker_does_not_suppress_a_different_site() {
+        let src = "// allow(tracing-target-syntax)\ntracing::warn!(target = \"x\", \"m\");\ntracing::error!(target = \"y\", \"m\");\n";
         assert_eq!(
-            kinds(r#"warn!(target = "x", "m");"#),
-            vec![(1, "warn".to_owned(), "target".to_owned())]
+            kinds(src),
+            vec![(3, "error".to_owned(), "target".to_owned())]
         );
+    }
+
+    /// The marker is the remedy for the accepted cost demonstrated by
+    /// `foreign_macro_colliding_with_a_tracing_name_is_now_flagged`: a
+    /// colliding foreign macro can be silenced explicitly.
+    #[test]
+    fn allow_marker_silences_a_colliding_foreign_macro() {
+        let src = r#"mycrate::warn!(target = "x", "m"); // allow(tracing-target-syntax)"#;
+        assert_eq!(kinds(src), vec![]);
+    }
+
+    /// Regression test for the FIX B panic-message fix (second review
+    /// wave): a delimiter mismatch — unreachable against valid Rust, but
+    /// exercised here to prove the code path — is a recoverable error
+    /// rather than a `debug_assert_eq!` panic that names only a byte
+    /// offset. This source could never compile, but the scanner tracks
+    /// delimiter depth independently of syntax validity, so it still
+    /// reaches the same branch a future `mask_trivia` desync would hit
+    /// against real source.
+    #[test]
+    fn mismatched_delimiter_is_a_diagnosable_error_not_a_panic() {
+        let src = "tracing::warn!(target = \"x\", \"m\"];\n";
+        let err = try_scan(src).expect_err("expected a mismatched-delimiter error");
+        assert_eq!(err.found, b']');
+        assert_eq!(err.expected, b')');
     }
 
     /// The real shape of the SMA-543 bug: the keyword is on its own line.
