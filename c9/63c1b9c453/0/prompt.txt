@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b5id76suv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/b5id76suv.output</output-file>
+<status>completed</status>
+<summary>Background command "CodeRabbit CLI round 3" completed (exit code 0)</summary>
+</task-notification>
