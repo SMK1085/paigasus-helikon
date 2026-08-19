@@ -19,8 +19,8 @@ dependencies.
 ## Global Constraints
 
 - **Sole file changed for behaviour:** `crates/paigasus-helikon-providers-litellm/src/stream.rs`. `crates/paigasus-helikon-providers-openai/src/backend/chat.rs` gets a comment only (Task 5).
-- **Commit/PR scope is `providers`, never `providers-litellm`** — `.versionrc:18`'s `scopeRegex` does not list `providers-litellm`; the local `commit-msg` hook and the `commits` CI job both reject it.
-- **Commit message format:** `<type>(providers): SMA-550 <lowercase subject>`.
+- **Never use the scope `providers-litellm`** — `.versionrc:18`'s `scopeRegex` does not list it; the local `commit-msg` hook and the `commits` CI job both reject it. Use the parent scope `providers` for work on that crate. **The PR title must also use `providers`**, since `pr-title.yml` runs on `pull_request_target` and reads the allowlist from `main`.
+- **Commit message format:** `<type>(<scope>): SMA-550 <lowercase subject>`. Scope is `providers` for every litellm commit; Task 5 touches `providers-openai` instead, and **that scope is allowed** — it is in the allowlist, unlike `providers-litellm`. Doc-only commits on the artifacts in `docs/superpowers/` use `spec` or `plan` (`plan` is singular; `plans` is rejected).
 - **Run `cargo fmt --all` and `cargo clippy --workspace --all-features --all-targets -- -D warnings` before every commit.** The `pre-commit` hook is a deliberate no-op; nothing catches formatting until push.
 - **No mdBook edit and no README edit.** Deliberate — `docs/book/src/concepts/agent-loop.md:57-62` and `crates/paigasus-helikon-providers-litellm/README.md:125-131` already describe the post-fix behaviour. Do not "helpfully" add one.
 - **No `CHANGELOG` edits by hand** — release-plz generates them.
@@ -198,6 +198,7 @@ Leave every line below `:261` untouched — in particular the flush condition at
 - [ ] **Step 5: Verify no behaviour changed**
 
 ```bash
+set -o pipefail
 cargo test -p paigasus-helikon-providers-litellm --all-features 2>&1 | grep -E "^test result:|^error"
 ```
 
@@ -320,7 +321,8 @@ This test uses three helpers that do not exist yet. Add them at the top of
 - [ ] **Step 2: Run it — it must PASS**
 
 ```bash
-cargo test -p paigasus-helikon-providers-litellm --lib parallel_zero_argument_calls_flush_in_wire_order -- --exact 2>&1 | tail -5
+set -o pipefail
+cargo test -p paigasus-helikon-providers-litellm --lib stream::tests::parallel_zero_argument_calls_flush_in_wire_order -- --exact 2>&1 | tail -5
 ```
 
 Expected: `test result: ok. 1 passed`. If it fails now, the helpers are wrong —
@@ -367,6 +369,7 @@ report rather than restoring the derive silently.
 - [ ] **Step 5: Verify the whole suite is still green**
 
 ```bash
+set -o pipefail
 cargo test -p paigasus-helikon-providers-litellm --all-features 2>&1 | grep -E "^test result:|^error"
 ```
 
@@ -624,6 +627,7 @@ Add all eight to `mod tests`.
 - [ ] **Step 2: Run them and RECORD the failures**
 
 ```bash
+set -o pipefail
 cargo test -p paigasus-helikon-providers-litellm --lib 2>&1 | grep -E "^test .*(dual_key|reassemble|merges_in_order|two_indexes|interleaved|canonical_key) .*(ok|FAILED)"
 ```
 
@@ -721,10 +725,11 @@ comment block, insert:
 - [ ] **Step 5: Run the full crate suite**
 
 ```bash
+set -o pipefail
 cargo test -p paigasus-helikon-providers-litellm --all-features 2>&1 | grep -E "^test result:|^error|FAILED"
 ```
 
-Expected: the seven new tests pass. **Two pre-existing tests are expected to
+Expected: the eight new tests pass. **Two pre-existing tests are expected to
 fail here** — `late_name_fragment_warns_once` and
 `one_call_id_under_two_keys_flushes_a_single_name`. Both are retargeted in
 Task 4; do **not** fix them by weakening the new code. Any *other* failure is a
@@ -877,7 +882,7 @@ with:
 Note `key` is moved by `self.name_emitted.insert(key, ...)` further down the
 loop; the `?key` here is before that, so it borrows fine.
 
-- [ ] **Step 5: Fix the four remaining stale comments**
+- [ ] **Step 5: Fix the remaining stale comments**
 
 1. `stream.rs:44-45` — `Key::Id`'s variant doc. Replace:
 
@@ -965,6 +970,7 @@ with:
 - [ ] **Step 6: Run the full crate suite — everything green**
 
 ```bash
+set -o pipefail
 cargo test -p paigasus-helikon-providers-litellm --all-features 2>&1 | grep -E "^test result:|^error|FAILED"
 ```
 
@@ -1028,6 +1034,7 @@ two disjoint openings on one item. (What *is* a compile error, `E0585`, is a
 - [ ] **Step 2: Verify the crate still builds and documents cleanly**
 
 ```bash
+set -o pipefail
 cargo test -p paigasus-helikon-providers-openai --all-features 2>&1 | grep -E "^test result:|^error"
 RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-providers-openai --all-features --no-deps 2>&1 | tail -5
 ```
