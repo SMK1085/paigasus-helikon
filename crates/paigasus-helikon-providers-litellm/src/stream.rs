@@ -52,12 +52,39 @@ enum Key {
 /// the first delta after the id is observed and never re-prepended — while
 /// `name` keeps accumulating across every delta and is cleared only when it
 /// flushes (SMA-547 §1).
-#[derive(Default)]
+///
+/// **No `Default` impl, deliberately.** Every buffer must carry the `seq` it
+/// was created with, so construction goes through [`Pending::new`] via
+/// [`ChatTranslator::ensure_pending`]. Deriving `Default` would let an
+/// `.or_default()` call site silently mint a buffer with `seq: 0`, which
+/// would corrupt the merge order in [`ChatTranslator::canonicalize`]
+/// (SMA-550). The absence of the derive is what makes that a compile error
+/// rather than a latent bug.
 struct Pending {
+    /// Monotonic creation order across all buffers in one stream.
+    ///
+    /// Used to merge two buffers for one call in wire order (SMA-550) and to
+    /// give `flush_buffered_names` a deterministic end-of-stream order.
+    // Not yet read: the consuming logic lands in SMA-550 Task 2. Stamped here
+    // first so every `Pending` carries it from construction onward — see the
+    // struct doc for why that ordering (not a later retrofit) is load-bearing.
+    #[allow(dead_code)]
+    seq: u64,
     /// Accumulated function-name fragments.
     name: String,
     /// Accumulated JSON-arguments fragments.
     args: String,
+}
+
+impl Pending {
+    /// An empty buffer stamped with its creation order.
+    fn new(seq: u64) -> Self {
+        Self {
+            seq,
+            name: String::new(),
+            args: String::new(),
+        }
+    }
 }
 
 /// Accumulates SSE deltas and produces [`ModelEvent`]s.
@@ -83,6 +110,8 @@ pub(crate) struct ChatTranslator {
     /// is known and never re-prepended. `name` accumulates across every delta
     /// and is cleared only when the name flushes (SMA-547 §1).
     pending: HashMap<Key, Pending>,
+    /// Next value handed out by [`Self::ensure_pending`]; never reused.
+    next_seq: u64,
     /// The most recent `finish_reason` observed, buffered until [`Self::finish`].
     finish_reason: Option<String>,
     /// Whether the multi-choice warning has already fired for this stream.
@@ -97,8 +126,23 @@ impl ChatTranslator {
             name_emitted: HashMap::new(),
             warned_late_name: HashSet::new(),
             pending: HashMap::new(),
+            next_seq: 0,
             finish_reason: None,
             warned_multi_choice: false,
+        }
+    }
+
+    /// Ensure a buffer exists for `key`, stamping a fresh `seq` on creation.
+    ///
+    /// Deliberately returns nothing rather than `&mut Pending`: callers then
+    /// reach the buffer through `self.pending.get_mut(..)`, which borrows one
+    /// field instead of all of `self` and so leaves the surrounding
+    /// disjoint-field borrows of `name_emitted` and `tool_calls` intact.
+    fn ensure_pending(&mut self, key: &Key) {
+        if !self.pending.contains_key(key) {
+            self.pending
+                .insert(key.clone(), Pending::new(self.next_seq));
+            self.next_seq += 1;
         }
     }
 
@@ -225,7 +269,11 @@ impl ChatTranslator {
 
         let Some(call_id) = self.tool_calls.get(&key).cloned() else {
             // No id yet — buffer both fragments.
-            let slot = self.pending.entry(key).or_default();
+            self.ensure_pending(&key);
+            let slot = self
+                .pending
+                .get_mut(&key)
+                .expect("ensure_pending just inserted this key");
             slot.name.push_str(name_frag);
             slot.args.push_str(args_frag);
             return;
@@ -258,7 +306,11 @@ impl ChatTranslator {
         // cannot change which deltas flush.
         let already_emitted = self.name_emitted.contains_key(&key);
 
-        let slot = self.pending.entry(key.clone()).or_default();
+        self.ensure_pending(&key);
+        let slot = self
+            .pending
+            .get_mut(&key)
+            .expect("ensure_pending just inserted this key");
         // A name fragment identical to the name accumulated so far is treated
         // as a whole-name repeat and skipped, not appended -- otherwise a
         // backend that resends the complete function name on every delta
