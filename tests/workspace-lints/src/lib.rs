@@ -57,7 +57,11 @@ pub fn scan(src: &str) -> Vec<Offense> {
             i += 1;
             continue;
         }
-        let Some(name) = ident_before(b, i) else {
+        let Some((name_start, name_end)) = ident_range_before(b, i) else {
+            i += 1;
+            continue;
+        };
+        let Ok(name) = std::str::from_utf8(&b[name_start..name_end]) else {
             i += 1;
             continue;
         };
@@ -65,12 +69,33 @@ pub fn scan(src: &str) -> Vec<Offense> {
         while j < b.len() && b[j].is_ascii_whitespace() {
             j += 1;
         }
-        if b.get(j) != Some(&b'(') {
-            i += 1;
-            continue;
-        }
-        if TRACING_MACROS.contains(&name) {
-            collect_args(b, j, name, &mut offenses);
+        // Macros accept all three delimiters with identical token trees —
+        // `warn!(...)`, `warn![...]` and `warn!{...}` are equally valid Rust
+        // and equally reproduce the SMA-543 defect, so all three must be
+        // recognised as an invocation, not just `(`.
+        let closer = match b.get(j) {
+            Some(b'(') => b')',
+            Some(b'[') => b']',
+            Some(b'{') => b'}',
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        // A qualified call (`tracing::warn!`, or `some::mod::tracing::warn!`)
+        // only counts if the segment immediately before the macro name is
+        // `tracing` — otherwise an unrelated macro whose last path segment
+        // happens to collide with a tracing macro name (e.g.
+        // `mycrate::warn!`) would be false-flagged. A bare, unqualified call
+        // (`warn!` after `use tracing::warn;`) is still matched: this repo's
+        // existing bare-macro tests rely on that, and bare imports of
+        // `tracing`'s macros are legitimate.
+        let qualified_to_tracing = match qualifier_before(b, name_start) {
+            Some(q) => q == "tracing",
+            None => true,
+        };
+        if qualified_to_tracing && TRACING_MACROS.contains(&name) {
+            collect_args(b, j, closer, name, &mut offenses);
         }
         i = j + 1;
     }
@@ -81,10 +106,11 @@ fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
-/// The identifier immediately preceding `at`, if any, skipping any whitespace
-/// between the identifier and `at` (so `warn ! (` still finds `warn`). Stops
-/// at `:`, so a qualified `tracing::warn!` yields `warn`.
-fn ident_before(b: &[u8], at: usize) -> Option<&str> {
+/// Start/end (exclusive) of the identifier immediately preceding `at`, if
+/// any, skipping any whitespace between the identifier and `at` (so
+/// `warn ! (` still finds `warn`). Stops at `:`, so a qualified
+/// `tracing::warn!` yields just the `warn` range.
+fn ident_range_before(b: &[u8], at: usize) -> Option<(usize, usize)> {
     let mut e = at;
     while e > 0 && b[e - 1].is_ascii_whitespace() {
         e -= 1;
@@ -96,7 +122,35 @@ fn ident_before(b: &[u8], at: usize) -> Option<&str> {
     if s == e {
         return None;
     }
-    std::str::from_utf8(&b[s..e]).ok()
+    Some((s, e))
+}
+
+/// The path segment immediately before the identifier occupying
+/// `[name_start, ..)`, if that identifier is written `<segment>::name`
+/// (modulo whitespace on either side of the `::`). Returns `None` for a
+/// bare, unqualified identifier, e.g. `warn!` reached via
+/// `use tracing::warn;`.
+fn qualifier_before(b: &[u8], name_start: usize) -> Option<&str> {
+    let mut e = name_start;
+    while e > 0 && b[e - 1].is_ascii_whitespace() {
+        e -= 1;
+    }
+    if e < 2 || &b[e - 2..e] != b"::" {
+        return None;
+    }
+    e -= 2;
+    while e > 0 && b[e - 1].is_ascii_whitespace() {
+        e -= 1;
+    }
+    let end = e;
+    let mut s = end;
+    while s > 0 && is_ident_byte(b[s - 1]) {
+        s -= 1;
+    }
+    if s == end {
+        return None;
+    }
+    std::str::from_utf8(&b[s..end]).ok()
 }
 
 fn blank(out: &mut [u8], from: usize, to: usize) {
@@ -277,8 +331,11 @@ fn line_of(b: &[u8], at: usize) -> usize {
 }
 
 /// Walk one macro invocation's argument list, flagging any top-level argument
-/// that opens with `target =` or `parent =`.
-fn collect_args(b: &[u8], open: usize, macro_name: &str, out: &mut Vec<Offense>) {
+/// that opens with `target =` or `parent =`. `open` is the index of the
+/// invocation's opening delimiter (`(`, `[` or `{`) and `closer` its matching
+/// close byte, so a `{`- or `[`-delimited invocation terminates on its own
+/// closer rather than on the first `)` it happens to contain.
+fn collect_args(b: &[u8], open: usize, closer: u8, macro_name: &str, out: &mut Vec<Offense>) {
     let mut k = open + 1;
     let mut depth = 0usize;
     let mut at_arg_start = true;
@@ -289,6 +346,15 @@ fn collect_args(b: &[u8], open: usize, macro_name: &str, out: &mut Vec<Offense>)
             at_arg_start = false;
         } else if c == b')' || c == b']' || c == b'}' {
             if depth == 0 {
+                // Well-formed Rust nests delimiters strictly (each close
+                // matches the most recently opened group), so the closer
+                // reached at depth 0 must be this invocation's own —
+                // any interior groups, of any delimiter kind, were already
+                // closed by the depth count above.
+                debug_assert_eq!(
+                    c, closer,
+                    "mismatched delimiter ending macro invocation at byte {k}"
+                );
                 return;
             }
             depth -= 1;
@@ -354,8 +420,8 @@ mod tests {
                 "target",
             ),
             (r#"tracing::info!(parent = p, "m");"#, "info", "parent"),
-            // Whitespace between the macro path and `!` (`ident_before` must
-            // skip back over it, not just abut it — SMA-543 fix wave).
+            // Whitespace between the macro path and `!` (`ident_range_before`
+            // must skip back over it, not just abut it — SMA-543 fix wave).
             (r#"tracing::warn ! (target = "x", "m");"#, "warn", "target"),
             // A correctly-masked `'\''` char literal ahead of the macro call
             // (regression case for the `char_literal_end` off-by-one that
@@ -374,6 +440,61 @@ mod tests {
                 "expected one offense for `{src}`"
             );
         }
+    }
+
+    /// Macros accept all three delimiters with identical token trees, and
+    /// all three reproduce the exact SMA-543 defect: `tracing` 0.1 +
+    /// `tracing-subscriber` 0.3 both emit these on the module path, not on
+    /// `"x"`. Each must be recognised as an invocation, not just `(`.
+    #[test]
+    fn flags_brace_and_bracket_delimited_invocations() {
+        let cases: &[(&str, &str, &str)] = &[
+            (r#"tracing::warn!(target = "x", "m");"#, "warn", "target"),
+            (r#"tracing::warn![target = "x", "m"];"#, "warn", "target"),
+            (r#"tracing::warn!{ target = "x", "m" }"#, "warn", "target"),
+        ];
+        for (src, mac, kw) in cases {
+            let got = kinds(src);
+            assert_eq!(
+                got,
+                vec![(1, (*mac).to_owned(), (*kw).to_owned())],
+                "expected exactly one offense for `{src}`"
+            );
+        }
+    }
+
+    /// A non-`(` delimiter with the correct `target:` syntax must stay clean.
+    #[test]
+    fn accepts_brace_delimited_correct_form() {
+        assert_eq!(kinds(r#"tracing::warn!{ target: "x", "m" }"#), vec![]);
+    }
+
+    /// A `(` nested inside a `{`-delimited invocation must still increment
+    /// depth as before, so the top-level `target = ` is found and the walk
+    /// does not mistake the nested `)` for the invocation's own closer.
+    #[test]
+    fn brace_invocation_tracks_nested_paren_depth() {
+        assert_eq!(
+            kinds(r#"tracing::warn!{ target = "x", other = compute(a, b), "m" }"#),
+            vec![(1, "warn".to_owned(), "target".to_owned())]
+        );
+    }
+
+    /// Matching on the final path segment alone would flag any unrelated
+    /// macro whose last segment collides with a tracing macro name. Only a
+    /// `tracing::` qualifier (or no qualifier at all, i.e. a bare macro
+    /// reached via `use tracing::warn;`) counts.
+    #[test]
+    fn requires_the_tracing_qualifier_when_one_is_present() {
+        assert_eq!(kinds(r#"mycrate::warn!(target = "x", "m");"#), vec![]);
+        assert_eq!(
+            kinds(r#"tracing::warn!(target = "x", "m");"#),
+            vec![(1, "warn".to_owned(), "target".to_owned())]
+        );
+        assert_eq!(
+            kinds(r#"warn!(target = "x", "m");"#),
+            vec![(1, "warn".to_owned(), "target".to_owned())]
+        );
     }
 
     /// The real shape of the SMA-543 bug: the keyword is on its own line.

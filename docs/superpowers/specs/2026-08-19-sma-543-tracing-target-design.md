@@ -127,11 +127,20 @@ line comments, block comments, string literals, raw strings, byte strings and
 char literals — so a macro appearing inside a comment, doc example or string is
 never flagged, and a `)` inside a literal never miscounts paren depth:
 
-1. Find each `!` followed by `(` whose preceding path segment is one of
-   `warn`, `info`, `debug`, `error`, `trace`, `event`,
-   `span`, `warn_span`, `info_span`, `debug_span`, `error_span`, `trace_span`.
-2. Walk that invocation's argument list, tracking paren/bracket/brace depth so
-   only **top-level** arguments are considered.
+1. Find each `!` followed (modulo whitespace) by an opening delimiter —
+   `(`, `[` or `{`, since macros accept all three with identical token trees
+   and each equally reproduces the SMA-543 defect — whose preceding path
+   segment is one of `warn`, `info`, `debug`, `error`, `trace`, `event`,
+   `span`, `warn_span`, `info_span`, `debug_span`, `error_span`,
+   `trace_span`. If that segment is itself qualified (`some::path::warn!`),
+   the segment immediately before it must be `tracing`; an unqualified
+   (bare) macro name is still matched, since a legitimate call can reach the
+   macro via `use tracing::warn;`. This keeps an unrelated macro whose last
+   path segment merely collides with a tracing macro name — e.g.
+   `mycrate::warn!(target = "x", "m")` — from being false-flagged.
+2. Walk that invocation's argument list, tracking paren/bracket/brace depth
+   (terminating on the delimiter matching whichever one opened the
+   invocation) so only **top-level** arguments are considered.
 3. At the start of each top-level argument, flag it if it is the bare
    identifier `target` or `parent` followed (modulo whitespace) by `=` that is
    not `==`.

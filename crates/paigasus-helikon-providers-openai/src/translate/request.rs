@@ -643,11 +643,21 @@ mod tracing_target_tests {
 
     use super::*;
 
-    /// Records the metadata target of every event it sees.
+    /// Records the metadata target of every WARN-or-above event it sees.
+    ///
+    /// Filtering in `enabled` (rather than in `on_event`) means unrelated
+    /// `debug!`/`trace!`/`info!` calls anywhere in the exercised code path
+    /// never reach the subscriber at all, so this test only ever pins the
+    /// target of the warn it cares about — a routine unrelated log addition
+    /// elsewhere in `to_chat_messages` cannot make it fail.
     #[derive(Clone, Default)]
     struct TargetCapture(Arc<Mutex<Vec<String>>>);
 
     impl<S: tracing::Subscriber + for<'l> LookupSpan<'l>> Layer<S> for TargetCapture {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: Context<'_, S>) -> bool {
+            *metadata.level() <= tracing::Level::WARN
+        }
+
         fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
             self.0
                 .lock()
