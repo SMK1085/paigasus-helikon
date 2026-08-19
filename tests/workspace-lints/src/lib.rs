@@ -28,6 +28,11 @@ const TRACING_MACROS: &[&str] = &[
     "info_span",
     "warn_span",
     "error_span",
+    // Predicate macros — not used anywhere in this workspace today, but they
+    // also accept `target:` and are included here for completeness.
+    "enabled",
+    "event_enabled",
+    "span_enabled",
 ];
 
 /// Keywords that must be introduced with `:` and never with `=`.
@@ -76,17 +81,22 @@ fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
-/// The identifier immediately preceding `at`, if any. Stops at `:`, so a
-/// qualified `tracing::warn!` yields `warn`.
+/// The identifier immediately preceding `at`, if any, skipping any whitespace
+/// between the identifier and `at` (so `warn ! (` still finds `warn`). Stops
+/// at `:`, so a qualified `tracing::warn!` yields `warn`.
 fn ident_before(b: &[u8], at: usize) -> Option<&str> {
-    let mut s = at;
+    let mut e = at;
+    while e > 0 && b[e - 1].is_ascii_whitespace() {
+        e -= 1;
+    }
+    let mut s = e;
     while s > 0 && is_ident_byte(b[s - 1]) {
         s -= 1;
     }
-    if s == at {
+    if s == e {
         return None;
     }
-    std::str::from_utf8(&b[s..at]).ok()
+    std::str::from_utf8(&b[s..e]).ok()
 }
 
 fn blank(out: &mut [u8], from: usize, to: usize) {
@@ -141,7 +151,10 @@ fn mask_trivia(src: &str) -> Vec<u8> {
                 i += 1;
                 while i < b.len() {
                     if b[i] == b'\\' {
-                        i += 2;
+                        // Clamp: a trailing backslash at EOF (unterminated
+                        // string) must not push `i` past `out.len()`, or the
+                        // `blank` call below panics on an out-of-range slice.
+                        i = (i + 2).min(b.len());
                     } else if b[i] == b'"' {
                         i += 1;
                         break;
@@ -209,7 +222,9 @@ fn raw_or_byte_string_end(b: &[u8], i: usize) -> Option<usize> {
     j += 1;
     while j < b.len() {
         if b[j] == b'\\' {
-            j += 2;
+            // Same clamp as the `b'"'` arm of `mask_trivia`: an escape at
+            // EOF must not push `j` past `b.len()`.
+            j = (j + 2).min(b.len());
         } else if b[j] == b'"' {
             return Some(j + 1);
         } else {
@@ -222,7 +237,13 @@ fn raw_or_byte_string_end(b: &[u8], i: usize) -> Option<usize> {
 /// End (exclusive) of a char literal starting at `i`, or `None` for a lifetime.
 fn char_literal_end(b: &[u8], i: usize) -> Option<usize> {
     if b.get(i + 1) == Some(&b'\\') {
-        let mut j = i + 2;
+        // Start the scan for the closing `'` *after* the escaped character
+        // (`i + 3`), not at it (`i + 2`). For `'\''` the byte at `i + 2` is
+        // the escaped quote itself, not the closing delimiter — starting
+        // there would stop one byte early and leave the real closing `'`
+        // unmasked. Clamp so a trailing escape at EOF cannot push `j` past
+        // `b.len()`.
+        let mut j = (i + 3).min(b.len());
         while j < b.len() && b[j] != b'\'' {
             j += 1;
         }
@@ -333,6 +354,17 @@ mod tests {
                 "target",
             ),
             (r#"tracing::info!(parent = p, "m");"#, "info", "parent"),
+            // Whitespace between the macro path and `!` (`ident_before` must
+            // skip back over it, not just abut it — SMA-543 fix wave).
+            (r#"tracing::warn ! (target = "x", "m");"#, "warn", "target"),
+            // A correctly-masked `'\''` char literal ahead of the macro call
+            // (regression case for the `char_literal_end` off-by-one that
+            // used to leave the real closing quote unmasked).
+            (
+                r#"let d = '\''; tracing::warn!(target = "x", "m");"#,
+                "warn",
+                "target",
+            ),
         ];
         for (src, mac, kw) in cases {
             let got = kinds(src);
@@ -395,7 +427,6 @@ mod tests {
             r#"let s = "tracing::warn!(target = \"x\")";"#,
             "let s = r#\"tracing::warn!(target = \"x\")\"#;",
             r#"let s = b"warn!(target = 1)";"#,
-            r#"let c = '"'; let d = '\''; "#,
         ];
         for src in cases {
             assert_eq!(kinds(src), vec![], "false positive on `{src}`");
@@ -424,5 +455,13 @@ mod tests {
             kinds(src),
             vec![(2, "warn".to_owned(), "target".to_owned())]
         );
+    }
+
+    /// A file ending mid-escape (an unterminated string literal) must not
+    /// panic `mask_trivia`'s `blank` call with an out-of-range slice.
+    #[test]
+    fn unterminated_string_literal_does_not_panic() {
+        let src = "let s = \"abc\\";
+        assert_eq!(kinds(src), vec![]);
     }
 }

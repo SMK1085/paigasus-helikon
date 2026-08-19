@@ -193,11 +193,15 @@ scanned. This mirrors the explicit "Guard against a vacuous pass" assertion in
 that silently examines nothing reports identically to one that passes.
 
 **Root resolution.** The repo root is derived from `CARGO_MANIFEST_DIR`, not
-the process CWD, so it survives the member being moved. The walk starts at the
-repo root — not at `crates/` — so it covers `tests/runtime-http-conformance`,
-which is a full workspace member outside `crates/` and would otherwise be
-invisible. Any directory named `target` or `.git` is skipped, guarding against
-a nested `CARGO_TARGET_DIR`.
+the process CWD, so it survives the member being moved. The walk covers the
+`crates/` and `tests/` directories explicitly — not the repo root as a whole —
+so it reaches `tests/runtime-http-conformance` and `tests/workspace-lints`,
+both full workspace members outside `crates/` that would otherwise be
+invisible, while deliberately not walking the repo root itself:
+`.claude/worktrees/` can hold complete checkouts of other branches, and
+scanning those would make the guard's verdict depend on unrelated work a
+developer happens to have checked out. Any directory named `target` or `.git`
+is skipped, guarding against a nested `CARGO_TARGET_DIR`.
 
 ### 4.6 One behavioural test as well
 
@@ -239,8 +243,9 @@ bug at every call site.
      172 / litellm 174, which was already correct. The fix substitutes
      characters in place and adds no lines, so these numbers hold before and
      after;
-   - openai-only `to_responses_input` (245–352) and `mod responses_tests`
-     (564–630);
+   - openai-only `to_responses_input` (245–352), `mod responses_tests`
+     (564–630), and `mod tracing_target_tests` (632–686) — the §4.6
+     behavioural capture-`Layer` test added by this branch;
    - litellm-only trailing `chat_tests`:
      `plain_text_user_turn_emits_string_content` (457–463) and
      `tool_call_then_result_round_trips` (465–486).
