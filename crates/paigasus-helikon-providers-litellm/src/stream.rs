@@ -42,7 +42,9 @@ enum Key {
     /// last resort, by position within `delta.tool_calls` (in OpenAI-
     /// compatible streaming the array position *is* the index, so a
     /// positional continuation delta correctly joins a call already keyed
-    /// by `Index`).
+    /// by `Index`). Once a call's `id` resolves, `Index` is only ever a wire
+    /// key again — its state has migrated to the canonical [`Key::Id`]. See
+    /// [`ChatTranslator::canonicalize`].
     Index(u32),
     /// Correlated by `delta.tool_calls[].id`.
     ///
@@ -169,9 +171,11 @@ impl ChatTranslator {
     /// `Key::Index` / `Key::Id` boundary reassemble instead of losing a
     /// fragment (SMA-550).
     fn canonicalize(&mut self, key: Key, call_id: &str) -> Key {
-        // Already canonical — return without allocating. This is the common
-        // path: LiteLLM keys every tool-call delta by `index`, so a resolved
-        // stream would otherwise pay a `String` allocation per args chunk.
+        // Already canonical — return without allocating. Reached only when the
+        // delta was keyed by `id` with no `index`; LiteLLM itself sends `index`
+        // on every delta, so its streams fall through and clone the `call_id`
+        // once per delta. That clone is accepted — every emitted
+        // `ToolCallDelta` already pays one.
         if matches!(&key, Key::Id(id) if id == call_id) {
             return key;
         }
@@ -491,8 +495,9 @@ impl ChatTranslator {
                 continue;
             }
             // Claimed only once we know this key actually has a name to flush
-            // — claiming earlier would let an empty-name entry for a resolved
-            // call_id suppress another entry that does have one.
+            // — claiming earlier would, were two entries for one call_id ever
+            // possible again, let an empty-name entry suppress another that
+            // does have one.
             if !already.insert(call_id.clone()) {
                 // Unreachable since SMA-550: canonicalization gives each
                 // call_id exactly one pending key, so two keys can no longer
@@ -1324,9 +1329,11 @@ mod tests {
         assert!(matches!(fin[0], ModelEvent::Finish { .. }));
     }
 
-    /// One `call_id` reachable under both `Key::Index` and `Key::Id` must
-    /// still yield exactly one name-carrying delta. Guards the dedup set in
-    /// `flush_buffered_names`; without it this emits two.
+    /// One `call_id` reached under both `Key` variants yields exactly one
+    /// name-carrying delta, and the fragments reassemble. Pre-fix this
+    /// emitted `Some("get_")` and discarded `weather`; since SMA-550 both
+    /// deltas share one canonical slot, so there is no second entry for the
+    /// dedup set in `flush_buffered_names` to catch.
     #[test]
     fn one_call_id_under_two_keys_flushes_a_single_name() {
         let mut t = ChatTranslator::new();
