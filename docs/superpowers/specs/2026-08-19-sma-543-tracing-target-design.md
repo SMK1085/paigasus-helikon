@@ -221,10 +221,13 @@ file most likely to accumulate bad examples permanently unchecked.
 
 **Anti-vacuity.** A scan that walks zero files must fail, not pass. The repo
 test therefore asserts that the resolved root exists (panicking if not), that
-the number of `.rs` files scanned meets a floor, and that both
-`providers-openai/src/translate/request.rs` and
-`providers-litellm/src/translate/request.rs` were among the files actually
-scanned. This mirrors the explicit "Guard against a vacuous pass" assertion in
+the number of `.rs` files scanned meets a floor, and that three specific
+files were among those actually scanned (a suffix match on the repo-relative
+path): `crates/paigasus-helikon-providers-openai/src/translate/request.rs`,
+`crates/paigasus-helikon-providers-litellm/src/translate/request.rs`, and
+`tests/runtime-http-conformance/src/lib.rs` — the third because it is a
+workspace member *outside* `crates/`, so it is what proves the second root is
+live rather than silently unwalked. This mirrors the explicit "Guard against a vacuous pass" assertion in
 `openai_litellm_message_parity.rs:226-239`, and the reasoning behind
 `HELIKON_REQUIRE_TEMPORAL` / `HELIKON_REQUIRE_SANDBOX` in CLAUDE.md: a check
 that silently examines nothing reports identically to one that passes.
@@ -247,7 +250,16 @@ The static guard proves the *syntax*. It cannot prove the *semantics* — that
 artifact in the repo.
 
 Add one capture-`Layer` test in `providers-openai` asserting that the warn at
-`translate/request.rs:205` emits on `paigasus::openai::translate`. It is cheap:
+`translate/request.rs:205` emits on `paigasus::openai::translate`.
+
+> **Amended during review.** A later review pass observed that nothing pinned
+> the *value* of the **litellm** namespace: the static guard checks syntax
+> only, this test lived solely in `providers-openai`, and the cross-crate
+> parity test compares translated `messages`. A copy-paste leaving
+> `paigasus::openai::translate` inside the litellm crate would therefore keep
+> every gate green while reproducing exactly the operator-visible failure this
+> ticket fixes. An equivalent test now exists in `providers-litellm`, and §5.2
+> lists both modules. It is cheap:
 the reachable input already exists in the neighbouring unit test
 `assistant_image_content_part_is_dropped_with_warning` (same file, line 456),
 and `tracing-subscriber` is already a `[workspace.dependencies]` entry, so the

@@ -335,7 +335,7 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
                 }
                 blank(&mut out, start, i);
             }
-            b'r' | b'b' => match raw_or_byte_string_end(b, i) {
+            b'r' | b'b' | b'c' => match raw_or_byte_string_end(b, i) {
                 Some(end) => {
                     blank(&mut out, i, end);
                     i = end;
@@ -381,7 +381,10 @@ fn raw_or_byte_string_end(b: &[u8], i: usize) -> Option<usize> {
         return None;
     }
     let mut j = i;
-    if b[j] == b'b' {
+    // `b` (byte string) and `c` (C string) may prefix either form: b"…" / br#"…"#
+    // / c"…" / cr#"…"#. Without consuming the prefix, the `r` of `cr#` is read as
+    // an identifier byte and the raw-string machinery never engages.
+    if b[j] == b'b' || b[j] == b'c' {
         j += 1;
     }
     let raw = b.get(j) == Some(&b'r');
@@ -412,7 +415,7 @@ fn raw_or_byte_string_end(b: &[u8], i: usize) -> Option<usize> {
         }
         return Some(b.len());
     }
-    if b[i] != b'b' || b.get(j) != Some(&b'"') {
+    if (b[i] != b'b' && b[i] != b'c') || b.get(j) != Some(&b'"') {
         return None;
     }
     j += 1;
@@ -808,6 +811,34 @@ mod tests {
         for src in cases {
             assert_eq!(kinds(src), vec![], "false positive on `{src}`");
         }
+    }
+
+    /// C-string prefixes take a different path through the masker than plain
+    /// raw strings: without consuming the `c`, the `r` of `cr#` reads as an
+    /// identifier byte and the raw-string machinery never engages, so the body
+    /// gets scanned as code. Even-numbered inner quotes hid this by accident.
+    #[test]
+    fn masks_c_string_prefixes() {
+        let cases = [
+            r#"let s = c"tracing::warn!(target = 1)";"#,
+            "let s = cr#\"tracing::warn!(target = 1)\"#;",
+            // Odd number of unescaped inner quotes — the case that regressed.
+            "let s = cr#\"a \"b tracing::warn!(target = 1) \"#;",
+            "let s = c\"a \\\" tracing::warn!(target = 1)\";",
+        ];
+        for src in cases {
+            assert_eq!(kinds(src), vec![], "false positive on `{src}`");
+        }
+    }
+
+    /// A masking bug must not let a *real* site after the literal go missing.
+    #[test]
+    fn c_string_does_not_hide_a_later_real_site() {
+        let src = "let s = cr#\"x \"y tracing::warn!(target = 1)\"#;\ntracing::warn!(target = \"real\", \"m\");";
+        assert_eq!(
+            kinds(src),
+            vec![(2, "warn".to_owned(), "target".to_owned())]
+        );
     }
 
     /// The guard scans its own source. Because the lexer blanks comments and
