@@ -22,6 +22,12 @@
 //!    merge two distinct calls. A mixed array (some entries indexed, one
 //!    not) is non-conforming for OpenAI-compatible streaming; the
 //!    ambiguous entry is skipped with a loud warning rather than guessed.
+//!    Correlation itself is canonicalized: once a delta resolves the call's
+//!    `id`, the key becomes `Key::Id(call_id)` and any fragments buffered
+//!    under the pre-canonical key migrate into that slot in buffer-creation
+//!    order. One `call_id` therefore owns exactly one state entry, which is
+//!    what makes "at most one name-carrying delta per `call_id`" structural
+//!    rather than guarded (SMA-550).
 
 use std::collections::{HashMap, HashSet};
 
@@ -30,18 +36,22 @@ use paigasus_helikon_core::{FinishReason, ModelEvent};
 use crate::sse::{StreamChunk, ToolCallChunk};
 
 /// Correlation key for a streaming tool call.
-// `PartialOrd`/`Ord`: `flush_buffered_names` sorts keys for a deterministic
-// end-of-stream flush order, and `Key::Index` sorting before `Key::Id` is
-// what makes the dual-key winner predictable.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Key {
     /// Correlated by `delta.tool_calls[].index`, when present — or, as a
     /// last resort, by position within `delta.tool_calls` (in OpenAI-
     /// compatible streaming the array position *is* the index, so a
     /// positional continuation delta correctly joins a call already keyed
-    /// by `Index`).
+    /// by `Index`). Once a call's `id` resolves, `Index` is only ever a wire
+    /// key again — its state has migrated to the canonical [`Key::Id`]. See
+    /// [`ChatTranslator::canonicalize`].
     Index(u32),
-    /// Correlated by `delta.tool_calls[].id`, when `index` is absent.
+    /// Correlated by `delta.tool_calls[].id`.
+    ///
+    /// Reached two ways: as the wire key when `index` is absent, and — since
+    /// SMA-550 — as the *canonical* key for every call whose `id` has
+    /// resolved, whether or not it also carried an `index`. See
+    /// [`ChatTranslator::canonicalize`].
     Id(String),
 }
 
@@ -52,12 +62,35 @@ enum Key {
 /// the first delta after the id is observed and never re-prepended — while
 /// `name` keeps accumulating across every delta and is cleared only when it
 /// flushes (SMA-547 §1).
-#[derive(Default)]
+///
+/// **No `Default` impl, deliberately.** Every buffer must carry the `seq` it
+/// was created with, so construction goes through [`Pending::new`] via
+/// [`ChatTranslator::ensure_pending`]. Deriving `Default` would let an
+/// `.or_default()` call site silently mint a buffer with `seq: 0`, which
+/// would corrupt the merge order in [`ChatTranslator::canonicalize`]
+/// (SMA-550). The absence of the derive is what makes that a compile error
+/// rather than a latent bug.
 struct Pending {
+    /// Monotonic creation order across all buffers in one stream.
+    ///
+    /// Used to merge two buffers for one call in wire order (SMA-550) and to
+    /// give `flush_buffered_names` a deterministic end-of-stream order.
+    seq: u64,
     /// Accumulated function-name fragments.
     name: String,
     /// Accumulated JSON-arguments fragments.
     args: String,
+}
+
+impl Pending {
+    /// An empty buffer stamped with its creation order.
+    fn new(seq: u64) -> Self {
+        Self {
+            seq,
+            name: String::new(),
+            args: String::new(),
+        }
+    }
 }
 
 /// Accumulates SSE deltas and produces [`ModelEvent`]s.
@@ -67,8 +100,14 @@ struct Pending {
 /// EOF) to emit the terminal event, if any.
 pub(crate) struct ChatTranslator {
     /// Resolved call ids, keyed by correlation [`Key`].
+    ///
+    /// Holds both wire keys (`Key::Index(i)`, so later index-only deltas keep
+    /// resolving) and the canonical `Key::Id(call_id) -> call_id` self-mapping
+    /// that [`Self::canonicalize`] registers. The self-mapping is load-bearing:
+    /// `flush_buffered_names` and `warn_unresolved_pending` both resolve a
+    /// pending key through this map.
     tool_calls: HashMap<Key, String>,
-    /// Key → the tool name already emitted to the consumer.
+    /// Canonical key → the tool name already emitted to the consumer.
     ///
     /// Holds the *value*, not just the key, so a late fragment can be told
     /// apart from a backend that repeats the whole name on every delta
@@ -79,10 +118,19 @@ pub(crate) struct ChatTranslator {
     warned_late_name: HashSet<Key>,
     /// Name/args fragments buffered per call.
     ///
+    /// Keyed by the canonical key once the call's `id` resolves, so one
+    /// `call_id` never owns two buffers (SMA-550).
+    ///
     /// `args` is drain-once: taken on the first delta after the call's `id`
     /// is known and never re-prepended. `name` accumulates across every delta
     /// and is cleared only when the name flushes (SMA-547 §1).
     pending: HashMap<Key, Pending>,
+    /// Next value handed out by [`Self::ensure_pending`]; never reused.
+    next_seq: u64,
+    /// Wire keys for which the empty-`id` warning has already fired, so a
+    /// backend that sends `"id": ""` on every delta warns once per call
+    /// rather than once per chunk.
+    warned_blank_id: HashSet<Key>,
     /// The most recent `finish_reason` observed, buffered until [`Self::finish`].
     finish_reason: Option<String>,
     /// Whether the multi-choice warning has already fired for this stream.
@@ -97,9 +145,156 @@ impl ChatTranslator {
             name_emitted: HashMap::new(),
             warned_late_name: HashSet::new(),
             pending: HashMap::new(),
+            next_seq: 0,
+            warned_blank_id: HashSet::new(),
             finish_reason: None,
             warned_multi_choice: false,
         }
+    }
+
+    /// Ensure a buffer exists for `key`, stamping a fresh `seq` on creation.
+    ///
+    /// Deliberately returns nothing rather than `&mut Pending`: callers then
+    /// reach the buffer through `self.pending.get_mut(..)`, which borrows one
+    /// field instead of all of `self` and so leaves the surrounding
+    /// disjoint-field borrows of `name_emitted` and `tool_calls` intact.
+    fn ensure_pending(&mut self, key: &Key) {
+        if !self.pending.contains_key(key) {
+            self.pending
+                .insert(key.clone(), Pending::new(self.next_seq));
+            self.next_seq += 1;
+        }
+    }
+
+    /// Rewrite `key` to the canonical slot for `call_id`, migrating any
+    /// fragments buffered under the pre-canonical key.
+    ///
+    /// Every delta for one call — however it was keyed on the wire — shares a
+    /// single state entry from here on. That is what makes "at most one
+    /// name-carrying `ToolCallDelta` per `call_id`" hold by construction
+    /// rather than by guard, and it is what lets a name fragmented across the
+    /// `Key::Index` / `Key::Id` boundary reassemble instead of losing a
+    /// fragment (SMA-550).
+    fn canonicalize(&mut self, key: Key, call_id: &str) -> Key {
+        // An empty `id` is not an identity. A backend that sends `"id": ""` on
+        // every entry would otherwise collapse every one of its parallel calls
+        // into a single `Key::Id("")` slot, and all but the first would vanish
+        // from the stream entirely — a strictly worse outcome than the
+        // dual-keying this function exists to fix. Leave such deltas on their
+        // wire key, which keeps distinct calls distinct.
+        if call_id.is_empty() {
+            if self.warned_blank_id.insert(key.clone()) {
+                tracing::warn!(
+                    target: "paigasus::litellm::stream",
+                    ?key,
+                    "tool-call delta carries an empty id; correlating by wire key \
+                     instead, since an empty id cannot identify a call"
+                );
+            }
+            return key;
+        }
+        // Already canonical — return without allocating. Reached only when the
+        // delta was keyed by `id` with no `index`; LiteLLM itself sends `index`
+        // on every delta, so its streams fall through and clone the `call_id`
+        // once per delta. That clone is accepted — every emitted
+        // `ToolCallDelta` already pays one.
+        if matches!(&key, Key::Id(id) if id == call_id) {
+            return key;
+        }
+        let canonical = Key::Id(call_id.to_owned());
+
+        if let Some(old) = self.pending.remove(&key) {
+            self.ensure_pending(&canonical);
+            let slot = self
+                .pending
+                .get_mut(&canonical)
+                .expect("ensure_pending just inserted this key");
+
+            // A resolved slot drains `args` on every delta and is removed once
+            // both fields are empty, so `slot.args` is always empty here --
+            // which is what makes `insert_str(0, ..)` below an assignment in
+            // practice rather than a splice. The assert does not guard
+            // correctness: `insert_str(0, ..)` stays order-preserving even if
+            // `slot.args` were non-empty. It exists so that a future
+            // relaxation of drain-once surfaces here for a deliberate
+            // re-decision, instead of silently changing this from an
+            // assignment to a splice unnoticed.
+            debug_assert!(
+                slot.args.is_empty(),
+                "a resolved slot drains its args on every delta"
+            );
+            slot.args.insert_str(0, &old.args);
+
+            // The canonical slot has already emitted its name, so the migrating
+            // fragment can never reach a consumer: the flush condition below
+            // tests `name_emitted` and will not fire again for this call. It
+            // must not be left sitting in `pending` either — `flush_buffered_names`
+            // skips entries whose call_id already emitted, and
+            // `warn_unresolved_pending` ignores entries whose key resolves,
+            // which this one now does. Dropping it silently would recreate the
+            // undiagnosed loss SMA-550 exists to eliminate, so drop it loudly
+            // and record it the same way a late wire fragment is recorded.
+            if !old.name.is_empty() {
+                if let Some(emitted) = self.name_emitted.get(&canonical) {
+                    if self.warned_late_name.insert(canonical.clone()) {
+                        tracing::warn!(
+                            target: "paigasus::litellm::stream",
+                            %call_id,
+                            fragment = %old.name,
+                            emitted = %emitted,
+                            "tool-call name fragment buffered under another correlation \
+                             key arrived after the name was emitted; it cannot be \
+                             recovered and is dropped"
+                        );
+                    }
+                    return canonical;
+                }
+            }
+
+            // A migrating fragment identical to what the canonical slot already
+            // holds is a whole-name repeat, not a continuation — the same case
+            // the wire path guards below, for the same reason: a backend that
+            // resends the complete name on every delta would otherwise get
+            // "search" + "search" -> "searchsearch". Pre-SMA-550 this shape
+            // emitted "search" correctly, so concatenating unconditionally here
+            // is a regression, not merely an unhandled edge.
+            if !old.name.is_empty() && old.name != slot.name {
+                if !slot.name.is_empty() {
+                    tracing::warn!(
+                        target: "paigasus::litellm::stream",
+                        %call_id,
+                        "tool-call name fragments for one call arrived under two \
+                         correlation keys; merging in buffer-creation order, which \
+                         may misorder them if the two keys interleaved"
+                    );
+                }
+                // Order by creation `seq`, not by which buffer is migrating.
+                // Both orderings are reachable, and a plain prepend or a plain
+                // append is wrong in exactly one of them (SMA-550 §Merge order).
+                if old.seq < slot.seq {
+                    slot.name.insert_str(0, &old.name);
+                } else {
+                    slot.name.push_str(&old.name);
+                }
+            }
+            // Claimed whenever the migrating buffer is the older one, even if
+            // its name was a repeat or empty: `seq` carries the call's wire
+            // position for the end-of-stream flush order, independently of
+            // whether any name text moved.
+            if old.seq < slot.seq {
+                slot.seq = old.seq;
+            }
+        }
+
+        // `flush_buffered_names` and `warn_unresolved_pending` both resolve a
+        // pending key through `tool_calls`. Without this the canonical key
+        // resolves to nothing: the call is skipped at flush AND then falsely
+        // reported as an unresolved loss. Pinned by
+        // `canonical_key_resolves_through_tool_calls`.
+        self.tool_calls
+            .entry(canonical.clone())
+            .or_insert_with(|| call_id.to_owned());
+        canonical
     }
 
     /// Consume one chunk. Never emits `Finish`.
@@ -218,18 +413,39 @@ impl ChatTranslator {
             .unwrap_or("");
 
         if let Some(id) = tc.id.as_deref() {
-            self.tool_calls
-                .entry(key.clone())
-                .or_insert_with(|| id.to_owned());
+            match self.tool_calls.get_mut(&key) {
+                // First id wins, so a backend that changes a call's id
+                // mid-stream cannot re-point an in-flight call. The one
+                // exception is an id already recorded as empty: `canonicalize`
+                // treats a blank id as "no identity yet" rather than as an
+                // identity, so a real id arriving later must be allowed to
+                // replace it — otherwise the blank sticks and the call reaches
+                // the consumer under an empty `call_id` even though the backend
+                // eventually supplied a real one.
+                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                    *existing = id.to_owned();
+                }
+                Some(_) => {}
+                None => {
+                    self.tool_calls.insert(key.clone(), id.to_owned());
+                }
+            }
         }
 
         let Some(call_id) = self.tool_calls.get(&key).cloned() else {
             // No id yet — buffer both fragments.
-            let slot = self.pending.entry(key).or_default();
+            self.ensure_pending(&key);
+            let slot = self
+                .pending
+                .get_mut(&key)
+                .expect("ensure_pending just inserted this key");
             slot.name.push_str(name_frag);
             slot.args.push_str(args_frag);
             return;
         };
+
+        // From here on, one call_id owns exactly one state entry.
+        let key = self.canonicalize(key, &call_id);
 
         // A name fragment arriving after the name was emitted cannot be
         // recovered — the event is already downstream. Warn once per call,
@@ -258,7 +474,11 @@ impl ChatTranslator {
         // cannot change which deltas flush.
         let already_emitted = self.name_emitted.contains_key(&key);
 
-        let slot = self.pending.entry(key.clone()).or_default();
+        self.ensure_pending(&key);
+        let slot = self
+            .pending
+            .get_mut(&key)
+            .expect("ensure_pending just inserted this key");
         // A name fragment identical to the name accumulated so far is treated
         // as a whole-name repeat and skipped, not appended -- otherwise a
         // backend that resends the complete function name on every delta
@@ -319,13 +539,17 @@ impl ChatTranslator {
     /// reads the tool to run from its `name`.
     ///
     /// Skips entries whose `id` never resolved (nothing to emit under) and
-    /// entries whose resolved `call_id` already emitted a name. The latter is
-    /// not redundant with `name_emitted`: a call reached under both
-    /// `Key::Index` and `Key::Id` has two entries for one `call_id`, and the
-    /// contract allows only one name-carrying delta per call.
+    /// entries whose resolved `call_id` already emitted a name. Since SMA-550
+    /// the latter check is redundant — canonicalization gives each `call_id`
+    /// one key — and is kept as a net; see the comment at its `continue`.
     fn flush_buffered_names(&mut self) -> Vec<ModelEvent> {
+        // Sorted by buffer-creation order, not by `Key`. After SMA-550 every
+        // resolved key is `Key::Id(call_id)`, so sorting by `Key` would mean
+        // lexicographic-by-call_id — silently reordering parallel calls
+        // against the wire. `seq` is unique per buffer, so this is a total,
+        // deterministic order that matches first appearance.
         let mut keys: Vec<Key> = self.pending.keys().cloned().collect();
-        keys.sort();
+        keys.sort_by_key(|k| self.pending[k].seq);
 
         let mut already: HashSet<String> = self
             .name_emitted
@@ -347,10 +571,28 @@ impl ChatTranslator {
             if slot.name.is_empty() {
                 continue;
             }
-            // Claimed only once we know this key actually has a name to
-            // flush — claiming earlier would let an empty-name entry for a
-            // resolved call_id block a sibling key that does have one.
+            // Claimed only once we know this key actually has a name to flush
+            // — claiming earlier would, were two entries for one call_id ever
+            // possible again, let an empty-name entry suppress another that
+            // does have one.
             if !already.insert(call_id.clone()) {
+                // Unreachable since SMA-550: canonicalization gives each
+                // call_id exactly one pending key, so two keys can no longer
+                // resolve to one call_id. Kept as a net because it enforces
+                // the at-most-one-name invariant at the point of emission,
+                // independent of the keying discipline upstream — which is
+                // precisely what a cross-provider conformance suite asserts.
+                // Loud rather than a bare `continue`: if the keying is ever
+                // loosened again, a silent drop here would recreate the exact
+                // undiagnosed loss SMA-550 existed to fix.
+                tracing::error!(
+                    target: "paigasus::litellm::stream",
+                    %call_id,
+                    ?key,
+                    "two pending keys resolved to one call_id after \
+                     canonicalization; dropping the second buffered name. This \
+                     is a correlation-keying regression, not a backend quirk"
+                );
                 continue;
             }
             let name = std::mem::take(&mut slot.name);
@@ -426,6 +668,52 @@ mod tests {
 
     fn chunk(v: serde_json::Value) -> StreamChunk {
         serde_json::from_value(v).expect("chunk must deserialize")
+    }
+
+    /// Wrap a `tool_calls` array in the surrounding chunk envelope.
+    fn tc_chunk(tool_calls: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"choices": [{"index": 0, "delta": {"tool_calls": tool_calls}}]})
+    }
+
+    /// Drive every chunk through `consume`, then `finish`, collecting all
+    /// events. Collecting across both is required: the SMA-550 invariant is
+    /// per-stream, and a `finish()`-only assertion passes vacuously against
+    /// the pre-fix translator, whose violation is two *mid-stream* emissions.
+    fn drive(t: &mut ChatTranslator, chunks: Vec<serde_json::Value>) -> Vec<ModelEvent> {
+        let mut out = Vec::new();
+        for c in chunks {
+            out.extend(t.consume(chunk(c)));
+        }
+        out.extend(t.finish());
+        out
+    }
+
+    /// `(call_id, name)` for every delta carrying `Some(name)`, in order.
+    fn named(evs: &[ModelEvent]) -> Vec<(String, String)> {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name: Some(n),
+                    ..
+                } => Some((call_id.clone(), n.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Concatenated `args_delta` for one `call_id`, in emission order.
+    fn args_of(evs: &[ModelEvent], call_id: &str) -> String {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id: c,
+                    args_delta,
+                    ..
+                } if c == call_id => Some(args_delta.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn texts(evs: &[ModelEvent]) -> Vec<String> {
@@ -1091,9 +1379,15 @@ mod tests {
         }
         assert_eq!(t.warned_late_name.len(), 1, "at most one warning per call");
         assert_eq!(
-            t.name_emitted.get(&Key::Index(0)).map(String::as_str),
+            t.name_emitted
+                .get(&Key::Id("c1".to_owned()))
+                .map(String::as_str),
             Some("get_"),
             "the already-emitted name is not retroactively changed"
+        );
+        assert!(
+            t.warned_late_name.contains(&Key::Id("c1".to_owned())),
+            "the loss is recorded under the canonical key"
         );
     }
 
@@ -1112,9 +1406,11 @@ mod tests {
         assert!(matches!(fin[0], ModelEvent::Finish { .. }));
     }
 
-    /// One `call_id` reachable under both `Key::Index` and `Key::Id` must
-    /// still yield exactly one name-carrying delta. Guards the dedup set in
-    /// `flush_buffered_names`; without it this emits two.
+    /// One `call_id` reached under both `Key` variants yields exactly one
+    /// name-carrying delta, and the fragments reassemble. Pre-fix this
+    /// emitted `Some("get_")` and discarded `weather`; since SMA-550 both
+    /// deltas share one canonical slot, so there is no second entry for the
+    /// dedup set in `flush_buffered_names` to catch.
     #[test]
     fn one_call_id_under_two_keys_flushes_a_single_name() {
         let mut t = ChatTranslator::new();
@@ -1123,7 +1419,9 @@ mod tests {
                 {"index": 0, "id": "c1", "function": {"name": "get_"}}
             ]}}]
         })));
-        // No `index` -> keys as Key::Id("c1"): a second entry for one call.
+        // No `index` -> would key as Key::Id("c1"); since SMA-550 that IS the
+        // canonical key, so this joins the same slot rather than opening a
+        // second entry for one call.
         t.consume(chunk(serde_json::json!({
             "choices": [{"index": 0, "delta": {"tool_calls": [
                 {"id": "c1", "function": {"name": "weather"}}
@@ -1145,29 +1443,37 @@ mod tests {
         assert_eq!(named.len(), 1, "one name-carrying delta per call_id");
         assert_eq!(
             named[0],
-            ("c1".to_owned(), "get_".to_owned()),
-            "Key::Index sorts before Key::Id, so the winner is deterministic"
+            ("c1".to_owned(), "get_weather".to_owned()),
+            "the two keys are one slot after SMA-550, so the fragments reassemble"
         );
     }
 
-    /// Pins the `already` seed in `flush_buffered_names`. Without it, a
-    /// call_id that already flushed its name mid-stream under one key (here
-    /// `Key::Index(0)`) can still have a *second* name emitted for the same
-    /// call_id from a sibling key (`Key::Id("c1")`) that never got a chance
-    /// to flush mid-stream — the seed is what stops that second emission.
+    /// A call_id that already flushed its name mid-stream must not get a
+    /// second name at end-of-stream.
+    ///
+    /// Since SMA-550 this holds because both deltas share one canonical slot,
+    /// so `name_emitted` suppresses the second flush directly — not because
+    /// of the `already` seed in `flush_buffered_names`, which this sequence no
+    /// longer reaches. Kept because the invariant is what matters, not the
+    /// mechanism that currently enforces it.
     #[test]
     fn flush_does_not_re_emit_a_name_already_flushed_under_another_key() {
         let mut t = ChatTranslator::new();
-        // Non-empty args complete the name mid-stream under Key::Index(0),
-        // recording name_emitted[Key::Index(0)] = "get_".
+        // `id` is present alongside `index` on this delta, so `canonicalize`
+        // resolves it immediately: the entry is recorded as
+        // name_emitted[Key::Id("c1")] = "get_" from this first delta, not
+        // under Key::Index(0) — there is no intermediate wire-keyed state to
+        // observe here.
         t.consume(chunk(serde_json::json!({
             "choices": [{"index": 0, "delta": {"tool_calls": [
                 {"index": 0, "id": "c1", "function": {"name": "get_", "arguments": "{"}}
             ]}}]
         })));
-        // No `index` -> keys as Key::Id("c1"): a second entry for the same
-        // call_id, buffered but never flushed mid-stream (no args fragment
-        // on this delta to complete it).
+        // No `index`, so this keys as Key::Id("c1") directly — the same
+        // canonical slot the first delta already resolved to, which already
+        // has an emitted name. Nothing is buffered: the fragment is dropped
+        // on arrival by the canonical-keyed already-emitted short-circuit,
+        // which also fires the `warned_late_name` warning for this key.
         t.consume(chunk(serde_json::json!({
             "choices": [{"index": 0, "delta": {"tool_calls": [
                 {"id": "c1", "function": {"name": "weather"}}
@@ -1188,8 +1494,9 @@ mod tests {
             .collect();
         assert!(
             named.is_empty(),
-            "Key::Id(\"c1\")'s buffered name must not re-emit for call_id \"c1\", \
-             which already flushed under Key::Index(0); got {named:?}"
+            "call_id \"c1\"'s late fragment must not re-emit a name: it already \
+             flushed under the canonical Key::Id(\"c1\") from the first delta; \
+             got {named:?}"
         );
     }
 
@@ -1218,5 +1525,405 @@ mod tests {
             ModelEvent::ToolCallDelta { call_id, name: None, args_delta }
                 if call_id == "c1" && args_delta == "{\"a\":1}"
         ));
+    }
+
+    /// Two parallel zero-argument calls flush in wire order, not in
+    /// call_id-lexicographic order.
+    ///
+    /// Pins the `seq` sort in `flush_buffered_names`. After SMA-550's
+    /// canonicalization every resolved pending key is `Key::Id(call_id)`, so
+    /// a sort by `Key` would silently reorder these two by call_id —
+    /// `call_a` before `call_z` — reversing what the wire said. The ids are
+    /// chosen so lexicographic and wire order disagree.
+    #[test]
+    fn parallel_zero_argument_calls_flush_in_wire_order() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"index": 0, "id": "call_z", "function": {"name": "zulu"}},
+                {"index": 1, "id": "call_a", "function": {"name": "alpha"}}
+            ]))],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                ("call_z".to_owned(), "zulu".to_owned()),
+                ("call_a".to_owned(), "alpha".to_owned()),
+            ],
+            "wire order (index 0 then 1), not lexicographic by call_id"
+        );
+    }
+
+    /// SMA-550 acceptance criterion: one `call_id` reached under both `Key`
+    /// variants must not produce two name-carrying deltas — mid-stream
+    /// included. Shape A.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("get_")` and then `Some("weather")`, both from `consume`.
+    #[test]
+    fn dual_key_call_emits_at_most_one_name_mid_stream() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "get_", "arguments": "{"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"id": "c1", "function": {"name": "weather", "arguments": "}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "get_".to_owned())],
+            "exactly one name-carrying delta per call_id, across consume and finish"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "{}",
+            "suppressing the second name must not swallow its args"
+        );
+    }
+
+    /// SMA-550 shape B: a name fragmented across the key boundary reassembles
+    /// instead of losing the pre-boundary fragment.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("weather")` — `get_` is silently discarded by the EOS guard.
+    #[test]
+    fn name_fragments_split_across_the_key_boundary_reassemble() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "get_"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"id": "c1", "function": {"name": "weather", "arguments": "{}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "get_weather".to_owned())]
+        );
+    }
+
+    /// SMA-550 shape C: the id-keyed buffer is created FIRST, so the
+    /// index-keyed buffer migrating into it must be *appended*.
+    ///
+    /// Together with `index_keyed_buffer_created_first_merges_in_order` this
+    /// is why `Pending` carries a `seq`: a naive `insert_str(0, ..)` prepend
+    /// passes that test and yields `Some("weathget_er")` here.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator (`Some("weather")`).
+    #[test]
+    fn id_keyed_buffer_created_before_the_index_keyed_one_merges_in_order() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "get_"}}])),
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "weath"}}])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "er", "arguments": "{}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "get_weather".to_owned())]
+        );
+    }
+
+    /// SMA-550 shape B′: the index-keyed buffer is created FIRST, so it must
+    /// be *prepended* when it migrates. Mirror of the test above; a naive
+    /// `push_str` append yields `Some("weathget_er")` here.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator (`Some("get_er")`).
+    #[test]
+    fn index_keyed_buffer_created_first_merges_in_order() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "get_"}}])),
+                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "weath"}}])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "er", "arguments": "{}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "get_weather".to_owned())]
+        );
+    }
+
+    /// SMA-550 shape D: two entries in one array carrying different `index`
+    /// values but the same `id` are one call, and yield one name.
+    ///
+    /// The merged name `alphabeta` is not "correct" in any deep sense — the
+    /// input is malformed, since an `id` identifies a call — but it is one
+    /// name for one call_id, which is the invariant under test.
+    /// `providers-openai` emits TWO names here; see the divergence comment in
+    /// its `chat.rs`.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator (`Some("beta")`).
+    #[test]
+    fn two_indexes_with_one_id_merge_into_a_single_call() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"index": 0, "id": "c1", "function": {"name": "alpha"}},
+                {"index": 1, "id": "c1", "function": {"name": "beta", "arguments": "{}"}}
+            ]))],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "alphabeta".to_owned())]);
+    }
+
+    /// SMA-550 shape E, the accepted residual: when the two keys interleave
+    /// at *fragment* level, no buffer-level order can reconstruct the wire
+    /// sequence, so the merge misorders the fragments -- though it loses
+    /// none of them. The third chunk's fragment ("IE") is deliberately
+    /// distinct from the second's ("ID"): a repeat there would be swallowed
+    /// by the pre-existing SMA-547 whole-name-repeat guard before the merge
+    /// ever runs, which would make this pass for the wrong reason and mask
+    /// a real ordering bug in `canonicalize`.
+    ///
+    /// This is deliberately pinned rather than left undefined. It is still
+    /// strictly better than the pre-fix translator, which emits
+    /// `Some("IDXIDX")` and silently discards the `Id`-keyed fragments
+    /// entirely: the merge here is lossless and carries a `warn!`. Do not
+    /// "fix" the misordering without adding per-fragment sequencing and
+    /// re-deciding the trade-off.
+    #[test]
+    fn interleaved_dual_keying_is_lossless_and_misordered() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "IDX"}}])),
+                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "ID"}}])),
+                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "IE"}}])),
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "IDX"}}])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"arguments": "{}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "IDXIDXIDIE".to_owned())],
+            "the merge loses nothing, but the wire order is not reconstructable \
+             from two independently-ordered buffers"
+        );
+    }
+
+    /// The canonical key must be registered in `tool_calls`.
+    ///
+    /// Not defensive padding: `flush_buffered_names` resolves a pending key
+    /// through `tool_calls` and would skip a canonicalized call entirely,
+    /// and `warn_unresolved_pending` would then report that same call as an
+    /// unresolved loss on every healthy stream. Pinned so a future "this
+    /// self-mapping looks redundant" cleanup fails loudly.
+    #[test]
+    fn canonical_key_resolves_through_tool_calls() {
+        let mut t = ChatTranslator::new();
+        t.consume(chunk(tc_chunk(serde_json::json!([
+            {"index": 0, "id": "c1", "function": {"name": "get_weather"}}
+        ]))));
+        assert_eq!(
+            t.tool_calls
+                .get(&Key::Id("c1".to_owned()))
+                .map(String::as_str),
+            Some("c1"),
+            "canonicalize must register the canonical key"
+        );
+    }
+
+    /// SMA-550's secondary defect: the fragment dropped in shape A must be
+    /// reported. Pre-fix it was recorded under no key at all, because the
+    /// losing key never emitted and so never reached the late-name check.
+    #[test]
+    fn dual_key_late_fragment_is_reported() {
+        let mut t = ChatTranslator::new();
+        drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "get_", "arguments": "{"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"id": "c1", "function": {"name": "weather", "arguments": "}"}}
+                ])),
+            ],
+        );
+        assert!(
+            t.warned_late_name.contains(&Key::Id("c1".to_owned())),
+            "the dropped `weather` fragment must be recorded under the canonical key"
+        );
+        assert_eq!(t.warned_late_name.len(), 1, "at most one warning per call");
+    }
+
+    /// Mutation guard for `slot.seq = old.seq;` in `canonicalize` (SMA-550
+    /// review, Finding 1). Pins that a migrated buffer inherits the
+    /// *migrating* buffer's wire position for `flush_buffered_names`'
+    /// `seq`-sort, not the canonical slot's own (later) creation seq.
+    ///
+    /// `c1`'s `Index(0)`-keyed buffer is created first (seq 0, chunk 1), but
+    /// only resolves into its canonical `Id("c1")` slot in chunk 3 -- by
+    /// which point `c2`'s canonical `Id("c2")` slot already exists with an
+    /// earlier seq (seq 1, chunk 2). Without `slot.seq = old.seq`, the
+    /// migrated `c1` slot would keep the canonical slot's just-created seq
+    /// (2) instead, sorting after `c2` at flush and reversing wire order.
+    #[test]
+    fn migrated_buffer_keeps_its_wire_position_in_the_flush_order() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "alpha"}}])),
+                tc_chunk(serde_json::json!([
+                    {"index": 1, "id": "c2", "function": {"name": "bravo"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "_x"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                ("c1".to_owned(), "alpha_x".to_owned()),
+                ("c2".to_owned(), "bravo".to_owned()),
+            ],
+            "the migrated buffer must keep its original wire position, not the \
+             canonical slot's own (later) creation order"
+        );
+    }
+
+    /// A real `id` arriving after a blank one on the same wire key must win.
+    ///
+    /// Treating an empty id as "not an identity" is only half a policy: the
+    /// registration in `tool_calls` is `or_insert`, so a blank id recorded
+    /// first would stick, and every later delta for that call — including one
+    /// carrying the real id — would keep resolving to `""`. The call would
+    /// then reach the consumer under an empty `call_id` even though the
+    /// backend eventually supplied a real one.
+    #[test]
+    fn a_real_id_replaces_a_blank_one_on_the_same_wire_key() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"index": 0, "id": "", "function": {"name": "foo"}}])),
+                tc_chunk(
+                    serde_json::json!([{"index": 0, "id": "c1", "function": {"arguments": "{}"}}]),
+                ),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "foo".to_owned())],
+            "the real id must replace the blank one, and the buffered name must \
+             follow it onto the canonical key"
+        );
+    }
+
+    /// A backend that resends the COMPLETE name on every delta must not have it
+    /// doubled when two buffers merge across the key boundary.
+    ///
+    /// `canonicalize` originally concatenated the two names unconditionally,
+    /// bypassing the SMA-547 whole-name-repeat guard the wire path applies
+    /// (`slot.name != name_frag`). That was a regression against pre-SMA-550
+    /// behaviour, which emitted `Some("search")` here, whereas the unguarded
+    /// merge produced `Some("searchsearch")` — a name that resolves to no
+    /// registered tool. Confirmed against `main` before the guard was added.
+    #[test]
+    fn repeated_whole_name_is_not_doubled_across_the_key_boundary() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "search"}}])),
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "search"}}])),
+                tc_chunk(
+                    serde_json::json!([{"index": 0, "id": "c1", "function": {"arguments": "{}"}}]),
+                ),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "search".to_owned())]);
+    }
+
+    /// A fragment migrating into a slot that already emitted its name cannot be
+    /// recovered, so it must be reported rather than stranded.
+    ///
+    /// Before this guard it was left in `pending` under the canonical key,
+    /// where `flush_buffered_names` skipped it (the call_id had already
+    /// emitted) and `warn_unresolved_pending` ignored it (the key now
+    /// resolves) — a silent loss with no diagnostic anywhere, which is exactly
+    /// what SMA-550 set out to eliminate.
+    #[test]
+    fn fragment_migrating_into_an_emitted_slot_is_reported_not_stranded() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "foo"}}])),
+                tc_chunk(serde_json::json!([
+                    {"id": "c1", "function": {"name": "bar", "arguments": "{}"}}
+                ])),
+                tc_chunk(
+                    serde_json::json!([{"index": 0, "id": "c1", "function": {"arguments": "x"}}]),
+                ),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "bar".to_owned())],
+            "still at most one name-carrying delta per call_id"
+        );
+        assert!(
+            t.warned_late_name.contains(&Key::Id("c1".to_owned())),
+            "the dropped `foo` fragment must be recorded, not silently stranded"
+        );
+        assert!(
+            t.pending
+                .get(&Key::Id("c1".to_owned()))
+                .is_none_or(|p| p.name.is_empty()),
+            "the unrecoverable fragment must not be left sitting in `pending`"
+        );
+    }
+
+    /// An empty `id` is not an identity: two parallel calls that both report
+    /// `"id": ""` must stay distinct.
+    ///
+    /// Canonicalizing on a blank id collapsed them into one `Key::Id("")` slot
+    /// and dropped the second call's name from the stream entirely — strictly
+    /// worse than the dual-keying this change targets, and a regression against
+    /// pre-SMA-550 behaviour, which emitted both. Confirmed against `main`.
+    #[test]
+    fn blank_ids_do_not_collapse_distinct_calls() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"index": 0, "id": "", "function": {"name": "alpha", "arguments": "{}"}},
+                {"index": 1, "id": "", "function": {"name": "beta", "arguments": "{}"}}
+            ]))],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "a blank id must not merge two distinct calls"
+        );
     }
 }
