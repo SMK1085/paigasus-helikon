@@ -1410,8 +1410,9 @@ mod tests {
             .collect();
         assert!(
             named.is_empty(),
-            "Key::Id(\"c1\")'s buffered name must not re-emit for call_id \"c1\", \
-             which already flushed under Key::Index(0); got {named:?}"
+            "call_id \"c1\"'s late fragment must not re-emit a name: it already \
+             flushed under the canonical Key::Id(\"c1\") from the first delta; \
+             got {named:?}"
         );
     }
 
