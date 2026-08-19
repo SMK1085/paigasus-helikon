@@ -294,10 +294,11 @@ on B′. **Only ordering by creation `seq` gets both right**, which is why
 **Residual, stated rather than hidden.** `seq` orders *buffers*, not individual
 fragments. In shape E the two buffers interleave at fragment level (index-only,
 id-only, id-only, index-only), and no buffer-level order can reconstruct the
-true sequence; the merge yields `IDXIDXID`. That is still strictly better than
-today's `IDXIDX`, which *silently discards* `ID` — the merge is lossless and
-now carries a `warn!`. Reconstructing fragment order would require per-fragment
-sequencing, which is not worth it for a shape no conforming backend emits.
+true sequence; the merge yields `IDXIDXIDIE`. That is still strictly better
+than today's `IDXIDX`, which *silently discards* the `Id`-keyed fragments
+entirely — the merge is lossless and now carries a `warn!`. Reconstructing
+fragment order would require per-fragment sequencing, which is not worth it
+for a shape no conforming backend emits.
 
 ### `flush_buffered_names` sorts by `seq`, not by `Key`
 
@@ -404,7 +405,7 @@ misleading after this change:
 | **B** | `Some("weather")` — silently wrong | `Some("get_weather")` — reunited |
 | **C** | `Some("weather")` — silently loses `get_` | `Some("get_weather")` — reunited |
 | **D** | `Some("beta")` — silently loses `alpha` | `Some("alphabeta")` — merged, one name, `warn!` |
-| **E** | `Some("IDXIDX")` — silently loses `ID` | `Some("IDXIDXID")` — lossless but misordered, `warn!` |
+| **E** | `Some("IDXIDX")` — silently loses `ID`/`IE` | `Some("IDXIDXIDIE")` — lossless but misordered, `warn!` |
 
 Sequence A still loses `weather`, and that is correct and intended: once
 `arguments` arrive, SMA-547's design treats the name as complete and emits it,
@@ -421,9 +422,9 @@ already sit.
 | `dual_key_call_emits_at_most_one_name_mid_stream` | Sequence A: over **every event from every `consume` call plus `finish()`**, exactly one carries `Some(name)` for `c1` | **yes** — the AC's required failing test |
 | `name_fragments_split_across_the_key_boundary_reassemble` | Sequence B yields `get_weather` | **yes** |
 | `id_keyed_buffer_created_before_the_index_keyed_one_merges_in_order` | Shape C yields `get_weather`, not `weathget_er` — pins the `seq` merge against a plain prepend | **yes** |
-| `index_keyed_buffer_created_first_merges_in_order` | Shape B′ yields `get_weather` — pins `seq` against a plain append | no (passes today by luck; guards the fix) |
-| `interleaved_dual_keying_is_lossless_and_misordered` | Shape E yields `IDXIDXID`; documents the accepted residual so an implementer cannot "discover" it and treat it as a bug | **yes** |
-| `two_indexes_with_one_id_merge_into_a_single_call` | Shape D yields exactly one `Some(name)` for `c1` | no (one name today too) |
+| `index_keyed_buffer_created_first_merges_in_order` | Shape B′ yields `get_weather` — pins `seq` against a plain append | **yes** |
+| `interleaved_dual_keying_is_lossless_and_misordered` | Shape E yields `IDXIDXIDIE`; documents the accepted residual so an implementer cannot "discover" it and treat it as a bug | **yes** |
+| `two_indexes_with_one_id_merge_into_a_single_call` | Shape D yields exactly one `Some(name)` for `c1` | **yes** |
 | `dual_key_late_fragment_is_reported` | after Sequence A, `warned_late_name` contains **`Key::Id("c1")`** (not `Key::Index(0)`) | yes |
 | `canonical_key_resolves_through_tool_calls` | `tool_calls` contains the canonical key after a canonicalized stream — pins the self-mapping a future "cleanup" would remove | yes |
 | `late_name_fragment_warns_once` (`:1078`) | **retarget**: `:1094` asserts `name_emitted.get(&Key::Index(0))`, which becomes `Key::Id("c1")` | assertion updated |
