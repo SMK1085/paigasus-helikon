@@ -3,7 +3,7 @@
   "checkpoint_id": "573f516dc864",
   "strategy": "manual-commit",
   "branch": "feature/sma-550-litellm-stream-translator-can-emit-two-name-carrying-deltas",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "crates/paigasus-helikon-providers-litellm/src/stream.rs"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/57/3f516dc864/0/transcript.jsonl",
       "content_hash": "/57/3f516dc864/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/57/3f516dc864/1/metadata.json",
+      "transcript": "/57/3f516dc864/1/full.jsonl",
+      "compact_transcript": "/57/3f516dc864/1/transcript.jsonl",
+      "content_hash": "/57/3f516dc864/1/content_hash.txt",
+      "prompt": "/57/3f516dc864/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 2,
-    "cache_creation_tokens": 4,
-    "cache_read_tokens": 119357,
-    "output_tokens": 408,
-    "api_call_count": 1
+    "input_tokens": 142,
+    "cache_creation_tokens": 366466,
+    "cache_read_tokens": 12516555,
+    "output_tokens": 123177,
+    "api_call_count": 75
   }
 }
