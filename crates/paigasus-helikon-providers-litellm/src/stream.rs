@@ -30,10 +30,7 @@ use paigasus_helikon_core::{FinishReason, ModelEvent};
 use crate::sse::{StreamChunk, ToolCallChunk};
 
 /// Correlation key for a streaming tool call.
-// `PartialOrd`/`Ord`: `flush_buffered_names` sorts keys for a deterministic
-// end-of-stream flush order, and `Key::Index` sorting before `Key::Id` is
-// what makes the dual-key winner predictable.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Key {
     /// Correlated by `delta.tool_calls[].index`, when present — or, as a
     /// last resort, by position within `delta.tool_calls` (in OpenAI-
@@ -65,10 +62,6 @@ struct Pending {
     ///
     /// Used to merge two buffers for one call in wire order (SMA-550) and to
     /// give `flush_buffered_names` a deterministic end-of-stream order.
-    // Not yet read: the consuming logic lands in SMA-550 Task 2. Stamped here
-    // first so every `Pending` carries it from construction onward — see the
-    // struct doc for why that ordering (not a later retrofit) is load-bearing.
-    #[allow(dead_code)]
     seq: u64,
     /// Accumulated function-name fragments.
     name: String,
@@ -376,8 +369,13 @@ impl ChatTranslator {
     /// `Key::Index` and `Key::Id` has two entries for one `call_id`, and the
     /// contract allows only one name-carrying delta per call.
     fn flush_buffered_names(&mut self) -> Vec<ModelEvent> {
+        // Sorted by buffer-creation order, not by `Key`. After SMA-550 every
+        // resolved key is `Key::Id(call_id)`, so sorting by `Key` would mean
+        // lexicographic-by-call_id — silently reordering parallel calls
+        // against the wire. `seq` is unique per buffer, so this is a total,
+        // deterministic order that matches first appearance.
         let mut keys: Vec<Key> = self.pending.keys().cloned().collect();
-        keys.sort();
+        keys.sort_by_key(|k| self.pending[k].seq);
 
         let mut already: HashSet<String> = self
             .name_emitted
@@ -478,6 +476,53 @@ mod tests {
 
     fn chunk(v: serde_json::Value) -> StreamChunk {
         serde_json::from_value(v).expect("chunk must deserialize")
+    }
+
+    /// Wrap a `tool_calls` array in the surrounding chunk envelope.
+    fn tc_chunk(tool_calls: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"choices": [{"index": 0, "delta": {"tool_calls": tool_calls}}]})
+    }
+
+    /// Drive every chunk through `consume`, then `finish`, collecting all
+    /// events. Collecting across both is required: the SMA-550 invariant is
+    /// per-stream, and a `finish()`-only assertion passes vacuously against
+    /// the pre-fix translator, whose violation is two *mid-stream* emissions.
+    fn drive(t: &mut ChatTranslator, chunks: Vec<serde_json::Value>) -> Vec<ModelEvent> {
+        let mut out = Vec::new();
+        for c in chunks {
+            out.extend(t.consume(chunk(c)));
+        }
+        out.extend(t.finish());
+        out
+    }
+
+    /// `(call_id, name)` for every delta carrying `Some(name)`, in order.
+    fn named(evs: &[ModelEvent]) -> Vec<(String, String)> {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name: Some(n),
+                    ..
+                } => Some((call_id.clone(), n.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Concatenated `args_delta` for one `call_id`, in emission order.
+    #[allow(dead_code)] // unused until Task 3 consumes it
+    fn args_of(evs: &[ModelEvent], call_id: &str) -> String {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id: c,
+                    args_delta,
+                    ..
+                } if c == call_id => Some(args_delta.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn texts(evs: &[ModelEvent]) -> Vec<String> {
@@ -1270,5 +1315,33 @@ mod tests {
             ModelEvent::ToolCallDelta { call_id, name: None, args_delta }
                 if call_id == "c1" && args_delta == "{\"a\":1}"
         ));
+    }
+
+    /// Two parallel zero-argument calls flush in wire order, not in
+    /// call_id-lexicographic order.
+    ///
+    /// Pins the `seq` sort in `flush_buffered_names`. After SMA-550's
+    /// canonicalization every resolved pending key is `Key::Id(call_id)`, so
+    /// a sort by `Key` would silently reorder these two by call_id —
+    /// `call_a` before `call_z` — reversing what the wire said. The ids are
+    /// chosen so lexicographic and wire order disagree.
+    #[test]
+    fn parallel_zero_argument_calls_flush_in_wire_order() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"index": 0, "id": "call_z", "function": {"name": "zulu"}},
+                {"index": 1, "id": "call_a", "function": {"name": "alpha"}}
+            ]))],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                ("call_z".to_owned(), "zulu".to_owned()),
+                ("call_a".to_owned(), "alpha".to_owned()),
+            ],
+            "wire order (index 0 then 1), not lexicographic by call_id"
+        );
     }
 }
