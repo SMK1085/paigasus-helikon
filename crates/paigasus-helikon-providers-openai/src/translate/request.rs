@@ -628,3 +628,59 @@ mod responses_tests {
         assert_eq!(out[0]["output"], "42");
     }
 }
+
+/// The static guard in `tests/workspace-lints` proves these call sites use
+/// `target:` rather than `target =`. This proves what that *buys*: the event
+/// actually lands on the declared target, so `RUST_LOG` /
+/// `EnvFilter` selectors naming it work (SMA-543).
+#[cfg(test)]
+mod tracing_target_tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::subscriber::with_default;
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::LookupSpan;
+
+    use super::*;
+
+    /// Records the metadata target of every event it sees.
+    #[derive(Clone, Default)]
+    struct TargetCapture(Arc<Mutex<Vec<String>>>);
+
+    impl<S: tracing::Subscriber + for<'l> LookupSpan<'l>> Layer<S> for TargetCapture {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            self.0
+                .lock()
+                .expect("capture mutex")
+                .push(event.metadata().target().to_owned());
+        }
+    }
+
+    #[test]
+    fn dropped_multimodal_part_warns_on_the_declared_target() {
+        let capture = TargetCapture::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+
+        with_default(subscriber, || {
+            // Same input as `assistant_image_content_part_is_dropped_with_warning`:
+            // an Image part on an AssistantMessage is not representable in the
+            // Chat assistant role, so `assistant_message` warns and drops it.
+            let items = vec![Item::AssistantMessage {
+                content: vec![ContentPart::Image {
+                    source: MediaSource::Url {
+                        url: "x".to_owned(),
+                    },
+                }],
+                agent: None,
+            }];
+            let _ = to_chat_messages(&items);
+        });
+
+        let targets = capture.0.lock().expect("capture mutex").clone();
+        assert_eq!(
+            targets,
+            vec!["paigasus::openai::translate".to_owned()],
+            "the warn must land on its declared target, not on the module path"
+        );
+    }
+}
