@@ -413,9 +413,23 @@ impl ChatTranslator {
             .unwrap_or("");
 
         if let Some(id) = tc.id.as_deref() {
-            self.tool_calls
-                .entry(key.clone())
-                .or_insert_with(|| id.to_owned());
+            match self.tool_calls.get_mut(&key) {
+                // First id wins, so a backend that changes a call's id
+                // mid-stream cannot re-point an in-flight call. The one
+                // exception is an id already recorded as empty: `canonicalize`
+                // treats a blank id as "no identity yet" rather than as an
+                // identity, so a real id arriving later must be allowed to
+                // replace it — otherwise the blank sticks and the call reaches
+                // the consumer under an empty `call_id` even though the backend
+                // eventually supplied a real one.
+                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                    *existing = id.to_owned();
+                }
+                Some(_) => {}
+                None => {
+                    self.tool_calls.insert(key.clone(), id.to_owned());
+                }
+            }
         }
 
         let Some(call_id) = self.tool_calls.get(&key).cloned() else {
@@ -1790,6 +1804,34 @@ mod tests {
             ],
             "the migrated buffer must keep its original wire position, not the \
              canonical slot's own (later) creation order"
+        );
+    }
+
+    /// A real `id` arriving after a blank one on the same wire key must win.
+    ///
+    /// Treating an empty id as "not an identity" is only half a policy: the
+    /// registration in `tool_calls` is `or_insert`, so a blank id recorded
+    /// first would stick, and every later delta for that call — including one
+    /// carrying the real id — would keep resolving to `""`. The call would
+    /// then reach the consumer under an empty `call_id` even though the
+    /// backend eventually supplied a real one.
+    #[test]
+    fn a_real_id_replaces_a_blank_one_on_the_same_wire_key() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"index": 0, "id": "", "function": {"name": "foo"}}])),
+                tc_chunk(
+                    serde_json::json!([{"index": 0, "id": "c1", "function": {"arguments": "{}"}}]),
+                ),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "foo".to_owned())],
+            "the real id must replace the blank one, and the buffered name must \
+             follow it onto the canonical key"
         );
     }
 

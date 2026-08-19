@@ -176,6 +176,16 @@ to the data structure.
 
 ## Design
 
+> **The Rust snippets in this section are the original design sketch, and the
+> implementation diverged from them.** They are kept as the record of what was
+> designed; they are **not** the algorithm that shipped. Three things the
+> sketches below do not have — an empty-`id` early return, whole-name-repeat
+> suppression during the merge, and a warning when a fragment migrates into an
+> already-emitted slot — were added after review found each one to be a
+> regression against `main`. See §Three regressions the first implementation
+> introduced. The authoritative algorithm is
+> `crates/paigasus-helikon-providers-litellm/src/stream.rs::canonicalize`.
+
 ### `Pending` carries a creation sequence
 
 ```rust

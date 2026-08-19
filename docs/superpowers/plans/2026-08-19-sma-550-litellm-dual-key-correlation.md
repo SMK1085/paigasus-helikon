@@ -376,6 +376,16 @@ git commit -m "refactor(providers): SMA-550 order the eos name flush by buffer c
 
 ---
 
+> **Task 3's `canonicalize` below is SUPERSEDED — do not copy it.** Review of
+> the finished branch found three shapes where the merge as written here was
+> worse than the code it replaced: it doubled a repeated whole name across the
+> key boundary, collapsed distinct calls that both reported a blank `id`, and
+> silently stranded a fragment migrating into an already-emitted slot. The
+> shipped version guards all three. This task is retained as the record of what
+> was planned; for the algorithm that shipped, read
+> `crates/paigasus-helikon-providers-litellm/src/stream.rs::canonicalize` and
+> §"Three regressions the first implementation introduced" in the design doc.
+
 ### Task 3: Canonicalize the correlation key on the resolved `call_id`
 
 The behavioural fix.
