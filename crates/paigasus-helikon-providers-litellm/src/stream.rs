@@ -1375,16 +1375,21 @@ mod tests {
     #[test]
     fn flush_does_not_re_emit_a_name_already_flushed_under_another_key() {
         let mut t = ChatTranslator::new();
-        // Non-empty args complete the name mid-stream under Key::Index(0),
-        // recording name_emitted[Key::Index(0)] = "get_".
+        // `id` is present alongside `index` on this delta, so `canonicalize`
+        // resolves it immediately: the entry is recorded as
+        // name_emitted[Key::Id("c1")] = "get_" from this first delta, not
+        // under Key::Index(0) — there is no intermediate wire-keyed state to
+        // observe here.
         t.consume(chunk(serde_json::json!({
             "choices": [{"index": 0, "delta": {"tool_calls": [
                 {"index": 0, "id": "c1", "function": {"name": "get_", "arguments": "{"}}
             ]}}]
         })));
-        // No `index` -> keys as Key::Id("c1"): a second entry for the same
-        // call_id, buffered but never flushed mid-stream (no args fragment
-        // on this delta to complete it).
+        // No `index`, so this keys as Key::Id("c1") directly — the same
+        // canonical slot the first delta already resolved to, which already
+        // has an emitted name. Nothing is buffered: the fragment is dropped
+        // on arrival by the canonical-keyed already-emitted short-circuit,
+        // which also fires the `warned_late_name` warning for this key.
         t.consume(chunk(serde_json::json!({
             "choices": [{"index": 0, "delta": {"tool_calls": [
                 {"id": "c1", "function": {"name": "weather"}}
