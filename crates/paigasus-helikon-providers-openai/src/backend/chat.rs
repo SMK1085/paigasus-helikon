@@ -409,7 +409,7 @@ impl ChatTranslator {
     /// `id` — malformed, since an `id` identifies a call — litellm merges them
     /// into one call emitting one name, while this translator keeps two
     /// indexes and emits a name for each: two name-carrying `ToolCallDelta`s
-    /// for one `call_id`. `flush_buffered_names` below has no `call_id`-level
+    /// for one `call_id`. `flush_buffered_names` above has no `call_id`-level
     /// dedup, so nothing catches it. That shape is unobserved from any
     /// backend, which is why SMA-550 documented it here rather than changing
     /// this code. A cross-provider conformance suite asserting "at most one
