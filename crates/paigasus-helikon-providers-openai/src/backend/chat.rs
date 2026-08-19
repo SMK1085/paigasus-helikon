@@ -395,6 +395,26 @@ impl ChatTranslator {
         out
     }
 
+    /// Correlate one tool-call delta and emit any completed name/args.
+    ///
+    /// **Divergence from `providers-litellm` (SMA-550), deliberate.** That
+    /// crate canonicalizes its correlation state onto the resolved `call_id`,
+    /// because its `index` is optional on the wire and one call can arrive
+    /// under two different keys. This translator does not, and does not need
+    /// to for that case: `ChatCompletionMessageToolCallChunk::index` is a
+    /// required `u32`, so there is exactly one key space here.
+    ///
+    /// It is not fully aligned, though, and the gap runs the *other* way.
+    /// Given two deltas carrying different `index` values but the **same**
+    /// `id` — malformed, since an `id` identifies a call — litellm merges them
+    /// into one call emitting one name, while this translator keeps two
+    /// indexes and emits a name for each: two name-carrying `ToolCallDelta`s
+    /// for one `call_id`. `flush_buffered_names` below has no `call_id`-level
+    /// dedup, so nothing catches it. That shape is unobserved from any
+    /// backend, which is why SMA-550 documented it here rather than changing
+    /// this code. A cross-provider conformance suite asserting "at most one
+    /// name-carrying delta per `call_id`" would fail here and pass for
+    /// litellm; closing it needs its own ticket.
     fn handle_tool_call_chunk(
         &mut self,
         tc: &ChatCompletionMessageToolCallChunk,
