@@ -397,6 +397,49 @@ misleading after this change:
 6. **`:350-352`** — "claiming earlier would let an empty-name entry … block a
    **sibling key**". There are no sibling keys post-fix.
 
+## Three regressions the first implementation introduced
+
+A high-effort local review of the finished branch found three shapes where the
+merge in `canonicalize` was **worse than the code it replaced**. All three were
+confirmed by running the same input against both this branch and `main`; they
+are measurements, not predictions. This section records them because the design
+above did not anticipate any of them — the omission was in this document, not
+in the implementation of it.
+
+| Shape | `main` | First implementation | Now |
+|---|---|---|---|
+| Repeated whole name across the key boundary: `{"id":"c1","name":"search"}`, `{"index":0,"name":"search"}`, `{"index":0,"id":"c1","arguments":"{}"}` | `Some("search")` | `Some("searchsearch")` | `Some("search")` |
+| Blank id on two parallel calls: one array, both entries `"id": ""` | `alpha` **and** `beta` | `alpha` only — `beta` lost | `alpha` **and** `beta` |
+| Migrate into an already-emitted slot: `{"index":0,"name":"foo"}`, `{"id":"c1","name":"bar","arguments":"{}"}`, `{"index":0,"id":"c1","arguments":"x"}` | `bar` + `foo` (two names — the original defect) | `bar`, `foo` silently stranded | `bar`, `foo` reported |
+
+**1. The merge bypassed SMA-547's whole-name-repeat guard.** The wire path
+guards `slot.name != name_frag` precisely so a backend that resends the
+complete name on every delta gets `search`, not `searchsearch` — and the
+existing comment there says appending unconditionally "would be a regression".
+The migration path did exactly that. `canonicalize` now applies the same guard
+to the migrating buffer. This design never mentioned the repeat guard, so the
+interaction was never considered.
+
+**2. An empty `id` was treated as an identity.** A backend sending `"id": ""`
+on every entry collapsed all of its parallel calls into one `Key::Id("")` slot,
+and every call but the first vanished from the stream — strictly worse than the
+dual-keying this ticket targets. `canonicalize` now leaves a blank-id delta on
+its wire key and warns once per key. Losing a whole call is worse than emitting
+two name-carrying deltas for a `call_id` that is not an identity in the first
+place.
+
+**3. A fragment migrating into an already-emitted slot vanished silently.** It
+was left in `pending` under the canonical key, where `flush_buffered_names`
+skips it (the call_id has emitted) and `warn_unresolved_pending` ignores it (the
+key now resolves) — no diagnostic anywhere. That is the exact undiagnosed loss
+this ticket exists to eliminate, reintroduced by its own fix. It is now dropped
+loudly and recorded in `warned_late_name`, the same way a late wire fragment is.
+
+The general lesson for the §Merge order reasoning above: it treated the two
+buffers as opaque strings to be ordered, when the wire path had already
+established that name fragments need *content* rules (repeat detection) and
+*state* rules (has this call already emitted?) as well as an ordering rule.
+
 ## Consequences for behaviour
 
 | Shape | Today | After |
