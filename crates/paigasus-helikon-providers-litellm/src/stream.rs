@@ -22,6 +22,12 @@
 //!    merge two distinct calls. A mixed array (some entries indexed, one
 //!    not) is non-conforming for OpenAI-compatible streaming; the
 //!    ambiguous entry is skipped with a loud warning rather than guessed.
+//!    Correlation itself is canonicalized: once a delta resolves the call's
+//!    `id`, the key becomes `Key::Id(call_id)` and any fragments buffered
+//!    under the pre-canonical key migrate into that slot in buffer-creation
+//!    order. One `call_id` therefore owns exactly one state entry, which is
+//!    what makes "at most one name-carrying delta per `call_id`" structural
+//!    rather than guarded (SMA-550).
 
 use std::collections::{HashMap, HashSet};
 
@@ -38,7 +44,12 @@ enum Key {
     /// positional continuation delta correctly joins a call already keyed
     /// by `Index`).
     Index(u32),
-    /// Correlated by `delta.tool_calls[].id`, when `index` is absent.
+    /// Correlated by `delta.tool_calls[].id`.
+    ///
+    /// Reached two ways: as the wire key when `index` is absent, and — since
+    /// SMA-550 — as the *canonical* key for every call whose `id` has
+    /// resolved, whether or not it also carried an `index`. See
+    /// [`ChatTranslator::canonicalize`].
     Id(String),
 }
 
@@ -87,8 +98,14 @@ impl Pending {
 /// EOF) to emit the terminal event, if any.
 pub(crate) struct ChatTranslator {
     /// Resolved call ids, keyed by correlation [`Key`].
+    ///
+    /// Holds both wire keys (`Key::Index(i)`, so later index-only deltas keep
+    /// resolving) and the canonical `Key::Id(call_id) -> call_id` self-mapping
+    /// that [`Self::canonicalize`] registers. The self-mapping is load-bearing:
+    /// `flush_buffered_names` and `warn_unresolved_pending` both resolve a
+    /// pending key through this map.
     tool_calls: HashMap<Key, String>,
-    /// Key → the tool name already emitted to the consumer.
+    /// Canonical key → the tool name already emitted to the consumer.
     ///
     /// Holds the *value*, not just the key, so a late fragment can be told
     /// apart from a backend that repeats the whole name on every delta
@@ -98,6 +115,9 @@ pub(crate) struct ChatTranslator {
     /// chatty backend cannot produce one warn per argument chunk.
     warned_late_name: HashSet<Key>,
     /// Name/args fragments buffered per call.
+    ///
+    /// Keyed by the canonical key once the call's `id` resolves, so one
+    /// `call_id` never owns two buffers (SMA-550).
     ///
     /// `args` is drain-once: taken on the first delta after the call's `id`
     /// is known and never re-prepended. `name` accumulates across every delta
@@ -438,10 +458,9 @@ impl ChatTranslator {
     /// reads the tool to run from its `name`.
     ///
     /// Skips entries whose `id` never resolved (nothing to emit under) and
-    /// entries whose resolved `call_id` already emitted a name. The latter is
-    /// not redundant with `name_emitted`: a call reached under both
-    /// `Key::Index` and `Key::Id` has two entries for one `call_id`, and the
-    /// contract allows only one name-carrying delta per call.
+    /// entries whose resolved `call_id` already emitted a name. Since SMA-550
+    /// the latter check is redundant — canonicalization gives each `call_id`
+    /// one key — and is kept as a net; see the comment at its `continue`.
     fn flush_buffered_names(&mut self) -> Vec<ModelEvent> {
         // Sorted by buffer-creation order, not by `Key`. After SMA-550 every
         // resolved key is `Key::Id(call_id)`, so sorting by `Key` would mean
@@ -471,10 +490,27 @@ impl ChatTranslator {
             if slot.name.is_empty() {
                 continue;
             }
-            // Claimed only once we know this key actually has a name to
-            // flush — claiming earlier would let an empty-name entry for a
-            // resolved call_id block a sibling key that does have one.
+            // Claimed only once we know this key actually has a name to flush
+            // — claiming earlier would let an empty-name entry for a resolved
+            // call_id suppress another entry that does have one.
             if !already.insert(call_id.clone()) {
+                // Unreachable since SMA-550: canonicalization gives each
+                // call_id exactly one pending key, so two keys can no longer
+                // resolve to one call_id. Kept as a net because it enforces
+                // the at-most-one-name invariant at the point of emission,
+                // independent of the keying discipline upstream — which is
+                // precisely what a cross-provider conformance suite asserts.
+                // Loud rather than a bare `continue`: if the keying is ever
+                // loosened again, a silent drop here would recreate the exact
+                // undiagnosed loss SMA-550 existed to fix.
+                tracing::error!(
+                    target: "paigasus::litellm::stream",
+                    %call_id,
+                    ?key,
+                    "two pending keys resolved to one call_id after \
+                     canonicalization; dropping the second buffered name. This \
+                     is a correlation-keying regression, not a backend quirk"
+                );
                 continue;
             }
             let name = std::mem::take(&mut slot.name);
@@ -1261,9 +1297,15 @@ mod tests {
         }
         assert_eq!(t.warned_late_name.len(), 1, "at most one warning per call");
         assert_eq!(
-            t.name_emitted.get(&Key::Index(0)).map(String::as_str),
+            t.name_emitted
+                .get(&Key::Id("c1".to_owned()))
+                .map(String::as_str),
             Some("get_"),
             "the already-emitted name is not retroactively changed"
+        );
+        assert!(
+            t.warned_late_name.contains(&Key::Id("c1".to_owned())),
+            "the loss is recorded under the canonical key"
         );
     }
 
@@ -1293,7 +1335,9 @@ mod tests {
                 {"index": 0, "id": "c1", "function": {"name": "get_"}}
             ]}}]
         })));
-        // No `index` -> keys as Key::Id("c1"): a second entry for one call.
+        // No `index` -> would key as Key::Id("c1"); since SMA-550 that IS the
+        // canonical key, so this joins the same slot rather than opening a
+        // second entry for one call.
         t.consume(chunk(serde_json::json!({
             "choices": [{"index": 0, "delta": {"tool_calls": [
                 {"id": "c1", "function": {"name": "weather"}}
@@ -1315,16 +1359,19 @@ mod tests {
         assert_eq!(named.len(), 1, "one name-carrying delta per call_id");
         assert_eq!(
             named[0],
-            ("c1".to_owned(), "get_".to_owned()),
-            "Key::Index sorts before Key::Id, so the winner is deterministic"
+            ("c1".to_owned(), "get_weather".to_owned()),
+            "the two keys are one slot after SMA-550, so the fragments reassemble"
         );
     }
 
-    /// Pins the `already` seed in `flush_buffered_names`. Without it, a
-    /// call_id that already flushed its name mid-stream under one key (here
-    /// `Key::Index(0)`) can still have a *second* name emitted for the same
-    /// call_id from a sibling key (`Key::Id("c1")`) that never got a chance
-    /// to flush mid-stream — the seed is what stops that second emission.
+    /// A call_id that already flushed its name mid-stream must not get a
+    /// second name at end-of-stream.
+    ///
+    /// Since SMA-550 this holds because both deltas share one canonical slot,
+    /// so `name_emitted` suppresses the second flush directly — not because
+    /// of the `already` seed in `flush_buffered_names`, which this sequence no
+    /// longer reaches. Kept because the invariant is what matters, not the
+    /// mechanism that currently enforces it.
     #[test]
     fn flush_does_not_re_emit_a_name_already_flushed_under_another_key() {
         let mut t = ChatTranslator::new();
