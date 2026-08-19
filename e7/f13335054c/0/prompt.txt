@@ -97,3 +97,83 @@ Test summary: `cargo test -p paigasus-helikon-providers-litellm --all-features` 
 ---
 
 run a code review locally using the skill
+
+---
+
+<task-notification>
+<task-id>a3ccc4acfbaf9b0a7</task-id>
+<tool-use-id>toolu_014prHmiy8jacDuNrkEyt4R1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a3ccc4acfbaf9b0a7.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review main high" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have a complete picture, with two defects verified empirically against both the branch and `main`. Here are the findings.
+
+```json
+[
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 218,
+    "summary": "`canonicalize` merges the two buffers' names with an unconditional prepend/append, bypassing the SMA-547 whole-name-repeat guard, so a backend that resends the complete name on every delta now gets a doubled name across the key boundary — a verified regression against main.",
+    "failure_scenario": "Chunks `[{\"id\":\"c1\",\"function\":{\"name\":\"search\"}}]`, `[{\"index\":0,\"function\":{\"name\":\"search\"}}]`, `[{\"index\":0,\"id\":\"c1\",\"function\":{\"arguments\":\"{}\"}}]`. Verified by running: branch emits `ToolCallDelta{c1, Some(\"searchsearch\")}`, main emits `Some(\"search\")`. Same result with the buffers created in the opposite order. `ModelTurnAccumulator` builds `Item::ToolCall{name:\"searchsearch\"}`, which resolves to no registered tool and fails the turn. Line 421 explicitly guards this case for wire fragments (`if !already_emitted &amp;&amp; slot.name != name_frag`) with a comment saying appending unconditionally 'would be a regression'; the migration path does exactly that. The spec has no mention of the repeat guard, so the interaction was never considered."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 184,
+    "summary": "When `canonicalize` migrates a non-empty `old.name` into a canonical slot whose name has already been emitted, the fragment is silently discarded — no `warn!`, no `warned_late_name` entry, and `warn_unresolved_pending` cannot see it either.",
+    "failure_scenario": "Chunks `[{\"index\":0,\"function\":{\"name\":\"foo\"}}]`, `[{\"id\":\"c1\",\"function\":{\"name\":\"bar\",\"arguments\":\"{}\"}}]`, `[{\"index\":0,\"id\":\"c1\",\"function\":{\"arguments\":\"x\"}}]`. Verified by running: emits only `(\"c1\",\"bar\")`, `t.warned_late_name` is empty, and `t.pending[Key::Id(\"c1\")].name == \"foo\"` is still there at end of stream. The true name is `foobar`; the agent runs `bar`. The leftover buffer is skipped by `flush_buffered_names`' `name_emitted` check (line 485) and excluded from `warn_unresolved_pending` because `canonicalize` registered the canonical key in `tool_calls` (line 231). This is the exact 'undiagnosed silent loss' SMA-550 set out to eliminate (its `dual_key_late_fragment_is_reported` test covers only the fragment-arrives-on-a-delta path); `canonicalize` needs a `name_emitted.contains_key(&amp;canonical)` check that warns and records `warned_late_name` before dropping."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 182,
+    "summary": "The resolved `call_id` is trusted as a globally unique identity, so distinct calls that both resolve to an empty (or repeated) `id` string now collapse into one `Key::Id(\"\")` slot and one of them disappears from the raw delta stream.",
+    "failure_scenario": "One chunk with `[{\"index\":0,\"id\":\"\",\"function\":{\"name\":\"alpha\",\"arguments\":\"{\\\"a\\\":1}\"}},{\"index\":1,\"id\":\"\",\"function\":{\"name\":\"beta\",\"arguments\":\"{\\\"b\\\":2}\"}}]` — a plausible shape from a permissively-parsed OpenAI-compatible backend that sends `\"id\": \"\"`. Verified by running: the branch emits a single name-carrying delta `(\"\", \"alpha\")` and `beta` is lost entirely; main emitted both names. By the spec's own standard (§'sorts by seq' argues raw-stream ordering is user-visible to runtime-axum/actix consumers), losing a whole name from the raw stream is a user-visible regression. `canonicalize` should treat a blank `call_id` as unresolved rather than as an identity."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 365,
+    "summary": "The unresolved-buffer branch appends name fragments with no whole-name-repeat guard, unlike the resolved path 57 lines below, so a repeated-whole-name backend doubles the name whenever the `id` has not arrived yet.",
+    "failure_scenario": "Chunks `[{\"index\":0,\"function\":{\"name\":\"search\"}}]`, `[{\"index\":0,\"function\":{\"name\":\"search\"}}]`, `[{\"index\":0,\"id\":\"c1\",\"function\":{\"arguments\":\"{}\"}}]` accumulates `slot.name == \"searchsearch\"` and emits it. Pre-existing on main, but this exact branch is rewritten by the diff (`entry().or_default()` → `ensure_pending` + `get_mut`), and the new `interleaved_dual_keying_is_lossless_and_misordered` test now *pins* the doubled output (`IDX` + `IDX` → `IDXIDX`) as expected behaviour, which will make fixing it look like breaking a test."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-openai/src/backend/chat.rs",
+    "line": 398,
+    "summary": "Altitude: the fix is applied to one of two near-verbatim copies of the same tool-call correlation state machine, and the divergence is documented rather than removed — the 'at most one name per call_id' invariant now depends on which provider crate you picked.",
+    "failure_scenario": "`litellm/src/stream.rs::handle_tool_call` and `openai/src/backend/chat.rs::handle_tool_call_chunk` share identical structure and verbatim-copied comment blocks (the SMA-547 repeat guard, the drain-once args comment, the late-name warn, `flush_buffered_names`). SMA-550 fixed one and added 20 lines of prose to the other explaining that it still emits two names for one `call_id`. Every future correlation fix pays this cost twice, and each cross-provider conformance assertion has to be written per-crate. The deeper fix is one shared correlation state machine (generic over `Option&lt;u32&gt;`/`u32` index) that both OpenAI-compatible translators call; the doc comment itself concedes 'closing it needs its own ticket'."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 1600,
+    "summary": "The shape-D merge is documented as deliberate, but its downstream effect is strictly worse than before: the synthesized name `alphabeta` resolves to no registered tool, where the pre-fix output named a real one.",
+    "failure_scenario": "`[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"alpha\"}},{\"index\":1,\"id\":\"c1\",\"function\":{\"name\":\"beta\",\"arguments\":\"{}\"}}]`. Pre-fix the translator emitted `Some(\"alpha\")` then `Some(\"beta\")`; `ModelTurnAccumulator` keeps the first name (`model.rs:575`, `if a.name.is_none()`), so the assembled call was `ToolCall{name:\"alpha\", args:{}}` — a runnable tool. Post-fix it is `ToolCall{name:\"alphabeta\"}` — tool-not-found. The spec's outcome table (§'shape' comparison) compares only translator output, never the assembled `Item::ToolCall`, so this trade was made without the downstream half being stated."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 232,
+    "summary": "`canonicalize` performs two String allocations and two hash lookups on every tool-call delta of every real LiteLLM stream, and the comment above it understates this as one clone per delta.",
+    "failure_scenario": "LiteLLM always sends `index`, so the `matches!` short-circuit at line 179 never fires: each delta pays `Key::Id(call_id.to_owned())` (line 182) *plus* `canonical.clone()` for the `entry()` at line 232, even though the entry already exists after the first delta — for a 200-chunk argument stream that is 400 heap allocations that main did not make. The comment at lines 174-178 says 'clone the `call_id` once per delta', which is off by one and reads as if the entry() clone were free. Replacing `entry(canonical.clone()).or_insert_with(..)` with `if !self.tool_calls.contains_key(&amp;canonical) { self.tool_calls.insert(canonical.clone(), call_id.to_owned()); }` removes the steady-state clone."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 156,
+    "summary": "`ensure_pending` returns nothing, forcing the same three-line `get_mut(..).expect(..)` re-lookup at all three call sites; the spec's own `pending_mut` returned the reference directly.",
+    "failure_scenario": "Lines 185-189, 360-364 and 400-404 are the same copy-pasted block, each doing a second hash of the key immediately after `ensure_pending` already hashed it (a third hash on the insert path, since `ensure_pending` itself does `contains_key` then `insert`). The design doc's version — `let next = self.next_seq; if !self.pending.contains_key(&amp;key) { self.next_seq += 1; } self.pending.entry(key).or_insert_with(|| Pending::new(next))` — returns `&amp;mut Pending` and compiles fine when inlined at the sites that also need `name_emitted`, removing three `expect(..)` panics-that-can't-happen and three lookups."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 475,
+    "summary": "The end-of-stream sort clones every pending key and then does a `HashMap` lookup inside the comparator, hashing each key O(log n) times.",
+    "failure_scenario": "`keys.sort_by_key(|k| self.pending[k].seq)` re-hashes and re-looks-up a `Key::Id(String)` on every comparison — for n parallel calls that is O(n log n) string hashes plus n key clones, where collecting `let mut keys: Vec&lt;(u64, Key)&gt; = self.pending.iter().map(|(k, p)| (p.seq, k.clone())).collect(); keys.sort_unstable_by_key(|(s, _)| *s);` hashes nothing. Also note `self.pending[k]` panics on a missing key rather than returning an option — safe today only because the Vec is built from `pending.keys()` two lines earlier."
+  },
+  {
+    "file": "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "line": 400,
+    "summary": "Every argument delta arriving after the name has flushed creates a `Pending` (cloning the key and burning a `seq`) that line 443 removes again on the same delta.",
+    "failure_scenario": "A tool call streaming 200 argument chunks after its name flushed executes `ensure_pending` → key clone + insert + `next_seq += 1`, drains, then `pending.remove(&amp;key)` — 200 pointless insert/remove pairs and 200 consumed sequence numbers per call. Pre-existing in shape (`entry(key.clone()).or_default()`), but now also inflates `next_seq`, which the diff makes load-bearing for flush ordering. An early return when `already_emitted &amp;&amp; !self.pending.contains_key(&amp;key)` (emitting the drained args directly) avoids touching the map at all on that path."
+  }
+]
+```
+
+Verification notes for the caller: findings 1, 2, 3 and 4 were confirmed by running temporary probe tests against both this branch and `main`'s `stream.rs` (file restored afterwards; `git status` clean). The branch itself is green — 150 lib tests pass, `cargo clippy --all-features --all-targets` and `RUSTDOCFLAGS=-D warnings cargo doc` are clean for both touched crates.</result>
+<usage><subagent_tokens>138775</subagent_tokens><tool_uses>34</tool_uses><duration_ms>679138</duration_ms></usage>
+</task-notification>
