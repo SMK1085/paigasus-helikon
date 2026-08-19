@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "d6bd9bdcc674",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-550-litellm-stream-translator-can-emit-two-name-carrying-deltas",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-19-sma-550-litellm-dual-key-correlation-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d6/bd9bdcc674/0/metadata.json",
+      "transcript": "/d6/bd9bdcc674/0/full.jsonl",
+      "compact_transcript": "/d6/bd9bdcc674/0/transcript.jsonl",
+      "content_hash": "/d6/bd9bdcc674/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 51,
+    "cache_creation_tokens": 80982,
+    "cache_read_tokens": 2198238,
+    "output_tokens": 11086,
+    "api_call_count": 26
+  }
+}
