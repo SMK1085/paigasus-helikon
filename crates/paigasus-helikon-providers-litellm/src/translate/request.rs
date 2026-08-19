@@ -82,7 +82,7 @@ pub(crate) fn to_chat_messages(items: &[Item]) -> Value {
             _ => {
                 // Future Item variants (Item is #[non_exhaustive]) — skip with warn.
                 tracing::warn!(
-                    target = "paigasus::litellm::translate",
+                    target: "paigasus::litellm::translate",
                     "unknown Item variant; skipping"
                 );
             }
@@ -204,13 +204,13 @@ fn assistant_message(content: &[ContentPart]) -> Value {
             ContentPart::Reasoning { .. } => { /* drop */ }
             ContentPart::Image { .. } | ContentPart::Audio { .. } => {
                 tracing::warn!(
-                    target = "paigasus::litellm::translate",
+                    target: "paigasus::litellm::translate",
                     "dropping multimodal ContentPart from AssistantMessage (Chat assistant role accepts only string content)"
                 );
             }
             ContentPart::ToolResult { .. } => {
                 tracing::warn!(
-                    target = "paigasus::litellm::translate",
+                    target: "paigasus::litellm::translate",
                     "dropping ContentPart::ToolResult nested in AssistantMessage (only valid on UserMessage in Anthropic shape)"
                 );
             }
