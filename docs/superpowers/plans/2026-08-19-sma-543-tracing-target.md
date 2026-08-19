@@ -676,11 +676,15 @@ In both files the offending token is identical. Replace `target = ` with
 `target: ` at each of the seven locations — and nowhere else:
 
 ```bash
-sed -i '' 's/^\(\s*\)target = "paigasus::openai::translate",$/\1target: "paigasus::openai::translate",/' \
+sed -i '' 's/^\([[:space:]]*\)target = "paigasus::openai::translate",$/\1target: "paigasus::openai::translate",/' \
   crates/paigasus-helikon-providers-openai/src/translate/request.rs
-sed -i '' 's/^\(\s*\)target = "paigasus::litellm::translate",$/\1target: "paigasus::litellm::translate",/' \
+sed -i '' 's/^\([[:space:]]*\)target = "paigasus::litellm::translate",$/\1target: "paigasus::litellm::translate",/' \
   crates/paigasus-helikon-providers-litellm/src/translate/request.rs
 ```
+
+`[[:space:]]`, not `\s`: this is BSD sed on macOS, where `\s` matches nothing
+**and still exits 0** — the substitution silently does nothing and the run looks
+like it worked. Step 4 is what catches that, so do not skip it.
 
 - [ ] **Step 4: Confirm exactly seven lines changed, and only those**
 
