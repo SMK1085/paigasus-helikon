@@ -1,0 +1,18 @@
+[package]
+name        = "paigasus-helikon-workspace-lints"
+description = "Internal: workspace-wide source lints for the Helikon repo."
+version     = "0.0.0"
+publish     = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

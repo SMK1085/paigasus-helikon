@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/*", "tests/runtime-http-conformance"]
+members  = ["crates/*", "tests/runtime-http-conformance", "tests/workspace-lints"]
 
 [workspace.package]
 version       = "0.0.0"
