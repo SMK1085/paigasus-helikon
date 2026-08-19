@@ -15,7 +15,10 @@
 - MSRV is `1.94`; edition and all metadata inherit from `[workspace.package]`. Per-crate `Cargo.toml` sets only `name`, `description`, `version`, `publish`, and deps.
 - Every new crate opts into workspace lints with a `[lints] workspace = true` block. That enables `missing_docs = "warn"`, and CI runs `-D warnings`: **every public item needs a `///` doc comment.**
 - `scripts/check-doc-coverage.sh` builds its crate list from `cargo metadata --no-deps` and excludes only `paigasus-helikon-cli`, so the new member counts toward the 80% workspace doc-coverage gate. Fully documenting its small public surface keeps this a non-issue.
-- No new third-party dependency. `regex` is not a workspace dep and must not become one for this.
+- **No new entry in `[workspace.dependencies]`.** `regex` is not a workspace dep and
+  must not become one for this. Adding an *already-pinned* workspace dep to a
+  crate's own `[dev-dependencies]` with `{ workspace = true }` is fine and is
+  what Task 3 does with `tracing-subscriber`.
 - Both provider crates change in the same PR (SMA-451 design decision D6 — see spec §2).
 - Commit messages: `<type>(<scope>): SMA-543 <lowercase message>`. Allowed scopes come from `.versionrc`'s `scopeRegex`; use `providers`, `workspace`, `spec`, or `plan`. **`workspace-lints` is not an allowed scope.**
 - Run `cargo fmt --all` before every commit — the `pre-commit` hook is a deliberate no-op, so nothing catches formatting until `pre-push`.
