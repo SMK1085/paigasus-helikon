@@ -165,10 +165,14 @@ impl ChatTranslator {
                 .expect("ensure_pending just inserted this key");
 
             // A resolved slot drains `args` on every delta and is removed once
-            // both fields are empty, so `slot.args` is always empty here and
-            // this is an assignment rather than a splice. The assert pins that
-            // dependency: if drain-once is ever relaxed, this fails loudly
-            // instead of silently mis-ordering JSON.
+            // both fields are empty, so `slot.args` is always empty here --
+            // which is what makes `insert_str(0, ..)` below an assignment in
+            // practice rather than a splice. The assert does not guard
+            // correctness: `insert_str(0, ..)` stays order-preserving even if
+            // `slot.args` were non-empty. It exists so that a future
+            // relaxation of drain-once surfaces here for a deliberate
+            // re-decision, instead of silently changing this from an
+            // assignment to a splice unnoticed.
             debug_assert!(
                 slot.args.is_empty(),
                 "a resolved slot drains its args on every delta"
@@ -1547,13 +1551,19 @@ mod tests {
 
     /// SMA-550 shape E, the accepted residual: when the two keys interleave
     /// at *fragment* level, no buffer-level order can reconstruct the wire
-    /// sequence, and the merge misorders them.
+    /// sequence, so the merge misorders the fragments -- though it loses
+    /// none of them. The third chunk's fragment ("IE") is deliberately
+    /// distinct from the second's ("ID"): a repeat there would be swallowed
+    /// by the pre-existing SMA-547 whole-name-repeat guard before the merge
+    /// ever runs, which would make this pass for the wrong reason and mask
+    /// a real ordering bug in `canonicalize`.
     ///
     /// This is deliberately pinned rather than left undefined. It is still
     /// strictly better than the pre-fix translator, which emits
-    /// `Some("IDXIDX")` and silently discards `ID` entirely: the merge is
-    /// lossless and carries a `warn!`. Do not "fix" this to `IDXIDIDX`
-    /// without adding per-fragment sequencing and re-deciding the trade-off.
+    /// `Some("IDXIDX")` and silently discards the `Id`-keyed fragments
+    /// entirely: the merge here is lossless and carries a `warn!`. Do not
+    /// "fix" the misordering without adding per-fragment sequencing and
+    /// re-deciding the trade-off.
     #[test]
     fn interleaved_dual_keying_is_lossless_and_misordered() {
         let mut t = ChatTranslator::new();
@@ -1562,7 +1572,7 @@ mod tests {
             vec![
                 tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "IDX"}}])),
                 tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "ID"}}])),
-                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "ID"}}])),
+                tc_chunk(serde_json::json!([{"id": "c1", "function": {"name": "IE"}}])),
                 tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "IDX"}}])),
                 tc_chunk(serde_json::json!([
                     {"index": 0, "id": "c1", "function": {"arguments": "{}"}}
@@ -1571,8 +1581,9 @@ mod tests {
         );
         assert_eq!(
             named(&evs),
-            vec![("c1".to_owned(), "IDXIDXID".to_owned())],
-            "lossless: every fragment survives, even though the order is not recoverable"
+            vec![("c1".to_owned(), "IDXIDXIDIE".to_owned())],
+            "the merge loses nothing, but the wire order is not reconstructable \
+             from two independently-ordered buffers"
         );
     }
 
@@ -1620,5 +1631,42 @@ mod tests {
             "the dropped `weather` fragment must be recorded under the canonical key"
         );
         assert_eq!(t.warned_late_name.len(), 1, "at most one warning per call");
+    }
+
+    /// Mutation guard for `slot.seq = old.seq;` in `canonicalize` (SMA-550
+    /// review, Finding 1). Pins that a migrated buffer inherits the
+    /// *migrating* buffer's wire position for `flush_buffered_names`'
+    /// `seq`-sort, not the canonical slot's own (later) creation seq.
+    ///
+    /// `c1`'s `Index(0)`-keyed buffer is created first (seq 0, chunk 1), but
+    /// only resolves into its canonical `Id("c1")` slot in chunk 3 -- by
+    /// which point `c2`'s canonical `Id("c2")` slot already exists with an
+    /// earlier seq (seq 1, chunk 2). Without `slot.seq = old.seq`, the
+    /// migrated `c1` slot would keep the canonical slot's just-created seq
+    /// (2) instead, sorting after `c2` at flush and reversing wire order.
+    #[test]
+    fn migrated_buffer_keeps_its_wire_position_in_the_flush_order() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([{"index": 0, "function": {"name": "alpha"}}])),
+                tc_chunk(serde_json::json!([
+                    {"index": 1, "id": "c2", "function": {"name": "bravo"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "_x"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                ("c1".to_owned(), "alpha_x".to_owned()),
+                ("c2".to_owned(), "bravo".to_owned()),
+            ],
+            "the migrated buffer must keep its original wire position, not the \
+             canonical slot's own (later) creation order"
+        );
     }
 }
