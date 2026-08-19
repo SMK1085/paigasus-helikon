@@ -70,8 +70,14 @@ fn no_tracing_macro_passes_target_or_parent_with_equals() {
     // this, a wrong root or a moved directory reports identically to a clean
     // workspace. Same reasoning as the vacuous-pass guard in
     // `crates/paigasus-helikon/tests/openai_litellm_message_parity.rs`.
+    //
+    // This is a catastrophic-truncation tripwire, not a coverage measure —
+    // it is set well below the repo's actual file count (~390 as of this
+    // writing) so it does not couple to workspace size. Coverage of both
+    // roots is guaranteed by the three required-path assertions below, not
+    // by this count.
     assert!(
-        files.len() >= 300,
+        files.len() >= 100,
         "scanned only {} .rs files — the walk is not reaching the workspace",
         files.len()
     );
@@ -95,9 +101,10 @@ fn no_tracing_macro_passes_target_or_parent_with_equals() {
             .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
         let rel = file.strip_prefix(&root).unwrap_or(file);
         // `try_scan` rather than `scan`: a delimiter-mismatch error must be
-        // attributed to the file it came from. `scan`'s `debug_assert_eq!`
-        // panic named only a byte offset — across ~600 scanned files that
-        // is not locatable without bisecting this loop.
+        // attributed to the file it came from. `scan` calls `try_scan` and
+        // panics with the `MismatchedDelimiter` message alone — that names a
+        // byte offset but no file, so across the ~390 files this loop scans
+        // it would not be locatable without bisecting the loop by hand.
         match try_scan(&src) {
             Ok(found) => {
                 for o in found {

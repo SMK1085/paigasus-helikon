@@ -73,6 +73,8 @@ impl std::fmt::Display for MismatchedDelimiter {
     }
 }
 
+impl std::error::Error for MismatchedDelimiter {}
+
 /// Scan Rust source for `tracing` macro arguments written `target = …` or
 /// `parent = …`, which the macros silently treat as ordinary fields.
 ///

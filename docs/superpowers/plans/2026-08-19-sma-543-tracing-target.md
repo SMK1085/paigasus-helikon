@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- MSRV is `1.94`; edition and all metadata inherit from `[workspace.package]`. Per-crate `Cargo.toml` sets only `name`, `description`, `version`, `publish`, and deps.
+- MSRV is `1.94`. Per-crate `Cargo.toml` sets only package-specific values directly — `name`, `description`, `version`, `publish`, and deps — while `edition`, `rust-version`, `authors`, `license`, `repository`, `homepage`, `keywords`, and `categories` inherit from `[workspace.package]` (each written as `<field>.workspace = true`, as in Task 1's manifest below).
 - Every new crate opts into workspace lints with a `[lints] workspace = true` block. That enables `missing_docs = "warn"`, and CI runs `-D warnings`: **every public item needs a `///` doc comment.**
 - `scripts/check-doc-coverage.sh` builds its crate list from `cargo metadata --no-deps` and excludes only `paigasus-helikon-cli`, so the new member counts toward the 80% workspace doc-coverage gate. Fully documenting its small public surface keeps this a non-issue.
 - **No new entry in `[workspace.dependencies]`.** `regex` is not a workspace dep and
@@ -284,7 +284,22 @@ pub fn scan(src: &str) -> Vec<Offense> {
     }
     offenses
 }
+```
 
+> **Post-execution note (later review waves):** the shipped detector
+> hardened well past this draft — it recognises `warn![...]` and `warn!{...}`
+> in addition to `warn!(...)`; it matches a macro's final path segment
+> against a locally-declared alias table as well as the literal
+> `TRACING_MACROS` names, so `use tracing::warn as w; w!(...)` is caught; it
+> honours a `// allow(tracing-target-syntax)` opt-out marker read from the
+> file's unmasked text before comment-blanking runs; and `scan` itself
+> becomes a thin wrapper around a new fallible `try_scan(&str) ->
+> Result<Vec<Offense>, MismatchedDelimiter>`, so a delimiter desync surfaces
+> as a value a caller can attribute to a specific file rather than an
+> in-function panic (see spec §4.3–§4.5). Step 6 above is left as originally
+> executed; this note records the follow-up rather than rewriting the task.
+
+```rust
 fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
@@ -849,6 +864,16 @@ mod tracing_target_tests {
 }
 ```
 
+> **Post-execution note (later review wave):** the shipped `TargetCapture`
+> hardened past this sketch — `Layer::enabled` filters to WARN-and-above
+> before `on_event` ever records anything, rather than recording every event
+> unconditionally. Without that filter, an unrelated `debug!`/`trace!`/`info!`
+> call added anywhere in the exercised code path later would push extra
+> entries into `targets` and fail this test for a reason that has nothing to
+> do with the SMA-543 property it exists to pin. Step 2's snippet above is
+> left as originally drafted; this note records the follow-up rather than
+> rewriting it.
+
 - [ ] **Step 3: Verify the test genuinely discriminates**
 
 Temporarily revert line 205 to the broken form and confirm the test fails:
@@ -909,9 +934,12 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+mdbook build docs/book
 ```
 
-Expected: all four clean. Run them from the worktree, not the main checkout —
+Expected: all five clean. This PR edits `docs/book/src/reference/crates.md`,
+so the `book-build` CI gate applies and belongs in this local repro list.
+Run them from the worktree, not the main checkout —
 the bedrock suite fails on this machine when run from
 `~/dev/paigasus/paigasus-helikon` for reasons tied to the checkout path, and a
 worktree under the scratchpad gives a true signal.

@@ -173,7 +173,9 @@ remedy for the accepted-cost collision above: a genuinely unrelated
 `mycrate::warn!` can be silenced explicitly, which the qualifier-restricted
 first draft offered no way to do short of editing this crate.
 
-The failure message lists every offending `file:line` with the argument index.
+The failure message lists every offending `file:line`, the macro it appeared
+in, and which keyword (`target` or `parent`) was misused — for example,
+`crate/src/f.rs:12 — warn! passes target =; it must be target:`.
 
 Hand-rolled. `regex` is not a workspace dependency and this does not justify
 adding one.
@@ -213,6 +215,17 @@ compiling bad form in §4.4 plus good forms that must *not* trip it:
 legitimately named `count`, the bad pattern inside a `//` comment, inside a
 `///` doc comment, and inside a string literal. A CRLF case is included because
 `cargo test --workspace --all-features` also runs on `windows-latest`.
+
+**Shipped as a fallible/infallible pair (later review wave).** `scan(&str) ->
+Vec<Offense>` is the public entry point described above, but it is a thin
+wrapper: `pub fn try_scan(&str) -> Result<Vec<Offense>, MismatchedDelimiter>`
+does the actual work, and `scan` calls it and panics on `Err`. Well-formed
+Rust nests delimiters strictly, so a mismatch is unreachable against real
+source — it exists to catch a future desync between the trivia masker and the
+argument walker's depth tracking. The repo-walking integration test (below)
+calls `try_scan` directly rather than `scan`, so a mismatch is attributed to
+the file it came from rather than surfacing as a bare panic naming only a
+byte offset.
 
 Because the lexer skips comments and string literals, the guard scanning its
 own source is a non-issue — the bad forms in its test table are string literals.
@@ -351,8 +364,10 @@ the same `// allow(tracing-target-syntax)` marker.
    would fix.
 3. **Full local CI gate set** in the worktree: `cargo fmt --all -- --check`,
    `cargo clippy --workspace --all-features --all-targets -- -D warnings`,
-   `cargo test --workspace --all-features`, and
-   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
+   `cargo test --workspace --all-features`,
+   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`,
+   and `mdbook build docs/book` — this PR edits
+   `docs/book/src/reference/crates.md`, so the `book-build` CI gate applies.
 
 ## 6. Non-goals
 
