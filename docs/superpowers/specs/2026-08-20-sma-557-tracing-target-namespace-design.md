@@ -148,9 +148,15 @@ next step", and `CONTRIBUTING.md` carries only a commit-type → semver table.
 
 ### D1 — Two-tier stability
 
-**`paigasus::` and `paigasus::<component>` are a stable filtering surface.**
-Renaming or removing a component is a breaking change. **The `::<subsystem>`
-leaf is an implementation detail** and may change in any release.
+**`paigasus::` and `paigasus::<component>` are a stable filtering surface**, for
+every component the book's table marks *stable*. Renaming or removing one is a
+breaking change. **The `::<subsystem>` leaf is an implementation detail** and may
+change in any release.
+
+A component marked *provisional* carries none of this — today that is only
+`paigasus::temporal`, for the reason D2 gives. Stating D1 unqualified would
+contradict the provisional marking, which is exactly the blanket-claim-with-a
+-distant-exception defect this branch had to fix twice in the book.
 
 Three things make this operational rather than aspirational:
 

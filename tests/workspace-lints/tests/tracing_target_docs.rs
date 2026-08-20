@@ -208,7 +208,9 @@ fn documented_components_match_source() {
         "tracing component drift between source and {BOOK_PAGE}:\n  \
          in source but not documented: {undocumented:?}\n  \
          documented but not in source: {stale:?}\n\
-         Add or remove the row in the marked region. Renaming a component is a \
-         breaking change (SMA-557 D1) — use a `BREAKING CHANGE:` footer."
+         Add or remove the row in the marked region. For a component the table \
+         marks `stable`, renaming or removing it is a breaking change \
+         (SMA-557 D1) — use a `BREAKING CHANGE:` footer. A `provisional` \
+         component carries no such guarantee."
     );
 }

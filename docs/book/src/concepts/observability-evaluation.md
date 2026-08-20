@@ -172,11 +172,13 @@ hand-chosen targets is tracked as a follow-up.
 
 The namespace is a two-tier contract.
 
-- **`paigasus::` and `paigasus::<component>` are stable.** Renaming or removing a
-  component is a breaking change, made through a commit carrying a
-  `BREAKING CHANGE:` footer so it appears in the crate's CHANGELOG. No component
-  name will ever be a prefix of another — that would silently widen a saved
-  filter, since matching is prefix-based.
+- **`paigasus::` and `paigasus::<component>` are stable**, for every component
+  the table above marks *stable*. Renaming or removing one is a breaking change,
+  made through a commit carrying a `BREAKING CHANGE:` footer so it appears in the
+  crate's CHANGELOG. No component name will ever be a prefix of another — that
+  would silently widen a saved filter, since matching is prefix-based. A
+  component marked *provisional* carries none of this and may be renamed or
+  removed in any release.
 - **The `::<subsystem>` leaf is an implementation detail** and may change in any
   release without notice.
 
