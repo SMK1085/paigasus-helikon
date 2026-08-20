@@ -445,8 +445,9 @@ then does it become an exception: a filed Linear issue, an
 rigor — a future engineer facing a red assertion could convert it to
 `Declined("wire shape cannot occur")` in one line and keep CI green.
 
-So the expected declines are pinned as a `const DECLINED: &[(&str, Scenario)]`
-in `src/lib.rs`, exactly matching §6.2, and the suite **fails when the observed
+So the expected declines are pinned as a `const DECLINED: &[(&str, Scenario, &str)]`
+in `src/declines.rs` — subject, scenario, and the reason string, so a reworded
+reason is drift too — exactly matching §6.2, and the suite **fails when the observed
 decline set differs in either direction** — an unexpected decline *and* an
 expected decline that stopped happening. Adding or removing one then requires a
 reviewed diff to a table, not a string literal in a match arm.

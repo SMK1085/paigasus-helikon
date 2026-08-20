@@ -387,10 +387,15 @@ mod tests {
         .await;
         let gate = server.take_gate().expect("gate_after was set");
 
-        let url = server.base_url();
-        let handle = tokio::spawn(async move {
-            reqwest::Client::new().post(url).send().await.unwrap().text().await
-        });
+        // Await the response head directly and stream its body — do NOT spawn a
+        // task that buffers the whole body with `.text()`. The gate must be
+        // observed frame by frame, and a spawned handle would also be unused
+        // here, which `-D warnings` rejects.
+        let response = reqwest::Client::new()
+            .post(server.base_url())
+            .send()
+            .await
+            .expect("headers should arrive");
 
         // Assert three separate properties, not one. An `is_finished()` probe
         // after a fixed sleep is one-directional: on a machine where the
@@ -575,7 +580,7 @@ aws-sdk-bedrockruntime = { workspace = true }
 
 The payload is `serde_json::to_vec(payload)`.
 
-`build_bedrock_model_against(url)` constructs an `SdkConfig` with `endpoint_url(url)`, a static `Region::new("us-east-1")`, and hard-coded test credentials (`Credentials::new("AKIDTEST", "secret", None, None, "conformance")`), then `BedrockModel::builder("anthropic.claude-3-5-sonnet-20240620-v1:0").sdk_config(&cfg).build()`. Confirm the exact builder entry point against `crates/paigasus-helikon-providers-bedrock/src/builder.rs` before writing it.
+`build_bedrock_model_against(url)` constructs an `SdkConfig` with `endpoint_url(url)`, a static `Region::new("us-east-1")`, and hard-coded test credentials (`Credentials::new("AKIDTEST", "secret", None, None, "conformance")`), then `BedrockModel::converse("anthropic.claude-3-5-sonnet-20240620-v1:0").sdk_config(&cfg).build()`. The entry point is **`converse`**, not `builder` — verified against `crates/paigasus-helikon-providers-bedrock/src/model.rs` during the spike; there is no `BedrockModel::builder`.
 
 - [ ] **Step 4: Run the test**
 
@@ -1026,7 +1031,9 @@ Replace the `todo!` with the real arms — it is shown only to fix the signature
 1. For each `Scenario::ALL`, call `subject.stream(scenario, token)`.
 2. On `Outcome::Declined(reason)`, record `(subject.name(), scenario, reason)` and continue.
 3. On `Outcome::Served { stream, gate }`: assert `subject.encodes_stop_reason(scenario) == scenario.expects_stop_reason()`, else fail with `StopReasonDeclarationMismatch`.
-4. For the two cancel scenarios, spawn a task that drains the stream; wait for the gate event to be observed, release the gate, fire the cancel token, then collect. For all others, drain directly.
+4. For the two cancel scenarios, spawn a task that drains the stream; wait for the stream to fall quiet, **fire the cancel token while the gate is still held**, then release the gate so the server task can exit, then collect. For all others, drain directly.
+
+   > **Corrected during implementation.** This step originally said to release the gate *before* firing the token. That races the stream terminator against the cancellation: the server sends its remaining chunks and a clean EOF, so a **correct** provider can emit `Finish` before the token lands and be reported as `FinishOnCancel`. Holding the gate across cancellation removes the race, and `GateHandle::release`'s return value ("was the server still parked?") becomes positive evidence that truncation actually happened.
 5. Wrap the whole per-scenario drain in `tokio::time::timeout(Duration::from_secs(10), …)`; on elapse, fail with `Violation::Timeout`. A subject whose stream never ends is a real bug this suite should catch, and without this it would hang `cargo test` rather than fail it.
 6. Run the floors, then `classify`. Panic with the subject name, scenario and violation on any failure.
 7. After the loop, compare the recorded declines against `DECLINED` filtered to this subject and panic on any difference in either direction.

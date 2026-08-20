@@ -174,14 +174,27 @@ async fn tool_call_turn_finishes_with_tool_calls() {
         "fragmented arguments must reassemble to the whole JSON object"
     );
 
-    // Exactly one ToolCallDelta carries the name.
-    let names_carried = unwrapped
+    // Exactly one ToolCallDelta carries the name — and it must be the *right*
+    // name against the *stable* call id. Counting `Some(_)` alone would pass a
+    // translator that emitted a truncated or wrong name, which is the SMA-547
+    // bug class this assertion exists to catch. Note the id asserted here is
+    // `item.call_id` from the capture, not the `fc_…` `item.id` the argument
+    // deltas correlate on.
+    let named_calls: Vec<(&str, &str)> = unwrapped
         .iter()
-        .filter(|e| matches!(e, ModelEvent::ToolCallDelta { name: Some(_), .. }))
-        .count();
+        .filter_map(|e| match e {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name: Some(name),
+                ..
+            } => Some((call_id.as_str(), name.as_str())),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        names_carried, 1,
-        "expected exactly one name-carrying ToolCallDelta, got {unwrapped:?}"
+        named_calls,
+        vec![("call_D3Tp4UJ6scmDWx6jmfvy2LQo", "get_weather")],
+        "expected exactly one complete name for the stable call id, got {unwrapped:?}"
     );
 
     assert!(
