@@ -1086,7 +1086,19 @@ impl StreamUnderTest for <Subject> {
     fn name(&self) -> &'static str { "<subject>" }
 
     fn encodes_stop_reason(&self, scenario: Scenario) -> bool {
-        scenario.expects_stop_reason()
+        // MEASURE the bytes about to be served. Do NOT return
+        // `scenario.expects_stop_reason()` — that compares the harness's
+        // expectation against itself, so the cross-check in `assert_conforms`
+        // becomes dead code and a mis-transcribed fixture sails through.
+        //
+        // This is the only thing that can catch a lost stop reason in
+        // `ErrorAfterStopReason`, whose observable events —
+        // `[TokenDelta, TokenDelta, Err]` — are byte-identical to
+        // `ErrorMidGeneration`'s. Assertion 3 cannot help there: its `Err`
+        // guard skips it, and assertion 6 passes either way.
+        script_for(scenario)
+            .map(|s| s.chunks.iter().any(|c| contains(c, STOP_REASON_MARKER)))
+            .unwrap_or(false)
     }
 
     fn fixture_tool_name(&self) -> &'static str { "get_weather" }

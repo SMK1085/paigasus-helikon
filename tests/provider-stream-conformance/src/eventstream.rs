@@ -71,6 +71,16 @@ pub fn frame(event_type: &str, payload: &serde_json::Value) -> Vec<u8> {
 
 /// Build a real `BedrockModel` pointed at a local plain-HTTP endpoint.
 ///
+/// **Kept in sync by hand with `bedrock::build_model_against` in
+/// `tests/conformance.rs`.** This copy is `#[cfg(test)]`, so it exists only in
+/// the lib's unit-test build and cannot be reached from an integration test;
+/// making it `pub` instead would pull the whole AWS SDK into the lib's
+/// dependency graph for every subject in the suite. The duplication has one
+/// consequence worth knowing: `bedrock_signs_the_local_request_with_sigv4`
+/// below asserts against *this* copy, so a region or credential-scope change
+/// made only in `tests/conformance.rs` would go unasserted. Change both, or
+/// neither.
+///
 /// The `SdkConfig` is assembled by hand rather than through
 /// `aws_config::defaults(..).load()` because that loader is `async` and would
 /// also consult the ambient environment — a developer's real
