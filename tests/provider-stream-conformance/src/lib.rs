@@ -10,9 +10,14 @@
 //! See `docs/superpowers/specs/2026-08-19-sma-533-stream-conformance-design.md`.
 #![forbid(unsafe_code)]
 
+/// Event stream classification and violation detection.
+pub mod check;
 pub mod eventstream;
+/// Fake model streams for testing.
+pub mod fakes;
 mod server;
 
+pub use check::classify;
 pub use server::{Ending, PacedServer, Script};
 
 use futures_util::stream::BoxStream;
