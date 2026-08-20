@@ -173,11 +173,21 @@ two segments** for durable filters:
 The first draft's "≤ 2 segments" rule was wrong at its lower bound: one segment
 is ≤ 2 and is precisely the over-matching form.
 
-**(b) A naming constraint.** Because matching is prefix-based, **no component
-name may be a prefix of another** — `openai` and `openai_compat` cannot coexist,
-because a saved `paigasus::openai` filter would silently widen to include the
-new component. This constraint is part of the stability promise, not a separate
-style rule.
+**(b) A naming constraint, namespace-wide.** Because matching is prefix-based,
+**no component name may be a prefix of another** — `openai` and `openai_compat`
+cannot coexist, because a saved `paigasus::openai` filter would silently widen to
+include the new component.
+
+This binds **every** component, *provisional* ones included, and is therefore
+**not** part of the stable-only guarantee in the first paragraph. The two protect
+different things: that guarantee is about a name being *retained*, which is a
+promise to someone reading the docs today; this constraint is about a name being
+*introduced*, which affects filters already deployed — and an operator whose
+alert quietly began matching more than it did yesterday is not consoled by the
+new component being provisional. Conflating them would also make the guard
+incoherent, since it rejects collisions across the whole source set with no
+status filter; a future provisional `temporal_compat` would redden CI while the
+book said provisional components carry no obligations.
 
 **(c) A mechanism the repo can actually execute.** Renaming a component requires
 a commit carrying a `BREAKING CHANGE:` footer. release-plz maps that to a

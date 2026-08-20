@@ -175,10 +175,14 @@ The namespace is a two-tier contract.
 - **`paigasus::` and `paigasus::<component>` are stable**, for every component
   the table above marks *stable*. Renaming or removing one is a breaking change,
   made through a commit carrying a `BREAKING CHANGE:` footer so it appears in the
-  crate's CHANGELOG. No component name will ever be a prefix of another — that
-  would silently widen a saved filter, since matching is prefix-based. A
-  component marked *provisional* carries none of this and may be renamed or
-  removed in any release.
+  crate's CHANGELOG. A component marked *provisional* carries no such promise and
+  may be renamed or removed in any release.
+- **No component name will ever be a prefix of another.** This one is
+  namespace-wide and binds *provisional* components exactly as much as stable
+  ones — it is not part of the guarantee above. A collision would silently widen
+  a filter that is already deployed, since matching is prefix-based, and a new
+  component's status is no comfort to an operator whose alert quietly started
+  matching more than it did yesterday.
 - **The `::<subsystem>` leaf is an implementation detail** and may change in any
   release without notice.
 

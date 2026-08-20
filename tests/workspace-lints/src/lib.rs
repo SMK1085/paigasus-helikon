@@ -191,35 +191,29 @@ pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
 /// be a false positive. No such site exists in this workspace, and the failure
 /// mode is a loud mismatch rather than a silent miss.
 ///
-/// The gap between `target:` and its literal is scanned against the raw
-/// source (see the comment at the whitespace-skip loop below), so a comment
-/// sitting in that gap — e.g. `target: /* … */ "paigasus::x::y"` — stops the
-/// skip early and silently yields no component for that site. Likewise,
-/// `target: SOME_CONST` — a `const &'static str`, which `tracing` accepts —
-/// is invisible in the same way, since only a literal written directly after
-/// `target:` is recognised. No such site exists in this workspace today.
+/// A comment may sit between `target:` and its literal — `tracing` accepts
+/// `target: /* note */ "paigasus::x::y"` — and that form is recognised. What is
+/// **not** recognised is a target that is not a literal at all:
+/// `target: SOME_CONST`, a `const &'static str`, which `tracing` also accepts,
+/// yields no component. No such site exists in this workspace today.
 pub fn scan_targets(src: &str) -> BTreeSet<String> {
     const NEEDLE: &[u8] = b"target:";
     let masked = mask_trivia(src);
     let b = &masked.buf[..];
-    // Whitespace between `target:` and its literal is skipped against the
-    // *raw* source, not the masked buffer: `mask_trivia` blanks a string
-    // literal's delimiters and contents to spaces too, so scanning the
-    // masked buffer here would read straight through the literal as if it
-    // were more whitespace and overshoot its opening quote.
-    let src_bytes = src.as_bytes();
     let mut out = BTreeSet::new();
     let mut i = 0;
     while let Some(rel) = find_sub(&b[i..], NEEDLE) {
         let after = i + rel + NEEDLE.len();
-        let mut j = after;
-        while j < src_bytes.len() && src_bytes[j].is_ascii_whitespace() {
-            j += 1;
-        }
-        // The literal must begin exactly where the whitespace ended; anything
-        // else (an identifier, a `format!`, a nested expression) is not a
-        // literal target and is skipped.
-        if let Some(&(start, end)) = masked.string_literals.iter().find(|&&(s, _)| s == j) {
+        // Take the next literal whose span is separated from `target:` by
+        // nothing but whitespace *in the masked buffer*. That test is what
+        // makes a comment in the gap transparent: `mask_trivia` blanks
+        // comments to spaces, so they read as whitespace here, while any real
+        // token — an identifier, a `format!`, an opening paren — does not, and
+        // correctly rejects the match. Testing the raw source instead would
+        // stop at the comment's leading `/` and silently skip the site.
+        if let Some(&(start, end)) = masked.string_literals.iter().find(|&&(start, _)| {
+            start >= after && b[after..start].iter().all(u8::is_ascii_whitespace)
+        }) {
             if let Some(component) = component_of(&src[start..end]) {
                 out.insert(component);
             }
@@ -1098,6 +1092,29 @@ mod tests {
         ] {
             assert!(scan_targets(src).is_empty(), "leaked from: {src}");
         }
+    }
+
+    /// `tracing` accepts a comment between `target:` and its literal. Such a
+    /// site must still be found — otherwise a new component written this way
+    /// would silently bypass the documentation drift guard.
+    #[test]
+    fn scan_targets_sees_through_a_comment_before_the_literal() {
+        for src in [
+            "tracing::warn!(target: /* note */ \"paigasus::openai::chat\", \"m\");\n",
+            "tracing::warn!(\n    target: // note\n    \"paigasus::openai::chat\",\n    \"m\"\n);\n",
+        ] {
+            let got: Vec<String> = scan_targets(src).into_iter().collect();
+            assert_eq!(got, vec!["openai".to_owned()], "missed site in: {src}");
+        }
+    }
+
+    /// The gap test must not be so permissive that a non-literal target matches
+    /// a later literal in the same invocation. `target: SOME_CONST` yields
+    /// nothing rather than picking up the message string.
+    #[test]
+    fn scan_targets_ignores_a_non_literal_target() {
+        let src = "tracing::warn!(target: SOME_CONST, \"paigasus::openai::chat\");\n";
+        assert!(scan_targets(src).is_empty());
     }
 
     /// A target inside an outer string literal is a test fixture, not a call

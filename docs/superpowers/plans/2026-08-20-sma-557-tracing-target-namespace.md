@@ -352,37 +352,37 @@ use std::collections::BTreeSet;
 /// so guarding it would redden CI on legitimate refactors.
 ///
 /// Comments, char literals and text nested inside a string literal are invisible
-/// to it, because it looks for `target:` in [`mask_trivia`]'s masked buffer and
+/// to it, because it looks for `target:` in `mask_trivia`'s masked buffer and
 /// reads the literal's contents back out of the original source.
 ///
 /// Not macro-aware: it keys on a `target:` token followed by a `paigasus::`
 /// literal, so a non-`tracing` field named `target` holding such a string would
 /// be a false positive. No such site exists in this workspace, and the failure
 /// mode is a loud mismatch rather than a silent miss.
+///
+/// A comment may sit between `target:` and its literal — `tracing` accepts
+/// `target: /* note */ "paigasus::x::y"` — and that form is recognised. What is
+/// **not** recognised is a target that is not a literal at all:
+/// `target: SOME_CONST`, a `const &'static str`, which `tracing` also accepts,
+/// yields no component. No such site exists in this workspace today.
 pub fn scan_targets(src: &str) -> BTreeSet<String> {
     const NEEDLE: &[u8] = b"target:";
     let masked = mask_trivia(src);
     let b = &masked.buf[..];
-    // Whitespace between `target:` and its literal is skipped against the
-    // *raw* source, not the masked buffer: `mask_trivia` blanks a string
-    // literal's delimiters and contents to spaces too, so scanning the
-    // masked buffer here would read straight through the literal as if it
-    // were more whitespace and overshoot its opening quote. The needle
-    // search stays on the masked buffer — that is what keeps comments and
-    // nested literals invisible.
-    let src_bytes = src.as_bytes();
     let mut out = BTreeSet::new();
     let mut i = 0;
     while let Some(rel) = find_sub(&b[i..], NEEDLE) {
         let after = i + rel + NEEDLE.len();
-        let mut j = after;
-        while j < src_bytes.len() && src_bytes[j].is_ascii_whitespace() {
-            j += 1;
-        }
-        // The literal must begin exactly where the whitespace ended; anything
-        // else (an identifier, a `format!`, a nested expression) is not a
-        // literal target and is skipped.
-        if let Some(&(start, end)) = masked.string_literals.iter().find(|&&(s, _)| s == j) {
+        // Take the next literal whose span is separated from `target:` by
+        // nothing but whitespace *in the masked buffer*. That test is what
+        // makes a comment in the gap transparent: `mask_trivia` blanks
+        // comments to spaces, so they read as whitespace here, while any real
+        // token — an identifier, a `format!`, an opening paren — does not, and
+        // correctly rejects the match. Testing the raw source instead would
+        // stop at the comment's leading `/` and silently skip the site.
+        if let Some(&(start, end)) = masked.string_literals.iter().find(|&&(start, _)| {
+            start >= after && b[after..start].iter().all(u8::is_ascii_whitespace)
+        }) {
             if let Some(component) = component_of(&src[start..end]) {
                 out.insert(component);
             }
@@ -568,11 +568,17 @@ hand-chosen targets is tracked as a follow-up.
 
 The namespace is a two-tier contract.
 
-- **`paigasus::` and `paigasus::<component>` are stable.** Renaming or removing a
-  component is a breaking change, made through a commit carrying a
-  `BREAKING CHANGE:` footer so it appears in the crate's CHANGELOG. No component
-  name will ever be a prefix of another — that would silently widen a saved
-  filter, since matching is prefix-based.
+- **`paigasus::` and `paigasus::<component>` are stable**, for every component
+  the table above marks *stable*. Renaming or removing one is a breaking change,
+  made through a commit carrying a `BREAKING CHANGE:` footer so it appears in the
+  crate's CHANGELOG. A component marked *provisional* carries no such promise and
+  may be renamed or removed in any release.
+- **No component name will ever be a prefix of another.** This one is
+  namespace-wide and binds *provisional* components exactly as much as stable
+  ones — it is not part of the guarantee above. A collision would silently widen
+  a filter that is already deployed, since matching is prefix-based, and a new
+  component's status is no comfort to an operator whose alert quietly started
+  matching more than it did yesterday.
 - **The `::<subsystem>` leaf is an implementation detail** and may change in any
   release without notice.
 
