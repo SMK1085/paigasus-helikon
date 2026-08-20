@@ -730,6 +730,51 @@ mod tests {
     use std::sync::Mutex;
     use tokio::sync::oneshot;
 
+    /// `Scenario::ALL` is a hand-written const with nothing tying it to the
+    /// `Scenario` enum: the six registered subjects' `script` and
+    /// `fixture_finish_reason` matches are exhaustive over `Scenario` and so
+    /// break at compile time the moment a variant is added, but `ALL` itself
+    /// is just an array literal — a variant added there and nowhere else
+    /// would compile clean and simply never run in `assert_conforms`, with
+    /// every subject staying green.
+    ///
+    /// The `match` below is exhaustive over the `Scenario` *type*, so it
+    /// fails to compile as soon as the enum grows a variant not named in
+    /// this list, independent of what this list or `ALL` contains at
+    /// runtime. That forces every variant to be named here, and each one is
+    /// then checked directly against `ALL`, so a variant the type has but
+    /// `ALL` is missing — freshly added, or dropped by accident — fails this
+    /// test instead of silently never running.
+    #[test]
+    fn scenario_all_is_exhaustive() {
+        for variant in [
+            Scenario::CleanStop,
+            Scenario::TruncatedAfterStopReason,
+            Scenario::TruncatedMidGeneration,
+            Scenario::ErrorMidGeneration,
+            Scenario::ErrorAfterStopReason,
+            Scenario::CancelMidGeneration,
+            Scenario::CancelAfterStopReason,
+            Scenario::FragmentedToolName,
+            Scenario::ToolCallCleanStop,
+        ] {
+            match variant {
+                Scenario::CleanStop
+                | Scenario::TruncatedAfterStopReason
+                | Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ToolCallCleanStop => assert!(
+                    Scenario::ALL.contains(&variant),
+                    "{variant:?} is missing from Scenario::ALL"
+                ),
+            }
+        }
+    }
+
     /// What the fake subject does with the gate it hands back for a
     /// cancellation scenario. Each variant is one way the cancel scenarios can
     /// silently stop testing anything.

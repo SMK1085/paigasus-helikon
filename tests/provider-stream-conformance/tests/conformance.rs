@@ -652,8 +652,8 @@ mod openai_chat {
     }
 
     /// The trailing usage-only chunk. Matches `chat_text_usage_trailing.txt`'s
-    /// usage chunk exactly, including its token counts: an empty `delta`, no
-    /// `finish_reason` key at all, and a top-level `usage` object.
+    /// usage chunk's shape: an empty `delta`, no `finish_reason` key at all,
+    /// and a top-level `usage` object.
     fn usage_chunk() -> Vec<u8> {
         frame(json!({
             "id": RESPONSE_ID,

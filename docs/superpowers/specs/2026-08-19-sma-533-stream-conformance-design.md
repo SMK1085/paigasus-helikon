@@ -401,10 +401,15 @@ it would hang `cargo test` rather than fail it.
 
 ## 8. Proving the suite can fail
 
-Verifying by hand once leaves nothing behind, so it is built in. `src/lib.rs`
-ships nine fake `Model` implementations, each violating exactly one rule, and
-the crate's own unit tests assert the checker rejects each **with the
-classification named in §7**:
+Verifying by hand once leaves nothing behind, so it is built in. `src/fakes.rs`
+ships ten non-conforming fake event sequences (plus `Fake::Conforming`, which
+violates none), each violating exactly one rule, and the crate's own unit
+tests assert the checker rejects each **with the classification named in
+§7**. These are deliberately *not* `Model` implementations: each fake builds
+its `Vec<Result<ModelEvent, ModelError>>` in memory and calls `classify`
+directly, so no server, no transport and no provider crate is on this path —
+a fake can never be rejected by a floor instead of the classification it is
+written to trigger (`src/fakes.rs`'s module doc explains and justifies this):
 
 | Fake | Expected classification | Replicates |
 | --- | --- | --- |

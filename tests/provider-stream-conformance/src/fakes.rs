@@ -60,11 +60,11 @@ impl Fake {
     /// fake can never be tested under a cancellation flag that contradicts the
     /// script it is emitting.
     pub async fn run(self, scenario: Scenario) -> Option<Violation> {
-        let cancelled = matches!(
+        classify(
+            &self.events(scenario),
             scenario,
-            Scenario::CancelMidGeneration | Scenario::CancelAfterStopReason
-        );
-        classify(&self.events(scenario), scenario, cancelled)
+            crate::is_cancel_scenario(scenario),
+        )
     }
 
     /// The event sequence this fake emits for `scenario`.
