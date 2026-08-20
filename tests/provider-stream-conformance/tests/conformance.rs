@@ -2142,6 +2142,34 @@ mod anthropic {
 /// [`tool_call_chunk`], [`finish_and_usage`] and [`done`] for the specific
 /// citations. Nothing here is invented from vendor documentation.
 ///
+/// # KNOWN GAP — `ToolCallCleanStop`'s `functionCall` shape is UNVERIFIED
+/// against live traffic
+///
+/// Review of this subject's registration (task-11-report.md) ruled that the
+/// bedrock precedent above does **not** transfer to `ToolCallCleanStop`:
+/// bedrock's absence is total (a binary wire format, no capture for *any*
+/// scenario), while every other scenario in this module, and
+/// `ToolCallCleanStop` on every one of the four sibling subjects
+/// (`tool_call_stream.txt` for `openai/chat`/`litellm`,
+/// `parallel_tool_use.txt` for `anthropic`), rests on a genuine capture.
+/// Gemini's `ToolCallCleanStop` would be the only one of five not grounded in
+/// real traffic. Concretely: `sse.rs` declares `FunctionCall.id` as
+/// `Option<String>` and `stream.rs` carries an `fc_{index}` synthesizing
+/// fallback for exactly the case where a real chunk omits it — so
+/// [`tool_call_chunk`]'s choice to include a literal `id` may not be the shape
+/// real Gemini traffic sends, the same class of mistake SMA-522 was. Sven's
+/// ruling: capture a real streaming turn against `GEMINI_API_KEY`/
+/// `GOOGLE_API_KEY` (or Vertex ADC) and transcribe it with a provenance
+/// header in `tool_call_stream_fragmented_name.txt`'s style, settling
+/// explicitly whether real traffic sends `functionCall.id`. No credential was
+/// available in the environment this subject was registered from (checked:
+/// `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` unset;
+/// `~/.config/gcloud/application_default_credentials.json` absent) — see the
+/// task report's "Fix report" section for the full account. **This is an open
+/// item, not a closed one**: [`tool_call_chunk`] and [`finish_and_usage`]
+/// remain derived-from-source, not capture-verified, until someone with a
+/// working credential supplies a real transcript.
+///
 /// # `usageMetadata` stays on the stop-reason chunk, deliberately
 ///
 /// `StreamTranslator::consume` (`stream.rs:60-67`) emits a `Usage` for *every*
@@ -2288,6 +2316,12 @@ mod gemini {
     /// `sse.rs`'s `Part`/`FunctionCall` structs (`#[serde(rename_all =
     /// "camelCase")]`) pin the wire key to `functionCall` and its fields to
     /// `id`/`name`/`args`.
+    ///
+    /// **UNVERIFIED against live traffic — see the module doc's "KNOWN GAP"
+    /// section.** In particular, whether real Gemini traffic sends `id` at
+    /// all (as scripted here) or omits it (falling through to `stream.rs`'s
+    /// `fc_{index}` synthesis) is an open empirical question this shape does
+    /// not answer.
     fn tool_call_chunk(call_id: &str, name: &str, args: serde_json::Value) -> Vec<u8> {
         frame(json!({
             "candidates": [{
@@ -2327,6 +2361,10 @@ mod gemini {
     /// scoped to one chunk, so `finish()` still resolves this `"STOP"` to
     /// `FinishReason::ToolCalls` even though the `functionCall` and the
     /// `finishReason` arrive in different chunks here.
+    ///
+    /// **UNVERIFIED against live traffic — see the module doc's "KNOWN GAP"
+    /// section.** Composed, not captured; the same caveat as
+    /// [`tool_call_chunk`].
     fn finish_and_usage(reason: &str, prompt_tokens: u32, candidates_tokens: u32) -> Vec<u8> {
         frame(json!({
             "candidates": [{ "finishReason": reason }],
