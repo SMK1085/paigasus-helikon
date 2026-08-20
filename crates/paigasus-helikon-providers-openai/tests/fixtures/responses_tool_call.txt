@@ -1,0 +1,83 @@
+: Provenance: CAPTURED against a real https://api.openai.com/v1/responses
+: request, model gpt-4o-mini-2024-07-18, a single `get_weather` tool, on
+: 2026-08-20. This is the shape SMA-533's Task 12 was originally BLOCKED
+: without: the stream conformance suite
+: (tests/provider-stream-conformance/tests/conformance.rs, `openai_responses`
+: module, `ToolCallCleanStop` scenario) needs a tool-call shape, and no
+: capture existed anywhere in the repo -- deriving one from this crate's own
+: unit tests instead of escalating is exactly how the FragmentedToolName
+: Gemini fixture went wrong under SMA-522 (see that module's doc comment).
+: This capture supersedes that risk for the Responses backend.
+:
+: Confirms `item_to_call` (backend/responses.rs) is correctly keyed on
+: `item.id` (`fc_...`), not `call_id` (`call_...`): `output_item.added`
+: carries both, separately, and `function_call_arguments.delta` carries only
+: `item_id`. Also confirms arguments stream as multiple small fragments
+: (`{"`, `city`, `":"`, `Berlin`, `"}`) rather than arriving whole, and that
+: `response.completed` reports `"status":"completed"` with
+: `"incomplete_details":null` for a turn whose only output is a function
+: call -- the shape that exposed `terminal_events` reporting `Finish{Stop}`
+: instead of `Finish{ToolCalls}` for a tool-only turn (fixed in the same
+: SMA-533 PR that adds this fixture; see `ResponsesTranslator`'s tests
+: module, and `tool_call_turn_finishes_with_tool_calls` in
+: `responses_streaming.rs`, which exercises this exact fixture end to end).
+:
+: `event:` lines are kept, unlike this directory's other `responses_*.txt`
+: fixtures. Those omit them; async-openai's `ResponseStreamEvent` is
+: `#[serde(tag = "type")]`, so the parser dispatches purely off the JSON
+: `type` key inside `data:` and the `event:` line is cosmetic to it -- but
+: this fixture is a literal transcription of a real capture that DID send
+: them, and (per this crate's `anthropic`-sibling module's own reasoning
+: for the same choice in the stream conformance suite) a fixture claiming
+: to be CAPTURED should stay faithful to what the wire actually sent, not
+: just to what the parser happens to need.
+:
+: Two omissions from the raw capture, both deliberate:
+:
+: 1. `response.created` and `response.in_progress` are dropped.
+:    `ResponsesTranslator::consume` has no arm for either (both fall through
+:    to the trailing `other` debug-log arm), and every fixture already
+:    committed in this directory starts at the first translator-relevant
+:    event for the same reason (compare `responses_reasoning_then_text.txt`).
+:
+: 2. Every delta in the raw capture also carried an `"obfuscation"` field --
+:    an opaque per-chunk padding string OpenAI adds to streaming responses
+:    (documented at platform.openai.com/docs/api-reference/responses-streaming
+:    as anti-side-channel padding, not response data). It has no
+:    corresponding field on `ResponseFunctionCallArgumentsDeltaEvent` to
+:    deserialize into -- deserialization tolerates it silently either way,
+:    since none of these event structs are `#[serde(deny_unknown_fields)]`
+:    -- but it carries no semantic content and is not stable API surface,
+:    so it is dropped here for the same reason this directory's other
+:    fixtures already omit every optional field the translator does not
+:    read (no `logprobs`, no `metadata`, a minimal `output`).
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"function_call","id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","status":"in_progress","arguments":"","call_id":"call_D3Tp4UJ6scmDWx6jmfvy2LQo","name":"get_weather"}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":3,"item_id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","output_index":0,"delta":"{\""}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":4,"item_id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","output_index":0,"delta":"city"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":5,"item_id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","output_index":0,"delta":"\":\""}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":6,"item_id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","output_index":0,"delta":"Berlin"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":7,"item_id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","output_index":0,"delta":"\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":8,"item_id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","output_index":0,"arguments":"{\"city\":\"Berlin\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":9,"output_index":0,"item":{"type":"function_call","id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","status":"completed","arguments":"{\"city\":\"Berlin\"}","call_id":"call_D3Tp4UJ6scmDWx6jmfvy2LQo","name":"get_weather"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_0bb8bdbb23a3677a006a871dee88d087d2b7be34f6f6026eb3","object":"response","created_at":1787239918,"model":"gpt-4o-mini-2024-07-18","output":[{"type":"function_call","id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","status":"completed","arguments":"{\"city\":\"Berlin\"}","call_id":"call_D3Tp4UJ6scmDWx6jmfvy2LQo","name":"get_weather"}],"status":"completed","incomplete_details":null,"usage":{"input_tokens":51,"input_tokens_details":{"cached_tokens":0},"output_tokens":15,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":66}}}
+
+data: [DONE]
+

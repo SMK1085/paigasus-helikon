@@ -2652,3 +2652,501 @@ mod gemini {
         assert_conforms(&Gemini).await;
     }
 }
+
+/// The `Model::invoke` stream contract, checked against the OpenAI Responses
+/// backend (`ResponsesTranslator`, `crates/paigasus-helikon-providers-openai/
+/// src/backend/responses.rs`). This is the last subject registered.
+///
+/// # Why this subject declines four scenarios
+///
+/// `terminal_events` (`backend/responses.rs`) builds `Usage` and `Finish`
+/// together from a single upstream event — `response.completed` or
+/// `response.incomplete` — and the driver (`backend/responses.rs`'s `invoke`,
+/// the `None => return` arm) has no flush-on-EOF path at all: there is no
+/// `finish()` method the way `ChatTranslator` has one. So there is never a
+/// window in which a stop reason has been buffered but `Finish` has not yet
+/// been emitted, which makes three scenarios unreachable:
+/// `TruncatedAfterStopReason`, `ErrorAfterStopReason`,
+/// `CancelAfterStopReason`. `FragmentedToolName` is declined for the same
+/// reason every other subject with a whole-name tool-call shape declines it:
+/// `response.output_item.added` carries the complete function `name` in one
+/// event, so there is no second event a name fragment could split across.
+///
+/// The exact strings below are copied by hand from `src/declines.rs` — see
+/// this file's top-level module doc for why that duplication is load-bearing.
+///
+/// # Fixture provenance
+///
+/// Every non-tool-call shape below (`response.output_text.delta`,
+/// `response.completed` with a plain `status`/`usage`, the `[DONE]`
+/// sentinel) is transcribed from the shapes already committed under
+/// `crates/paigasus-helikon-providers-openai/tests/fixtures/`, in particular
+/// `responses_reasoning_then_text.txt`, whose `response.output_text.delta`
+/// and `response.completed` events this module's [`text_delta`] and
+/// [`completed`] match field-for-field.
+///
+/// The tool-call shape is different: no committed fixture anywhere in the
+/// repo grounded it, so Task 12 was originally reported BLOCKED rather than
+/// derived from this crate's own unit tests — deriving an ungrounded shape
+/// from unit tests instead of escalating is exactly how the Gemini
+/// `functionCall` fixture went wrong under SMA-522 (see `gemini`'s module
+/// doc). A real capture against `https://api.openai.com/v1/responses`
+/// (`gpt-4o-mini-2024-07-18`, a single `get_weather` tool, 2026-08-20) has
+/// since been transcribed into
+/// `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`
+/// (see that file's own provenance header for the full detail, including the
+/// two fields deliberately dropped from the transcription).
+/// `ToolCallCleanStop`'s script below reconstructs that exact event sequence
+/// — same item id, same call id, same five argument fragments, same
+/// terminal usage — and every helper that builds a tool-call frame cites the
+/// line in that fixture it matches. The same capture also grounds a
+/// crate-level regression test,
+/// `tool_call_turn_finishes_with_tool_calls` in
+/// `crates/paigasus-helikon-providers-openai/tests/responses_streaming.rs`,
+/// which runs the fixture through the real translator end to end.
+///
+/// # Correlation: `item.id` vs `item.call_id`
+///
+/// `ResponsesTranslator::item_to_call` (`backend/responses.rs`) is keyed on
+/// `item.id` (the `fc_...` value), not `item.call_id` (the `call_...`
+/// value) — the capture is what confirms these are genuinely two different
+/// identifiers on the wire rather than an assumption read off the
+/// translator's own code: `response.output_item.added` carries both,
+/// separately, and `response.function_call_arguments.delta` carries only
+/// `item_id` (never `call_id`). [`output_item_added`] and
+/// [`function_call_arguments_delta`] use distinct constants,
+/// [`TOOL_ITEM_ID`] and [`TOOL_CALL_ID`], for exactly this reason — using one
+/// constant for both would silently stop exercising the correlation this
+/// subject exists to check.
+mod openai_responses {
+    use super::*;
+    use paigasus_helikon_providers_openai::OpenAiModel;
+
+    /// The model id `build_model_against` requests, and every scripted
+    /// `response.completed`'s `model` field.
+    const MODEL_ID: &str = "gpt-4o-mini";
+
+    /// The tool name every tool-call fixture declares.
+    const TOOL_NAME: &str = "get_weather";
+
+    /// The internal item id (`fc_...`) — the correlator
+    /// `function_call_arguments.delta.item_id` matches, per
+    /// `responses_tool_call.txt`'s `fc_0bb8...` value. Deliberately distinct
+    /// from [`TOOL_CALL_ID`]; see the module doc's "Correlation" section.
+    const TOOL_ITEM_ID: &str = "fc_conformance_0";
+
+    /// The stable call id (`call_...`) downstream tool execution must use,
+    /// per `responses_tool_call.txt`'s `call_D3Tp...` value. Deliberately
+    /// distinct from [`TOOL_ITEM_ID`]; see the module doc's "Correlation"
+    /// section.
+    const TOOL_CALL_ID: &str = "call_conformance_0";
+
+    /// The substring that appears in a chunk if and only if it carries the
+    /// terminal `response.completed` event.
+    ///
+    /// Unlike `openai_chat`/`litellm`/`gemini`, this subject's stop reason is
+    /// not a field threaded through an otherwise-ordinary chunk — it *is* the
+    /// event type. Scanning for the `type` key's value is therefore the
+    /// direct analogue of those subjects' finish-reason-field scan, not a
+    /// looser approximation of it. `scan_finds_only_the_terminal_event` is
+    /// the guard that keeps this true against an ordinary delta or tool-call
+    /// frame.
+    const COMPLETED_MARKER: &[u8] = b"\"type\":\"response.completed\"";
+
+    /// One SSE frame: `data: {payload}\n\n`. Matches every fixture already
+    /// committed under `crates/paigasus-helikon-providers-openai/tests/fixtures/`
+    /// (all four omit an `event:` line; async-openai's `ResponseStreamEvent`
+    /// is `#[serde(tag = "type")]`, so the parser dispatches off the JSON
+    /// `type` key inside `data:` alone).
+    fn frame(payload: serde_json::Value) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
+    /// One text delta. Matches `responses_reasoning_then_text.txt`'s
+    /// `response.output_text.delta` event shape (`item_id`/`output_index`/
+    /// `content_index`/`delta`, no `logprobs` key — the translator does not
+    /// read it and every committed fixture omits it).
+    fn text_delta(text: &str) -> Vec<u8> {
+        frame(json!({
+            "type": "response.output_text.delta",
+            "sequence_number": 0,
+            "item_id": "msg_conformance",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text
+        }))
+    }
+
+    /// The terminal `response.completed` event: a `status`, an `output`
+    /// array, and a `usage` object, all siblings under `response`. Matches
+    /// `responses_reasoning_then_text.txt`'s `response.completed` event
+    /// shape.
+    fn completed(output: serde_json::Value, input_tokens: u32, output_tokens: u32) -> Vec<u8> {
+        frame(json!({
+            "type": "response.completed",
+            "sequence_number": 0,
+            "response": {
+                "id": "resp_conformance",
+                "object": "response",
+                "created_at": 1,
+                "model": MODEL_ID,
+                "output": output,
+                "status": "completed",
+                "incomplete_details": null,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "input_tokens_details": { "cached_tokens": 0 },
+                    "output_tokens": output_tokens,
+                    "output_tokens_details": { "reasoning_tokens": 0 },
+                    "total_tokens": input_tokens + output_tokens
+                }
+            }
+        }))
+    }
+
+    /// The stream terminator every committed fixture in this crate ends
+    /// with. Matches `responses_reasoning_then_text.txt`'s trailing line.
+    fn done() -> Vec<u8> {
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    /// `response.output_item.added` for a function-call item: `item.id`,
+    /// `item.call_id` and the whole `name`, all present together. Matches
+    /// `responses_tool_call.txt` line 56 (the `event: response.output_item.added`
+    /// frame) field-for-field — this is what registers
+    /// `ResponsesTranslator::item_to_call`.
+    fn output_item_added(item_id: &str, call_id: &str, name: &str) -> Vec<u8> {
+        frame(json!({
+            "type": "response.output_item.added",
+            "sequence_number": 0,
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "status": "in_progress",
+                "arguments": "",
+                "call_id": call_id,
+                "name": name
+            }
+        }))
+    }
+
+    /// One `response.function_call_arguments.delta`, carrying `item_id` —
+    /// never `call_id` — per `responses_tool_call.txt` lines 59-71 (the five
+    /// `event: response.function_call_arguments.delta` frames). `delta` is a
+    /// small fragment, matching the capture's `{"`, `city`, `":"`, `Berlin`,
+    /// `"}` split rather than one whole-argument frame.
+    fn function_call_arguments_delta(item_id: &str, delta: &str) -> Vec<u8> {
+        frame(json!({
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 0,
+            "item_id": item_id,
+            "output_index": 0,
+            "delta": delta
+        }))
+    }
+
+    /// `response.function_call_arguments.done`, carrying the reassembled
+    /// whole argument string. Matches `responses_tool_call.txt` line 74 —
+    /// present on the real wire but a no-op to the translator (`consume`'s
+    /// `other` arm), included here purely so the script is the stream the
+    /// capture claims it is.
+    fn function_call_arguments_done(item_id: &str, arguments: &str) -> Vec<u8> {
+        frame(json!({
+            "type": "response.function_call_arguments.done",
+            "sequence_number": 0,
+            "item_id": item_id,
+            "output_index": 0,
+            "arguments": arguments
+        }))
+    }
+
+    /// `response.output_item.done`, the completed mirror of
+    /// [`output_item_added`]. Matches `responses_tool_call.txt` line 77 — the
+    /// same no-op-to-the-translator caveat as
+    /// [`function_call_arguments_done`] applies.
+    fn output_item_done(item_id: &str, call_id: &str, name: &str, arguments: &str) -> Vec<u8> {
+        frame(json!({
+            "type": "response.output_item.done",
+            "sequence_number": 0,
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "status": "completed",
+                "arguments": arguments,
+                "call_id": call_id,
+                "name": name
+            }
+        }))
+    }
+
+    /// The scripted response for one scenario, or `None` for the four this
+    /// subject declines — see the module doc's "Why this subject declines
+    /// four scenarios" section. Returning an `Option` rather than panicking
+    /// on a declined scenario is what lets
+    /// [`OpenAiResponses::encodes_stop_reason`] call this for *every*
+    /// scenario and measure the bytes — see `bedrock::script`'s doc for the
+    /// same pattern.
+    fn script(scenario: Scenario) -> Option<Script> {
+        // The two-delta opening every text scenario shares. The content is
+        // arbitrary, as in every other subject in this file.
+        let opening = || vec![text_delta("Hel"), text_delta("lo")];
+
+        let (chunks, gate_after, ending) = match scenario {
+            // Full stream: deltas, then the one event that carries both the
+            // stop reason and usage, then `[DONE]` and a clean end of body.
+            Scenario::CleanStop => {
+                let mut chunks = opening();
+                chunks.push(completed(json!([]), 8, 6));
+                chunks.push(done());
+                (chunks, None, Ending::Clean)
+            }
+            // Declined — `Usage`/`Finish` are built from one upstream event
+            // with no earlier point at which a stop reason is buffered but
+            // unflushed, and `invoke`'s driver has no flush-on-EOF path at
+            // all. See the module doc.
+            Scenario::TruncatedAfterStopReason => return None,
+            // The body ends cleanly mid-generation: no `response.completed`/
+            // `response.incomplete` event ever arrives, so no stop reason is
+            // ever observed. `opening()` alone, matching every sibling
+            // subject's shape for this scenario.
+            Scenario::TruncatedMidGeneration => (opening(), None, Ending::Clean),
+            // Same prefix, but the connection is torn down without a
+            // terminating chunk, so the client observes a transport error.
+            Scenario::ErrorMidGeneration => (opening(), None, Ending::Abort),
+            // Declined for the same reason as `TruncatedAfterStopReason`.
+            Scenario::ErrorAfterStopReason => return None,
+            // One content delta goes out, then the server parks holding the
+            // second back (`gate_after: Some(1)` pauses *before* the chunk at
+            // index 1) — no terminal event anywhere in this script, so no
+            // stop reason exists even after the gate releases.
+            Scenario::CancelMidGeneration => (opening(), Some(1), Ending::Clean),
+            // Declined for the same reason as `TruncatedAfterStopReason`.
+            Scenario::CancelAfterStopReason => return None,
+            // Declined — the whole function `name` arrives in
+            // `output_item.added`; there is no second event a fragment could
+            // split across. See the module doc.
+            Scenario::FragmentedToolName => return None,
+            // The capture's shape, verbatim and in full: `output_item.added`
+            // registers `item_to_call`, five small argument fragments
+            // reassemble to `{"city":"Berlin"}`, `function_call_arguments.done`
+            // and `output_item.done` precede the terminal event exactly as
+            // the capture ordered them, and `response.completed` carries
+            // both the tool-call output and its usage. This is what proves
+            // `terminal_events` maps a tool-only turn's `status: "completed"`
+            // to `FinishReason::ToolCalls`, not `Stop` — the SMA-533 defect
+            // this subject's registration surfaced.
+            Scenario::ToolCallCleanStop => {
+                let args = "{\"city\":\"Berlin\"}";
+                let chunks = vec![
+                    output_item_added(TOOL_ITEM_ID, TOOL_CALL_ID, TOOL_NAME),
+                    function_call_arguments_delta(TOOL_ITEM_ID, "{\""),
+                    function_call_arguments_delta(TOOL_ITEM_ID, "city"),
+                    function_call_arguments_delta(TOOL_ITEM_ID, "\":\""),
+                    function_call_arguments_delta(TOOL_ITEM_ID, "Berlin"),
+                    function_call_arguments_delta(TOOL_ITEM_ID, "\"}"),
+                    function_call_arguments_done(TOOL_ITEM_ID, args),
+                    output_item_done(TOOL_ITEM_ID, TOOL_CALL_ID, TOOL_NAME, args),
+                    completed(
+                        json!([{
+                            "type": "function_call",
+                            "id": TOOL_ITEM_ID,
+                            "status": "completed",
+                            "arguments": args,
+                            "call_id": TOOL_CALL_ID,
+                            "name": TOOL_NAME
+                        }]),
+                        51,
+                        15,
+                    ),
+                    done(),
+                ];
+                (chunks, None, Ending::Clean)
+            }
+        };
+
+        Some(Script {
+            content_type: "text/event-stream",
+            chunks,
+            gate_after,
+            ending,
+        })
+    }
+
+    /// The request driven through `Model::invoke`.
+    ///
+    /// Carries a tool definition for `ToolCallCleanStop` so the exchange is
+    /// coherent — a response returning a function call for a request that
+    /// offered no tools is not a stream the Responses API would ever
+    /// produce. `FragmentedToolName` is this subject's other tool scenario,
+    /// but it is declined and so never reaches this function.
+    fn request(scenario: Scenario) -> ModelRequest {
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "What is the weather in Berlin?".into(),
+            }],
+        }];
+        if matches!(scenario, Scenario::ToolCallCleanStop) {
+            req.tools = vec![ToolDef {
+                name: TOOL_NAME.to_owned(),
+                description: "Look up the current weather for a city.".to_owned(),
+                schema: json!({
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }),
+            }];
+        }
+        req
+    }
+
+    /// Build a real `OpenAiModel` (Responses backend) pointed at a local
+    /// plain-HTTP endpoint.
+    fn build_model_against(base_url: &str) -> OpenAiModel {
+        OpenAiModel::responses(MODEL_ID)
+            .api_key("sk-conformance-test")
+            .base_url(base_url)
+            .build()
+            .expect("openai/responses model should build with an explicit api key and base url")
+    }
+
+    /// See the module-level docs on this file for the fixture provenance
+    /// rules this subject follows.
+    struct OpenAiResponses;
+
+    #[async_trait::async_trait]
+    impl StreamUnderTest for OpenAiResponses {
+        fn name(&self) -> &'static str {
+            "openai/responses"
+        }
+
+        fn encodes_stop_reason(&self, scenario: Scenario) -> bool {
+            // MEASURED from the bytes about to be served — deliberately not
+            // `scenario.expects_stop_reason()`. See the crate's `declines`
+            // module doc and `bedrock::encodes_stop_reason` for why that
+            // restatement would make the harness's cross-check dead code.
+            script(scenario)
+                .map(|script| {
+                    script
+                        .chunks
+                        .iter()
+                        .any(|chunk| contains(chunk, COMPLETED_MARKER))
+                })
+                .unwrap_or(false)
+        }
+
+        fn fixture_tool_name(&self) -> &'static str {
+            TOOL_NAME
+        }
+
+        fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason> {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                Scenario::CleanStop => Some(FinishReason::Stop),
+                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::CancelMidGeneration => None,
+                // Declined; never reached.
+                Scenario::TruncatedAfterStopReason
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName => None,
+            }
+        }
+
+        async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
+            match scenario {
+                // `Usage`/`Finish` are built from one upstream event with no
+                // earlier point at which a stop reason is buffered but
+                // unflushed, and there is no flush-on-EOF path either. See
+                // the module doc's "Why this subject declines four
+                // scenarios" section.
+                Scenario::TruncatedAfterStopReason
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelAfterStopReason => {
+                    return Outcome::Declined("stop reason and Finish are the same event")
+                }
+                // The whole function `name` arrives in `output_item.added`;
+                // there is no second event a fragment could split across.
+                Scenario::FragmentedToolName => {
+                    return Outcome::Declined("name arrives whole in output_item.added")
+                }
+                _ => {}
+            }
+
+            let script =
+                script(scenario).expect("a scenario this subject serves must have a script");
+            let mut server = PacedServer::start(script).await;
+            let gate = server.take_gate();
+            let model = build_model_against(&server.base_url());
+
+            let stream = model
+                .invoke(request(scenario), cancel)
+                .await
+                .expect("openai/responses invoke should reach the local paced server");
+
+            Outcome::Served { stream, gate }
+        }
+    }
+
+    /// Whether `haystack` contains `needle` as a contiguous byte run.
+    /// Duplicated per subject module by design — see `bedrock::contains`.
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The soundness claim behind
+    /// [`OpenAiResponses::encodes_stop_reason`]'s substring scan:
+    /// [`COMPLETED_MARKER`] occurs in [`completed`]'s output and in no other
+    /// frame this subject builds — in particular, not in an ordinary content
+    /// delta or any of the tool-call frames, none of which carry a `type`
+    /// value starting with `response.completed`.
+    #[test]
+    fn scan_finds_only_the_terminal_event() {
+        assert!(
+            contains(&completed(json!([]), 8, 6), COMPLETED_MARKER),
+            "the completed event must carry the marker, or the scan measures nothing"
+        );
+
+        for (name, frame) in [
+            ("content delta", text_delta("Hel")),
+            ("[DONE]", done()),
+            (
+                "output_item.added",
+                output_item_added(TOOL_ITEM_ID, TOOL_CALL_ID, TOOL_NAME),
+            ),
+            (
+                "function_call_arguments.delta",
+                function_call_arguments_delta(TOOL_ITEM_ID, "{\""),
+            ),
+            (
+                "function_call_arguments.done",
+                function_call_arguments_done(TOOL_ITEM_ID, "{\"city\":\"Berlin\"}"),
+            ),
+            (
+                "output_item.done",
+                output_item_done(
+                    TOOL_ITEM_ID,
+                    TOOL_CALL_ID,
+                    TOOL_NAME,
+                    "{\"city\":\"Berlin\"}",
+                ),
+            ),
+        ] {
+            assert!(
+                !contains(&frame, COMPLETED_MARKER),
+                "{name} contains the response.completed marker, so the scan would report a stop \
+                 reason for scripts that encode none."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conforms() {
+        assert_conforms(&OpenAiResponses).await;
+    }
+}
