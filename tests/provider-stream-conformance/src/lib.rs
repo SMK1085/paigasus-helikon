@@ -24,7 +24,7 @@ pub use server::{Ending, PacedServer, Script};
 use std::time::Duration;
 
 use futures_util::stream::{BoxStream, StreamExt};
-use paigasus_helikon_core::{CancellationToken, ModelError, ModelEvent};
+use paigasus_helikon_core::{CancellationToken, FinishReason, ModelError, ModelEvent};
 
 /// One wire script, run against every subject that can express it.
 ///
@@ -114,6 +114,15 @@ pub enum Violation {
     /// The stream did not produce the minimum evidence its scenario requires,
     /// so the assertions would have passed vacuously.
     InsufficientEvidence(&'static str),
+    /// The terminal event carried a different `FinishReason` than the
+    /// subject's fixture declares, so the bytes served are not the ones the
+    /// scenario describes (spec §7.1).
+    FinishReasonMismatch {
+        /// What the subject's `fixture_finish_reason` declared.
+        expected: FinishReason,
+        /// What the stream actually emitted.
+        observed: FinishReason,
+    },
     /// The stream did not terminate within the per-scenario timeout.
     Timeout,
     /// The subject's `encodes_stop_reason` disagreed with the scenario's own
@@ -178,6 +187,22 @@ pub trait StreamUnderTest {
     /// The tool name this subject's tool-call fixtures declare.
     fn fixture_tool_name(&self) -> &'static str;
 
+    /// The `FinishReason` this subject's fixture for `scenario` declares, or
+    /// `None` for scenarios that must not produce a `Finish` at all.
+    ///
+    /// Only three scenarios end with a `Finish`: `CleanStop` and
+    /// `ToolCallCleanStop`, whose floors check this value, and
+    /// `TruncatedAfterStopReason`, where assertion 3 requires the buffered
+    /// stop reason to be flushed at end-of-stream. Every other scenario must
+    /// return `None` — a cancelled or errored stream withholds `Finish`, and a
+    /// truncation with no stop reason observed never had one to emit.
+    ///
+    /// Declared per subject rather than inferred suite-side because only the
+    /// fixture knows what its bytes encode: a checker that assumed
+    /// `CleanStop` ⇒ `Stop` would silently accept a fixture that had been
+    /// transcribed with the wrong stop reason.
+    fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason>;
+
     /// Serve `scenario` and return the subject's `Model::invoke` stream.
     async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome;
 }
@@ -193,14 +218,26 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a gated stream must stay silent before the harness accepts that the
 /// server is parked on the gate and fires cancellation.
 ///
-/// Every pre-gate chunk is handed to the response body back-to-back with no
-/// await in between and travels over loopback, so silence for this long means
-/// the server is withholding — not that the machine was busy. This is also the
-/// only synchronisation point that works for both cancellation scenarios: the
-/// event that precedes the gate differs per subject (a `TokenDelta` for one,
-/// the `Usage` the fixture places after the stop-reason chunk for the other),
-/// and some subjects emit a `Usage` early enough that "cancel on the first
-/// `Usage`" would fire before the stop reason was ever buffered.
+/// **Why quiescence and not a named gate edge.** The design spec's §6.1 has the
+/// harness block on a specific event — a `TokenDelta` for `CancelMidGeneration`,
+/// the `Usage` the fixture places after the stop-reason chunk for
+/// `CancelAfterStopReason`. That does not survive contact with Anthropic, which
+/// emits a `Usage` from `message_start` (`anthropic/stream.rs:79`): "cancel on
+/// the first `Usage`" would fire before any stop reason was buffered, and
+/// `CancelAfterStopReason` would silently degrade into `CancelMidGeneration` for
+/// that subject. Silence is subject-independent, and — unlike an event
+/// predicate — is itself positive evidence that the server is withholding.
+///
+/// **What a slow machine does to it.** Two directions, and only one is
+/// dangerous. Firing *late* (the harness task is descheduled, so the window
+/// elapses later in wall-clock terms) is harmless: the server is parked either
+/// way and nothing else is in flight. Firing *early* would need two consecutive
+/// pre-gate chunks to arrive more than this far apart, which the server does not
+/// do — `feed` pushes every pre-gate chunk into an unbounded channel with no
+/// await between them, so they reach the socket back-to-back over loopback.
+/// Were it ever to happen, the consequence is a weaker test (cancellation at an
+/// earlier truncation point), not a spurious failure — and the
+/// `server_was_parked` evidence below is unaffected either way.
 const GATE_QUIESCENCE: Duration = Duration::from_millis(400);
 
 /// Run every [`Scenario`] against `subject` and panic on the first thing that
@@ -275,9 +312,12 @@ pub async fn assert_conforms(subject: &impl StreamUnderTest) {
             );
         };
 
-        if let Some(violation) =
-            floor_violation(scenario, &drained.events, subject.fixture_tool_name())
-        {
+        if let Some(violation) = floor_violation(
+            scenario,
+            &drained.events,
+            subject.fixture_tool_name(),
+            subject.fixture_finish_reason(scenario),
+        ) {
             fail(
                 name,
                 scenario,
@@ -404,6 +444,15 @@ async fn drain(
             // The stream ended by itself: the gate withheld nothing.
             Ok(None) => break,
             Err(_) => {
+                // The stream has fallen silent, so the server is parked on the
+                // gate. Fire the token while STILL HOLDING the gate. Do not
+                // "simplify" this by releasing first: that puts the rest of the
+                // script on the wire in a race with the token, so a correct
+                // driver can emit `Finish` from an already-delivered terminator
+                // before it ever observes the cancellation — and the suite would
+                // report `FinishOnCancel` against provider code that did nothing
+                // wrong, intermittently, depending on machine load. Holding is
+                // also what makes the truncation provable further down.
                 cancel.cancel();
                 fired = true;
                 break;
@@ -439,10 +488,16 @@ async fn drain(
 ///
 /// The one exception is the `Err` count, because `classify` has no rule for a
 /// stream that errors twice and would otherwise let it through unremarked.
+///
+/// The `FinishReason` check also lives here rather than in `classify`, and
+/// must: `classify` has no fixture knowledge and its signature is fixed, while
+/// the reason a `Finish` should carry is exactly a property of the bytes the
+/// subject transcribed.
 fn floor_violation(
     scenario: Scenario,
     events: &[Result<ModelEvent, ModelError>],
     tool_name: &str,
+    finish_reason: Option<FinishReason>,
 ) -> Option<Violation> {
     match scenario {
         Scenario::CleanStop
@@ -483,14 +538,28 @@ fn floor_violation(
         }
     }
 
-    if matches!(scenario, Scenario::CleanStop | Scenario::ToolCallCleanStop)
-        && !events
-            .iter()
-            .any(|e| matches!(e, Ok(ModelEvent::Finish { .. })))
-    {
-        return Some(Violation::InsufficientEvidence(
-            "no Finish: a clean stop that never terminated proves nothing about terminality",
-        ));
+    if matches!(scenario, Scenario::CleanStop | Scenario::ToolCallCleanStop) {
+        // The first `Finish` on purpose: a second one is a `DuplicateFinish`,
+        // which `classify` names precisely, and checking the reason on the
+        // first is what tells a wrong fixture from a wrong driver.
+        let observed = events.iter().find_map(|event| match event {
+            Ok(ModelEvent::Finish { reason }) => Some(reason.clone()),
+            _ => None,
+        });
+        let Some(observed) = observed else {
+            return Some(Violation::InsufficientEvidence(
+                "no Finish: a clean stop that never terminated proves nothing about terminality",
+            ));
+        };
+        let Some(expected) = finish_reason else {
+            return Some(Violation::InsufficientEvidence(
+                "this scenario must end with a Finish, but the subject declares no \
+                 FinishReason for it, so its fixture is not the one the scenario describes",
+            ));
+        };
+        if observed != expected {
+            return Some(Violation::FinishReasonMismatch { expected, observed });
+        }
     }
 
     if matches!(
@@ -612,6 +681,19 @@ mod tests {
     /// Builds one scenario's substitute event sequence.
     type EventsFn = dyn Fn() -> Vec<Result<ModelEvent, ModelError>> + Send + Sync;
 
+    /// What the fake subject declares as its `CleanStop` fixture's
+    /// `FinishReason`. The fixture always emits `Stop`, so only `Truthful`
+    /// matches it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FinishDecl {
+        /// `Some(Stop)` — what the fixture really encodes.
+        Truthful,
+        /// `Some(ToolCalls)` — a transcription that does not match the bytes.
+        Wrong,
+        /// `None`, for a scenario that must end with a `Finish`.
+        Absent,
+    }
+
     /// A `StreamUnderTest` built from in-memory event vectors, so the harness
     /// itself can be tested without a server or a provider.
     ///
@@ -632,6 +714,8 @@ mod tests {
         stalls_on: Option<Scenario>,
         /// Declare the opposite of what each scenario requires.
         lies_about_stop_reason: bool,
+        /// What this subject claims its `CleanStop` fixture's `FinishReason` is.
+        finish_reason: FinishDecl,
         held: Mutex<Vec<oneshot::Receiver<()>>>,
     }
 
@@ -646,6 +730,7 @@ mod tests {
                 substitute: None,
                 stalls_on: None,
                 lies_about_stop_reason: false,
+                finish_reason: FinishDecl::Truthful,
                 held: Mutex::new(Vec::new()),
             }
         }
@@ -692,6 +777,21 @@ mod tests {
 
         fn fixture_tool_name(&self) -> &'static str {
             TOOL_NAME
+        }
+
+        /// Mirrors what `fakes::conforming` emits: `ToolCalls` for the tool
+        /// scenarios, `Stop` for the other two that end with a `Finish`.
+        fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason> {
+            match scenario {
+                Scenario::CleanStop => match self.finish_reason {
+                    FinishDecl::Truthful => Some(FinishReason::Stop),
+                    FinishDecl::Wrong => Some(FinishReason::ToolCalls),
+                    FinishDecl::Absent => None,
+                },
+                Scenario::TruncatedAfterStopReason => Some(FinishReason::Stop),
+                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                _ => None,
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -840,6 +940,32 @@ mod tests {
     async fn a_stream_that_never_ends_fails_with_a_timeout() {
         let subject = Subject {
             stalls_on: Some(Scenario::CleanStop),
+            ..Subject::conforming("openai/chat")
+        };
+        assert_conforms(&subject).await;
+    }
+
+    /// Spec §7.1: the single `Finish` must carry the `FinishReason` the fixture
+    /// declares. A stream that terminates with the wrong reason is serving
+    /// bytes other than the ones the subject claims — which a
+    /// variant-only check (`matches!(.., Finish { .. })`) would wave through.
+    #[tokio::test]
+    #[should_panic(expected = "FinishReasonMismatch { expected: ToolCalls, observed: Stop }")]
+    async fn a_finish_carrying_the_wrong_reason_fails_its_floor() {
+        let subject = Subject {
+            finish_reason: FinishDecl::Wrong,
+            ..Subject::conforming("openai/chat")
+        };
+        assert_conforms(&subject).await;
+    }
+
+    /// Declaring no `FinishReason` for a scenario that must end with a `Finish`
+    /// would turn the check above into a no-op, so it is itself a failure.
+    #[tokio::test]
+    #[should_panic(expected = "declares no FinishReason")]
+    async fn no_declared_finish_reason_for_a_clean_stop_fails() {
+        let subject = Subject {
+            finish_reason: FinishDecl::Absent,
             ..Subject::conforming("openai/chat")
         };
         assert_conforms(&subject).await;

@@ -290,6 +290,20 @@ mod tests {
         }
     }
 
+    /// What a subject serving `conforming(scenario)` would declare as its
+    /// fixture's `FinishReason`.
+    ///
+    /// Written out independently of [`finish`] rather than read back out of the
+    /// sequence: the floor checks that the declaration and the emitted event
+    /// agree, and deriving one from the other would make that check tautological.
+    fn declared_finish_reason(scenario: Scenario) -> Option<FinishReason> {
+        match scenario {
+            Scenario::CleanStop | Scenario::TruncatedAfterStopReason => Some(FinishReason::Stop),
+            Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+            _ => None,
+        }
+    }
+
     /// The floors are the harness's own anti-vacuity guard, and the fakes never
     /// reach them — so pin here that a conforming sequence would also clear
     /// them. Without this, a floor that rejects every well-formed stream would
@@ -298,7 +312,12 @@ mod tests {
     fn the_conforming_fake_clears_every_floor() {
         for scenario in Scenario::ALL {
             assert_eq!(
-                crate::floor_violation(*scenario, &conforming(*scenario), TOOL_NAME),
+                crate::floor_violation(
+                    *scenario,
+                    &conforming(*scenario),
+                    TOOL_NAME,
+                    declared_finish_reason(*scenario),
+                ),
                 None,
                 "{scenario:?}"
             );
