@@ -774,9 +774,11 @@ mod openai_chat {
             // The stop reason is buffered and *then* the body is aborted, so
             // the error path must not flush it as a Finish.
             Scenario::ErrorAfterStopReason => (through_stop(), None, Ending::Abort),
-            // Two content deltas go out, then the server parks holding
-            // nothing else back — no finish_reason chunk anywhere in this
-            // script, so no stop reason exists even after the gate releases.
+            // One content delta goes out, then the server parks holding the
+            // second back (`gate_after: Some(1)` pauses *before* sending the
+            // chunk at index 1, per `server.rs`'s `feed` loop) — no
+            // finish_reason chunk anywhere in this script, so no stop reason
+            // exists even after the gate releases.
             Scenario::CancelMidGeneration => {
                 let chunks = opening();
                 (chunks, Some(1), Ending::Clean)
@@ -992,7 +994,9 @@ mod openai_chat {
 /// re-keyed onto a single canonical `Key::Id(call_id)` slot
 /// (`ChatTranslator::canonicalize`), which is what makes assertion 7 —
 /// "exactly one name-carrying `ToolCallDelta` per `call_id`" — structural
-/// for this subject rather than incidental.
+/// for the translator in general. **It is not, however, probed by this
+/// module's own fixtures** — see the section below on where that coverage
+/// actually lives.
 ///
 /// # Fixture provenance
 ///
@@ -1044,6 +1048,35 @@ mod openai_chat {
 /// subject's script stops right after the three tool-call deltas — see
 /// `openai_chat`'s module doc for the full reasoning (same shape, same fix,
 /// same file).
+///
+/// # `canonicalize`'s SMA-550 regression coverage lives in the crate's own
+/// unit tests, not here
+///
+/// Both `tool_call_stream.txt` and `tool_call_stream_fragmented_name.txt`
+/// carry an explicit `"index":0` on *every* tool-call delta. Because of
+/// that, `handle_tool_call` (`stream.rs:373-448`) already resolves every
+/// delta for one call to the same `call_id` via
+/// `self.tool_calls.get(&Key::Index(0))` alone — the `Key::Index`/`Key::Id`
+/// boundary that `ChatTranslator::canonicalize` exists to unify never arises
+/// from these specific bytes.
+///
+/// Confirmed by mutation while registering this subject: temporarily
+/// stubbing `canonicalize` into an identity function left `litellm::conforms`
+/// green, while the same change failed **11 tests** in
+/// `crates/paigasus-helikon-providers-litellm/src/stream.rs`'s own test
+/// module — most directly
+/// `stream::tests::dual_key_call_emits_at_most_one_name_mid_stream`, which
+/// observes exactly the pre-SMA-550 shape (two name-carrying deltas for one
+/// `call_id`) that neither of this subject's tool scenarios can reproduce.
+///
+/// So: read this subject's `conforms` test as confirming the translator
+/// behaves correctly on the wire shapes LiteLLM is actually observed to
+/// send, **not** as a standing regression guard for the `canonicalize` fix
+/// itself — that guard is `dual_key_call_emits_at_most_one_name_mid_stream`
+/// and its ten siblings, in the crate under test. If a future litellm
+/// capture ever shows a backend whose `index`/`id` correlation key changes
+/// mid-call, that would be the fixture to add here; none currently
+/// committed does.
 mod litellm {
     use super::*;
     use paigasus_helikon_providers_litellm::LiteLlmModel;
@@ -1252,9 +1285,11 @@ mod litellm {
             // events, which is exactly what `encodes_stop_reason` exists to
             // keep distinguishable — see its doc.
             Scenario::ErrorAfterStopReason => (through_stop(), None, Ending::Abort),
-            // Two content deltas go out, then the server parks holding
-            // nothing else back — no finish_reason chunk anywhere in this
-            // script, so no stop reason exists even after the gate releases.
+            // One content delta goes out, then the server parks holding the
+            // second back (`gate_after: Some(1)` pauses *before* sending the
+            // chunk at index 1, per `server.rs`'s `feed` loop) — no
+            // finish_reason chunk anywhere in this script, so no stop reason
+            // exists even after the gate releases.
             Scenario::CancelMidGeneration => {
                 let chunks = opening();
                 (chunks, Some(1), Ending::Clean)
