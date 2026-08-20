@@ -970,7 +970,33 @@ Expected: FAIL to compile — `Fake` is not defined.
 
 - [ ] **Step 4: Implement the fakes and `assert_conforms`**
 
-`Fake` is a `#[derive(Debug, Clone, Copy)]` enum with the eleven variants above. `Fake::run(scenario)` returns `Option<Violation>` by building the event vector for that variant/scenario in memory and calling `classify` — these fakes test the **checker**, so they need no HTTP server.
+`Fake` is a `#[derive(Debug, Clone, Copy)]` enum with the eleven variants above (ten non-conforming plus `Conforming`). These fakes test the **checker**, so they need no HTTP server: `run` builds the event vector in memory and calls `classify`.
+
+```rust
+impl Fake {
+    /// Build this fake's event sequence for `scenario` and classify it.
+    ///
+    /// `cancelled` is derived from the scenario rather than passed in, so a
+    /// fake can never be tested under a cancellation flag that contradicts the
+    /// script it is emitting.
+    pub async fn run(self, scenario: Scenario) -> Option<Violation> {
+        let cancelled = matches!(
+            scenario,
+            Scenario::CancelMidGeneration | Scenario::CancelAfterStopReason
+        );
+        classify(&self.events(scenario), scenario, cancelled)
+    }
+
+    /// The event sequence this fake emits for `scenario`.
+    fn events(self, scenario: Scenario) -> Vec<Result<ModelEvent, ModelError>> {
+        // one match arm per variant; `Conforming` returns a sequence that
+        // satisfies every assertion for the given scenario
+        todo!("write one arm per variant")
+    }
+}
+```
+
+Replace the `todo!` with the real arms — it is shown only to fix the signature. `Conforming` must return, for each scenario: a `TokenDelta`, then a `Usage` and a `Finish` only when `scenario.expects_stop_reason()` and the scenario is not a cancel or error variant; a trailing `Err` for the two error scenarios; and for the two tool scenarios a `ToolCallDelta` carrying `Some("get_weather")` exactly once.
 
 `assert_conforms` in `src/lib.rs`:
 
@@ -1178,11 +1204,21 @@ mdbook build docs/book
 
 Expected: all four succeed. `mdbook build` must stay clean — `[output.linkcheck] warning-policy = "error"`.
 
-Confirm no `version` field changed:
+Confirm no `version` field changed **anywhere on the branch** — not just in the
+working tree. A bare `git diff` would only inspect uncommitted changes and would
+pass trivially here:
 
 ```bash
-git diff --stat | grep -i 'cargo.toml\|changelog' || echo "no manifest or changelog touched — correct"
+git diff 0bf5e759..HEAD -- 'Cargo.toml' '*/Cargo.toml' '*CHANGELOG.md' \
+  | grep -E '^[+-]version' \
+  && echo "FAIL: a version field changed — see spec 2.3" \
+  || echo "no version field changed — correct"
 ```
+
+The new crate's own `version = "0.0.0"` line is a **new file**, not an edit to an
+existing manifest, so it does not appear in this check's output as a `-version`
+/ `+version` pair on a tracked manifest. If it does appear, something bumped a
+real crate.
 
 - [ ] **Step 6: Commit**
 
