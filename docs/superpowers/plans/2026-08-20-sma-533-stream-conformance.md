@@ -550,15 +550,21 @@ Expected: FAIL to compile — `frame` and `build_bedrock_model_against` are not 
 
 - [ ] **Step 3: Implement the frame writer and the model builder**
 
-Add to `Cargo.toml` `[dev-dependencies]`:
+`frame` is a **library** item that Task 7 calls from `tests/conformance.rs`, so the
+crates it uses must be normal `[dependencies]`, not `[dev-dependencies]` — a
+dev-dependency is not linkable from `src/`. Only the provider crate and the SDK
+entry points needed to *build a model in a test* are dev-deps.
 
 ```toml
-paigasus-helikon-providers-bedrock = { workspace = true }
-aws-config             = { workspace = true }
-aws-sdk-bedrockruntime = { workspace = true }
+[dependencies]
 aws-smithy-eventstream = { workspace = true }
 aws-smithy-types       = { workspace = true }
 serde_json             = { workspace = true }
+
+[dev-dependencies]
+paigasus-helikon-providers-bedrock = { workspace = true }
+aws-config             = { workspace = true }
+aws-sdk-bedrockruntime = { workspace = true }
 ```
 
 `frame` builds one `aws_smithy_eventstream::frame::Message` and serialises it with `write_message_to`. Three headers are mandatory and all three are string headers:
@@ -1155,12 +1161,18 @@ Verify with `git check-attr -a tests/provider-stream-conformance/fixtures/bedroc
 
 | Task | Subject | Builder entry | Declines |
 | --- | --- | --- | --- |
-| 7 | `bedrock` | `BedrockModel::builder(...).sdk_config(&cfg)` — see Task 3 | `FragmentedToolName`, `CancelAfterStopReason` |
+| 7 | `bedrock` | `BedrockModel::converse(...).sdk_config(&cfg)` — **not** `builder(...)`; verified in Task 3 | `FragmentedToolName`, `CancelAfterStopReason` |
 | 8 | `openai/chat` | `OpenAiModel::chat(...).base_url(...)` | none |
 | 9 | `litellm` | `LiteLlmModel::chat(...).base_url(...)` | none |
 | 10 | `anthropic` | `AnthropicModel::messages(...).base_url(...)` — confirm the exact constructor in that crate's `builder.rs` | `FragmentedToolName` |
 | 11 | `gemini` | `GeminiModel::...(...).base_url(...)` — confirm the exact constructor | `FragmentedToolName` |
 | 12 | `openai/responses` | `OpenAiModel::responses(...).base_url(...)` | `FragmentedToolName`, `TruncatedAfterStopReason`, `ErrorAfterStopReason`, `CancelAfterStopReason` |
+
+**Facts Task 3 established, which Tasks 7–12 depend on:**
+
+- `build_bedrock_model_against` from Task 3 is `#[cfg(test)]` in `src/`, so it is **not** reachable from `tests/conformance.rs`. Task 7 must copy its body — the exact source is in `task-3-report.md`.
+- The smithy client **does not retry a mid-body abort after a 200** (one attempt only), so S4a/S4b are safe for Bedrock. It **does** retry non-2xx responses and connect failures three times — and `PacedServer` serves its script once with a gate consumed by the first request, so any scenario that provokes a retry replays against a server that will not pause.
+- Stalled-stream protection is enabled with a 5 s grace. It did not fire across an 8 s gate hold in either idle or actively-polling form, but that is an observation, not a guarantee — if a Bedrock gate scenario ever fails intermittently, suspect this first.
 
 For Task 10, note that Anthropic's `message_delta` already emits `Usage` from the same event that carries the stop reason (`anthropic/stream.rs:161-181`), so it needs no extra chunk to serve as the `CancelAfterStopReason` gate edge. For Tasks 8, 9 and 11 the stop-reason chunk emits nothing observable, so the script must place a **usage chunk** after it and gate on that.
 
