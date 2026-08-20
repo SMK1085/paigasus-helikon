@@ -1510,3 +1510,591 @@ mod litellm {
         assert_conforms(&LiteLlm).await;
     }
 }
+
+/// The `Model::invoke` stream contract, checked against the Anthropic Messages
+/// API.
+///
+/// This is the provider whose truncation defect is half the reason this suite
+/// exists: SMA-531 (PR #200), where a stream that ended cleanly between
+/// `message_delta` and `message_stop` emitted `Usage` and then nothing —
+/// `MessageTranslator`'s buffered stop reason was never flushed, so the
+/// consumer got no terminal event at all. `TruncatedAfterStopReason` below is
+/// that exact shape, transcribed verbatim from the fixture the SMA-531 fix
+/// itself is tested against.
+///
+/// # Fixture provenance
+///
+/// Every envelope shape below is transcribed from a fixture committed in
+/// `crates/paigasus-helikon-providers-anthropic/tests/fixtures/`, cited on the
+/// helper or script arm that builds it:
+///
+/// - `text_only.txt` — the baseline: `message_start` (including its top-level
+///   `"stop_reason":null`), a text `content_block_start`, two
+///   `content_block_delta`s, `content_block_stop`, `message_delta`
+///   (`stop_reason` + `usage` in one event), `message_stop`. Grounds
+///   [`message_start`], [`content_block_start_text`], [`text_delta`],
+///   [`content_block_stop`], [`message_delta`] and [`message_stop`], and
+///   `CleanStop`'s full script.
+/// - `eof_after_message_delta.txt` — the exact SMA-531 shape and the fixture
+///   the crate's own `clean_eof_after_message_delta_emits_finish` regression
+///   test reads: `text_only.txt`'s prefix through `message_delta`, then the
+///   body simply ends — no `message_stop`. `TruncatedAfterStopReason`
+///   transcribes this verbatim (via `through_stop()`, with no `message_stop`
+///   appended).
+/// - `eof_mid_content_block.txt` — grounds `TruncatedMidGeneration`'s
+///   envelope shape (`message_start`, `content_block_start`, a
+///   `content_block_delta`, then EOF with no `message_delta` at all). The
+///   delta *count* is not grounded from this file — as with every other
+///   subject in this module, `opening()`'s two deltas are arbitrary content
+///   over a grounded envelope, not a literal transcription.
+/// - `stream_error.txt` — grounds `ErrorMidGeneration`'s prefix envelope
+///   (`message_start`, `content_block_start`, one `content_block_delta`)
+///   *before* its own in-band `event: error` frame. See "Why `Ending::Abort`
+///   and not the fixtures' own `error` event" below for why that frame itself
+///   is not transcribed into this script.
+/// - `error_after_message_delta.txt` — grounds `ErrorAfterStopReason`'s prefix
+///   envelope, identical to `eof_after_message_delta.txt`'s through
+///   `message_delta`, again *before* its own in-band `error` frame.
+/// - `parallel_tool_use.txt` and `tool_use_then_continuation.txt` — the
+///   `tool_use` envelope: a `content_block_start` carrying the whole `id` and
+///   `name` together, followed by exactly one `input_json_delta` carrying the
+///   whole argument JSON. Grounds [`tool_use_start`], [`input_json_delta`],
+///   and `ToolCallCleanStop`'s script.
+///
+/// `body_cut_inside_message_stop.txt` and `thinking_then_text.txt` were read
+/// but contribute no shape this module needs: the former is a byte-level cut
+/// of `eof_after_message_delta.txt` that the SSE parser discards down to the
+/// same events (already covered), and this suite has no reasoning-delta
+/// scenario for any subject.
+///
+/// # Why `Ending::Abort` and not the fixtures' own `error` event
+///
+/// `stream_error.txt` and `error_after_message_delta.txt` both encode
+/// Anthropic's real error mechanism: an in-band `event: error` SSE frame,
+/// parsed by `AnthropicEvent::Error` and turned into `Err(ModelError::…)` by
+/// `stream.rs`'s `consume`. That path is already exercised directly against
+/// the translator by the crate's own
+/// `stream_error_overloaded_terminates_with_unavailable` and
+/// `error_after_buffered_stop_reason_emits_no_finish` tests.
+///
+/// This module instead scripts `ErrorMidGeneration` and `ErrorAfterStopReason`
+/// with the harness's `Ending::Abort` — a raw transport-level disconnect, no
+/// `error` frame on the wire at all — matching exactly how `bedrock`,
+/// `openai_chat` and `litellm` script the same two scenarios. That keeps this
+/// suite testing the property it exists to test (the driver's `tokio::select!`
+/// cancel/error arms in `model.rs`, and specifically that a buffered stop
+/// reason is discarded rather than flushed when the transport fails) the same
+/// way across every subject, rather than re-deriving Anthropic's in-band error
+/// shape a second time in a different harness. Functionally the two
+/// mechanisms are indistinguishable to this driver either way: `model.rs`'s
+/// `Some(Err(e)) => { yield Err(...); return; }` arm returns as soon as it
+/// observes *any* transport-level error, before it would ever get to parse a
+/// subsequent `error` frame.
+///
+/// # Three things specific to this provider
+///
+/// **`message_delta` carries the stop reason AND usage in the same event**
+/// (see [`message_delta`]'s doc). That is what gives `CancelAfterStopReason` an
+/// observable edge to gate on at all — unlike `openai_chat`/`litellm`, whose
+/// finish-reason chunk is silent and needs a synthetic *following* usage chunk
+/// for the gate to sit after.
+///
+/// **`message_start` also emits a `Usage`** (`stream.rs`'s `MessageStart` arm),
+/// which makes the harness's own "at least one `Usage` observed" floor for
+/// `CancelAfterStopReason` vacuous for this subject — it is satisfied by
+/// `message_start` alone, whether or not the gate sits in the right place. The
+/// harness's `floor_violation` doc records this narrowing explicitly. The only
+/// guard left for this scenario on this subject is the provenance comment on
+/// its `script` match arm below, which states in prose where `gate_after`
+/// counts to and why — treat that comment as load-bearing, not decoration.
+///
+/// **`message_start` contains a literal `"stop_reason":null`.** A naive scan
+/// for the substring `stop_reason` would therefore match the very first event
+/// of every script, whether or not a stop reason was ever encoded.
+/// [`STOP_REASON_MARKER`] scans for the populated-string shape instead, pinned
+/// against `message_start`'s `null` by `scan_finds_only_a_populated_stop_reason`
+/// — the only detector for `ErrorAfterStopReason` degrading into
+/// `ErrorMidGeneration`, whose observable events are otherwise byte-identical.
+///
+/// # `ToolCallCleanStop` never splits `input_json_delta`
+///
+/// Every committed tool-call fixture (`parallel_tool_use.txt`,
+/// `tool_use_then_continuation.txt`) carries one tool call's whole argument
+/// JSON in a single `input_json_delta`. Unlike `bedrock`/`openai_chat`/
+/// `litellm`, this module does not split the arguments across two calls to its
+/// delta helper to *additionally* prove "not more than one delta carries the
+/// name" — no committed capture grounds Anthropic ever doing that, and
+/// inventing the split would fabricate a shape per this file's provenance
+/// rule. A single `input_json_delta` still fully exercises assertion 7's
+/// "exactly one, not zero" on this shape: the translator's `name_emitted` flag
+/// starts `false`, so the one delta this script sends is the one that must
+/// carry the name.
+mod anthropic {
+    use super::*;
+    use paigasus_helikon_providers_anthropic::AnthropicModel;
+
+    /// The model id `build_model_against` requests. Matches the constructor
+    /// example in the task brief (`AnthropicModel::messages("claude-3-5-sonnet-latest")`).
+    const MODEL_ID: &str = "claude-3-5-sonnet-latest";
+
+    /// The tool name every tool-call fixture declares.
+    const TOOL_NAME: &str = "get_weather";
+
+    /// `id` for the single tool call in the tool fixture. Not claimed to match
+    /// any real Anthropic id format (`tu_weather`/`tu_a`/`tu_b` is the shape
+    /// `parallel_tool_use.txt` and `tool_use_then_continuation.txt` use, but
+    /// nothing under test inspects it) — fixed purely so failure output is
+    /// stable and greppable.
+    const TOOL_USE_ID: &str = "tu_conformance_0";
+
+    /// The substring that appears in a chunk if and only if it carries a
+    /// *populated* `stop_reason`.
+    ///
+    /// The obvious marker — `stop_reason` alone — is wrong for this subject:
+    /// `message_start` carries an explicit `"stop_reason":null` at the top
+    /// level of its `message` object (see [`message_start`], grounded in
+    /// `text_only.txt`), so a bare substring scan would report a stop reason
+    /// on the very first event of every script, whether or not one was ever
+    /// encoded. Scanning for the opening quote of a *string* value excludes
+    /// the null case: `null` has no quote after the colon, `"end_turn"`/
+    /// `"tool_use"` do. `scan_finds_only_a_populated_stop_reason` is the guard
+    /// that keeps this true, including against `message_start`'s literal
+    /// `null`.
+    const STOP_REASON_MARKER: &[u8] = b"\"stop_reason\":\"";
+
+    /// One SSE frame: `event: {event}\ndata: {payload}\n\n`. Anthropic frames
+    /// carry an explicit event name — unlike the bare `data:` frames OpenAI
+    /// and LiteLLM send — matching every fixture in this crate's own
+    /// `tests/fixtures/`.
+    ///
+    /// The `event:` line is cosmetic to the translator: `model.rs` parses
+    /// `event.data` alone via `AnthropicEvent`'s `#[serde(tag = "type")]`,
+    /// never `event.event`. It is still written here because every real
+    /// Anthropic response sends it, and a fixture that omitted it would not be
+    /// the stream it claims to be.
+    fn frame(event: &str, payload: serde_json::Value) -> Vec<u8> {
+        format!("event: {event}\ndata: {payload}\n\n").into_bytes()
+    }
+
+    /// `message_start`, which opens every Anthropic stream and is the event
+    /// the translator reads its initial `Usage` from
+    /// (`stream.rs`'s `MessageStart` arm).
+    ///
+    /// Matches `text_only.txt`'s opening event, including the top-level
+    /// `"stop_reason":null` on the `message` object — the shape
+    /// [`STOP_REASON_MARKER`] must not match.
+    fn message_start() -> Vec<u8> {
+        frame(
+            "message_start",
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_conformance",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": MODEL_ID,
+                    "stop_reason": null,
+                    "usage": {
+                        "input_tokens": 12,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "output_tokens": 0
+                    }
+                }
+            }),
+        )
+    }
+
+    /// `content_block_start` opening a text block. Matches `text_only.txt`'s
+    /// second event. The translator's `ContentBlockStart`/`Text` arm records
+    /// no `ModelEvent` for this; it is included because a real stream opens
+    /// every block it later closes.
+    fn content_block_start_text() -> Vec<u8> {
+        frame(
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": { "type": "text", "text": "" }
+            }),
+        )
+    }
+
+    /// One text delta. Envelope matches `text_only.txt`'s delta events; the
+    /// content itself is arbitrary, as in every other subject in this file.
+    fn text_delta(text: &str) -> Vec<u8> {
+        frame(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "text_delta", "text": text }
+            }),
+        )
+    }
+
+    /// `content_block_stop`, closing the block opened above. Matches
+    /// `text_only.txt`. Ignored by the translator
+    /// (`AnthropicEvent::ContentBlockStop { .. }` only logs); included because
+    /// a real stream closes every block it opens.
+    fn content_block_stop() -> Vec<u8> {
+        frame(
+            "content_block_stop",
+            json!({ "type": "content_block_stop", "index": 0 }),
+        )
+    }
+
+    /// `message_delta` — the one event that carries BOTH the stop reason and
+    /// usage in a single frame. Matches `text_only.txt`'s and
+    /// `eof_after_message_delta.txt`'s shared shape.
+    ///
+    /// This is the load-bearing difference from every other subject in this
+    /// file: `stream.rs`'s `MessageDelta` arm emits `Usage` from the same
+    /// event that buffers `stop_reason`, so this event is itself an
+    /// observable edge a cancellation can gate on — unlike `openai_chat`/
+    /// `litellm`, whose finish-reason chunk is silent and needs a *following*
+    /// usage chunk to give `CancelAfterStopReason` something to gate on.
+    fn message_delta(stop_reason: &str, output_tokens: u32) -> Vec<u8> {
+        frame(
+            "message_delta",
+            json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": stop_reason, "stop_sequence": null },
+                "usage": { "output_tokens": output_tokens }
+            }),
+        )
+    }
+
+    /// `message_stop`, which flushes the buffered stop reason into `Finish`
+    /// (`stream.rs`'s `MessageStop` arm). Matches `text_only.txt`.
+    fn message_stop() -> Vec<u8> {
+        frame("message_stop", json!({ "type": "message_stop" }))
+    }
+
+    /// `content_block_start` opening a `tool_use` block. Matches
+    /// `parallel_tool_use.txt`'s and `tool_use_then_continuation.txt`'s
+    /// tool-call events. The translator records `call_id`/`name` here but
+    /// emits nothing — the name-carrying `ToolCallDelta` comes with the first
+    /// `input_json_delta` — which is why `FragmentedToolName` is declined for
+    /// this subject: the name arrives whole, in this one event.
+    fn tool_use_start(call_id: &str, name: &str) -> Vec<u8> {
+        frame(
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": { "type": "tool_use", "id": call_id, "name": name, "input": {} }
+            }),
+        )
+    }
+
+    /// One `input_json_delta`, carrying a whole argument JSON. See the module
+    /// doc's "`ToolCallCleanStop` never splits `input_json_delta`" section for
+    /// why this is never called twice for one call in this module, unlike its
+    /// siblings' tool-argument helpers.
+    fn input_json_delta(partial_json: &str) -> Vec<u8> {
+        frame(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "input_json_delta", "partial_json": partial_json }
+            }),
+        )
+    }
+
+    /// The scripted response for one scenario, or `None` for
+    /// `FragmentedToolName`, which this subject declines.
+    ///
+    /// Returning an `Option` rather than panicking on the declined scenario is
+    /// what lets [`Anthropic::encodes_stop_reason`] call this for *every*
+    /// scenario and measure the bytes — see `bedrock::script`'s doc for the
+    /// same pattern.
+    fn script(scenario: Scenario) -> Option<Script> {
+        // The four-event opening every text scenario shares: message_start,
+        // the text block's content_block_start, and two deltas — so a
+        // cancellation can be gated *between* two `TokenDelta`s rather than
+        // before the first one.
+        let opening = || {
+            vec![
+                message_start(),
+                content_block_start_text(),
+                text_delta("Hel"),
+                text_delta("lo"),
+            ]
+        };
+        // The opening plus a completed block and a populated message_delta.
+        // Deliberately stops short of `message_stop` — callers that want it
+        // append it themselves — which is what lets `CancelAfterStopReason`
+        // gate right after this prefix without ever having to include the
+        // event it is gating in front of.
+        let through_stop = || {
+            let mut chunks = opening();
+            chunks.push(content_block_stop());
+            chunks.push(message_delta("end_turn", 5));
+            chunks
+        };
+
+        let (chunks, gate_after, ending) = match scenario {
+            // Full stream: deltas, then message_delta (stop reason + usage in
+            // one event), then message_stop, then a clean end of body.
+            // Matches `text_only.txt` in full.
+            Scenario::CleanStop => {
+                let mut chunks = through_stop();
+                chunks.push(message_stop());
+                (chunks, None, Ending::Clean)
+            }
+            // The exact SMA-531 shape: `message_delta` is observed, then the
+            // body simply ends — no `message_stop` — so the translator's
+            // buffered stop reason has to be flushed by the EOF path
+            // (`MessageTranslator::finish`, called from `model.rs`'s
+            // `None =>` arm). Matches `eof_after_message_delta.txt` verbatim.
+            Scenario::TruncatedAfterStopReason => (through_stop(), None, Ending::Clean),
+            // The body ends cleanly mid-generation: no `message_delta` ever
+            // arrives, so no stop reason is ever observed. Envelope grounded
+            // in `eof_mid_content_block.txt` (see the module doc's provenance
+            // section for why the delta count itself is not transcribed).
+            Scenario::TruncatedMidGeneration => (opening(), None, Ending::Clean),
+            // Same prefix, but the connection is torn down without a
+            // terminating chunk, so the client observes a transport error.
+            // Prefix envelope grounded in `stream_error.txt`; see the module
+            // doc's "Why `Ending::Abort`" section for why the fixture's own
+            // in-band `error` frame is not transcribed into this script.
+            Scenario::ErrorMidGeneration => (opening(), None, Ending::Abort),
+            // The stop reason is buffered and *then* the body is aborted, so
+            // the error path must not flush it as a `Finish`. Prefix envelope
+            // grounded in `error_after_message_delta.txt`, through its own
+            // `message_delta`; same note on `Ending::Abort` as above.
+            Scenario::ErrorAfterStopReason => (through_stop(), None, Ending::Abort),
+            // Three chunks go out — message_start, the text block's
+            // content_block_start, and the first delta — and the server then
+            // parks, holding the second delta back (`gate_after: Some(3)`
+            // pauses *before* the chunk at index 3, per `server.rs`'s `feed`
+            // loop). No `message_delta` anywhere in this script, so no stop
+            // reason exists even after the gate releases.
+            Scenario::CancelMidGeneration => (opening(), Some(3), Ending::Clean),
+            // The stop reason AND its usage are both observed before the gate
+            // — `message_delta` carries both in one event (see its doc), so
+            // unlike `openai_chat`/`litellm` this scenario needs no *extra*
+            // usage chunk appended for the gate to sit after.
+            //
+            // **This comment is the only guard for this scenario on this
+            // subject.** The harness's own "at least one `Usage` observed"
+            // floor (`assert_conforms`'s `floor_violation`) is VACUOUS here:
+            // `message_start` above already emits a `Usage`
+            // (`stream.rs`'s `MessageStart` arm), so that floor is satisfied
+            // whether or not the gate sits in the right place — even a gate
+            // placed before `message_delta` would still show a `Usage` from
+            // `message_start`, and pass. `floor_violation`'s own doc records
+            // this narrowing for `anthropic` explicitly.
+            //
+            // So the only thing standing between this scenario and silently
+            // degrading into `CancelMidGeneration` under another name is
+            // this: `gate_after` is a COUNT — `chunks.len()`, not a
+            // hand-typed literal — read *after* `through_stop()` has pushed
+            // `message_delta` onto `chunks`. That parks the server with
+            // `message_delta` already sent and `message_stop` withheld
+            // indefinitely, so cancellation truncates the stream strictly
+            // after the stop reason was buffered.
+            Scenario::CancelAfterStopReason => {
+                let chunks = through_stop();
+                let gate_after = chunks.len();
+                (chunks, Some(gate_after), Ending::Clean)
+            }
+            // Declined — see `Anthropic::stream`.
+            Scenario::FragmentedToolName => return None,
+            // A whole tool call: the name arrives with the block start
+            // (`tool_use_start`), the whole argument JSON arrives on the one
+            // `input_json_delta` Anthropic is ever observed to send per call
+            // (see the module doc's "never splits" section), then a
+            // `tool_use` stop reason and its usage, then `message_stop`.
+            // Matches `parallel_tool_use.txt`'s single-call shape.
+            Scenario::ToolCallCleanStop => (
+                vec![
+                    message_start(),
+                    tool_use_start(TOOL_USE_ID, TOOL_NAME),
+                    input_json_delta("{\"city\":\"Berlin\"}"),
+                    content_block_stop(),
+                    message_delta("tool_use", 18),
+                    message_stop(),
+                ],
+                None,
+                Ending::Clean,
+            ),
+        };
+
+        Some(Script {
+            content_type: "text/event-stream",
+            chunks,
+            gate_after,
+            ending,
+        })
+    }
+
+    /// The request driven through `Model::invoke`.
+    ///
+    /// Carries a tool definition for `ToolCallCleanStop` so the exchange is
+    /// coherent — a response returning `tool_use` for a request that offered
+    /// no tools is not a stream Anthropic would ever produce.
+    /// `FragmentedToolName` is this subject's other tool scenario, but it is
+    /// declined and so never reaches this function.
+    fn request(scenario: Scenario) -> ModelRequest {
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "What is the weather in Berlin?".into(),
+            }],
+        }];
+        if matches!(scenario, Scenario::ToolCallCleanStop) {
+            req.tools = vec![ToolDef {
+                name: TOOL_NAME.to_owned(),
+                description: "Look up the current weather for a city.".to_owned(),
+                schema: json!({
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }),
+            }];
+        }
+        req
+    }
+
+    /// Build a real `AnthropicModel` (Messages API) pointed at a local
+    /// plain-HTTP endpoint.
+    fn build_model_against(base_url: &str) -> AnthropicModel {
+        AnthropicModel::messages(MODEL_ID)
+            .api_key("sk-ant-conformance-test")
+            .base_url(base_url)
+            .build()
+            .expect("anthropic model should build with an explicit api key and base url")
+    }
+
+    /// See the module-level docs on this file for the fixture provenance
+    /// rules this subject follows.
+    struct Anthropic;
+
+    #[async_trait::async_trait]
+    impl StreamUnderTest for Anthropic {
+        fn name(&self) -> &'static str {
+            "anthropic"
+        }
+
+        fn encodes_stop_reason(&self, scenario: Scenario) -> bool {
+            // MEASURED from the bytes about to be served — deliberately not
+            // `scenario.expects_stop_reason()`. See the crate's `declines`
+            // module doc and `bedrock::encodes_stop_reason` for why that
+            // restatement would make the harness's cross-check dead code.
+            script(scenario)
+                .map(|script| {
+                    script
+                        .chunks
+                        .iter()
+                        .any(|chunk| contains(chunk, STOP_REASON_MARKER))
+                })
+                .unwrap_or(false)
+        }
+
+        fn fixture_tool_name(&self) -> &'static str {
+            TOOL_NAME
+        }
+
+        fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason> {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                // `"end_turn"` maps to `FinishReason::Stop`
+                // (`stream.rs`'s `finish_or_error`). Both of these scenarios
+                // reach a `Finish`: `CleanStop` through `message_stop`,
+                // `TruncatedAfterStopReason` through the EOF flush.
+                Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
+                    Some(FinishReason::Stop)
+                }
+                // `"tool_use"` maps to `FinishReason::ToolCalls` when no
+                // structured-output synthesis is in play.
+                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                // Truncated, errored and cancelled streams must withhold
+                // `Finish` entirely.
+                Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason => None,
+                // Declined; never reached.
+                Scenario::FragmentedToolName => None,
+            }
+        }
+
+        async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
+            // The name is set once, whole, in the `content_block_start`
+            // `tool_use` block; there is no second event it could be split
+            // across.
+            if scenario == Scenario::FragmentedToolName {
+                return Outcome::Declined("name arrives whole in content_block_start");
+            }
+
+            let script =
+                script(scenario).expect("a scenario this subject serves must have a script");
+            let mut server = PacedServer::start(script).await;
+            let gate = server.take_gate();
+            let model = build_model_against(&server.base_url());
+
+            let stream = model
+                .invoke(request(scenario), cancel)
+                .await
+                .expect("anthropic invoke should reach the local paced server");
+
+            Outcome::Served { stream, gate }
+        }
+    }
+
+    /// Whether `haystack` contains `needle` as a contiguous byte run.
+    /// Duplicated per subject module by design — see `bedrock::contains`.
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The soundness claim behind [`Anthropic::encodes_stop_reason`]'s
+    /// substring scan: [`STOP_REASON_MARKER`] occurs in `message_delta`'s
+    /// populated `stop_reason` and in no other frame this subject builds —
+    /// in particular, not in `message_start`, which carries a literal
+    /// `"stop_reason":null` (see its doc comment), the Anthropic-specific
+    /// pitfall the task brief calls out.
+    ///
+    /// This is also the only detector for `ErrorAfterStopReason` degrading
+    /// into `ErrorMidGeneration`: their observable events are byte-for-byte
+    /// identical (`[TokenDelta, TokenDelta, Err]`), so if `through_stop()`
+    /// ever lost its `message_delta`, this scan is what would notice.
+    #[test]
+    fn scan_finds_only_a_populated_stop_reason() {
+        assert!(
+            contains(&message_delta("end_turn", 5), STOP_REASON_MARKER),
+            "the message_delta frame must carry the marker, or the scan measures nothing"
+        );
+
+        for (name, frame) in [
+            ("message_start (stop_reason: null)", message_start()),
+            ("content_block_start (text)", content_block_start_text()),
+            ("content delta", text_delta("Hel")),
+            ("content_block_stop", content_block_stop()),
+            ("message_stop", message_stop()),
+            ("tool_use start", tool_use_start(TOOL_USE_ID, TOOL_NAME)),
+            (
+                "input_json_delta",
+                input_json_delta("{\"city\":\"Berlin\"}"),
+            ),
+        ] {
+            assert!(
+                !contains(&frame, STOP_REASON_MARKER),
+                "{name} contains the populated-stop_reason marker, so the scan would report a \
+                 stop reason for scripts that encode none. In particular, message_start carries \
+                 a literal \"stop_reason\":null, and the marker must not match that null value."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conforms() {
+        assert_conforms(&Anthropic).await;
+    }
+}
