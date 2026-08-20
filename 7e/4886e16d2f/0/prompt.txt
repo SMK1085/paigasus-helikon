@@ -1,0 +1,88 @@
+<task-notification>
+<task-id>ab2b48cd418cbb40f</task-id>
+<tool-use-id>toolu_01T1f9XPPtFC9cxYKHxWGtLM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ab2b48cd418cbb40f.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: paced HTTP server" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commits:**
+- `38d0797b feat(providers): SMA-533 add the paced conformance http server`
+- `74e68a1f test(providers): SMA-533 pin the abort-path flush with a regression test`
+
+**Tests:** 4/4 pass (15 consecutive full-suite runs); fmt, clippy `-D warnings`, docs gate all clean.
+
+**Mutation evidence:** removing the defer-by-one-poll fails `abort_delivers_buffered_chunks_before_erroring` with `left: ""` (client received zero body bytes) — killed 15/15, while the other three tests including `abort_ending_surfaces_as_an_error` still pass. Restored: 15/15 green.
+
+**One thing you should know — writing the test exposed a second problem.** My first attempt produced a test that *could not fail*: with the original `mpsc::channel(1)`, the mutant survived 15/15. Correctness was resting on two mechanisms, not one — the explicit deferral, plus an implicit race window from capacity-1 back-pressure that wins on an idle machine and could flip on a loaded CI runner. I switched the body channel to `unbounded_channel` so the deferral is the sole mechanism; the mutant then dies deterministically. That removes a hidden mechanism rather than adding one. I re-verified (temporary raw-socket test, since removed) that the gate's prefix-delivery guarantee is unaffected — it comes from the feeder parking at the gate, not from the channel bound, and the code comment claiming otherwise was wrong and is replaced.
+
+Also added the `//` comment at the defer site naming the protecting test, and `stream` to the reqwest dev-dep for `bytes_stream()`.
+
+**Remaining concern (unchanged, low):** the deferred poll guarantees a `poll_flush` *call*, not that it drained — an abort fixture exceeding ~64 KB could still lose its tail. Far above conformance fixture sizes.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-2-report.md`</result>
+<usage><subagent_tokens>155859</subagent_tokens><tool_uses>27</tool_uses><duration_ms>321769</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab2b48cd418cbb40f</task-id>
+<tool-use-id>toolu_01XoiWj1mVoqBdQUikBMTmkE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ab2b48cd418cbb40f.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: paced HTTP server" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commits (this round):** `659a5984 test(providers): SMA-533 assert the gate delivers its prefix before withholding`
+
+**Tests:** 4/4 pass, 12/12 consecutive runs; fmt, clippy `-D warnings`, docs gate all clean.
+
+**Mutation evidence:** mutant 1 (gate no-op) killed by part (b), 10/10 — `gate did not withhold the post-gate chunk`. Mutant 2 (pre-gate chunk withheld) killed by part (a) — `pre-gate chunk never reached the client: Elapsed(())`. Both real.
+
+**I verified the finding's core claim rather than taking it on faith:** I re-added the deleted test alongside the new one and ran both against mutant 2 — the old test **passed** while the new one failed. Confirmed the hole was real (a broken gate produces byte-identical output, so the trailing `assert_eq!` could never catch it). Temporary copy removed before commit.
+
+**Minors fixed:** size caveat now at the `script_frames` doc site (flush *call*, not drained socket, ~64 KB limit); accept loop continues on `ConnectionAborted`/`Reset`/`Refused`/`Interrupted` via `is_transient_accept_error` and breaks only on fatal; dead `use futures_util::StreamExt;` removed. Moving `Duration` to module scope initially broke `clippy -D warnings` with `unused import` — caught by the gate and moved into `mod tests` before commit.
+
+**One thing to flag:** `docs/superpowers/plans/2026-08-20-sma-533-stream-conformance.md` shows modified in the worktree. Not my change — left unstaged; my commit is `src/server.rs` only.
+
+**Residual (unchanged):** part (b) is inherently one-directional, but (a) now proves the pipe is live before it runs, so a dead connection no longer masquerades as a held gate.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-2-report.md`</result>
+<usage><subagent_tokens>181532</subagent_tokens><tool_uses>37</tool_uses><duration_ms>562016</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a670b0fcb6bf77762</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a670b0fcb6bf77762.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: Bedrock spike" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Fix round complete.
+
+**Status:** DONE
+
+**Commits:**
+- `7b9d6a8b feat(providers): SMA-533 prove bedrock eventstream framing over local http`
+- `e463db17 test(providers): SMA-533 assert the sdk signs the local bedrock request` (this round)
+
+**Tests:** 7/7 green in the crate lib suite (3 eventstream + Task 2's 4 server tests, unchanged). fmt, clippy `-D warnings`, docs `-D warnings` all clean.
+
+**Fix:** `PacedServer` now records the first request's headers (`Arc&lt;StdMutex&lt;Option&lt;HeaderMap&gt;&gt;&gt;`, filled before the body is consumed, first-request-only so a retry can't clobber it) behind one narrow accessor `first_request_headers() -&gt; Option&lt;HeaderMap&gt;`, doc-commented against growing into a general request recorder. New test `bedrock_signs_the_local_request_with_sigv4` asserts the `Authorization` header starts with `AWS4-HMAC-SHA256 `, carries scope `/us-east-1/bedrock/aws4_request`, and carries a `Signature=`. Kept separate from the verbatim brief test so the two failure modes stay independently diagnosable.
+
+**Mutation proof (both reverted, neither committed):**
+- **C — wrong expected prefix** (`SHA256`→`SHA512`): fails, printing the real header. The digest also differs from the earlier ad-hoc capture because the signed `host` port differs — evidence it's computed per-request, not echoed.
+- **D — drop `.credentials_provider(..)`**: the SDK refuses to dispatch at all (`NoMatchingAuthSchemeError … sigv4: NoIdentityResolver`), no socket opened. So signing is unconditional — the reviewer's code reading, now observed.
+
+**Corrected verdicts:** Assumption 1 — PROVEN *and re-verified on every run by two committed tests* (plain-HTTP dispatch; SigV4 signing). Assumption 2 — PROVEN, unchanged. Report's assumption-1 section rewritten in place with a correction note; the uncommitted probe is demoted to corroboration.
+
+**Residual limit (recorded in the report):** the suite proves a well-formed SigV4 header for the right service/region, not a cryptographically *correct* signature — verifying the digest would mean reimplementing SigV4 and testing the AWS SDK rather than this repo.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-3-report.md`</result>
+<usage><subagent_tokens>206551</subagent_tokens><tool_uses>34</tool_uses><duration_ms>361201</duration_ms></usage>
+</task-notification>
