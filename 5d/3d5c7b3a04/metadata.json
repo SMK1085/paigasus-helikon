@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "5d3d5c7b3a04",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-533-add-a-cross-provider-conformance-suite-for-stream-event",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/5d/3d5c7b3a04/0/metadata.json",
+      "transcript": "/5d/3d5c7b3a04/0/full.jsonl",
+      "compact_transcript": "/5d/3d5c7b3a04/0/transcript.jsonl",
+      "content_hash": "/5d/3d5c7b3a04/0/content_hash.txt",
+      "prompt": "/5d/3d5c7b3a04/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 217,
+    "cache_creation_tokens": 708328,
+    "cache_read_tokens": 16812910,
+    "output_tokens": 145627,
+    "api_call_count": 91
+  }
+}
