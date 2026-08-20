@@ -2116,76 +2116,106 @@ mod anthropic {
 /// # Fixture provenance
 ///
 /// Gemini has no fixture directory the way `litellm`/`anthropic`/`openai_chat`
-/// do — its committed SSE lives inline in two integration-test files. Every
-/// envelope shape below is transcribed from one of them, cited on the helper
-/// that builds it:
+/// do — its committed SSE lives inline, either in
+/// `crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs` or, for
+/// the tool-call shape, in this module's own doc comments (see "Live capture"
+/// below). Every envelope shape is transcribed from one of these, cited on the
+/// helper that builds it:
 ///
 /// - `crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:60-63`
-///   (`truncated_stream_no_finish`) — a content delta with no `finishReason`/
-///   `usageMetadata` key at all. Grounds [`text_delta`].
-/// - `crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:40`
-///   (`text_then_finish`) and `:78-86`
-///   (`multi_chunk_usage_emits_usage_per_chunk`, second chunk) — a
-///   `finishReason` and `usageMetadata` arriving in the SAME event as a text
-///   part. Grounds [`stop_chunk`].
+///   (`truncated_stream_no_finish`) — grounds the SCRIPT shape of
+///   `TruncatedMidGeneration` (one delta, then EOF, no `finishReason`).
+/// - `crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:82-86`
+///   (`multi_chunk_usage_emits_usage_per_chunk`) — both of its two chunks
+///   carry `usageMetadata`, including the first, which has no `finishReason`.
+///   Grounds [`text_delta`]'s per-chunk usage and, together with `:40`
+///   (`text_then_finish`), [`stop_chunk`]'s combined
+///   text+`finishReason`+`usageMetadata` event.
 ///
-/// Two shapes have no `tests/`-level capture anywhere in the repo — verified
-/// by `grep -rln functionCall crates/paigasus-helikon-providers-gemini/`,
-/// which turns up only outgoing tool-*declaration* builders
-/// (`translate/request.rs`, `translate/tools.rs`, `translate/mod.rs` — what
-/// Gemini is *offered*, never what it streams back) and this translator's own
-/// unit tests — and a repo-wide grep for the literal string `[DONE]` under
-/// this crate, which turns up only `model.rs`'s own comparison. Per this
-/// file's provenance rule, and as `bedrock`'s module doc directs for the same
-/// situation, both are derived from the translator's own match arms and
-/// already-committed, reviewed unit tests rather than invented — see
-/// [`tool_call_chunk`], [`finish_and_usage`] and [`done`] for the specific
-/// citations. Nothing here is invented from vendor documentation.
+/// # Live capture — `ToolCallCleanStop`
 ///
-/// # KNOWN GAP — `ToolCallCleanStop`'s `functionCall` shape is UNVERIFIED
-/// against live traffic
+/// The `functionCall` shape has no `tests/`-level capture anywhere else in
+/// the repo (a subject-registration review confirmed this and ruled that the
+/// `bedrock`-style "derive from the translator's own unit tests" fallback
+/// this module originally used does not transfer here — see the task report's
+/// appended fix-report section for the full account of that ruling). Sven
+/// captured a real streaming turn to settle it:
 ///
-/// Review of this subject's registration (task-11-report.md) ruled that the
-/// bedrock precedent above does **not** transfer to `ToolCallCleanStop`:
-/// bedrock's absence is total (a binary wire format, no capture for *any*
-/// scenario), while every other scenario in this module, and
-/// `ToolCallCleanStop` on every one of the four sibling subjects
-/// (`tool_call_stream.txt` for `openai/chat`/`litellm`,
-/// `parallel_tool_use.txt` for `anthropic`), rests on a genuine capture.
-/// Gemini's `ToolCallCleanStop` would be the only one of five not grounded in
-/// real traffic. Concretely: `sse.rs` declares `FunctionCall.id` as
-/// `Option<String>` and `stream.rs` carries an `fc_{index}` synthesizing
-/// fallback for exactly the case where a real chunk omits it — so
-/// [`tool_call_chunk`]'s choice to include a literal `id` may not be the shape
-/// real Gemini traffic sends, the same class of mistake SMA-522 was. Sven's
-/// ruling: capture a real streaming turn against `GEMINI_API_KEY`/
-/// `GOOGLE_API_KEY` (or Vertex ADC) and transcribe it with a provenance
-/// header in `tool_call_stream_fragmented_name.txt`'s style, settling
-/// explicitly whether real traffic sends `functionCall.id`. No credential was
-/// available in the environment this subject was registered from (checked:
-/// `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT` unset;
-/// `~/.config/gcloud/application_default_credentials.json` absent) — see the
-/// task report's "Fix report" section for the full account. **This is an open
-/// item, not a closed one**: [`tool_call_chunk`] and [`finish_and_usage`]
-/// remain derived-from-source, not capture-verified, until someone with a
-/// working credential supplies a real transcript.
+/// ```text
+/// CAPTURED against the real Gemini Developer API, `streamGenerateContent?alt=sse`,
+/// model `gemini-3.6-flash`, 2026-08-20. Prompt offered one `get_weather(city)`
+/// tool; the model called it. Two SSE events, verbatim structure (the
+/// `thoughtSignature` value is a ~700-character opaque base64 blob, elided
+/// below to `<elided>`; every other key and value is exactly as captured):
 ///
-/// # `usageMetadata` stays on the stop-reason chunk, deliberately
+/// data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather",
+///   "args":{"city":"Berlin"},"id":"call_1285087"},"thoughtSignature":"<elided>"}],
+///   "role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":58,
+///   "candidatesTokenCount":16,"totalTokenCount":150,"promptTokensDetails":
+///   [{"modality":"TEXT","tokenCount":58}],"thoughtsTokenCount":76,
+///   "serviceTier":"standard"},"modelVersion":"gemini-3.6-flash",
+///   "responseId":"tR-HasqFGurtxN8PrpzvwAw"}
 ///
-/// `StreamTranslator::consume` (`stream.rs:60-67`) emits a `Usage` for *every*
-/// chunk that carries `usageMetadata` — unlike `openai_chat`/`litellm`, whose
-/// `finish_reason` chunk is silent, Gemini's stop-reason chunk is itself
-/// observable because it always carries usage in the same event (see
-/// [`stop_chunk`]'s doc). This module places `usageMetadata` on no other
-/// helper. That is load-bearing for `CancelAfterStopReason`: the harness's
-/// "at least one `Usage` observed" floor is genuinely testing something here,
-/// not vacuous the way it is for `anthropic` (whose `message_start` emits
-/// `Usage` unconditionally) — a gate placed one chunk too early, before
-/// [`stop_chunk`], would leave the drained stream with no `Usage` at all and
-/// the floor would bite. If a future edit ever spread `usageMetadata` across
-/// every chunk the way a naive "just always report tokens" fixture would, that
-/// floor would stop being able to tell a correctly-placed gate from a
-/// misplaced one.
+/// data: {"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},
+///   "finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":58,
+///   "candidatesTokenCount":16,"totalTokenCount":150,"promptTokensDetails":
+///   [{"modality":"TEXT","tokenCount":58}],"thoughtsTokenCount":76,
+///   "serviceTier":"standard"},"modelVersion":"gemini-3.6-flash",
+///   "responseId":"tR-HasqFGurtxN8PrpzvwAw"}
+///
+/// Body ended at bare EOF — no `[DONE]` sentinel in this capture.
+/// ```
+///
+/// This settles the question the module previously flagged as open:
+///
+/// 1. **`functionCall.id` IS present in real traffic** —
+///    `"id":"call_1285087"`. `stream.rs`'s `fc_{index}` synthesis
+///    (`stream.rs:42-46`) is a fallback for the case a chunk omits it, not the
+///    common path for this model. [`tool_call_chunk`] scripts `id` as present,
+///    now capture-verified rather than merely plausible.
+/// 2. **The `functionCall` chunk carries no `finishReason`.** `"STOP"` arrives
+///    on a *separate, later* chunk, alongside an empty text part
+///    (`"parts":[{"text":""}]`) — not the empty-`content` shape this module
+///    guessed at before the capture existed. [`stop_chunk`] (already used for
+///    the text scenarios) reproduces this shape exactly when called with
+///    `text: ""`, so `ToolCallCleanStop`'s second chunk reuses it directly
+///    rather than needing its own helper — see [`stop_chunk`]'s doc.
+/// 3. **`thoughtSignature` is a real field**, a sibling of `functionCall`
+///    inside the `Part` object (not nested inside `functionCall` itself).
+///    `sse.rs`'s `Part` struct has no `deny_unknown_fields` attribute (checked:
+///    none of `sse.rs`'s structs do), so an unrecognised key is silently
+///    ignored by serde rather than rejected — [`tool_call_chunk`] keeps this
+///    field, both for fidelity to the capture and because its presence is a
+///    small, free regression check that a real-world extra field does not
+///    break parsing. Its value is a short synthetic placeholder, not the
+///    captured ~700-character blob — nothing under test inspects its content
+///    or length, only that the key is present with some string value,
+///    matching this module's established "arbitrary content over a grounded
+///    envelope" convention (e.g. [`text_delta`]'s "Hel"/"lo").
+///
+/// # `usageMetadata` appears on every chunk — corrected from an earlier draft
+///
+/// **This module previously confined `usageMetadata` to the stop-reason
+/// chunk alone**, specifically so the harness's "at least one `Usage`
+/// observed" floor for `CancelAfterStopReason` would be non-vacuous. The live
+/// capture above contradicts that shape directly: its first chunk carries
+/// `usageMetadata` despite having no `finishReason` at all, and
+/// `multi_chunk_usage_emits_usage_per_chunk`'s first chunk (already cited
+/// above) shows the same thing. Real Gemini traffic reports usage on every
+/// chunk, not only the terminal one. [`text_delta`] now sets `usageMetadata`
+/// on every call, matching this.
+///
+/// **Consequence, accepted rather than fought:** the `CancelAfterStopReason`
+/// floor is now vacuous for this subject, the same way it already is for
+/// `anthropic` (whose `message_start` emits `Usage` unconditionally) — a gate
+/// placed anywhere in this script, even before `stop_chunk`, would still show
+/// a `Usage` from the first `text_delta` and pass the floor trivially. The
+/// guarantee that this scenario is genuinely testing cancellation *after* the
+/// stop reason was buffered therefore comes entirely from the fixture's own
+/// provenance — `gate_after` being a *count* read after `through_stop()` has
+/// pushed `stop_chunk` — documented at the scenario site in `script`, not
+/// from the harness floor. See that match arm's comment, and
+/// `anthropic`'s identical handling of the identical narrowing.
 ///
 /// # Why `FragmentedToolName` is declined
 ///
@@ -2201,17 +2231,27 @@ mod gemini {
 
     /// The model id `build_model_against` requests. Matches the constructor
     /// example in the task brief (`GeminiModel::developer("gemini-2.0-flash")`).
+    /// Independent of the model the live capture happened to be taken
+    /// against (`gemini-3.6-flash` — see the module doc's "Live capture"
+    /// section): `PacedServer` ignores the request entirely and always serves
+    /// the scripted bytes, so this id only has to be one the crate accepts.
     const MODEL_ID: &str = "gemini-2.0-flash";
 
     /// The tool name every tool-call fixture declares.
     const TOOL_NAME: &str = "get_weather";
 
-    /// `id` for the single tool call in the tool fixture. Not claimed to match
-    /// any real Gemini id format — `function_call_uses_native_id`
-    /// (`stream.rs:107-114`) is the source of the `id`/`name`/`args` key
-    /// shape, not of this specific value, and nothing under test inspects it —
-    /// fixed purely so failure output is stable and greppable.
+    /// `id` for the single tool call in the tool fixture. The live capture
+    /// (module doc, "Live capture") confirms real traffic sends a
+    /// `functionCall.id`, settling that this key belongs in the fixture at
+    /// all — but this specific value is not claimed to match any real id
+    /// format (the capture's was `"call_1285087"`), and nothing under test
+    /// inspects it. Fixed purely so failure output is stable and greppable.
     const TOOL_CALL_ID: &str = "fc_conformance_0";
+
+    /// Synthetic stand-in for the real `thoughtSignature` value. See the
+    /// module doc's "Live capture" point 3 for why the field is kept but its
+    /// content is not.
+    const THOUGHT_SIGNATURE: &str = "thoughtsig_conformance_0";
 
     /// The substring that appears in a chunk if and only if it carries a
     /// *populated* `finishReason`.
@@ -2234,31 +2274,40 @@ mod gemini {
         format!("data: {payload}\n\n").into_bytes()
     }
 
-    /// One text delta with no `finishReason`/`usageMetadata` key at all.
-    /// Matches `gemini_streaming.rs`'s `truncated_stream_no_finish` fixture
-    /// (`crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:60-63`):
-    /// `{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}`.
-    fn text_delta(text: &str) -> Vec<u8> {
+    /// One text delta, carrying `usageMetadata`. Matches
+    /// `multi_chunk_usage_emits_usage_per_chunk`'s first chunk
+    /// (`crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:82-84`):
+    /// a content-only candidate (no `finishReason`) with `usageMetadata` as a
+    /// top-level sibling of `candidates` — see the module doc's "`usageMetadata`
+    /// appears on every chunk" section for why this replaced an earlier,
+    /// usage-free version of this helper.
+    fn text_delta(text: &str, prompt_tokens: u32, candidates_tokens: u32) -> Vec<u8> {
         frame(json!({
             "candidates": [{
                 "content": { "parts": [ { "text": text } ] }
-            }]
+            }],
+            "usageMetadata": {
+                "promptTokenCount": prompt_tokens,
+                "candidatesTokenCount": candidates_tokens
+            }
         }))
     }
 
-    /// The chunk carrying a populated `finishReason` AND `usageMetadata` in
-    /// the SAME event — Gemini's defining shape (task brief point 2): there is
-    /// no separate trailing usage event the way there is for `openai_chat`/
-    /// `litellm`. Matches `gemini_streaming.rs`'s `text_then_finish` fixture
-    /// (`.../tests/gemini_streaming.rs:40`) and
-    /// `multi_chunk_usage_emits_usage_per_chunk`'s second chunk
-    /// (`.../tests/gemini_streaming.rs:85-86`): text and `finishReason` inside
-    /// the one candidate, `usageMetadata` a top-level sibling of `candidates`
-    /// in the same SSE event.
+    /// A chunk carrying a `content.parts` text part, a populated
+    /// `finishReason`, AND `usageMetadata` in the SAME event — Gemini's
+    /// defining shape (task brief point 2): there is no separate trailing
+    /// usage event the way there is for `openai_chat`/`litellm`. Matches
+    /// `gemini_streaming.rs`'s `text_then_finish` fixture (`:40`) and
+    /// `multi_chunk_usage_emits_usage_per_chunk`'s second chunk (`:85-86`)
+    /// when called with non-empty `text`.
     ///
-    /// This is the only helper in this module that sets `usageMetadata` — see
-    /// the module doc's "`usageMetadata` stays on the stop-reason chunk"
-    /// section for why that placement is load-bearing.
+    /// Called with `text: ""` this is ALSO the shape `ToolCallCleanStop`'s
+    /// terminal chunk needs — the live capture (module doc, "Live capture"
+    /// point 2) shows the stop-reason chunk after a tool call carries an
+    /// *empty* text part (`"parts":[{"text":""}]`), not an absent `content`
+    /// key, which is exactly what this helper already produces for
+    /// `text: ""`. Reusing it here rather than adding a second, near-identical
+    /// helper is itself grounded by the capture, not merely convenient.
     fn stop_chunk(text: &str, reason: &str, prompt_tokens: u32, candidates_tokens: u32) -> Vec<u8> {
         frame(json!({
             "candidates": [{
@@ -2279,95 +2328,50 @@ mod gemini {
     /// No committed fixture anywhere in the repo exercises this arm — a
     /// repo-wide grep for the literal string `[DONE]` under
     /// `crates/paigasus-helikon-providers-gemini/` turns up only the driver's
-    /// own comparison, never a captured or scripted SSE frame. `CleanStop`
-    /// below is the first thing in this codebase that ever sends Gemini a
-    /// `[DONE]` sentinel and checks what the driver does with it. Grounded
-    /// directly in the driver's own string comparison rather than a capture;
-    /// the bytes are the same `data: [DONE]\n\n` terminator `openai_chat` and
-    /// `litellm` send, since `model.rs` checks nothing about the frame besides
-    /// its `data` field.
+    /// own comparison, never a captured or scripted SSE frame, and the live
+    /// capture (module doc, "Live capture") itself ended at bare EOF with no
+    /// `[DONE]` either. `CleanStop` below is the first thing in this codebase
+    /// that ever sends Gemini a `[DONE]` sentinel and checks what the driver
+    /// does with it. Grounded directly in the driver's own string comparison
+    /// rather than a capture; the bytes are the same `data: [DONE]\n\n`
+    /// terminator `openai_chat` and `litellm` send, since `model.rs` checks
+    /// nothing about the frame besides its `data` field.
     fn done() -> Vec<u8> {
         b"data: [DONE]\n\n".to_vec()
     }
 
-    /// `id`, the whole function `name`, and the whole argument JSON, all in
-    /// one `functionCall` part — Gemini never streams a tool call
-    /// incrementally, so this is the only shape a tool call can take on the
-    /// wire (see the module doc's "why `FragmentedToolName` is declined"
-    /// section).
+    /// `id`, the whole function `name`, the whole argument JSON, and
+    /// `thoughtSignature`, all in one `functionCall` part, plus
+    /// `usageMetadata` — Gemini never streams a tool call incrementally, so
+    /// this is the only shape a tool call can take on the wire (see the
+    /// module doc's "why `FragmentedToolName` is declined" section).
     ///
     /// # Provenance
     ///
-    /// No `tests/`-level SSE capture of a `functionCall` response exists
-    /// anywhere in this repo (see the module doc's provenance section). So —
-    /// as `bedrock`'s module doc directs for the same situation — this shape
-    /// is derived from two sources and nothing else:
-    ///
-    /// 1. **The translator's own match arm**, `stream.rs:40-52`, which reads
-    ///    `fc.id`, `fc.name` and `fc.args` off exactly this structure.
-    /// 2. **The crate's own already-committed, reviewed unit tests**:
-    ///    `function_call_uses_native_id` (`stream.rs:107-114`) is the source
-    ///    of the literal `id`/`name`/`args` keys used here, and
-    ///    `finish_with_function_call_is_tool_calls` (`stream.rs:179-185`)
-    ///    confirms that this exact shape — a content-carrying `functionCall`
-    ///    part plus a `STOP` `finishReason` — resolves to
-    ///    `FinishReason::ToolCalls`.
-    ///
-    /// `sse.rs`'s `Part`/`FunctionCall` structs (`#[serde(rename_all =
-    /// "camelCase")]`) pin the wire key to `functionCall` and its fields to
-    /// `id`/`name`/`args`.
-    ///
-    /// **UNVERIFIED against live traffic — see the module doc's "KNOWN GAP"
-    /// section.** In particular, whether real Gemini traffic sends `id` at
-    /// all (as scripted here) or omits it (falling through to `stream.rs`'s
-    /// `fc_{index}` synthesis) is an open empirical question this shape does
-    /// not answer.
-    fn tool_call_chunk(call_id: &str, name: &str, args: serde_json::Value) -> Vec<u8> {
+    /// Transcribed from the live capture (module doc, "Live capture"
+    /// section) — `id`/`name`/`args`/`thoughtSignature` keys and their
+    /// nesting match the captured bytes exactly (`thoughtSignature`'s VALUE
+    /// is a short synthetic placeholder, not the captured blob — see
+    /// [`THOUGHT_SIGNATURE`]). No `finishReason` key, matching the capture's
+    /// first chunk. `sse.rs`'s `Part`/`FunctionCall` structs
+    /// (`#[serde(rename_all = "camelCase")]`) independently confirm the wire
+    /// key is `functionCall` and its modelled fields are `id`/`name`/`args`.
+    fn tool_call_chunk(
+        call_id: &str,
+        name: &str,
+        args: serde_json::Value,
+        prompt_tokens: u32,
+        candidates_tokens: u32,
+    ) -> Vec<u8> {
         frame(json!({
             "candidates": [{
                 "content": { "parts": [
-                    { "functionCall": { "id": call_id, "name": name, "args": args } }
+                    {
+                        "functionCall": { "name": name, "args": args, "id": call_id },
+                        "thoughtSignature": THOUGHT_SIGNATURE
+                    }
                 ] }
-            }]
-        }))
-    }
-
-    /// A populated `finishReason` and `usageMetadata`, with no `content` key
-    /// at all — the shape `ToolCallCleanStop` needs for the event after its
-    /// one tool-call chunk, per the task brief's table (the tool call and the
-    /// finish/usage are two separate steps, not one combined event).
-    ///
-    /// # Provenance
-    ///
-    /// Composed from two independently grounded pieces, since no single
-    /// committed shape carries both at once with empty content:
-    ///
-    /// 1. **A `finishReason` with no `content` key at all** is exactly
-    ///    `safety_finish_maps_to_content_filter`'s shape (`stream.rs:212-217`:
-    ///    `{"candidates":[{"finishReason":"SAFETY"}]}`) — here with `"STOP"`
-    ///    in place of `"SAFETY"`, a substitution grounded by
-    ///    `finish_reason_stop_emitted_on_finish` (`stream.rs:164-170`) and
-    ///    `finish_with_function_call_is_tool_calls` (`stream.rs:179-185`),
-    ///    both of which prove `"STOP"` is read off exactly this key
-    ///    regardless of what else the candidate carries.
-    /// 2. **`usageMetadata` as a top-level sibling of `candidates`,
-    ///    independent of what the candidate itself contains** is the same
-    ///    pattern [`stop_chunk`] grounds via `text_then_finish`/
-    ///    `multi_chunk_usage_emits_usage_per_chunk` — `GeminiChunk`'s
-    ///    `usage_metadata` field (`sse.rs:12`) is read once per chunk
-    ///    regardless of `candidates`' shape.
-    ///
-    /// `saw_function_call` (`stream.rs:10,41`) is a translator-level flag, not
-    /// scoped to one chunk, so `finish()` still resolves this `"STOP"` to
-    /// `FinishReason::ToolCalls` even though the `functionCall` and the
-    /// `finishReason` arrive in different chunks here.
-    ///
-    /// **UNVERIFIED against live traffic — see the module doc's "KNOWN GAP"
-    /// section.** Composed, not captured; the same caveat as
-    /// [`tool_call_chunk`].
-    fn finish_and_usage(reason: &str, prompt_tokens: u32, candidates_tokens: u32) -> Vec<u8> {
-        frame(json!({
-            "candidates": [{ "finishReason": reason }],
+            }],
             "usageMetadata": {
                 "promptTokenCount": prompt_tokens,
                 "candidatesTokenCount": candidates_tokens
@@ -2383,16 +2387,17 @@ mod gemini {
     /// scenario and measure the bytes — see `bedrock::script`'s doc for the
     /// same pattern.
     fn script(scenario: Scenario) -> Option<Script> {
-        // The two-delta opening every text scenario shares, matching
-        // `truncated_stream_no_finish`'s envelope. The content is arbitrary,
-        // as in every other subject in this file.
-        let opening = || vec![text_delta("Hel"), text_delta("lo")];
+        // The two-delta opening every text scenario shares. Both deltas carry
+        // `usageMetadata` — see the module doc's "`usageMetadata` appears on
+        // every chunk" section for why. Numbers match
+        // `multi_chunk_usage_emits_usage_per_chunk`'s two chunks verbatim.
+        let opening = || vec![text_delta("Hel", 1, 1), text_delta("lo", 1, 2)];
         // The opening plus one chunk carrying BOTH the stop reason and usage
         // — see the module doc for why those two are never split across two
         // chunks in this subject.
         let through_stop = || {
             let mut chunks = opening();
-            chunks.push(stop_chunk("!", "STOP", 8, 6));
+            chunks.push(stop_chunk("!", "STOP", 1, 3));
             chunks
         };
 
@@ -2416,9 +2421,10 @@ mod gemini {
             // loop, not the same one twice.
             Scenario::TruncatedAfterStopReason => (through_stop(), None, Ending::Clean),
             // The body ends cleanly mid-generation: no `finishReason` chunk
-            // ever arrives, so no stop reason is ever observed. Matches
-            // `truncated_stream_no_finish`'s shape (content delta(s), then
-            // EOF) directly — `opening()` alone.
+            // ever arrives, so no stop reason is ever observed. The SCRIPT
+            // shape (a delta, then EOF, no `finishReason`) matches
+            // `truncated_stream_no_finish`'s envelope
+            // (`gemini_streaming.rs:60-63`) — `opening()` alone.
             Scenario::TruncatedMidGeneration => (opening(), None, Ending::Clean),
             // Same prefix, but the connection is torn down without a
             // terminating chunk, so the client observes a transport error
@@ -2443,20 +2449,28 @@ mod gemini {
             // needs no *extra* usage chunk appended for the gate to sit
             // after, the same shape as `anthropic`'s `message_delta`.
             //
-            // Unlike `anthropic`, the harness's "at least one `Usage`
-            // observed" floor is NOT vacuous here: nothing before
-            // `stop_chunk` in this script ever sets `usageMetadata` (see the
-            // module doc's "`usageMetadata` stays on the stop-reason chunk"
-            // section), so a gate placed one chunk too early would leave the
-            // drained stream with no `Usage` at all and the floor would
-            // catch it.
+            // **This comment is the only guard for this scenario on this
+            // subject.** The harness's own "at least one `Usage` observed"
+            // floor (`assert_conforms`'s `floor_violation`) is VACUOUS here,
+            // the same way it is for `anthropic`: `text_delta` (module doc,
+            // "`usageMetadata` appears on every chunk") already emits a
+            // `Usage` on the very first chunk of `opening()`, so that floor
+            // is satisfied whether or not the gate sits in the right place —
+            // even a gate placed before `stop_chunk` would still show a
+            // `Usage` from the first `text_delta`, and pass. An earlier draft
+            // of this module confined `usageMetadata` to the stop-reason
+            // chunk specifically to keep this floor non-vacuous; the live
+            // capture (module doc) showed that shape does not occur in real
+            // traffic, so it was removed — fidelity over a convenient floor.
             //
-            // `gate_after` is a COUNT — `chunks.len()`, not a hand-typed
-            // literal — read *after* `through_stop()` has pushed
+            // So the only thing standing between this scenario and silently
+            // degrading into `CancelMidGeneration` under another name is
+            // this: `gate_after` is a COUNT — `chunks.len()`, not a
+            // hand-typed literal — read *after* `through_stop()` has pushed
             // `stop_chunk` onto `chunks`. That parks the server with
             // `stop_chunk` already sent and the body still open, so
             // cancellation truncates the stream strictly after the stop
-            // reason was buffered and its usage observed.
+            // reason was buffered.
             Scenario::CancelAfterStopReason => {
                 let chunks = through_stop();
                 let gate_after = chunks.len();
@@ -2465,16 +2479,19 @@ mod gemini {
             // Declined — see the module doc's "why `FragmentedToolName` is
             // declined" section and `Gemini::stream`.
             Scenario::FragmentedToolName => return None,
-            // A whole tool call: the name and full argument JSON arrive
-            // together in the one `functionCall` part Gemini is ever observed
-            // to send per call (see [`tool_call_chunk`]'s doc), then a
-            // separate chunk carries a `tool_use`-equivalent `STOP` stop
-            // reason and its usage (see [`finish_and_usage`]'s doc), then the
-            // `[DONE]` sentinel.
+            // A whole tool call, transcribed from the live capture (module
+            // doc, "Live capture"): the name, arguments, id and
+            // `thoughtSignature` arrive together in one `functionCall` part
+            // alongside `usageMetadata` and no `finishReason` (see
+            // [`tool_call_chunk`]'s doc), then a separate chunk carries an
+            // empty text part, `finishReason: "STOP"`, and `usageMetadata`
+            // again (see [`stop_chunk`]'s doc on its `text: ""` reuse), then
+            // the `[DONE]` sentinel — not itself part of the capture, which
+            // ended at bare EOF (see [`done`]'s doc).
             Scenario::ToolCallCleanStop => (
                 vec![
-                    tool_call_chunk(TOOL_CALL_ID, TOOL_NAME, json!({ "city": "Berlin" })),
-                    finish_and_usage("STOP", 10, 4),
+                    tool_call_chunk(TOOL_CALL_ID, TOOL_NAME, json!({ "city": "Berlin" }), 58, 16),
+                    stop_chunk("", "STOP", 58, 16),
                     done(),
                 ],
                 None,
@@ -2571,6 +2588,12 @@ mod gemini {
                 }
                 // `"STOP"` maps to `FinishReason::ToolCalls` once
                 // `saw_function_call` is set, which `tool_call_chunk` sets.
+                // Gemini has no tool-specific value on the wire — the
+                // translator derives `ToolCalls` purely from having seen a
+                // `functionCall` part earlier in the stream, not from a
+                // distinct `finishReason` string (confirmed live: the
+                // capture's own finish chunk carries the same `"STOP"` a
+                // plain text turn would).
                 Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
@@ -2614,29 +2637,27 @@ mod gemini {
     }
 
     /// The soundness claim behind [`Gemini::encodes_stop_reason`]'s substring
-    /// scan: [`FINISH_REASON_MARKER`] occurs in [`stop_chunk`]'s and
-    /// [`finish_and_usage`]'s populated `finishReason` and in no other frame
-    /// this subject builds — in particular, not in an ordinary content-only
-    /// chunk, which has no `finishReason` key at all (see [`text_delta`]'s
-    /// doc), and not in a `functionCall`-only chunk either.
+    /// scan: [`FINISH_REASON_MARKER`] occurs in [`stop_chunk`]'s populated
+    /// `finishReason` and in no other frame this subject builds — in
+    /// particular, not in an ordinary content-only chunk, which has no
+    /// `finishReason` key at all (see [`text_delta`]'s doc), and not in a
+    /// `functionCall`-only chunk either.
     #[test]
     fn scan_finds_only_a_populated_finish_reason() {
-        for (name, frame) in [
-            ("stop_chunk", stop_chunk("!", "STOP", 8, 6)),
-            ("finish_and_usage", finish_and_usage("STOP", 10, 4)),
-        ] {
-            assert!(
-                contains(&frame, FINISH_REASON_MARKER),
-                "{name} must carry the marker, or the scan measures nothing"
-            );
-        }
+        assert!(
+            contains(&stop_chunk("!", "STOP", 1, 3), FINISH_REASON_MARKER),
+            "stop_chunk must carry the marker, or the scan measures nothing"
+        );
 
         for (name, frame) in [
-            ("content delta (no finishReason key)", text_delta("Hel")),
+            (
+                "content delta (no finishReason key)",
+                text_delta("Hel", 1, 1),
+            ),
             ("[DONE]", done()),
             (
                 "functionCall chunk (no finishReason key)",
-                tool_call_chunk(TOOL_CALL_ID, TOOL_NAME, json!({ "city": "Berlin" })),
+                tool_call_chunk(TOOL_CALL_ID, TOOL_NAME, json!({ "city": "Berlin" }), 58, 16),
             ),
         ] {
             assert!(
