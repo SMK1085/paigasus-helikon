@@ -118,9 +118,9 @@ pub fn scan(src: &str) -> Vec<Offense> {
 /// failure to the file it was reading — something a panic raised from
 /// inside this `&str`-only function cannot do on its own.
 pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
-    let (masked, line_comment_ranges) = mask_trivia(src);
-    let allow_lines = collect_allow_marker_lines(src, &line_comment_ranges);
-    let b = &masked[..];
+    let masked = mask_trivia(src);
+    let allow_lines = collect_allow_marker_lines(src, &masked.line_comments);
+    let b = &masked.buf[..];
     let aliases = collect_macro_aliases(b);
     let mut offenses = Vec::new();
     let mut i = 0;
@@ -294,6 +294,32 @@ fn blank(out: &mut [u8], from: usize, to: usize) {
     }
 }
 
+/// What [`mask_trivia`] found while masking one file's source.
+struct Masked {
+    /// Source bytes with comments and literals blanked to spaces, so a scan
+    /// over it sees only genuine code.
+    buf: Vec<u8>,
+    /// Byte ranges of genuine `//` line comments (including `///` and `//!`).
+    /// [`collect_allow_marker_lines`] uses these to tell a real
+    /// `// allow(tracing-target-syntax)` from that text inside a string.
+    line_comments: Vec<(usize, usize)>,
+    /// Byte ranges of string literals — plain, raw, byte and C strings —
+    /// delimiters included. Char literals are excluded: they cannot hold a
+    /// tracing target, and a lifetime (`'a`) is not a literal at all.
+    ///
+    /// `scan_targets` needs these because `buf` has blanked the very bytes a
+    /// target string is made of. Reporting the span instead of un-blanking
+    /// keeps one lexer authoritative over what counts as code — re-deriving
+    /// literal boundaries in a second scanner is what the note at
+    /// `collect_allow_marker_lines` warns against.
+    ///
+    /// Unread outside `mod tests` until `scan_targets` (SMA-557 Task 2) lands
+    /// and becomes its consumer; `#[allow(dead_code)]` below is temporary for
+    /// that reason and should be removed once that caller exists.
+    #[allow(dead_code)]
+    string_literals: Vec<(usize, usize)>,
+}
+
 /// Replace every byte inside a comment or literal with a space, preserving
 /// length, byte offsets and newlines so offsets still map onto the original.
 ///
@@ -305,10 +331,11 @@ fn blank(out: &mut [u8], from: usize, to: usize) {
 /// string, or a block comment — all of which this function also blanks, but
 /// does *not* record a range for, since only a line comment is a legitimate
 /// home for the marker.
-fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
+fn mask_trivia(src: &str) -> Masked {
     let b = src.as_bytes();
     let mut out = b.to_vec();
-    let mut line_comment_ranges = Vec::new();
+    let mut line_comments = Vec::new();
+    let mut string_literals = Vec::new();
     let mut i = 0;
     while i < b.len() {
         match b[i] {
@@ -318,7 +345,7 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
                     i += 1;
                 }
                 blank(&mut out, start, i);
-                line_comment_ranges.push((start, i));
+                line_comments.push((start, i));
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 let start = i;
@@ -340,6 +367,7 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
             b'r' | b'b' | b'c' => match raw_or_byte_string_end(b, i) {
                 Some(end) => {
                     blank(&mut out, i, end);
+                    string_literals.push((i, end));
                     i = end;
                 }
                 None => i += 1,
@@ -361,6 +389,7 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
                     }
                 }
                 blank(&mut out, start, i);
+                string_literals.push((start, i));
             }
             b'\'' => match char_literal_end(b, i) {
                 Some(end) => {
@@ -373,7 +402,11 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
             _ => i += 1,
         }
     }
-    (out, line_comment_ranges)
+    Masked {
+        buf: out,
+        line_comments,
+        string_literals,
+    }
 }
 
 /// End (exclusive) of a raw or byte string starting at `i`, if one does.
@@ -892,5 +925,31 @@ mod tests {
     fn unterminated_string_literal_does_not_panic() {
         let src = "let s = \"abc\\";
         assert_eq!(kinds(src), vec![]);
+    }
+
+    /// `mask_trivia` must report the byte span of every string literal, so a
+    /// later scan can read the literal's *contents* out of the original source
+    /// (the masked buffer has blanked them). Char literals are deliberately
+    /// excluded — they can never hold a tracing target.
+    #[test]
+    fn mask_trivia_reports_string_literal_spans() {
+        let src = "let a = \"one\"; let b = 'x'; let c = r#\"two\"#;";
+        let masked = mask_trivia(src);
+        let texts: Vec<&str> = masked
+            .string_literals
+            .iter()
+            .map(|&(s, e)| &src[s..e])
+            .collect();
+        assert_eq!(texts, vec!["\"one\"", "r#\"two\"#"]);
+    }
+
+    /// The existing line-comment reporting must survive the signature change.
+    #[test]
+    fn mask_trivia_still_reports_line_comments() {
+        let src = "// note\nlet a = 1;\n";
+        let masked = mask_trivia(src);
+        assert_eq!(masked.line_comments.len(), 1);
+        let (s, e) = masked.line_comments[0];
+        assert_eq!(&src[s..e], "// note");
     }
 }
