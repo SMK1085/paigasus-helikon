@@ -4002,6 +4002,7 @@ dependencies = [
  "hyper-util",
  "paigasus-helikon-core",
  "paigasus-helikon-providers-bedrock",
+ "paigasus-helikon-providers-openai",
  "reqwest",
  "serde_json",
  "tokio",

@@ -502,3 +502,479 @@ mod bedrock {
         assert_conforms(&Bedrock).await;
     }
 }
+
+/// The `Model::invoke` stream contract, checked against the OpenAI Chat
+/// Completions backend.
+///
+/// This is the subject whose historical defect motivated the whole suite:
+/// SMA-522 (PR #197), where this exact translator emitted `Finish` before
+/// `Usage` on every streaming turn. It went undetected because the fixtures
+/// in place at the time encoded a wire shape real OpenAI-compatible servers
+/// do not send — `usage` arriving *before* `finish_reason` rather than after.
+/// `CleanStop` below places `usage` after the `finish_reason` chunk for
+/// exactly that reason.
+///
+/// # Fixture provenance
+///
+/// Every envelope shape below is transcribed from a committed fixture in this
+/// workspace, cited on the helper that builds it:
+///
+/// - `crates/paigasus-helikon-providers-openai/tests/fixtures/chat_text_usage_trailing.txt`
+///   — the SMA-522 capture: content deltas, the `finish_reason` chunk, the
+///   trailing `usage` chunk, `[DONE]`.
+/// - `crates/paigasus-helikon-providers-openai/tests/chat_wire.rs`'s
+///   `happy_path_text_completion` fixture body — grounds the explicit
+///   `"finish_reason":null"` OpenAI sends on every non-terminal chunk, which
+///   is exactly the shape [`OpenAiChat::encodes_stop_reason`]'s marker must
+///   not match.
+/// - `crates/paigasus-helikon-providers-openai/tests/fixtures/chat_parallel_tool_calls.txt`
+///   — the tool-call envelope: `id`/`name` arriving with empty `arguments`,
+///   followed by args-only continuations with no `name` key.
+/// - `crates/paigasus-helikon-providers-litellm/tests/fixtures/tool_call_stream_fragmented_name.txt`
+///   — the committed capture of a name split across two deltas that BOTH
+///   arrive after the `id`, which `FragmentedToolName` must use verbatim per
+///   the design spec's §6 provenance note (the "id resolves late" variant has
+///   no capture anywhere in the repo and is not built here).
+///
+/// `chat_content_filter.txt` and `chat_text_usage_trailing_empty_choices.txt`
+/// were read but contribute no shape this module needs: this subject serves
+/// only `Stop` and `ToolCalls` finish reasons, and the empty-`choices` usage
+/// variant is a second encoding of the same trailing-usage envelope already
+/// covered by `chat_text_usage_trailing.txt`.
+///
+/// # `FragmentedToolName` deliberately never completes
+///
+/// The task brief's scenario table describes `FragmentedToolName` as ending
+/// with `finish_reason: "tool_calls"` → `usage` → `[DONE]`, mirroring the
+/// litellm capture's full trace. That shape was tried first and reverted: the
+/// design spec's §6 table asserts only **7, 1** for this scenario (`S6`), not
+/// 3/4, and `Scenario::expects_stop_reason` (`src/lib.rs`) excludes
+/// `FragmentedToolName` from the set of scenarios that may observe a stop
+/// reason. Completing the stream — which the real translator does, buffering
+/// `finish_reason` and flushing it as a genuine `Finish` at end-of-stream —
+/// makes `encodes_stop_reason` measure `true` against an `expects_stop_reason`
+/// of `false`, failing on `StopReasonDeclarationMismatch` before the stream is
+/// even drained. So this subject's `FragmentedToolName` script is a *prefix*
+/// of the committed capture: the three tool-call deltas, verbatim, with the
+/// body ending cleanly right after them — no `finish_reason`, no `usage`, no
+/// `[DONE]`. Assertion 7 (exactly one name-bearing delta per `call_id`) is
+/// fully exercised by that prefix alone; nothing here shortens what the
+/// scenario tests, only when its script stops.
+mod openai_chat {
+    use super::*;
+    use paigasus_helikon_providers_openai::OpenAiModel;
+
+    /// `id` on every scripted chunk. Not claimed to match any real OpenAI id
+    /// format — nothing under test inspects it — fixed purely so failure
+    /// output is stable and greppable.
+    const RESPONSE_ID: &str = "chatcmpl-conformance";
+
+    /// `model` on every scripted chunk, and the model id `build_model_against`
+    /// requests. Matches the identifier the task brief specifies.
+    const MODEL_ID: &str = "gpt-4o-mini";
+
+    /// The tool name every tool-call fixture declares.
+    const TOOL_NAME: &str = "get_weather";
+
+    /// `id` for the single tool call in the tool fixtures. Fixed for the same
+    /// reason as [`RESPONSE_ID`].
+    const TOOL_CALL_ID: &str = "call_conformance_0";
+
+    /// The substring that appears in a Chat Completions chunk if and only if
+    /// that chunk carries a *populated* `finish_reason`.
+    ///
+    /// The obvious marker — `finish_reason` alone — is wrong for this
+    /// subject: OpenAI sends `"finish_reason":null` on every ordinary content
+    /// or tool-call delta (see [`text_delta`]), so a bare substring scan would
+    /// report a stop reason for scripts that encode none. Scanning for the
+    /// opening quote of a *string* value excludes the null case: `null` has
+    /// no quote after the colon, `"stop"`/`"tool_calls"` do.
+    /// `scan_finds_only_a_populated_finish_reason` is the guard that keeps
+    /// this true as helpers are added or edited.
+    const FINISH_REASON_MARKER: &[u8] = b"\"finish_reason\":\"";
+
+    /// One SSE frame: `data: {payload}\n\n`. `serde_json::Value`'s `Display`
+    /// impl serialises compactly (no extra whitespace), which is what keeps
+    /// [`FINISH_REASON_MARKER`] a literal substring of the bytes on the wire.
+    fn frame(payload: serde_json::Value) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
+    /// One text delta.
+    ///
+    /// Envelope shape (`id`/`object`/`created`/`model`/`choices[].index`/
+    /// `choices[].delta.content`) matches the content-delta chunks in
+    /// `chat_text_usage_trailing.txt`. The explicit `"finish_reason":null` is
+    /// grounded in `tests/chat_wire.rs`'s `happy_path_text_completion`
+    /// fixture body (itself captured from LiteLLM) — it is the frame
+    /// `scan_finds_only_a_populated_finish_reason` uses to prove the marker
+    /// does not fire on a null value.
+    fn text_delta(text: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{
+                "index": 0,
+                "delta": { "content": text },
+                "finish_reason": null
+            }]
+        }))
+    }
+
+    /// The chunk carrying a populated `finish_reason`. Matches
+    /// `chat_text_usage_trailing.txt`'s finish chunk
+    /// (`"delta":{},"finish_reason":"stop"`).
+    ///
+    /// `ChatTranslator` buffers this and does **not** emit `Finish` inline —
+    /// it is released only by `finish()` at end-of-stream
+    /// (`backend/chat.rs`'s `consume`/`finish` doc comments) — which is the
+    /// whole reason `CleanStop` must place [`usage_chunk`] *after* this one:
+    /// that ordering is the exact shape SMA-522 got wrong.
+    fn finish_chunk(reason: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{ "index": 0, "delta": {}, "finish_reason": reason }]
+        }))
+    }
+
+    /// The trailing usage-only chunk. Matches `chat_text_usage_trailing.txt`'s
+    /// usage chunk exactly, including its token counts: an empty `delta`, no
+    /// `finish_reason` key at all, and a top-level `usage` object.
+    fn usage_chunk() -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{ "index": 0, "delta": {} }],
+            "usage": { "prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14 }
+        }))
+    }
+
+    /// The stream terminator every committed fixture ends with.
+    /// `async-openai`'s `create_stream` consumes `[DONE]` internally and ends
+    /// iteration on it (`backend/chat.rs`'s `invoke` doc comment), so it never
+    /// reaches the translator as an event — it only has to be present for a
+    /// script to be the stream it claims to be.
+    fn done() -> Vec<u8> {
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    /// `id` plus a name fragment, empty `arguments`. Matches
+    /// `tool_call_stream_fragmented_name.txt`'s first tool-call line
+    /// (`"id":"call_abc","function":{"arguments":"","name":"get_"}`).
+    fn tool_call_start(id: &str, name_frag: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": id,
+                        "type": "function",
+                        "function": { "name": name_frag, "arguments": "" }
+                    }]
+                }
+            }]
+        }))
+    }
+
+    /// A later name fragment, no `id` key. Matches
+    /// `tool_call_stream_fragmented_name.txt`'s second tool-call line
+    /// (`"function":{"arguments":"","name":"weather"}`, no `id`) — the shape
+    /// that proves both fragments arrive AFTER the id, the SMA-547 defect
+    /// this capture exists to demonstrate.
+    fn tool_call_name_fragment(name_frag: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "type": "function",
+                        "function": { "name": name_frag, "arguments": "" }
+                    }]
+                }
+            }]
+        }))
+    }
+
+    /// An args-only continuation: no `id`, no `name` key at all. Matches
+    /// `tool_call_stream_fragmented_name.txt`'s third tool-call line and
+    /// `chat_parallel_tool_calls.txt`'s argument-continuation lines.
+    fn tool_call_args(args_frag: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "type": "function",
+                        "function": { "arguments": args_frag }
+                    }]
+                }
+            }]
+        }))
+    }
+
+    /// The scripted response for one scenario.
+    ///
+    /// Every scenario is served — `openai/chat` declines none — so unlike
+    /// `bedrock::script` this returns a bare [`Script`], not an `Option`.
+    fn script(scenario: Scenario) -> Script {
+        // The two-delta opening every text scenario shares. The content is
+        // arbitrary (as in `bedrock::opening`); the envelope is what is
+        // grounded — see `text_delta`.
+        let opening = || vec![text_delta("Hel"), text_delta("lo")];
+        // The opening plus a populated finish_reason chunk.
+        let through_stop = || {
+            let mut chunks = opening();
+            chunks.push(finish_chunk("stop"));
+            chunks
+        };
+
+        let (chunks, gate_after, ending) = match scenario {
+            // Full stream: deltas, stop reason, then usage AFTER it, then
+            // [DONE] and a clean end of body. Usage-after-finish_reason is
+            // the real OpenAI wire order and the exact shape SMA-522 got
+            // wrong — see the module doc.
+            Scenario::CleanStop => {
+                let mut chunks = through_stop();
+                chunks.push(usage_chunk());
+                chunks.push(done());
+                (chunks, None, Ending::Clean)
+            }
+            // The stop reason is observed, then the body simply ends — no
+            // usage, no [DONE] — so the translator's buffered stop reason has
+            // to be flushed by the EOF path (`ChatTranslator::finish`).
+            Scenario::TruncatedAfterStopReason => (through_stop(), None, Ending::Clean),
+            // The body ends cleanly mid-generation: no finish_reason chunk
+            // ever arrives, so no stop reason is ever observed.
+            Scenario::TruncatedMidGeneration => (opening(), None, Ending::Clean),
+            // Same prefix, but the connection is torn down without a
+            // terminating chunk, so the client observes a transport error.
+            Scenario::ErrorMidGeneration => (opening(), None, Ending::Abort),
+            // The stop reason is buffered and *then* the body is aborted, so
+            // the error path must not flush it as a Finish.
+            Scenario::ErrorAfterStopReason => (through_stop(), None, Ending::Abort),
+            // Two content deltas go out, then the server parks holding
+            // nothing else back — no finish_reason chunk anywhere in this
+            // script, so no stop reason exists even after the gate releases.
+            Scenario::CancelMidGeneration => {
+                let chunks = opening();
+                (chunks, Some(1), Ending::Clean)
+            }
+            // The stop reason AND the usage chunk after it are both observed
+            // before the gate. `usage` is the harness's required edge here:
+            // `ChatTranslator` buffers `finish_reason` silently
+            // (`backend/chat.rs`'s `consume` doc comment), so the stop-reason
+            // chunk itself is not an observable event — usage is the first
+            // thing the client sees after it, and the floor in
+            // `assert_conforms` requires at least one `Usage` for this exact
+            // reason (see its `CancelAfterStopReason` comment).
+            Scenario::CancelAfterStopReason => {
+                let mut chunks = through_stop();
+                chunks.push(usage_chunk());
+                let gate_after = chunks.len();
+                (chunks, Some(gate_after), Ending::Clean)
+            }
+            // The committed capture's shape, verbatim and in full — see the
+            // module doc's "FragmentedToolName deliberately never completes"
+            // section for why the body ends right here rather than
+            // continuing on to the capture's finish_reason/usage/[DONE]
+            // tail.
+            Scenario::FragmentedToolName => {
+                let chunks = vec![
+                    tool_call_start(TOOL_CALL_ID, "get_"),
+                    tool_call_name_fragment("weather"),
+                    tool_call_args("{\"city\":\"Berlin\"}"),
+                ];
+                (chunks, None, Ending::Clean)
+            }
+            // A whole tool call: the name arrives with the first delta
+            // (empty args), the arguments arrive on the next delta (so
+            // exactly one emitted `ToolCallDelta` carries the name), then a
+            // tool_calls stop reason and the usage-bearing trailing chunk.
+            Scenario::ToolCallCleanStop => {
+                let chunks = vec![
+                    tool_call_start(TOOL_CALL_ID, TOOL_NAME),
+                    tool_call_args("{\"city\":\"Berlin\"}"),
+                    finish_chunk("tool_calls"),
+                    usage_chunk(),
+                    done(),
+                ];
+                (chunks, None, Ending::Clean)
+            }
+        };
+
+        Script {
+            content_type: "text/event-stream",
+            chunks,
+            gate_after,
+            ending,
+        }
+    }
+
+    /// The request driven through `Model::invoke`.
+    ///
+    /// Carries a tool definition for both tool scenarios so the exchange is
+    /// coherent — a response returning `tool_calls` for a request that
+    /// offered no tools is not a stream OpenAI would ever produce.
+    fn request(scenario: Scenario) -> ModelRequest {
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "What is the weather in Berlin?".into(),
+            }],
+        }];
+        if matches!(
+            scenario,
+            Scenario::ToolCallCleanStop | Scenario::FragmentedToolName
+        ) {
+            req.tools = vec![ToolDef {
+                name: TOOL_NAME.to_owned(),
+                description: "Look up the current weather for a city.".to_owned(),
+                schema: json!({
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }),
+            }];
+        }
+        req
+    }
+
+    /// Build a real `OpenAiModel` (Chat Completions backend) pointed at a
+    /// local plain-HTTP endpoint.
+    fn build_model_against(base_url: &str) -> OpenAiModel {
+        OpenAiModel::chat(MODEL_ID)
+            .api_key("sk-conformance-test")
+            .base_url(base_url)
+            .build()
+            .expect("openai/chat model should build with an explicit api key and base url")
+    }
+
+    /// See the module-level docs on this file for the fixture provenance
+    /// rules this subject follows.
+    struct OpenAiChat;
+
+    #[async_trait::async_trait]
+    impl StreamUnderTest for OpenAiChat {
+        fn name(&self) -> &'static str {
+            "openai/chat"
+        }
+
+        fn encodes_stop_reason(&self, scenario: Scenario) -> bool {
+            // MEASURED from the bytes about to be served — deliberately not
+            // `scenario.expects_stop_reason()`. See the crate's `declines`
+            // module doc and `bedrock::encodes_stop_reason` for why that
+            // restatement would make the harness's cross-check dead code.
+            script(scenario)
+                .chunks
+                .iter()
+                .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
+        }
+
+        fn fixture_tool_name(&self) -> &'static str {
+            TOOL_NAME
+        }
+
+        fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason> {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
+                    Some(FinishReason::Stop)
+                }
+                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                // Truncated, errored and cancelled streams must withhold
+                // `Finish` entirely, and so — per the module doc's
+                // "FragmentedToolName deliberately never completes" section —
+                // must this subject's `FragmentedToolName` script, which ends
+                // before any finish_reason chunk arrives.
+                Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName => None,
+            }
+        }
+
+        async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
+            let script = script(scenario);
+            let mut server = PacedServer::start(script).await;
+            let gate = server.take_gate();
+            let model = build_model_against(&server.base_url());
+
+            let stream = model
+                .invoke(request(scenario), cancel)
+                .await
+                .expect("openai/chat invoke should reach the local paced server");
+
+            Outcome::Served { stream, gate }
+        }
+    }
+
+    /// Whether `haystack` contains `needle` as a contiguous byte run.
+    /// Duplicated per subject module by design — see `bedrock::contains`.
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The soundness claim behind [`OpenAiChat::encodes_stop_reason`]'s
+    /// substring scan: [`FINISH_REASON_MARKER`] occurs in the finish_reason
+    /// chunk and in no other frame this subject builds — in particular, not
+    /// in an ordinary content delta, which is the OpenAI-specific pitfall the
+    /// task brief calls out (`"finish_reason":null` contains `finish_reason`
+    /// but not the marker).
+    #[test]
+    fn scan_finds_only_a_populated_finish_reason() {
+        assert!(
+            contains(&finish_chunk("stop"), FINISH_REASON_MARKER),
+            "the finish_reason chunk must carry the marker, or the scan measures nothing"
+        );
+
+        for (name, frame) in [
+            ("content delta (finish_reason: null)", text_delta("Hel")),
+            ("usage chunk", usage_chunk()),
+            ("[DONE]", done()),
+            ("tool_call start", tool_call_start(TOOL_CALL_ID, "get_")),
+            (
+                "tool_call name fragment",
+                tool_call_name_fragment("weather"),
+            ),
+            ("tool_call args", tool_call_args("{\"city\":\"Berlin\"}")),
+        ] {
+            assert!(
+                !contains(&frame, FINISH_REASON_MARKER),
+                "{name} contains the populated-finish_reason marker, so the scan would report a \
+                 stop reason for scripts that encode none. In particular, an ordinary content \
+                 delta carries \"finish_reason\":null, and the marker must not match that null \
+                 value."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conforms() {
+        assert_conforms(&OpenAiChat).await;
+    }
+}
