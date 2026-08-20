@@ -3,6 +3,8 @@
 //! Internal, never published. See
 //! `docs/superpowers/specs/2026-08-19-sma-543-tracing-target-design.md`.
 
+use std::collections::BTreeSet;
+
 /// One `target =` / `parent =` argument found inside a `tracing` macro.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Offense {
@@ -171,6 +173,89 @@ pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
     Ok(offenses)
 }
 
+/// Distinct `<component>` segments of every `target: "paigasus::…"` literal in
+/// one file's source.
+///
+/// This is the source half of the doc-sync guard in
+/// `tests/workspace-lints/tests/tracing_target_docs.rs`: the components found
+/// here must match the ones the mdBook documents. It reports **components
+/// only** — the `::<subsystem>` leaf is explicitly free to change (SMA-557 D1),
+/// so guarding it would redden CI on legitimate refactors.
+///
+/// Comments, char literals and text nested inside a string literal are invisible
+/// to it, because it looks for `target:` in [`mask_trivia`]'s masked buffer and
+/// reads the literal's contents back out of the original source.
+///
+/// Not macro-aware: it keys on a `target:` token followed by a `paigasus::`
+/// literal, so a non-`tracing` field named `target` holding such a string would
+/// be a false positive. No such site exists in this workspace, and the failure
+/// mode is a loud mismatch rather than a silent miss.
+pub fn scan_targets(src: &str) -> BTreeSet<String> {
+    const NEEDLE: &[u8] = b"target:";
+    let masked = mask_trivia(src);
+    let b = &masked.buf[..];
+    // Whitespace between `target:` and its literal is skipped against the
+    // *raw* source, not the masked buffer: `mask_trivia` blanks a string
+    // literal's delimiters and contents to spaces too, so scanning the
+    // masked buffer here would read straight through the literal as if it
+    // were more whitespace and overshoot its opening quote.
+    let src_bytes = src.as_bytes();
+    let mut out = BTreeSet::new();
+    let mut i = 0;
+    while let Some(rel) = find_sub(&b[i..], NEEDLE) {
+        let after = i + rel + NEEDLE.len();
+        let mut j = after;
+        while j < src_bytes.len() && src_bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        // The literal must begin exactly where the whitespace ended; anything
+        // else (an identifier, a `format!`, a nested expression) is not a
+        // literal target and is skipped.
+        if let Some(&(start, end)) = masked.string_literals.iter().find(|&&(s, _)| s == j) {
+            if let Some(component) = component_of(&src[start..end]) {
+                out.insert(component);
+            }
+        }
+        i = after;
+    }
+    out
+}
+
+/// The `<component>` of a `"paigasus::<component>::…"` string literal, given the
+/// literal's raw text **including** its delimiters.
+///
+/// Returns `None` for a literal outside the namespace, or one whose component
+/// segment is empty (`"paigasus::"`).
+fn component_of(literal: &str) -> Option<String> {
+    let open = literal.find('"')?;
+    let close = literal.rfind('"')?;
+    if close <= open {
+        return None;
+    }
+    let content = literal.get(open + 1..close)?;
+    let rest = content.strip_prefix("paigasus::")?;
+    let component = match rest.find("::") {
+        Some(k) => &rest[..k],
+        None => rest,
+    };
+    if component.is_empty() {
+        None
+    } else {
+        Some(component.to_owned())
+    }
+}
+
+/// Index of the first occurrence of `needle` in `haystack`, or `None`.
+///
+/// `std` has no substring search for `&[u8]`, and this crate takes no
+/// dependencies.
+fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
 fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
@@ -312,11 +397,6 @@ struct Masked {
     /// keeps one lexer authoritative over what counts as code — re-deriving
     /// literal boundaries in a second scanner is what the note at
     /// `collect_allow_marker_lines` warns against.
-    ///
-    /// Unread outside `mod tests` until `scan_targets` (SMA-557 Task 2) lands
-    /// and becomes its consumer; `#[allow(dead_code)]` below is temporary for
-    /// that reason and should be removed once that caller exists.
-    #[allow(dead_code)]
     string_literals: Vec<(usize, usize)>,
 }
 
@@ -951,5 +1031,73 @@ mod tests {
         assert_eq!(masked.line_comments.len(), 1);
         let (s, e) = masked.line_comments[0];
         assert_eq!(&src[s..e], "// note");
+    }
+
+    /// The ordinary case: a component is taken from between the `paigasus::`
+    /// prefix and the next `::`.
+    #[test]
+    fn scan_targets_extracts_components() {
+        let src = concat!(
+            "tracing::debug!(target: \"paigasus::openai::chat\", \"m\");\n",
+            "tracing::warn!(target: \"paigasus::litellm::stream\", \"m\");\n",
+            "tracing::warn!(target: \"paigasus::openai::responses\", \"m\");\n",
+        );
+        let got: Vec<String> = scan_targets(src).into_iter().collect();
+        assert_eq!(got, vec!["litellm".to_owned(), "openai".to_owned()]);
+    }
+
+    /// A macro spanning several lines is the dominant real-world shape.
+    #[test]
+    fn scan_targets_handles_multiline_macros() {
+        let src = "tracing::warn!(\n    target: \"paigasus::bedrock::translate\",\n    \"m\"\n);\n";
+        let got: Vec<String> = scan_targets(src).into_iter().collect();
+        assert_eq!(got, vec!["bedrock".to_owned()]);
+    }
+
+    /// A literal with no second `::` still yields a component. This shape does
+    /// not occur in the workspace today; it must not panic.
+    #[test]
+    fn scan_targets_accepts_a_bare_component() {
+        let src = "tracing::warn!(target: \"paigasus::gemini\", \"m\");\n";
+        let got: Vec<String> = scan_targets(src).into_iter().collect();
+        assert_eq!(got, vec!["gemini".to_owned()]);
+    }
+
+    /// Targets outside the namespace are not components.
+    #[test]
+    fn scan_targets_ignores_foreign_targets() {
+        let src = "tracing::warn!(target: \"hyper::client\", \"m\");\n";
+        assert!(scan_targets(src).is_empty());
+    }
+
+    /// `target =` is the SMA-543 defect: it records an ordinary field and the
+    /// event never lands on that target, so it is not a target site at all.
+    #[test]
+    fn scan_targets_ignores_the_equals_form() {
+        let src = "tracing::warn!(target = \"paigasus::openai::chat\", \"m\");\n";
+        assert!(scan_targets(src).is_empty());
+    }
+
+    /// Comments are not code. This is not hypothetical: a `///` doc comment at
+    /// `crates/paigasus-helikon-providers-litellm/src/translate/request.rs:497`
+    /// made the spec's first inventory count 57 sites where there are 56.
+    #[test]
+    fn scan_targets_ignores_comments() {
+        for src in [
+            "// tracing::warn!(target: \"paigasus::ghost::x\", \"m\");\n",
+            "/// reinstates `target: \"paigasus::ghost::x\"` inside this\n",
+            "/* tracing::warn!(target: \"paigasus::ghost::x\"); */\n",
+        ] {
+            assert!(scan_targets(src).is_empty(), "leaked from: {src}");
+        }
+    }
+
+    /// A target inside an outer string literal is a test fixture, not a call
+    /// site. This property is what lets the guard scan its own source without
+    /// path-based self-exclusion.
+    #[test]
+    fn scan_targets_ignores_nested_literals() {
+        let src = "let fixture = \"tracing::warn!(target: \\\"paigasus::ghost::x\\\")\";\n";
+        assert!(scan_targets(src).is_empty());
     }
 }
