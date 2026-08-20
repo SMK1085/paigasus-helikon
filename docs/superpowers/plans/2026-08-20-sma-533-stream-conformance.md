@@ -392,13 +392,28 @@ mod tests {
             reqwest::Client::new().post(url).send().await.unwrap().text().await
         });
 
-        // The second chunk must still be withheld.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(!handle.is_finished(), "body completed before the gate released");
+        // Assert three separate properties, not one. An `is_finished()` probe
+        // after a fixed sleep is one-directional: on a machine where the
+        // loopback round trip exceeds the window, a completely broken gate
+        // passes, and a full-body `assert_eq!` cannot rescue it because a
+        // broken gate produces byte-identical output. It also never asserts
+        // that the pre-gate chunk *reached the client* — the property the
+        // cancellation scenarios in Tasks 9 and 11 are built on.
+        let mut frames = response.bytes_stream();
 
+        // (a) the pre-gate chunk really arrived
+        let prefix = timeout(WINDOW, accumulate_until(&mut frames, "data: one\n\n")).await;
+        assert!(prefix.is_ok(), "pre-gate chunk never reached the client");
+
+        // (b) the gate withholds the next frame
+        assert!(
+            timeout(WINDOW, frames.next()).await.is_err(),
+            "gate did not withhold the post-gate chunk"
+        );
+
+        // (c) release delivers the remainder
         gate.release();
-        let body = handle.await.unwrap().expect("body should complete after release");
-        assert_eq!(body, "data: one\n\ndata: two\n\n");
+        assert_eq!(drain(&mut frames).await, "data: two\n\n");
     }
 }
 ```
