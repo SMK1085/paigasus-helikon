@@ -894,6 +894,27 @@ Then restore:
 sed -i '' '205s/target = /target: /' crates/paigasus-helikon-providers-openai/src/translate/request.rs
 ```
 
+> **Post-execution note — prefer a content-based mutation.** The commands above
+> address line 205 directly, which was correct when they were run (and still is).
+> But a line-addressed `sed` whose address no longer holds **changes nothing and
+> still exits 0** — the same silent-no-op class as the BSD `\s` trap this plan
+> warns about in Task 2, Step 3. Here the plan's own "Expected: FAIL — if it
+> passes, it is not testing what it claims" instruction is what catches it, so
+> the check was sound as executed. If you reuse this recipe, make the mutation
+> self-verifying instead of relying on that: match on content and assert exactly
+> one replacement.
+>
+> ```bash
+> f=crates/paigasus-helikon-providers-openai/src/translate/request.rs
+> before=$(grep -c 'target: "paigasus::openai::translate"' "$f")
+> sed -i '' 's/target: "paigasus::openai::translate"/target = "paigasus::openai::translate"/' "$f"
+> after=$(grep -c 'target = "paigasus::openai::translate"' "$f")
+> [ "$after" -eq "$before" ] || { echo "mutation did not apply as expected"; exit 1; }
+> ```
+>
+> Restore by reversing the substitution and re-running the workspace-lints guard,
+> which reports zero offenses only if every site is back to `target:`.
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
