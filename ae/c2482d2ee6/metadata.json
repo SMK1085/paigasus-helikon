@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "aec2482d2ee6",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-557-document-the-paigasus-tracing-target-namespace-for-operators",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ae/c2482d2ee6/0/metadata.json",
+      "transcript": "/ae/c2482d2ee6/0/full.jsonl",
+      "compact_transcript": "/ae/c2482d2ee6/0/transcript.jsonl",
+      "content_hash": "/ae/c2482d2ee6/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 197,
+    "cache_creation_tokens": 373265,
+    "cache_read_tokens": 17539741,
+    "output_tokens": 115950,
+    "api_call_count": 101
+  }
+}
