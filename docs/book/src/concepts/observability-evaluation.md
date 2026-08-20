@@ -95,6 +95,124 @@ The example's `runtime-tokio` feature pulls in `TokioRunner`, which installs the
 [the agent loop](./agent-loop.md) for how the runner drives a run, and
 [crates reference](../reference/crates.md) for what each crate ships.
 
+### Filtering by target
+
+Every `tracing` event and span carries a **target**. Helikon's targets come from
+two namespaces:
+
+- **`paigasus::<component>::<subsystem>`** — hand-chosen targets, written
+  explicitly at the call site and independent of the Rust module the code lives
+  in. Today these are the model providers.
+- **`paigasus_helikon_*::…`** — ordinary Rust module paths, the `tracing`
+  default. Everything in `paigasus-helikon-core` and the runtime crates emits
+  here.
+
+**`EnvFilter` matches a directive against a target by raw string prefix, not by
+`::` segment.** That one fact decides every recipe below:
+
+| Directive | Reaches |
+| --- | --- |
+| `paigasus` | **Both** namespaces — it is a raw prefix, so it also matches `paigasus_helikon_core::session`. |
+| `paigasus::` | The hand-chosen namespace only. The trailing `::` is what excludes the module paths. |
+| `paigasus::openai` | One component. |
+| `paigasus::openai::chat` | One subsystem. |
+
+<!-- tracing-components:start — keep in sync; asserted by
+     tests/workspace-lints/tests/tracing_target_docs.rs -->
+
+| Component | Crate | Subsystems today | Status |
+| --- | --- | --- | --- |
+| `paigasus::openai` | `paigasus-helikon-providers-openai` | `translate`, `chat`, `responses` | stable |
+| `paigasus::anthropic` | `paigasus-helikon-providers-anthropic` | `translate`, `stream`, `sse` | stable |
+| `paigasus::bedrock` | `paigasus-helikon-providers-bedrock` | `translate`, `stream`, `builder` | stable |
+| `paigasus::gemini` | `paigasus-helikon-providers-gemini` | `translate`, `sse` | stable |
+| `paigasus::litellm` | `paigasus-helikon-providers-litellm` | `translate`, `stream`, `sse`, `http` | stable |
+| `paigasus::temporal` | `paigasus-helikon-runtime-temporal` | `activities` | provisional |
+
+<!-- tracing-components:end -->
+
+The **Subsystems today** column lists what exists at the time of writing, not a
+fixed set — see the stability rules below.
+
+#### What is not in this namespace
+
+`paigasus-helikon-core` and the runtime crates do **not** use hand-chosen
+targets. Their events and spans land on module paths, so you select them by
+crate:
+
+```
+paigasus_helikon_core
+paigasus_helikon_runtime_axum
+paigasus_helikon_runtime_actix
+paigasus_helikon_runtime_agentcore
+paigasus_helikon_runtime_temporal
+paigasus_helikon_runtime_tokio
+```
+
+This includes **the run/turn/chat trace tree described above** — the
+`agent.run`, `agent.turn`, `gen_ai.chat` and `tool.execute` spans all come from
+`paigasus_helikon_core::agent`, not from `paigasus::*`. To turn that tree up or
+down, filter on `paigasus_helikon_core`.
+
+`paigasus::temporal` is a single call site in a crate that is otherwise
+untargeted, which is why it is marked *provisional* above: it is listed so the
+namespace is completely described, but it does not carry the guarantee the
+provider components do. Whether the core and runtime crates should adopt
+hand-chosen targets is tracked as a follow-up.
+
+#### Stability
+
+The namespace is a two-tier contract.
+
+- **`paigasus::` and `paigasus::<component>` are stable.** Renaming or removing a
+  component is a breaking change, made through a commit carrying a
+  `BREAKING CHANGE:` footer so it appears in the crate's CHANGELOG. No component
+  name will ever be a prefix of another — that would silently widen a saved
+  filter, since matching is prefix-based.
+- **The `::<subsystem>` leaf is an implementation detail** and may change in any
+  release without notice.
+
+So: use **exactly two segments** for anything durable — alerting rules,
+dashboards, saved queries. Use three segments for interactive debugging, and
+expect them to move. A bare `paigasus` is a raw prefix, not a namespace
+selector; reach for `paigasus::` when you mean the curated targets.
+
+This guarantee begins with this document and is not retroactive.
+
+#### Recipes
+
+Warnings everywhere, one provider verbose:
+
+```
+RUST_LOG='warn,paigasus::openai=debug'
+```
+
+The hand-chosen namespace only, excluding core and runtime module paths — note
+the trailing `::`:
+
+```
+RUST_LOG='warn,paigasus::=debug'
+```
+
+One subsystem and nothing else. This is a three-segment selector, so treat it as
+a debugging tool: the `stream` leaf may be renamed in any release, and if this
+example ever stops matching, that is why.
+
+```
+RUST_LOG='off,paigasus::litellm::stream=trace'
+```
+
+The agent trace tree — the `agent.run` / `agent.turn` / `gen_ai.chat` /
+`tool.execute` spans:
+
+```
+RUST_LOG='warn,paigasus_helikon_core=debug'
+```
+
+These set the level for a `tracing-subscriber` `EnvFilter`; see
+[`tracing_subscriber::EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
+for the full directive grammar.
+
 ## Evaluation
 
 `paigasus-helikon-evals` runs a dataset of cases through an agent, scores
