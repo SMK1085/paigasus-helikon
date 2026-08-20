@@ -86,8 +86,15 @@ fn documented_components(page: &str) -> BTreeSet<String> {
             .next()
             .unwrap_or_default()
             .trim();
-        // Header row and the `| --- |` separator carry no component.
-        if first == "Component" || first.chars().all(|c| c == '-' || c == ':') {
+        // Header row and the `| --- |` separator carry no component. The
+        // emptiness guard matters: `str::chars().all(...)` is vacuously true
+        // on an empty string, so without it a row with an accidentally blank
+        // first cell (`| | some-crate | ... | ... |`) would be misclassified
+        // as a separator and silently skipped instead of hitting the hard
+        // failure below, as the doc comment above promises.
+        if first == "Component"
+            || (!first.is_empty() && first.chars().all(|c| c == '-' || c == ':'))
+        {
             continue;
         }
         let component = first
