@@ -152,3 +152,22 @@ Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550
 - **Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-6-report.md`</result>
 <usage><subagent_tokens>222176</subagent_tokens><tool_uses>28</tool_uses><duration_ms>334476</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>ace6ecf8764bcd962</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ace6ecf8764bcd962.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 6: conformance harness" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- **Status:** DONE
+- **Commits:** `88f8248d` floors/timeout/pinned declines; `2c3acc71` fixture finish reason; `60aaee33` detect a cancel-after-stop-reason gate placed too early
+- **Tests:** 38 pass (was 36); fmt, clippy `-D warnings`, docs gate all clean.
+- **Finding 1 done:** `CancelAfterStopReason` now floors on ≥ 1 `Usage`; mutation-verified (`if false &amp;&amp;` → the new test fails to panic). The anthropic vacuity narrowing is recorded at the site, pointing at the fixture provenance comment instead. This forced a prerequisite: `fakes::conforming` did not emit a `Usage` for S5b (it followed the brief's classifier-shaped wording, not the wire), so the conforming fake would have failed the floor it exists to clear — now split into "`Usage` when a stop reason is expected and it did not error, `Finish` additionally only when not cancelled".
+- **Finding 2 done:** the doc now separates the two timer armings — between-events (weaker test) vs before-the-first-event (spurious failure via the no-TokenDelta floor), the latter named as the first thing to suspect behind an intermittent cancel failure.
+- **Finding 3 done, and it needed a test you did not ask for.** I ran the mutation first: dropping `TruncatedAfterStopReason` back out left the suite **green**, so the fix was uncovered by construction. `FinishDecl` gained `WrongOnTruncation` (old `Wrong` → `WrongOnCleanStop`, since a `CleanStop` lie panics first and masks later scenarios) plus a dedicated test; the mutation now fails.
+- **Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-6-report.md` (test-count correction to 19 recorded there)</result>
+<usage><subagent_tokens>247219</subagent_tokens><tool_uses>23</tool_uses><duration_ms>326233</duration_ms></usage>
+</task-notification>
