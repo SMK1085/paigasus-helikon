@@ -412,3 +412,13 @@ Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550
 Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-14-report.md`</result>
 <usage><subagent_tokens>138773</subagent_tokens><tool_uses>63</tool_uses><duration_ms>995911</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>bnsk1u34k</task-id>
+<tool-use-id>toolu_017ugMY6zDqJ6q3z5gGvpnqN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/bnsk1u34k.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for CI workflows to fire" failed with exit code 1</summary>
+</task-notification>
