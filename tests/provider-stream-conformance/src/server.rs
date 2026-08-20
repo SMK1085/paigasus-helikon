@@ -118,7 +118,17 @@ impl PacedServer {
         });
 
         tokio::spawn(async move {
-            while let Ok((stream, _peer)) = listener.accept().await {
+            loop {
+                let (stream, _peer) = match listener.accept().await {
+                    Ok(accepted) => accepted,
+                    // A peer that vanished between the SYN and the accept kills
+                    // only that connection. Bailing out here would drop the
+                    // listener, and every later connect would get
+                    // ECONNREFUSED — which reads as a provider bug in the
+                    // subject tasks rather than as a dead test server.
+                    Err(err) if is_transient_accept_error(&err) => continue,
+                    Err(_) => break,
+                };
                 let shared = Arc::clone(&shared);
                 tokio::spawn(async move {
                     let service =
@@ -191,8 +201,15 @@ async fn respond(
 /// buffer, and the client would see a connection that closed before it ever got
 /// a response — not the truncated body the abort scenarios need. Returning
 /// `Pending` once (with an immediate self-wake) forces the intervening flush, so
-/// the client reliably receives the head and every chunk, and only then loses
-/// the connection mid-body.
+/// the client receives the head and every chunk, and only then loses the
+/// connection mid-body.
+///
+/// The guarantee has a limit worth knowing before you lean on it: this forces
+/// hyper to *call* `poll_flush`, not to have drained the socket. A scripted body
+/// larger than the socket send buffer (~64 KB on loopback) can still lose its
+/// tail when the abort lands, because the flush would return `Pending` with
+/// bytes still buffered. Every conformance fixture is orders of magnitude
+/// smaller than that; if you add a large abort fixture, re-check this.
 fn script_frames(
     mut rx: mpsc::UnboundedReceiver<ScriptFrame>,
 ) -> impl Stream<Item = ScriptFrame> + Send {
@@ -255,6 +272,18 @@ async fn feed(
     }
 }
 
+/// Whether an `accept` error killed only one connection rather than the
+/// listener.
+fn is_transient_accept_error(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::Interrupted
+    )
+}
+
 /// Await the gate, if there is one left to await. A dropped `GateHandle`
 /// resolves the receiver with an error, which releases the body too — a test
 /// that forgets to release should not hang forever.
@@ -267,6 +296,7 @@ async fn wait_for_gate(gate_rx: &mut Option<oneshot::Receiver<()>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// A clean ending must deliver every chunk and terminate the body normally.
     #[tokio::test]
@@ -326,8 +356,6 @@ mod tests {
     /// `script_frames`.
     #[tokio::test]
     async fn abort_delivers_buffered_chunks_before_erroring() {
-        use futures_util::StreamExt;
-
         let server = PacedServer::start(Script {
             content_type: "text/event-stream",
             chunks: vec![b"data: one\n\n".to_vec(), b"data: two\n\n".to_vec()],
@@ -366,9 +394,27 @@ mod tests {
         );
     }
 
-    /// Chunks after the gate must not be sent until the gate is released.
+    /// The gate owes two things, and the cancel scenarios in the later subject
+    /// tasks depend on both: the pre-gate bytes must actually reach the client
+    /// (they fire cancellation only after observing an event, which cannot
+    /// happen if nothing arrived), and everything after the gate must stay
+    /// unsent so the translator is still holding buffered state when they do.
+    ///
+    /// Part (a) is a positive assertion on purpose. Asserting only that the body
+    /// has *not* finished is one-directional — on a machine slow enough to miss
+    /// the window a completely broken gate passes — and the trailing body
+    /// comparison cannot rescue it, because a broken gate produces
+    /// byte-identical output. Waiting for the prefix to arrive fails loudly
+    /// instead.
     #[tokio::test]
-    async fn gate_withholds_later_chunks_until_released() {
+    async fn gate_delivers_prefix_then_withholds_until_released() {
+        // Generous: exceeding this means the bytes never came, not that the
+        // machine was busy. Only ever reached on failure, so it costs nothing.
+        const ARRIVAL: Duration = Duration::from_secs(5);
+        // Short: here a timeout is the passing outcome, so the test waits this
+        // long on every run.
+        const WITHHOLD: Duration = Duration::from_millis(300);
+
         let mut server = PacedServer::start(Script {
             content_type: "text/event-stream",
             chunks: vec![b"data: one\n\n".to_vec(), b"data: two\n\n".to_vec()],
@@ -378,29 +424,62 @@ mod tests {
         .await;
         let gate = server.take_gate().expect("gate_after was set");
 
-        let url = server.base_url();
-        let handle = tokio::spawn(async move {
+        let mut frames = Box::pin(
             reqwest::Client::new()
-                .post(url)
+                .post(server.base_url())
                 .send()
                 .await
-                .unwrap()
-                .text()
-                .await
-        });
-
-        // The second chunk must still be withheld.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(
-            !handle.is_finished(),
-            "body completed before the gate released"
+                .expect("headers should arrive")
+                .bytes_stream(),
         );
 
-        gate.release();
-        let body = handle
+        // (a) The pre-gate chunk must actually reach the client.
+        let prefix = tokio::time::timeout(ARRIVAL, accumulate(&mut frames, "data: one\n\n".len()))
             .await
-            .unwrap()
+            .expect("pre-gate chunk never reached the client");
+        assert_eq!(prefix, "data: one\n\n");
+
+        // (b) Everything after the gate must be withheld.
+        assert!(
+            tokio::time::timeout(WITHHOLD, frames.next()).await.is_err(),
+            "gate did not withhold the post-gate chunk"
+        );
+
+        // (c) Releasing delivers the remainder and ends the body cleanly.
+        gate.release();
+        let rest = tokio::time::timeout(ARRIVAL, drain(&mut frames))
+            .await
             .expect("body should complete after release");
-        assert_eq!(body, "data: one\n\ndata: two\n\n");
+        assert_eq!(rest, "data: two\n\n");
+    }
+
+    /// Pull frames until at least `want` bytes have arrived. Panics rather than
+    /// returning short, so a caller's `assert_eq!` never compares a truncated
+    /// read against the expected prefix.
+    async fn accumulate<S>(frames: &mut S, want: usize) -> String
+    where
+        S: Stream<Item = reqwest::Result<Bytes>> + Unpin,
+    {
+        let mut buf: Vec<u8> = Vec::new();
+        while buf.len() < want {
+            match frames.next().await {
+                Some(Ok(bytes)) => buf.extend_from_slice(&bytes),
+                Some(Err(err)) => panic!("stream errored before the prefix arrived: {err}"),
+                None => panic!("stream ended before the prefix arrived"),
+            }
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// Read the rest of the body to its clean end.
+    async fn drain<S>(frames: &mut S) -> String
+    where
+        S: Stream<Item = reqwest::Result<Bytes>> + Unpin,
+    {
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(frame) = frames.next().await {
+            buf.extend_from_slice(&frame.expect("body should not error after release"));
+        }
+        String::from_utf8_lossy(&buf).into_owned()
     }
 }
