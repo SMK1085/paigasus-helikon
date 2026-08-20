@@ -499,8 +499,14 @@ mod tests {
             "gate did not withhold the post-gate chunk"
         );
 
-        // (c) Releasing delivers the remainder and ends the body cleanly.
-        gate.release();
+        // (c) Releasing delivers the remainder and ends the body cleanly. The
+        // release reports whether the server was still parked on the gate,
+        // which is the same signal `assert_conforms` uses to prove a cancelled
+        // stream was truncated rather than left to run out.
+        assert!(
+            gate.release(),
+            "the server should still have been parked on the gate"
+        );
         let rest = tokio::time::timeout(ARRIVAL, drain(&mut frames))
             .await
             .expect("body should complete after release");
