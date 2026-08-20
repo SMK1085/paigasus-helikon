@@ -150,9 +150,13 @@ paigasus_helikon_runtime_tokio
 ```
 
 This includes **the run/turn/chat trace tree described above** — the
-`agent.run`, `agent.turn`, `gen_ai.chat` and `tool.execute` spans all come from
-`paigasus_helikon_core::agent`, not from `paigasus::*`. To turn that tree up or
-down, filter on `paigasus_helikon_core`.
+`agent.run`, `agent.turn`, `gen_ai.chat` and `tool.execute` spans come from
+`paigasus_helikon_core`, not from `paigasus::*`. Most are raised in
+`paigasus_helikon_core::agent`; the multi-agent constructs — the sequential,
+parallel and loop workflows, plus the graph and swarm agents — raise their own
+`agent.run` span in `paigasus_helikon_core::workflow`. Filter on
+`paigasus_helikon_core` to catch both: a narrower `paigasus_helikon_core::agent`
+silently misses a multi-agent run's top-level span.
 
 `paigasus::temporal` is a single call site in a crate that is otherwise
 untargeted, which is why it is marked *provisional* above: it is listed so the
