@@ -12,12 +12,13 @@
 
 use std::convert::Infallible;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::task::Poll;
 
 use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use http_body_util::{BodyExt, StreamBody};
 use hyper::body::{Bytes, Frame, Incoming};
+use hyper::http::HeaderMap;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -80,7 +81,17 @@ pub struct PacedServer {
     port: u16,
     /// Present exactly when the script set `gate_after`.
     gate: Option<GateHandle>,
+    /// Filled in by the first request to arrive. See
+    /// [`PacedServer::first_request_headers`].
+    first_request_headers: CapturedHeaders,
 }
+
+/// The first request's header map, shared between the handler that fills it and
+/// the [`PacedServer`] that hands it back.
+///
+/// `std::sync::Mutex` rather than the `tokio` one: the critical section is a
+/// clone with no `await` in it, so an async mutex would buy nothing.
+type CapturedHeaders = Arc<StdMutex<Option<HeaderMap>>>;
 
 /// What the request handler needs, shared across the connections of one server.
 struct Shared {
@@ -89,6 +100,8 @@ struct Shared {
     /// Taken by the first request; a `oneshot` can only be awaited once, and
     /// one server plays its script to one request.
     gate_rx: Mutex<Option<oneshot::Receiver<()>>>,
+    /// Write side of [`PacedServer::first_request_headers`].
+    first_request_headers: CapturedHeaders,
 }
 
 impl PacedServer {
@@ -112,9 +125,12 @@ impl PacedServer {
             (None, None)
         };
 
+        let first_request_headers: CapturedHeaders = Arc::new(StdMutex::new(None));
+
         let shared = Arc::new(Shared {
             script,
             gate_rx: Mutex::new(gate_rx),
+            first_request_headers: Arc::clone(&first_request_headers),
         });
 
         tokio::spawn(async move {
@@ -143,7 +159,11 @@ impl PacedServer {
             }
         });
 
-        Self { port, gate }
+        Self {
+            port,
+            gate,
+            first_request_headers,
+        }
     }
 
     /// The origin to point a client at, e.g. `http://127.0.0.1:52413`.
@@ -157,6 +177,28 @@ impl PacedServer {
     pub fn take_gate(&mut self) -> Option<GateHandle> {
         self.gate.take()
     }
+
+    /// The headers of the **first** request this server received, or `None` if
+    /// no request has arrived yet.
+    ///
+    /// This exists so a subject can assert what its provider's driver actually
+    /// put on the wire, not merely that a round-trip happened. The Bedrock
+    /// subject uses it to prove the AWS SDK really signed the request: the
+    /// server ignores `Authorization` when responding, so without reading it
+    /// back, an unsigned request would pass a transport test exactly as well as
+    /// a signed one.
+    ///
+    /// Deliberately narrow — first request only, headers only, no method, path
+    /// or body. This is not a general-purpose request recorder, and it should
+    /// not grow into one; a subject that needs to assert on a request *body*
+    /// wants a different tool. First-only also means a retried request cannot
+    /// overwrite the record of the original.
+    pub fn first_request_headers(&self) -> Option<HeaderMap> {
+        self.first_request_headers
+            .lock()
+            .expect("captured-headers mutex should not be poisoned")
+            .clone()
+    }
 }
 
 /// Handle one request: drain its body, then stream the script back.
@@ -164,6 +206,18 @@ async fn respond(
     shared: Arc<Shared>,
     req: Request<Incoming>,
 ) -> Result<Response<ScriptBody>, Infallible> {
+    // Record the first request's headers before the request is consumed. Only
+    // the first: a retry must not overwrite what the original attempt sent.
+    {
+        let mut slot = shared
+            .first_request_headers
+            .lock()
+            .expect("captured-headers mutex should not be poisoned");
+        if slot.is_none() {
+            *slot = Some(req.headers().clone());
+        }
+    }
+
     // Drain the request body before responding. A client that is still writing
     // when the connection goes away can see a reset instead of the response, and
     // that would present as a provider bug.

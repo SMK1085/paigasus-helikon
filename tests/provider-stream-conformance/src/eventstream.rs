@@ -79,8 +79,11 @@ pub fn frame(event_type: &str, payload: &serde_json::Value) -> Vec<u8> {
 /// (HTTP client, sleep impl, time source, retry policy) comes from the
 /// generated client's default runtime plugins.
 ///
-/// The credentials are inert placeholders: SigV4 still signs the request, and
-/// the paced server ignores the `Authorization` header entirely.
+/// The credentials are inert placeholders — the paced server never checks them
+/// when deciding what to respond. It does *record* them, though:
+/// `bedrock_signs_the_local_request_with_sigv4` reads the `Authorization`
+/// header back off the server, which is the only thing that distinguishes a
+/// signed request from an unsigned one here.
 #[cfg(test)]
 fn build_bedrock_model_against(base_url: &str) -> paigasus_helikon_providers_bedrock::BedrockModel {
     use aws_sdk_bedrockruntime::config::{Credentials, SharedCredentialsProvider};
@@ -235,6 +238,68 @@ mod tests {
             decoded.payload().as_ref(),
             br#"{"a":1}"#,
             "the payload must be the JSON body, unwrapped"
+        );
+    }
+
+    /// The AWS SDK must actually sign the local request with SigV4.
+    ///
+    /// `bedrock_reads_hand_built_frames_over_local_http` cannot prove this, and
+    /// it is important not to read it as though it does. The paced server never
+    /// inspects `Authorization` when deciding what to respond, so a request
+    /// carrying a broken signature — or no signature at all — would pass that
+    /// test exactly as well as a correctly signed one. Reading the header back
+    /// off the server is what turns "a round-trip happened" into "a *signed*
+    /// round-trip happened", which is the half of this spike's transport
+    /// assumption the dependent subject tasks are relying on.
+    #[tokio::test]
+    async fn bedrock_signs_the_local_request_with_sigv4() {
+        let script = crate::Script {
+            content_type: "application/vnd.amazon.eventstream",
+            chunks: vec![frame(
+                "messageStop",
+                &serde_json::json!({ "stopReason": "end_turn" }),
+            )],
+            gate_after: None,
+            ending: crate::Ending::Clean,
+        };
+        let server = crate::PacedServer::start(script).await;
+
+        let model = build_bedrock_model_against(&server.base_url());
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text { text: "hi".into() }],
+        }];
+
+        let mut stream = model
+            .invoke(req, CancellationToken::new())
+            .await
+            .expect("invoke should reach the local endpoint");
+        // Drain first: the request is only guaranteed to have been dispatched
+        // once the response stream has run to completion.
+        while let Some(ev) = stream.next().await {
+            ev.expect("no error event expected on a clean script");
+        }
+
+        let headers = server
+            .first_request_headers()
+            .expect("the SDK must have sent a request to the local endpoint");
+        let authorization = headers
+            .get("authorization")
+            .expect("the SDK must sign the request even against a plain-HTTP local endpoint")
+            .to_str()
+            .expect("an Authorization header must be ASCII");
+
+        assert!(
+            authorization.starts_with("AWS4-HMAC-SHA256 "),
+            "expected a SigV4 signature, got {authorization:?}"
+        );
+        assert!(
+            authorization.contains("/us-east-1/bedrock/aws4_request"),
+            "the credential scope must name this region and service, got {authorization:?}"
+        );
+        assert!(
+            authorization.contains("Signature="),
+            "a SigV4 header must carry a signature, got {authorization:?}"
         );
     }
 }
