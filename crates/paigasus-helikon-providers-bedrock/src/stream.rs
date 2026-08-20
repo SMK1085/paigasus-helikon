@@ -11,9 +11,11 @@
 //! Metadata            ← usage lives here (AFTER MessageStop)
 //! ```
 //!
-//! Because `ModelEvent::Usage` must precede `ModelEvent::Finish` (per the
-//! `paigasus_helikon_core::Model::invoke` ordering contract), and Bedrock
-//! emits `Metadata` **after** `MessageStop`, this translator buffers the
+//! Per the `paigasus_helikon_core::Model::invoke` ordering contract,
+//! `ModelEvent::Finish` is terminal and `ModelEvent::Usage` may appear
+//! anywhere in the stream — most providers emit one immediately before
+//! `Finish`. Because Bedrock emits `Metadata` (where usage lives) **after**
+//! `MessageStop` (where the stop reason lives), this translator buffers the
 //! stop reason when `MessageStop` arrives and emits nothing until `Metadata`
 //! arrives — at that point it emits `Usage` immediately followed by `Finish`.
 //!
@@ -436,7 +438,8 @@ mod tests {
 
     /// Text-only turn: Bedrock order is ...deltas... MessageStop Metadata.
     /// Translator buffers the stop reason on MessageStop, then emits Usage+Finish
-    /// when Metadata arrives — ensuring Usage always precedes Finish.
+    /// when Metadata arrives — Finish stays terminal even though Bedrock's own
+    /// wire order puts usage after the stop reason.
     #[test]
     fn text_only_emits_token_deltas_then_usage_then_finish() {
         let events = vec![

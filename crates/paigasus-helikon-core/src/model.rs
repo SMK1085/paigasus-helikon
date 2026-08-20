@@ -61,6 +61,9 @@ pub trait Model: Send + Sync {
     ///   retain the last seen and never sum `Usage` events within a turn.
     ///   See [`ModelEvent::Usage`].
     /// - `Finish` is the terminal event; nothing follows it.
+    /// - Implementations MUST emit `Finish` at end-of-stream when a stop
+    ///   reason was observed, and MUST NOT emit it on truncation with no stop
+    ///   reason observed, on cancellation, or after a mid-stream error.
     ///
     /// Implementations that cannot honor cancellation MUST still terminate
     /// the stream when the [`CancellationToken`] fires (drop the underlying
@@ -177,13 +180,21 @@ pub enum ModelEvent {
         /// The text fragment.
         text: String,
     },
-    /// A partial tool call. `name` is `Some` on the first delta for a given
-    /// `call_id`, then `None` on subsequent deltas as `args_delta` chunks
-    /// arrive.
+    /// A partial tool call. `name` is `Some` exactly once per `call_id`, on
+    /// the first delta for which the provider can establish the name is
+    /// complete, and `None` on every other delta. When `Some`, the value is
+    /// the whole name so far as the provider can determine — a provider
+    /// receiving the name in fragments MUST buffer and concatenate them, and
+    /// MUST NOT emit a name it can detect is still incomplete.
     ToolCallDelta {
         /// Provider-assigned identifier for the call.
         call_id: String,
-        /// Tool name; `Some` on the first delta only.
+        /// `Some` exactly once per `call_id`, on the first delta for which
+        /// the provider can establish the name is complete, and `None` on
+        /// every other delta. When `Some`, the value is the whole name so
+        /// far as the provider can determine — a provider receiving the
+        /// name in fragments MUST buffer and concatenate them, and MUST NOT
+        /// emit a name it can detect is still incomplete.
         name: Option<String>,
         /// JSON-encoded argument fragment.
         args_delta: String,
