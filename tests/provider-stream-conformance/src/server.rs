@@ -161,9 +161,13 @@ async fn respond(
 
     let gate_rx = shared.gate_rx.lock().await.take();
 
-    // Capacity 1 so the feeder cannot run ahead of the socket: the chunk before
-    // the gate has been handed to hyper by the time the feeder starts waiting.
-    let (tx, rx) = mpsc::channel::<ScriptFrame>(1);
+    // Unbounded on purpose. A bounded channel would add back-pressure that
+    // usually — but only usually — keeps the abort error from reaching hyper in
+    // the same poll pass as the last chunk, which silently masks a missing
+    // deferral in `script_frames` and makes that bug unreproducible in a test.
+    // With no back-pressure, the deferral is the single mechanism responsible
+    // for the abort flush, and its removal fails a test every time.
+    let (tx, rx) = mpsc::unbounded_channel::<ScriptFrame>();
     let feeder = Arc::clone(&shared);
     tokio::spawn(async move { feed(feeder, gate_rx, tx).await });
 
@@ -189,7 +193,9 @@ async fn respond(
 /// `Pending` once (with an immediate self-wake) forces the intervening flush, so
 /// the client reliably receives the head and every chunk, and only then loses
 /// the connection mid-body.
-fn script_frames(mut rx: mpsc::Receiver<ScriptFrame>) -> impl Stream<Item = ScriptFrame> + Send {
+fn script_frames(
+    mut rx: mpsc::UnboundedReceiver<ScriptFrame>,
+) -> impl Stream<Item = ScriptFrame> + Send {
     let mut deferred: Option<io::Error> = None;
     stream::poll_fn(move |cx| {
         if let Some(err) = deferred.take() {
@@ -197,6 +203,11 @@ fn script_frames(mut rx: mpsc::Receiver<ScriptFrame>) -> impl Stream<Item = Scri
         }
         match rx.poll_recv(cx) {
             Poll::Ready(Some(Err(err))) => {
+                // Defer by one poll so hyper flushes what it has already
+                // written before this error tears the connection down. Removing
+                // this makes the client receive an empty body on every abort;
+                // `abort_delivers_buffered_chunks_before_erroring` is the test
+                // that catches it.
                 deferred = Some(err);
                 cx.waker().wake_by_ref();
                 Poll::Pending
@@ -211,7 +222,7 @@ fn script_frames(mut rx: mpsc::Receiver<ScriptFrame>) -> impl Stream<Item = Scri
 async fn feed(
     shared: Arc<Shared>,
     mut gate_rx: Option<oneshot::Receiver<()>>,
-    tx: mpsc::Sender<ScriptFrame>,
+    tx: mpsc::UnboundedSender<ScriptFrame>,
 ) {
     let script = &shared.script;
 
@@ -221,7 +232,6 @@ async fn feed(
         }
         if tx
             .send(Ok(Frame::data(Bytes::from(chunk.clone()))))
-            .await
             .is_err()
         {
             // The client hung up, or the connection died. Nothing left to play.
@@ -240,7 +250,7 @@ async fn feed(
         // An error out of the body makes hyper abandon the connection without
         // the terminating chunk, so the client sees a transport error.
         Ending::Abort => {
-            let _ = tx.send(Err(io::Error::other("aborted"))).await;
+            let _ = tx.send(Err(io::Error::other("aborted")));
         }
     }
 }
@@ -304,6 +314,55 @@ mod tests {
         assert!(
             result.is_err(),
             "an aborted body must not read as a clean EOF, got {result:?}"
+        );
+    }
+
+    /// The abort path owes the client *both* halves of the contract: every
+    /// chunk written before the abort, and then an error rather than a clean
+    /// EOF. `abort_ending_surfaces_as_an_error` only checks the second half, so
+    /// it passes even when the client receives an empty body — which is exactly
+    /// what happens if the body error is allowed to escape hyper's `poll_write`
+    /// before `poll_flush` runs. This test is what pins the deferral in
+    /// `script_frames`.
+    #[tokio::test]
+    async fn abort_delivers_buffered_chunks_before_erroring() {
+        use futures_util::StreamExt;
+
+        let server = PacedServer::start(Script {
+            content_type: "text/event-stream",
+            chunks: vec![b"data: one\n\n".to_vec(), b"data: two\n\n".to_vec()],
+            gate_after: None,
+            ending: Ending::Abort,
+        })
+        .await;
+
+        let mut frames = reqwest::Client::new()
+            .post(server.base_url())
+            .send()
+            .await
+            .expect("headers should arrive")
+            .bytes_stream();
+
+        let mut received: Vec<u8> = Vec::new();
+        let mut ended_with_error = false;
+        while let Some(frame) = frames.next().await {
+            match frame {
+                Ok(bytes) => received.extend_from_slice(&bytes),
+                Err(_) => {
+                    ended_with_error = true;
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(
+            String::from_utf8_lossy(&received),
+            "data: one\n\ndata: two\n\n",
+            "chunks written before the abort must reach the client"
+        );
+        assert!(
+            ended_with_error,
+            "the abort must still surface as an error, not a clean EOF"
         );
     }
 

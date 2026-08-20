@@ -22,7 +22,7 @@ hyper-util     = { workspace = true }
 tokio          = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time", "sync"] }
 
 [dev-dependencies]
-reqwest = { workspace = true, features = ["rustls"] }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
