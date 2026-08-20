@@ -532,9 +532,12 @@ mod bedrock {
 ///   followed by args-only continuations with no `name` key.
 /// - `crates/paigasus-helikon-providers-litellm/tests/fixtures/tool_call_stream_fragmented_name.txt`
 ///   — the committed capture of a name split across two deltas that BOTH
-///   arrive after the `id`, which `FragmentedToolName` must use verbatim per
-///   the design spec's §6 provenance note (the "id resolves late" variant has
-///   no capture anywhere in the repo and is not built here).
+///   arrive after the `id`. Per the design spec's §6 provenance note, this is
+///   the capture `FragmentedToolName`'s shape must be drawn from — the note
+///   requires the committed **shape**, not byte-identical values; see
+///   "`FragmentedToolName` deliberately never completes" below for exactly
+///   what this module substitutes (the "id resolves late" variant has no
+///   capture anywhere in the repo and is not built here).
 ///
 /// `chat_content_filter.txt` and `chat_text_usage_trailing_empty_choices.txt`
 /// were read but contribute no shape this module needs: this subject serves
@@ -554,10 +557,16 @@ mod bedrock {
 /// `finish_reason` and flushing it as a genuine `Finish` at end-of-stream —
 /// makes `encodes_stop_reason` measure `true` against an `expects_stop_reason`
 /// of `false`, failing on `StopReasonDeclarationMismatch` before the stream is
-/// even drained. So this subject's `FragmentedToolName` script is a *prefix*
-/// of the committed capture: the three tool-call deltas, verbatim, with the
-/// body ending cleanly right after them — no `finish_reason`, no `usage`, no
-/// `[DONE]`. Assertion 7 (exactly one name-bearing delta per `call_id`) is
+/// even drained. So this subject's `FragmentedToolName` script draws its
+/// event sequence and key structure from that capture's first three frames —
+/// not a byte-identical copy: `id`/`created`/`model` are this module's fixed
+/// constants (`RESPONSE_ID`/`MODEL_ID`) rather than the capture's literal
+/// values, `TOOL_CALL_ID` stands in for the capture's literal tool-call id,
+/// and the first frame omits the capture's `"role":"assistant"` key
+/// (`ChatTranslator` does not read it) — see the `FragmentedToolName` match
+/// arm in `script`, below, for the exact substitutions. The body ends
+/// cleanly right after those three frames — no `finish_reason`, no `usage`,
+/// no `[DONE]`. Assertion 7 (exactly one name-bearing delta per `call_id`) is
 /// fully exercised by that prefix alone; nothing here shortens what the
 /// scenario tests, only when its script stops.
 mod openai_chat {
@@ -1047,7 +1056,8 @@ mod openai_chat {
 /// it), so that second shape is scripted only inside the guard test, not
 /// served to the subject.
 ///
-/// # `FragmentedToolName` is a verbatim prefix of the capture
+/// # `FragmentedToolName` draws its shape, not its literal values, from the
+/// capture
 ///
 /// Per `Scenario::expects_stop_reason` (`src/lib.rs`) and the design spec's
 /// §6 table (`7, 1` only, no assertion 3), this scenario must not carry a
@@ -1055,7 +1065,12 @@ mod openai_chat {
 /// continues on to a `"tool_calls"` finish chunk and trailing usage, but this
 /// subject's script stops right after the three tool-call deltas — see
 /// `openai_chat`'s module doc for the full reasoning (same shape, same fix,
-/// same file).
+/// same file). As in every other scenario in this module, `id`/`created`/
+/// `model` are this module's fixed constants rather than the capture's
+/// literal values, and `TOOL_CALL_ID` stands in for the capture's literal
+/// tool-call id; unlike `openai_chat`'s version of this same scenario,
+/// this module's `tool_call_start` keeps the capture's `"role":"assistant"`
+/// key.
 ///
 /// # `canonicalize`'s SMA-550 regression coverage lives in the crate's own
 /// unit tests, not here
@@ -1313,11 +1328,13 @@ mod litellm {
                 let gate_after = chunks.len();
                 (chunks, Some(gate_after), Ending::Clean)
             }
-            // A verbatim prefix of `tool_call_stream_fragmented_name.txt`:
-            // the three tool-call deltas, and nothing more — no
-            // finish_reason, no usage, no [DONE]. See the module doc's
-            // "FragmentedToolName is a verbatim prefix of the capture"
-            // section for why the body ends right here.
+            // `tool_call_stream_fragmented_name.txt`'s event sequence and key
+            // structure for its first three frames, not a byte-identical
+            // copy (see the module doc's "`FragmentedToolName` draws its
+            // shape, not its literal values, from the capture" section for
+            // the substitutions) — and nothing more: no finish_reason, no
+            // usage, no [DONE]. See that same section for why the body ends
+            // right here.
             Scenario::FragmentedToolName => {
                 let chunks = vec![
                     tool_call_start(TOOL_CALL_ID, "get_"),
@@ -1532,9 +1549,11 @@ mod litellm {
 /// exists: SMA-531 (PR #200), where a stream that ended cleanly between
 /// `message_delta` and `message_stop` emitted `Usage` and then nothing —
 /// `MessageTranslator`'s buffered stop reason was never flushed, so the
-/// consumer got no terminal event at all. `TruncatedAfterStopReason` below is
-/// that exact shape, transcribed verbatim from the fixture the SMA-531 fix
-/// itself is tested against.
+/// consumer got no terminal event at all. `TruncatedAfterStopReason` below
+/// reproduces that shape — the same event sequence, through `message_delta`'s
+/// `stop_reason`/`usage` values — from the fixture the SMA-531 fix itself is
+/// tested against; see the Fixture provenance section below for what this
+/// module substitutes rather than transcribes.
 ///
 /// # Fixture provenance
 ///
@@ -1552,9 +1571,12 @@ mod litellm {
 /// - `eof_after_message_delta.txt` — the exact SMA-531 shape and the fixture
 ///   the crate's own `clean_eof_after_message_delta_emits_finish` regression
 ///   test reads: `text_only.txt`'s prefix through `message_delta`, then the
-///   body simply ends — no `message_stop`. `TruncatedAfterStopReason`
-///   transcribes this verbatim (via `through_stop()`, with no `message_stop`
-///   appended).
+///   body simply ends — no `message_stop`. `TruncatedAfterStopReason` draws
+///   its event sequence and `message_delta`'s `stop_reason`/`usage` values
+///   from this fixture (via `through_stop()`, with no `message_stop`
+///   appended); `message_start`'s `id`/`model` and the delta text are this
+///   module's own constants, not the fixture's literal values (see
+///   [`message_start`]'s doc).
 /// - `eof_mid_content_block.txt` — grounds `TruncatedMidGeneration`'s
 ///   envelope shape (`message_start`, `content_block_start`, a
 ///   `content_block_delta`, then EOF with no `message_delta` at all). The
@@ -1566,9 +1588,13 @@ mod litellm {
 ///   *before* its own in-band `event: error` frame. See "Why `Ending::Abort`
 ///   and not the fixtures' own `error` event" below for why that frame itself
 ///   is not transcribed into this script.
-/// - `error_after_message_delta.txt` — grounds `ErrorAfterStopReason`'s prefix
-///   envelope, identical to `eof_after_message_delta.txt`'s through
-///   `message_delta`, again *before* its own in-band `error` frame.
+/// - `error_after_message_delta.txt` — grounds `ErrorAfterStopReason`'s
+///   prefix envelope: the same event-sequence shape as
+///   `eof_after_message_delta.txt`'s through `message_delta` (message_start,
+///   content_block_start, delta(s), content_block_stop, message_delta),
+///   though the two fixtures are not byte-identical to each other — this one
+///   carries a different `message_start` id and one delta where the other
+///   has two — again *before* its own in-band `error` frame.
 /// - `parallel_tool_use.txt` and `tool_use_then_continuation.txt` — the
 ///   `tool_use` envelope: a `content_block_start` carrying the whole `id` and
 ///   `name` together, followed by exactly one `input_json_delta` carrying the
@@ -1628,7 +1654,10 @@ mod litellm {
 /// [`STOP_REASON_MARKER`] scans for the populated-string shape instead, pinned
 /// against `message_start`'s `null` by `scan_finds_only_a_populated_stop_reason`
 /// — the only detector for `ErrorAfterStopReason` degrading into
-/// `ErrorMidGeneration`, whose observable events are otherwise byte-identical.
+/// `ErrorMidGeneration`: `classify` and `floor_violation` don't distinguish
+/// the two by `Usage` count, only by `Finish`/`Err` presence and ordering,
+/// which already match for both (see `scan_finds_only_a_populated_stop_reason`'s
+/// own doc for the full argument).
 ///
 /// # `ToolCallCleanStop` never splits `input_json_delta`
 ///
@@ -1852,8 +1881,13 @@ mod anthropic {
 
         let (chunks, gate_after, ending) = match scenario {
             // Full stream: deltas, then message_delta (stop reason + usage in
-            // one event), then message_stop, then a clean end of body.
-            // Matches `text_only.txt` in full.
+            // one event), then message_stop, then a clean end of body — every
+            // event `text_only.txt` sends, not a prefix of it. `stop_reason`
+            // and `usage.output_tokens` are pulled from the fixture
+            // (`message_delta("end_turn", 5)`); `message_start`'s `id`/
+            // `model` and the delta text are this module's own values, not
+            // the fixture's `"msg_01"`/`"claude-sonnet-4-6"`/`"Hello"`/
+            // `" world"`.
             Scenario::CleanStop => {
                 let mut chunks = through_stop();
                 chunks.push(message_stop());
@@ -1863,7 +1897,10 @@ mod anthropic {
             // body simply ends — no `message_stop` — so the translator's
             // buffered stop reason has to be flushed by the EOF path
             // (`MessageTranslator::finish`, called from `model.rs`'s
-            // `None =>` arm). Matches `eof_after_message_delta.txt` verbatim.
+            // `None =>` arm). Matches `eof_after_message_delta.txt`'s event
+            // sequence and `stop_reason`/`usage` values exactly; `id`/`model`
+            // and delta text are this module's own values, same substitution
+            // as `CleanStop` above.
             Scenario::TruncatedAfterStopReason => (through_stop(), None, Ending::Clean),
             // The body ends cleanly mid-generation: no `message_delta` ever
             // arrives, so no stop reason is ever observed. Envelope grounded
@@ -2076,9 +2113,18 @@ mod anthropic {
     /// pitfall the task brief calls out.
     ///
     /// This is also the only detector for `ErrorAfterStopReason` degrading
-    /// into `ErrorMidGeneration`: their observable events are byte-for-byte
-    /// identical (`[TokenDelta, TokenDelta, Err]`), so if `through_stop()`
-    /// ever lost its `message_delta`, this scan is what would notice.
+    /// into `ErrorMidGeneration`. Their `ModelEvent` streams are not
+    /// literally identical today — both open with `message_start`, which
+    /// always emits a `Usage` (`stream.rs`'s `MessageStart` arm), and
+    /// `ErrorAfterStopReason` additionally observes a second `Usage` from
+    /// `message_delta` that `ErrorMidGeneration` never sends — but neither
+    /// `classify` nor `floor_violation` (`assert_conforms`'s two event-level
+    /// checks) counts `Usage` events or otherwise distinguishes the two:
+    /// both see "no `Finish`, one `Err`" and pass identically either way. So
+    /// if `through_stop()` ever lost its `message_delta`, `ErrorAfterStopReason`
+    /// would become indistinguishable from `ErrorMidGeneration` in every way
+    /// the suite's event-level checks can see — this byte-level scan on the
+    /// *script*, not the translated events, is what would still notice.
     #[test]
     fn scan_finds_only_a_populated_stop_reason() {
         assert!(
@@ -2228,8 +2274,11 @@ mod anthropic {
 /// stop reason was buffered therefore comes entirely from the fixture's own
 /// provenance — `gate_after` being a *count* read after `through_stop()` has
 /// pushed `stop_chunk` — documented at the scenario site in `script`, not
-/// from the harness floor. See that match arm's comment, and
-/// `anthropic`'s identical handling of the identical narrowing.
+/// from the harness floor. See that match arm's comment, and `anthropic`'s
+/// `CancelAfterStopReason` arm for the same gate-placement technique against
+/// the same shape of floor-vacuity narrowing (message-level, not chunk-level,
+/// since anthropic's unconditional `Usage` comes from one event —
+/// `message_start` — rather than every chunk).
 ///
 /// # Why `FragmentedToolName` is declined
 ///
@@ -2278,8 +2327,10 @@ mod gemini {
     /// instruction and the sibling subjects' convention.
     /// `scan_finds_only_a_populated_finish_reason` is the guard that keeps
     /// this true against an ordinary content-only chunk — the only detector
-    /// for `ErrorAfterStopReason` degrading into `ErrorMidGeneration`, whose
-    /// observable events are otherwise byte-identical.
+    /// for `ErrorAfterStopReason` degrading into `ErrorMidGeneration` should
+    /// `stop_chunk` ever be dropped from its script; see that scenario's own
+    /// comment in `script` for exactly how their observable events differ as
+    /// currently scripted.
     const FINISH_REASON_MARKER: &[u8] = b"\"finishReason\":\"";
 
     /// One SSE frame: `data: {payload}\n\n`. Gemini sends bare `data:` frames
@@ -2446,11 +2497,16 @@ mod gemini {
             Scenario::ErrorMidGeneration => (opening(), None, Ending::Abort),
             // The stop reason and usage are buffered/observed and *then* the
             // body is aborted, so the error path must not flush a `Finish`.
-            // This is the one scenario byte-identical to
-            // `ErrorMidGeneration`'s observable events but for the trailing
-            // `Usage` — [`Gemini::encodes_stop_reason`]'s measured scan is
-            // what keeps the two distinguishable if `stop_chunk` were ever
-            // dropped from this script by mistake.
+            // If `stop_chunk` were ever dropped from this script by mistake,
+            // this scenario's observable events would collapse to exactly
+            // `ErrorMidGeneration`'s (`[TokenDelta, Usage, TokenDelta, Usage,
+            // Err]`, from `opening()`'s two `usageMetadata`-carrying deltas).
+            // As scripted, `stop_chunk("!", ...)` itself carries a non-empty
+            // text part alongside its own `usageMetadata`, so it adds one
+            // more `TokenDelta`/`Usage` pair before the `Err`, not merely a
+            // trailing `Usage`. [`Gemini::encodes_stop_reason`]'s measured
+            // scan is what keeps the two distinguishable at the fixture
+            // level regardless of which of those it is.
             Scenario::ErrorAfterStopReason => (through_stop(), None, Ending::Abort),
             // One content delta goes out, then the server parks holding the
             // second back (`gate_after: Some(1)` pauses *before* the chunk at
@@ -2733,12 +2789,16 @@ mod gemini {
 /// (`gpt-4o-mini-2024-07-18`, a single `get_weather` tool, 2026-08-20) has
 /// since been transcribed into
 /// `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`
-/// (see that file's own provenance header for the full detail, including the
-/// two fields deliberately dropped from the transcription).
-/// `ToolCallCleanStop`'s script below reconstructs that exact event sequence
-/// — same item id, same call id, same five argument fragments, same
-/// terminal usage — and every helper that builds a tool-call frame cites the
-/// line in that fixture it matches. The same capture also grounds a
+/// (see that file's own provenance header for the full detail on what is
+/// kept versus trimmed from the raw capture, and why).
+/// `ToolCallCleanStop`'s script below reconstructs that capture's event
+/// sequence and argument content — the same five argument fragments, the
+/// same terminal usage (`input_tokens: 51`, `output_tokens: 15`) — using
+/// this module's own item id and call id ([`TOOL_ITEM_ID`]/[`TOOL_CALL_ID`])
+/// rather than the capture's literal `fc_0bb8...`/`call_D3Tp...` values (see
+/// those constants' own docs for why), and every helper that builds a
+/// tool-call frame cites the line in that fixture it matches. The same
+/// capture also grounds a
 /// crate-level regression test,
 /// `tool_call_turn_finishes_with_tool_calls` in
 /// `crates/paigasus-helikon-providers-openai/tests/responses_streaming.rs`,
