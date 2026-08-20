@@ -797,11 +797,19 @@ mod openai_chat {
                 let gate_after = chunks.len();
                 (chunks, Some(gate_after), Ending::Clean)
             }
-            // The committed capture's shape, verbatim and in full — see the
-            // module doc's "FragmentedToolName deliberately never completes"
-            // section for why the body ends right here rather than
-            // continuing on to the capture's finish_reason/usage/[DONE]
-            // tail.
+            // The committed capture's event sequence and key structure for
+            // its first three frames, not a byte-identical copy: `id`/
+            // `created`/`model` are this module's fixed constants
+            // (`RESPONSE_ID`/`MODEL_ID`) rather than the capture's
+            // `"chatcmpl-fake"`/`1786999074`/`"shape-fragment"` values,
+            // `TOOL_CALL_ID` stands in for the capture's literal
+            // `"call_abc"`, and [`tool_call_start`]'s frame omits the
+            // capture's `"role":"assistant"` key — `ChatTranslator` does not
+            // read it, the same reason every other omitted-but-unread field
+            // in this module is dropped. See the module doc's
+            // "FragmentedToolName deliberately never completes" section for
+            // why the body ends right here rather than continuing on to the
+            // capture's finish_reason/usage/[DONE] tail.
             Scenario::FragmentedToolName => {
                 let chunks = vec![
                     tool_call_start(TOOL_CALL_ID, "get_"),
@@ -1318,9 +1326,15 @@ mod litellm {
                 ];
                 (chunks, None, Ending::Clean)
             }
-            // `tool_call_stream.txt`, verbatim and in full: the whole name
-            // arrives with the id (empty args), the arguments arrive split
-            // across two continuations (so exactly one emitted
+            // `tool_call_stream.txt`'s event sequence and key structure, not
+            // its literal values: `id`/`created`/`model` are this module's
+            // fixed constants (`RESPONSE_ID`/`MODEL_ID`) rather than the
+            // capture's `"chatcmpl-fake"`/`1786999072`/`"shape-normal"`, and
+            // `TOOL_CALL_ID` stands in for the capture's literal
+            // `"call_abc"` (same substitution convention as every other
+            // scenario in this module). What the fixture actually grounds:
+            // the whole name arrives with the id (empty args), the arguments
+            // arrive split across two continuations (so exactly one emitted
             // `ToolCallDelta` carries the name), then a tool_calls stop
             // reason and the usage-bearing trailing chunk.
             Scenario::ToolCallCleanStop => {
