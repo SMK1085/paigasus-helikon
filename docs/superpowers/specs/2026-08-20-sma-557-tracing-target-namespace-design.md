@@ -69,6 +69,12 @@ not by reading tracing-subscriber's source.** A probe program emitted real
 | `off,paigasus::litellm::stream=trace` | — | — | — | — | — | — |
 | `paigasus_helikon_core=debug` | — | — | ✅ | — | — | — |
 
+The `off,paigasus::litellm::stream=trace` row shows `—` in every column only
+because the probe program carried no `paigasus::litellm::stream` column to
+test against — that row is absence of evidence, not evidence of absence. The
+directive is valid and reaches real call sites, e.g.
+`crates/paigasus-helikon-providers-litellm/src/stream.rs:188`.
+
 Three consequences, all load-bearing:
 
 1. **`paigasus=debug` is not a curated-namespace filter.** It is a raw prefix
@@ -400,9 +406,13 @@ The test:
    placeholder becomes a loud error instead of a phantom component. Without this
    rule pinned down, three plausible parsers (regex scrape / first-cell /
    split-on-`|`) all pass §4.5's mutation check while behaving differently.
-6. `assert_eq!`, with a **directional** message — "in source but not documented:
-   X; documented but not in source: Y". A bare two-set dump across six
-   components is not actionable. The formatting helper is itself unit-tested.
+6. A directional `assert!` (not `assert_eq!`) over the two set differences
+   (`in_source.difference(&in_docs)`, `in_docs.difference(&in_source)`),
+   computed ahead of the assertion and named in the panic message via inlined
+   `{undocumented:?}` / `{stale:?}` — "in source but not documented: X;
+   documented but not in source: Y". A bare two-set dump across six components
+   is not actionable. There is no separate formatting helper; the message is
+   inlined at the assertion site.
 
 ### 4.4 Failability and anti-vacuity
 
