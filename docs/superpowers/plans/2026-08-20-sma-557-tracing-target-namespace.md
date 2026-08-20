@@ -358,12 +358,20 @@ pub fn scan_targets(src: &str) -> BTreeSet<String> {
     const NEEDLE: &[u8] = b"target:";
     let masked = mask_trivia(src);
     let b = &masked.buf[..];
+    // Whitespace between `target:` and its literal is skipped against the
+    // *raw* source, not the masked buffer: `mask_trivia` blanks a string
+    // literal's delimiters and contents to spaces too, so scanning the
+    // masked buffer here would read straight through the literal as if it
+    // were more whitespace and overshoot its opening quote. The needle
+    // search stays on the masked buffer — that is what keeps comments and
+    // nested literals invisible.
+    let src_bytes = src.as_bytes();
     let mut out = BTreeSet::new();
     let mut i = 0;
     while let Some(rel) = find_sub(&b[i..], NEEDLE) {
         let after = i + rel + NEEDLE.len();
         let mut j = after;
-        while j < b.len() && b[j].is_ascii_whitespace() {
+        while j < src_bytes.len() && src_bytes[j].is_ascii_whitespace() {
             j += 1;
         }
         // The literal must begin exactly where the whitespace ended; anything
@@ -429,9 +437,17 @@ Run:
 ```bash
 cargo test -p paigasus-helikon-workspace-lints
 cargo fmt --all
+RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-workspace-lints --no-deps
 cargo clippy -p paigasus-helikon-workspace-lints --all-targets -- -D warnings
 ```
 Expected: all green.
+
+**`cargo doc` is in that list for a reason.** `scan_targets` is `pub`, and a
+`///` intra-doc link from a `pub` item to a private one (writing
+`` [`mask_trivia`] `` rather than `` `mask_trivia` ``) fails
+`rustdoc::private_intra_doc_links` under `-D warnings` — while `cargo test`,
+`cargo clippy` and `cargo fmt` all stay green. CI's `docs` job is a required
+context, so that slip blocks merge and nothing else catches it.
 
 - [ ] **Step 6: Commit**
 
@@ -891,6 +907,7 @@ Run before opening the PR — this is the full CI-equivalent set for this change
 cargo fmt --all -- --check
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo test --workspace --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 mdbook build docs/book
 ```
 

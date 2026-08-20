@@ -264,8 +264,17 @@ The table sits inside the marked region described in §4.1.
   an operator will actually type (`paigasus_helikon_core`,
   `paigasus_helikon_runtime_axum`, …).
 - **The run/turn/chat/tool span tree documented earlier on this page comes from
-  `paigasus_helikon_core::agent`** — filtering it has nothing to do with
-  `paigasus::*`. Cross-reference the earlier section explicitly.
+  `paigasus_helikon_core`** — filtering it has nothing to do with `paigasus::*`.
+  Cross-reference the earlier section explicitly. Be precise about *which*
+  module, per §1.3's table: most of the tree is raised in
+  `paigasus_helikon_core::agent`, but `agent.run` has a second creation site in
+  `paigasus_helikon_core::workflow` (`workflow_run_span`), reached by the
+  sequential, parallel and loop workflows and by the graph and swarm agents.
+  Filtering on the bare crate prefix catches both; a narrower
+  `paigasus_helikon_core::agent` silently misses a multi-agent run's top-level
+  span. An earlier draft of this section said the whole tree came from
+  `::agent`, contradicting §1.3 — that wording reached the book and was caught
+  in review.
 - `paigasus::temporal` is a single call site in an otherwise-untargeted crate:
   listed, `provisional`, and not covered by the D1 guarantee.
 - The gap is known and tracked as a follow-up (§6), stated in prose. **No Linear
