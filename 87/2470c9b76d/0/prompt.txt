@@ -1,0 +1,455 @@
+<task-notification>
+<task-id>ab2b48cd418cbb40f</task-id>
+<tool-use-id>toolu_01T1f9XPPtFC9cxYKHxWGtLM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ab2b48cd418cbb40f.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: paced HTTP server" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commits:**
+- `38d0797b feat(providers): SMA-533 add the paced conformance http server`
+- `74e68a1f test(providers): SMA-533 pin the abort-path flush with a regression test`
+
+**Tests:** 4/4 pass (15 consecutive full-suite runs); fmt, clippy `-D warnings`, docs gate all clean.
+
+**Mutation evidence:** removing the defer-by-one-poll fails `abort_delivers_buffered_chunks_before_erroring` with `left: ""` (client received zero body bytes) — killed 15/15, while the other three tests including `abort_ending_surfaces_as_an_error` still pass. Restored: 15/15 green.
+
+**One thing you should know — writing the test exposed a second problem.** My first attempt produced a test that *could not fail*: with the original `mpsc::channel(1)`, the mutant survived 15/15. Correctness was resting on two mechanisms, not one — the explicit deferral, plus an implicit race window from capacity-1 back-pressure that wins on an idle machine and could flip on a loaded CI runner. I switched the body channel to `unbounded_channel` so the deferral is the sole mechanism; the mutant then dies deterministically. That removes a hidden mechanism rather than adding one. I re-verified (temporary raw-socket test, since removed) that the gate's prefix-delivery guarantee is unaffected — it comes from the feeder parking at the gate, not from the channel bound, and the code comment claiming otherwise was wrong and is replaced.
+
+Also added the `//` comment at the defer site naming the protecting test, and `stream` to the reqwest dev-dep for `bytes_stream()`.
+
+**Remaining concern (unchanged, low):** the deferred poll guarantees a `poll_flush` *call*, not that it drained — an abort fixture exceeding ~64 KB could still lose its tail. Far above conformance fixture sizes.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-2-report.md`</result>
+<usage><subagent_tokens>155859</subagent_tokens><tool_uses>27</tool_uses><duration_ms>321769</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab2b48cd418cbb40f</task-id>
+<tool-use-id>toolu_01XoiWj1mVoqBdQUikBMTmkE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ab2b48cd418cbb40f.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: paced HTTP server" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commits (this round):** `659a5984 test(providers): SMA-533 assert the gate delivers its prefix before withholding`
+
+**Tests:** 4/4 pass, 12/12 consecutive runs; fmt, clippy `-D warnings`, docs gate all clean.
+
+**Mutation evidence:** mutant 1 (gate no-op) killed by part (b), 10/10 — `gate did not withhold the post-gate chunk`. Mutant 2 (pre-gate chunk withheld) killed by part (a) — `pre-gate chunk never reached the client: Elapsed(())`. Both real.
+
+**I verified the finding's core claim rather than taking it on faith:** I re-added the deleted test alongside the new one and ran both against mutant 2 — the old test **passed** while the new one failed. Confirmed the hole was real (a broken gate produces byte-identical output, so the trailing `assert_eq!` could never catch it). Temporary copy removed before commit.
+
+**Minors fixed:** size caveat now at the `script_frames` doc site (flush *call*, not drained socket, ~64 KB limit); accept loop continues on `ConnectionAborted`/`Reset`/`Refused`/`Interrupted` via `is_transient_accept_error` and breaks only on fatal; dead `use futures_util::StreamExt;` removed. Moving `Duration` to module scope initially broke `clippy -D warnings` with `unused import` — caught by the gate and moved into `mod tests` before commit.
+
+**One thing to flag:** `docs/superpowers/plans/2026-08-20-sma-533-stream-conformance.md` shows modified in the worktree. Not my change — left unstaged; my commit is `src/server.rs` only.
+
+**Residual (unchanged):** part (b) is inherently one-directional, but (a) now proves the pipe is live before it runs, so a dead connection no longer masquerades as a held gate.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-2-report.md`</result>
+<usage><subagent_tokens>181532</subagent_tokens><tool_uses>37</tool_uses><duration_ms>562016</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a670b0fcb6bf77762</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a670b0fcb6bf77762.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: Bedrock spike" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Fix round complete.
+
+**Status:** DONE
+
+**Commits:**
+- `7b9d6a8b feat(providers): SMA-533 prove bedrock eventstream framing over local http`
+- `e463db17 test(providers): SMA-533 assert the sdk signs the local bedrock request` (this round)
+
+**Tests:** 7/7 green in the crate lib suite (3 eventstream + Task 2's 4 server tests, unchanged). fmt, clippy `-D warnings`, docs `-D warnings` all clean.
+
+**Fix:** `PacedServer` now records the first request's headers (`Arc&lt;StdMutex&lt;Option&lt;HeaderMap&gt;&gt;&gt;`, filled before the body is consumed, first-request-only so a retry can't clobber it) behind one narrow accessor `first_request_headers() -&gt; Option&lt;HeaderMap&gt;`, doc-commented against growing into a general request recorder. New test `bedrock_signs_the_local_request_with_sigv4` asserts the `Authorization` header starts with `AWS4-HMAC-SHA256 `, carries scope `/us-east-1/bedrock/aws4_request`, and carries a `Signature=`. Kept separate from the verbatim brief test so the two failure modes stay independently diagnosable.
+
+**Mutation proof (both reverted, neither committed):**
+- **C — wrong expected prefix** (`SHA256`→`SHA512`): fails, printing the real header. The digest also differs from the earlier ad-hoc capture because the signed `host` port differs — evidence it's computed per-request, not echoed.
+- **D — drop `.credentials_provider(..)`**: the SDK refuses to dispatch at all (`NoMatchingAuthSchemeError … sigv4: NoIdentityResolver`), no socket opened. So signing is unconditional — the reviewer's code reading, now observed.
+
+**Corrected verdicts:** Assumption 1 — PROVEN *and re-verified on every run by two committed tests* (plain-HTTP dispatch; SigV4 signing). Assumption 2 — PROVEN, unchanged. Report's assumption-1 section rewritten in place with a correction note; the uncommitted probe is demoted to corroboration.
+
+**Residual limit (recorded in the report):** the suite proves a well-formed SigV4 header for the right service/region, not a cryptographically *correct* signature — verifying the digest would mean reimplementing SigV4 and testing the AWS SDK rather than this repo.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-3-report.md`</result>
+<usage><subagent_tokens>206551</subagent_tokens><tool_uses>34</tool_uses><duration_ms>361201</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8edb52f9c05cb344</task-id>
+<tool-use-id>toolu_011TbcKdg6yJP6aRToX9GcQR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a8edb52f9c05cb344.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 4: terminality checker" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commits created:**
+- `632a4de9` — `fix(providers): SMA-533 make check and fakes modules private`
+
+**Test verification:** All 4 tests pass with no warnings after visibility fix.
+
+**Fix applied:** Changed `pub mod check;` and `pub mod fakes;` to `mod check;` and `mod fakes;` per brief spec, maintaining `pub use check::classify;` re-export. No visibility issues detected.
+
+**Report file:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-4-report.md` (updated with fix section)</result>
+<usage><subagent_tokens>58132</subagent_tokens><tool_uses>6</tool_uses><duration_ms>36854</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2ee4a57ab5878c27</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a2ee4a57ab5878c27.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 5: emission checker" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Commits:
+- `0ffb0b77` — `feat(providers): SMA-533 classify emission and tool-name violations`
+- `6b1ed50b` — `fix(providers): SMA-533 exempt a cancelled stream from the missing-finish rule`
+
+Test summary: 12/12 pass in `check::tests` (original 11 + new `cancelled_stream_without_finish_conforms`); the new regression test failed as predicted pre-fix (`Some(MissingFinish)` vs expected `None`), and all 11 pre-existing tests were confirmed unchanged post-fix.
+
+Fix: added `!cancelled` to assertion 3's guard (`!has_finish` was reachable when a cancelled stream correctly withheld `Finish`), updated the `classify` doc comment, and corrected the plan doc's rule 4 to match. fmt/clippy(`-D warnings`)/docs(`-D warnings`) all clean; `git status` clean after commit.
+
+Concerns: none.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-5-report.md`</result>
+<usage><subagent_tokens>110713</subagent_tokens><tool_uses>17</tool_uses><duration_ms>126063</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ace6ecf8764bcd962</task-id>
+<tool-use-id>toolu_01Kb8nFGkUzywbU4jbX17vF7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ace6ecf8764bcd962.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 6: conformance harness" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- **Status:** DONE
+- **Commits:** `88f8248d` add conformance floors, timeout and pinned declines; `2c3acc71` pin the finish reason each fixture declares
+- **Tests:** 36 pass (was 34); fmt, clippy `-D warnings`, docs gate all clean. Two more mutations verified: disabling the reason comparison fails `a_finish_carrying_the_wrong_reason_fails_its_floor`; drifting the fakes' declaration fails `the_conforming_fake_clears_every_floor`.
+- **Concern 4 done:** `fixture_finish_reason` added to the trait (five methods now — Tasks 7–12 need the extra one; skeleton is in the report). Enforced in the `CleanStop`/`ToolCallCleanStop` floor via a new `Violation::FinishReasonMismatch { expected, observed }`, because `InsufficientEvidence(&amp;'static str)` cannot carry both reasons. Declaring `None` where a `Finish` is mandatory is itself a failure, so the check cannot be no-op'd. Task 3's variant-only `Finish` Minor is closed here.
+- **Concerns 1 and 2 done:** the "never release the gate before firing the token" argument is now an eight-line comment at the `cancel.cancel()` site opening with "Do not 'simplify' this by releasing first"; `GATE_QUIESCENCE`'s doc carries the Anthropic falsification and the slow-machine analysis.
+- **One correction to your shorthand:** on a slow machine this fires *early*, not late — early is the dangerous direction, and it needs two consecutive pre-gate chunks 400 ms apart, which `feed` cannot produce (unbounded channel, no await between sends, loopback). Late firing is the harmless one. The doc states it that way round.
+- **Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-6-report.md`</result>
+<usage><subagent_tokens>222176</subagent_tokens><tool_uses>28</tool_uses><duration_ms>334476</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ace6ecf8764bcd962</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ace6ecf8764bcd962.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 6: conformance harness" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- **Status:** DONE
+- **Commits:** `88f8248d` floors/timeout/pinned declines; `2c3acc71` fixture finish reason; `60aaee33` detect a cancel-after-stop-reason gate placed too early
+- **Tests:** 38 pass (was 36); fmt, clippy `-D warnings`, docs gate all clean.
+- **Finding 1 done:** `CancelAfterStopReason` now floors on ≥ 1 `Usage`; mutation-verified (`if false &amp;&amp;` → the new test fails to panic). The anthropic vacuity narrowing is recorded at the site, pointing at the fixture provenance comment instead. This forced a prerequisite: `fakes::conforming` did not emit a `Usage` for S5b (it followed the brief's classifier-shaped wording, not the wire), so the conforming fake would have failed the floor it exists to clear — now split into "`Usage` when a stop reason is expected and it did not error, `Finish` additionally only when not cancelled".
+- **Finding 2 done:** the doc now separates the two timer armings — between-events (weaker test) vs before-the-first-event (spurious failure via the no-TokenDelta floor), the latter named as the first thing to suspect behind an intermittent cancel failure.
+- **Finding 3 done, and it needed a test you did not ask for.** I ran the mutation first: dropping `TruncatedAfterStopReason` back out left the suite **green**, so the fix was uncovered by construction. `FinishDecl` gained `WrongOnTruncation` (old `Wrong` → `WrongOnCleanStop`, since a `CleanStop` lie panics first and masks later scenarios) plus a dedicated test; the mutation now fails.
+- **Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-6-report.md` (test-count correction to 19 recorded there)</result>
+<usage><subagent_tokens>247219</subagent_tokens><tool_uses>23</tool_uses><duration_ms>326233</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a85c61dfc22f41b00</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a85c61dfc22f41b00.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 7: register bedrock" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commits:**
+- `fdc04d3e test(providers): SMA-533 register bedrock in the stream conformance suite`
+- `61456ea4 test(providers): SMA-533 measure the bedrock stop-reason declaration from its bytes`
+
+**Tests:** 38 lib + 2 integration (`bedrock::conforms`, `bedrock::scan_finds_only_the_stop_event`) green; fmt/clippy/doc clean; `git diff -- crates/` is 0 lines; 25/25 non-flaky.
+
+**Real provider defect surfaced:** still none — bedrock conforms. All nine mutations were injected and reverted.
+
+**The Important finding was worse than I reported it.** I called `encodes_stop_reason` "structurally vacuous," implying redundancy; it was the *sole* detector for `ErrorAfterStopReason` drifting into `ErrorMidGeneration`. Now measured by scanning the script's frames for the `messageStop` `:event-type`, with `scan_finds_only_the_stop_event` pinning the substring scan's soundness. Proven three ways: the targeted fixture bug now fails `StopReasonDeclarationMismatch`; **the same bug against the old impl passes 2/2 green** (the counterfactual that justifies the rewrite); and widening the marker to `"message"` fails the guard test. All five Minors fixed — for `TOOL_USE_ID` I dropped the unciteable claim rather than inventing a source.
+
+**Concerns:**
+1. My flake script still filtered `bedrock_conforms` after the rename and reported a **worthless** `pass=25` — libtest exits 0 on zero matches. Caught it, fixed the script to assert `1 passed` and abort on an empty filter, re-ran. Exactly the vacuity this suite exists to catch, committed by me.
+2. I committed the coordinator's in-flight plan-template edit (it was in my tree) so it ships with the code it describes — flagging in case that was unintended.
+3. `scan_finds_only_the_stop_event` enumerates the six helpers by hand; a seventh added without a row is uncovered. May warrant a shared harness assertion if Tasks 8–12 repeat the shape.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-7-report.md`</result>
+<usage><subagent_tokens>224998</subagent_tokens><tool_uses>31</tool_uses><duration_ms>478653</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adb94995dfe7ec5b4</task-id>
+<tool-use-id>toolu_01RNc1YjA1Zi9teGyw4ReJgX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/adb94995dfe7ec5b4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 9: register litellm" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Commits created:
+- `c6ee79c4` — `test(providers): SMA-533 register litellm in the stream conformance suite`
+- `b56c37a6` — `fix(providers): SMA-533 correct the litellm gate comment and caveat canonicalize's coverage claim`
+
+Test summary: 44/44 pass (38 lib + 6 integration); `crates/` diff empty; fmt/clippy clean.
+
+**Whether the suite surfaced any real provider defect:** No. Both tool scenarios pass. The one nuance (already documented in-code now) is that neither committed litellm capture actually exercises the `Index`/`Id` correlation boundary SMA-550's `canonicalize` fixes — that regression coverage lives in the litellm crate's own unit tests, not in this conformance subject.
+
+Concerns: none outstanding — both Important findings from review addressed: the copy-pasted "two deltas go out" gate comment fixed in both `mod litellm` and `mod openai_chat` (cross-module edit explicitly authorized), and the "structural for this subject" claim softened with a new module-doc section naming the actual regression-guard test (`dual_key_call_emits_at_most_one_name_mid_stream`).
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-9-report.md`</result>
+<usage><subagent_tokens>253945</subagent_tokens><tool_uses>17</tool_uses><duration_ms>145003</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a93e9e0a9b4906a64</task-id>
+<tool-use-id>toolu_01M2pXE8EdWV8X13SVbyZr13</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a93e9e0a9b4906a64.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 11: register gemini" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** BLOCKED (on the live-capture sub-task only; mechanical registration otherwise holds)
+
+**Commits:**
+- `cd1eb1eb` — test(providers): SMA-533 register gemini in the stream conformance suite
+- `a6afbfe4` — docs(providers): SMA-533 flag gemini tool-call fixture as unverified against live traffic
+
+**Test summary:** All 48 covering tests still green; `crates/` untouched (`git diff --stat -- crates/` empty).
+
+**No real provider defect surfaced.** Two-terminal-arm asymmetry still holds (independently re-confirmed by review).
+
+**What I tried:** checked `GEMINI_API_KEY`/`GOOGLE_API_KEY`/`GOOGLE_CLOUD_PROJECT` (unset), a `.env` file (none), `~/.config/gcloud/application_default_credentials.json` (absent — ADC never set up), `gcloud auth list` (only a CLI-login user account, not ADC/usable for API calls). Did not attempt to extract a token from that account (classifier-blocked) or search 1Password — treated both as workarounds rather than legitimate credential discovery.
+
+**No credential is available in this environment.** Per the ruling, I did not fall back to the derived shape as a resolution and did not add a `DECLINED` row. Instead: left the already-working code in place (removing it would leave `ToolCallCleanStop` unservable, worse than a flagged gap), added a prominent `# KNOWN GAP` doc section plus per-function `UNVERIFIED` markers pointing to the report, and re-verified all gates green.
+
+**What's needed to close:** someone with a working `GEMINI_API_KEY`/`GOOGLE_API_KEY`/Vertex-ADC credential to run a tool-call streaming turn, capture the raw SSE, and settle whether `functionCall.id` is present or absent in real traffic (details and exact recipe in the report).
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-11-report.md` (see appended "Fix report" section)</result>
+<usage><subagent_tokens>283448</subagent_tokens><tool_uses>29</tool_uses><duration_ms>337018</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a22481b9cf582a1be</task-id>
+<tool-use-id>toolu_01MPupUkvMUnDpboHTQkQhC1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a22481b9cf582a1be.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 13: contract wording" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+Commit: `75dac222` — `docs(core): SMA-533 state the finish emission and tool-name completeness rules`
+Verification: `cargo fmt --all` (no-op beyond edits), `cargo clippy --workspace --all-features --all-targets -- -D warnings` (clean), `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` (exit 0, only the pre-existing documented lib/bin filename-collision warning), `mdbook build docs/book` (exit 0) — all four ran synchronously to terminal completion.
+**No version field changed:** confirmed via `git diff 0bf5e759..HEAD -- 'Cargo.toml' '*/Cargo.toml' '*CHANGELOG.md' | grep -E '^[+-]version'`, which shows a single `+version = "0.0.0"` line belonging entirely to the brand-new `tests/provider-stream-conformance/Cargo.toml` file (Task 1-12's conformance crate) — the exact documented exception, not an edit to any published crate's manifest.
+Concerns: none. Report at `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-13-report.md`</result>
+<usage><subagent_tokens>99112</subagent_tokens><tool_uses>34</tool_uses><duration_ms>299218</duration_ms></usage>
+</task-notification>
+
+---
+
+which env variables do i need to set?
+
+---
+
+okay both are configured, run it
+
+---
+
+<task-notification>
+<task-id>ad121613368e8c5dd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ad121613368e8c5dd.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 12: register openai/responses + fix ToolCalls" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Commits:
+- `7176bb02` `test(providers): SMA-533 register openai responses in the stream conformance suite`
+- `527d4ec8` `fix(providers-openai): SMA-533 report tool-calls as the finish reason on the responses backend`
+
+Test summary: `openai/responses` registered with 5 served + 4 declined scenarios (matching `src/declines.rs` exactly); new captured fixture `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`; `terminal_events` fixed and covered by 4 new unit tests + 1 new wire test; full workspace (`cargo test --workspace --all-features`), fmt, and clippy all clean.
+
+Pre-fix failure, verbatim:
+```
+conformance: openai/responses / ToolCallCleanStop — FinishReasonMismatch { expected: ToolCalls, observed: Stop }
+  observed: ToolCallDelta(call_conformance_0, name=get_weather), ToolCallDelta(call_conformance_0), ToolCallDelta(call_conformance_0), ToolCallDelta(call_conformance_0), ToolCallDelta(call_conformance_0), Usage, Finish(Stop)
+```
+
+All six subjects now pass together (12/12 conformance tests green, confirmed post-fix).
+
+Concerns: (1) theoretical edge case — if `response.completed` raced ahead of `output_item.added`, `has_tool_calls` would misread `false`; no evidence this is reachable, flagged not fixed. (2) I added a crate-level wire test consuming the new fixture beyond the literal ask, judged in-scope since every other fixture in that directory is consumed by a test.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-12-report.md`</result>
+<usage><subagent_tokens>277028</subagent_tokens><tool_uses>119</tool_uses><duration_ms>1450486</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a93e9e0a9b4906a64</task-id>
+<tool-use-id>toolu_01LFyuzsWMzYWYWXe7MM4nyT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a93e9e0a9b4906a64.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 11: register gemini" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commit:** `5c9fcfc3` — fix(providers): SMA-533 rebuild gemini tool-call fixture from a live capture
+
+**Test summary:** All six subjects pass together — 38 lib tests + 12 integration tests (`bedrock`, `openai_chat`, `litellm`, `anthropic`, `gemini`, `openai_responses` from Task 12), plus gemini provider crate's own suite; clippy/fmt clean; scope-verified byte-identical elsewhere (`mod openai_responses` and every sibling module diffed clean against the pre-fix commit, `src/` untouched).
+
+**Live-capture findings:** `functionCall.id` IS present in real traffic (`"call_1285087"` — the `fc_{index}` fallback is not the common path); `functionCall` chunk carries no `finishReason` (arrives on a separate later chunk with an empty text part); `usageMetadata` appears on every chunk, not just the stop-reason chunk; `thoughtSignature` is a real sibling field, kept in the fixture with a synthetic placeholder value.
+
+**Vacuous-floor handling:** `CancelAfterStopReason`'s floor is now genuinely vacuous for gemini (same as anthropic) — documented at the scenario site per that precedent; guarantee now rests on `gate_after = chunks.len()` alone.
+
+**Both mutations re-verified:** Mutation 1 → `StopReasonDeclarationMismatch`. Mutation 2 → `TruncatedAfterStopReason` fails `MissingFinish` while `CleanStop` (running first in scenario order) stays green — two-terminal-arm asymmetry confirmed intact against the rebuilt fixture. Both fully reverted (`git diff --stat -- crates/` empty).
+
+**Concerns:** None outstanding — the prior BLOCKED item is resolved.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-11-report.md` (see appended "Fix report 2")</result>
+<usage><subagent_tokens>374911</subagent_tokens><tool_uses>46</tool_uses><duration_ms>750732</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a50d861acfc602a81</task-id>
+<tool-use-id>toolu_01HuYRPL5EPmZY8RXfQcRBrK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a50d861acfc602a81.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix batched documentation-accuracy findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE_WITH_CONCERNS
+Commit: `2e0ecc23` — `docs(providers): SMA-533 correct two more verbatim overstatements in conformance.rs`
+Verification: fmt/clippy clean, both test crates green (comment-only changes, no test deltas)
+Line citations: checked both modules for stale numeric fixture-line citations; found none (only descriptive "first/second/third tool-call line" wording, unaffected since no fixture bytes changed this round)
+Concerns: found the identical "verbatim" defect in **4 more places** in the same two modules, not fixed — `openai_chat` module doc lines 535 and 558 (same `FragmentedToolName` scenario as the line-800 fix, so now sits inconsistently with it) and `litellm` module-doc heading (~1042) plus scenario comments (1308, 1311), both about litellm's `FragmentedToolName`/`tool_call_stream_fragmented_name.txt` (a different scenario than line 1321). Flagged in detail in the report for a follow-up decision rather than fixed, to avoid re-sprawling past the two-item scope.
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-cleanup-report.md`</result>
+<usage><subagent_tokens>200905</subagent_tokens><tool_uses>35</tool_uses><duration_ms>423241</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a50d861acfc602a81</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a50d861acfc602a81.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix batched documentation-accuracy findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+Commit: `0acbb1ab` — `docs(providers): SMA-533 sweep every absolute-fidelity claim in the conformance suite`
+Verification: fmt/clippy clean, both test crates green (all 6 subjects' `conforms`/`scan_finds_only_*` tests pass)
+
+Swept all six modules with the full keyword list. Fixed: `openai_chat`'s L535/558/800 now agree (the coordinator's flagged inconsistency); litellm's parallel `FragmentedToolName` claims; four claims in `anthropic` including one substantive error — `scan_finds_only_a_populated_stop_reason`'s doc claimed two scenarios' `ModelEvent` streams were "byte-for-byte identical," but reading `stream.rs` directly showed `message_start`/`message_delta` unconditionally emit `Usage`, so they aren't — reworded to state what's actually true (`classify`/`floor_violation` just don't check `Usage` count); the equivalent gemini claim ("but for the trailing Usage") was also incomplete — it's a trailing TokenDelta+Usage pair, not just Usage, confirmed against gemini's `stream.rs`; and in `openai_responses`, a stale cross-reference left by round 1's own fix, plus a genuinely false "same item id, same call id" claim (they're deliberately different synthetic constants).
+
+Left unchanged (verified accurate): bedrock's and litellm's own byte-identical claims (confirmed via source), the declines.rs literal-string convention (correct usage of "verbatim" elsewhere), gemini's inline live-capture transcript (primary source, no external artifact to check against — noted as a limit).
+
+No numeric line citations needed re-checking — none of `conformance.rs`'s citations point at itself, and this round touched no other file.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-cleanup-report.md`</result>
+<usage><subagent_tokens>378478</subagent_tokens><tool_uses>143</tool_uses><duration_ms>1627806</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afd4fb59c5d222c72</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/afd4fb59c5d222c72.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 14: full CI gate run and audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean, commit in place. Task complete.
+
+**Status:** DONE
+
+**Commit created:** `eb5923da` — `test(providers): SMA-533 assert every declined subject is registered` (tests/provider-stream-conformance/src/declines.rs, +43 lines)
+
+**Gates:**
+- fmt: pass
+- clippy (workspace, all-features, all-targets, -D warnings): pass
+- test (workspace, all-features, exact command): pass, 170/170 result blocks 0-failed, no NATIVE_ROOTS, no panics
+- doc (RUSTDOCFLAGS=-D warnings): pass, only the documented non-fatal facade/CLI filename-collision warning
+- doc-coverage (pinned nightly, already installed): pass, 100.0% (1375/1375)
+- mdbook build: pass, no linkcheck errors
+
+**Decline count observed:** grep literally shows 13 lines from 3 self-tests (harness is silent on success, so a clean run never prints "8 rows"). Structurally confirmed the real 8-row set (declines.rs) holds: all six `conforms` tests pass, which is only possible if each subject's observed declines exactly match its `DECLINED` slice — bedrock×2, anthropic×1, gemini×1, openai/responses×4, zero for openai/chat and litellm.
+
+**Version-check result:** exactly one hit, `+version = "0.0.0"`, belonging solely to the new stub `tests/provider-stream-conformance/Cargo.toml`. No existing crate or CHANGELOG touched.
+
+**Concerns:** The brief's Step 2 "expected 8 rows via grep" doesn't literally hold given the harness's silent-on-success design — flagged in the report with the structural proof instead of papering over it. Nothing else looked wrong.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-14-report.md`</result>
+<usage><subagent_tokens>138773</subagent_tokens><tool_uses>63</tool_uses><duration_ms>995911</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bnsk1u34k</task-id>
+<tool-use-id>toolu_017ugMY6zDqJ6q3z5gGvpnqN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/bnsk1u34k.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for CI workflows to fire" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b71x69b3j</task-id>
+<summary>Monitor event: "PR #211 CI check results as they land"</summary>
+<event>audit: success
+book-build: success
+book-deploy: skipped
+commits: success
+deny: success
+fmt: success
+pr-title: success
+scheduled-audit: skipped</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b71x69b3j</task-id>
+<summary>Monitor event: "PR #211 CI check results as they land"</summary>
+<event>build-no-default-features: success</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b71x69b3j</task-id>
+<summary>Monitor event: "PR #211 CI check results as they land"</summary>
+<event>clippy: failure</event>
+</task-notification>
