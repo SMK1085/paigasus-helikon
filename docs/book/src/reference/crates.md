@@ -1,6 +1,6 @@
 # Crate overview
 
-The workspace is **21 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself), plus two further internal, non-published Cargo workspace members outside `crates/` (see below). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
+The workspace is **21 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself), plus three further internal, non-published Cargo workspace members outside `crates/` (see below). This page is the version-bearing map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
 
 For orientation — how to pick crates and add them to your `Cargo.toml` — see [workspace layout](../getting-started/workspace-layout.md). For the rendered rustdoc, see [API docs](./api-docs.md).
 
@@ -42,7 +42,13 @@ Versions below are **current as of 2026-08-16** and move every release — read 
 
 Every crate above the `-sessions-testkit` row publishes to crates.io — the last two stubs (`-evals`, `-cli`) ascended to real implementations in SMA-332/SMA-333, following the four-remaining-crates ascend before them (`-runtime-axum`, `-runtime-temporal`, `-runtime-agentcore`). `paigasus-helikon-sessions-testkit` is the sole `publish = false` crate under `crates/`, and it is an intentional internal test harness rather than a stub awaiting an ascend.
 
-The workspace has two further members outside `crates/`: `paigasus-helikon-runtime-http-conformance` (under `tests/runtime-http-conformance/`, `version = "0.0.0"`, `publish = false`) — an internal axum⇔actix wire-format conformance suite exercising both HTTP runtimes against the same test cases — and `paigasus-helikon-provider-stream-conformance` (under `tests/provider-stream-conformance/`, `version = "0.0.0"`, `publish = false`) — the cross-provider `Model::invoke` stream event-ordering conformance suite. Like `-sessions-testkit`, both are intentional non-published test harnesses, not stubs.
+The workspace has three further members outside `crates/`:
+
+- `paigasus-helikon-runtime-http-conformance` (under `tests/runtime-http-conformance/`, `version = "0.0.0"`, `publish = false`) — an internal axum⇔actix wire-format conformance suite exercising both HTTP runtimes against the same test cases.
+- `paigasus-helikon-workspace-lints` (under `tests/workspace-lints/`, `version = "0.0.0"`, `publish = false`) — an internal workspace-wide source-lint suite; its current lint asserts that no `tracing` macro passes `target`/`parent` with `=` instead of `:` (which would silently record a field and leave the event on its module-path target).
+- `paigasus-helikon-provider-stream-conformance` (under `tests/provider-stream-conformance/`, `version = "0.0.0"`, `publish = false`) — the cross-provider `Model::invoke` stream event-ordering conformance suite, driving every provider translator over a paced HTTP server.
+
+Like `-sessions-testkit`, all three are intentional non-published test harnesses, not stubs.
 
 ## Facade feature → re-export map
 

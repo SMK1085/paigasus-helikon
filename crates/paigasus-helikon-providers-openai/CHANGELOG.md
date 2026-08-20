@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.23](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.22...paigasus-helikon-providers-openai-v0.2.23) - 2026-08-20
+
+### Fixed
+
+- *(providers)* SMA-543 route chat-translator warnings to their declared tracing target ([#209](https://github.com/SMK1085/paigasus-helikon/pull/209))
+- *(providers)* SMA-550 canonicalize litellm tool-call correlation on the resolved call_id ([#208](https://github.com/SMK1085/paigasus-helikon/pull/208))
+
 ## [0.2.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.21...paigasus-helikon-providers-openai-v0.2.22) - 2026-08-18
 
 ### Fixed

@@ -80,7 +80,7 @@ pub(crate) fn to_chat_messages(items: &[Item]) -> Value {
             _ => {
                 // Future Item variants (Item is #[non_exhaustive]) — skip with warn.
                 tracing::warn!(
-                    target = "paigasus::openai::translate",
+                    target: "paigasus::openai::translate",
                     "unknown Item variant; skipping"
                 );
             }
@@ -202,13 +202,13 @@ fn assistant_message(content: &[ContentPart]) -> Value {
             ContentPart::Reasoning { .. } => { /* drop */ }
             ContentPart::Image { .. } | ContentPart::Audio { .. } => {
                 tracing::warn!(
-                    target = "paigasus::openai::translate",
+                    target: "paigasus::openai::translate",
                     "dropping multimodal ContentPart from AssistantMessage (Chat assistant role accepts only string content)"
                 );
             }
             ContentPart::ToolResult { .. } => {
                 tracing::warn!(
-                    target = "paigasus::openai::translate",
+                    target: "paigasus::openai::translate",
                     "dropping ContentPart::ToolResult nested in AssistantMessage (only valid on UserMessage in Anthropic shape)"
                 );
             }
@@ -342,7 +342,7 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
             _ => {
                 // Future Item variants — skip.
                 tracing::warn!(
-                    target = "paigasus::openai::translate",
+                    target: "paigasus::openai::translate",
                     "unknown Item variant; skipping in to_responses_input"
                 );
             }
@@ -626,5 +626,71 @@ mod responses_tests {
         assert_eq!(out[0]["type"], "function_call_output");
         assert_eq!(out[0]["call_id"], "c1");
         assert_eq!(out[0]["output"], "42");
+    }
+}
+
+/// The static guard in `tests/workspace-lints` proves these call sites use
+/// `target:` rather than `target =`. This proves what that *buys*: the event
+/// actually lands on the declared target, so `RUST_LOG` /
+/// `EnvFilter` selectors naming it work (SMA-543).
+#[cfg(test)]
+mod tracing_target_tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::subscriber::with_default;
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::LookupSpan;
+
+    use super::*;
+
+    /// Records the metadata target of every WARN-or-above event it sees.
+    ///
+    /// Filtering in `enabled` (rather than in `on_event`) means unrelated
+    /// `debug!`/`trace!`/`info!` calls anywhere in the exercised code path
+    /// never reach the subscriber at all, so this test only ever pins the
+    /// target of the warn it cares about — a routine unrelated log addition
+    /// elsewhere in `to_chat_messages` cannot make it fail.
+    #[derive(Clone, Default)]
+    struct TargetCapture(Arc<Mutex<Vec<String>>>);
+
+    impl<S: tracing::Subscriber + for<'l> LookupSpan<'l>> Layer<S> for TargetCapture {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: Context<'_, S>) -> bool {
+            *metadata.level() <= tracing::Level::WARN
+        }
+
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            self.0
+                .lock()
+                .expect("capture mutex")
+                .push(event.metadata().target().to_owned());
+        }
+    }
+
+    #[test]
+    fn dropped_multimodal_part_warns_on_the_declared_target() {
+        let capture = TargetCapture::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+
+        with_default(subscriber, || {
+            // Same input as `assistant_image_content_part_is_dropped_with_warning`:
+            // an Image part on an AssistantMessage is not representable in the
+            // Chat assistant role, so `assistant_message` warns and drops it.
+            let items = vec![Item::AssistantMessage {
+                content: vec![ContentPart::Image {
+                    source: MediaSource::Url {
+                        url: "x".to_owned(),
+                    },
+                }],
+                agent: None,
+            }];
+            let _ = to_chat_messages(&items);
+        });
+
+        let targets = capture.0.lock().expect("capture mutex").clone();
+        assert_eq!(
+            targets,
+            vec!["paigasus::openai::translate".to_owned()],
+            "the warn must land on its declared target, not on the module path"
+        );
     }
 }
