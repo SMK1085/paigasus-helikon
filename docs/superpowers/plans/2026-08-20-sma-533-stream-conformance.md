@@ -14,7 +14,11 @@
 
 - **Never edit any `version` field**, in any `Cargo.toml` or `CHANGELOG.md`. Spec §2.3. release-plz performs the `-core` bump itself; a manual bump defeats the dependent cascade and strands the facade.
 - **Commit format:** `<type>(<scope>): SMA-533 <lowercase message>`. Scopes used here: `providers`, `core`, `docs`, `spec`, `plan`, `workflows`. `docs(plans)` is rejected by the commit-msg hook — use `docs(plan)` singular.
-- **Fixture provenance:** every fixture is transcribed from captured or already-committed traffic, never invented from vendor docs. Spec §6. If a shape has no capture in the repo, do not write a fixture for it — report it instead.
+- **Fixture provenance:** every fixture is transcribed from captured or already-committed traffic, never invented from vendor docs. Spec §6. If a shape has no capture in the repo, do not write a fixture for it — **report it instead**.
+
+  **One narrow exception, for binary wire formats only.** Bedrock's Converse API speaks `application/vnd.amazon.eventstream` — CRC-32-wrapped binary frames — so there is no text stream to transcribe and the rule cannot be satisfied the way it is for the four SSE providers. Its frames are instead built through the **provider SDK's own encoder** (`aws_smithy_eventstream::frame::write_message_to`), decoded by the SDK's own deserializer, with every event shape traced to the translator's own match arms rather than to vendor documentation, and **proven by execution**: the Task 3 spike drives the real `BedrockModel::invoke` against a live local endpoint and mutation-checks both failure directions.
+
+  This exception is about *format*, not convenience. It does **not** apply to a provider with a capturable text stream — Gemini `functionCall` and OpenAI Responses tool calls both hit exactly this situation, were reported BLOCKED rather than derived, and were captured live before landing.
 - **All `pub` items in `src/lib.rs` need `///` docs.** `scripts/check-doc-coverage.sh` iterates every `cargo metadata --no-deps` package excluding only `paigasus-helikon-cli`, and the crate sets `[lints] workspace = true`, so `missing_docs` is `warn` and the `docs` job runs `RUSTDOCFLAGS=-D warnings`.
 - **No intra-doc link from a `pub` item to a private/`pub(crate)` item** — `rustdoc::private_intra_doc_links` fails the `docs` gate while build and tests pass. Use prose.
 - **Run `cargo fmt --all` and `cargo clippy --workspace --all-features --all-targets -- -D warnings` before every commit.** The pre-commit hook is a deliberate no-op; pre-push catches it but only at push time.
