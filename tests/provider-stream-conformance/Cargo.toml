@@ -29,6 +29,7 @@ tokio          = { workspace = true, features = ["macros", "rt-multi-thread", "n
 [dev-dependencies]
 paigasus-helikon-providers-anthropic = { workspace = true }
 paigasus-helikon-providers-bedrock = { workspace = true }
+paigasus-helikon-providers-gemini  = { workspace = true }
 paigasus-helikon-providers-litellm = { workspace = true }
 paigasus-helikon-providers-openai  = { workspace = true }
 aws-config             = { workspace = true }

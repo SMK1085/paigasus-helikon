@@ -4003,6 +4003,7 @@ dependencies = [
  "paigasus-helikon-core",
  "paigasus-helikon-providers-anthropic",
  "paigasus-helikon-providers-bedrock",
+ "paigasus-helikon-providers-gemini",
  "paigasus-helikon-providers-litellm",
  "paigasus-helikon-providers-openai",
  "reqwest",

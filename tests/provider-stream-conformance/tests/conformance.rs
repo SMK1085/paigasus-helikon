@@ -2098,3 +2098,519 @@ mod anthropic {
         assert_conforms(&Anthropic).await;
     }
 }
+
+/// The `Model::invoke` stream contract, checked against the Gemini
+/// `streamGenerateContent` (SSE) backend.
+///
+/// This is the one subject in this suite whose driver has **two distinct
+/// terminal arms**: `model.rs`'s event loop flushes `translator.finish()` from
+/// both a `[DONE]` sentinel arm and a bare-EOF arm
+/// (`crates/paigasus-helikon-providers-gemini/src/model.rs:149-158`). `S2`
+/// (`TruncatedAfterStopReason`) is what makes that non-vacuous: `CleanStop`
+/// below ends with `[DONE]`, `TruncatedAfterStopReason` ends at bare EOF with
+/// no `[DONE]` anywhere in its script, and Step 4 of this subject's
+/// registration proved by mutation that disabling one arm fails exactly one of
+/// the two scenarios while leaving the other green — see the task report for
+/// the recorded result.
+///
+/// # Fixture provenance
+///
+/// Gemini has no fixture directory the way `litellm`/`anthropic`/`openai_chat`
+/// do — its committed SSE lives inline in two integration-test files. Every
+/// envelope shape below is transcribed from one of them, cited on the helper
+/// that builds it:
+///
+/// - `crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:60-63`
+///   (`truncated_stream_no_finish`) — a content delta with no `finishReason`/
+///   `usageMetadata` key at all. Grounds [`text_delta`].
+/// - `crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:40`
+///   (`text_then_finish`) and `:78-86`
+///   (`multi_chunk_usage_emits_usage_per_chunk`, second chunk) — a
+///   `finishReason` and `usageMetadata` arriving in the SAME event as a text
+///   part. Grounds [`stop_chunk`].
+///
+/// Two shapes have no `tests/`-level capture anywhere in the repo — verified
+/// by `grep -rln functionCall crates/paigasus-helikon-providers-gemini/`,
+/// which turns up only outgoing tool-*declaration* builders
+/// (`translate/request.rs`, `translate/tools.rs`, `translate/mod.rs` — what
+/// Gemini is *offered*, never what it streams back) and this translator's own
+/// unit tests — and a repo-wide grep for the literal string `[DONE]` under
+/// this crate, which turns up only `model.rs`'s own comparison. Per this
+/// file's provenance rule, and as `bedrock`'s module doc directs for the same
+/// situation, both are derived from the translator's own match arms and
+/// already-committed, reviewed unit tests rather than invented — see
+/// [`tool_call_chunk`], [`finish_and_usage`] and [`done`] for the specific
+/// citations. Nothing here is invented from vendor documentation.
+///
+/// # `usageMetadata` stays on the stop-reason chunk, deliberately
+///
+/// `StreamTranslator::consume` (`stream.rs:60-67`) emits a `Usage` for *every*
+/// chunk that carries `usageMetadata` — unlike `openai_chat`/`litellm`, whose
+/// `finish_reason` chunk is silent, Gemini's stop-reason chunk is itself
+/// observable because it always carries usage in the same event (see
+/// [`stop_chunk`]'s doc). This module places `usageMetadata` on no other
+/// helper. That is load-bearing for `CancelAfterStopReason`: the harness's
+/// "at least one `Usage` observed" floor is genuinely testing something here,
+/// not vacuous the way it is for `anthropic` (whose `message_start` emits
+/// `Usage` unconditionally) — a gate placed one chunk too early, before
+/// [`stop_chunk`], would leave the drained stream with no `Usage` at all and
+/// the floor would bite. If a future edit ever spread `usageMetadata` across
+/// every chunk the way a naive "just always report tokens" fixture would, that
+/// floor would stop being able to tell a correctly-placed gate from a
+/// misplaced one.
+///
+/// # Why `FragmentedToolName` is declined
+///
+/// `StreamTranslator::consume`'s `functionCall` arm (`stream.rs:40-52`) reads
+/// the whole `name` out of one `Part` in one event — there is no second event
+/// a name fragment could arrive on, the same reason `bedrock` and `anthropic`
+/// decline this scenario. The pinned reason,
+/// `"name arrives whole in functionCall"`, is asserted verbatim against
+/// `DECLINED` in `declines.rs`.
+mod gemini {
+    use super::*;
+    use paigasus_helikon_providers_gemini::GeminiModel;
+
+    /// The model id `build_model_against` requests. Matches the constructor
+    /// example in the task brief (`GeminiModel::developer("gemini-2.0-flash")`).
+    const MODEL_ID: &str = "gemini-2.0-flash";
+
+    /// The tool name every tool-call fixture declares.
+    const TOOL_NAME: &str = "get_weather";
+
+    /// `id` for the single tool call in the tool fixture. Not claimed to match
+    /// any real Gemini id format — `function_call_uses_native_id`
+    /// (`stream.rs:107-114`) is the source of the `id`/`name`/`args` key
+    /// shape, not of this specific value, and nothing under test inspects it —
+    /// fixed purely so failure output is stable and greppable.
+    const TOOL_CALL_ID: &str = "fc_conformance_0";
+
+    /// The substring that appears in a chunk if and only if it carries a
+    /// *populated* `finishReason`.
+    ///
+    /// Unlike `openai_chat`/`litellm`, Gemini has no explicit-`null` pitfall to
+    /// exclude: `Candidate::finish_reason` (`sse.rs:23`) is `#[serde(default)]`
+    /// `Option<String>`, so an ordinary content chunk omits the key entirely
+    /// rather than nulling it (see [`text_delta`]). The marker still scans for
+    /// the opening quote of a *string* value, matching the task brief's
+    /// instruction and the sibling subjects' convention.
+    /// `scan_finds_only_a_populated_finish_reason` is the guard that keeps
+    /// this true against an ordinary content-only chunk — the only detector
+    /// for `ErrorAfterStopReason` degrading into `ErrorMidGeneration`, whose
+    /// observable events are otherwise byte-identical.
+    const FINISH_REASON_MARKER: &[u8] = b"\"finishReason\":\"";
+
+    /// One SSE frame: `data: {payload}\n\n`. Gemini sends bare `data:` frames
+    /// with no `event:` line, matching every fixture cited above.
+    fn frame(payload: serde_json::Value) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
+    /// One text delta with no `finishReason`/`usageMetadata` key at all.
+    /// Matches `gemini_streaming.rs`'s `truncated_stream_no_finish` fixture
+    /// (`crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:60-63`):
+    /// `{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}`.
+    fn text_delta(text: &str) -> Vec<u8> {
+        frame(json!({
+            "candidates": [{
+                "content": { "parts": [ { "text": text } ] }
+            }]
+        }))
+    }
+
+    /// The chunk carrying a populated `finishReason` AND `usageMetadata` in
+    /// the SAME event — Gemini's defining shape (task brief point 2): there is
+    /// no separate trailing usage event the way there is for `openai_chat`/
+    /// `litellm`. Matches `gemini_streaming.rs`'s `text_then_finish` fixture
+    /// (`.../tests/gemini_streaming.rs:40`) and
+    /// `multi_chunk_usage_emits_usage_per_chunk`'s second chunk
+    /// (`.../tests/gemini_streaming.rs:85-86`): text and `finishReason` inside
+    /// the one candidate, `usageMetadata` a top-level sibling of `candidates`
+    /// in the same SSE event.
+    ///
+    /// This is the only helper in this module that sets `usageMetadata` — see
+    /// the module doc's "`usageMetadata` stays on the stop-reason chunk"
+    /// section for why that placement is load-bearing.
+    fn stop_chunk(text: &str, reason: &str, prompt_tokens: u32, candidates_tokens: u32) -> Vec<u8> {
+        frame(json!({
+            "candidates": [{
+                "content": { "parts": [ { "text": text } ] },
+                "finishReason": reason
+            }],
+            "usageMetadata": {
+                "promptTokenCount": prompt_tokens,
+                "candidatesTokenCount": candidates_tokens
+            }
+        }))
+    }
+
+    /// The `[DONE]` sentinel `model.rs`'s driver compares against verbatim
+    /// (`event.data == "[DONE]"`,
+    /// `crates/paigasus-helikon-providers-gemini/src/model.rs:155`).
+    ///
+    /// No committed fixture anywhere in the repo exercises this arm — a
+    /// repo-wide grep for the literal string `[DONE]` under
+    /// `crates/paigasus-helikon-providers-gemini/` turns up only the driver's
+    /// own comparison, never a captured or scripted SSE frame. `CleanStop`
+    /// below is the first thing in this codebase that ever sends Gemini a
+    /// `[DONE]` sentinel and checks what the driver does with it. Grounded
+    /// directly in the driver's own string comparison rather than a capture;
+    /// the bytes are the same `data: [DONE]\n\n` terminator `openai_chat` and
+    /// `litellm` send, since `model.rs` checks nothing about the frame besides
+    /// its `data` field.
+    fn done() -> Vec<u8> {
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    /// `id`, the whole function `name`, and the whole argument JSON, all in
+    /// one `functionCall` part — Gemini never streams a tool call
+    /// incrementally, so this is the only shape a tool call can take on the
+    /// wire (see the module doc's "why `FragmentedToolName` is declined"
+    /// section).
+    ///
+    /// # Provenance
+    ///
+    /// No `tests/`-level SSE capture of a `functionCall` response exists
+    /// anywhere in this repo (see the module doc's provenance section). So —
+    /// as `bedrock`'s module doc directs for the same situation — this shape
+    /// is derived from two sources and nothing else:
+    ///
+    /// 1. **The translator's own match arm**, `stream.rs:40-52`, which reads
+    ///    `fc.id`, `fc.name` and `fc.args` off exactly this structure.
+    /// 2. **The crate's own already-committed, reviewed unit tests**:
+    ///    `function_call_uses_native_id` (`stream.rs:107-114`) is the source
+    ///    of the literal `id`/`name`/`args` keys used here, and
+    ///    `finish_with_function_call_is_tool_calls` (`stream.rs:179-185`)
+    ///    confirms that this exact shape — a content-carrying `functionCall`
+    ///    part plus a `STOP` `finishReason` — resolves to
+    ///    `FinishReason::ToolCalls`.
+    ///
+    /// `sse.rs`'s `Part`/`FunctionCall` structs (`#[serde(rename_all =
+    /// "camelCase")]`) pin the wire key to `functionCall` and its fields to
+    /// `id`/`name`/`args`.
+    fn tool_call_chunk(call_id: &str, name: &str, args: serde_json::Value) -> Vec<u8> {
+        frame(json!({
+            "candidates": [{
+                "content": { "parts": [
+                    { "functionCall": { "id": call_id, "name": name, "args": args } }
+                ] }
+            }]
+        }))
+    }
+
+    /// A populated `finishReason` and `usageMetadata`, with no `content` key
+    /// at all — the shape `ToolCallCleanStop` needs for the event after its
+    /// one tool-call chunk, per the task brief's table (the tool call and the
+    /// finish/usage are two separate steps, not one combined event).
+    ///
+    /// # Provenance
+    ///
+    /// Composed from two independently grounded pieces, since no single
+    /// committed shape carries both at once with empty content:
+    ///
+    /// 1. **A `finishReason` with no `content` key at all** is exactly
+    ///    `safety_finish_maps_to_content_filter`'s shape (`stream.rs:212-217`:
+    ///    `{"candidates":[{"finishReason":"SAFETY"}]}`) — here with `"STOP"`
+    ///    in place of `"SAFETY"`, a substitution grounded by
+    ///    `finish_reason_stop_emitted_on_finish` (`stream.rs:164-170`) and
+    ///    `finish_with_function_call_is_tool_calls` (`stream.rs:179-185`),
+    ///    both of which prove `"STOP"` is read off exactly this key
+    ///    regardless of what else the candidate carries.
+    /// 2. **`usageMetadata` as a top-level sibling of `candidates`,
+    ///    independent of what the candidate itself contains** is the same
+    ///    pattern [`stop_chunk`] grounds via `text_then_finish`/
+    ///    `multi_chunk_usage_emits_usage_per_chunk` — `GeminiChunk`'s
+    ///    `usage_metadata` field (`sse.rs:12`) is read once per chunk
+    ///    regardless of `candidates`' shape.
+    ///
+    /// `saw_function_call` (`stream.rs:10,41`) is a translator-level flag, not
+    /// scoped to one chunk, so `finish()` still resolves this `"STOP"` to
+    /// `FinishReason::ToolCalls` even though the `functionCall` and the
+    /// `finishReason` arrive in different chunks here.
+    fn finish_and_usage(reason: &str, prompt_tokens: u32, candidates_tokens: u32) -> Vec<u8> {
+        frame(json!({
+            "candidates": [{ "finishReason": reason }],
+            "usageMetadata": {
+                "promptTokenCount": prompt_tokens,
+                "candidatesTokenCount": candidates_tokens
+            }
+        }))
+    }
+
+    /// The scripted response for one scenario, or `None` for
+    /// `FragmentedToolName`, which this subject declines.
+    ///
+    /// Returning an `Option` rather than panicking on the declined scenario is
+    /// what lets [`Gemini::encodes_stop_reason`] call this for *every*
+    /// scenario and measure the bytes — see `bedrock::script`'s doc for the
+    /// same pattern.
+    fn script(scenario: Scenario) -> Option<Script> {
+        // The two-delta opening every text scenario shares, matching
+        // `truncated_stream_no_finish`'s envelope. The content is arbitrary,
+        // as in every other subject in this file.
+        let opening = || vec![text_delta("Hel"), text_delta("lo")];
+        // The opening plus one chunk carrying BOTH the stop reason and usage
+        // — see the module doc for why those two are never split across two
+        // chunks in this subject.
+        let through_stop = || {
+            let mut chunks = opening();
+            chunks.push(stop_chunk("!", "STOP", 8, 6));
+            chunks
+        };
+
+        let (chunks, gate_after, ending) = match scenario {
+            // Full stream: deltas, then the combined stop-reason/usage chunk,
+            // then the `[DONE]` sentinel and a clean end of body. This is the
+            // arm that exercises `model.rs`'s `[DONE]` terminal path
+            // (`model.rs:155-158`) — see the module doc's two-terminal-arms
+            // section.
+            Scenario::CleanStop => {
+                let mut chunks = through_stop();
+                chunks.push(done());
+                (chunks, None, Ending::Clean)
+            }
+            // The stop reason and usage are observed, then the body simply
+            // ends — no `[DONE]` anywhere in this script — so the buffered
+            // stop reason has to be flushed by the bare-EOF arm
+            // (`model.rs:149-152`), the OTHER terminal path. Together with
+            // `CleanStop` this is what makes S2 non-vacuous for this subject:
+            // each scenario exercises a different arm of `model.rs`'s event
+            // loop, not the same one twice.
+            Scenario::TruncatedAfterStopReason => (through_stop(), None, Ending::Clean),
+            // The body ends cleanly mid-generation: no `finishReason` chunk
+            // ever arrives, so no stop reason is ever observed. Matches
+            // `truncated_stream_no_finish`'s shape (content delta(s), then
+            // EOF) directly — `opening()` alone.
+            Scenario::TruncatedMidGeneration => (opening(), None, Ending::Clean),
+            // Same prefix, but the connection is torn down without a
+            // terminating chunk, so the client observes a transport error
+            // (`model.rs`'s `Some(Err(e))` arm) rather than an end-of-stream.
+            Scenario::ErrorMidGeneration => (opening(), None, Ending::Abort),
+            // The stop reason and usage are buffered/observed and *then* the
+            // body is aborted, so the error path must not flush a `Finish`.
+            // This is the one scenario byte-identical to
+            // `ErrorMidGeneration`'s observable events but for the trailing
+            // `Usage` — [`Gemini::encodes_stop_reason`]'s measured scan is
+            // what keeps the two distinguishable if `stop_chunk` were ever
+            // dropped from this script by mistake.
+            Scenario::ErrorAfterStopReason => (through_stop(), None, Ending::Abort),
+            // One content delta goes out, then the server parks holding the
+            // second back (`gate_after: Some(1)` pauses *before* the chunk at
+            // index 1, per `server.rs`'s `feed` loop) — no `finishReason`
+            // chunk anywhere in this script, so no stop reason exists even
+            // after the gate releases.
+            Scenario::CancelMidGeneration => (opening(), Some(1), Ending::Clean),
+            // The stop reason AND its usage are both observed before the gate
+            // — [`stop_chunk`] carries both in one event, so this scenario
+            // needs no *extra* usage chunk appended for the gate to sit
+            // after, the same shape as `anthropic`'s `message_delta`.
+            //
+            // Unlike `anthropic`, the harness's "at least one `Usage`
+            // observed" floor is NOT vacuous here: nothing before
+            // `stop_chunk` in this script ever sets `usageMetadata` (see the
+            // module doc's "`usageMetadata` stays on the stop-reason chunk"
+            // section), so a gate placed one chunk too early would leave the
+            // drained stream with no `Usage` at all and the floor would
+            // catch it.
+            //
+            // `gate_after` is a COUNT — `chunks.len()`, not a hand-typed
+            // literal — read *after* `through_stop()` has pushed
+            // `stop_chunk` onto `chunks`. That parks the server with
+            // `stop_chunk` already sent and the body still open, so
+            // cancellation truncates the stream strictly after the stop
+            // reason was buffered and its usage observed.
+            Scenario::CancelAfterStopReason => {
+                let chunks = through_stop();
+                let gate_after = chunks.len();
+                (chunks, Some(gate_after), Ending::Clean)
+            }
+            // Declined — see the module doc's "why `FragmentedToolName` is
+            // declined" section and `Gemini::stream`.
+            Scenario::FragmentedToolName => return None,
+            // A whole tool call: the name and full argument JSON arrive
+            // together in the one `functionCall` part Gemini is ever observed
+            // to send per call (see [`tool_call_chunk`]'s doc), then a
+            // separate chunk carries a `tool_use`-equivalent `STOP` stop
+            // reason and its usage (see [`finish_and_usage`]'s doc), then the
+            // `[DONE]` sentinel.
+            Scenario::ToolCallCleanStop => (
+                vec![
+                    tool_call_chunk(TOOL_CALL_ID, TOOL_NAME, json!({ "city": "Berlin" })),
+                    finish_and_usage("STOP", 10, 4),
+                    done(),
+                ],
+                None,
+                Ending::Clean,
+            ),
+        };
+
+        Some(Script {
+            content_type: "text/event-stream",
+            chunks,
+            gate_after,
+            ending,
+        })
+    }
+
+    /// The request driven through `Model::invoke`.
+    ///
+    /// Carries a tool definition for `ToolCallCleanStop` so the exchange is
+    /// coherent — a response returning a `functionCall` for a request that
+    /// offered no tools is not a stream Gemini would ever produce.
+    /// `FragmentedToolName` is this subject's other tool scenario, but it is
+    /// declined and so never reaches this function.
+    fn request(scenario: Scenario) -> ModelRequest {
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "What is the weather in Berlin?".into(),
+            }],
+        }];
+        if matches!(scenario, Scenario::ToolCallCleanStop) {
+            req.tools = vec![ToolDef {
+                name: TOOL_NAME.to_owned(),
+                description: "Look up the current weather for a city.".to_owned(),
+                schema: json!({
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }),
+            }];
+        }
+        req
+    }
+
+    /// Build a real `GeminiModel` (Developer-API transport) pointed at a
+    /// local plain-HTTP endpoint.
+    fn build_model_against(base_url: &str) -> GeminiModel {
+        GeminiModel::developer(MODEL_ID)
+            .api_key("gm-conformance-test")
+            .base_url(base_url)
+            .build()
+            .expect("gemini model should build with an explicit api key and base url")
+    }
+
+    /// See the module-level docs on this file for the fixture provenance
+    /// rules this subject follows.
+    struct Gemini;
+
+    #[async_trait::async_trait]
+    impl StreamUnderTest for Gemini {
+        fn name(&self) -> &'static str {
+            "gemini"
+        }
+
+        fn encodes_stop_reason(&self, scenario: Scenario) -> bool {
+            // MEASURED from the bytes about to be served — deliberately not
+            // `scenario.expects_stop_reason()`. See the crate's `declines`
+            // module doc and `bedrock::encodes_stop_reason` for why that
+            // restatement would make the harness's cross-check dead code.
+            script(scenario)
+                .map(|script| {
+                    script
+                        .chunks
+                        .iter()
+                        .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
+                })
+                .unwrap_or(false)
+        }
+
+        fn fixture_tool_name(&self) -> &'static str {
+            TOOL_NAME
+        }
+
+        fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason> {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                // `"STOP"` maps to `FinishReason::Stop` when no `functionCall`
+                // has been seen (`stream.rs`'s `finish` method). Both of these
+                // scenarios reach a `Finish`: `CleanStop` through the
+                // `[DONE]` arm, `TruncatedAfterStopReason` through the
+                // bare-EOF arm.
+                Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
+                    Some(FinishReason::Stop)
+                }
+                // `"STOP"` maps to `FinishReason::ToolCalls` once
+                // `saw_function_call` is set, which `tool_call_chunk` sets.
+                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                // Truncated, errored and cancelled streams must withhold
+                // `Finish` entirely.
+                Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason => None,
+                // Declined; never reached.
+                Scenario::FragmentedToolName => None,
+            }
+        }
+
+        async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
+            // The name and full argument JSON are set once, whole, in the one
+            // `functionCall` part; there is no second event either could be
+            // split across.
+            if scenario == Scenario::FragmentedToolName {
+                return Outcome::Declined("name arrives whole in functionCall");
+            }
+
+            let script =
+                script(scenario).expect("a scenario this subject serves must have a script");
+            let mut server = PacedServer::start(script).await;
+            let gate = server.take_gate();
+            let model = build_model_against(&server.base_url());
+
+            let stream = model
+                .invoke(request(scenario), cancel)
+                .await
+                .expect("gemini invoke should reach the local paced server");
+
+            Outcome::Served { stream, gate }
+        }
+    }
+
+    /// Whether `haystack` contains `needle` as a contiguous byte run.
+    /// Duplicated per subject module by design — see `bedrock::contains`.
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The soundness claim behind [`Gemini::encodes_stop_reason`]'s substring
+    /// scan: [`FINISH_REASON_MARKER`] occurs in [`stop_chunk`]'s and
+    /// [`finish_and_usage`]'s populated `finishReason` and in no other frame
+    /// this subject builds — in particular, not in an ordinary content-only
+    /// chunk, which has no `finishReason` key at all (see [`text_delta`]'s
+    /// doc), and not in a `functionCall`-only chunk either.
+    #[test]
+    fn scan_finds_only_a_populated_finish_reason() {
+        for (name, frame) in [
+            ("stop_chunk", stop_chunk("!", "STOP", 8, 6)),
+            ("finish_and_usage", finish_and_usage("STOP", 10, 4)),
+        ] {
+            assert!(
+                contains(&frame, FINISH_REASON_MARKER),
+                "{name} must carry the marker, or the scan measures nothing"
+            );
+        }
+
+        for (name, frame) in [
+            ("content delta (no finishReason key)", text_delta("Hel")),
+            ("[DONE]", done()),
+            (
+                "functionCall chunk (no finishReason key)",
+                tool_call_chunk(TOOL_CALL_ID, TOOL_NAME, json!({ "city": "Berlin" })),
+            ),
+        ] {
+            assert!(
+                !contains(&frame, FINISH_REASON_MARKER),
+                "{name} contains the populated-finishReason marker, so the scan would report a \
+                 stop reason for scripts that encode none."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conforms() {
+        assert_conforms(&Gemini).await;
+    }
+}
