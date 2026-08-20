@@ -571,6 +571,13 @@ fn floor_violation(
     // the gate sits. Anthropic's guarantee has to come from its fixture's
     // provenance comment instead — the transcription must show the gate sitting
     // after `message_delta`.
+    //
+    // Same narrowing applies to **gemini**, for the same shape of reason:
+    // real Gemini traffic carries `usageMetadata` on every chunk, not only
+    // the terminal one (see the `gemini` module's "`usageMetadata` appears
+    // on every chunk" doc), so this floor is satisfied trivially there too —
+    // its guarantee likewise rests on the gate placement documented at the
+    // `CancelAfterStopReason` scenario site, not on this floor.
     if matches!(scenario, Scenario::CancelAfterStopReason)
         && !events
             .iter()

@@ -32,7 +32,7 @@
 : to be CAPTURED should stay faithful to what the wire actually sent, not
 : just to what the parser happens to need.
 :
-: Two omissions from the raw capture, both deliberate:
+: Three kinds of trimming from the raw capture, all deliberate:
 :
 : 1. `response.created` and `response.in_progress` are dropped.
 :    `ResponsesTranslator::consume` has no arm for either (both fall through
@@ -51,6 +51,28 @@
 :    so it is dropped here for the same reason this directory's other
 :    fixtures already omit every optional field the translator does not
 :    read (no `logprobs`, no `metadata`, a minimal `output`).
+:
+: 3. `response.completed`'s `.response` object is reduced from the 35 keys
+:    the raw capture sends to the 8 this fixture keeps (`created_at`, `id`,
+:    `incomplete_details`, `model`, `object`, `output`, `status`, `usage`)
+:    -- the same "only what the translator reads" convention as (1) and (2)
+:    above, and as `responses_reasoning_then_text.txt`. This is NOT a "two
+:    omissions" story: the other 27 keys are absent from this fixture but
+:    present on the real wire, and their absence here should not be read
+:    as absence there. For the record, they are: `background`,
+:    `completed_at`, `error`, `frequency_penalty`, `instructions`,
+:    `max_output_tokens`, `max_tool_calls`, `metadata`, `moderation`,
+:    `parallel_tool_calls`, `presence_penalty`, `previous_response_id`,
+:    `prompt_cache_key`, `prompt_cache_retention`, `reasoning`,
+:    `safety_identifier`, `service_tier`, `store`, `temperature`, `text`,
+:    `tool_choice`, `tool_usage`, `tools`, `top_logprobs`, `top_p`,
+:    `truncation`, and `user`. The same trimming happens one level deeper:
+:    the raw capture's `usage.input_tokens_details` carries both
+:    `cached_tokens` and `cache_write_tokens`; this fixture keeps only
+:    `cached_tokens`. OpenAI does send `cache_write_tokens` on the wire --
+:    it just is not consumed by the translator, so it is not reproduced
+:    here. Don't read its absence from this file as evidence OpenAI omits
+:    it.
 
 event: response.output_item.added
 data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"function_call","id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","status":"in_progress","arguments":"","call_id":"call_D3Tp4UJ6scmDWx6jmfvy2LQo","name":"get_weather"}}
