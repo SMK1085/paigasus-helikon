@@ -646,6 +646,15 @@ git commit -m "docs(docs): SMA-557 document the paigasus tracing target namespac
 The walker mirrors `tests/workspace-lints/tests/tracing_target_syntax.rs`. Read that
 file first — this task deliberately reuses its shape (manifest-relative root,
 symlink-safe walk, anti-vacuity floor) so the two stay recognisably siblings.
+Beyond the source-vs-docs diff, the test also asserts that no two components
+collide by prefix (SMA-557 D1(b)): `EnvFilter` matches targets by raw string
+prefix, so a saved `paigasus::openai` filter would otherwise silently widen to
+catch a future `paigasus::openai_compat`.
+
+> **Authoritative source:** the code block in Step 1 is a snapshot of
+> `tests/workspace-lints/tests/tracing_target_docs.rs`. If the two ever
+> disagree, the shipped test wins — treat this block as illustrative, not as
+> something to diff against blindly.
 
 - [ ] **Step 1: Write the test**
 
@@ -803,8 +812,8 @@ fn documented_components_match_source() {
     // constant. A path-existence assertion would not — `tests/` contributes no
     // components at all, so reaching it proves nothing about extraction.
     let probe = root.join("crates/paigasus-helikon-providers-openai/src/backend/chat.rs");
-    let probe_src = std::fs::read_to_string(&probe)
-        .unwrap_or_else(|e| panic!("read {}: {e}", probe.display()));
+    let probe_src =
+        std::fs::read_to_string(&probe).unwrap_or_else(|e| panic!("read {}: {e}", probe.display()));
     assert_eq!(
         scan_targets(&probe_src),
         BTreeSet::from(["openai".to_owned()]),
@@ -822,6 +831,28 @@ fn documented_components_match_source() {
         !in_source.is_empty(),
         "no `paigasus::` targets found in {} files — the scan is not working",
         files.len()
+    );
+
+    // Enforces the book's stability-contract clause (SMA-557 D1(b)): "No
+    // component name will ever be a prefix of another — that would silently
+    // widen a saved filter." This is a correctness property of the namespace
+    // itself, not a style rule — `EnvFilter` matches by raw string prefix, so
+    // a future `openai_compat` alongside `openai` would otherwise pass this
+    // guard as long as its row was added.
+    let mut prefix_collisions = Vec::new();
+    for shorter in &in_source {
+        for longer in &in_source {
+            if shorter != longer && longer.starts_with(shorter.as_str()) {
+                prefix_collisions.push((shorter.clone(), longer.clone()));
+            }
+        }
+    }
+    assert!(
+        prefix_collisions.is_empty(),
+        "tracing component name(s) collide by prefix: {prefix_collisions:?}\n\
+         A saved `paigasus::<shorter>` filter would silently widen to include \
+         `paigasus::<longer>` too, since EnvFilter matches targets by raw \
+         string prefix. Rename one of the colliding components (SMA-557 D1)."
     );
 
     let page_path = root.join(BOOK_PAGE);
@@ -850,7 +881,9 @@ fn documented_components_match_source() {
 
 Run: `cargo test -p paigasus-helikon-workspace-lints --test tracing_target_docs`
 Expected: PASS. Both sets should be
-`{anthropic, bedrock, gemini, litellm, openai, temporal}`.
+`{anthropic, bedrock, gemini, litellm, openai, temporal}`, and since none of
+those names is a prefix of another, the prefix-collision assertion passes
+silently alongside the source-vs-docs check.
 
 If it fails with `documented but not in source`, Task 3's table has a typo. If it
 fails with `in source but not documented`, re-read the failure — it is telling you
