@@ -978,3 +978,500 @@ mod openai_chat {
         assert_conforms(&OpenAiChat).await;
     }
 }
+
+/// The `Model::invoke` stream contract, checked against the LiteLLM proxy's
+/// Chat Completions backend.
+///
+/// LiteLLM's wire shape is the OpenAI Chat Completions envelope
+/// (`openai_chat` above is its closest sibling in this suite), but SMA-550
+/// fixed a real correlation bug in this translator specifically:
+/// `providers-litellm/src/stream.rs` used to key buffered tool-call fragments
+/// by their *wire* key (`Index`/`Id`) rather than canonicalizing on the
+/// resolved `call_id`, so one call could own two state entries and emit two
+/// name-bearing deltas. Since the fix, every delta for one call is
+/// re-keyed onto a single canonical `Key::Id(call_id)` slot
+/// (`ChatTranslator::canonicalize`), which is what makes assertion 7 —
+/// "exactly one name-carrying `ToolCallDelta` per `call_id`" — structural
+/// for this subject rather than incidental.
+///
+/// # Fixture provenance
+///
+/// Every envelope shape below is transcribed from a fixture committed in
+/// `crates/paigasus-helikon-providers-litellm/tests/fixtures/`, cited on the
+/// helper that builds it:
+///
+/// - `text_then_trailing_usage.txt` — content deltas with no `finish_reason`
+///   key at all (not even an explicit `null`), a chunk carrying a populated
+///   `finish_reason`, a trailing usage-only chunk with no `finish_reason` key,
+///   `[DONE]`.
+/// - `tool_call_stream.txt` — the whole-tool-call envelope: `id` and the
+///   complete function `name` arriving together with an empty-string
+///   `arguments`, followed by two args-only continuations with no `name` key
+///   at all (not even empty), then a `"tool_calls"` finish chunk and trailing
+///   usage.
+/// - `tool_call_stream_fragmented_name.txt` — captured against LiteLLM
+///   1.98.0; the canonical fragmented-name shape, both fragments arriving
+///   after the id (the first fragment arrives together with the id, the
+///   second on a later delta once the id has already resolved). Per the
+///   design spec's §6 provenance note the "id resolves late" variant has no
+///   capture anywhere in the repo and is not built here — matching
+///   `openai_chat`'s note on the same file.
+/// - `truncated_no_finish.txt` — grounds the shape "content delta(s), then
+///   the body simply ends" with no `finish_reason` chunk anywhere.
+///
+/// `unknown_finish_reason.txt` was read but contributes no shape this module
+/// needs: this subject serves only `Stop` and `ToolCalls` finish reasons, and
+/// the `"guardrail_intervened"` shape it captures is a second encoding of the
+/// already-covered populated-`finish_reason` envelope.
+///
+/// [`FINISH_REASON_MARKER`]'s guard test needs one more shape that no
+/// committed *litellm-crate* fixture happens to carry: a content delta with
+/// an **explicit** `"finish_reason":null`. That shape is grounded exactly as
+/// `openai_chat` grounds it — via
+/// `crates/paigasus-helikon-providers-openai/tests/chat_wire.rs`'s
+/// `happy_path_text_completion` fixture body, whose own comment records it as
+/// "Captured from LiteLLM". This module's own `text_delta` stays faithful to
+/// `text_then_trailing_usage.txt` (which omits the key rather than nulling
+/// it), so that second shape is scripted only inside the guard test, not
+/// served to the subject.
+///
+/// # `FragmentedToolName` is a verbatim prefix of the capture
+///
+/// Per `Scenario::expects_stop_reason` (`src/lib.rs`) and the design spec's
+/// §6 table (`7, 1` only, no assertion 3), this scenario must not carry a
+/// `finish_reason`. `tool_call_stream_fragmented_name.txt`'s capture
+/// continues on to a `"tool_calls"` finish chunk and trailing usage, but this
+/// subject's script stops right after the three tool-call deltas — see
+/// `openai_chat`'s module doc for the full reasoning (same shape, same fix,
+/// same file).
+mod litellm {
+    use super::*;
+    use paigasus_helikon_providers_litellm::LiteLlmModel;
+
+    /// `id` on every scripted chunk. Not claimed to match any real LiteLLM id
+    /// format — nothing under test inspects it — fixed purely so failure
+    /// output is stable and greppable.
+    const RESPONSE_ID: &str = "chatcmpl-conformance";
+
+    /// `model` on every scripted chunk, and the model alias `build_model_against`
+    /// requests. Matches the alias the task brief specifies.
+    const MODEL_ID: &str = "prod-fast";
+
+    /// The tool name every tool-call fixture declares.
+    const TOOL_NAME: &str = "get_weather";
+
+    /// `id` for the single tool call in the tool fixtures. Fixed for the same
+    /// reason as [`RESPONSE_ID`].
+    const TOOL_CALL_ID: &str = "call_conformance_0";
+
+    /// The substring that appears in a chunk if and only if it carries a
+    /// *populated* `finish_reason`.
+    ///
+    /// The obvious marker — `finish_reason` alone — would be wrong even
+    /// though this subject's own `text_delta` chunks omit the key entirely
+    /// (see [`text_delta`]): OpenAI-compatible backends behind LiteLLM can
+    /// still emit an explicit `"finish_reason":null` on an ordinary delta, so
+    /// the marker has to exclude that shape structurally, not merely happen
+    /// to avoid the one shape this module scripts. Scanning for the opening
+    /// quote of a *string* value does that: `null` has no quote after the
+    /// colon, `"stop"`/`"tool_calls"` do.
+    /// `scan_finds_only_a_populated_finish_reason` is the guard that keeps
+    /// this true, including against a literal `"finish_reason":null` chunk.
+    const FINISH_REASON_MARKER: &[u8] = b"\"finish_reason\":\"";
+
+    /// One SSE frame: `data: {payload}\n\n`. `serde_json::Value`'s `Display`
+    /// impl serialises compactly (no extra whitespace), which is what keeps
+    /// [`FINISH_REASON_MARKER`] a literal substring of the bytes on the wire.
+    fn frame(payload: serde_json::Value) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
+    /// One text delta. Matches `text_then_trailing_usage.txt`'s content
+    /// chunks: no `finish_reason` key at all, not even `null`.
+    fn text_delta(text: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{
+                "index": 0,
+                "delta": { "content": text }
+            }]
+        }))
+    }
+
+    /// The chunk carrying a populated `finish_reason`. Matches
+    /// `text_then_trailing_usage.txt`'s finish chunk
+    /// (`"delta":{},"finish_reason":"stop"`).
+    ///
+    /// `ChatTranslator` buffers this and does **not** emit `Finish` inline —
+    /// it is released only by `finish()` at end-of-stream (`stream.rs`'s
+    /// module doc, invariant 1) — which is why `CleanStop` below must place
+    /// [`usage_chunk`] *after* this one.
+    fn finish_chunk(reason: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{ "index": 0, "delta": {}, "finish_reason": reason }]
+        }))
+    }
+
+    /// The trailing usage-only chunk. Matches `text_then_trailing_usage.txt`'s
+    /// usage chunk's shape: an empty `delta`, no `finish_reason` key at all,
+    /// and a top-level `usage` object.
+    fn usage_chunk() -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{ "index": 0, "delta": {} }],
+            "usage": { "prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14 }
+        }))
+    }
+
+    /// The stream terminator every committed fixture ends with.
+    fn done() -> Vec<u8> {
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    /// `id` plus the whole function name, empty `arguments`. Matches
+    /// `tool_call_stream.txt`'s first tool-call line
+    /// (`"id":"call_abc","function":{"arguments":"","name":"get_weather"}`) —
+    /// also the shape of `tool_call_stream_fragmented_name.txt`'s first line
+    /// with a fragment instead of the whole name.
+    fn tool_call_start(id: &str, name_frag: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "created": 1,
+            "model": MODEL_ID,
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": id,
+                        "function": { "arguments": "", "name": name_frag },
+                        "type": "function",
+                        "index": 0
+                    }]
+                }
+            }]
+        }))
+    }
+
+    /// A later name fragment, no `id` key, empty `arguments`. Matches
+    /// `tool_call_stream_fragmented_name.txt`'s second tool-call line
+    /// (`"function":{"arguments":"","name":"weather"}`, no `id`) — the shape
+    /// that proves the second fragment arrives once the id has already
+    /// resolved, the SMA-547 defect this capture exists to demonstrate.
+    fn tool_call_name_fragment(name_frag: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "created": 1,
+            "model": MODEL_ID,
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "function": { "arguments": "", "name": name_frag },
+                        "type": "function",
+                        "index": 0
+                    }]
+                }
+            }]
+        }))
+    }
+
+    /// An args-only continuation: no `id`, no `name` key at all. Matches
+    /// `tool_call_stream.txt`'s and `tool_call_stream_fragmented_name.txt`'s
+    /// argument-continuation lines.
+    fn tool_call_args(args_frag: &str) -> Vec<u8> {
+        frame(json!({
+            "id": RESPONSE_ID,
+            "created": 1,
+            "model": MODEL_ID,
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "function": { "arguments": args_frag },
+                        "type": "function",
+                        "index": 0
+                    }]
+                }
+            }]
+        }))
+    }
+
+    /// The scripted response for one scenario.
+    ///
+    /// Every scenario is served — `litellm` declines none — so this returns a
+    /// bare [`Script`], not an `Option`.
+    fn script(scenario: Scenario) -> Script {
+        // The two-delta opening every text scenario shares, matching
+        // `text_then_trailing_usage.txt`'s two content chunks.
+        let opening = || vec![text_delta("Hel"), text_delta("lo")];
+        // The opening plus a populated finish_reason chunk.
+        let through_stop = || {
+            let mut chunks = opening();
+            chunks.push(finish_chunk("stop"));
+            chunks
+        };
+
+        let (chunks, gate_after, ending) = match scenario {
+            // Full stream: deltas, stop reason, then usage AFTER it, then
+            // [DONE] and a clean end of body — the exact order
+            // `text_then_trailing_usage.txt` captures.
+            Scenario::CleanStop => {
+                let mut chunks = through_stop();
+                chunks.push(usage_chunk());
+                chunks.push(done());
+                (chunks, None, Ending::Clean)
+            }
+            // The stop reason is observed, then the body simply ends — no
+            // usage, no [DONE] — so the translator's buffered stop reason has
+            // to be flushed by the EOF path (`ChatTranslator::finish`).
+            Scenario::TruncatedAfterStopReason => (through_stop(), None, Ending::Clean),
+            // The body ends cleanly mid-generation: no finish_reason chunk
+            // ever arrives, so no stop reason is ever observed. Grounded in
+            // `truncated_no_finish.txt`'s shape (content delta(s), then EOF).
+            Scenario::TruncatedMidGeneration => (opening(), None, Ending::Clean),
+            // Same prefix, but the connection is torn down without a
+            // terminating chunk, so the client observes a transport error.
+            Scenario::ErrorMidGeneration => (opening(), None, Ending::Abort),
+            // The stop reason is buffered and *then* the body is aborted, so
+            // the error path must not flush it as a Finish. This is the one
+            // scenario byte-identical to ErrorMidGeneration's observable
+            // events, which is exactly what `encodes_stop_reason` exists to
+            // keep distinguishable — see its doc.
+            Scenario::ErrorAfterStopReason => (through_stop(), None, Ending::Abort),
+            // Two content deltas go out, then the server parks holding
+            // nothing else back — no finish_reason chunk anywhere in this
+            // script, so no stop reason exists even after the gate releases.
+            Scenario::CancelMidGeneration => {
+                let chunks = opening();
+                (chunks, Some(1), Ending::Clean)
+            }
+            // The stop reason AND the usage chunk after it are both observed
+            // before the gate. `usage` is the harness's required edge here:
+            // `ChatTranslator` buffers `finish_reason` silently, so the
+            // stop-reason chunk itself is not an observable event — usage is
+            // the first thing the client sees after it.
+            Scenario::CancelAfterStopReason => {
+                let mut chunks = through_stop();
+                chunks.push(usage_chunk());
+                let gate_after = chunks.len();
+                (chunks, Some(gate_after), Ending::Clean)
+            }
+            // A verbatim prefix of `tool_call_stream_fragmented_name.txt`:
+            // the three tool-call deltas, and nothing more — no
+            // finish_reason, no usage, no [DONE]. See the module doc's
+            // "FragmentedToolName is a verbatim prefix of the capture"
+            // section for why the body ends right here.
+            Scenario::FragmentedToolName => {
+                let chunks = vec![
+                    tool_call_start(TOOL_CALL_ID, "get_"),
+                    tool_call_name_fragment("weather"),
+                    tool_call_args("{\"city\":\"Berlin\"}"),
+                ];
+                (chunks, None, Ending::Clean)
+            }
+            // `tool_call_stream.txt`, verbatim and in full: the whole name
+            // arrives with the id (empty args), the arguments arrive split
+            // across two continuations (so exactly one emitted
+            // `ToolCallDelta` carries the name), then a tool_calls stop
+            // reason and the usage-bearing trailing chunk.
+            Scenario::ToolCallCleanStop => {
+                let chunks = vec![
+                    tool_call_start(TOOL_CALL_ID, TOOL_NAME),
+                    tool_call_args("{\"city\":"),
+                    tool_call_args("\"Berlin\"}"),
+                    finish_chunk("tool_calls"),
+                    usage_chunk(),
+                    done(),
+                ];
+                (chunks, None, Ending::Clean)
+            }
+        };
+
+        Script {
+            content_type: "text/event-stream",
+            chunks,
+            gate_after,
+            ending,
+        }
+    }
+
+    /// The request driven through `Model::invoke`.
+    ///
+    /// Carries a tool definition for both tool scenarios so the exchange is
+    /// coherent — a response returning `tool_calls` for a request that
+    /// offered no tools is not a stream a real proxy would ever produce.
+    fn request(scenario: Scenario) -> ModelRequest {
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "What is the weather in Berlin?".into(),
+            }],
+        }];
+        if matches!(
+            scenario,
+            Scenario::ToolCallCleanStop | Scenario::FragmentedToolName
+        ) {
+            req.tools = vec![ToolDef {
+                name: TOOL_NAME.to_owned(),
+                description: "Look up the current weather for a city.".to_owned(),
+                schema: json!({
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }),
+            }];
+        }
+        req
+    }
+
+    /// Build a real `LiteLlmModel` pointed at a local plain-HTTP endpoint.
+    fn build_model_against(base_url: &str) -> LiteLlmModel {
+        LiteLlmModel::chat(MODEL_ID)
+            .base_url(base_url)
+            .build()
+            .expect("litellm model should build with an explicit base url")
+    }
+
+    /// See the module-level docs on this file for the fixture provenance
+    /// rules this subject follows.
+    struct LiteLlm;
+
+    #[async_trait::async_trait]
+    impl StreamUnderTest for LiteLlm {
+        fn name(&self) -> &'static str {
+            "litellm"
+        }
+
+        fn encodes_stop_reason(&self, scenario: Scenario) -> bool {
+            // MEASURED from the bytes about to be served — deliberately not
+            // `scenario.expects_stop_reason()`. See the crate's `declines`
+            // module doc and `bedrock::encodes_stop_reason` for why that
+            // restatement would make the harness's cross-check dead code.
+            script(scenario)
+                .chunks
+                .iter()
+                .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
+        }
+
+        fn fixture_tool_name(&self) -> &'static str {
+            TOOL_NAME
+        }
+
+        fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason> {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
+                    Some(FinishReason::Stop)
+                }
+                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                // Truncated, errored and cancelled streams must withhold
+                // `Finish` entirely, and so must `FragmentedToolName`, whose
+                // script ends before any finish_reason chunk arrives.
+                Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName => None,
+            }
+        }
+
+        async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
+            let script = script(scenario);
+            let mut server = PacedServer::start(script).await;
+            let gate = server.take_gate();
+            let model = build_model_against(&server.base_url());
+
+            let stream = model
+                .invoke(request(scenario), cancel)
+                .await
+                .expect("litellm invoke should reach the local paced server");
+
+            Outcome::Served { stream, gate }
+        }
+    }
+
+    /// Whether `haystack` contains `needle` as a contiguous byte run.
+    /// Duplicated per subject module by design — see `bedrock::contains`.
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// The soundness claim behind [`LiteLlm::encodes_stop_reason`]'s
+    /// substring scan: [`FINISH_REASON_MARKER`] occurs in the finish_reason
+    /// chunk and in no other frame this subject builds — in particular, not
+    /// in an ordinary content delta, whether that delta omits the key
+    /// entirely (this module's own `text_delta`) or carries it as an
+    /// explicit `null` (a shape no committed litellm-crate fixture happens to
+    /// carry, but which OpenAI-compatible backends behind LiteLLM can send —
+    /// grounded here via `providers-openai/tests/chat_wire.rs`'s
+    /// `happy_path_text_completion` fixture, itself captured from LiteLLM;
+    /// see `openai_chat`'s citation of the same file).
+    #[test]
+    fn scan_finds_only_a_populated_finish_reason() {
+        assert!(
+            contains(&finish_chunk("stop"), FINISH_REASON_MARKER),
+            "the finish_reason chunk must carry the marker, or the scan measures nothing"
+        );
+
+        // Not scripted by this module — `text_delta` stays faithful to
+        // `text_then_trailing_usage.txt`, which omits the key rather than
+        // nulling it. Included only so the marker is proven safe against the
+        // shape the task brief calls out, grounded per the doc comment above.
+        let explicit_null_delta = frame(json!({
+            "id": RESPONSE_ID,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": MODEL_ID,
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "hello" },
+                "finish_reason": null
+            }]
+        }));
+
+        for (name, frame) in [
+            ("content delta (no finish_reason key)", text_delta("Hel")),
+            (
+                "content delta (explicit finish_reason: null)",
+                explicit_null_delta,
+            ),
+            ("usage chunk", usage_chunk()),
+            ("[DONE]", done()),
+            ("tool_call start", tool_call_start(TOOL_CALL_ID, "get_")),
+            (
+                "tool_call name fragment",
+                tool_call_name_fragment("weather"),
+            ),
+            ("tool_call args", tool_call_args("{\"city\":\"Berlin\"}")),
+        ] {
+            assert!(
+                !contains(&frame, FINISH_REASON_MARKER),
+                "{name} contains the populated-finish_reason marker, so the scan would report a \
+                 stop reason for scripts that encode none. In particular, an ordinary content \
+                 delta carries at most \"finish_reason\":null, and the marker must not match \
+                 that null value."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn conforms() {
+        assert_conforms(&LiteLlm).await;
+    }
+}
