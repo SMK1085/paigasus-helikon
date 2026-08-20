@@ -135,6 +135,37 @@
         "label": "Skill: superpowers:subagent-driven-development",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01FawZPqP2tLWZ4fQd92w1ut",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "104a4bddcf5e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1817,
+        "end": 1818,
+        "entry_ids": [
+          "77c5502d-14cb-416a-8071-e2cceb38d562"
+        ],
+        "tool_use_id": "toolu_01FawZPqP2tLWZ4fQd92w1ut"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01FawZPqP2tLWZ4fQd92w1ut"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
