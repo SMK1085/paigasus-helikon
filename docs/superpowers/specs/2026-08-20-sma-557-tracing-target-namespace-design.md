@@ -484,6 +484,9 @@ bystander.
 
 - Normalizing the 41 untargeted `core`/runtime call sites (D2).
 - Resolving `runtime-temporal`'s split personality — 1 targeted site, 3 not.
+- Any change to a published crate — **superseded during Stage 6**; see §7's
+  amendment for the one-site Rust 1.98 clippy fix that was folded in by the
+  owner's decision. Nothing else under `crates/` changes.
 - Enforcing the naming *convention* on target strings — with one deliberate
   exception. SMA-543's `scan()` guards syntax; D3's guard checks doc-source
   agreement **and** that no component name is a prefix of another. That last
@@ -512,11 +515,25 @@ highest-value candidates, being the trace tree the book already teaches.
 
 ## 7. Commit and PR
 
-Two commits, both semver-neutral — no published crate is touched, so release-plz
-attributes no bump:
+The ticket's own work is semver-neutral — it touches only the book and the
+unpublished `tests/workspace-lints`:
 
 - `docs(docs): SMA-557 …` for the book page.
 - `test(lints): SMA-557 …` for `tests/workspace-lints`.
+
+**Amendment, decided during Stage 6.** Rust 1.98.0 reached CI's `stable` channel
+while this PR was open, and its `clippy::needless_late_init` fires on
+pre-existing code at `crates/paigasus-helikon-tools/src/exec/mod.rs:247`. That
+turned the required `clippy` gate red on this PR **and on `main`**, on code this
+ticket never touched (`main` was last green at 06:00 UTC the same day; the local
+`stable` toolchain here was pinned at 1.96.0, which is why local gates passed).
+The whole workspace is otherwise clean under 1.98 — it is exactly one site.
+
+The owner chose to fold the fix into this PR rather than split it out, so a third
+commit — `refactor(tools): SMA-557 …` — is in scope, and the "no published crate
+is touched" property stated elsewhere in this document **no longer holds**:
+`paigasus-helikon-tools` takes a patch bump and the facade cascades. That is an
+accepted deviation from §6's non-goals, not an oversight.
 
 Both scopes are verified present in `.versionrc:18`'s `scopeRegex`. There is **no
 `book` scope** — do not invent one; the allowlist is read from `main` for the PR
