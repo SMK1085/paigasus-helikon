@@ -194,8 +194,10 @@ pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
 /// The gap between `target:` and its literal is scanned against the raw
 /// source (see the comment at the whitespace-skip loop below), so a comment
 /// sitting in that gap — e.g. `target: /* … */ "paigasus::x::y"` — stops the
-/// skip early and silently yields no component for that site. No such site
-/// exists in this workspace today.
+/// skip early and silently yields no component for that site. Likewise,
+/// `target: SOME_CONST` — a `const &'static str`, which `tracing` accepts —
+/// is invisible in the same way, since only a literal written directly after
+/// `target:` is recognised. No such site exists in this workspace today.
 pub fn scan_targets(src: &str) -> BTreeSet<String> {
     const NEEDLE: &[u8] = b"target:";
     let masked = mask_trivia(src);

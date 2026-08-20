@@ -170,6 +170,28 @@ fn documented_components_match_source() {
         files.len()
     );
 
+    // Enforces the book's stability-contract clause (SMA-557 D1(b)): "No
+    // component name will ever be a prefix of another — that would silently
+    // widen a saved filter." This is a correctness property of the namespace
+    // itself, not a style rule — `EnvFilter` matches by raw string prefix, so
+    // a future `openai_compat` alongside `openai` would otherwise pass this
+    // guard as long as its row was added.
+    let mut prefix_collisions = Vec::new();
+    for shorter in &in_source {
+        for longer in &in_source {
+            if shorter != longer && longer.starts_with(shorter.as_str()) {
+                prefix_collisions.push((shorter.clone(), longer.clone()));
+            }
+        }
+    }
+    assert!(
+        prefix_collisions.is_empty(),
+        "tracing component name(s) collide by prefix: {prefix_collisions:?}\n\
+         A saved `paigasus::<shorter>` filter would silently widen to include \
+         `paigasus::<longer>` too, since EnvFilter matches targets by raw \
+         string prefix. Rename one of the colliding components (SMA-557 D1)."
+    );
+
     let page_path = root.join(BOOK_PAGE);
     let page = std::fs::read_to_string(&page_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", page_path.display()));
