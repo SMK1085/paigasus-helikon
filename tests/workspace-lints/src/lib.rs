@@ -183,13 +183,19 @@ pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
 /// so guarding it would redden CI on legitimate refactors.
 ///
 /// Comments, char literals and text nested inside a string literal are invisible
-/// to it, because it looks for `target:` in [`mask_trivia`]'s masked buffer and
+/// to it, because it looks for `target:` in `mask_trivia`'s masked buffer and
 /// reads the literal's contents back out of the original source.
 ///
 /// Not macro-aware: it keys on a `target:` token followed by a `paigasus::`
 /// literal, so a non-`tracing` field named `target` holding such a string would
 /// be a false positive. No such site exists in this workspace, and the failure
 /// mode is a loud mismatch rather than a silent miss.
+///
+/// The gap between `target:` and its literal is scanned against the raw
+/// source (see the comment at the whitespace-skip loop below), so a comment
+/// sitting in that gap — e.g. `target: /* … */ "paigasus::x::y"` — stops the
+/// skip early and silently yields no component for that site. No such site
+/// exists in this workspace today.
 pub fn scan_targets(src: &str) -> BTreeSet<String> {
     const NEEDLE: &[u8] = b"target:";
     let masked = mask_trivia(src);
