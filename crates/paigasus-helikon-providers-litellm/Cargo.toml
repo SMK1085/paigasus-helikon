@@ -27,10 +27,11 @@ tokio                 = { workspace = true }
 tracing               = { workspace = true }
 
 [dev-dependencies]
-wiremock = { workspace = true }
-insta    = { workspace = true, features = ["json", "yaml"] }
-tokio    = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
-reqwest  = { workspace = true }
+wiremock           = { workspace = true }
+insta              = { workspace = true, features = ["json", "yaml"] }
+tokio              = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+reqwest            = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

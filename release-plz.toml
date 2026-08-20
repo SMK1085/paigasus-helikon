@@ -42,3 +42,10 @@ release = false
 name = "paigasus-helikon-runtime-http-conformance"
 publish = false
 release = false
+
+# Internal workspace-wide source lints (SMA-543). Never published, so it
+# carries the same publish=false / release=false pair as the members above.
+[[package]]
+name = "paigasus-helikon-workspace-lints"
+publish = false
+release = false

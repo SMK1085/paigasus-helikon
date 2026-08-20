@@ -4073,6 +4073,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "wiremock",
 ]
 
@@ -4095,6 +4096,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "wiremock",
 ]
 
@@ -4307,6 +4309,10 @@ dependencies = [
  "url",
  "wiremock",
 ]
+
+[[package]]
+name = "paigasus-helikon-workspace-lints"
+version = "0.0.0"
 
 [[package]]
 name = "parking"
