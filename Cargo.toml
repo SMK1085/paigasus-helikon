@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/*", "tests/runtime-http-conformance"]
+members  = ["crates/*", "tests/runtime-http-conformance", "tests/provider-stream-conformance"]
 
 [workspace.package]
 version       = "0.0.0"
@@ -41,6 +41,9 @@ futures               = { version = "0.3", default-features = false, features = 
 # CryptoProvider::install_default() ambiguous and panics any rustls auto-default
 # user (e.g. tools' forkd_tls test) under `cargo test --workspace --all-features`.
 gcp_auth              = { version = "0.12", default-features = false, features = ["aws-lc-rs"] }
+http-body-util        = "0.1"
+hyper                 = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util            = { version = "0.1", default-features = false, features = ["tokio"] }
 insta                 = "1"
 globset               = "0.4"
 # Pinned to 0.2.28: jiff 0.2.29 activates a `defmt` integration that pulls the
@@ -137,6 +140,7 @@ temporalio-workflow = { version = "0.7", default-features = false }
 # omitted: they either pull RUSTSEC-2026-0098 or cause a multi-provider panic.
 aws-config             = { version = "1.8.18", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
 aws-sdk-bedrockruntime = { version = "1.135.0", default-features = false, features = ["rt-tokio"] }
+aws-smithy-eventstream = { version = "0.61.2", default-features = false }
 aws-smithy-types       = { version = "1.5.0", default-features = false }
 aws-smithy-runtime-api = { version = "1.12.3", default-features = false }
 aws-smithy-runtime     = { version = "1.11.3", default-features = false, features = ["client"] }

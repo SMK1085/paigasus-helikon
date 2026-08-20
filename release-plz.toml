@@ -42,3 +42,11 @@ release = false
 name = "paigasus-helikon-runtime-http-conformance"
 publish = false
 release = false
+
+# Internal cross-provider stream event-ordering conformance suite. Never
+# published, so it carries the same publish=false / release=false pair as the
+# two internal crates above.
+[[package]]
+name = "paigasus-helikon-provider-stream-conformance"
+publish = false
+release = false

@@ -3988,6 +3988,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "paigasus-helikon-provider-stream-conformance"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "paigasus-helikon-core",
+ "tokio",
+]
+
+[[package]]
 name = "paigasus-helikon-providers-anthropic"
 version = "0.1.22"
 dependencies = [
