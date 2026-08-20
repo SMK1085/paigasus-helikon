@@ -53,3 +53,36 @@ Also added the `//` comment at the defer site naming the protecting test, and `s
 **Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-2-report.md`</result>
 <usage><subagent_tokens>181532</subagent_tokens><tool_uses>37</tool_uses><duration_ms>562016</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a670b0fcb6bf77762</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/a670b0fcb6bf77762.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: Bedrock spike" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Fix round complete.
+
+**Status:** DONE
+
+**Commits:**
+- `7b9d6a8b feat(providers): SMA-533 prove bedrock eventstream framing over local http`
+- `e463db17 test(providers): SMA-533 assert the sdk signs the local bedrock request` (this round)
+
+**Tests:** 7/7 green in the crate lib suite (3 eventstream + Task 2's 4 server tests, unchanged). fmt, clippy `-D warnings`, docs `-D warnings` all clean.
+
+**Fix:** `PacedServer` now records the first request's headers (`Arc&lt;StdMutex&lt;Option&lt;HeaderMap&gt;&gt;&gt;`, filled before the body is consumed, first-request-only so a retry can't clobber it) behind one narrow accessor `first_request_headers() -&gt; Option&lt;HeaderMap&gt;`, doc-commented against growing into a general request recorder. New test `bedrock_signs_the_local_request_with_sigv4` asserts the `Authorization` header starts with `AWS4-HMAC-SHA256 `, carries scope `/us-east-1/bedrock/aws4_request`, and carries a `Signature=`. Kept separate from the verbatim brief test so the two failure modes stay independently diagnosable.
+
+**Mutation proof (both reverted, neither committed):**
+- **C — wrong expected prefix** (`SHA256`→`SHA512`): fails, printing the real header. The digest also differs from the earlier ad-hoc capture because the signed `host` port differs — evidence it's computed per-request, not echoed.
+- **D — drop `.credentials_provider(..)`**: the SDK refuses to dispatch at all (`NoMatchingAuthSchemeError … sigv4: NoIdentityResolver`), no socket opened. So signing is unconditional — the reviewer's code reading, now observed.
+
+**Corrected verdicts:** Assumption 1 — PROVEN *and re-verified on every run by two committed tests* (plain-HTTP dispatch; SigV4 signing). Assumption 2 — PROVEN, unchanged. Report's assumption-1 section rewritten in place with a correction note; the uncommitted probe is demoted to corroboration.
+
+**Residual limit (recorded in the report):** the suite proves a well-formed SigV4 header for the right service/region, not a cryptographically *correct* signature — verifying the digest would mean reimplementing SigV4 and testing the AWS SDK rather than this repo.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-3-report.md`</result>
+<usage><subagent_tokens>206551</subagent_tokens><tool_uses>34</tool_uses><duration_ms>361201</duration_ms></usage>
+</task-notification>
