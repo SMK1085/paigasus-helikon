@@ -201,3 +201,28 @@ Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550
 **Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-7-report.md`</result>
 <usage><subagent_tokens>224998</subagent_tokens><tool_uses>31</tool_uses><duration_ms>478653</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>adb94995dfe7ec5b4</task-id>
+<tool-use-id>toolu_01RNc1YjA1Zi9teGyw4ReJgX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/adb94995dfe7ec5b4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 9: register litellm" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Commits created:
+- `c6ee79c4` — `test(providers): SMA-533 register litellm in the stream conformance suite`
+- `b56c37a6` — `fix(providers): SMA-533 correct the litellm gate comment and caveat canonicalize's coverage claim`
+
+Test summary: 44/44 pass (38 lib + 6 integration); `crates/` diff empty; fmt/clippy clean.
+
+**Whether the suite surfaced any real provider defect:** No. Both tool scenarios pass. The one nuance (already documented in-code now) is that neither committed litellm capture actually exercises the `Index`/`Id` correlation boundary SMA-550's `canonicalize` fixes — that regression coverage lives in the litellm crate's own unit tests, not in this conformance subject.
+
+Concerns: none outstanding — both Important findings from review addressed: the copy-pasted "two deltas go out" gate comment fixed in both `mod litellm` and `mod openai_chat` (cross-module edit explicitly authorized), and the "structural for this subject" claim softened with a new module-doc section naming the actual regression-guard test (`dual_key_call_emits_at_most_one_name_mid_stream`).
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-9-report.md`</result>
+<usage><subagent_tokens>253945</subagent_tokens><tool_uses>17</tool_uses><duration_ms>145003</duration_ms></usage>
+</task-notification>
