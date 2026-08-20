@@ -860,7 +860,9 @@ Replace the `let _ = (scenario, cancelled);` line with, in this order:
 1. **Assertion 5** — if `cancelled` and any `Finish` is present, return `FinishOnCancel`. Checked before 3/4/6 because a cancelled stream's stop-reason expectation is moot.
 2. **Assertion 6** — if any `Err` is present and a `Finish` appears *after* it, return `FinishAfterError`.
 3. **Assertion 4** — if `!scenario.expects_stop_reason()` and a `Finish` is present, return `FinishOnTruncation`.
-4. **Assertion 3** — if `scenario.expects_stop_reason()`, no `Err` is present, and no `Finish` is present, return `MissingFinish`. The no-`Err` guard matters: assertion 6 governs the error case and requires the opposite outcome.
+4. **Assertion 3** — if `scenario.expects_stop_reason()`, **not `cancelled`**, no `Err` is present, and no `Finish` is present, return `MissingFinish`. Two guards, both load-bearing and for the same reason — another rule already governs that stream and demands the opposite outcome:
+   - **no-`Err`**: assertion 6 owns the error case and requires *no* `Finish`.
+   - **not-`cancelled`**: assertion 5 owns the cancelled case and also requires *no* `Finish`. Without this guard, a correctly-cancelled stream that withholds `Finish` — exactly what `core/src/model.rs` mandates — is reported as `MissingFinish`. Rule 1 does not catch it, because assertion 5 only fires when a `Finish` *is* present.
 5. **Assertion 7** — group `ToolCallDelta`s by `call_id` preserving first-seen order; for each, count deltas carrying `Some(name)`; return `ToolNameNotExactlyOnce { call_id, count }` for the first group whose count is not exactly 1.
 
 - [ ] **Step 4: Run to verify they pass**

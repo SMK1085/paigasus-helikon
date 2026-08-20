@@ -9,8 +9,10 @@ use paigasus_helikon_core::{ModelError, ModelEvent};
 /// calling out: cancellation (assertion 5) is checked before the stop-reason
 /// and error rules (3, 4, 6) because a cancelled stream's stop-reason
 /// expectation is moot; and assertion 3 explicitly excludes streams carrying
-/// an `Err` because assertion 6 governs those and demands the opposite
-/// outcome.
+/// an `Err` or a cancellation, because assertion 6 governs the former and
+/// assertion 5 governs the latter, and both demand the opposite outcome —
+/// withholding `Finish` is exactly what the contract requires of a cancelled
+/// stream.
 pub fn classify(
     events: &[Result<ModelEvent, ModelError>],
     scenario: Scenario,
@@ -61,10 +63,12 @@ pub fn classify(
     }
 
     // Assertion 3: when a stop reason is expected and the stream ended
-    // without an error, end-of-stream with no Finish is a violation. The
-    // no-`Err` guard matters: assertion 6 governs the error case and
-    // requires the opposite outcome.
-    if scenario.expects_stop_reason() && err_at.is_none() && !has_finish {
+    // without an error or a cancellation, end-of-stream with no Finish is a
+    // violation. The no-`Err` guard matters: assertion 6 governs the error
+    // case and requires the opposite outcome. The no-`cancelled` guard
+    // matters for the same reason: assertion 5 governs the cancelled case,
+    // and withholding `Finish` is exactly what the contract requires there.
+    if scenario.expects_stop_reason() && err_at.is_none() && !cancelled && !has_finish {
         return Some(Violation::MissingFinish);
     }
 
@@ -251,5 +255,13 @@ mod tests {
             }),
         ];
         assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
+    /// A cancelled stream that withholds Finish is conformant, not MissingFinish —
+    /// withholding is what the contract requires of it.
+    #[test]
+    fn cancelled_stream_without_finish_conforms() {
+        let evs = vec![token("hi")];
+        assert_eq!(classify(&evs, Scenario::CancelAfterStopReason, true), None);
     }
 }
