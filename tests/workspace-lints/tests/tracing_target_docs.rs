@@ -63,6 +63,19 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
 /// separator rows are skipped; any other non-empty row is a hard failure, so a
 /// stray placeholder becomes a loud error instead of a phantom component.
 fn documented_components(page: &str) -> BTreeSet<String> {
+    // Exactly one pair, not merely at least one. `find` takes the first hit, so
+    // a duplicated marker pair would silently parse only the first region and
+    // ignore whatever the second one documents — a drift the guard exists to
+    // catch reading as a clean pass.
+    for (name, count) in [
+        (MARK_START, page.matches(MARK_START).count()),
+        (MARK_END, page.matches(MARK_END).count()),
+    ] {
+        assert_eq!(
+            count, 1,
+            "`{name}` appears {count} time(s) in {BOOK_PAGE}; expected exactly 1"
+        );
+    }
     let start = page
         .find(MARK_START)
         .unwrap_or_else(|| panic!("missing `{MARK_START}` marker in {BOOK_PAGE}"));

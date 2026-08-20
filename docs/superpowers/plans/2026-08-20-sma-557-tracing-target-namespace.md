@@ -726,6 +726,19 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
 /// separator rows are skipped; any other non-empty row is a hard failure, so a
 /// stray placeholder becomes a loud error instead of a phantom component.
 fn documented_components(page: &str) -> BTreeSet<String> {
+    // Exactly one pair, not merely at least one. `find` takes the first hit, so
+    // a duplicated marker pair would silently parse only the first region and
+    // ignore whatever the second one documents — a drift the guard exists to
+    // catch reading as a clean pass.
+    for (name, count) in [
+        (MARK_START, page.matches(MARK_START).count()),
+        (MARK_END, page.matches(MARK_END).count()),
+    ] {
+        assert_eq!(
+            count, 1,
+            "`{name}` appears {count} time(s) in {BOOK_PAGE}; expected exactly 1"
+        );
+    }
     let start = page
         .find(MARK_START)
         .unwrap_or_else(|| panic!("missing `{MARK_START}` marker in {BOOK_PAGE}"));
@@ -871,8 +884,10 @@ fn documented_components_match_source() {
         "tracing component drift between source and {BOOK_PAGE}:\n  \
          in source but not documented: {undocumented:?}\n  \
          documented but not in source: {stale:?}\n\
-         Add or remove the row in the marked region. Renaming a component is a \
-         breaking change (SMA-557 D1) — use a `BREAKING CHANGE:` footer."
+         Add or remove the row in the marked region. For a component the table \
+         marks `stable`, renaming or removing it is a breaking change \
+         (SMA-557 D1) — use a `BREAKING CHANGE:` footer. A `provisional` \
+         component carries no such guarantee."
     );
 }
 ```
@@ -897,9 +912,9 @@ cargo test -p paigasus-helikon-workspace-lints --test tracing_target_docs
 ```
 Expected: **FAIL**, naming `gemini` under *in source but not documented*.
 
-Restore and re-verify:
+Restore from the backup and re-verify:
 ```bash
-git checkout -- docs/book/src/concepts/observability-evaluation.md
+cp "$BACKUP_DIR/observability-evaluation.md" docs/book/src/concepts/observability-evaluation.md
 cargo test -p paigasus-helikon-workspace-lints --test tracing_target_docs
 ```
 Expected: PASS.
@@ -916,12 +931,23 @@ cargo test -p paigasus-helikon-workspace-lints --test tracing_target_docs
 ```
 Expected: **FAIL**, naming `zzz` under *in source but not documented*.
 
-Restore and re-verify:
+Restore from the backup and re-verify:
 ```bash
-git checkout -- crates/paigasus-helikon-providers-openai/src/backend/chat.rs
+cp "$BACKUP_DIR/chat.rs" crates/paigasus-helikon-providers-openai/src/backend/chat.rs
 cargo test -p paigasus-helikon-workspace-lints --test tracing_target_docs
 ```
 Expected: PASS.
+
+> **Restore from a backup copy, never `git checkout -- <path>`.** That command
+> reverts the file to `HEAD`, discarding *every* uncommitted change in it — not
+> just your mutation. This is not hypothetical: during this ticket's own final
+> fix wave it silently wiped legitimate in-progress edits to the book page,
+> which had to be reconstructed. Take the backups before Step 3:
+> ```bash
+> BACKUP_DIR=$(mktemp -d)
+> cp docs/book/src/concepts/observability-evaluation.md "$BACKUP_DIR/"
+> cp crates/paigasus-helikon-providers-openai/src/backend/chat.rs "$BACKUP_DIR/"
+> ```
 
 > Confirm `git status --short` is clean of those two paths before continuing. A
 > leftover mutation committed by accident is a silent corruption of a published

@@ -484,9 +484,16 @@ bystander.
 
 - Normalizing the 41 untargeted `core`/runtime call sites (D2).
 - Resolving `runtime-temporal`'s split personality — 1 targeted site, 3 not.
-- Enforcing the naming *convention* on target strings. SMA-543's `scan()` guards
-  syntax; D3's guard checks doc-source agreement. Neither is convention
-  enforcement, and the ticket says that is a separate decision.
+- Enforcing the naming *convention* on target strings — with one deliberate
+  exception. SMA-543's `scan()` guards syntax; D3's guard checks doc-source
+  agreement **and** that no component name is a prefix of another. That last
+  check is a D1(b) stability clause, not a style rule: prefix matching means a
+  collision silently widens a saved filter, so it has to be mechanical. Nothing
+  asserts that a target string matches the `paigasus::<component>::<subsystem>`
+  shape, that a subsystem is named sensibly, or that a component is spelled a
+  particular way — the ticket says that remains a separate decision. (The
+  `[a-z0-9_]+` assertion in the doc-table parser is a parse-validity rule for
+  the table's own format, not a constraint on source.)
 - Adding a row to CONTRIBUTING's semver table for component renames. D1(c) uses
   the existing `BREAKING CHANGE:` mechanism, so nothing is blocked; promoting it
   into CONTRIBUTING is a reasonable follow-up, not a prerequisite.
