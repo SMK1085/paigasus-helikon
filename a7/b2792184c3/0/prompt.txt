@@ -379,3 +379,36 @@ No numeric line citations needed re-checking — none of `conformance.rs`'s cita
 Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-cleanup-report.md`</result>
 <usage><subagent_tokens>378478</subagent_tokens><tool_uses>143</tool_uses><duration_ms>1627806</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>afd4fb59c5d222c72</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/afd4fb59c5d222c72.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 14: full CI gate run and audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree clean, commit in place. Task complete.
+
+**Status:** DONE
+
+**Commit created:** `eb5923da` — `test(providers): SMA-533 assert every declined subject is registered` (tests/provider-stream-conformance/src/declines.rs, +43 lines)
+
+**Gates:**
+- fmt: pass
+- clippy (workspace, all-features, all-targets, -D warnings): pass
+- test (workspace, all-features, exact command): pass, 170/170 result blocks 0-failed, no NATIVE_ROOTS, no panics
+- doc (RUSTDOCFLAGS=-D warnings): pass, only the documented non-fatal facade/CLI filename-collision warning
+- doc-coverage (pinned nightly, already installed): pass, 100.0% (1375/1375)
+- mdbook build: pass, no linkcheck errors
+
+**Decline count observed:** grep literally shows 13 lines from 3 self-tests (harness is silent on success, so a clean run never prints "8 rows"). Structurally confirmed the real 8-row set (declines.rs) holds: all six `conforms` tests pass, which is only possible if each subject's observed declines exactly match its `DECLINED` slice — bedrock×2, anthropic×1, gemini×1, openai/responses×4, zero for openai/chat and litellm.
+
+**Version-check result:** exactly one hit, `+version = "0.0.0"`, belonging solely to the new stub `tests/provider-stream-conformance/Cargo.toml`. No existing crate or CHANGELOG touched.
+
+**Concerns:** The brief's Step 2 "expected 8 rows via grep" doesn't literally hold given the harness's silent-on-success design — flagged in the report with the structural proof instead of papering over it. Nothing else looked wrong.
+
+Report: `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-14-report.md`</result>
+<usage><subagent_tokens>138773</subagent_tokens><tool_uses>63</tool_uses><duration_ms>995911</duration_ms></usage>
+</task-notification>
