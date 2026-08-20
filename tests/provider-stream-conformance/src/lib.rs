@@ -10,6 +10,7 @@
 //! See `docs/superpowers/specs/2026-08-19-sma-533-stream-conformance-design.md`.
 #![forbid(unsafe_code)]
 
+pub mod eventstream;
 mod server;
 
 pub use server::{Ending, PacedServer, Script};

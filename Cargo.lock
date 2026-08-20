@@ -3992,12 +3992,18 @@ name = "paigasus-helikon-provider-stream-conformance"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "aws-config",
+ "aws-sdk-bedrockruntime",
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
  "futures-util",
  "http-body-util",
  "hyper",
  "hyper-util",
  "paigasus-helikon-core",
+ "paigasus-helikon-providers-bedrock",
  "reqwest",
+ "serde_json",
  "tokio",
 ]
 
