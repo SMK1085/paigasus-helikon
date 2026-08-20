@@ -102,10 +102,11 @@ two namespaces:
 
 - **`paigasus::<component>::<subsystem>`** — hand-chosen targets, written
   explicitly at the call site and independent of the Rust module the code lives
-  in. Today these are the model providers.
+  in. Today these are the five model providers, plus one call site in
+  `paigasus-helikon-runtime-temporal`.
 - **`paigasus_helikon_*::…`** — ordinary Rust module paths, the `tracing`
-  default. Everything in `paigasus-helikon-core` and the runtime crates emits
-  here.
+  default. Nearly everything in `paigasus-helikon-core` and the runtime crates
+  emits here.
 
 **`EnvFilter` matches a directive against a target by raw string prefix, not by
 `::` segment.** That one fact decides every recipe below:
@@ -137,7 +138,8 @@ fixed set — see the stability rules below.
 #### What is not in this namespace
 
 `paigasus-helikon-core` and the runtime crates do **not** use hand-chosen
-targets. Their events and spans land on module paths, so you select them by
+targets, with the single exception of `paigasus::temporal::activities` noted
+below. Their events and spans land on module paths, so you select them by
 crate:
 
 ```
@@ -145,13 +147,15 @@ paigasus_helikon_core
 paigasus_helikon_runtime_axum
 paigasus_helikon_runtime_actix
 paigasus_helikon_runtime_agentcore
-paigasus_helikon_runtime_temporal
+paigasus_helikon_runtime_temporal   # all but one site; see paigasus::temporal below
 paigasus_helikon_runtime_tokio
 ```
 
 This includes **the run/turn/chat trace tree described above** — the
 `agent.run`, `agent.turn`, `gen_ai.chat` and `tool.execute` spans come from
-`paigasus_helikon_core`, not from `paigasus::*`. Most are raised in
+`paigasus_helikon_core`, not from `paigasus::*`. (The `invoke_agent` /
+`agent.turn` / `chat` / `execute_tool` operation names used above are the
+`gen_ai.operation.name` fields set on these same spans.) Most are raised in
 `paigasus_helikon_core::agent`; the multi-agent constructs — the sequential,
 parallel and loop workflows, plus the graph and swarm agents — raise their own
 `agent.run` span in `paigasus_helikon_core::workflow`. Filter on
