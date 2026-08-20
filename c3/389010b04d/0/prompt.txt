@@ -1,0 +1,26 @@
+<task-notification>
+<task-id>ab2b48cd418cbb40f</task-id>
+<tool-use-id>toolu_01T1f9XPPtFC9cxYKHxWGtLM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/e67be59f-bff9-455c-a313-56ff99d20e5d/tasks/ab2b48cd418cbb40f.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: paced HTTP server" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commits:**
+- `38d0797b feat(providers): SMA-533 add the paced conformance http server`
+- `74e68a1f test(providers): SMA-533 pin the abort-path flush with a regression test`
+
+**Tests:** 4/4 pass (15 consecutive full-suite runs); fmt, clippy `-D warnings`, docs gate all clean.
+
+**Mutation evidence:** removing the defer-by-one-poll fails `abort_delivers_buffered_chunks_before_erroring` with `left: ""` (client received zero body bytes) — killed 15/15, while the other three tests including `abort_ending_surfaces_as_an_error` still pass. Restored: 15/15 green.
+
+**One thing you should know — writing the test exposed a second problem.** My first attempt produced a test that *could not fail*: with the original `mpsc::channel(1)`, the mutant survived 15/15. Correctness was resting on two mechanisms, not one — the explicit deferral, plus an implicit race window from capacity-1 back-pressure that wins on an idle machine and could flip on a loaded CI runner. I switched the body channel to `unbounded_channel` so the deferral is the sole mechanism; the mutant then dies deterministically. That removes a hidden mechanism rather than adding one. I re-verified (temporary raw-socket test, since removed) that the gate's prefix-delivery guarantee is unaffected — it comes from the feeder parking at the gate, not from the channel bound, and the code comment claiming otherwise was wrong and is replaced.
+
+Also added the `//` comment at the defer site naming the protecting test, and `stream` to the reqwest dev-dep for `bytes_stream()`.
+
+**Remaining concern (unchanged, low):** the deferred poll guarantees a `poll_flush` *call*, not that it drained — an abort fixture exceeding ~64 KB could still lose its tail. Far above conformance fixture sizes.
+
+**Report:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-550-litellm-dual-key/.superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-2-report.md`</result>
+<usage><subagent_tokens>155859</subagent_tokens><tool_uses>27</tool_uses><duration_ms>321769</duration_ms></usage>
+</task-notification>
