@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "37b5b4878bf0",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-533-add-a-cross-provider-conformance-suite-for-stream-event",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/37/b5b4878bf0/0/metadata.json",
+      "transcript": "/37/b5b4878bf0/0/full.jsonl",
+      "compact_transcript": "/37/b5b4878bf0/0/transcript.jsonl",
+      "content_hash": "/37/b5b4878bf0/0/content_hash.txt",
+      "prompt": "/37/b5b4878bf0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 514,
+    "cache_creation_tokens": 2018492,
+    "cache_read_tokens": 74313654,
+    "output_tokens": 334473,
+    "api_call_count": 220
+  }
+}
