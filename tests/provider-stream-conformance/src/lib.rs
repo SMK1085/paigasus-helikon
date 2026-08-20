@@ -10,6 +10,10 @@
 //! See `docs/superpowers/specs/2026-08-19-sma-533-stream-conformance-design.md`.
 #![forbid(unsafe_code)]
 
+mod server;
+
+pub use server::{Ending, PacedServer, Script};
+
 use futures_util::stream::BoxStream;
 use paigasus_helikon_core::{CancellationToken, ModelError, ModelEvent};
 
