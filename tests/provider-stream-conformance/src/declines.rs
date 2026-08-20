@@ -57,3 +57,46 @@ pub const DECLINED: &[(&str, Scenario, &str)] = &[
         "stop reason and Finish are the same event",
     ),
 ];
+
+/// The subject names registered in `tests/conformance.rs` — one `mod` per
+/// subject, each holding a `StreamUnderTest` impl whose `name()` returns one
+/// of these strings.
+///
+/// [`DECLINED`] is checked against this list because a typo'd subject name in
+/// the table would otherwise be silently invisible: `assert_declines_match`
+/// only ever runs with a real subject's name, filtering [`DECLINED`] down to
+/// the rows for that one subject. A row naming a subject that does not exist
+/// never matches that filter for *any* real subject, so it is never checked
+/// in either direction — not flagged as an unexpected decline, and not
+/// flagged as a pinned decline that stopped happening. The reverse direction
+/// (a real subject declining something absent from the table) does fail
+/// loudly; this is the direction that previously did not.
+#[cfg(test)]
+const REGISTERED_SUBJECTS: &[&str] = &[
+    "anthropic",
+    "gemini",
+    "bedrock",
+    "litellm",
+    "openai/chat",
+    "openai/responses",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every subject named in [`DECLINED`] must be one this suite actually
+    /// registers. Misspell one (e.g. `"bedrok"`) and this fails; the row
+    /// would otherwise sit in the table forever, never compared against any
+    /// real subject's observed declines.
+    #[test]
+    fn every_declined_subject_is_registered() {
+        for (subject, scenario, reason) in DECLINED {
+            assert!(
+                REGISTERED_SUBJECTS.contains(subject),
+                "DECLINED names {subject:?} for {scenario:?} ({reason:?}), which is not a \
+                 registered subject name ({REGISTERED_SUBJECTS:?}) — check for a typo"
+            );
+        }
+    }
+}
