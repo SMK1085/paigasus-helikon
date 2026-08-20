@@ -190,12 +190,17 @@ pub trait StreamUnderTest {
     /// The `FinishReason` this subject's fixture for `scenario` declares, or
     /// `None` for scenarios that must not produce a `Finish` at all.
     ///
-    /// Only three scenarios end with a `Finish`: `CleanStop` and
-    /// `ToolCallCleanStop`, whose floors check this value, and
-    /// `TruncatedAfterStopReason`, where assertion 3 requires the buffered
-    /// stop reason to be flushed at end-of-stream. Every other scenario must
-    /// return `None` — a cancelled or errored stream withholds `Finish`, and a
+    /// Exactly three scenarios end with a `Finish`, and the floor checks this
+    /// value for all three: `CleanStop`, `ToolCallCleanStop`, and
+    /// `TruncatedAfterStopReason`, where assertion 3 requires the buffered stop
+    /// reason to be flushed at end-of-stream. Every other scenario must return
+    /// `None` — a cancelled or errored stream withholds `Finish`, and a
     /// truncation with no stop reason observed never had one to emit.
+    ///
+    /// The three differ in one way only: for the two clean stops a missing
+    /// `Finish` fails the floor, whereas for `TruncatedAfterStopReason` it is
+    /// `classify`'s `MissingFinish` (the SMA-531 shape). Either way, a `Finish`
+    /// that *is* emitted must carry what this method declares.
     ///
     /// Declared per subject rather than inferred suite-side because only the
     /// fixture knows what its bytes encode: a checker that assumed
@@ -228,16 +233,27 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// that subject. Silence is subject-independent, and — unlike an event
 /// predicate — is itself positive evidence that the server is withholding.
 ///
-/// **What a slow machine does to it.** Two directions, and only one is
-/// dangerous. Firing *late* (the harness task is descheduled, so the window
-/// elapses later in wall-clock terms) is harmless: the server is parked either
-/// way and nothing else is in flight. Firing *early* would need two consecutive
-/// pre-gate chunks to arrive more than this far apart, which the server does not
-/// do — `feed` pushes every pre-gate chunk into an unbounded channel with no
-/// await between them, so they reach the socket back-to-back over loopback.
-/// Were it ever to happen, the consequence is a weaker test (cancellation at an
-/// earlier truncation point), not a spurious failure — and the
-/// `server_was_parked` evidence below is unaffected either way.
+/// **What a slow machine does to it.** Firing *late* (the harness task is
+/// descheduled, so the window elapses later in wall-clock terms) is harmless:
+/// the server is parked either way and nothing else is in flight. Firing
+/// *early* is the dangerous direction, and the timer arms twice with different
+/// stakes:
+///
+/// - **Between two events.** Needs two consecutive pre-gate chunks more than
+///   this far apart, which the server does not produce: `feed` pushes every
+///   pre-gate chunk into an unbounded channel with no await between them, so
+///   they reach the socket back-to-back over loopback. If it ever did happen,
+///   the consequence is a weaker test — cancellation at an earlier truncation
+///   point — not a red run.
+/// - **Before the first event**, which is the arming that can actually fail a
+///   run. It covers connect, request, response head and first chunk, with
+///   nothing yet consumed. Should *that* window elapse, the token fires having
+///   collected nothing and the scenario dies on the "no TokenDelta" floor — a
+///   spurious failure, not a weaker test. Sub-millisecond on loopback, but it
+///   is the first thing to suspect behind an intermittent cancel-scenario
+///   failure, ahead of anything in the provider.
+///
+/// The `server_was_parked` evidence below is unaffected in every case.
 const GATE_QUIESCENCE: Duration = Duration::from_millis(400);
 
 /// Run every [`Scenario`] against `subject` and panic on the first thing that
@@ -538,7 +554,39 @@ fn floor_violation(
         }
     }
 
-    if matches!(scenario, Scenario::CleanStop | Scenario::ToolCallCleanStop) {
+    // `CancelAfterStopReason` is the one degradation with no other detector.
+    // `gate: None`, `fired` and `server_was_parked` all catch a cancellation
+    // that withheld nothing, but none of them catches a gate placed one chunk
+    // *too early* — withholding the stop-reason chunk and the usage chunk after
+    // it. The stream then carries only `TokenDelta`s, quiesces, cancels, and
+    // passes everything: the scenario silently ran `CancelMidGeneration` and
+    // never exercised the case it exists for, a driver wrongly flushing a
+    // *buffered* stop reason on cancel. The usage chunk is the fixture's own
+    // marker for "the stop reason has gone past", so requiring it discriminates
+    // a misplaced gate.
+    //
+    // Narrowing, recorded rather than implied: this is **vacuous for
+    // anthropic**, whose `message_start` emits a `Usage` before any content
+    // (`anthropic/stream.rs:71-85`), so the floor passes there no matter where
+    // the gate sits. Anthropic's guarantee has to come from its fixture's
+    // provenance comment instead — the transcription must show the gate sitting
+    // after `message_delta`.
+    if matches!(scenario, Scenario::CancelAfterStopReason)
+        && !events
+            .iter()
+            .any(|e| matches!(e, Ok(ModelEvent::Usage { .. })))
+    {
+        return Some(Violation::InsufficientEvidence(
+            "no Usage: this scenario's script places a usage chunk after the stop-reason \
+             chunk and gates on it, so a stream with no Usage was cancelled before the stop \
+             reason was ever buffered — it ran CancelMidGeneration under another name",
+        ));
+    }
+
+    if matches!(
+        scenario,
+        Scenario::CleanStop | Scenario::TruncatedAfterStopReason | Scenario::ToolCallCleanStop
+    ) {
         // The first `Finish` on purpose: a second one is a `DuplicateFinish`,
         // which `classify` names precisely, and checking the reason on the
         // first is what tells a wrong fixture from a wrong driver.
@@ -546,19 +594,31 @@ fn floor_violation(
             Ok(ModelEvent::Finish { reason }) => Some(reason.clone()),
             _ => None,
         });
-        let Some(observed) = observed else {
-            return Some(Violation::InsufficientEvidence(
-                "no Finish: a clean stop that never terminated proves nothing about terminality",
-            ));
-        };
-        let Some(expected) = finish_reason else {
-            return Some(Violation::InsufficientEvidence(
-                "this scenario must end with a Finish, but the subject declares no \
-                 FinishReason for it, so its fixture is not the one the scenario describes",
-            ));
-        };
-        if observed != expected {
-            return Some(Violation::FinishReasonMismatch { expected, observed });
+        match observed {
+            // Only the two *clean stop* scenarios floor the absence of a
+            // `Finish`. For `TruncatedAfterStopReason` the absence is assertion
+            // 3 — the SMA-531 shape — which `classify` reports as
+            // `MissingFinish`; a floor here would mask the one bug class that
+            // scenario exists to catch behind `InsufficientEvidence`.
+            None if matches!(scenario, Scenario::CleanStop | Scenario::ToolCallCleanStop) => {
+                return Some(Violation::InsufficientEvidence(
+                    "no Finish: a clean stop that never terminated proves nothing about \
+                     terminality",
+                ));
+            }
+            None => {}
+            Some(observed) => {
+                let Some(expected) = finish_reason else {
+                    return Some(Violation::InsufficientEvidence(
+                        "this scenario must end with a Finish, but the subject declares no \
+                         FinishReason for it, so its fixture is not the one the scenario \
+                         describes",
+                    ));
+                };
+                if observed != expected {
+                    return Some(Violation::FinishReasonMismatch { expected, observed });
+                }
+            }
         }
     }
 
@@ -681,16 +741,20 @@ mod tests {
     /// Builds one scenario's substitute event sequence.
     type EventsFn = dyn Fn() -> Vec<Result<ModelEvent, ModelError>> + Send + Sync;
 
-    /// What the fake subject declares as its `CleanStop` fixture's
-    /// `FinishReason`. The fixture always emits `Stop`, so only `Truthful`
-    /// matches it.
+    /// What the fake subject declares as its fixture's `FinishReason`. Both
+    /// scenarios below really emit `Stop`, so anything but `Truthful` is a
+    /// declaration that contradicts the bytes.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum FinishDecl {
-        /// `Some(Stop)` — what the fixture really encodes.
+        /// `Some(Stop)` everywhere it matters — what the fixtures encode.
         Truthful,
-        /// `Some(ToolCalls)` — a transcription that does not match the bytes.
-        Wrong,
-        /// `None`, for a scenario that must end with a `Finish`.
+        /// `Some(ToolCalls)` for `CleanStop`.
+        WrongOnCleanStop,
+        /// `Some(ToolCalls)` for `TruncatedAfterStopReason` — the same lie on
+        /// the scenario whose *missing* `Finish` is `classify`'s business
+        /// rather than the floor's, so only the reason check can catch it.
+        WrongOnTruncation,
+        /// `None` for `CleanStop`, which must end with a `Finish`.
         Absent,
     }
 
@@ -784,11 +848,14 @@ mod tests {
         fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason> {
             match scenario {
                 Scenario::CleanStop => match self.finish_reason {
-                    FinishDecl::Truthful => Some(FinishReason::Stop),
-                    FinishDecl::Wrong => Some(FinishReason::ToolCalls),
+                    FinishDecl::WrongOnCleanStop => Some(FinishReason::ToolCalls),
                     FinishDecl::Absent => None,
+                    _ => Some(FinishReason::Stop),
                 },
-                Scenario::TruncatedAfterStopReason => Some(FinishReason::Stop),
+                Scenario::TruncatedAfterStopReason => match self.finish_reason {
+                    FinishDecl::WrongOnTruncation => Some(FinishReason::ToolCalls),
+                    _ => Some(FinishReason::Stop),
+                },
                 Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
                 _ => None,
             }
@@ -945,6 +1012,30 @@ mod tests {
         assert_conforms(&subject).await;
     }
 
+    /// The S5b-degrades-into-S5a path, which no other guard catches. A gate
+    /// placed one chunk too early withholds the stop-reason chunk *and* the
+    /// usage chunk after it, so the stream carries only text: the gate is
+    /// present, cancellation fires, the server is parked, and every other check
+    /// passes — while the case this scenario exists for, a driver flushing a
+    /// buffered stop reason on cancel, was never reachable.
+    #[tokio::test]
+    #[should_panic(expected = "no Usage")]
+    async fn a_cancel_after_stop_reason_that_never_saw_usage_fails_its_floor() {
+        let before_the_stop_reason = || {
+            vec![Ok(ModelEvent::TokenDelta {
+                text: "hi".to_owned(),
+            })]
+        };
+        let subject = Subject {
+            substitute: Some((
+                Scenario::CancelAfterStopReason,
+                Box::new(before_the_stop_reason),
+            )),
+            ..Subject::conforming("openai/chat")
+        };
+        assert_conforms(&subject).await;
+    }
+
     /// Spec §7.1: the single `Finish` must carry the `FinishReason` the fixture
     /// declares. A stream that terminates with the wrong reason is serving
     /// bytes other than the ones the subject claims — which a
@@ -953,7 +1044,23 @@ mod tests {
     #[should_panic(expected = "FinishReasonMismatch { expected: ToolCalls, observed: Stop }")]
     async fn a_finish_carrying_the_wrong_reason_fails_its_floor() {
         let subject = Subject {
-            finish_reason: FinishDecl::Wrong,
+            finish_reason: FinishDecl::WrongOnCleanStop,
+            ..Subject::conforming("openai/chat")
+        };
+        assert_conforms(&subject).await;
+    }
+
+    /// The same check on `TruncatedAfterStopReason`. Assertion 3 forces a
+    /// `Finish` there, and its reason is exactly as forgeable as a clean stop's
+    /// — but the floor treats that scenario differently (a *missing* `Finish`
+    /// is `classify`'s `MissingFinish`), so it needs its own test or the
+    /// scenario can be dropped from the reason check with the suite still
+    /// green.
+    #[tokio::test]
+    #[should_panic(expected = "TruncatedAfterStopReason — FinishReasonMismatch")]
+    async fn a_truncation_finish_carrying_the_wrong_reason_fails_its_floor() {
+        let subject = Subject {
+            finish_reason: FinishDecl::WrongOnTruncation,
             ..Subject::conforming("openai/chat")
         };
         assert_conforms(&subject).await;

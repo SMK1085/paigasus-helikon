@@ -131,16 +131,26 @@ pub(crate) fn conforming(scenario: Scenario) -> Vec<Result<ModelEvent, ModelErro
         events.push(tool(None, "\"Berlin\"}"));
     }
 
-    let ended_early = matches!(
+    let errored = matches!(
         scenario,
-        Scenario::ErrorMidGeneration
-            | Scenario::ErrorAfterStopReason
-            | Scenario::CancelMidGeneration
-            | Scenario::CancelAfterStopReason
+        Scenario::ErrorMidGeneration | Scenario::ErrorAfterStopReason
     );
-    if scenario.expects_stop_reason() && !ended_early {
+    let cancelled = matches!(
+        scenario,
+        Scenario::CancelMidGeneration | Scenario::CancelAfterStopReason
+    );
+    if scenario.expects_stop_reason() && !errored {
+        // `CancelAfterStopReason` gets the `Usage` but not the `Finish`. That
+        // is not a detail: its script places a usage chunk *after* the
+        // stop-reason chunk and gates on it, so a conforming subject really
+        // does emit one before the token fires — and the harness's floor looks
+        // for exactly that to tell S5b from a gate placed one chunk too early.
+        // Withholding `Finish` is what the contract requires of a cancelled
+        // stream, and of an errored one.
         events.push(usage());
-        events.push(finish(scenario));
+        if !cancelled {
+            events.push(finish(scenario));
+        }
     }
 
     if matches!(
