@@ -5,7 +5,12 @@ use paigasus_helikon_core::{ModelError, ModelEvent};
 ///
 /// Rules overlap by construction — a `Usage` after `Finish` breaks both
 /// assertion 2 and assertion 1 — so the order here is part of the contract, not
-/// an implementation detail. Assertions 3 to 7 are added in the next task.
+/// an implementation detail. Two overlaps among assertions 3 to 7 are worth
+/// calling out: cancellation (assertion 5) is checked before the stop-reason
+/// and error rules (3, 4, 6) because a cancelled stream's stop-reason
+/// expectation is moot; and assertion 3 explicitly excludes streams carrying
+/// an `Err` because assertion 6 governs those and demands the opposite
+/// outcome.
 pub fn classify(
     events: &[Result<ModelEvent, ModelError>],
     scenario: Scenario,
@@ -34,7 +39,60 @@ pub fn classify(
         }
     }
 
-    let _ = (scenario, cancelled); // used from the next task onward
+    let has_finish = finish_at.is_some();
+    let err_at = events.iter().position(Result::is_err);
+
+    // Assertion 5: a cancelled stream must not emit Finish. Checked before
+    // 3/4/6 because cancellation makes the scenario's stop-reason expectation
+    // moot.
+    if cancelled && has_finish {
+        return Some(Violation::FinishOnCancel);
+    }
+
+    // Assertion 6: a mid-stream error must not be followed by a clean Finish.
+    if finish_at.zip(err_at).is_some_and(|(f, e)| f > e) {
+        return Some(Violation::FinishAfterError);
+    }
+
+    // Assertion 4: a Finish must never appear when the scenario expects no
+    // stop reason to be observed.
+    if !scenario.expects_stop_reason() && has_finish {
+        return Some(Violation::FinishOnTruncation);
+    }
+
+    // Assertion 3: when a stop reason is expected and the stream ended
+    // without an error, end-of-stream with no Finish is a violation. The
+    // no-`Err` guard matters: assertion 6 governs the error case and
+    // requires the opposite outcome.
+    if scenario.expects_stop_reason() && err_at.is_none() && !has_finish {
+        return Some(Violation::MissingFinish);
+    }
+
+    // Assertion 7: each call_id must carry exactly one name-bearing delta —
+    // not "at most one". A translator that never emits a name for a call_id
+    // satisfies "at most one" while still producing a tool call that resolves
+    // to nothing on replay, which is precisely the bug this rule exists to
+    // catch. Groups are built preserving first-seen `call_id` order so the
+    // reported violation is deterministic.
+    let mut name_counts: Vec<(String, usize)> = Vec::new();
+    for event in events {
+        if let Ok(ModelEvent::ToolCallDelta { call_id, name, .. }) = event {
+            match name_counts.iter_mut().find(|(id, _)| id == call_id) {
+                Some((_, count)) => {
+                    if name.is_some() {
+                        *count += 1;
+                    }
+                }
+                None => name_counts.push((call_id.clone(), usize::from(name.is_some()))),
+            }
+        }
+    }
+    for (call_id, count) in name_counts {
+        if count != 1 {
+            return Some(Violation::ToolNameNotExactlyOnce { call_id, count });
+        }
+    }
+
     None
 }
 
@@ -95,5 +153,103 @@ mod tests {
     fn clean_stop_conforms() {
         let evs = vec![token("hi"), usage(), finish()];
         assert_eq!(classify(&evs, Scenario::CleanStop, false), None);
+    }
+
+    fn tool(call_id: &str, name: Option<&str>, args: &str) -> Result<ModelEvent, ModelError> {
+        Ok(ModelEvent::ToolCallDelta {
+            call_id: call_id.into(),
+            name: name.map(str::to_owned),
+            args_delta: args.into(),
+        })
+    }
+
+    /// The SMA-531 shape: a stop reason was observed but no Finish was emitted.
+    #[test]
+    fn missing_finish_after_observed_stop_reason() {
+        let evs = vec![token("hi")];
+        assert_eq!(
+            classify(&evs, Scenario::TruncatedAfterStopReason, false),
+            Some(Violation::MissingFinish)
+        );
+    }
+
+    /// Truncation with no stop reason must never be reported as a clean stop.
+    #[test]
+    fn finish_on_truncation_is_a_violation() {
+        let evs = vec![token("hi"), finish()];
+        assert_eq!(
+            classify(&evs, Scenario::TruncatedMidGeneration, false),
+            Some(Violation::FinishOnTruncation)
+        );
+    }
+
+    /// Cancellation outranks the scenario's stop-reason expectation.
+    #[test]
+    fn finish_on_cancel_is_a_violation() {
+        let evs = vec![token("hi"), finish()];
+        assert_eq!(
+            classify(&evs, Scenario::CancelAfterStopReason, true),
+            Some(Violation::FinishOnCancel)
+        );
+    }
+
+    /// A mid-stream error must not be followed by a clean terminal event.
+    #[test]
+    fn finish_after_error_is_a_violation() {
+        let evs = vec![token("hi"), Err(ModelError::Unavailable), finish()];
+        assert_eq!(
+            classify(&evs, Scenario::ErrorAfterStopReason, false),
+            Some(Violation::FinishAfterError)
+        );
+    }
+
+    /// The SMA-550 shape: one call_id carrying two name-bearing deltas.
+    #[test]
+    fn two_named_deltas_for_one_call_id() {
+        let evs = vec![
+            tool("c1", Some("get_"), "{"),
+            tool("c1", Some("weather"), "}"),
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            }),
+        ];
+        assert_eq!(
+            classify(&evs, Scenario::ToolCallCleanStop, false),
+            Some(Violation::ToolNameNotExactlyOnce {
+                call_id: "c1".into(),
+                count: 2
+            })
+        );
+    }
+
+    /// The tightening: a call that never carries a name is also a violation.
+    #[test]
+    fn no_named_delta_for_a_call_id() {
+        let evs = vec![
+            tool("c1", None, "{}"),
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            }),
+        ];
+        assert_eq!(
+            classify(&evs, Scenario::ToolCallCleanStop, false),
+            Some(Violation::ToolNameNotExactlyOnce {
+                call_id: "c1".into(),
+                count: 0
+            })
+        );
+    }
+
+    /// A conforming tool call passes.
+    #[test]
+    fn one_named_delta_conforms() {
+        let evs = vec![
+            tool("c1", Some("get_weather"), "{"),
+            tool("c1", None, "}"),
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            }),
+        ];
+        assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
     }
 }
