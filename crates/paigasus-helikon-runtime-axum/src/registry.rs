@@ -78,6 +78,7 @@ impl RunHandle {
         // logging it here would duplicate it per subscriber and skip it entirely
         // for an unwatched run.
         tracing::warn!(
+            target: "paigasus::runtime_axum::registry",
             agent = %self.agent_name,
             %error,
             "run ended without a real terminal event; synthesizing a RunFailed frame for the stream subscriber"
@@ -185,6 +186,7 @@ impl RunRegistry {
             // The only server-side signal that the cap is biting; the caller's
             // 503 body is redacted.
             tracing::warn!(
+                target: "paigasus::runtime_axum::registry",
                 live = inner.live,
                 cap = self.max_in_flight,
                 "rejecting run: in-flight limit reached"
@@ -305,8 +307,12 @@ impl RunRegistry {
                 // debug-only assert, rather than a bare `-=` that could wrap.
                 debug_assert!(inner.live > 0, "live run count underflow in sweep pass 0");
                 inner.live = inner.live.saturating_sub(1);
-                tracing::warn!(%id, agent = %handle.agent_name,
-                               "reclaiming run that exceeded max_run_duration");
+                tracing::warn!(
+                    target: "paigasus::runtime_axum::registry",
+                    %id,
+                    agent = %handle.agent_name,
+                    "reclaiming run that exceeded max_run_duration"
+                );
             }
         }
 
@@ -390,6 +396,7 @@ impl RunRegistry {
     pub fn spawn_sweeper(self: &Arc<Self>) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             tracing::warn!(
+                target: "paigasus::runtime_axum::registry",
                 "no Tokio runtime available; the run-registry sweeper was not spawned — runs \
                  exceeding max_run_duration will not be reclaimed until spawn_sweeper is called \
                  again from within an async context"

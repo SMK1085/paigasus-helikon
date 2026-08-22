@@ -329,6 +329,7 @@ impl TaskStore for InMemoryTaskStore {
                         inner.tasks.get(&id).map(|record| {
                             if cursor < record.first_seq {
                                 tracing::debug!(
+                                    target: "paigasus::runtime_agentcore::a2a",
                                     task_id = %id,
                                     requested = cursor,
                                     clamped_to = record.first_seq,

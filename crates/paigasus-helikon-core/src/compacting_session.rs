@@ -201,13 +201,20 @@ impl<S: Session> CompactingSession<S> {
         let summary = match self.collect_summary(req).await {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(error = %e, "CompactingSession: summarization failed; skipping compaction");
+                tracing::warn!(
+                    target: "paigasus::core::compaction",
+                    error = %e,
+                    "CompactingSession: summarization failed; skipping compaction"
+                );
                 return Ok(());
             }
         };
         // 8. Empty-summary guard.
         if summary.trim().is_empty() {
-            tracing::warn!("CompactingSession: model returned empty summary; skipping compaction");
+            tracing::warn!(
+                target: "paigasus::core::compaction",
+                "CompactingSession: model returned empty summary; skipping compaction"
+            );
             return Ok(());
         }
         // 9. Append marker; resync cheap estimate to the summary size.

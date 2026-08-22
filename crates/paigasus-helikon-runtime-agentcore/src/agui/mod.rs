@@ -65,7 +65,11 @@ impl<Ctx: Send + Sync + 'static> AgentCoreServer<Ctx> {
                 ))
             })?;
         let elapsed_ms = start.elapsed().as_millis();
-        tracing::info!(elapsed_ms = elapsed_ms as u64, "ready in {elapsed_ms}ms");
+        tracing::info!(
+            target: "paigasus::runtime_agentcore::agui",
+            elapsed_ms = elapsed_ms as u64,
+            "ready in {elapsed_ms}ms"
+        );
         axum::serve(listener, router)
             .await
             .map_err(|e| AgentCoreError::Internal(e.to_string()))

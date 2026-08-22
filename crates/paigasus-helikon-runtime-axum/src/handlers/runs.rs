@@ -347,6 +347,7 @@ fn spawn_writer<Ctx: Send + Sync + 'static>(
                 // detailed cause exactly once — the wire-facing frame and the 500
                 // body are both redacted, so this is the only place it survives.
                 tracing::error!(
+                    target: "paigasus::runtime_axum::runs",
                     agent = %handle.agent_name,
                     %run_id,
                     error = %e,

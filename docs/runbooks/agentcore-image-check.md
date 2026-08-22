@@ -130,8 +130,8 @@ table above captures one real validated run):
 | echo exec->200 (gate)            |           11 ms |    < 50 ms |
 | agent exec->200 (gate)           |            9 ms |    < 50 ms |
 
-echo image app-side log:  ...INFO paigasus_helikon_runtime_agentcore::server: ready in 0ms elapsed_ms=0
-agent image app-side log: ...INFO paigasus_helikon_runtime_agentcore::server: ready in 0ms elapsed_ms=0
+echo image app-side log:  ...INFO paigasus::runtime_agentcore::server: ready in 0ms elapsed_ms=0
+agent image app-side log: ...INFO paigasus::runtime_agentcore::server: ready in 0ms elapsed_ms=0
 
 All gates passed.
 ```

@@ -545,6 +545,7 @@ where
         let denied_events = &denied_events;
         let secrets = &secrets;
         let span = tracing::info_span!(
+            target: "paigasus::core::agent",
             parent: parent,
             "tool.execute",
             otel.name = tracing::field::Empty,
@@ -732,6 +733,7 @@ where
             let mut tx_input = crate::TransitionInput::Start { messages: input.messages };
 
             let run_span = tracing::info_span!(
+                target: "paigasus::core::agent",
                 "agent.run",
                 otel.name = tracing::field::Empty,
                 otel.kind = "internal",
@@ -856,6 +858,7 @@ where
                     match &ev {
                         crate::AgentEvent::TurnStarted { turn } => {
                             let s = tracing::info_span!(
+                                target: "paigasus::core::agent",
                                 parent: &run_span,
                                 "agent.turn",
                                 otel.kind = "internal",
@@ -916,6 +919,7 @@ where
                         }
                         let chat_parent = turn_span.as_ref().unwrap_or(&run_span);
                         let chat_span = tracing::info_span!(
+                            target: "paigasus::core::agent",
                             parent: chat_parent,
                             "gen_ai.chat",
                             otel.name = tracing::field::Empty,

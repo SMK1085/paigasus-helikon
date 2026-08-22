@@ -487,6 +487,7 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         }
 
         tracing::debug!(
+            target: "paigasus::runtime_temporal::worker",
             model_retry_policy = ?self.model_retry_policy,
             tool_retry_policy = ?self.tool_retry_policy,
             agents = self.registry.len(),

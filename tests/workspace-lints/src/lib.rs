@@ -48,6 +48,13 @@ const KEYWORDS: &[&str] = &["target", "parent"];
 /// trailing the invocation's own line.
 const ALLOW_MARKER: &str = "// allow(tracing-target-syntax)";
 
+/// Opt-out marker for a call site that is deliberately exempt from the
+/// `target:` coverage requirement Task 9 enforces — e.g. a legitimate
+/// untargeted or computed-target invocation that cannot be made a literal.
+/// Same placement rules as the syntax lint's own marker: a `// allow(...)`
+/// comment either immediately before the invocation or trailing its own line.
+pub const ALLOW_MARKER_COVERAGE: &str = "// allow(tracing-target-coverage)";
+
 /// An interior delimiter did not close the way the argument walker expected
 /// while walking a macro invocation's argument list. Well-formed Rust nests
 /// delimiters strictly, so this should be unreachable against real source —
@@ -121,10 +128,50 @@ pub fn scan(src: &str) -> Vec<Offense> {
 /// inside this `&str`-only function cannot do on its own.
 pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
     let masked = mask_trivia(src);
-    let allow_lines = collect_allow_marker_lines(src, &masked.line_comments);
+    let allow_lines = collect_allow_marker_lines(src, &masked.line_comments, ALLOW_MARKER);
     let b = &masked.buf[..];
     let aliases = collect_macro_aliases(b);
     let mut offenses = Vec::new();
+    walk_invocations(b, &aliases, |inv| {
+        let macro_line = line_of(b, inv.name_start);
+        // The marker suppresses the whole invocation, so this checks the
+        // invocation's own start line, not each offending keyword's line
+        // (an invocation can span many lines).
+        let suppressed = allow_lines.contains(&macro_line)
+            || (macro_line > 1 && allow_lines.contains(&(macro_line - 1)));
+        if !suppressed {
+            collect_args(b, inv.open, inv.closer, inv.name, &mut offenses)?;
+        }
+        Ok(())
+    })?;
+    Ok(offenses)
+}
+
+/// One recognised `tracing`-macro invocation's location, as found by
+/// [`walk_invocations`]: `name` is the macro's final path segment,
+/// `name_start` the byte offset that segment begins at (used for line
+/// reporting), and `open`/`closer` locate its argument list the way
+/// [`for_each_top_level_arg`] expects.
+struct MacroInvocation<'a> {
+    name: &'a str,
+    name_start: usize,
+    open: usize,
+    closer: u8,
+}
+
+/// Find every recognised `tracing`-macro invocation in the masked buffer `b`
+/// and call `f` with its location. Shared by [`try_scan`] (which flags
+/// `target =` / `parent =` syntax offenses inside each invocation) and
+/// [`scan_invocations`] (which classifies each invocation's `target:`
+/// argument), so the "find `ident !` followed by an opening delimiter, then
+/// recognise the identifier as a tracing macro" walk lives in exactly one
+/// place. `f` may fail with [`MismatchedDelimiter`] while walking the
+/// invocation's own argument list; that error is propagated immediately.
+fn walk_invocations<'a>(
+    b: &'a [u8],
+    aliases: &[String],
+    mut f: impl FnMut(MacroInvocation<'a>) -> Result<(), MismatchedDelimiter>,
+) -> Result<(), MismatchedDelimiter> {
     let mut i = 0;
     while i < b.len() {
         if b[i] != b'!' {
@@ -158,19 +205,16 @@ pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
         };
         let is_tracing_macro = TRACING_MACROS.contains(&name) || aliases.iter().any(|a| a == name);
         if is_tracing_macro {
-            let macro_line = line_of(b, name_start);
-            // The marker suppresses the whole invocation, so this checks the
-            // invocation's own start line, not each offending keyword's line
-            // (an invocation can span many lines).
-            let suppressed = allow_lines.contains(&macro_line)
-                || (macro_line > 1 && allow_lines.contains(&(macro_line - 1)));
-            if !suppressed {
-                collect_args(b, j, closer, name, &mut offenses)?;
-            }
+            f(MacroInvocation {
+                name,
+                name_start,
+                open: j,
+                closer,
+            })?;
         }
         i = j + 1;
     }
-    Ok(offenses)
+    Ok(())
 }
 
 /// Distinct `<component>` segments of every `target: "paigasus::…"` literal in
@@ -188,8 +232,16 @@ pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
 ///
 /// Not macro-aware: it keys on a `target:` token followed by a `paigasus::`
 /// literal, so a non-`tracing` field named `target` holding such a string would
-/// be a false positive. No such site exists in this workspace, and the failure
-/// mode is a loud mismatch rather than a silent miss.
+/// be a false positive. Such sites **do** exist in this workspace —
+/// `crates/paigasus-helikon-core/src/command_match.rs` builds a `Redirect {
+/// target: "...".into() }` struct literal with no `tracing` macro anywhere
+/// near it — but none of them happen to hold a `"paigasus::…"`-shaped string,
+/// so `scan_targets` tolerates them only because a non-`paigasus::` literal
+/// yields `None` from the `component_of` helper; a future site whose non-tracing
+/// `target:` field happened to start with `"paigasus::"` would be a silent
+/// false positive here. [`scan_invocations`] is immune to this class of bug
+/// structurally, because it only classifies a `target:` argument found
+/// while walking a *recognised macro invocation's* argument list.
 ///
 /// A comment may sit between `target:` and its literal — `tracing` accepts
 /// `target: /* note */ "paigasus::x::y"` — and that form is recognised. What is
@@ -229,12 +281,7 @@ pub fn scan_targets(src: &str) -> BTreeSet<String> {
 /// Returns `None` for a literal outside the namespace, or one whose component
 /// segment is empty (`"paigasus::"`).
 fn component_of(literal: &str) -> Option<String> {
-    let open = literal.find('"')?;
-    let close = literal.rfind('"')?;
-    if close <= open {
-        return None;
-    }
-    let content = literal.get(open + 1..close)?;
+    let content = literal_content(literal)?;
     let rest = content.strip_prefix("paigasus::")?;
     let component = match rest.find("::") {
         Some(k) => &rest[..k],
@@ -245,6 +292,23 @@ fn component_of(literal: &str) -> Option<String> {
     } else {
         Some(component.to_owned())
     }
+}
+
+/// The content of a string literal, given its raw text **including** its
+/// delimiters and any `r#…#`/`b`/`c` prefix — i.e. the text strictly between
+/// the first and last `"` byte. Shared by [`component_of`] (which further
+/// requires a `paigasus::` prefix) and [`classify_target_arg`] (which does
+/// not).
+///
+/// Returns `None` if `literal` contains no `"` pair at all, which should not
+/// happen for a span taken from [`Masked::string_literals`].
+fn literal_content(literal: &str) -> Option<&str> {
+    let open = literal.find('"')?;
+    let close = literal.rfind('"')?;
+    if close <= open {
+        return None;
+    }
+    literal.get(open + 1..close)
 }
 
 /// Index of the first occurrence of `needle` in `haystack`, or `None`.
@@ -281,8 +345,9 @@ fn ident_range_before(b: &[u8], at: usize) -> Option<(usize, usize)> {
     Some((s, e))
 }
 
-/// Line numbers (1-based) in `src` that carry the [`ALLOW_MARKER`] opt-out,
-/// either as a standalone comment or trailing code.
+/// Line numbers (1-based) in `src` that carry a `// allow(<marker>)`-shaped
+/// opt-out comment — [`ALLOW_MARKER`] or [`ALLOW_MARKER_COVERAGE`] — either
+/// as a standalone comment or trailing code.
 ///
 /// Matched against the *raw* source, because the marker text lives inside a
 /// comment and [`mask_trivia`] has already blanked comments to spaces by the
@@ -296,17 +361,30 @@ fn ident_range_before(b: &[u8], at: usize) -> Option<(usize, usize)> {
 fn collect_allow_marker_lines(
     src: &str,
     line_comment_ranges: &[(usize, usize)],
-) -> std::collections::HashSet<usize> {
+    marker: &str,
+) -> BTreeSet<usize> {
     let bytes = src.as_bytes();
-    src.match_indices(ALLOW_MARKER)
+    src.match_indices(marker)
         .filter(|&(pos, _)| {
-            let end = pos + ALLOW_MARKER.len();
+            let end = pos + marker.len();
             line_comment_ranges
                 .iter()
                 .any(|&(start, stop)| pos >= start && end <= stop)
         })
         .map(|(pos, _)| line_of(bytes, pos))
         .collect()
+}
+
+/// Public form of the internal allow-marker search for a caller (Task 8's
+/// integration test, Task 9's coverage lint) that only has `src` and does not
+/// already hold the masker's line-comment ranges — it re-derives them itself
+/// from `src` to get the line-comment ranges the search needs.
+///
+/// `marker` is any `// allow(...)`-shaped opt-out text, typically the syntax
+/// lint's own marker or [`ALLOW_MARKER_COVERAGE`].
+pub fn allow_marker_lines(src: &str, marker: &str) -> BTreeSet<usize> {
+    let masked = mask_trivia(src);
+    collect_allow_marker_lines(src, &masked.line_comments, marker)
 }
 
 /// Local names that resolve to a `tracing` macro via
@@ -592,17 +670,23 @@ fn line_of(b: &[u8], at: usize) -> usize {
     b[..at].iter().filter(|&&c| c == b'\n').count() + 1
 }
 
-/// Walk one macro invocation's argument list, flagging any top-level argument
-/// that opens with `target =` or `parent =`. `open` is the index of the
-/// invocation's opening delimiter (`(`, `[` or `{`) and `closer` its matching
-/// close byte, so a `{`- or `[`-delimited invocation terminates on its own
-/// closer rather than on the first `)` it happens to contain.
-fn collect_args(
+/// Walk one macro invocation's top-level (depth 0) arguments and call `f`
+/// with the byte offset each argument starts at (its first non-whitespace
+/// byte). `open` is the index of the invocation's opening delimiter (`(`,
+/// `[` or `{`) and `closer` its matching close byte, so a `{`- or
+/// `[`-delimited invocation terminates on its own closer rather than on the
+/// first `)` it happens to contain.
+///
+/// Shared by [`collect_args`] (which flags an argument opening with
+/// `target =` / `parent =`) and [`classify_target_arg`] (which classifies an
+/// argument opening with `target:`), so the depth-tracking, comma-splitting
+/// walk that decides what counts as "top-level" lives in exactly one place —
+/// the two callers would otherwise have to agree on it independently.
+fn for_each_top_level_arg(
     b: &[u8],
     open: usize,
     closer: u8,
-    macro_name: &str,
-    out: &mut Vec<Offense>,
+    mut f: impl FnMut(usize),
 ) -> Result<(), MismatchedDelimiter> {
     let mut k = open + 1;
     let mut depth = 0usize;
@@ -638,25 +722,246 @@ fn collect_args(
             // Whitespace never ends an argument-start position.
         } else {
             if at_arg_start && depth == 0 {
-                if let Some(kw) = KEYWORDS.iter().find(|kw| starts_with_ident(b, k, kw)) {
-                    let mut m = k + kw.len();
-                    while m < b.len() && b[m].is_ascii_whitespace() {
-                        m += 1;
-                    }
-                    if b.get(m) == Some(&b'=') && b.get(m + 1) != Some(&b'=') {
-                        out.push(Offense {
-                            line: line_of(b, k),
-                            macro_name: macro_name.to_owned(),
-                            keyword: (*kw).to_owned(),
-                        });
-                    }
-                }
+                f(k);
             }
             at_arg_start = false;
         }
         k += 1;
     }
     Ok(())
+}
+
+/// Flag any top-level argument that opens with `target =` or `parent =`.
+fn collect_args(
+    b: &[u8],
+    open: usize,
+    closer: u8,
+    macro_name: &str,
+    out: &mut Vec<Offense>,
+) -> Result<(), MismatchedDelimiter> {
+    for_each_top_level_arg(b, open, closer, |k| {
+        if let Some(kw) = KEYWORDS.iter().find(|kw| starts_with_ident(b, k, kw)) {
+            let mut m = k + kw.len();
+            while m < b.len() && b[m].is_ascii_whitespace() {
+                m += 1;
+            }
+            if b.get(m) == Some(&b'=') && b.get(m + 1) != Some(&b'=') {
+                out.push(Offense {
+                    line: line_of(b, k),
+                    macro_name: macro_name.to_owned(),
+                    keyword: (*kw).to_owned(),
+                });
+            }
+        }
+    })
+}
+
+/// Classification of the `target:` argument found (or not) in one `tracing`
+/// macro invocation. Deliberately three states, not two: Task 8/9 must tell
+/// "no target" apart from "computed target" apart from "literal target" — a
+/// computed target satisfies coverage but cannot be shape-checked, which is
+/// exactly how an event could be routed out of the namespace invisibly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetArg {
+    /// The invocation passes no `target:` argument at all. Note this
+    /// includes a `target = "…"` argument — that is macro *field* syntax
+    /// (the SMA-543 defect [`scan`] separately flags), not the `target:`
+    /// keyword, so it never actually overrides the event's target.
+    Absent,
+    /// The invocation passes `target:` with a value that is not a string
+    /// literal — e.g. a `const`, or any other expression.
+    NonLiteral,
+    /// The invocation passes `target: "…"` with a string-literal value; the
+    /// literal's content, with its delimiters and any `r#`/`b`/`c` prefix
+    /// stripped.
+    Literal(String),
+}
+
+/// One recognised `tracing` macro invocation and how it targets its event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invocation {
+    /// 1-based line number where the macro's name begins.
+    pub line: usize,
+    /// Macro it appeared in, unqualified (e.g. `warn` for `tracing::warn!`).
+    pub macro_name: String,
+    /// How this invocation specifies its `target:`.
+    pub target: TargetArg,
+}
+
+/// Find every `tracing` macro invocation in `src` and classify how each one
+/// specifies (or fails to specify) its `target:` argument.
+///
+/// Recognises the same invocation shapes [`scan`]/[`try_scan`] do — final
+/// path segment, any of the three delimiter kinds, `use`-aliased bare
+/// forms — by sharing the same internal invocation walker, and is
+/// comment/literal-blind for the same reason: it operates on the masked
+/// buffer the trivia masker produces.
+///
+/// Unlike [`scan_targets`], this is macro-aware: a `target:` argument is
+/// only classified when it is a top-level argument of a *recognised macro
+/// invocation*, found by walking that invocation's own argument list — never
+/// by a bare needle search over the whole file. An ordinary struct-literal
+/// field named `target` (e.g. `Redirect { target: "/etc/passwd".into() }`)
+/// is invisible to it, because no macro invocation surrounds that site at
+/// all.
+///
+/// # Errors
+///
+/// Returns [`MismatchedDelimiter`] under the same unreachable-against-valid-Rust
+/// condition [`try_scan`] documents.
+pub fn scan_invocations(src: &str) -> Result<Vec<Invocation>, MismatchedDelimiter> {
+    let masked = mask_trivia(src);
+    let b = &masked.buf[..];
+    let aliases = collect_macro_aliases(b);
+    let mut invocations = Vec::new();
+    walk_invocations(b, &aliases, |inv| {
+        let target = classify_target_arg(b, inv.open, inv.closer, &masked.string_literals, src)?;
+        invocations.push(Invocation {
+            line: line_of(b, inv.name_start),
+            macro_name: inv.name.to_owned(),
+            target,
+        });
+        Ok(())
+    })?;
+    Ok(invocations)
+}
+
+/// Classify one invocation's `target:` argument (see [`TargetArg`]),
+/// looking only at its top-level arguments via [`for_each_top_level_arg`].
+/// `string_literals` and `src` are [`Masked::string_literals`] and the
+/// original (unmasked) source, needed to tell a literal value from a
+/// non-literal one and to read the literal's content back out.
+fn classify_target_arg(
+    b: &[u8],
+    open: usize,
+    closer: u8,
+    string_literals: &[(usize, usize)],
+    src: &str,
+) -> Result<TargetArg, MismatchedDelimiter> {
+    let mut target = TargetArg::Absent;
+    for_each_top_level_arg(b, open, closer, |k| {
+        if !starts_with_ident(b, k, "target") {
+            return;
+        }
+        let mut m = k + "target".len();
+        while m < b.len() && b[m].is_ascii_whitespace() {
+            m += 1;
+        }
+        // Only the `target:` keyword form actually sets the event's target;
+        // `target = ...` compiles to an ordinary field (the SMA-543 defect)
+        // and never reaches here as anything but `Absent`.
+        if b.get(m) != Some(&b':') {
+            return;
+        }
+        // Advance past real whitespace *and* comments (both blank to spaces
+        // in `b`) to find where the value starts, but stop the instant a
+        // position matches a known string-literal start — a literal's own
+        // interior is also blanked to spaces in `b`, so a plain "skip
+        // whitespace in `b`" loop would run straight through it and land on
+        // whatever follows instead.
+        let mut v = m + 1;
+        while v < b.len()
+            && b[v].is_ascii_whitespace()
+            && !string_literals.iter().any(|&(start, _)| start == v)
+        {
+            v += 1;
+        }
+        target = match string_literals.iter().find(|&&(start, _)| start == v) {
+            Some(&(start, end)) => {
+                TargetArg::Literal(literal_content(&src[start..end]).unwrap_or("").to_owned())
+            }
+            None => TargetArg::NonLiteral,
+        };
+    })?;
+    Ok(target)
+}
+
+/// Lines (1-based) carrying a `#[tracing::instrument]` or bare
+/// `#[instrument]` attribute.
+///
+/// Operates on the trivia masker's masked buffer, so an occurrence inside a
+/// comment (e.g. a doc comment mentioning the attribute in prose) or a
+/// string literal is invisible to it — matching
+/// `crates/paigasus-helikon-macros/src/signature.rs:210`'s doc comment,
+/// which names `#[tracing::instrument]` in a sentence and must not be
+/// reported.
+///
+/// Recognised structurally, not by a bare text search: the `instrument`
+/// identifier must be preceded (modulo whitespace, and modulo zero or more
+/// `tracing::`/other path qualifiers immediately before it, including a
+/// leading `::` root as in `#[::tracing::instrument]`) by an attribute's
+/// opening `#[`. The attribute need not begin immediately there — being
+/// anywhere inside the attribute's brackets counts, so
+/// `#[cfg_attr(test, tracing::instrument)]` is also recognised. That keeps an
+/// unrelated identifier or expression named `instrument` from being mistaken
+/// for the attribute.
+pub fn instrument_attribute_lines(src: &str) -> BTreeSet<usize> {
+    let masked = mask_trivia(src);
+    let b = &masked.buf[..];
+    let mut lines = BTreeSet::new();
+    let mut i = 0;
+    while i < b.len() {
+        if !is_ident_byte(b[i]) || (i > 0 && is_ident_byte(b[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_ident_byte(b[i]) {
+            i += 1;
+        }
+        if &b[start..i] == b"instrument" {
+            let mut p = start;
+            while p > 0 && b[p - 1].is_ascii_whitespace() {
+                p -= 1;
+            }
+            // Skip zero or more optional qualifiers immediately before
+            // `instrument`, e.g. the `tracing::` in `#[tracing::instrument]`,
+            // looping so a leading `::` root (`#[::tracing::instrument]`) and
+            // multi-segment paths are both fully stripped rather than just
+            // the innermost segment.
+            while p >= 2 && &b[p - 2..p] == b"::" {
+                p -= 2;
+                while p > 0 && is_ident_byte(b[p - 1]) {
+                    p -= 1;
+                }
+                while p > 0 && b[p - 1].is_ascii_whitespace() {
+                    p -= 1;
+                }
+            }
+            if inside_attribute_brackets(b, p) {
+                lines.insert(line_of(b, start));
+            }
+        }
+    }
+    lines
+}
+
+/// Whether position `at` in the masked buffer `b` sits inside some
+/// attribute's `#[ … ]` brackets, i.e. an unmatched `#[` is reachable by
+/// walking backward from `at`.
+///
+/// Only `[`/`]` are tracked; `(`/`)` and `{`/`}` are transparent to the walk.
+/// That is deliberate: `#[cfg_attr(test, tracing::instrument)]` nests
+/// `instrument` inside `cfg_attr(...)`'s parens, one level below the
+/// attribute's own brackets, and those parens must not stop the backward
+/// search from reaching the enclosing `#[`.
+fn inside_attribute_brackets(b: &[u8], at: usize) -> bool {
+    let mut depth: i32 = 0;
+    let mut k = at;
+    while k > 0 {
+        k -= 1;
+        match b[k] {
+            b']' => depth += 1,
+            b'[' => {
+                if depth == 0 {
+                    return k > 0 && b[k - 1] == b'#';
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -668,6 +973,144 @@ mod tests {
             .into_iter()
             .map(|o| (o.line, o.macro_name, o.keyword))
             .collect()
+    }
+
+    #[test]
+    fn scan_invocations_classifies_a_literal_target() {
+        let src = r#"fn f() { tracing::warn!(target: "paigasus::core::agent", "m"); }"#;
+        let got = scan_invocations(src).expect("well-formed source");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].macro_name, "warn");
+        assert_eq!(
+            got[0].target,
+            TargetArg::Literal("paigasus::core::agent".to_owned())
+        );
+    }
+
+    #[test]
+    fn scan_invocations_reports_an_untargeted_site() {
+        let src = r#"fn f() { tracing::warn!("m"); }"#;
+        let got = scan_invocations(src).expect("well-formed source");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].target, TargetArg::Absent);
+    }
+
+    // Regression: `crates/paigasus-helikon-core/src/command_match.rs:436` contains
+    // `Redirect { target: "/etc/passwd".into() }` inside a `#[cfg(test)]` module.
+    // A needle-based scanner reads that as a tracing target and fails the shape
+    // assertion on a file that emits nothing at all.
+    #[test]
+    fn scan_invocations_ignores_a_struct_field_named_target() {
+        let src = r#"fn f() { let r = Redirect { op: Op::Write, target: "/etc/passwd".into() }; }"#;
+        assert_eq!(scan_invocations(src).expect("well-formed source"), vec![]);
+    }
+
+    #[test]
+    fn scan_invocations_classifies_a_non_literal_target() {
+        let src = r#"fn f() { tracing::warn!(target: T_CORE, "m"); }"#;
+        let got = scan_invocations(src).expect("well-formed source");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].target, TargetArg::NonLiteral);
+    }
+
+    #[test]
+    fn scan_invocations_sees_span_macros_and_bare_forms() {
+        let src = r#"
+            use tracing::warn;
+            fn f() {
+                let _ = tracing::info_span!(target: "paigasus::core::agent", parent: p, "agent.run");
+                warn!("bare");
+            }
+        "#;
+        let got = scan_invocations(src).expect("well-formed source");
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            got[0].target,
+            TargetArg::Literal("paigasus::core::agent".to_owned())
+        );
+        assert_eq!(got[1].target, TargetArg::Absent);
+    }
+
+    #[test]
+    fn scan_invocations_is_blind_to_comments_and_string_literals() {
+        let src = r#"
+            // tracing::warn!("commented out");
+            fn f() { let s = "tracing::warn!(\"in a string\")"; }
+        "#;
+        assert_eq!(scan_invocations(src).expect("well-formed source"), vec![]);
+    }
+
+    #[test]
+    fn allow_marker_lines_finds_both_positions_and_ignores_string_literals() {
+        let src = r#"
+            // allow(tracing-target-coverage)
+            fn a() { tracing::warn!("m"); }
+            fn b() { tracing::warn!("m"); } // allow(tracing-target-coverage)
+            fn c() { let s = "// allow(tracing-target-coverage)"; }
+        "#;
+        let lines = allow_marker_lines(src, ALLOW_MARKER_COVERAGE);
+        assert_eq!(
+            lines.len(),
+            2,
+            "the marker inside a string literal must not count"
+        );
+    }
+
+    /// A real `#[tracing::instrument]` attribute is reported on its own line.
+    #[test]
+    fn instrument_attribute_lines_finds_the_qualified_form() {
+        let src = "#[tracing::instrument]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
+    }
+
+    /// The bare `#[instrument]` form (reachable via `use tracing::instrument;`)
+    /// is also reported.
+    #[test]
+    fn instrument_attribute_lines_finds_the_bare_form() {
+        let src = "#[instrument]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
+    }
+
+    /// An occurrence inside a `//` comment must not be reported — this is the
+    /// exact shape of `paigasus-helikon-macros/src/signature.rs:210`'s doc
+    /// comment, which names the attribute in prose.
+    #[test]
+    fn instrument_attribute_lines_ignores_a_line_comment() {
+        let src = "// mentions `#[tracing::instrument]` in prose\nfn a() {}\n";
+        assert!(instrument_attribute_lines(src).is_empty());
+    }
+
+    /// An occurrence inside a string literal must not be reported.
+    #[test]
+    fn instrument_attribute_lines_ignores_a_string_literal() {
+        let src = "fn a() { let s = \"#[tracing::instrument]\"; }";
+        assert!(instrument_attribute_lines(src).is_empty());
+    }
+
+    /// A leading `::` root (`#[::tracing::instrument]`, an idiomatic way to
+    /// avoid path shadowing) must still be recognised: the qualifier-strip
+    /// has to loop rather than stop after one segment.
+    #[test]
+    fn instrument_attribute_lines_finds_the_leading_root_qualified_form() {
+        let src = "#[::tracing::instrument]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
+    }
+
+    /// `#[cfg_attr(test, tracing::instrument)]` places `instrument` inside
+    /// the attribute's brackets but not immediately after `#[` — the
+    /// attribute-interior check must still recognise it.
+    #[test]
+    fn instrument_attribute_lines_finds_the_cfg_attr_form() {
+        let src = "#[cfg_attr(test, tracing::instrument)]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
+    }
+
+    /// Both bypasses combined: a `cfg_attr` wrapping a leading-`::`-qualified
+    /// `instrument`.
+    #[test]
+    fn instrument_attribute_lines_finds_the_cfg_attr_leading_root_form() {
+        let src = "#[cfg_attr(feature = \"x\", ::tracing::instrument)]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
     }
 
     /// Every form that actually compiles against `tracing` 0.1 and silently

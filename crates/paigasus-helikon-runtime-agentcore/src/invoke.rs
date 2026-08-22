@@ -244,7 +244,10 @@ async fn run_json<Ctx: Send + Sync + 'static>(
             // The client disconnected, so nobody is left to receive the outcome.
             // The session write has already happened (finalize runs before `run`
             // resolves), so this is bookkeeping, not a lost turn.
-            tracing::debug!("invocation client disconnected; run outcome discarded");
+            tracing::debug!(
+                target: "paigasus::runtime_agentcore::invoke",
+                "invocation client disconnected; run outcome discarded"
+            );
         }
     });
 
@@ -256,6 +259,7 @@ async fn run_json<Ctx: Send + Sync + 'static>(
         .await
         .map_err(|_| {
             tracing::error!(
+                target: "paigasus::runtime_agentcore::invoke",
                 "run task ended without reporting a result (panicked or runtime shut down)"
             );
             AgentCoreError::Internal("run task ended without a result".to_owned())

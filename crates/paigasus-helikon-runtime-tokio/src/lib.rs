@@ -106,6 +106,7 @@ async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecord
         .drain();
     if let Err(e) = session.append(&events).await {
         tracing::warn!(
+            target: "paigasus::runtime_tokio::runner",
             error = %e,
             "session persistence failed during finalize; run outcome unaffected"
         );

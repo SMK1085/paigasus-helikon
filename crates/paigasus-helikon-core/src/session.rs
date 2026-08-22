@@ -366,11 +366,13 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
                 let n = usize::try_from(*original_count).unwrap_or(usize::MAX);
                 if n == 0 {
                     tracing::warn!(
+                        target: "paigasus::core::session",
                         "Compacted event with original_count = 0; emitting summary as a system message without compacting any history (likely producer bug — use SessionEvent::compacted with a positive count)"
                     );
                 }
                 if n > contributions.len() {
                     tracing::warn!(
+                        target: "paigasus::core::session",
                         original_count = n,
                         events_seen = contributions.len(),
                         "Compacted event references more events than have been seen; treating as 'compact everything observed so far' (likely corrupt log)"
@@ -457,6 +459,7 @@ impl SessionRecorder {
                 }
                 Item::System { .. } => {
                     tracing::debug!(
+                        target: "paigasus::core::session",
                         "SessionRecorder: skipping Item::System in input (no SessionEvent variant)"
                     );
                 }
