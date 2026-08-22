@@ -956,7 +956,19 @@ than relaxing the guard.
 - [ ] **Step 4: Mutation-check the guard against real source, both directions**
 
 A guard that returns an empty finding list unconditionally passes on a clean
-tree. Prove it does not:
+tree. Prove it does not.
+
+**First confirm both files are clean**, because each check restores its file
+with `git checkout -- <path>`, which discards *any* uncommitted change to that
+file — including work you had in progress:
+
+```bash
+git status --short crates/paigasus-helikon-core/src/path_match.rs \
+                   crates/paigasus-helikon-runtime-actix/src/registry.rs
+```
+
+Expected: no output. If either file is modified, commit or set that work aside
+before continuing — do not run the mutations over it.
 
 ```bash
 # 3a. Break coverage.
@@ -1260,9 +1272,15 @@ two-segment form the stability rules already recommend.
 - [ ] **Step 5: Record the reserved component names, outside the marked region**
 
 State the derivation rule — strip `paigasus-helikon-`, then a leading
-`providers-`, then `-` → `_` — and list the names reserved for crates that emit
-nothing yet: `mcp`, `tools`, `evals`, `cli`, `sessions_sqlite`,
-`sessions_postgres`, `sessions_redis`.
+`providers-`, then `-` → `_` — and list all ten names reserved for crates that
+emit nothing yet: `mcp`, `tools`, `evals`, `cli`, `sessions_sqlite`,
+`sessions_postgres`, `sessions_redis`, `sessions_testkit`, `macros`, and
+`facade`.
+
+`facade` is the one exception to the rule and must be called out as such: the
+crate is named `paigasus-helikon` with no suffix to strip, so the rule would
+yield `paigasus_helikon`. A contributor who follows the rule literally for that
+crate gets a guard failure naming a component the book never mentioned.
 
 **These must not become table rows.** The docs guard asserts the book's
 component set equals the source's, so a row for a component nothing emits fails
