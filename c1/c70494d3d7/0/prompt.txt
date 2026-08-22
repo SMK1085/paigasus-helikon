@@ -1,0 +1,183 @@
+<task-notification>
+<task-id>a00760c584982ab75</task-id>
+<tool-use-id>toolu_015duC8CqpgtD95zBqrPaaa3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a00760c584982ab75.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 6 docs update" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>STATUS: DONE
+Commit SHA: b535e34e9761e9d8c8659c041493589e0071220f
+mdbook build: RAN (was installed) — clean, exit 0, no link/warning errors.
+Both README and mdBook paragraphs inserted verbatim per the brief. Only the two named files were staged and committed; no HEAD-moving git commands used. No concerns.</result>
+<usage><subagent_tokens>68889</subagent_tokens><tool_uses>13</tool_uses><duration_ms>60406</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adfc395696a2a0c3d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/adfc395696a2a0c3d.output</output-file>
+<status>completed</status>
+<summary>Agent "Batched review tasks 3-5" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Single contiguous hunk, confirming no scattered/stranded changes elsewhere in the file. All verification complete.
+
+---
+
+## Review: SMA-563 Tasks 3, 4, 5
+
+### Spec compliance
+
+- **Task 3: ✅** — `crates/paigasus-helikon/examples/langfuse_tracing.rs` change is verbatim to the brief (modulo rustfmt reflow of the multi-line closure call). Only file touched. Commit message exact match.
+- **Task 4: ✅** — `cancel_after_content_ends_stream_without_finish` in `crates/paigasus-helikon-runtime-tokio/src/retry.rs` is character-for-character the brief's code. Only `retry.rs` touched. Commit message exact match. Mutation check performed for real and reverted cleanly.
+- **Task 5: ✅** — Comment correction and `cancel_during_backoff_ends_stream` are verbatim to the brief. Only `retry.rs` touched. Commit message exact match. Mutation check performed for real, reverted cleanly, and the report correctly identifies the non-obvious assertion (`calls()`, not `items.is_empty()`) that catches the mutation.
+
+### Task quality: **Approved**
+
+No Critical or Important findings. All three tasks are clean, narrowly scoped, and independently verified against the actual dependency source (not just the reports' narrative):
+
+**Independent verification performed (beyond reading the diff):**
+- `cargo fmt --all -- --check`, `cargo check` on the example, `cargo test --no-run` on the crate, and `cargo clippy --all-targets --all-features -D warnings` on both affected crates — all clean, confirming item 5 (fully-qualified `take_while`, `cancel` binding used, no warnings) and item 7 (no clippy risk).
+- Item 2 (`cancel_after_content_ends_stream_without_finish` determinism): traced against tokio 1.53.1's actual `select!` macro expansion (`macros/select.rs`) — with `biased`, `start=0` and the branch loop `return`s the instant one branch is `Ready`, never polling later branches that round. Combined with `tokio-util` 0.7.19's `WaitForCancellationFuture::poll` (`cancellation_token.rs:349-354`), which checks `is_cancelled()` before ever polling the underlying `Notified` and returns `Ready` immediately if already true — the doc comment's determinism claim is exactly correct, verified against source, not just plausible. **No race.**
+- Item 3 (`cancel_during_backoff_ends_stream` — the crux): traced the full scheduling sequence on tokio's current-thread test runtime. Every step prior to `backoff()`'s `sleep` (invoke, first-item peek) is synchronous with no genuine `Pending`, so the spawned `drain` task necessarily runs all the way to the real `select!` in `backoff()` on its very first poll turn — the single `yield_now().await` is sufficient by construction, not by luck, because there is nothing else for it to park on earlier. This is independently corroborated by the mutation evidence itself: when `backoff()`'s cancel arm was deleted, the paused clock's **idle-detection auto-advance** (not premature completion) let attempt #2 fire, flipping `calls()` from 1→2 — this only happens because the real (non-mutated) run had genuinely parked inside `backoff()`'s `select!`, relying on the cancellation notify (a real wakeup) rather than any clock advance, to keep `calls()` at 1. If the test were passing for the "wrong reason" (short-circuiting via the peek-`select!`'s `cancelled()` arm before ever reaching `backoff()`, the same defect that made the old test worthless), the mutation to `backoff()` would have had **zero** observable effect — but it did have an effect. This is genuine, not decorative, mutation-testing. **Test reaches backoff() for real.**
+- Item 4: the corrected comment on `cancellation_aborts_backoff_promptly` was traced line-by-line against the code path (`return` inside the `cancelled()` select arm bypasses the `match first` entirely) — the new comment is accurate.
+- Item 6: confirmed via `git diff c98c0dc7 a37dbc8a --stat` (only the 2 expected files) and a single contiguous hunk in `retry.rs` — no stranded mutation, no production-code change beyond the comment (Task 3's change to `DemoModel` is the intended example-file change, not incidental).
+
+**Minor (Task 5, inherited from the brief, not an implementer deviation):** the new test's doc comment says "the hour-long delay costs no wall-clock time," and `RetryPolicy::new().base_delay(Duration::from_secs(3600))` is set without overriding `max_delay`. Since `next_delay` computes `ceiling = grown.min(max_delay)` and the default `max_delay` is 30s, the actually-applied backoff is capped at **30 seconds**, not one hour. This doesn't affect correctness (30s virtual time is still far beyond what a single `yield_now()` could auto-advance, and the passing-path mechanism is cancellation-notify-driven, not clock-advance-driven, as shown above) — it's a pre-existing idiom already present verbatim in the untouched `cancellation_aborts_backoff_promptly` test ("A 1-hour backoff...", same unset `max_delay`), and Task 5 was required to use the brief's text verbatim. Cosmetic only; no action needed unless a future pass wants to correct the comment's "hour-long" framing to "capped at the default 30s ceiling."
+
+All three commits are clean, atomic, correctly scoped, and match the constraints (commit format, scopes `facade`/`runtime-tokio`, `cargo fmt` applied, no stray staging).</result>
+<usage><subagent_tokens>120558</subagent_tokens><tool_uses>29</tool_uses><duration_ms>421298</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa401e98ab0d77c0f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/aa401e98ab0d77c0f.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 7 full CI gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>DONE
+
+- Gate 1 (fmt): PASS
+- Gate 2 (clippy, workspace/all-features/all-targets): PASS
+- Gate 3 (test, workspace/all-features): PASS
+- Gate 4 (doc, workspace/all-features): PASS
+
+No failures attributed to this branch. No suspected-environmental failures either — bedrock's NATIVE_ROOTS issue did not manifest this run (worktree checkout path is the known-passing config). The only warning seen anywhere was the pre-existing `paigasus-helikon` lib/bin filename-collision on gate 4, which is documented in CLAUDE.md as accepted-by-design and did not cause a nonzero exit. No files were modified. Full report written to `.superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-7-report.md`.</result>
+<usage><subagent_tokens>73817</subagent_tokens><tool_uses>13</tool_uses><duration_ms>474011</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abd651778ed600c36</task-id>
+<tool-use-id>toolu_014nygQzfFoyUA2yoD7jb8QQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/abd651778ed600c36.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Whole-branch review — SMA-563
+
+I checked the spec claim-by-claim against the shipped tree, swept the workspace for every `Model` impl and every `MockModel` consumer, traced the post-cancellation path through `ModelTurnAccumulator` → `loop_state::transition` → `controlled()`, and read `RetryPolicy::next_delay` to settle the backoff question. Findings below.
+
+---
+
+### Critical
+None.
+
+---
+
+### Important
+
+**I1. `docs/book/src/concepts/observability-evaluation.md:294-297` — the tool-call paragraph states a conditional outcome as unconditional, and it is the wrong half of the truth.**
+
+&gt; "Cancelling part-way through a tool call leaves a truncated `args_delta`, which core's turn accumulator then fails to parse"
+
+That holds only when the cut lands mid-JSON. Two other cuts are reachable and land the opposite way:
+
+- `crates/paigasus-helikon-core/src/model.rs:521-527` normalizes blank/whitespace args to `{}`. A script `[ToolCallDelta{name:Some("get_balance"), args_delta:""}, ToolCallDelta{args_delta:"{}"}, Finish]` cancelled after event 1 produces a valid `Item::ToolCall { args: {} }`.
+- A script that sends complete JSON in one delta (entirely normal, and trivially what a hand-written `ScriptFile` does) cancelled after that delta also parses cleanly.
+
+In both cases `loop_state.rs:280-281` matches on `items.iter().any(ToolCall)` **regardless of `finish_reason`**, so the loop goes to `NextAction::ExecuteTools`: **a cancelled model stream still executes the tool, then calls the model again** (popping another script, or erroring as exhausted). The book tells a reader the opposite — that a mid-tool-call cancel fails the run — which is the safe-looking case. The genuinely surprising one (a side-effecting tool runs after cancellation) is undocumented.
+
+Failure scenario: a consumer writes a cancellation test against `MockModel` with a zero-arg or single-delta tool script, reads this paragraph, expects `RunFailed`, and instead gets a real tool invocation plus a script-exhaustion error — and concludes the mock is broken.
+
+Also note this paragraph is an expansion beyond spec §5, which prescribed "one sentence each" for README and book. The extra prose is the only inaccurate prose on the branch. Suggested replacement:
+
+&gt; Cancellation is a *model*-boundary event, not a run-level one: the loop treats the truncated turn as a complete turn. If the cut lands mid-JSON, `build_items` fails to parse the partial `args_delta` and the run fails with `invalid tool args for call_id=…` — matching what a real provider does when a connection drops mid-call, now reproducible deterministically. If the cut lands on a syntactically complete (or empty, hence normalized to `{}`) argument string, the tool call is well-formed and **the loop executes it**. Neither is specific to `MockModel`; both are what a real provider produces from the same cut.
+
+**I2. `crates/paigasus-helikon-runtime-tokio/src/retry.rs:547` — the branch introduces a direct self-contradiction it did not clean up.**
+
+Line 547 (untouched): `// A 1-hour backoff: the test would hang if cancellation didn't abort it.`
+Lines 558-562 (added by this branch): "…the scripted error is never observed and backoff is never entered."
+
+Eight lines apart, the file now asserts both that the test would hang in backoff and that it never reaches backoff. That is worse than the pre-branch state, where the stale comment at least stood alone.
+
+**This answers your item 4 directly: yes, the fix must correct the pre-existing comment.** And line 547 is wrong on three counts, not one: (a) `next_delay` returns `grown.min(max_delay)` with a default `max_delay` of 30s (`retry.rs:35`, `retry.rs:104-108`), so the delay would be 30s not an hour; (b) this test never computes a delay at all; (c) under `start_paused` a sleep never hangs regardless — the clock auto-advances.
+
+**Preferred fix — make the code true rather than the prose apologetic.** Add `.max_delay(Duration::from_secs(3600))` to *both* policies (line 548-550 and line 607-609). Then "1-hour backoff" is literally accurate, the whole 30s-cap footnote disappears, and nothing about either test's behavior changes (the 3600s sleep in `cancel_during_backoff_ends_stream` is still cancelled before any virtual time elapses).
+
+With that, the wording I'd use:
+
+`retry.rs:547` →
+```rust
+        // A 1-hour backoff (cap raised to match), so a backoff this test
+        // actually entered would be unmissable. It never enters one — see below.
+```
+
+`retry.rs:601-603` →
+```rust
+    /// `start_paused` makes tokio's clock virtual, so the hour-long backoff
+    /// costs no wall-clock time — and the exact length is immaterial anyway: a
+    /// paused clock only auto-advances when every task is idle, and
+    /// `yield_now` leaves this task ready, so no virtual time elapses before
+    /// `cancel()`. The drain is spawned so the token can be fired from this
+    /// task while the stream is parked.
+```
+
+If you'd rather not touch the policies, the minimum is to delete "the test would hang if cancellation didn't abort it" from line 547 and say the effective delay is the 30s cap in both places — but raising `max_delay` is strictly cleaner.
+
+---
+
+### Minor
+
+**M1. `retry.rs:605-635` — `cancel_during_backoff_ends_stream` cannot self-verify that it reached backoff.** In the degenerate scheduling where `cancel()` lands before the spawned task's first poll, the peek `select!` at `retry.rs:211-215` returns immediately and produces *identical* observables: `items.is_empty()` and `calls() == 1`. So the test's two assertions cannot distinguish the path it claims to cover from the path `cancellation_aborts_backoff_promptly` already covers — the same structural weakness this branch is fixing in that older test. Your mutation check proved the ordering held at that moment; nothing pins it. Cheap structural fix: replace `tokio::task::yield_now().await` (line 622) with `tokio::time::sleep(Duration::from_millis(1)).await`. Under a paused clock the main task parks, the drain is polled to the backoff park, auto-advance jumps to the *nearest* deadline (1 ms, not the backoff), and the cancel then provably fires while the stream is parked mid-sleep. Adjust the comment at 620-621 accordingly.
+
+**M2. `retry.rs:443` — `ScriptModel::invoke` binds `_cancel`, and that is now load-bearing.** `cancel_after_content_ends_stream_without_finish` only isolates `RetryingModel`'s forwarding-loop `select!` because the inner fake ignores the token. A future "make every fake contract-compliant" sweep would leave the test green while silently destroying its mutation-sensitivity. Worth one line at 443: `// Deliberately ignores the token: cancel_after_content_ends_stream_without_finish must observe the DECORATOR ending the stream, not the inner model.`
+
+**M3. Spec §6 (`…-design.md:261-266`) undercounts the touched packaged crates.** It names two (`evals`, `runtime-tokio`); the branch also touches `crates/paigasus-helikon/examples/langfuse_tracing.rs`, i.e. the facade itself, which has no `include`/`exclude` in its `Cargo.toml` so examples are packaged. **The §6 conclusion is nonetheless correct** — I checked `CLAUDE.md`'s two caveats and neither applies: no `paigasus-helikon-core` API is added or changed (the branch touches no core file at all), so there is no same-PR core bump and therefore no defeated `dependencies_update` cascade; no stub ascends. `evals` and `runtime-tokio` take path-attributed patch bumps, the facade takes one either way (direct `fix(facade)` attribution *and* the cascade — they coalesce into a single patch), and `cli` cascades off `evals`. No manual bump, no CHANGELOG edit. `cargo publish --verify` builds lib+bins, not examples, so the facade example carries no publish risk.
+
+**M4. `docs/book/src/concepts/model-providers.md:58-62` is the missed doc surface.** That page is the "write your own `Model`" reference and it restates the `Finish` MUST verbatim from the trait — but omits the very next contract sentence, the cancellation MUST that this entire ticket enforces. A third-party implementor reading that page gets no signal at all. One sentence appended to that bullet would close it, and this branch is the natural moment.
+
+**M5. `crates/paigasus-helikon-evals/tests/mock.rs:211` — `cancel_mid_tool_call_truncates_the_args` never asserts anything about args.** It asserts the first delta's content and that the rest is empty. The doc comment is honest about this; the name is not. `cancel_mid_tool_call_ends_stream` would match what it does.
+
+**M6. `retry.rs:545` — `cancellation_aborts_backoff_promptly` now carries a comment saying its name is a lie.** The spec consciously kept it (§4.2), which is defensible, but since the branch is already editing its body, renaming to e.g. `prefired_cancel_ends_stream_before_backoff` costs nothing and removes a permanent trap. Its `#[tokio::test(start_paused = true)]` is also now known-vestigial.
+
+**M7. `crates/paigasus-helikon/examples/langfuse_tracing.rs:96-100` uses UFCS** (`futures_util::StreamExt::take_while(stream, …)`) to avoid an import. As the copy-paste scaffold the spec argues it is, `use futures_util::StreamExt as _;` plus method syntax would read better. Pure nit.
+
+---
+
+### Things I specifically looked for and did **not** find
+
+- **Consumer breakage (item 2).** No consumer can be broken. `EvalRun` builds a fresh `RunContext::ephemeral` per case (`evals/src/run.rs:222`), so every case gets a never-fired token; `evals` has zero other references to cancellation. The CLI never constructs or fires a `CancellationToken` anywhere — `CliModel::Mock` is a pure delegator (`cli/src/model.rs:46`), and `helikon` installs no Ctrl-C handler. Crucially, `RunConfig::timeout` does **not** fire the token: `controlled()` (`runtime-tokio/src/lib.rs:53-71`) ends the *agent event* stream and records a `RunInterrupt`, it never calls `cancel()`. So no timeout-driven truncation is reachable either.
+- **`prefired_cancel_still_completes_ready_run` (`runtime-tokio/tests/run_control.rs:66`)** is unaffected — it uses the crate-local `MockModel` fake in `tests/common/mod.rs:20`, not `evals::MockModel`. §2.3's claim that the run-level outcome is unchanged is correct and I verified the mechanism end to end: empty stream → `build_items` emits no items (`core/src/model.rs:508`) → the no-tool-call arm at `loop_state.rs:352-402` → `RunCompleted` + `LoopState::Done` with empty content. `Ok(RunResult)`, final output `""`. (One unstated wrinkle: with a structured-output type configured, the empty turn routes to `Finalizing` and issues a *second* `invoke`, popping another script. Not cancellation-specific — any empty-text script does this — so not a finding, just noting I checked it.)
+- **Remaining shipped `Model` impls that ignore the token.** I swept all `impl Model for` sites and every `_cancel:` binding in the workspace. Post-branch, every surviving `_cancel` is in `tests/`, inside a `#[cfg(test)]` module (verified: `retry.rs:377`, `temporal/src/worker.rs:578`, `temporal/src/activities.rs:473`/`491`), or in a rustdoc example. Spec §1.1's four-bucket classification is accurate.
+- **`NoopModel` (`core/src/model.rs:29-47`) is correctly excluded** even though it sits directly above the MUST clause. It returns `Err(ModelError::Unavailable)` and never produces a stream, so there is nothing to terminate — `_cancel` is the right binding there. I checked this specifically because the branch's own argument for fixing `DemoModel` ("the scaffold a consumer copies") applies with more force to the trait's own doc example; it doesn't survive contact with the code.
+- **Contradiction or drift across the four doc surfaces (item 3).** None. The struct doc, `invoke` doc, README:53, and book:286-292 all state the same three rules in compatible language ("observed at each poll", "ends on the first fired observation", "without emitting `Finish`", "pre-cancelled still pops"). The struct doc omits the pre-cancelled rule and the `invoke` doc carries it — a division of labour, not drift. The only divergence is the extra book paragraph, which is I1.
+- **Tests passing against a subtly wrong implementation (item 7).** I enumerated the plausible wrong impls: capture `is_cancelled()` once at `invoke` time (caught by `cancel_mid_stream_ends_without_finish`); yield `Err` instead of ending (caught — the drain loops `.unwrap()` and would panic); skip the pop when pre-cancelled or return `Err` (caught by `pre_cancelled_invoke_is_empty_and_still_pops`, which is the only test the fresh-token detail makes writable); drop the trailing `Finish` unconditionally (caught by `uncancelled_invoke_yields_full_script`, the guard the spec correctly argued nothing else in the repo provides). The two impls the tests genuinely cannot distinguish are `filter` instead of `take_while`, and the check-before-pull `unfold` variant — both are observationally identical here because a `CancellationToken` cannot be un-cancelled and a dropped `ModelEvent` has no side effect, which is exactly what spec §3 argues. No real hole.
+- **`docs/book/src/reference/crates.md:39` (item 6): I agree the skip was right, and the evidence is stronger than the spec claims.** The staleness is systemic, not evals-specific — `runtime-tokio` reads `0.1.20` vs an actual `0.1.21`, `mcp` `0.1.19` vs `0.1.20`, `tools` `0.2.13` vs `0.2.14`, `cli` `0.1.13` vs an actual `0.1.17` (four releases behind). Hand-patching one row would leave a table that looks maintained and isn't. Raise it as its own ticket; ideally one that makes the column generated or deletes it.
+- **Everything else that mentions `MockModel`** (`README.md:50`, `book/introduction.md:17`, `reference/api-docs.md:19`, `getting-started/workspace-layout.md:36,70`, `evals/src/lib.rs:21`) is a one-line roster entry needing no behavioral edit.
+- **PR-title mechanics** are clear: `evals` is already in `pr-title.yml`'s `scopes` list on `main` (line 50), so `fix(evals): SMA-563 honor the cancellation token in mockmodel` satisfies both rules.
+
+---
+
+### Verdict
+
+**Merge, after fixing I2** — the self-contradicting comment at `retry.rs:547` is introduced by this branch and should not reach `main`. **I1** should go in the same push; it is the only inaccurate user-facing prose on the branch and it is on a published book page. M1–M7 are all optional, though M1 and M2 are cheap and protect the two tests whose value rests entirely on mutation-sensitivity.
+
+The core change is correct, minimal, and matches spec §3 verbatim; the acceptance criteria are met and genuinely pinned; the blast radius is nil (no consumer in the workspace can reach a fired token through `MockModel`); and the release mechanics need no manual intervention.</result>
+<usage><subagent_tokens>130420</subagent_tokens><tool_uses>39</tool_uses><duration_ms>433059</duration_ms></usage>
+</task-notification>
