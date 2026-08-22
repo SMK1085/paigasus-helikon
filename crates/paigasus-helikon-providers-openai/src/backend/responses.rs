@@ -288,10 +288,15 @@ impl ResponsesTranslator {
     /// - `status: Some(Incomplete)` — a truncated turn's `arguments` is a
     ///   partial JSON string, and emitting it would fail the whole turn in
     ///   `ModelTurnAccumulator::finish` rather than dropping one call; checked
-    ///   before registering into `item_to_call` so an incomplete item never
-    ///   makes `has_tool_calls` true while emitting nothing (that combination
-    ///   is exactly the `Finish { ToolCalls }`-with-no-`ToolCallDelta` defect
-    ///   this method exists to remove);
+    ///   before *this method* registers into `item_to_call`, so this method
+    ///   itself never causes an incomplete item to make `has_tool_calls`
+    ///   true while emitting nothing. It does not follow that an incomplete
+    ///   item can never reach that state overall: `item_to_call` has a
+    ///   second, unconditional writer (`ResponseOutputItemAdded`), so an item
+    ///   already registered there before it is later seen as `Incomplete`
+    ///   here is untouched by this guard. The `response.completed` arm's
+    ///   `has_tool_calls` accordingly reads `name_emitted`, not
+    ///   `item_to_call`, to stay correct against that writer;
     /// - a call already emitted, per `name_emitted`.
     ///
     /// Emits no `Usage`, so SMA-522's ordering invariant is untouched.
@@ -494,6 +499,22 @@ impl ResponsesTranslator {
             //
             // `terminal_events` stays the sole constructor of `Usage` and
             // still appends `Finish` last (SMA-522).
+            //
+            // `has_tool_calls` is `!name_emitted.is_empty()` — deliberately
+            // NOT `!item_to_call.is_empty()` — evaluated AFTER the sweep
+            // above. `item_to_call` has a second, unconditional writer
+            // (`ResponseOutputItemAdded`, which must register every item with
+            // an `id` so the delta path has a correlator to look up), so it
+            // can be non-empty for an item that was never, and will never be,
+            // emitted (skipped as `Incomplete`, or simply absent from
+            // `response.output`). `name_emitted` has no such writer: every
+            // insertion into it is paired, in the same branch, with the
+            // `ToolCallDelta` that names the call. Reading it after the sweep
+            // is not the alternative spec §4.5 rejects (gating on
+            // `name_emitted` INSTEAD OF reconciling, which would silently
+            // drop a call the API described) — by this point reconciliation
+            // has already run to completion, so `name_emitted` reflects
+            // everything emittable.
             ResponseStreamEvent::ResponseCompleted(e) => {
                 let mut out: Vec<ModelEvent> = e
                     .response
@@ -505,14 +526,15 @@ impl ResponsesTranslator {
                     tracing::warn!(
                         target: "paigasus::openai::responses",
                         orphans = self.pending_args.len(),
-                        "argument deltas were buffered for item_ids that never resolved; dropping"
+                        "argument deltas remained buffered for item_ids that never resolved \
+                         (no matching function_call in response.output); they are not emitted"
                     );
                 }
                 out.extend(terminal_events(
                     e.response.usage,
                     e.response.status,
                     None,
-                    !self.item_to_call.is_empty(),
+                    !self.name_emitted.is_empty(),
                 ));
                 Ok(out)
             }
@@ -1134,6 +1156,13 @@ mod tests {
     /// that until now. The cross-provider conformance suite enforces the same
     /// "exactly one named delta per call_id" rule, where a regression would
     /// surface with no unit-level signal.
+    ///
+    /// A gets no `done` event — its only emission path is the `completed`
+    /// sweep. B keeps its `done` event so the test still guards the ordinary
+    /// path alongside the reconciliation path. (Controller finding 2, Task 2
+    /// review: with both calls carrying a `done`, this test still passed
+    /// with the entire sweep deleted — it wasn't exercising the code under
+    /// test.)
     #[test]
     fn parallel_calls_emit_one_named_delta_each() {
         let mut t = ResponsesTranslator::new();
@@ -1149,15 +1178,6 @@ mod tests {
         );
         // Only B streams arguments.
         all.extend(t.consume(delta_event("fc_b", "{}")).unwrap());
-        all.extend(
-            t.consume(done_event(
-                "fc_a",
-                "call_a",
-                "get_weather",
-                "{\"city\":\"Rome\"}",
-            ))
-            .unwrap(),
-        );
         all.extend(
             t.consume(done_event("fc_b", "call_b", "get_time", "{}"))
                 .unwrap(),
@@ -1190,8 +1210,9 @@ mod tests {
             "expected exactly one named delta per call_id, got {all:?}"
         );
 
-        // Args must be attributed to the right call, and A's must not be
-        // double-counted between its `done` and the terminal reconciliation.
+        // Args must be attributed to the right call: A is emitted exactly
+        // once, entirely by the terminal reconciliation sweep (it has no
+        // `done` event to double-count against).
         let a_args: String = all
             .iter()
             .filter_map(|e| match e {
@@ -1207,16 +1228,28 @@ mod tests {
     }
 
     /// §4.3 on the terminal path: an incomplete item in `response.output` must
-    /// not be emitted, because its `arguments` may be truncated JSON. Also
-    /// asserts the two consequences of skipping registration (controller
-    /// ruling on this task's brief): a turn whose only item is incomplete
-    /// must terminate `Stop`, not `ToolCalls`, and `item_to_call` must stay
-    /// empty. Asserting only "no delta" would pass even if the item wrongly
-    /// registered and the turn wrongly claimed `ToolCalls` — the same
-    /// mutation-blind gap Task 1's review caught.
+    /// not be emitted, because its `arguments` may be truncated JSON.
+    ///
+    /// Drives `output_item.added` for the same item id before the incomplete
+    /// `completed` — the realistic stream shape (an item is always added
+    /// before it terminates), and the shape the Task 2 review used to break
+    /// the pre-fix code: `added` registers `fc_1` into `item_to_call`
+    /// unconditionally (it must, so the delta path has a correlator), so a
+    /// `has_tool_calls` check reading `item_to_call` would see a non-empty
+    /// map and wrongly report `ToolCalls` even though nothing was ever
+    /// emitted. Asserting only "no delta" would pass even under that defect
+    /// — the same mutation-blind gap Task 1's review caught. `name_emitted`,
+    /// not `item_to_call`, is what must stay empty: it is only ever
+    /// populated in the same step as the `ToolCallDelta` that names a call,
+    /// so it correctly reflects that nothing was emitted.
     #[test]
     fn completed_skips_incomplete_output_item() {
         let mut t = ResponsesTranslator::new();
+
+        assert!(t
+            .consume(added_event("fc_1", "call_1", "get_weather"))
+            .unwrap()
+            .is_empty());
 
         let evs = t
             .consume(completed_event(
@@ -1237,11 +1270,50 @@ mod tests {
                     reason: FinishReason::Stop
                 })
             ),
-            "an incomplete-only turn must report Stop, not ToolCalls; got {evs:?}"
+            "an incomplete-only turn must report Stop, not ToolCalls, even though a prior \
+             `added` event already registered the item into item_to_call; got {evs:?}"
         );
         assert!(
-            t.item_to_call.is_empty(),
-            "an incomplete item must not register into item_to_call"
+            t.name_emitted.is_empty(),
+            "an incomplete item must never be marked as emitted"
+        );
+    }
+
+    /// Regression for controller finding 1 (Task 2 review): `has_tool_calls`
+    /// must read `name_emitted`, not `item_to_call`, evaluated after the
+    /// reconciliation sweep. `output_item.added` registers `fc_1` into
+    /// `item_to_call` unconditionally, but the call never appears in
+    /// `response.output` (a truncated/empty `output` array) and is therefore
+    /// never emitted by the sweep either. Gating on
+    /// `!item_to_call.is_empty()` would still report `Finish { ToolCalls }`
+    /// here with zero `ToolCallDelta`s — the exact defect this ticket exists
+    /// to remove, reachable through a second path this task's original tests
+    /// did not cover.
+    #[test]
+    fn added_then_completed_omitting_the_call_reports_stop() {
+        let mut t = ResponsesTranslator::new();
+
+        assert!(t
+            .consume(added_event("fc_1", "call_1", "get_weather"))
+            .unwrap()
+            .is_empty());
+
+        let evs = t.consume(completed_event("[]")).unwrap();
+
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
+            "no call was ever described in response.output nor emitted; got {evs:?}"
+        );
+        assert!(
+            matches!(
+                evs.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::Stop
+                })
+            ),
+            "a call registered by `added` but omitted from response.output must report Stop, \
+             not ToolCalls; got {evs:?}"
         );
     }
 }
