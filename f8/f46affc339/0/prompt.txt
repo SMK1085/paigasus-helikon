@@ -870,3 +870,7 @@ check whether we need to rebase
 <status>completed</status>
 <summary>Background command "Wait full reset window, then trigger CodeRabbit once" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+it's only a minor docs change, fix it, then push, wait for CI to go green then merge and cleanup. don't wait for Coderabbit
