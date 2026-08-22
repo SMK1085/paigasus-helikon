@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.18](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.17...paigasus-helikon-core-v0.5.18) - 2026-08-22
+
+### Fixed
+
+- *(providers)* SMA-533 add a cross-provider stream conformance suite and fix the responses finish reason ([#211](https://github.com/SMK1085/paigasus-helikon/pull/211))
+
 ## [0.5.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.16...paigasus-helikon-core-v0.5.17) - 2026-08-16
 
 ### Added
