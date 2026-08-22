@@ -440,6 +440,8 @@ mod decorator_tests {
         async fn invoke(
             &self,
             _request: ModelRequest,
+            // Deliberately ignores the token: cancel_after_content_ends_stream_without_finish
+            // must observe the DECORATOR ending the stream, not the inner model.
             _cancel: CancellationToken,
         ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
             let idx = self.calls.fetch_add(1, Ordering::SeqCst);
@@ -542,11 +544,13 @@ mod decorator_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn cancellation_aborts_backoff_promptly() {
+    async fn prefired_cancel_ends_stream_before_backoff() {
         let model = ScriptModel::new(vec![Resp::ErrFirst(ModelError::Unavailable), Resp::Ok]);
-        // A 1-hour backoff: the test would hang if cancellation didn't abort it.
+        // A 1-hour backoff (cap raised to match), so a backoff this test
+        // actually entered would be unmissable. It never enters one — see below.
         let policy = RetryPolicy::new()
             .base_delay(Duration::from_secs(3600))
+            .max_delay(Duration::from_secs(3600))
             .jitter(false);
         let cancel = CancellationToken::new();
         let retrying = RetryingModel::shared(Arc::clone(&model), policy);
@@ -596,7 +600,7 @@ mod decorator_tests {
 
     /// The one `RetryingModel` cancellation path with real latency: parked in
     /// `backoff()` between attempts. Untested before SMA-563 — the test named
-    /// `cancellation_aborts_backoff_promptly` never reaches backoff at all.
+    /// `prefired_cancel_ends_stream_before_backoff` never reaches backoff at all.
     ///
     /// `start_paused` makes tokio's clock virtual, so the hour-long delay costs
     /// no wall-clock time; the drain is spawned so the token can be fired from
@@ -606,6 +610,7 @@ mod decorator_tests {
         let model = ScriptModel::new(vec![Resp::ErrFirst(ModelError::Unavailable), Resp::Ok]);
         let policy = RetryPolicy::new()
             .base_delay(Duration::from_secs(3600))
+            .max_delay(Duration::from_secs(3600))
             .jitter(false);
         let cancel = CancellationToken::new();
         let retrying = RetryingModel::shared(Arc::clone(&model), policy);
@@ -617,9 +622,12 @@ mod decorator_tests {
         let handle = tokio::spawn(drain(stream));
 
         // Let the spawned task run: attempt #1 fails and parks in `backoff()`.
-        // `yield_now` under a paused clock hands over without advancing time,
-        // so the 1-hour sleep cannot elapse and mask the cancellation.
-        tokio::task::yield_now().await;
+        // A real (paused-clock) sleep parks the main task instead of merely
+        // yielding, so the drain is polled through to its backoff park before
+        // we proceed; auto-advance then jumps to the NEAREST deadline (this
+        // 1ms sleep, not the 1-hour backoff), proving cancel() fires while the
+        // stream is genuinely parked mid-sleep rather than by scheduling luck.
+        tokio::time::sleep(Duration::from_millis(1)).await;
         cancel.cancel();
 
         let items = handle.await.unwrap();

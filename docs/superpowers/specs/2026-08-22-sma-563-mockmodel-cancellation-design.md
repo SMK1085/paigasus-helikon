@@ -258,12 +258,15 @@ than patched blind here.
 
 ## 6. Release mechanics
 
-A `fix(evals)` change touching packaged files in **two** crates:
-`crates/paigasus-helikon-evals/**` and `crates/paigasus-helikon-runtime-tokio/src/retry.rs`
-(the retry tests are inline in a packaged source file). release-plz attributes bumps by file
-path, so both take a patch bump and the facade cascades. All automatic — no core API is
+A `fix(evals)` change touching packaged files in **three** crates:
+`crates/paigasus-helikon-evals/**`, `crates/paigasus-helikon-runtime-tokio/src/retry.rs`
+(the retry tests are inline in a packaged source file), and
+`crates/paigasus-helikon/examples/langfuse_tracing.rs` (the facade's `Cargo.toml` has no
+`include`/`exclude`, so examples are packaged too). release-plz attributes bumps by file
+path, so all three take a patch bump and the facade cascades. All automatic — no core API is
 added, so none of `CLAUDE.md`'s manual-bump caveats apply: no stub ascend, no same-PR core
-bump, no manual facade bump.
+bump, no manual facade bump — and `cargo publish --verify` builds lib+bins, not examples, so
+the example carries no publish risk.
 
 ## 7. Non-goals
 

@@ -291,10 +291,14 @@ which is all a synchronous scripted stream can offer. An `invoke` called with
 an already-cancelled token yields an empty stream but still consumes its
 script, so "one script per `invoke`" holds regardless of cancellation timing.
 
-Cancelling part-way through a tool call leaves a truncated `args_delta`, which
-core's turn accumulator then fails to parse — matching what a real provider
-does when a connection drops mid-call. That is the point: it is now
-reproducible deterministically.
+Cancellation is a *model*-boundary event, not a run-level one: the loop treats
+the truncated turn as a complete turn. If the cut lands mid-JSON, `build_items`
+fails to parse the partial `args_delta` and the run fails with `invalid tool
+args for call_id=…` — matching what a real provider does when a connection
+drops mid-call, now reproducible deterministically. If the cut lands on a
+syntactically complete (or empty, hence normalized to `{}`) argument string,
+the tool call is well-formed and **the loop executes it**. Neither is specific
+to `MockModel`; both are what a real provider produces from the same cut.
 
 ### `EvalRun`
 
