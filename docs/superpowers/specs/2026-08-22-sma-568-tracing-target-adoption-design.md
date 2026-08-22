@@ -1,0 +1,800 @@
+# SMA-568 — Adopt `paigasus::*` tracing targets in `core` and the runtime crates
+
+Status: proposed
+Ticket: [SMA-568](https://linear.app/smaschek/issue/SMA-568)
+Predecessor: [SMA-557](https://linear.app/smaschek/issue/SMA-557) —
+`docs/superpowers/specs/2026-08-20-sma-557-tracing-target-namespace-design.md`
+
+SMA-557 documented the `paigasus::<component>::<subsystem>` tracing namespace
+and deliberately changed no call site, filing the adoption question as
+follow-up. This is that follow-up. It answers **yes**, names the components,
+resolves `runtime-temporal`'s split personality, and adds the enforcement that
+keeps the answer true.
+
+---
+
+## 1. Problem
+
+### 1.1 Inventory, re-measured
+
+Measured against `main@b6679108` by walking every `tracing` macro invocation
+under `crates/*/src/**.rs` with a delimiter-aware parser (not a line regex —
+provider call sites put `target:` on the line *after* the macro, which a naive
+per-line grep misclassifies as untargeted). Comment-only lines excluded.
+
+| Crate | Targeted | Untargeted |
+|---|---:|---:|
+| `providers-openai` | 12 | 0 |
+| `providers-anthropic` | 8 | 0 |
+| `providers-bedrock` | 14 | 0 |
+| `providers-gemini` | 3 | 0 |
+| `providers-litellm` | 18 | 0 |
+| `core` | 0 | 12 |
+| `runtime-tokio` | 0 | 2 |
+| `runtime-temporal` | 1 | 3 |
+| `runtime-axum` | 0 | 7 |
+| `runtime-actix` | 0 | 6 |
+| `runtime-agentcore` | 0 | 11 |
+| **Total** | **56** | **41** |
+
+97 sites. This reproduces SMA-557's numbers exactly.
+
+`mcp`, `tools`, `sessions-*`, `evals`, `cli`, `macros` and the facade contain
+zero `tracing` call sites. There is no `#[tracing::instrument]` anywhere under
+`crates/`. Four `core` modules import `tracing::Instrument` to attach an
+*existing* span to a future (`agent.rs`, `workflow.rs`, `graph.rs`, `swarm.rs`);
+that creates no new target.
+
+**Every invocation in the workspace is written `tracing::<macro>!`** — fully
+qualified, no bare `warn!` reached through `use tracing::warn;`, no aliases.
+Verified by grep for the bare forms, which returns nothing under `crates/*/src`.
+This matters for §4: the coverage guard must still *handle* the bare and alias
+forms, because the existing walker does and a future contributor may write one,
+but nothing in the workspace exercises them today.
+
+The sole non-`src` user of a `tracing` macro anywhere under `crates/` is
+`crates/paigasus-helikon-providers-anthropic/tests/live.rs`. §4.2 scopes the
+guard so this stays out of it.
+
+### 1.2 The split this creates
+
+Two namespaces describe one SDK:
+
+- `paigasus::<component>::<subsystem>` — hand-chosen, 56 sites, all five
+  providers plus one stray site in `runtime-temporal`.
+- `paigasus_helikon_*::…` — Rust module paths, the `tracing` default, 41 sites,
+  all of `core` and the runtimes.
+
+The consequences the ticket names:
+
+1. **The trace tree is on the wrong side.** The four `tracing::info_span!` sites
+   in `core` are the only span macros in the workspace, and they produce exactly
+   the `agent.run` → `agent.turn` → `gen_ai.chat` / `tool.execute` tree the book
+   teaches in `docs/book/src/concepts/observability-evaluation.md`. An operator
+   selects them with `paigasus_helikon_core`, a different namespace from
+   everything else that chapter documents.
+2. **`paigasus::` does not mean "Helikon".** It means "the providers, and one
+   line in the Temporal runtime".
+3. **`runtime-temporal` is incoherent** — 1 site in the curated namespace, 3 on
+   module paths, in the same crate.
+
+### 1.3 The constraint every answer must respect
+
+`EnvFilter` matches a directive against a target by **raw string prefix, not by
+`::` segment**. SMA-557 verified this by execution:
+
+- `paigasus=debug` matches `paigasus_helikon_core::session` **and**
+  `paigasus::openai::chat`.
+- `paigasus::=debug` (trailing `::`) selects the curated namespace only.
+- `paigasus::openai=debug` would also match a hypothetical
+  `paigasus::openai_compat::chat`.
+
+§7.1 promotes this from a hand-verified REPL fact to a regression test.
+
+### 1.4 What SMA-557 already decided — not relitigated here
+
+- **D1 two-tier stability.** `paigasus::` and `paigasus::<component>` are
+  stable for components marked *stable*; renaming one is a breaking change made
+  through a `BREAKING CHANGE:` footer. The `::<subsystem>` leaf is an
+  implementation detail, free to change in any release.
+- **D1(b) no-prefix-collision**, namespace-wide, binding *provisional*
+  components too, because a collision silently widens an already-deployed
+  filter.
+- **D3 doc-drift guard.** `tests/workspace-lints/tests/tracing_target_docs.rs`
+  asserts the set of components in source equals the set in the book's marked
+  region, and rejects prefix collisions. It ignores the Status column.
+- The D1 guarantee **begins with the SMA-557 document** and is not retroactive.
+
+### 1.5 What SMA-557 explicitly left open — decided here
+
+> "Nothing asserts that a target string matches the
+> `paigasus::<component>::<subsystem>` shape, that a subsystem is named
+> sensibly, or that a component is spelled a particular way — the ticket says
+> that remains a separate decision."
+
+§4 is that decision.
+
+---
+
+## 2. Decisions
+
+### D1 — Adopt, fully
+
+**Every `tracing` call site under `crates/*/src` carries an explicit
+`target: "paigasus::<component>::<subsystem>"`.** All 41 untargeted sites are
+converted. After this ticket, `paigasus::` means *all Helikon events*, with no
+exception to document.
+
+`runtime-temporal`'s split personality resolves **by addition** — its other
+three sites gain targets — not by deleting `paigasus::temporal::activities`.
+
+Rejected alternatives:
+
+- ***Core only,*** leaving the runtimes on module paths and deleting
+  `temporal`'s lone site. Smaller blast radius, and defensible on the grounds
+  that runtimes are adapters rather than the SDK proper. Rejected because
+  `paigasus::` still would not mean "everything", so the book would still carry
+  a "what is not in this namespace" section — the exact shape of the problem
+  this ticket exists to remove, merely smaller.
+- ***Decline,*** keeping module paths and removing `temporal`'s site.
+  Module paths never drift, need no contract, and need no guard. Rejected
+  because it leaves the highest-value events — the trace tree the observability
+  chapter is *about* — selectable only through a namespace that chapter
+  otherwise never mentions.
+- ***Adopt everywhere except `core`'s four `info_span!` sites,*** so the
+  documented `paigasus_helikon_core=debug` recipe keeps working. Rejected: it
+  buys backwards compatibility by putting a deliberate hole in the middle of the
+  namespace, and the hole is precisely the part operators most want to select.
+
+### D2 — Component names: bare `core`, `runtime_`-prefixed adapters
+
+Eleven components, **all marked `stable`**:
+
+| Component | Crate | Change |
+|---|---|---|
+| `openai` | `paigasus-helikon-providers-openai` | unchanged |
+| `anthropic` | `paigasus-helikon-providers-anthropic` | unchanged |
+| `bedrock` | `paigasus-helikon-providers-bedrock` | unchanged |
+| `gemini` | `paigasus-helikon-providers-gemini` | unchanged |
+| `litellm` | `paigasus-helikon-providers-litellm` | unchanged |
+| `core` | `paigasus-helikon-core` | **new** |
+| `runtime_tokio` | `paigasus-helikon-runtime-tokio` | **new** |
+| `runtime_axum` | `paigasus-helikon-runtime-axum` | **new** |
+| `runtime_actix` | `paigasus-helikon-runtime-actix` | **new** |
+| `runtime_agentcore` | `paigasus-helikon-runtime-agentcore` | **new** |
+| `runtime_temporal` | `paigasus-helikon-runtime-temporal` | **renamed** from `temporal`; `provisional` → `stable` |
+
+**Prefix-collision check, exhaustive over the eleven.** No name is a prefix of
+any other in either direction. The near misses:
+
+- `runtime_axum` / `runtime_actix` / `runtime_agentcore` share the prefix
+  `runtime_a`, which is not itself a component. None is a prefix of another
+  (`ax`/`ac` diverge at position 9; `actix` and `agentcore` diverge at
+  position 10).
+- `runtime_temporal` / `runtime_tokio` share `runtime_t`, diverging at
+  position 10.
+- `core` is not a prefix of, nor prefixed by, anything — note in particular
+  that it does *not* collide with `runtime_agentcore`, since prefix matching
+  anchors at the start of the string.
+
+**Renaming `temporal` → `runtime_temporal` is permitted without a breaking
+change** under SMA-557 D1: `temporal` is marked *provisional*, which "carries
+none of this" and "may be renamed or removed in any release". It is nonetheless
+covered by the announcement in D4, because provisional-ness is a licence, not a
+reason to be quiet.
+
+Rejected alternatives:
+
+- ***Bare crate names*** (`core`, `tokio`, `axum`, `actix`, `agentcore`,
+  `temporal`). Matches the provider precedent most closely — component = crate,
+  one word. Rejected on two counts. First, `agentcore` permanently burns
+  `agent` as a future component name, since `agent` would be a prefix of it, and
+  `agent` is the most natural name for the loop that is the SDK's centrepiece.
+  Second, it forgoes the group selector below.
+- ***A single `runtime` component*** with the backend as the subsystem
+  (`paigasus::runtime::axum`). Only two new components, the smallest contract
+  surface. Rejected because per-runtime selection would drop to a three-segment
+  form, which D1 declares free to change in any release — so an operator
+  running two backends could not build a durable "all axum events" filter, which
+  is a realistic and reasonable thing to want.
+
+### D3 — `paigasus::runtime` is a guaranteed group selector
+
+Because matching is raw-prefix, `paigasus::runtime` selects every runtime
+adapter at once. D2's naming makes this true; **this decision makes it
+promised**, and documents it in the book alongside the other forms.
+
+This costs nothing to protect. It holds as long as no component is named
+exactly `runtime` and every runtime component is named `runtime_*`. The first is
+already mechanical: SMA-557's D3 guard rejects any component that is a prefix of
+another, so a component named `runtime` would redden CI against all five
+existing `runtime_*` names. The second is a naming convention stated in the book
+and applied at review time.
+
+It is a **1.5-segment form** — `paigasus::runtime` is a prefix of five
+components rather than being one — so the book must present it as its own row
+rather than folding it into D1's segment-count table, which counts whole
+components.
+
+### D4 — Announce it as breaking, with a migration table
+
+Strictly, nothing under contract breaks. Module-path targets were never
+promised, and `paigasus::temporal` is *provisional*. Both technicalities are
+true and neither helps an operator whose dashboard filter silently went quiet.
+
+The SMA-557 book page publishes
+
+```
+RUST_LOG='warn,paigasus_helikon_core=debug'
+```
+
+as *the* recipe for selecting the agent trace tree. This ticket stops it
+matching, one release later. Announcing that through the mechanism the repo
+already has for "a consumer must see this" is the honest call.
+
+**Mechanism.** The breaking marker is carried **two ways**, because a
+squash-merge is what release-plz actually parses and the PR title is what
+becomes the squashed subject:
+
+- `!` in the PR title — `feat(core)!: SMA-568 …`.
+- A `BREAKING CHANGE:` footer on the branch commits that touch published
+  crates.
+
+release-plz maps either to a **minor** bump on a 0.x crate, so `core` and the
+four affected runtimes each take a minor bump and each CHANGELOG records the
+change; the facade cascades. `runtime-actix`, `runtime-axum`,
+`runtime-agentcore`, `runtime-tokio` and `runtime-temporal` are all already
+published, so **no manual version bump is performed in this PR** — see §6.
+
+Rejected alternatives:
+
+- ***Book migration section only,*** ordinary `feat(…)` commits, patch bumps.
+  Faithful to the letter of the contract. Rejected: an operator who reads
+  CHANGELOGs and not the book gets no warning at all.
+- ***Ship the six new components `provisional`*** and promote later. Maximally
+  cautious. Rejected because it withholds the exact thing the ticket is meant
+  to deliver — a durable filtering surface — and manufactures another follow-up
+  to close.
+
+### D5 — Coverage and shape enforcement
+
+A new test asserts, over `crates/*/src/**.rs`:
+
+- **Coverage** — every `tracing` macro invocation carries an explicit
+  `target:`.
+- **Shape** — every target is exactly `paigasus::<component>::<subsystem>`,
+  three `[a-z0-9_]+` segments.
+
+Rationale: without it, the namespace decays on the first bare `tracing::warn!`
+a contributor adds. That event lands on a module path and escapes every
+`paigasus::` filter — silently, with the build green — which is the precise
+failure mode this ticket exists to end, reintroduced one commit at a time.
+Coverage is what makes "`paigasus::` is complete" true *by construction* rather
+than by vigilance.
+
+It is satisfiable today: the six crates with zero call sites impose no work, and
+the 97 sites are all converted by this ticket.
+
+Relying on convention alone was rejected on precedent. CLAUDE.md already
+requires updating the book in the same PR as any user-facing change, and that is
+exactly the mechanism that failed for the book itself — 13 of 17 pages sat as
+stubs through all of Stage 1 until the SMA-423 catch-up.
+
+Rejected alternative: ***shape guard only***, validating existing `paigasus::`
+strings without requiring coverage. Catches typos; does not stop a new
+untargeted site from escaping. Half the value for nearly all the work, since the
+scanner and test harness are the same either way.
+
+---
+
+## 3. The target map
+
+The component tier is stable (D2); **the subsystem tier below is not** — D1
+declares leaves free to change, so this table is the state at merge, not a
+contract. Subsystems mirror the module the site lives in, except where a module
+name would be less informative than the concern it serves.
+
+### 3.1 `core` — 12 sites
+
+| Target | File:line | Macro |
+|---|---|---|
+| `paigasus::core::agent` | `agent.rs:547` | `info_span!` `execute_tool` |
+| `paigasus::core::agent` | `agent.rs:734` | `info_span!` `invoke_agent` |
+| `paigasus::core::agent` | `agent.rs:858` | `info_span!` `agent.turn` |
+| `paigasus::core::agent` | `agent.rs:918` | `info_span!` `chat` |
+| `paigasus::core::workflow` | `workflow.rs:51` | `info_span!` `invoke_agent` |
+| `paigasus::core::session` | `session.rs:368` | `warn!` |
+| `paigasus::core::session` | `session.rs:373` | `warn!` |
+| `paigasus::core::session` | `session.rs:459` | `debug!` |
+| `paigasus::core::compaction` | `compacting_session.rs:204` | `warn!` |
+| `paigasus::core::compaction` | `compacting_session.rs:210` | `warn!` |
+| `paigasus::core::permissions` | `path_match.rs:144` | `warn!` |
+| `paigasus::core::permissions` | `path_match.rs:150` | `warn!` |
+
+`path_match.rs` is documented in its own module header as "lexical path matching
+for permission path-rules", so `permissions` names the concern more usefully than
+`path_match` names the file.
+
+**A side effect worth stating.** The book currently warns that filtering on
+`paigasus_helikon_core::agent` silently misses the multi-agent run's top-level
+span, which is raised in `workflow.rs`, and tells the reader to use
+`paigasus_helikon_core` to catch both. Under this map the correct filter is
+`paigasus::core` — which is also the *stable two-segment form* D1 recommends for
+anything durable. The right answer and the durable answer become the same
+string.
+
+### 3.2 `runtime_tokio` — 2 sites
+
+| Target | File:line |
+|---|---|
+| `paigasus::runtime_tokio::runner` | `lib.rs:108` |
+| `paigasus::runtime_tokio::retry` | `retry.rs:236` |
+
+### 3.3 `runtime_temporal` — 4 sites
+
+| Target | File:line | Note |
+|---|---|---|
+| `paigasus::runtime_temporal::activities` | `activities.rs:351` | existing site; component segment renamed |
+| `paigasus::runtime_temporal::activity_input` | `activity_input.rs:106` | new |
+| `paigasus::runtime_temporal::worker` | `worker.rs:489` | new |
+| `paigasus::runtime_temporal::runner` | `runner.rs:356` | new |
+
+### 3.4 `runtime_axum` — 7 sites
+
+| Target | File:line |
+|---|---|
+| `paigasus::runtime_axum::registry` | `registry.rs:80`, `:187`, `:308`, `:392` |
+| `paigasus::runtime_axum::error` | `error.rs:116`, `:125` |
+| `paigasus::runtime_axum::runs` | `handlers/runs.rs:349` |
+
+### 3.5 `runtime_actix` — 6 sites
+
+| Target | File:line |
+|---|---|
+| `paigasus::runtime_actix::registry` | `registry.rs:79`, `:187`, `:308` |
+| `paigasus::runtime_actix::error` | `error.rs:112`, `:121` |
+| `paigasus::runtime_actix::runs` | `handlers/runs.rs:399` |
+
+### 3.6 `runtime_agentcore` — 11 sites
+
+| Target | File:line |
+|---|---|
+| `paigasus::runtime_agentcore::server` | `server.rs:405` |
+| `paigasus::runtime_agentcore::invoke` | `invoke.rs:247`, `:258` |
+| `paigasus::runtime_agentcore::mcp` | `mcp.rs:144` |
+| `paigasus::runtime_agentcore::a2a` | `a2a/mod.rs:59`, `a2a/rpc.rs:203`, `:610`, `:623`, `:657`, `a2a/store.rs:331` |
+| `paigasus::runtime_agentcore::agui` | `agui/mod.rs:68` |
+
+Six sites under `a2a/` share one subsystem rather than splitting into
+`a2a_rpc` / `a2a_store`: the operator question is "what is the A2A surface
+doing", and a leaf split would not answer a different one.
+
+### 3.7 Line numbers are a snapshot
+
+The line numbers above are against `main@b6679108` and will drift as edits land
+within a file. They are navigation aids for the implementer, not assertions —
+nothing in §4 or §7 asserts a line number.
+
+---
+
+## 4. The coverage-and-shape guard
+
+New test file: `tests/workspace-lints/tests/tracing_target_coverage.rs`, in the
+existing internal `paigasus-helikon-workspace-lints` member (`0.0.0`,
+`publish = false`).
+
+### 4.1 Built on the existing walker, not a new regex
+
+`tests/workspace-lints/src/lib.rs` already contains a delimiter-aware argument
+walker built for SMA-543: it masks comments and string literals before scanning,
+recognises all three macro delimiters (`(`, `[`, `{`), matches a macro by its
+**final path segment** so `tracing::warn!`, `crate::obs::warn!` and a bare
+`warn!` reached through `use tracing::warn;` all count, resolves
+`use tracing::warn as w;` aliases, and surfaces a delimiter mismatch as a
+`MismatchedDelimiter` value the caller can attribute to a file.
+
+Reimplementing any of that with a line regex would reproduce the exact defect
+§1.1 describes — provider sites put `target:` on a later line, so a per-line
+check reads a correctly-targeted site as untargeted.
+
+Two new public functions in that crate, reusing the same masking and walking:
+
+```rust
+/// One `tracing` macro invocation carrying no `target:` argument.
+pub struct Untargeted { pub line: usize, pub macro_name: String }
+
+/// Every `tracing` macro invocation in `src` with no `target:` argument.
+pub fn scan_untargeted(src: &str) -> Result<Vec<Untargeted>, MismatchedDelimiter>;
+
+/// Every string literal passed as `target:` to a `tracing` macro in `src`.
+pub fn scan_target_literals(src: &str) -> Result<Vec<(usize, String)>, MismatchedDelimiter>;
+```
+
+Both return `Result` rather than panicking, matching `try_scan`'s precedent so a
+walk over many files can name the file it was reading.
+
+`scan_target_literals` returns only *string-literal* targets. A `target:` whose
+value is not a literal (a `const`, a `&str` expression) satisfies coverage but
+cannot be shape-checked; §4.4 makes that a hard failure rather than a silent
+pass, since a computed target is a way to route events out of the namespace
+invisibly.
+
+The existing `scan_targets` (used by `tracing_target_docs.rs`) is **not** a
+usable base for either. It searches the masked buffer for the bare needle
+`target:` and takes the next adjacent string literal, without establishing that
+the site is a `tracing` macro invocation at all — it would happily extract a
+component from a `struct Foo { target: "…" }`-shaped construct. That looseness is
+correct for the question it answers (*which components exist in source*, for the
+doc-drift assertion) and wrong for both questions here, which are about
+invocations. It is left untouched, and the new functions must not be folded into
+it.
+
+### 4.2 Scope
+
+Walked: `crates/*/src/**/*.rs`.
+
+Not walked:
+
+- `crates/*/tests/`, `examples/`, `benches/` — a test may legitimately assert on
+  an arbitrary target string, and
+  `crates/paigasus-helikon-providers-anthropic/tests/live.rs` uses a `tracing`
+  macro today. Requiring the namespace of test scaffolding would be enforcement
+  for its own sake.
+- `tests/` at the repo root — the workspace-lints member itself, which writes
+  `tracing` macros inside string fixtures.
+- `.claude/worktrees/` — never reached, because the walk is rooted at
+  `<repo>/crates` rather than at the repo root. This mirrors the reasoning in
+  the two existing guards: a developer's unrelated worktrees must not change a
+  test's verdict.
+
+`#[cfg(test)]` modules *inside* `src/` are walked. None contains a `tracing`
+macro today, so this costs nothing now and keeps the rule "every site under
+`src` is targeted" free of a carve-out that would need its own detection logic.
+
+### 4.3 Escape hatch
+
+`// allow(tracing-target-coverage)`, on the line immediately before the
+invocation or trailing the invocation's own line — the same two positions the
+existing `// allow(tracing-target-syntax)` marker accepts, and the same
+comment-line bookkeeping.
+
+It exists for the case §4.1 flags: a macro whose final path segment collides
+with a `tracing` macro name but which is not one (`mycrate::warn!`). The
+existing syntax guard already accepts that false positive by design and offers
+this hatch; the coverage guard inherits the same exposure and must offer the
+same relief.
+
+**No site in this workspace uses it after this ticket.** The guard asserts that:
+if the marker count under `crates/*/src` is ever non-zero, that is a fact a
+reviewer should see, so §7.2 pins it at zero. A future legitimate use is a
+one-line change to that expectation, made deliberately.
+
+### 4.4 The two assertions
+
+```
+for each file under crates/*/src:
+    scan_untargeted(src)?   must be empty
+    for (line, literal) in scan_target_literals(src)?:
+        literal must match ^paigasus::[a-z0-9_]+::[a-z0-9_]+$
+```
+
+Plus: the number of `target:` arguments the walker sees must equal the number of
+string literals `scan_target_literals` returns, so a non-literal target is a
+hard failure rather than an unchecked pass.
+
+Failures report `path:line` and the offending literal, never a byte offset.
+
+The shape assertion deliberately does **not** check the component against the
+documented list — `tracing_target_docs.rs` already does exactly that, and
+duplicating it would mean two tests reddening for one cause with two different
+messages.
+
+### 4.5 Anti-vacuity and mutation checks
+
+Following the SMA-557 guard's precedent, which this repo has already found
+worth the cost:
+
+- **File-count floor.** Assert the walk reaches at least 100 `.rs` files, so a
+  truncated walk fails rather than passes.
+- **Positive probe.** Assert `scan_target_literals` extracts
+  `paigasus::openai::chat` from
+  `crates/paigasus-helikon-providers-openai/src/backend/chat.rs`, proving the
+  scanner reads real source rather than returning a constant. A path-existence
+  check would prove nothing.
+- **Unit mutation checks, both directions**, over inline fixture strings in the
+  test file:
+  - a targeted site must **not** be reported by `scan_untargeted`;
+  - an untargeted site must **be** reported;
+  - an untargeted site carrying the allow-marker must not be reported, in both
+    marker positions;
+  - `paigasus::core::agent` passes the shape check; `paigasus::core`,
+    `paigasus::core::agent::extra`, `paigasus::Core::agent` and
+    `paigasus_helikon_core::agent` each fail it;
+  - a `tracing` macro written inside a comment or a string literal is invisible
+    to both scanners.
+
+The both-directions requirement is the point: a scanner that returns an empty
+`Vec` unconditionally passes the coverage assertion on a clean tree, and only a
+must-be-reported case catches it.
+
+### 4.6 Crate mechanics
+
+`tests/workspace-lints` today has an **empty `[dependencies]`** and
+`[lints] workspace = true`, which means workspace-wide `missing_docs = "warn"`
+applies to it. Both new `pub` functions and the new `pub struct Untargeted`
+(including its fields) therefore need `///` docs, or the required `docs` job
+fails under `RUSTDOCFLAGS=-D warnings`.
+
+§7.1's `EnvFilter` test needs `tracing` and `tracing-subscriber` added as
+**dev-dependencies** (`workspace = true`; both are already pinned in the root
+`[workspace.dependencies]`, `tracing-subscriber` with the `env-filter` feature).
+Dev-dependencies only — nothing in the crate's `[dependencies]` changes, so no
+published crate gains a dependency.
+
+The member is `version = "0.0.0"`, `publish = false`, with a
+`release = false` block in `release-plz.toml`, so it attracts no bump and never
+publishes.
+
+### 4.7 CI
+
+The member is already in the workspace, so the new test runs under the existing
+required `test` matrix job. No workflow edit.
+
+---
+
+## 5. Documentation
+
+`docs/book/src/concepts/observability-evaluation.md`, the "Filtering by target"
+section. `mdbook build docs/book` must stay clean —
+`[output.linkcheck] warning-policy = "error"`.
+
+### 5.1 One namespace, not two
+
+The section opens by describing two namespaces. After this ticket there is one.
+Rewrite the opening to say every Helikon event and span carries a
+`paigasus::<component>::<subsystem>` target, and that the coverage guard is what
+keeps that true.
+
+### 5.2 The matching table gains the group selector
+
+| Directive | Reaches |
+|---|---|
+| `paigasus` | Raw prefix. Equivalent to `paigasus::` in practice today — see §5.5. |
+| `paigasus::` | The whole namespace. |
+| `paigasus::runtime` | **New.** Every runtime adapter (D3). A prefix of five components, not a component. |
+| `paigasus::core` | One component. |
+| `paigasus::core::agent` | One subsystem. Debugging only; the leaf may change. |
+
+### 5.3 The component table
+
+Inside the `tracing-components:start` / `:end` markers, which
+`tracing_target_docs.rs` parses. Add five rows (`core`, `runtime_tokio`,
+`runtime_axum`, `runtime_actix`, `runtime_agentcore`), rename the `temporal` row
+to `runtime_temporal`, and set every Status cell to `stable`.
+
+The parser requires each body row's first cell to be exactly
+`` `paigasus::<component>` `` with the component matching `[a-z0-9_]+`. All six
+new names satisfy that; the underscore is already permitted.
+
+### 5.4 "What is not in this namespace" → "Migrating from module-path filters"
+
+The existing subsection lists the six crates that emit on module paths. Nothing
+does any more, so it is replaced by the migration table:
+
+| Was | Now |
+|---|---|
+| `paigasus_helikon_core` | `paigasus::core` |
+| `paigasus_helikon_runtime_tokio` | `paigasus::runtime_tokio` |
+| `paigasus_helikon_runtime_temporal` | `paigasus::runtime_temporal` |
+| `paigasus_helikon_runtime_axum` | `paigasus::runtime_axum` |
+| `paigasus_helikon_runtime_actix` | `paigasus::runtime_actix` |
+| `paigasus_helikon_runtime_agentcore` | `paigasus::runtime_agentcore` |
+| `paigasus::temporal` | `paigasus::runtime_temporal` |
+
+It must state plainly that the old directives **stop matching** rather than
+becoming redundant.
+
+It must **not** name a version. The version is decided by release-plz after
+merge (§6), so any number written at authoring time is a guess that will be
+wrong. Point at the CHANGELOGs instead, which is where D4's `BREAKING CHANGE:`
+footer lands the fact with the correct version attached.
+
+The paragraph explaining that `paigasus_helikon_core::agent` misses the
+`workflow.rs` span is kept in substance and moved to the `core` row's context,
+updated to `paigasus::core` — the trap still exists at the leaf tier, and it is
+now avoided by using the form D1 already recommends.
+
+The prose marking `paigasus::temporal` provisional, and the sentence deferring
+this decision to a follow-up, are both deleted.
+
+### 5.5 An honest note on `paigasus` vs `paigasus::`
+
+After this ticket nothing under `crates/*/src` emits on a `paigasus_helikon_*`
+target, so the bare `paigasus` prefix and `paigasus::` select the same events.
+
+The book must not present that as a guarantee. It holds because a lint says so
+(§4), not because the contract says so, and a lint can be given an escape hatch.
+Keep recommending `paigasus::`; state why in one sentence.
+
+### 5.6 Recipes
+
+`RUST_LOG='warn,paigasus_helikon_core=debug'` → `RUST_LOG='warn,paigasus::core=debug'`.
+Add a runtime-group recipe using D3. The provider recipes are unaffected.
+
+### 5.7 What does not change
+
+No crate `README.md`. No crate's public Rust API, usage example, install story,
+feature flag, or published status moves, so CLAUDE.md's README rule does not
+fire. A conscious call, not a silent skip.
+
+The facade `README.md` is `include_str!`'d into its rustdoc, making its Rust
+fences doctests — another reason not to touch it without cause.
+
+---
+
+## 6. Release mechanics
+
+All six affected crates are already published, so this is release-plz's
+**pure-auto** path. **No `version` field, no `[workspace.dependencies]` pin and
+no CHANGELOG is edited by hand in this PR.**
+
+This is load-bearing, not merely tidy. CLAUDE.md documents that a manual
+same-PR version bump defeats `dependencies_update`: the cascade that bumps the
+facade's pin only runs when release-plz itself performs the sibling bump. The
+manual bump is required only when a *stub is ascending from `0.0.0`*, which is
+not the case for any crate here.
+
+Expected outcome after merge: release-plz opens a `chore: release` PR carrying a
+**minor** bump on `paigasus-helikon-core`, `-runtime-tokio`, `-runtime-temporal`,
+`-runtime-axum`, `-runtime-actix` and `-runtime-agentcore` (D4's breaking
+marker), with `paigasus-helikon` cascading. That PR's CI is checked before merge
+— its `cargo update` can pull a fresh advisory that reddens `audit`/`deny` on
+the bot PR alone.
+
+`tests/workspace-lints` is `publish = false` and attracts no bump.
+
+---
+
+## 7. Verification
+
+### 7.1 An executable test for the `EnvFilter` semantics
+
+New test in `tests/workspace-lints`, or alongside it — `EnvFilter` semantics are
+a workspace-wide property, not any one crate's.
+
+`tracing-subscriber` is not a Helikon runtime dependency and must not become
+one — the book's "bring your own observability stack" stance depends on core
+staying `tracing`-only. It is already pinned in the root
+`[workspace.dependencies]` with the `env-filter` feature; §4.6 takes it as a
+**dev-dependency** of `tests/workspace-lints`.
+
+**Mechanism.** Build an `EnvFilter` from the directive, layer it under
+`tracing_subscriber::registry()` together with a small capture layer that
+records each event's target into a shared `Vec`, install it for the duration of
+a closure with `tracing::subscriber::with_default`, emit one
+`tracing::event!(target: "…", Level::DEBUG, "")` per probe target, and assert on
+the captured set.
+
+Constructing a `Metadata` by hand and calling `Filter::enabled` was considered
+and rejected: `Metadata` needs a `Callsite`, and `Filter::enabled` needs a
+`Context`, which needs a `Subscriber` — so the "direct" route ends up building
+the same machinery with more ceremony and less fidelity to what actually
+happens at runtime. `with_default` is also the house pattern; the openai and
+litellm `translate/request.rs` test modules already use it.
+
+| Directive | Enables | Excludes |
+|---|---|---|
+| `paigasus::core=debug` | `paigasus::core::agent`, `paigasus::core::workflow` | `paigasus::openai::chat`, `paigasus::runtime_axum::registry` |
+| `paigasus::runtime=debug` | all five `runtime_*` subsystems | `paigasus::core::agent`, `paigasus::openai::chat` |
+| `paigasus::=debug` | every `paigasus::` target | `hyper::client` |
+| `paigasus=debug` | every `paigasus::` target **and** `paigasus_helikon_core::session` | `hyper::client` |
+
+The last row is the one that matters most: it pins the raw-prefix behaviour that
+D2, D3 and the whole book section depend on, and it is the fact SMA-557 could
+only verify by hand.
+
+### 7.1.1 The self-poisoning hazard — read before writing either test
+
+`tracing_target_docs.rs` walks **both `crates/` and `tests/`**, and
+`scan_targets` finds any `target:` followed by an adjacent string literal in
+*real code*. A test file in `tests/workspace-lints` that writes a genuine
+`tracing::event!(target: "paigasus::fake::x", …)` as a negative control
+therefore injects a phantom component `fake` into that guard's source set and
+reddens it — a failure in a *different* test file, blaming a component nobody
+declared.
+
+Two rules follow, and both are load-bearing:
+
+1. **§7.1's probe targets must all be real, documented targets.** The table
+   above already satisfies this: every `paigasus::`-prefixed probe uses a
+   component from D2's list, and the two negative probes —
+   `paigasus_helikon_core::session` and `hyper::client` — are outside the
+   namespace, so `component_of` returns `None` for both and contributes
+   nothing. Do not add `paigasus::nonexistent::…` as a negative control.
+2. **§4.5's malformed fixtures must be Rust string literals, never real
+   invocations.** `mask_trivia` blanks string literals before `scan_targets`
+   searches for the needle, so a fixture written as
+   `r#"tracing::warn!(target: "paigasus::Core::agent", "m");"#` is invisible to
+   the docs guard while remaining a perfectly good input to `scan_untargeted`
+   and `scan_target_literals`, which take `&str`. This is the same technique
+   that keeps SMA-543's and SMA-557's own test fixtures from poisoning each
+   other; it is not a new trick, but it is not optional either.
+
+### 7.2 The guard's own expectations
+
+- `scan_untargeted` returns empty for every file under `crates/*/src`.
+- Every target literal matches the three-segment shape.
+- The `// allow(tracing-target-coverage)` marker appears zero times under
+  `crates/*/src`.
+
+### 7.3 Existing gates that must stay green
+
+- `tracing_target_docs.rs` — will redden until §5.3 lands. That is its job.
+- `tracing_target_syntax.rs` — every new `target:` uses `:`, never `=`. The
+  41 edits are exactly the population that guard was written for.
+- `cargo test --workspace --all-features` — the full required gate, not
+  per-crate. A per-crate run has previously missed a feature-unification defect.
+- `cargo fmt --all -- --check` and
+  `cargo clippy --workspace --all-features --all-targets -- -D warnings` before
+  every push; the `pre-push` hook runs both.
+- `mdbook build docs/book`.
+- `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
+
+### 7.4 Manual spot check
+
+Run the `langfuse_tracing` example's subscriber wiring against a `fmt`
+subscriber with `RUST_LOG='paigasus::core=debug'` and confirm the
+`invoke_agent` / `agent.turn` / `chat` / `execute_tool` tree still appears.
+
+This is a spot check, not a gate: `tracing-opentelemetry` 0.33 emits a span's
+target only as an **attribute** (`with_target`), never as the OTel span name —
+confirmed by reading `layer.rs` in the vendored crate source. Exported span
+names, and therefore any Langfuse dashboard keyed on them, are unaffected by
+this ticket. The spot check exists to catch a filter-wiring mistake, not a
+naming regression.
+
+---
+
+## 8. Non-goals
+
+- **Adding subsystems, or renaming any provider component.** The five provider
+  components and their 56 sites are untouched.
+- **Adding `#[tracing::instrument]` anywhere.** There is none today; introducing
+  it would put targets on module paths again by default and is a separate
+  decision.
+- **New `tracing` call sites.** This ticket re-targets existing events; it adds
+  no observability.
+- **Changing span names, levels or fields.** Only the `target:` argument is
+  added.
+- **A CONTRIBUTING row for component renames.** D4 uses the existing
+  `BREAKING CHANGE:` mechanism. SMA-557 already flagged promoting this into
+  CONTRIBUTING as a reasonable follow-up rather than a prerequisite; that
+  remains true.
+- **An ADR.** `docs/book/src/decisions/index.md` still says a formal ADR section
+  is "the planned next step". This spec does not create one.
+
+---
+
+## 9. Commits and PR
+
+Branch: `feature/sma-568-decide-whether-core-and-the-runtime-crates-should-adopt`.
+
+All scopes below already exist in `.versionrc`'s `scopeRegex` and in
+`pr-title.yml`'s `scopes:` list **on `main`** — no new scope is registered, so
+the base-branch-reads-the-allowlist trap does not apply.
+
+| Commit | Touches |
+|---|---|
+| `docs(spec): SMA-568 …` | this document |
+| `docs(plan): SMA-568 …` | the implementation plan |
+| `feat(core)!: SMA-568 …` | `crates/paigasus-helikon-core/src` — 12 sites; `BREAKING CHANGE:` footer |
+| `feat(runtime)!: SMA-568 …` | the five runtime crates — 30 sites (29 newly targeted, plus the component rename on `activities.rs`); `BREAKING CHANGE:` footer |
+| `test(lints): SMA-568 …` | the coverage guard and the `EnvFilter` semantics test |
+| `docs(docs): SMA-568 …` | the book page |
+
+PR title: `feat(core)!: SMA-568 adopt paigasus:: tracing targets in core and the runtimes`.
+
+Lowercase subject after the `SMA-568 ` prefix, satisfying
+`subjectPattern: ^([A-Z]{2,4}-\d+ )?[^A-Z].+$`, with a full Conventional
+Commits `type(scope)!:` prefix. The PR body cites PR numbers, not other
+`SMA-###` tokens, which trip CodeRabbit's Linked Issues check.
