@@ -887,10 +887,14 @@ fn classify_target_arg(
 /// reported.
 ///
 /// Recognised structurally, not by a bare text search: the `instrument`
-/// identifier must be immediately preceded (modulo whitespace, and modulo an
-/// optional `tracing::`/other qualifier immediately before it) by `#[`, so an
-/// unrelated identifier or expression named `instrument` is not mistaken for
-/// the attribute.
+/// identifier must be preceded (modulo whitespace, and modulo zero or more
+/// `tracing::`/other path qualifiers immediately before it, including a
+/// leading `::` root as in `#[::tracing::instrument]`) by an attribute's
+/// opening `#[`. The attribute need not begin immediately there — being
+/// anywhere inside the attribute's brackets counts, so
+/// `#[cfg_attr(test, tracing::instrument)]` is also recognised. That keeps an
+/// unrelated identifier or expression named `instrument` from being mistaken
+/// for the attribute.
 pub fn instrument_attribute_lines(src: &str) -> BTreeSet<usize> {
     let masked = mask_trivia(src);
     let b = &masked.buf[..];
@@ -910,9 +914,12 @@ pub fn instrument_attribute_lines(src: &str) -> BTreeSet<usize> {
             while p > 0 && b[p - 1].is_ascii_whitespace() {
                 p -= 1;
             }
-            // Skip an optional qualifier immediately before `instrument`,
-            // e.g. the `tracing::` in `#[tracing::instrument]`.
-            if p >= 2 && &b[p - 2..p] == b"::" {
+            // Skip zero or more optional qualifiers immediately before
+            // `instrument`, e.g. the `tracing::` in `#[tracing::instrument]`,
+            // looping so a leading `::` root (`#[::tracing::instrument]`) and
+            // multi-segment paths are both fully stripped rather than just
+            // the innermost segment.
+            while p >= 2 && &b[p - 2..p] == b"::" {
                 p -= 2;
                 while p > 0 && is_ident_byte(b[p - 1]) {
                     p -= 1;
@@ -921,12 +928,40 @@ pub fn instrument_attribute_lines(src: &str) -> BTreeSet<usize> {
                     p -= 1;
                 }
             }
-            if p >= 2 && &b[p - 2..p] == b"#[" {
+            if inside_attribute_brackets(b, p) {
                 lines.insert(line_of(b, start));
             }
         }
     }
     lines
+}
+
+/// Whether position `at` in the masked buffer `b` sits inside some
+/// attribute's `#[ … ]` brackets, i.e. an unmatched `#[` is reachable by
+/// walking backward from `at`.
+///
+/// Only `[`/`]` are tracked; `(`/`)` and `{`/`}` are transparent to the walk.
+/// That is deliberate: `#[cfg_attr(test, tracing::instrument)]` nests
+/// `instrument` inside `cfg_attr(...)`'s parens, one level below the
+/// attribute's own brackets, and those parens must not stop the backward
+/// search from reaching the enclosing `#[`.
+fn inside_attribute_brackets(b: &[u8], at: usize) -> bool {
+    let mut depth: i32 = 0;
+    let mut k = at;
+    while k > 0 {
+        k -= 1;
+        match b[k] {
+            b']' => depth += 1,
+            b'[' => {
+                if depth == 0 {
+                    return k > 0 && b[k - 1] == b'#';
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1050,6 +1085,32 @@ mod tests {
     fn instrument_attribute_lines_ignores_a_string_literal() {
         let src = "fn a() { let s = \"#[tracing::instrument]\"; }";
         assert!(instrument_attribute_lines(src).is_empty());
+    }
+
+    /// A leading `::` root (`#[::tracing::instrument]`, an idiomatic way to
+    /// avoid path shadowing) must still be recognised: the qualifier-strip
+    /// has to loop rather than stop after one segment.
+    #[test]
+    fn instrument_attribute_lines_finds_the_leading_root_qualified_form() {
+        let src = "#[::tracing::instrument]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
+    }
+
+    /// `#[cfg_attr(test, tracing::instrument)]` places `instrument` inside
+    /// the attribute's brackets but not immediately after `#[` — the
+    /// attribute-interior check must still recognise it.
+    #[test]
+    fn instrument_attribute_lines_finds_the_cfg_attr_form() {
+        let src = "#[cfg_attr(test, tracing::instrument)]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
+    }
+
+    /// Both bypasses combined: a `cfg_attr` wrapping a leading-`::`-qualified
+    /// `instrument`.
+    #[test]
+    fn instrument_attribute_lines_finds_the_cfg_attr_leading_root_form() {
+        let src = "#[cfg_attr(feature = \"x\", ::tracing::instrument)]\nfn a() {}\n";
+        assert_eq!(instrument_attribute_lines(src), [1].into_iter().collect());
     }
 
     /// Every form that actually compiles against `tracing` 0.1 and silently
