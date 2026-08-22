@@ -873,16 +873,19 @@ facade only runs when release-plz itself performs the sibling bump. The manual
 bump is required only when a *stub ascends from `0.0.0`*, which applies to no
 crate here.
 
-**Expected outcome after merge**, under D4's non-breaking decision:
+**Expected outcome after merge**, under D4's non-breaking decision. Baselines
+are as of `main@fece785f`; four of them moved after this branch was cut, when
+release #215 landed, so read the "Now" column from `main` rather than trusting
+these numbers if more releases have shipped since:
 
-| Crate | Now | Expected |
+| Crate | Now (`main@fece785f`) | Expected |
 |---|---|---|
 | `paigasus-helikon-core` | `0.5.18` | `0.5.19` |
-| `paigasus-helikon-runtime-tokio` | `0.1.21` | `0.1.22` |
-| `paigasus-helikon-runtime-axum` | `0.2.3` | `0.2.4` |
-| `paigasus-helikon-runtime-actix` | `0.2.3` | `0.2.4` |
+| `paigasus-helikon-runtime-tokio` | `0.1.22` | `0.1.23` |
+| `paigasus-helikon-runtime-axum` | `0.2.4` | `0.2.5` |
+| `paigasus-helikon-runtime-actix` | `0.2.4` | `0.2.5` |
 | `paigasus-helikon-runtime-temporal` | `0.4.3` | `0.4.4` |
-| `paigasus-helikon-runtime-agentcore` | `0.2.6` | `0.2.7` |
+| `paigasus-helikon-runtime-agentcore` | `0.2.7` | `0.2.8` |
 
 Patch bumps, because release-plz bumps an additive `feat` as **patch** on a 0.x
 crate — the minor bump is reserved for breaking changes. All six stay
