@@ -131,6 +131,7 @@ two namespaces:
 | `paigasus::litellm` | `paigasus-helikon-providers-litellm` | `translate`, `stream`, `sse`, `http` | stable |
 | `paigasus::runtime_tokio` | `paigasus-helikon-runtime-tokio` | `runner`, `retry` | stable |
 | `paigasus::runtime_temporal` | `paigasus-helikon-runtime-temporal` | `activities`, `activity_input`, `worker`, `runner` | stable |
+| `paigasus::runtime_axum` | `paigasus-helikon-runtime-axum` | `registry`, `error`, `runs` | stable |
 
 <!-- tracing-components:end -->
 

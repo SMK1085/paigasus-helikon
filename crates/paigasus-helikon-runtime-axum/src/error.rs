@@ -113,7 +113,11 @@ impl IntoResponse for ServerError {
         // the caller already knows.
         let public: Option<&'static str> = match &self {
             ServerError::RunStart(_) | ServerError::Internal(_) => {
-                tracing::error!(error = %self, "internal server error");
+                tracing::error!(
+                    target: "paigasus::runtime_axum::error",
+                    error = %self,
+                    "internal server error"
+                );
                 Some(PUBLIC_INTERNAL_ERROR)
             }
             ServerError::Unavailable(_) => {
@@ -122,7 +126,11 @@ impl IntoResponse for ServerError {
                 // admission rejection at `warn` in `RunRegistry::create`), and
                 // a caller looping requests against a saturated server must
                 // not be able to drive unbounded error-level log volume.
-                tracing::warn!(error = %self, "service unavailable");
+                tracing::warn!(
+                    target: "paigasus::runtime_axum::error",
+                    error = %self,
+                    "service unavailable"
+                );
                 Some(PUBLIC_UNAVAILABLE)
             }
             _ => None,
