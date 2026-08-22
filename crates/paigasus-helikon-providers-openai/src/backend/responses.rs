@@ -219,10 +219,20 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 ///   name-emission gating (name emitted once per call_id, then `None`). If
 ///   `output_item.added` has not yet registered the item_id, the delta is buffered
 ///   in `pending_args` and flushed when the registration eventually arrives.
-/// - `response.completed` → `Usage` + `Finish { Stop }`, or `Finish { ToolCalls }`
-///   when `item_to_call` is non-empty — a turn whose sole output is a function
-///   call still reports `status: "completed"` on the wire (confirmed against
-///   real traffic; see `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`),
+/// - `response.output_item.done` (when the item is a complete function call) →
+///   `ToolCallDelta` carrying the item's complete `arguments`, **if no delta has
+///   already been emitted for it**. This is what makes a stream that carries no
+///   argument deltas at all — a resumed background response — report its tool
+///   calls (SMA-562).
+/// - `response.completed` → any function call in `response.output` that has not
+///   yet been emitted, then `Usage` + `Finish { Stop }`, or `Finish { ToolCalls }`
+///   when `name_emitted` is non-empty (evaluated *after* that reconciliation
+///   sweep, not before). Reconciling against `response.output` before the
+///   terminal pair is what makes `Finish { ToolCalls }` and the emitted
+///   `ToolCallDelta`s agree by construction rather than by coincidence
+///   (SMA-562). A turn whose sole output is a function call still reports
+///   `status: "completed"` on the wire (confirmed against real traffic; see
+///   `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`),
 ///   so `status` alone cannot distinguish the two cases.
 /// - `response.incomplete` → `Usage` + `Finish` per `incomplete_details.reason`
 ///   - `"max_output_tokens"` → `Finish { Length }`
@@ -247,18 +257,35 @@ pub(crate) struct ResponsesTranslator {
     /// Tracks item_ids (internal correlator) for which a name has already been
     /// emitted (name-emission gating: name is `Some` on the first `ToolCallDelta`
     /// for a given item_id, then `None` on subsequent deltas).
+    ///
+    /// Also set by the two SMA-562 reconciliation sites (`output_item.done`
+    /// and the `response.completed` sweep), which use it as their dedup key.
     name_emitted: HashSet<String>,
     /// Maps internal `item_id` → `(stable call_id, function name)`.
     ///
-    /// Populated by `response.output_item.added` when the item is a function call.
-    /// Keyed by `item.id` (the correlator used in `function_call_arguments.delta`),
-    /// not by `item.call_id` (the stable downstream identifier).
+    /// Populated unconditionally by `response.output_item.added` when the item
+    /// is a function call. Keyed by `item.id` (the correlator used in
+    /// `function_call_arguments.delta`), not by `item.call_id` (the stable
+    /// downstream identifier).
+    ///
+    /// Since SMA-562, `emit_call_if_unseen` (called by `response.output_item.done`
+    /// and the `response.completed` sweep) also registers into this map — except
+    /// when the item's `status` is `Incomplete`, which the helper checks and
+    /// returns `None` for *before* registering. So this map is not guaranteed to
+    /// hold every function call in `response.output`, and `response.completed`'s
+    /// `has_tool_calls` reads `name_emitted` instead, evaluated after that sweep;
+    /// the `response.incomplete` arm still reads this map, unchanged by SMA-562.
     item_to_call: HashMap<String, (String, String)>,
     /// Buffered argument deltas that arrived (via `function_call_arguments.delta`)
     /// before `output_item.added` registered the corresponding `item_id` mapping.
     ///
     /// Keyed by `item_id`. Flushed as a single `ToolCallDelta` (with the real
     /// `call_id` and `name`) the moment `output_item.added` registers the item.
+    ///
+    /// Since SMA-562 a buffer may instead be *discarded* by
+    /// `emit_call_if_unseen`, which prefers the complete `arguments` string the
+    /// terminal item carries; the buffer wins only when that string is empty.
+    /// Buffers still unresolved at `response.completed` are logged and dropped.
     pending_args: HashMap<String, String>,
 }
 
@@ -603,7 +630,13 @@ impl ResponsesTranslator {
 /// `incomplete_details: null` (see
 /// `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`),
 /// so `status` alone cannot tell a tool-call turn from an ordinary text
-/// completion — the caller passes `!item_to_call.is_empty()` to resolve that.
+/// completion. The `ResponseIncomplete` caller passes `!item_to_call.is_empty()`
+/// to resolve that; the `ResponseCompleted` caller passes
+/// `!name_emitted.is_empty()` instead, evaluated after reconciling against
+/// `response.output` — the two differ because that reconciliation step can
+/// register a call into `item_to_call` (via `output_item.added`) that it never
+/// actually emits (e.g. an item later found to be `Incomplete`), so only
+/// `name_emitted` is guaranteed to track what was emitted (SMA-562).
 /// Every other status arm ignores it, matching every other subject in the
 /// stream conformance suite, which distinguish `ToolCalls` from `Stop` only
 /// on the natural-completion path.
@@ -829,7 +862,9 @@ mod tests {
     /// `status: "completed"` on the wire — confirmed against real traffic,
     /// see `tests/fixtures/responses_tool_call.txt` — so `Status::Completed`
     /// alone cannot distinguish an ordinary text stop from a tool-call turn;
-    /// `has_tool_calls` is what the caller threads in from `item_to_call`.
+    /// `has_tool_calls` is what the caller threads in — from `item_to_call` for
+    /// the `response.incomplete` arm, or from `name_emitted` (evaluated after
+    /// reconciling against `response.output`) for `response.completed` (SMA-562).
     #[test]
     fn terminal_events_completed_with_tool_calls_maps_to_tool_calls() {
         let events = terminal_events(Some(usage()), Status::Completed, None, true);
@@ -996,8 +1031,9 @@ mod tests {
         );
         assert!(
             t.item_to_call.is_empty(),
-            "an incomplete item must not register into item_to_call; that would make \
-             has_tool_calls true with nothing emitted"
+            "an incomplete item must not register into item_to_call, since the \
+             response.incomplete arm's has_tool_calls check still reads this map \
+             directly and would otherwise report ToolCalls with nothing emitted"
         );
     }
 

@@ -144,6 +144,15 @@ invariant rather than a hope.
 
 Deliberately scoped to `response.completed`. §4.3 says why `response.incomplete` is excluded.
 
+**Delivered by a gate, not assumed.** `response.completed`'s `has_tool_calls` reads
+`!name_emitted.is_empty()` evaluated *after* step B's reconciliation sweep (§4), so the "iff"
+holds by construction — see §4.5 for why this differs from gating on `name_emitted` *instead
+of* reconciling (rejected) versus gating on it *after* reconciling (shipped). Two carve-outs
+are deliberate, not gaps in the guarantee: a `function_call` item with `id: None` is never
+emitted (§4.2 — no correlator to dedup on), and one with `status: Incomplete` is never
+emitted (§4.3 — its `arguments` may be truncated JSON). Both are absent from "every
+`function_call` item ... has had exactly one `ToolCallDelta`" by carve-out, not by defect.
+
 ## 4. The change
 
 One private helper plus two arms in `ResponsesTranslator::consume`. The helper is the single
@@ -155,10 +164,16 @@ fn emit_call_if_unseen(&mut self, item: &OutputItem) -> Option<ModelEvent>
 
 Given an `OutputItem::FunctionCall(fc)` with `id: Some(item_id)`:
 
-1. **Register** — `item_to_call.entry(item_id).or_insert((call_id, name))`, so
-   `has_tool_calls` is correct even when `output_item.added` never arrived (§2.2).
-2. **Skip if incomplete** — return `None` when `fc.status == Some(OutputStatus::Incomplete)`
-   (§4.3).
+1. **Skip if incomplete** — return `None` when `fc.status == Some(OutputStatus::Incomplete)`,
+   *before* registering into `item_to_call` (§4.3). Order matters: registering first and
+   checking incomplete second would let an incomplete item land in `item_to_call` while
+   emitting nothing — the same shape that makes a naive `has_tool_calls` check report
+   `ToolCalls` with zero `ToolCallDelta`s emitted (§3.1's post-condition would fail).
+2. **Register** — `item_to_call.entry(item_id).or_insert((call_id, name))`, so
+   `has_tool_calls` is correct even when `output_item.added` never arrived (§2.2). Because
+   step 1 already returned for an incomplete item, the helper only ever registers an item it
+   still intends to emit (modulo the "already emitted" skip below, which is an idempotent
+   re-registration, not a false positive).
 3. **Skip if already emitted** — return `None` when `name_emitted` contains `item_id`.
 4. **Otherwise emit** — discard any `pending_args` for `item_id` **unless** `fc.arguments`
    is empty and the buffer is not (in which case the buffer is the better data), insert
@@ -182,10 +197,13 @@ let mut out: Vec<ModelEvent> = e.response.output.iter()
     .filter_map(|item| self.emit_call_if_unseen(item))
     .collect();
 out.extend(terminal_events(
-    e.response.usage, e.response.status, None, !self.item_to_call.is_empty(),
+    e.response.usage, e.response.status, None, !self.name_emitted.is_empty(),
 ));
 Ok(out)
 ```
+
+**Shipped, revising the above:** `has_tool_calls` is `!self.name_emitted.is_empty()`, not
+`!self.item_to_call.is_empty()`, evaluated *after* the sweep. §3.1 and §4.5 explain why.
 
 Both arms share the helper and the same dedup key, so they compose idempotently: in the
 normal path (§2.1) the deltas emit, `done` sees `name_emitted` and returns `None`, and
@@ -216,10 +234,16 @@ would emit unparseable args and make `build_items` return
 `Err("invalid tool args for call_id=…")` (`crates/paigasus-helikon-core/src/model.rs:530-535`),
 failing the **entire turn** — a strictly worse unhappy path than the one being fixed.
 
-So: the `ResponseIncomplete` arm is untouched, and step 2 of the helper also skips
-`OutputStatus::Incomplete` items on the `completed` path. This costs nothing at the finish
-reason, because `terminal_events` already ignores `has_tool_calls` whenever
-`incomplete_reason` is `Some` (`:495-501`, guarded by an existing test at `:690`).
+So: the `ResponseIncomplete` arm is untouched, and step 1 of the helper also skips
+`OutputStatus::Incomplete` items on the `completed` path. For `response.incomplete` this
+costs nothing at the finish reason, because `terminal_events` already ignores
+`has_tool_calls` whenever `incomplete_reason` is `Some` (`:495-501`, guarded by an existing
+test at `:690`). **That reasoning does not transfer to `response.completed`**: there,
+`incomplete_reason` is `None`, so `has_tool_calls` does steer the finish reason. That is
+exactly why `response.completed`'s `has_tool_calls` reads `name_emitted` — set only when the
+helper actually emits — rather than `item_to_call`, which `output_item.added` still populates
+unconditionally, incomplete items included; reading `item_to_call` there would let a
+never-emitted incomplete call flip the finish reason to `ToolCalls`.
 
 ### 4.4 Assumptions stated rather than left implicit
 
@@ -237,16 +261,25 @@ reason, because `terminal_events` already ignores `has_tool_calls` whenever
   `TOOL_CALL_ARGS` verbatim — an AG-UI client would see an empty args span rather than
   `{}`. Accepted: synthesising `{}` where the wire said `""` would misreport the wire, and
   step 4's buffer-preference rule already covers the case where better data exists.
-- **Orphaned `pending_args`** are logged with `tracing::warn!` in the terminal arms when
-  non-empty. They remain dropped — reconciliation from `response.output` supersedes them —
-  but silently dropping data is what §1 is about, so it becomes observable.
+- **Orphaned `pending_args`** are logged with `tracing::warn!` in the `response.completed`
+  arm when non-empty. Only that arm warns: `response.incomplete` is deliberately untouched
+  (§4.3), so it neither reconciles nor logs a buffer left over for an item that turns out
+  truncated. They remain dropped either way — reconciliation from `response.output`
+  supersedes them where it runs — but silently dropping data is what §1 is about, so it
+  becomes observable at least on the `completed` path.
 
 ### 4.5 Rejected alternatives
 
 - **`output_item.done` only** (AC 2 as literally written) — §3. Repairs §2.2, leaves §1.
-- **Gate `has_tool_calls` on `!name_emitted.is_empty()` instead.** Makes the two agree in the
-  fail-safe direction, but by *dropping* a call the API fully described — that is §2.2's bug,
-  not a fix for it.
+- **Gate `has_tool_calls` on `!name_emitted.is_empty()` instead of reconciling.** Rejected in
+  that form: skipping step B's `response.output` sweep and gating on `name_emitted` alone
+  makes the two agree in the fail-safe direction, but by *dropping* a call the API fully
+  described — that is §2.2's bug, not a fix for it. **What shipped is different, and is not
+  this rejected alternative:** gate on `!name_emitted.is_empty()` *after* step B's sweep has
+  already run. By that point every emittable call has already been emitted (and is therefore
+  in `name_emitted`), so reading it there drops nothing — it is a refinement of the
+  reconciling design, not a substitute for it. (`!item_to_call.is_empty()` is kept for the
+  untouched `response.incomplete` arm — §4.3.)
 - **`response.function_call_arguments.done` as the reconciliation point.** It carries
   `item_id` and complete `arguments`, but no `call_id` and no `name`, so a call that never
   saw `output_item.added` could not be emitted from it. `output_item.done` and
@@ -303,7 +336,7 @@ output recorded in the commit message, per AC 3. Tests 1–4 are unit tests in t
    `status: "incomplete"` function call with truncated `arguments`. Asserts no
    `ToolCallDelta` (§4.3).
    *Fails today* in the sense that matters: it fails against the **naive** version of this
-   fix (one that omits step 2), which is the regression it exists to prevent. Against
+   fix (one that omits step 1), which is the regression it exists to prevent. Against
    unmodified `main` it passes vacuously; the commit message says so rather than claiming a
    red-to-green transition it does not have.
 6. **`zero_argument_tool_streams_one_delta`** — an integration test in
@@ -358,7 +391,12 @@ provenance is a follow-up ticket, not this PR.
 
 Six comment sites in this crate become stale (an earlier draft named only one, and named it
 wrongly — `terminal_events`' own doc at `:453-477` says merely "the caller passes
-`!item_to_call.is_empty()`", which stays true):
+`!item_to_call.is_empty()`", which this draft claimed stays true).
+
+**Correction, post-implementation:** it does not stay true. §4's shipped `ResponseCompleted`
+arm passes `!name_emitted.is_empty()`, not `!item_to_call.is_empty()`, so that doc's claim
+is false for that caller — it became a seventh stale site, fixed alongside the other six
+(it now says which caller passes which expression):
 
 1. `:215-221` — the `ResponsesTranslator` event-list bullets: add `output_item.done`, and
    restate what `response.completed` now does.
