@@ -219,6 +219,10 @@ Deployment to GitHub Pages happens automatically on push to `main` via `.github/
 
 The `mdbook build` output lands under `docs/book/book/html/` (because the `[output.linkcheck]` backend reorganizes the output tree). This path is only relevant for CI artifact uploads — `mdbook serve` reads from its own in-memory tree.
 
+In `crates/paigasus-helikon/README.md` specifically, tag prose snippets ` ```text `
+or ` ```ignore ` — never a bare ` ```rust `. That file is `include_str!`'d into the
+facade's rustdoc, so a `rust` fence becomes a doctest that CI's test gate will run.
+
 ## Local pre-PR checklist
 
 Run these before pushing — they are the same gates CI runs:
@@ -230,7 +234,16 @@ cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
   bash scripts/check-doc-coverage.sh
+npm ci                                               # once, or after package-lock.json changes
+npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
 ```
+
+The Markdown gate needs Node (>= 22); everything else in that list needs only the
+Rust toolchain. `markdownlint-cli2` is pinned exactly in `package-lock.json` and is
+**not** tracked by Dependabot — bumping it is a deliberate act, like `PROTOC_VERSION`
+and `NIGHTLY_TOOLCHAIN`. `npx markdownlint-cli2 --fix` resolves most findings
+mechanically; review the diff before committing, since a few fixes edit content
+rather than whitespace.
 
 Optionally (CI also runs this):
 
@@ -297,7 +310,7 @@ settings are checked in as JSON + a POSIX `sh` apply script:
 | File | Purpose |
 | --- | --- |
 | `.github/CODEOWNERS` | Review routing — currently `* @SMK1085`. |
-| `.github/rulesets/main-protection-checks.json` | Required status checks, linear history, no force-push, no deletion. Enforced on admins (no bypass). Required contexts: `fmt`, `clippy`, `test (ubuntu-latest, stable)`, `test (macos-latest, stable)` (required because it is the only gate that compiles and runs the Seatbelt backend), `docs`, `doc-coverage`, `book-build`, `commits`, `pr-title`, `audit`, `deny`, `sessions-it` (required because it is the only gate that runs the Postgres/Redis session backends against live servers), `build-no-default-features` (required because it is the only gate that compiles both `runtime-axum` and `runtime-actix` with `--no-default-features`, catching `openapi`-feature-gating regressions, plus a `cargo tree` assertion that axum does not leak into the `runtime-actix` feature graph). |
+| `.github/rulesets/main-protection-checks.json` | Required status checks, linear history, no force-push, no deletion. Enforced on admins (no bypass). Required contexts: `fmt`, `clippy`, `test (ubuntu-latest, stable)`, `test (macos-latest, stable)` (required because it is the only gate that compiles and runs the Seatbelt backend), `docs`, `doc-coverage`, `book-build`, `commits`, `pr-title`, `audit`, `deny`, `sessions-it` (required because it is the only gate that runs the Postgres/Redis session backends against live servers), `build-no-default-features` (required because it is the only gate that compiles both `runtime-axum` and `runtime-actix` with `--no-default-features`, catching `openapi`-feature-gating regressions, plus a `cargo tree` assertion that axum does not leak into the `runtime-actix` feature graph), `markdown-lint` (required because it is the only gate that lints the published Markdown surfaces — the mdBook, every crate README, the repo-root docs, and the runbooks — against `.markdownlint-cli2.jsonc`). |
 | `.github/rulesets/main-protection-reviews.json` | 1 approval, dismiss stale, CODEOWNERS review, thread resolution. Admin role bypass — solo-maintainer self-merge is intentional and will auto-engage for non-admins once a second human joins. |
 | `.github/rulesets/branch-names.json` | `creation` / `update` / `deletion` blocked on branches not under `refs/heads/feature/**`, `refs/heads/hotfix/**`, or `refs/heads/main`. Enforces the *prefix* portion of the documented branch-naming convention (full regex isn't enforceable on user-owned repository rulesets — `branch_name_pattern` is org-only). Bypass: dependabot (resolved at apply time) + the maintainer's private release-plz App `paigasusbot` (hardcoded ID — private Apps can't be looked up via the public `/apps/{slug}` endpoint). |
 | `scripts/apply-repo-config.sh` | Idempotent applier. Resolves bot App IDs at apply time and POST/PUTs each ruleset; sets merge methods + squash-commit format via a direct `gh api -X PATCH` call (not `gh repo edit` — its boolean toggles silently drop `=false` and it doesn't expose `--squash-merge-commit-title`). |

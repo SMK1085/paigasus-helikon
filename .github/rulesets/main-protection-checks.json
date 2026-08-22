@@ -26,7 +26,8 @@
           { "context": "audit" },
           { "context": "deny" },
           { "context": "sessions-it" },
-          { "context": "build-no-default-features" }
+          { "context": "build-no-default-features" },
+          { "context": "markdown-lint" }
         ],
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false
