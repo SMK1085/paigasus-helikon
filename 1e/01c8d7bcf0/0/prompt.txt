@@ -1,0 +1,76 @@
+<task-notification>
+<task-id>ab39076ebc117e7b6</task-id>
+<tool-use-id>toolu_01TnbzfUQL7n5Xsrb9thZzQr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/ab39076ebc117e7b6.output</output-file>
+<status>completed</status>
+<summary>Agent "Final review fix wave" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Status: complete. Commit SHA: `84def046`.
+
+- FIX 1: applied — max_delay(3600s) added to both policies; contradictory comment replaced.
+- FIX 2: applied — renamed to `prefired_cancel_ends_stream_before_backoff`; only in-file reference updated.
+- FIX 3: applied — `yield_now` → `sleep(1ms)`, comment rewritten.
+- FIX 4: applied — comment added above `_cancel` in `ScriptModel::invoke`.
+- FIX 5: applied — observability-evaluation.md paragraph replaced with the two-case explanation.
+- FIX 6: applied — cancellation MUST sentence appended to model-providers.md contract block.
+- FIX 7: applied — design spec §6 updated to "three crates" including the facade example, conclusion unchanged plus the publish-risk clause.
+
+Verification: `cargo fmt --all` clean; `decorator_tests` 8/8 pass (incl. renamed test); clippy clean with `-D warnings`; `mdbook build docs/book` clean. Mutation re-check: replacing `backoff()`'s body with an unconditional sleep made `cancel_during_backoff_ends_stream` FAIL (`left: 2, right: 1`, "the retry must not fire after cancellation") — confirming the timing fix still bites. Mutation reverted by hand; `git diff --staged` on `backoff()` shows no residual change; full suite re-passed post-revert.
+
+Staged only the four prescribed paths, no `git add -A`. No concerns.</result>
+<usage><subagent_tokens>88227</subagent_tokens><tool_uses>33</tool_uses><duration_ms>163764</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9bc2ec933b1a0542</task-id>
+<tool-use-id>toolu_01MLNwoj5L6HRWdr9ZWWNKFU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a9bc2ec933b1a0542.output</output-file>
+<status>completed</status>
+<summary>Agent "Scoped re-review of fix wave" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean, confirmed independently. All evidence gathered. Final assessment:
+
+## Per-finding verdicts
+
+**F1 — ADDRESSED.** `retry.rs:551` and `retry.rs:614` both add `.max_delay(Duration::from_secs(3600))`. The contradictory comment at `retry.rs:546-548` is replaced with prose that states the test never enters backoff and points to `cancel_during_backoff_ends_stream` for that coverage. Traced the actual effect (see Q2 below) — genuinely makes "1-hour" true where it wasn't before.
+
+**F2 — ADDRESSED.** Test renamed to `prefired_cancel_ends_stream_before_backoff` at `retry.rs:544`; the in-file doc-comment reference on `cancel_during_backoff_ends_stream` (`retry.rs:598`) was updated to the new name. `grep` confirms zero remaining references to the old name inside `retry.rs`. Stale references remain in `docs/superpowers/plans/*.md` and outside-§6 parts of the design spec, but F2's prescription was explicitly "in-file references" — out of scope, correctly left alone per the fixer's report.
+
+**F3 — ADDRESSED, and it is a real strengthening, not cosmetic.** `retry.rs:632` replaces `yield_now().await` with `tokio::time::sleep(Duration::from_millis(1)).await`. See Q3 below — this is provably stronger than `yield_now`, not equivalent.
+
+**F4 — ADDRESSED.** Comment added directly above `_cancel` at `retry.rs:449-450` in `ScriptModel::invoke`, naming `cancel_after_content_ends_stream_without_finish` and explaining the decorator-vs-inner-model isolation rationale, matching the prescribed content exactly.
+
+**F5 — ADDRESSED, and factually correct.** Verified against `core/src/model.rs:521-527` (blank/whitespace `args_str` normalizes to `"{}"` before parse) and `core/src/loop_state.rs:281` (the `ExecutingTools` match arm guards only on `items.iter().any(|i| matches!(i, Item::ToolCall {..}))`, no `finish_reason` check). The new two-case prose in `observability-evaluation.md:294-299` — mid-JSON cut fails to parse (error string matches `build_items`'s actual `format!` exactly), syntactically-complete/normalized-to-`{}` cut executes the tool — is accurate.
+
+**F6 — ADDRESSED.** `model-providers.md:64-66` appends the cancellation MUST sentence to the Contract clarification block, correctly placed after the existing sentence and before "This tightens...", matching indentation.
+
+**F7 — ADDRESSED.** Design spec §6 now says "three crates," adds `crates/paigasus-helikon/examples/langfuse_tracing.rs` with correct rationale (verified: facade `Cargo.toml` has no `include`/`exclude` key, so examples are packaged by Cargo default), and appends the `cargo publish --verify` lib+bins-not-examples clause. Conclusion (no manual bumps needed) correctly left unchanged.
+
+## Answers to the specific questions
+
+**Q2 — F1's `max_delay` change, traced:**
+- `prefired_cancel_ends_stream_before_backoff`: `cancel.cancel()` is called before `stream.next().await`. The peek `select!` (`retry.rs:373-377`) is `biased` with `cancelled()` first; for an already-cancelled token `WaitForCancellationFuture` is `Ready` on first poll, so that branch fires and `model_stream.next()` is never polled. `policy.next_delay` is never called. The `max_delay` change is **provably unreachable code in this test** — zero behavioral effect, purely makes the comment's "unmissable if entered" framing literally true.
+- `cancel_during_backoff_ends_stream`: before the fix, `base_delay=3600s` but the *old* default `max_delay=30s` meant the actual computed delay was `min(3600, 30) = 30s` — the backoff genuinely only slept 30s virtual, not "1 hour" as the old comment claimed (this was the root contradiction). After the fix, `max_delay=3600s` makes the computed delay actually `3600s`. Both 30s and 3600s are enormously larger than the 1ms sleep, so cancellation still fires first in either case — test outcome unchanged, confirmed neutral. No bad interaction with F3's 1ms auto-advance (if anything, a larger gap makes the "nearest deadline" invariant even more clearly true).
+
+**Q3 — F3's fix is soundly stronger than `yield_now`, not merely equivalent:**
+`yield_now()`'s ordering guarantee (that a freshly-spawned task gets polled before the yielding task resumes) is scheduler-implementation behavior, not a documented contract. `tokio::time::sleep(1ms).await` under `start_paused = true` leverages a *documented* tokio invariant instead: paused-clock auto-advance only fires when the executor's run queue is completely empty — i.e., every task (including the freshly-spawned `drain` task) has been polled through to its own `Pending` point first. Traced through the code: the spawned task's single poll runs synchronously through `invoke()` → peek `select!` (immediate `Some(Err(..))`, since `cancel.cancelled()` is genuinely pending on a live token) → `policy.next_delay` computes 3600s → `backoff()`'s `select!` genuinely suspends (real timer registered, cancel still pending) — this is the drain task's actual parked-in-backoff state, and it is guaranteed to occur before the clock can advance to satisfy main's 1ms deadline. So the fix is not "merely equivalent to `yield_now`" — it correctly upgrades the pinning power, matching the fixer's report claim.
+
+**Q4 — New/changed comments checked against code, all accurate:** the F1 comment (backoff never entered, verified above), the F2-adjacent doc comment on `cancel_during_backoff_ends_stream` (correctly names the renamed test), the F3 comment (auto-advance-to-nearest-deadline reasoning, verified above), and the F4 `_cancel` comment (verified against the isolation test's logic) all check out against actual runtime behavior. No new inaccurate comment was introduced.
+
+**Q5 — F5 prose verified correct** against `core/src/model.rs:521-527` and `core/src/loop_state.rs:281` (see F5 verdict above); the quoted error string matches `build_items`'s literal `format!`.
+
+## New breakage in the fix diff
+
+None found. `cargo fmt --all -- --check` and `cargo clippy -p paigasus-helikon-runtime-tokio --all-features --all-targets -- -D warnings` both independently re-run clean; `mdbook build docs/book` independently re-run clean (linkcheck `warning-policy = "error"` did not trip). The diff touches only test code, test comments, and prose — no production code paths changed (`backoff()` itself is untouched, confirmed via the diff hunk boundaries).
+
+## Deferred (out of scope, not blocking)
+
+- Stale `cancellation_aborts_backoff_promptly` references remain in `docs/superpowers/plans/2026-08-22-sma-563-mockmodel-cancellation.md` (lines 504, 612, 636, 641) and `docs/superpowers/plans/2026-06-17-retry-policy.md`, and in the design spec outside §6 (lines 196, 198, 221) — all correctly out of F2's stated scope but worth a follow-up sweep if plan-doc accuracy matters going forward.
+
+## Overall verdict
+
+**All 7 findings ADDRESSED. No new breakage introduced.** The fix wave is sound: F1's `max_delay` addition is behavior-neutral for both tests as traced; F3's fix is a genuine, documented-behavior-backed strengthening over `yield_now`, not a cosmetic swap; F5's replacement prose is factually verified against the actual `core` dispatch logic; and none of the new/changed comments introduce a fresh inaccuracy.</result>
+<usage><subagent_tokens>96731</subagent_tokens><tool_uses>17</tool_uses><duration_ms>182641</duration_ms></usage>
+</task-notification>
