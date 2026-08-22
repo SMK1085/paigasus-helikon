@@ -174,9 +174,11 @@ only changes the `target` attribute, so anything keyed on a span name (like
 This includes **the run/turn/chat trace tree described above** — the
 `agent.run`, `agent.turn`, `gen_ai.chat` and `tool.execute` spans now carry
 `paigasus::core::*` targets, not the old `paigasus_helikon_core::*` module
-paths. (The `invoke_agent` / `agent.turn` / `chat` / `execute_tool` operation
-names used above are the `gen_ai.operation.name` fields set on these same
-spans.) Most are raised under `paigasus::core::agent`; the multi-agent
+paths. (Three of these — `invoke_agent`, `chat`, `execute_tool` — are also the
+`gen_ai.operation.name` fields set on the `agent.run`, `gen_ai.chat`, and
+`tool.execute` spans respectively, as used in the tree above. `agent.turn` is
+a purely internal span and sets no `gen_ai.operation.name`.) Most are raised
+under `paigasus::core::agent`; the multi-agent
 constructs — the sequential, parallel and loop workflows, plus the graph and
 swarm agents — raise their own top-level `agent.run` span under
 `paigasus::core::workflow`. Filter on `paigasus::core` to catch both: a
@@ -188,14 +190,20 @@ rules below already recommend for anything durable.
 
 The component name is derived mechanically from the crate name: strip the
 `paigasus-helikon-` prefix, then a leading `providers-` if present, then
-replace remaining `-` with `_`. Seven crates have a name under this rule with
-no call site emitting on it yet, because those crates carry no `tracing`
-instrumentation today: `mcp`, `tools`, `evals`, `cli`, `sessions_sqlite`,
-`sessions_postgres`, `sessions_redis`. They are not in the table above — a row
-for a component nothing emits would fail the guard that checks the table
-against source — but the names are reserved: when one of those crates starts
-emitting, it uses the derived name, and no other component may claim it in
-the meantime (see the no-prefix-collision rule below).
+replace remaining `-` with `_`. The facade crate, `paigasus-helikon`, is the
+one exception to the rule itself rather than to its output: stripping the
+`paigasus-helikon-` prefix leaves nothing to work with (there is no trailing
+`-<name>`), so its component is `facade` by fiat, not by the derivation.
+
+Ten crates have a name under this rule (nine derived, plus the facade's
+`facade`) with no call site emitting on it yet, because those crates carry no
+`tracing` instrumentation today: `facade`, `macros`, `mcp`, `tools`, `evals`,
+`cli`, `sessions_sqlite`, `sessions_postgres`, `sessions_redis`,
+`sessions_testkit`. They are not in the table above — a row for a component
+nothing emits would fail the guard that checks the table against source — but
+the names are reserved: when one of those crates starts emitting, it uses the
+derived (or, for the facade, the by-fiat) name, and no other component may
+claim it in the meantime (see the no-prefix-collision rule below).
 
 #### Stability
 
