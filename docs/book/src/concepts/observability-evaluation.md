@@ -129,6 +129,7 @@ two namespaces:
 | `paigasus::bedrock` | `paigasus-helikon-providers-bedrock` | `translate`, `stream`, `builder` | stable |
 | `paigasus::gemini` | `paigasus-helikon-providers-gemini` | `translate`, `sse` | stable |
 | `paigasus::litellm` | `paigasus-helikon-providers-litellm` | `translate`, `stream`, `sse`, `http` | stable |
+| `paigasus::runtime_tokio` | `paigasus-helikon-runtime-tokio` | `runner`, `retry` | stable |
 | `paigasus::temporal` | `paigasus-helikon-runtime-temporal` | `activities` | provisional |
 
 <!-- tracing-components:end -->

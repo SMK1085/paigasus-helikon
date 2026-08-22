@@ -234,6 +234,7 @@ impl<M: Model + 'static> Model for RetryingModel<M> {
                     Some(Err(e)) => match policy.next_delay(attempt, &e, fastrand::f64()) {
                         Some(d) => {
                             tracing::debug!(
+                                target: "paigasus::runtime_tokio::retry",
                                 attempt = attempt + 1,
                                 delay_ms = d.as_millis() as u64,
                                 "retrying model invoke after transient error"
