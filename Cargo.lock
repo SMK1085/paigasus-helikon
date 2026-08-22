@@ -4337,6 +4337,10 @@ dependencies = [
 [[package]]
 name = "paigasus-helikon-workspace-lints"
 version = "0.0.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "parking"
