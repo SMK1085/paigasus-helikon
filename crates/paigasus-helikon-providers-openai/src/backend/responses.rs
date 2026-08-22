@@ -270,7 +270,8 @@ pub(crate) struct ResponsesTranslator {
     ///
     /// Since SMA-562, `emit_call_if_unseen` (called by `response.output_item.done`
     /// and the `response.completed` sweep) also registers into this map — except
-    /// when the item's `status` is `Incomplete`, which the helper checks and
+    /// when the item's `status` is anything other than absent or `Completed`
+    /// (i.e. `InProgress` or `Incomplete`), which the helper checks and
     /// returns `None` for *before* registering. So this map is not guaranteed to
     /// hold every function call in `response.output`, and `response.completed`'s
     /// `has_tool_calls` reads `name_emitted` instead, evaluated after that sweep;
@@ -312,18 +313,23 @@ impl ResponsesTranslator {
     /// - a non-`FunctionCall` item (`reasoning`, `message`, hosted-tool calls);
     /// - `id: None` — `item_id` is the dedup correlator, and without it we
     ///   cannot tell a fresh call from one whose deltas already streamed;
-    /// - `status: Some(Incomplete)` — a truncated turn's `arguments` is a
-    ///   partial JSON string, and emitting it would fail the whole turn in
-    ///   `ModelTurnAccumulator::finish` rather than dropping one call; checked
-    ///   before *this method* registers into `item_to_call`, so this method
-    ///   itself never causes an incomplete item to make `has_tool_calls`
-    ///   true while emitting nothing. It does not follow that an incomplete
-    ///   item can never reach that state overall: `item_to_call` has a
-    ///   second, unconditional writer (`ResponseOutputItemAdded`), so an item
-    ///   already registered there before it is later seen as `Incomplete`
-    ///   here is untouched by this guard. The `response.completed` arm's
-    ///   `has_tool_calls` accordingly reads `name_emitted`, not
-    ///   `item_to_call`, to stay correct against that writer;
+    /// - `status` anything other than absent or `Some(Completed)` — i.e. a
+    ///   whitelist, not a blacklist of `Incomplete` alone. `OutputStatus` is
+    ///   not `#[non_exhaustive]`, so `InProgress` is a real, reachable
+    ///   variant: a `response.completed` sweep item can carry
+    ///   `"status":"in_progress"` with truncated `arguments`, and emitting
+    ///   that would fail the whole turn in `ModelTurnAccumulator::finish`
+    ///   exactly like an `Incomplete` item would, rather than dropping one
+    ///   call. Checked before *this method* registers into `item_to_call`,
+    ///   so this method itself never causes a non-complete item to make
+    ///   `has_tool_calls` true while emitting nothing. It does not follow
+    ///   that such an item can never reach that state overall: `item_to_call`
+    ///   has a second, unconditional writer (`ResponseOutputItemAdded`), so
+    ///   an item already registered there before it is later seen as
+    ///   non-complete here is untouched by this guard. The
+    ///   `response.completed` arm's `has_tool_calls` accordingly reads
+    ///   `name_emitted`, not `item_to_call`, to stay correct against that
+    ///   writer;
     /// - a call already emitted, per `name_emitted`.
     ///
     /// Emits no `Usage`, so SMA-522's ordering invariant is untouched.
@@ -340,11 +346,12 @@ impl ResponsesTranslator {
             return None;
         };
 
-        if matches!(fc.status, Some(OutputStatus::Incomplete)) {
+        if !matches!(fc.status, None | Some(OutputStatus::Completed)) {
             tracing::debug!(
                 target: "paigasus::openai::responses",
                 item_id = %item_id,
-                "function_call item is incomplete; arguments may be truncated, not emitting"
+                status = ?fc.status,
+                "function_call item is not complete; arguments may be truncated, not emitting"
             );
             return None;
         }
@@ -471,9 +478,11 @@ impl ResponsesTranslator {
             // where the deltas already carried the arguments.
             //
             // Assumes `done` is terminal for its item: a delta arriving after
-            // it would append to an already-complete args string. Not observed
-            // on the wire — a resumed stream truncates a prefix, preserving
-            // order.
+            // it would append to an already-complete args string, e.g.
+            // `{"city":"Berlin"}{"city":"Berlin"}`, which is not valid JSON and
+            // fails `build_items` for the WHOLE turn, not just this one call.
+            // Not observed on the wire — a resumed stream truncates a prefix,
+            // preserving order.
             ResponseStreamEvent::ResponseOutputItemDone(e) => {
                 Ok(self.emit_call_if_unseen(&e.item).into_iter().collect())
             }
@@ -496,6 +505,13 @@ impl ResponsesTranslator {
                         name,
                         args_delta: e.delta,
                     }])
+                } else if e.delta.is_empty() {
+                    // An empty delta for an unregistered item_id carries nothing
+                    // worth buffering. Skip it rather than inserting a ghost
+                    // `pending_args` entry: an entry that is buffered-but-empty
+                    // would otherwise survive to `response.completed` and trip
+                    // the orphan `warn!` there even though nothing was dropped.
+                    Ok(vec![])
                 } else {
                     // item_id not yet registered — buffer the delta until
                     // `output_item.added` arrives with the real call_id and name.
@@ -837,6 +853,23 @@ mod tests {
         } else {
             panic!("expected ToolCallDelta, got {evs:?}");
         }
+    }
+
+    /// Final-review fix: an empty `function_call_arguments.delta` for an
+    /// item_id that has not yet been registered by `output_item.added` must
+    /// not create a ghost `pending_args` entry. Before this fix it did
+    /// (`{"fc_x": ""}`), which then tripped the `response.completed` orphan
+    /// `warn!` with `orphans: 1` even though nothing was ever dropped.
+    #[test]
+    fn empty_orphan_delta_does_not_create_ghost_pending_entry() {
+        let mut t = ResponsesTranslator::new();
+
+        assert!(t.consume(delta_event("x", "")).unwrap().is_empty());
+        assert!(
+            !t.pending_args.contains_key("x"),
+            "an empty delta must not create a pending_args entry; got {:?}",
+            t.pending_args
+        );
     }
 
     /// A minimal usage snapshot. Field values are arbitrary — nothing below
@@ -1312,6 +1345,52 @@ mod tests {
         assert!(
             t.name_emitted.is_empty(),
             "an incomplete item must never be marked as emitted"
+        );
+    }
+
+    /// Final-review fix: `OutputStatus` is NOT `#[non_exhaustive]`, and the
+    /// guard in `emit_call_if_unseen` used to be a blacklist
+    /// (`matches!(fc.status, Some(OutputStatus::Incomplete))`), which left
+    /// `InProgress` unguarded. A `response.completed` sweep item can carry
+    /// `"status":"in_progress"` with truncated `arguments` (e.g. an item
+    /// still streaming when the server decided the turn was done); emitting
+    /// that would produce unparseable JSON and fail `build_items` for the
+    /// WHOLE turn — exactly the failure mode the guard exists to prevent.
+    /// The guard is now a whitelist (`None | Some(Completed)`), so this must
+    /// be skipped exactly like an `Incomplete` item is.
+    #[test]
+    fn completed_skips_in_progress_output_item() {
+        let mut t = ResponsesTranslator::new();
+
+        assert!(t
+            .consume(added_event("fc_1", "call_1", "get_weather"))
+            .unwrap()
+            .is_empty());
+
+        let evs = t
+            .consume(completed_event(
+                r#"[{"id":"fc_1","type":"function_call","status":"in_progress",
+                     "arguments":"{\"cit","call_id":"call_1","name":"get_weather"}]"#,
+            ))
+            .unwrap();
+
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
+            "an in-progress item must not be emitted; got {evs:?}"
+        );
+        assert!(
+            matches!(
+                evs.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::Stop
+                })
+            ),
+            "an in-progress-only turn must report Stop, not ToolCalls; got {evs:?}"
+        );
+        assert!(
+            t.name_emitted.is_empty(),
+            "an in-progress item must never be marked as emitted"
         );
     }
 
