@@ -9,7 +9,7 @@
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ModelSettings,
-    ResponseFormat, ToolDef,
+    ResponseFormat, ToolChoice, ToolDef,
 };
 use paigasus_helikon_providers_openai::OpenAiModel;
 
@@ -96,6 +96,13 @@ async fn responses_zero_arg_tool_streams_a_delta() {
         description: "Return the current server time. Takes no arguments.".to_owned(),
         schema: serde_json::json!({"type": "object", "properties": {}}),
     }];
+    // Force the call rather than relying on the prompt to persuade the model.
+    // Without this the model may answer in prose and the assertions below fail
+    // as a flake rather than as a real signal — and the 2026-08-22 capture this
+    // test mirrors was taken with `tool_choice: "required"` for the same reason.
+    let mut settings = ModelSettings::new();
+    settings.tool_choice = Some(ToolChoice::Required);
+    req.model_settings = settings;
     let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
     let events: Vec<ModelEvent> = stream
         .collect::<Vec<_>>()

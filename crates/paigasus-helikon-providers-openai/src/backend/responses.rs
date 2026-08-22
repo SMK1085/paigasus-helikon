@@ -1003,6 +1003,35 @@ mod tests {
             }
             other => panic!("expected ToolCallDelta, got {other:?}"),
         }
+
+        // The capture's second and final event. Driving it here is what makes
+        // this test the whole §2.2 shape rather than just its first half: the
+        // terminal sweep must find the call already in `name_emitted` and add
+        // nothing, and the turn must still report `ToolCalls` — which before
+        // the fix it did not, because `item_to_call` was empty.
+        let evs = t
+            .consume(completed_event(
+                r#"[{"id":"fc_0aae0e68b2ddb1af006a89d1c124c487d293f21c9ada8e4e5d",
+                     "type":"function_call","status":"completed",
+                     "arguments":"{\"city\":\"Berlin\"}",
+                     "call_id":"call_lQOsuE9Lx2s6d70xJ88uClEk","name":"get_weather"}]"#,
+            ))
+            .unwrap();
+
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
+            "the terminal sweep must not re-emit a call `done` already emitted; got {evs:?}"
+        );
+        assert!(
+            matches!(
+                evs.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::ToolCalls
+                })
+            ),
+            "expected Finish(ToolCalls) last, got {evs:?}"
+        );
     }
 
     /// The dedup guard: once the argument deltas have carried the arguments,

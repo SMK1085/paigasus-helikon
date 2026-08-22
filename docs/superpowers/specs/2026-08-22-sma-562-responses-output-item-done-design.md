@@ -226,10 +226,23 @@ holds unchanged.
 ### 4.1 Why `name_emitted` is the right dedup key
 
 `name_emitted` already means precisely "a `ToolCallDelta` has been emitted for this
-`item_id`": it is inserted at exactly two sites — `:347` (the `pending_args` flush, correctly
-guarded on `!buffered.is_empty()`, so an empty buffer is not marked emitted) and `:370` (the
-delta arm) — and nowhere else. Reusing it needs no new state and cannot drift from the
-emission sites.
+`item_id`". The property that makes it safe is not the *number* of write sites but that
+**every write is paired, in the same branch, with the emission it records** — so the set and
+the event stream cannot drift apart:
+
+- the `pending_args` flush in the `output_item.added` arm, correctly guarded on
+  `!buffered.is_empty()` so an empty buffer is not marked emitted;
+- the argument-delta arm;
+- `emit_call_if_unseen` itself — the third site, added by this change and serving both
+  reconciliation callers.
+
+`name_emitted` is never removed from, cleared, or retained-over, and the translator is
+constructed per stream, so `!name_emitted.is_empty()` is exactly "at least one
+`ToolCallDelta` was emitted in this stream", in both directions. That is what §3.1's
+post-condition rests on. Reusing it needs no new state.
+
+*(An earlier draft said "inserted at exactly two sites … and nowhere else", which the
+helper made false — the invariant above is the durable form of the claim.)*
 
 ### 4.2 Why `id: None` is skipped
 
@@ -349,8 +362,13 @@ output recorded in the commit message, per AC 3. Tests 1–4 are unit tests in t
    `completed_after_deltas_emits_only_terminal_pair` test, not inside this one) — `added` →
    two deltas → `done`. Asserts `done` yields zero events. Passes today; must keep passing.
 4. **`parallel_calls_emit_one_named_delta_each`** — two interleaved items:
-   `added(A)`, `added(B)`, deltas for B only, `done(A)`, `done(B)`, `completed`. Asserts
-   exactly one `name: Some(_)` delta per `call_id` and correct args attribution. The design
+   `added(A)`, `added(B)`, deltas for B only, `done(B)`, `completed`. Asserts
+   exactly one `name: Some(_)` delta per `call_id` and correct args attribution.
+   **`done(A)` is deliberately absent** (this draft listed it; it was dropped
+   post-implementation): with it, A was already in `name_emitted` before the terminal
+   event, so the test passed even with the entire `response.completed` sweep deleted.
+   Omitting it makes the sweep A's only emission path, which is what turns this into a
+   real reconciliation-under-parallelism guard — verified by mutation. The design
    is per-item correct (every map keys on `item.id`, `:250-262`) but nothing asserts it, and
    the conformance suite enforces the same rule cross-provider
    (`tests/provider-stream-conformance/src/check.rs:220-245`) where a regression would
@@ -422,7 +440,7 @@ provenance is a follow-up ticket, not this PR.
 
 ## 7. Documentation
 
-Six comment sites in this crate become stale (an earlier draft named only one, and named it
+Seven comment sites become stale — six in this crate, one in the conformance suite (an earlier draft named only one, and named it
 wrongly — `terminal_events`' own doc at `:453-477` says merely "the caller passes
 `!item_to_call.is_empty()`", which this draft claimed stays true).
 
@@ -439,7 +457,14 @@ is false for that caller — it became a seventh stale site, fixed alongside the
    registers"; §4 step 4 may discard it, and §4.4 warns on orphans.
 5. `:397-402` — the `ResponseCompleted` arm gains the reconciliation rationale and a pointer
    to §3.1's post-condition.
-6. `tests/provider-stream-conformance/tests/conformance.rs:2968-2971` — documents
+6. `terminal_events`' own doc — "the caller passes `!item_to_call.is_empty()` to resolve
+   that". True only of the `ResponseIncomplete` caller now; the `ResponseCompleted` caller
+   passes `!name_emitted.is_empty()`. This is the seventh site named in the correction
+   above, listed here so the enumeration matches the count.
+
+Sites 1–6 are crate-local. The seventh is not:
+
+7. `tests/provider-stream-conformance/tests/conformance.rs:2968-2971` — documents
    `output_item.done` as carrying "the same no-op-to-the-translator caveat". That becomes
    false for the OpenAI Responses subject and must be corrected even though §5 adds no
    scenario.
