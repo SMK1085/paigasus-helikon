@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "525f0d453767",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-562-openairesponses-reports-finishtoolcalls-for-a-function-call",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-openai/src/backend/responses.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/52/5f0d453767/0/metadata.json",
+      "transcript": "/52/5f0d453767/0/full.jsonl",
+      "compact_transcript": "/52/5f0d453767/0/transcript.jsonl",
+      "content_hash": "/52/5f0d453767/0/content_hash.txt",
+      "prompt": "/52/5f0d453767/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 14887,
+    "cache_read_tokens": 1965855,
+    "output_tokens": 5453,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 56,
+      "cache_creation_tokens": 217108,
+      "cache_read_tokens": 2219024,
+      "output_tokens": 28120,
+      "api_call_count": 28
+    }
+  }
+}

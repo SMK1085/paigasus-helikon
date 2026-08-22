@@ -1,0 +1,96 @@
+<task-notification>
+<task-id>a920934a840540761</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a920934a840540761.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 implementer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>STATUS: DONE
+
+Commit SHA: `47868a49567adacd0088d6d362ad4c9d2b6c3297`
+
+Test summary: `cargo test -p paigasus-helikon-providers-openai --lib backend::responses::tests` → 10/10 pass (3 new + 7 pre-existing); pre-implementation run showed the expected single failure (`done_without_added_or_deltas_emits_tool_call`: `expected one ToolCallDelta, got []`). `cargo clippy -p paigasus-helikon-providers-openai --all-features --all-targets -- -D warnings` clean.
+
+Concerns: none. Applied the controller's ordering correction in `emit_call_if_unseen` (Incomplete check before `item_to_call` registration) and reworded its doc comment to match. Only `crates/paigasus-helikon-providers-openai/src/backend/responses.rs` was touched/staged; `git show --stat HEAD` confirms one file, 212 insertions/5 deletions. Full evidence (including exact pre-fix failure text) is in `.superpowers/sdd/2026-08-22-sma-562-responses-tool-call-reconciliation/task-1-report.md`.</result>
+<usage><subagent_tokens>96814</subagent_tokens><tool_uses>17</tool_uses><duration_ms>146029</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ada0002ead0522e13</task-id>
+<tool-use-id>toolu_0181FZ7uofZ5i9wbYotSqX8T</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/ada0002ead0522e13.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 reviewer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed the brief, the report, the diff, the full source, the spec, and the ledger/downstream briefs. I also re-ran `cargo test -p paigasus-helikon-providers-openai --lib backend::responses::tests` (10/10 pass) and confirmed the tree is clean and the commit touches exactly one file.
+
+## Verdict 1 — Spec compliance: ✅
+
+The diff implements Task 1's brief exactly, with the controller ruling applied. Verified point by point:
+
+- Helper order at `responses.rs:298-345` is (1) not `FunctionCall` → `None`; (2) `id: None` → debug log, `None`; (3) `Incomplete` → debug log, `None` (`:311-318`); (4) register (`:320-322`); (5) `name_emitted` → `None` (`:324-326`); (6) resolve args, mark, emit (`:328-344`). Matches the ruling, not the brief.
+- The brief's now-false `// Register regardless of whether we emit` comment was correctly deleted, and the `Incomplete` doc bullet rewritten to state the ordering and why (`:284-289`).
+- `OutputStatus` added to both import lists; helper placed immediately before `consume`; arm inserted directly after `ResponseOutputItemAdded` (`:426-447`); three tests and two test helpers verbatim.
+- `terminal_events`, the `ResponseCompleted` arm and the `ResponseIncomplete` arm are byte-identical; no `Cargo.toml`; one file in the commit; commit message conforms.
+
+Nothing extra, nothing missing.
+
+**Post-condition reachability for Task 2:** not blocked. Registration happens before the dedup check, so an item emitted at `done` still contributes to `has_tool_calls`, and Task 2's sweep will see `name_emitted` and add nothing. The reversal actually *strengthens* §3.1 for the resumed shape (incomplete item → no delta and no `ToolCalls`).
+
+## Verdict 2 — Task quality: Changes requested (one assertion)
+
+Correctness of the helper is sound. I traced the three pre-existing emission paths against the new arm and found no ordering that loses or duplicates arguments:
+
+- buffered deltas + `done` with non-empty `arguments` → buffer discarded, complete string emitted (buffer was never emitted, so no loss);
+- buffered deltas + `done` with empty `arguments` → buffer wins, and `pending_args.remove` means a later `added` can't re-flush it;
+- `added` → deltas → `done` → `name_emitted` short-circuits;
+- empty `args_delta` is safe: `core/src/model.rs:525-529` normalizes blank args to `{}`.
+
+Parallel calls are correct — every map keys on `item.id`, and the helper adds no cross-item state.
+
+---
+
+### Important
+
+**1. The controller's ruling ships with zero test coverage, and Task 2's brief does not add it either.**
+`incomplete_status_item_is_not_emitted` (`responses.rs:924-949`) asserts only `evs.is_empty()`. That is equally true under the brief's *rejected* register-then-check order — the registration is invisible to the assertion, so the test is mutation-blind to exactly the defect the ruling exists to prevent. The ledger's Ruling 2 says "T2's `completed_skips_incomplete_output_item` is strengthened to also assert `Finish { Stop }`, so the post-condition is actually pinned rather than assumed" — but that test as drafted in `task-2-brief.md:200-214` asserts only "no `ToolCallDelta`". As things stand the ruling is unpinned everywhere.
+
+Fix here is one line in Task 1's test (the field is in-module):
+```rust
+assert!(
+    t.item_to_call.is_empty(),
+    "an incomplete item must not register into item_to_call; that would make \
+     has_tool_calls true with nothing emitted"
+);
+```
+Either add that, or restore the `Finish { Stop }` assertion to Task 2's brief — but do one of them.
+
+**2. Doc comments the diff falsified (tracked by Task 4 — flagging so it isn't lost, plus one correction Task 4 needs).**
+`responses.rs:209-234` enumerates the translator's "covered event types" without `response.output_item.done`, and still closes with "All other events are dropped with a `tracing::debug!` log" — now false. `item_to_call`'s field doc (`:253`) says "Populated by `response.output_item.added`"; `pending_args`' (`:260-262`) says buffers are "Flushed as a single `ToolCallDelta` … the moment `output_item.added` registers the item" — the helper now also populates the former and can silently *discard* the latter. Task 4's brief covers all three.
+
+The correction Task 4 needs: its prescribed `item_to_call` wording ("…also by `response.output_item.done` … so that `has_tool_calls` is correct even for a stream that never carried an `added` event") is no longer unconditionally true after the ruling — an `Incomplete` item is deliberately *not* registered. Task 4's brief was written against the pre-ruling order.
+
+### Minor
+
+**3. Spec §4 still documents the rejected order.** `docs/superpowers/specs/2026-08-22-sma-562-responses-output-item-done-design.md` §4 steps 1–2 (and §4.3's "step 2 of the helper also skips") describe register-then-check. The spec is committed on this branch; leaving it contradicting the shipped code invites a future reader to "fix" the code back to the defective order. One-line amendment, ideally in Task 4's docs commit.
+
+**4. New failure mode, documented but real.** Because `done` now sets `name_emitted` and registers `item_to_call`, a `function_call_arguments.delta` arriving *after* its item's `done` would emit with `name: None` and append to an already-complete args string → malformed JSON → `build_items` fails the entire turn. Before this change such a delta merely extended a partial string. The arm comment (`:436-440`) and spec §4.4 both name it as unobserved-on-the-wire. No action requested; recording that the accepted risk is genuinely new, not pre-existing.
+
+**5. The buffer-preference branch (`:332-337`) has no test anywhere in the plan.** `fc.arguments.is_empty() &amp;&amp; !buffered.is_empty()` is the one branch in the helper that nothing asserts — not in Task 1, and I checked Task 2's and Task 5's briefs, neither covers it. It is spec-mandated (§4 step 4) and I could not construct an ordering where it loses or duplicates data, so this is coverage, not a bug. A two-event test (buffered delta, then `done` with `arguments: ""`) would cost four lines.
+
+**6. §3.1's second clause has two undocumented carve-outs.** "every `function_call` item in the terminal `response.output` has had exactly one `ToolCallDelta` carrying `name: Some(_)`" cannot hold for an `id: None` item (`:302-310`) or an `Incomplete` one (`:311-318`). Both are deliberate and justified in §4.2/§4.3, but §3.1 as written does not carry the exceptions — Task 2's tests must not assert it literally over arbitrary `output` arrays.
+
+**7. `OutputStatus::InProgress` is unguarded.** The enum is `InProgress | Completed | Incomplete`; only `Incomplete` is excluded. Correct per spec §4 step 2 and unreachable on `output_item.done`, but Task 2 feeds the same helper from `response.output`, where the assumption is worth being conscious of.
+
+### On test honesty
+
+The report's claim is accurate and I verified it independently rather than taking it: before the change `ResponseOutputItemDone` fell through to the trailing `other` arm at `:530-537`, returning `Ok(vec![])`, so both `done_after_deltas_does_not_double_emit` and `incomplete_status_item_is_not_emitted` passed vacuously — only test 1 was red. The report says exactly that. `done_after_deltas_does_not_double_emit` is nonetheless a genuine guard against the *current* code (delete the `name_emitted` check and it fails); `incomplete_status_item_is_not_emitted` is not (finding 1).
+
+### ⚠️ Cannot verify from diff
+
+- `cargo fmt --all -- --check` and `RUSTDOCFLAGS="-D warnings" cargo doc` were not run by the implementer or by me (the report says only crate-scoped test + clippy). The helper's docs use no intra-doc links, so `private_intra_doc_links` is not at risk, but the docs gate is unproven for this commit.
+- The `47868a49` commit body's recorded pre-fix failure text — I confirmed the *current* 10/10 green and reproduced the pre-fix reasoning by inspection, but did not check out the parent to re-observe the red run.</result>
+<usage><subagent_tokens>108962</subagent_tokens><tool_uses>22</tool_uses><duration_ms>277353</duration_ms></usage>
+</task-notification>
