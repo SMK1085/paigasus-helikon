@@ -192,6 +192,13 @@ consumes its script.
 
 ### 4.2 `crates/paigasus-helikon-runtime-tokio/src/retry.rs` — pinning `RetryingModel`
 
+> **Post-implementation note.** This section names the pre-existing test
+> `cancellation_aborts_backoff_promptly` throughout. The final whole-branch review judged
+> that name misleading for the same reason this section gives — the test never reaches
+> backoff — so the shipped code renames it to `prefired_cancel_ends_stream_before_backoff`.
+> The old name is kept below on purpose: this document records what was designed, and the
+> code records what shipped.
+
 Added to the existing inline **`mod decorator_tests`** (line 378), which is where
 `ScriptModel`, `Resp`, `drain()` and `cancellation_aborts_backoff_promptly` live.
 

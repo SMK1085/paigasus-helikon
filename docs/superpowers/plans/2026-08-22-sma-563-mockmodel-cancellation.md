@@ -10,6 +10,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-22-sma-563-mockmodel-cancellation-design.md`
 
+> **Post-implementation note.** This plan and the spec were written before the final
+> whole-branch review, and both refer to the pre-existing test by its original name,
+> `cancellation_aborts_backoff_promptly`. That review found the name misleading — the test
+> never reaches backoff — so the shipped code renames it to
+> `prefired_cancel_ends_stream_before_backoff`. The old name is left in place throughout
+> these two documents on purpose: they record what was planned, and the code is the record
+> of what shipped.
+
 ## Global Constraints
 
 - **Commit prefix:** `<type>(<scope>): SMA-563 <lowercase message>`. Valid scopes for this work: `evals`, `runtime-tokio`, `facade`, `docs`, `spec`, `plan`. `convco` runs in a `commit-msg` hook and will reject anything else.
