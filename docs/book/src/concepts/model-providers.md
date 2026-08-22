@@ -61,8 +61,8 @@ These live in `paigasus_helikon::core` (re-exported from
   mid-stream error.
   Implementations that cannot honor cancellation MUST still terminate the
   stream when the `CancellationToken` fires, ending it without emitting
-  `Finish`. This tightens `Model::invoke`'s public contract for
-  third-party implementors.
+  `Finish`. Both rules restate `Model::invoke`'s existing public contract
+  here, where third-party implementors will look for them.
 - `ModelCapabilities` — the per-instance capability flags below.
 - `ModelError` — `Unavailable`, `RateLimited`, `ContextLengthExceeded`,
   `Refused`, `Transport`, `Other`. The loop does **not** auto-retry on these.

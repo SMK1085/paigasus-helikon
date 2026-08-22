@@ -610,6 +610,27 @@ Put the Step 3 mutation output in the commit body as evidence the test bites.
 
 ### Task 5: Cover the untested backoff-cancellation path and fix the misleading comment
 
+> ## ⚠️ SUPERSEDED
+>
+> **The shipped code is authoritative; the steps below record what was planned.** The
+> final whole-branch review changed two things in this task:
+>
+> 1. **The pre-existing test was renamed.** Every reference below to
+>    `cancellation_aborts_backoff_promptly` is the shipped
+>    `prefired_cancel_ends_stream_before_backoff`. The review judged the old name
+>    misleading for the same reason this task gives — it never reaches backoff.
+> 2. **`yield_now()` was replaced by `tokio::time::sleep(Duration::from_millis(1))`.**
+>    As planned, the test could not prove it had entered `backoff()`: in a degenerate
+>    scheduling where `cancel()` lands before the spawned task's first poll, the peek
+>    `select!` returns immediately and yields *identical* observables — the very weakness
+>    this task exists to correct. The sleep leans on tokio's documented paused-clock
+>    invariant (auto-advance fires only when the run queue is empty, so the drain must
+>    have parked) rather than `yield_now`'s undocumented scheduler ordering.
+>    `max_delay` was also raised to 3600s so the neighbouring "1-hour backoff" comment
+>    is literally true; the default 30s cap had silently contradicted it.
+>
+> See `crates/paigasus-helikon-runtime-tokio/src/retry.rs` for what actually shipped.
+
 **Files:**
 - Modify: `crates/paigasus-helikon-runtime-tokio/src/retry.rs` — the comment at line 558, and a new test in `mod decorator_tests`
 
