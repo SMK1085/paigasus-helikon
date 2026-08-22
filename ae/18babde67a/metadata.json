@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "ae18babde67a",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-568-decide-whether-core-and-the-runtime-crates-should-adopt",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-22-sma-568-tracing-target-adoption-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ae/18babde67a/0/metadata.json",
+      "transcript": "/ae/18babde67a/0/full.jsonl",
+      "compact_transcript": "/ae/18babde67a/0/transcript.jsonl",
+      "content_hash": "/ae/18babde67a/0/content_hash.txt",
+      "prompt": "/ae/18babde67a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 80,
+    "cache_creation_tokens": 201087,
+    "cache_read_tokens": 5275435,
+    "output_tokens": 48149,
+    "api_call_count": 40
+  }
+}
