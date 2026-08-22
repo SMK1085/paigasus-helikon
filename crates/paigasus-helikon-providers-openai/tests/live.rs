@@ -60,14 +60,25 @@ async fn responses_smoke() {
         .any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))));
 }
 
-/// The assertion a frozen fixture cannot make: that the live API still streams
-/// at least one `function_call_arguments.delta` for a zero-argument tool.
+/// An end-to-end pin against the live API for a zero-argument tool call.
 ///
-/// `responses_tool_call_zero_args.txt` pins the 2026-08-22 capture, but a
-/// recording cannot notice upstream behaviour changing. If OpenAI ever elides
-/// the `"{}"` delta, this is where it surfaces. The translator handles that
-/// case correctly since SMA-562 — this test exists so the change is *seen*,
-/// not so it breaks anything.
+/// `responses_tool_call_zero_args.txt` pins the 2026-08-22 capture as a frozen
+/// fixture; this test re-drives the same shape against the real endpoint.
+///
+/// **What this test can no longer notice (final-review correction):** it was
+/// originally framed as "if OpenAI ever elides the `{}` delta, this is where
+/// it surfaces." That framing predates SMA-562's `response.completed`
+/// reconciliation sweep. The sweep synthesises a `ToolCallDelta` from
+/// `response.output` for any call that streamed no argument deltas at all, so
+/// a live response *with* the `{}` delta and one *without* it now produce
+/// byte-identical `ModelEvent` sequences through the public API — the two
+/// shapes are indistinguishable downstream of the translator, which is the
+/// fix working as intended, not a gap. This test therefore cannot detect
+/// OpenAI eliding the delta, and is also blind to a regression that deleted
+/// the argument-delta emission path entirely (the reconciliation sweep would
+/// silently cover for it). Its real value is pinning the end-to-end shape —
+/// name, args and finish reason — against the live API, not distinguishing
+/// which wire path produced it.
 #[tokio::test]
 #[ignore]
 async fn responses_zero_arg_tool_streams_a_delta() {
@@ -83,18 +94,39 @@ async fn responses_zero_arg_tool_streams_a_delta() {
         schema: serde_json::json!({"type": "object", "properties": {}}),
     }];
     let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
-    let events: Vec<_> = stream.collect().await;
-
-    let deltas: Vec<&str> = events
-        .iter()
-        .filter_map(|r| match r {
-            Ok(ModelEvent::ToolCallDelta { args_delta, .. }) => Some(args_delta.as_str()),
-            _ => None,
-        })
+    let events: Vec<ModelEvent> = stream
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .map(|r| r.expect("live stream emitted Err"))
         .collect();
+
+    let tool_call_deltas: Vec<&ModelEvent> = events
+        .iter()
+        .filter(|e| matches!(e, ModelEvent::ToolCallDelta { .. }))
+        .collect();
+    assert_eq!(
+        tool_call_deltas.len(),
+        1,
+        "expected exactly one ToolCallDelta for a single zero-argument tool call; got {events:#?}"
+    );
+    match tool_call_deltas[0] {
+        ModelEvent::ToolCallDelta {
+            name, args_delta, ..
+        } => {
+            assert_eq!(name.as_deref(), Some("get_current_time"));
+            assert_eq!(args_delta, "{}");
+        }
+        other => panic!("expected ToolCallDelta, got {other:?}"),
+    }
     assert!(
-        !deltas.is_empty(),
-        "a zero-argument tool call emitted no ToolCallDelta at all; got {events:#?}"
+        matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: paigasus_helikon_core::FinishReason::ToolCalls
+            })
+        ),
+        "expected a terminal Finish {{ ToolCalls }}; got {events:#?}"
     );
 }
 

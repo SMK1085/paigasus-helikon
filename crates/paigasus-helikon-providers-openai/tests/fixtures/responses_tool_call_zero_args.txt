@@ -19,8 +19,22 @@
 : So this file is a REGRESSION PIN, not a reproduction. It pins the behaviour
 : the translator already had, so that if OpenAI ever elides the `{}` delta the
 : assumption is at least written down. Note what a frozen fixture cannot do:
-: notice that change happening. `responses_zero_arg_tool_streams_a_delta` in
-: `tests/live.rs` is the assertion that can, and is the reason it exists.
+: notice that change happening.
+:
+: CORRECTION (final review, post-implementation): this header used to claim
+: `responses_zero_arg_tool_streams_a_delta` in `tests/live.rs` "is the
+: assertion that can [notice], and is the reason it exists." That is no
+: longer true. SMA-562's own `response.completed` reconciliation sweep
+: synthesises a ToolCallDelta from `response.output` for any call that
+: streamed no argument deltas at all, so a live stream WITH the `{}` delta
+: and one WITHOUT it now produce byte-identical `ModelEvent` sequences
+: through the public API -- the two wire shapes are indistinguishable
+: downstream of the translator. That is the fix working as intended, not a
+: gap, but it does mean the elision this fixture guards against is no longer
+: observable through the public ModelEvent stream, by either the live test or
+: this fixture. The live test's real value is now an end-to-end pin against
+: the live API (name, args, finish reason), not a change-detector for the
+: `{}` delta specifically.
 :
 : Two deliberate edits from the raw capture:
 :
