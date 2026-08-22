@@ -312,6 +312,15 @@ a later whole-branch review (SMA-581 fix wave):
    configured** (`MD013`, `MD060` here). No file's *membership* in the linted set
    changes, so a membership-only check (does the probe path appear at all?) cannot
    catch it — the probe still appears via the explicitly-configured `MD060` line.
+4. **A bare-substring membership check is unsound once there is more than one
+   probe.** Found in a second review round on the fix wave above: the repo-root
+   probe's filename (`__mdlint_probe.md`) was a plain substring of every other
+   probe's path (e.g. `docs/book/src/__mdlint_probe.md` contains it), so a
+   `[[ "$output" == *"$probe"* ]]`-style check for the root probe was silently
+   satisfied by the BOOK or CRATE probe's own output lines. The root leg never
+   proved anything — excluding just the root file from `globs` left the script
+   printing "ok: all gated probes ... are linted" and exiting `0` while genuinely
+   no longer linting the root.
 
 Mechanism — markdownlint-cli2 has no `--list-files`, and per-file lines appear only
 for files *with* findings, so the script uses **probe files that deliberately
@@ -319,6 +328,17 @@ violate three rules at once**: `MD012` (multiple consecutive blank lines) and
 `MD040` (fenced code block with no language tag), both default-on and otherwise
 untouched by this repo's config; and `MD060` in `"compact"` style (an unpadded
 table row), the one rule this repo explicitly configures.
+
+Every probe path is matched **anchored**, not by bare substring: output lines are
+selected by `path + ":"` at the START of the line (markdownlint-cli2 emits
+`path:line[:col] error MDxxx/rule description`), via
+`awk -v p="${path}:" 'index($0, p) == 1'`. This is what actually fixes failure mode
+4 above, and it is applied to every leg (all three gated probes and the excluded
+probe), not just the root one, so a future rename or an added probe cannot
+reintroduce the same class of bug. The repo-root probe is additionally renamed to
+`__mdlint_probe_root.md` — not a substring of any sibling path — as a redundant,
+belt-and-braces defense that would catch the collision even if the anchoring were
+ever weakened.
 
 ```text
 set -euo pipefail; trap cleanup EXIT
@@ -328,16 +348,19 @@ set -euo pipefail; trap cleanup EXIT
 1. Write the same MD012+MD040+MD060 violation into three gated probes:
    docs/book/src/__mdlint_probe.md (deep book path), a crate README location
    (crates/paigasus-helikon-core/__mdlint_probe.md), and the repo root
-   (__mdlint_probe.md).
-   For each: assert the path is linted at all; assert MD012 fires on it (a
-   rule ID other than MD060, so this check cannot be satisfied by an MD060
-   line alone); assert MD040 fires on it (proves "default": true is in
-   force, independent of file membership); assert MD060 fires on it (proves
-   the configured style value is honoured).
-   -> proves each gated area is linted, independently of the others, under
-      both default-on and explicitly-configured rules.
+   (__mdlint_probe_root.md — collision-proof: not a substring of any sibling
+   probe path).
+   For each: extract only the output lines anchored to that exact path (see
+   "Mechanism" above); assert that set is non-empty (the path was linted at
+   all); assert MD012 fires in it (a rule ID other than MD060, so this check
+   cannot be satisfied by an MD060 line alone); assert MD040 fires in it
+   (proves "default": true is in force, independent of file membership);
+   assert MD060 fires in it (proves the configured style value is honoured).
+   -> proves each gated area is linted, independently of the others (both in
+      the sense of separate globs AND separate, non-colliding output-line
+      matching), under both default-on and explicitly-configured rules.
 2. Write the same violation into docs/superpowers/__mdlint_probe.md.
-   Assert the output does NOT name that path.
+   Assert its anchored output-line set is empty.
    -> proves the exclusion is in force.
 3. Remove all four probes.
 ```
@@ -347,7 +370,10 @@ absence-of-findings — per the repo's own lesson in `audit.yml`'s `scheduled-au
 commentary. Set membership rather than a file **count**, because a count is brittle
 against ordinary additions and trains people to update it reflexively. The
 membership check for each gated probe is itself tied to a named rule (`MD012`) that
-is not `MD060`, so an `MD060`-only match can never stand in for genuine membership.
+is not `MD060`, so an `MD060`-only match can never stand in for genuine membership
+— and, since SMA-581's second fix wave, tied to output lines anchored to that
+probe's exact path, so no probe's match can be satisfied by a sibling probe's
+output either.
 
 Not guarded: an unknown *rule name* (`"MD6O": false`) is also silently ignored, but
 that is fail-**safe** — the real rule stays enabled and a violation still fails the

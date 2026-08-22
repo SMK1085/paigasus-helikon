@@ -5,12 +5,14 @@
 # What this file DOES assert, each as a distinct check with its own failure
 # message naming the cause:
 #
-#   - Several areas the config is supposed to gate are each independently
+#   - Three areas the config is supposed to gate are each independently
 #     linted: a deep book path, a crate README location, and the repo root.
-#     Each is probed separately so a glob change that narrows to (or widens
-#     from) any ONE subtree -- e.g. adding "!crates/**", which would leave the
-#     book tree and the lint step both green while ungating every crate
-#     README -- is caught by name, not just proven for one path.
+#     Each is probed separately, with output lines matched anchored to that
+#     exact path (not a bare substring -- see "Anchoring" below), so a glob
+#     change that narrows to (or widens from) any ONE subtree -- e.g. adding
+#     "!crates/**", which would leave the book tree and the lint step both
+#     green while ungating every crate README -- is caught by name, not just
+#     proven for one path.
 #   - An explicitly excluded area (docs/superpowers/) is NOT linted.
 #   - The explicitly configured MD060 rule value is in force (its "style"
 #     option is not silently invalid).
@@ -29,6 +31,21 @@
 # covered (only the probed ones are), or that an unrelated/unknown rule option
 # is silently ignored (that failure mode is fail-safe -- the real rule stays
 # enabled -- and was verified separately; see the design doc).
+#
+# Anchoring (SMA-581 fix-wave-2): output lines are matched with an exact
+# path-prefix anchor (`path + ":"` at the START of the line), not a bare
+# substring. A bare-substring check is unsound with multiple probes: the repo
+# root probe's filename was, until this fix, a plain substring of every other
+# probe's path (e.g. "docs/book/src/__mdlint_probe.md" contains
+# "__mdlint_probe.md"), so its "membership" and rule checks were silently
+# satisfied by the BOOK or CRATE probe's own output lines -- the root leg
+# never actually proved anything. Excluding just the root probe from `globs`
+# left this script printing "ok: all gated probes ... are linted" and exiting
+# 0 while genuinely no longer linting the root. Fixed two ways, deliberately
+# redundant: the root probe is named collision-proof
+# (`__mdlint_probe_root.md`, not a substring of any sibling path), AND every
+# leg's matching is anchored to the exact path so a future rename or a probe
+# added later cannot reintroduce the same class of bug.
 #
 # Mechanism: markdownlint-cli2 has no --list-files, and per-file lines appear
 # only for files WITH findings. So we write probe files that deliberately
@@ -76,11 +93,13 @@ untagged fence
 
 # Three areas the config is supposed to gate, probed independently so a glob
 # edit that narrows to (or widens from) just one of them cannot hide behind
-# the other two staying green.
+# the other two staying green. Names are chosen so no probe's path is a
+# substring of another's (see "Anchoring" above) -- belt-and-braces alongside
+# the anchored matching below, which would catch the collision either way.
 GATED_PROBES=(
   "docs/book/src/__mdlint_probe.md"
   "crates/paigasus-helikon-core/__mdlint_probe.md"
-  "__mdlint_probe.md"
+  "__mdlint_probe_root.md"
 )
 EXCLUDED_PROBE="docs/superpowers/__mdlint_probe.md"
 
@@ -96,16 +115,21 @@ fail() {
   exit 1
 }
 
+# Returns (on stdout) the subset of $1's lines that belong to path $2,
+# anchored to the START of the line on the literal string "$2:" -- markdown-
+# lint-cli2 emits "path:line[:col] error MDxxx/rule description", so this
+# matches only lines that are actually reporting on that exact path, never a
+# path for which $2 merely happens to be a substring.
+lines_for_path() {
+  local all_output="$1"
+  local path="$2"
+  printf '%s\n' "$all_output" | awk -v p="${path}:" 'index($0, p) == 1'
+}
+
 # --- Assertion 0: we are testing the same binary the gate runs ---------------
 # markdownlint-cli2 prints "markdownlint-cli2 vX.Y.Z (markdownlint vA.B.C)" as
 # the first line of every run. If the self-test certified a different version
 # than the gate, it would prove nothing about the gate.
-# NB: every assertion below uses bash pattern matching, NOT `... | grep -q`.
-# Under `set -o pipefail`, `grep -q` exits on its FIRST match and closes the
-# pipe; the writer then takes SIGPIPE and the pipeline returns 141, which reads
-# as "not found". That misfires only when the output is large -- i.e. exactly
-# when the repo is dirty and the guard matters most. Observed for real while
-# validating this script.
 #
 # Also match the WHOLE help output, not just line 1: npx prepends its own
 # "npm warn exec ..." line when the package is not already installed locally.
@@ -126,13 +150,11 @@ output="$(npx markdownlint-cli2 2>&1 || true)"
 
 # --- Assertions 1-4, per gated probe -----------------------------------------
 for probe in "${GATED_PROBES[@]}"; do
-  if [[ "$output" != *"$probe"* ]]; then
+  probe_lines="$(lines_for_path "$output" "$probe")"
+
+  if [[ -z "$probe_lines" ]]; then
     fail "gated probe '$probe' was not linted at all -- the glob set has collapsed or narrowed to exclude this area, or 'gitignore' is excluding it"
   fi
-
-  # `grep -F` without `-q` so it consumes all of stdin; see the SIGPIPE note
-  # above.
-  probe_lines="$(printf '%s\n' "$output" | grep -F "$probe" || true)"
 
   if [[ "$probe_lines" != *MD012* ]]; then
     fail "MD012 did not fire on '$probe' -- membership was carried only by another rule (e.g. MD060), which cannot substitute for this check: it likely means 'default' is no longer true, since MD012 is a default-on rule with no explicit config in this repo"
@@ -149,7 +171,8 @@ done
 echo "ok: all gated probes (deep book path, a crate README location, and the repo root) are linted, with MD012/MD040 (default-on) and MD060 (explicitly configured) all firing"
 
 # --- Assertion 5: the exclusion is in force ----------------------------------
-if [[ "$output" == *"$EXCLUDED_PROBE"* ]]; then
+excluded_lines="$(lines_for_path "$output" "$EXCLUDED_PROBE")"
+if [[ -n "$excluded_lines" ]]; then
   fail "excluded probe '$EXCLUDED_PROBE' WAS linted -- the docs/superpowers exclusion is not in force"
 fi
 echo "ok: docs/superpowers/ is excluded"
