@@ -13,3 +13,27 @@ crates/paigasus-helikon-tools/tests/fixtures/*.html text eol=lf
 # defence for a future test that splits on literal \n -- not a fix for a
 # present failure. See SMA-522.
 crates/paigasus-helikon-providers-openai/tests/fixtures/*.txt text eol=lf
+
+# Cross-provider stream-conformance fixtures (SMA-533). The SSE subjects' `.txt`
+# fixtures follow the LF convention above.
+#
+# Presently inert: none of the six subjects checks in a fixture file — all
+# six build their wire bytes in code (see `tests/conformance.rs`). This rule
+# is here so that a `.txt` fixture dropped into this directory later cannot
+# be silently corrupted on a Windows checkout, the same defensive reasoning
+# as the binary rule below.
+tests/provider-stream-conformance/fixtures/**/*.txt text eol=lf
+
+# Bedrock is the one subject with a binary wire format:
+# `application/vnd.amazon.eventstream` frames are a length-prefixed header block
+# wrapped in two CRC-32s, so *any* eol translation corrupts them into frames the
+# SDK's decoder rejects. This rule is listed LAST on purpose — gitattributes
+# resolves later matches first, so no broader glob above can turn a file under
+# this directory back into `text`.
+#
+# Presently inert: the Bedrock subject builds its frames in-process with
+# `eventstream::frame` rather than checking in opaque `.bin` blobs, so no file
+# matches this yet. It is here so that a later fixture dropped into that
+# directory cannot be silently corrupted on a Windows checkout — which would
+# present as the translator dropping unknown events, not as a checkout bug.
+tests/provider-stream-conformance/fixtures/bedrock/** binary

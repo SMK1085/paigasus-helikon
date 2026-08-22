@@ -16,6 +16,7 @@ const REASONING: &str = include_str!("fixtures/responses_reasoning_then_text.txt
 const LENGTH: &str = include_str!("fixtures/responses_incomplete_length.txt");
 const FILTER: &str = include_str!("fixtures/responses_incomplete_filter.txt");
 const FAILED: &str = include_str!("fixtures/responses_failed.txt");
+const TOOL_CALL: &str = include_str!("fixtures/responses_tool_call.txt");
 
 fn user(text: &str) -> Item {
     Item::UserMessage {
@@ -130,6 +131,80 @@ async fn incomplete_content_filter_maps_to_finish_content_filter() {
             }
         ),
         "expected Finish(ContentFilter) as last event, got {:?}",
+        unwrapped.last()
+    );
+}
+
+/// End-to-end regression for the SMA-533 defect: a turn whose sole output is
+/// a `function_call` must finish with `FinishReason::ToolCalls`, not `Stop`.
+///
+/// `TOOL_CALL` (`fixtures/responses_tool_call.txt`) is CAPTURED against real
+/// `https://api.openai.com/v1/responses` traffic (`gpt-4o-mini-2024-07-18`,
+/// 2026-08-20; see the fixture's own provenance header). Before this fix,
+/// `ResponsesTranslator::terminal_events` had no `ToolCalls` arm at all —
+/// `grep -n ToolCalls backend/responses.rs` returned nothing — so this exact
+/// event sequence (`response.completed` with `status: "completed"` and
+/// `incomplete_details: null`) resolved to `Finish(Stop)`.
+#[tokio::test]
+async fn tool_call_turn_finishes_with_tool_calls() {
+    let events = run(TOOL_CALL).await;
+    let unwrapped: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
+
+    // The five argument fragments reassemble to the whole JSON object, all
+    // under the stable `call_id` (not the `fc_...` item id).
+    let args: String = unwrapped
+        .iter()
+        .filter_map(|e| match e {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                args_delta,
+                ..
+            } => {
+                assert_eq!(
+                    call_id, "call_D3Tp4UJ6scmDWx6jmfvy2LQo",
+                    "call_id must be the stable call_id from output_item.added, not the fc_... item id"
+                );
+                Some(args_delta.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        args, "{\"city\":\"Berlin\"}",
+        "fragmented arguments must reassemble to the whole JSON object"
+    );
+
+    // Exactly one ToolCallDelta carries the name — and it must be the *right*
+    // name against the *stable* call id. Counting `Some(_)` alone would pass a
+    // translator that emitted a truncated or wrong name, which is the SMA-547
+    // bug class this assertion exists to catch. Note the id asserted here is
+    // `item.call_id` from the capture, not the `fc_…` `item.id` the argument
+    // deltas correlate on.
+    let named_calls: Vec<(&str, &str)> = unwrapped
+        .iter()
+        .filter_map(|e| match e {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name: Some(name),
+                ..
+            } => Some((call_id.as_str(), name.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        named_calls,
+        vec![("call_D3Tp4UJ6scmDWx6jmfvy2LQo", "get_weather")],
+        "expected exactly one complete name for the stable call id, got {unwrapped:?}"
+    );
+
+    assert!(
+        matches!(
+            unwrapped.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ),
+        "expected Finish(ToolCalls) as the last event, got {:?}",
         unwrapped.last()
     );
 }

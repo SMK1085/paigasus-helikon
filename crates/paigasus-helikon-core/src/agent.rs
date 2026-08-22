@@ -381,7 +381,12 @@ pub enum AgentEvent {
     ToolCallDelta {
         /// Provider-assigned call identifier.
         call_id: String,
-        /// Tool name; `Some` on the first delta only.
+        /// `Some` exactly once per `call_id`, on the first delta for which
+        /// the provider can establish the name is complete, and `None` on
+        /// every other delta. When `Some`, the value is the whole name so
+        /// far as the provider can determine — a provider receiving the
+        /// name in fragments MUST buffer and concatenate them, and MUST NOT
+        /// emit a name it can detect is still incomplete.
         ///
         /// `skip_serializing_if = "Option::is_none"` so subsequent deltas
         /// (which have no name) omit the field entirely rather than emitting

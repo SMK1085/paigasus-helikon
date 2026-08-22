@@ -3988,6 +3988,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "paigasus-helikon-provider-stream-conformance"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-sdk-bedrockruntime",
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "paigasus-helikon-core",
+ "paigasus-helikon-providers-anthropic",
+ "paigasus-helikon-providers-bedrock",
+ "paigasus-helikon-providers-gemini",
+ "paigasus-helikon-providers-litellm",
+ "paigasus-helikon-providers-openai",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "paigasus-helikon-providers-anthropic"
 version = "0.1.22"
 dependencies = [

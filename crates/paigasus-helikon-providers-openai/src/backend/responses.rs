@@ -219,7 +219,11 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 ///   name-emission gating (name emitted once per call_id, then `None`). If
 ///   `output_item.added` has not yet registered the item_id, the delta is buffered
 ///   in `pending_args` and flushed when the registration eventually arrives.
-/// - `response.completed` → `Usage` + `Finish { Stop }`
+/// - `response.completed` → `Usage` + `Finish { Stop }`, or `Finish { ToolCalls }`
+///   when `item_to_call` is non-empty — a turn whose sole output is a function
+///   call still reports `status: "completed"` on the wire (confirmed against
+///   real traffic; see `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`),
+///   so `status` alone cannot distinguish the two cases.
 /// - `response.incomplete` → `Usage` + `Finish` per `incomplete_details.reason`
 ///   - `"max_output_tokens"` → `Finish { Length }`
 ///   - `"content_filter"` → `Finish { ContentFilter }`
@@ -390,9 +394,12 @@ impl ResponsesTranslator {
             }
 
             // Terminal: response completed.
-            ResponseStreamEvent::ResponseCompleted(e) => {
-                Ok(terminal_events(e.response.usage, e.response.status, None))
-            }
+            ResponseStreamEvent::ResponseCompleted(e) => Ok(terminal_events(
+                e.response.usage,
+                e.response.status,
+                None,
+                !self.item_to_call.is_empty(),
+            )),
 
             // Terminal: response incomplete — map reason to FinishReason.
             ResponseStreamEvent::ResponseIncomplete(e) => {
@@ -401,7 +408,12 @@ impl ResponsesTranslator {
                     .incomplete_details
                     .as_ref()
                     .map(|d| d.reason.as_str());
-                Ok(terminal_events(e.response.usage, e.response.status, reason))
+                Ok(terminal_events(
+                    e.response.usage,
+                    e.response.status,
+                    reason,
+                    !self.item_to_call.is_empty(),
+                ))
             }
 
             // Terminal: response failed — emit error on the outer stream.
@@ -439,12 +451,24 @@ impl ResponsesTranslator {
 }
 
 /// Build the terminal `[Usage, Finish]` event pair from a response's
-/// usage snapshot, status, and optional `incomplete_details.reason` string.
+/// usage snapshot, status, optional `incomplete_details.reason` string, and
+/// whether the response produced any tool calls.
 ///
 /// When `incomplete_reason` is `Some`, it overrides the status-based mapping:
 /// - `"max_output_tokens"` → `Finish { Length }`
 /// - `"content_filter"` → `Finish { ContentFilter }`
 /// - other string → `Finish { Other(reason) }`
+///
+/// `has_tool_calls` only affects the `Status::Completed` arm of the
+/// status-based mapping: real traffic confirms a turn whose sole output is a
+/// function call still reports `status: "completed"` with
+/// `incomplete_details: null` (see
+/// `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt`),
+/// so `status` alone cannot tell a tool-call turn from an ordinary text
+/// completion — the caller passes `!item_to_call.is_empty()` to resolve that.
+/// Every other status arm ignores it, matching every other subject in the
+/// stream conformance suite, which distinguish `ToolCalls` from `Stop` only
+/// on the natural-completion path.
 ///
 /// **Invariant (SMA-522):** `Usage` is constructed *only* here, and this
 /// function unconditionally appends `Finish` before returning. That — not the
@@ -455,6 +479,7 @@ fn terminal_events(
     usage: Option<ResponseUsage>,
     status: Status,
     incomplete_reason: Option<&str>,
+    has_tool_calls: bool,
 ) -> Vec<ModelEvent> {
     let mut out = Vec::new();
 
@@ -475,6 +500,7 @@ fn terminal_events(
         }
     } else {
         match status {
+            Status::Completed if has_tool_calls => FinishReason::ToolCalls,
             Status::Completed => FinishReason::Stop,
             Status::Failed => FinishReason::Other("failed".to_owned()),
             Status::Incomplete => FinishReason::Length,
@@ -616,5 +642,101 @@ mod tests {
         } else {
             panic!("expected ToolCallDelta, got {evs:?}");
         }
+    }
+
+    /// A minimal usage snapshot. Field values are arbitrary — nothing below
+    /// inspects them, only that a `Usage` event is present.
+    fn usage() -> ResponseUsage {
+        ResponseUsage {
+            input_tokens: 51,
+            input_tokens_details: async_openai::types::responses::InputTokenDetails {
+                cached_tokens: 0,
+            },
+            output_tokens: 15,
+            output_tokens_details: async_openai::types::responses::OutputTokenDetails {
+                reasoning_tokens: 0,
+            },
+            total_tokens: 66,
+        }
+    }
+
+    /// The regression this whole test guards: `grep -n ToolCalls
+    /// backend/responses.rs` returned nothing before this fix, while
+    /// `chat.rs` maps `OaFinishReason::ToolCalls => FinishReason::ToolCalls`.
+    /// A turn whose sole output is a `function_call` reports
+    /// `status: "completed"` on the wire — confirmed against real traffic,
+    /// see `tests/fixtures/responses_tool_call.txt` — so `Status::Completed`
+    /// alone cannot distinguish an ordinary text stop from a tool-call turn;
+    /// `has_tool_calls` is what the caller threads in from `item_to_call`.
+    #[test]
+    fn terminal_events_completed_with_tool_calls_maps_to_tool_calls() {
+        let events = terminal_events(Some(usage()), Status::Completed, None, true);
+        assert!(
+            matches!(
+                events.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::ToolCalls
+                })
+            ),
+            "expected Finish(ToolCalls) as the last event, got {events:?}"
+        );
+    }
+
+    /// The sibling of the test above: an ordinary text completion — no tool
+    /// calls observed — must still map `Status::Completed` to `Stop`, exactly
+    /// as before this fix. Guards against a careless rewrite that maps
+    /// `Status::Completed` to `ToolCalls` unconditionally.
+    #[test]
+    fn terminal_events_completed_without_tool_calls_maps_to_stop() {
+        let events = terminal_events(Some(usage()), Status::Completed, None, false);
+        assert!(
+            matches!(
+                events.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::Stop
+                })
+            ),
+            "expected Finish(Stop) as the last event, got {events:?}"
+        );
+    }
+
+    /// `has_tool_calls` must only steer the `Status::Completed` arm. The
+    /// `incomplete_details.reason` override path ignores it entirely — a
+    /// truncated-by-length turn stays `Length` even if it happened to carry a
+    /// tool call, matching the approved shape ("leaving every other arm
+    /// as-is").
+    #[test]
+    fn terminal_events_incomplete_reason_ignores_has_tool_calls() {
+        let events = terminal_events(
+            Some(usage()),
+            Status::Incomplete,
+            Some("max_output_tokens"),
+            true,
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::Length
+                })
+            ),
+            "expected Finish(Length) regardless of has_tool_calls, got {events:?}"
+        );
+    }
+
+    /// Same guard as above for the plain `Status`-based mapping's other arms:
+    /// `has_tool_calls` must not leak into `Failed`/`Cancelled`/etc.
+    #[test]
+    fn terminal_events_failed_status_ignores_has_tool_calls() {
+        let events = terminal_events(Some(usage()), Status::Failed, None, true);
+        assert!(
+            matches!(
+                events.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::Other(reason)
+                }) if reason == "failed"
+            ),
+            "expected Finish(Other(\"failed\")) regardless of has_tool_calls, got {events:?}"
+        );
     }
 }

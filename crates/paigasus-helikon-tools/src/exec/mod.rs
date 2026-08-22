@@ -244,11 +244,8 @@ pub(crate) async fn spawn_capped(
     let err_handle = tokio::spawn(read_capped(stderr_pipe, cap));
 
     let mut timed_out = false;
-    let exit_code: Option<i32>;
-    match tokio::time::timeout(cfg.timeout, child.wait()).await {
-        Ok(status) => {
-            exit_code = status.map_err(|e| ToolError::Other(e.into()))?.code();
-        }
+    let exit_code: Option<i32> = match tokio::time::timeout(cfg.timeout, child.wait()).await {
+        Ok(status) => status.map_err(|e| ToolError::Other(e.into()))?.code(),
         Err(_) => {
             timed_out = true;
             #[cfg(unix)]
@@ -263,12 +260,12 @@ pub(crate) async fn spawn_capped(
             {
                 let _ = child.start_kill();
             }
-            exit_code = match tokio::time::timeout(GRACE, child.wait()).await {
+            match tokio::time::timeout(GRACE, child.wait()).await {
                 Ok(Ok(status)) => status.code(),
                 _ => None,
-            };
+            }
         }
-    }
+    };
 
     let ((stdout, out_trunc), (stderr, err_trunc)) =
         tokio::join!(join_reader(out_handle), join_reader(err_handle));

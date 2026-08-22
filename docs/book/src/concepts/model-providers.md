@@ -55,6 +55,11 @@ These live in `paigasus_helikon::core` (re-exported from
 - `ModelEvent` — the streaming union: `TokenDelta`, `ReasoningDelta`,
   `ToolCallDelta`, `Usage { input_tokens, output_tokens, cached_input_tokens,
   reasoning_tokens }`, and the terminal `Finish { reason }` (a `FinishReason`).
+  **Contract clarification:** implementations MUST emit `Finish` at
+  end-of-stream when a stop reason was observed, and MUST NOT emit it on
+  truncation with no stop reason observed, on cancellation, or after a
+  mid-stream error. This tightens `Model::invoke`'s public contract for
+  third-party implementors.
 - `ModelCapabilities` — the per-instance capability flags below.
 - `ModelError` — `Unavailable`, `RateLimited`, `ContextLengthExceeded`,
   `Refused`, `Transport`, `Other`. The loop does **not** auto-retry on these.
