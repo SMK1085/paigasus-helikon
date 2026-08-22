@@ -50,6 +50,8 @@ println!("{}", report.render_table());
 
 `MockModel` replays a recorded script (`Vec<ModelEvent>` per `invoke` call) for deterministic, network-free testing. It is stateful — sharing one instance across cases is order-dependent under concurrency — so use `EvalRun::agent_factory` to build a fresh agent (and fresh `MockModel`) per case. `ScriptFile::load` parses a JSON file of serde mirror types (`ScriptEvent`/`ScriptFinishReason`) with a `"default"` script set plus an optional per-case `"cases"` map keyed by case id, so one file can drive a whole dataset.
 
+`MockModel` honors its `CancellationToken` as the `Model::invoke` contract requires: the stream observes the token at each poll and ends on the first fired observation, without emitting `Finish`. The token is observed, not awaited — a consumer that stops polling never learns the stream has ended. An `invoke` called with an already-cancelled token yields an empty stream but still consumes its script, so "one script per `invoke`" holds regardless of cancellation timing.
+
 ## Links
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-evals)

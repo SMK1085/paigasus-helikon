@@ -283,6 +283,19 @@ mock-backed agent across cases is order-dependent under concurrency. Use
 case, selecting scripts by `case.id` — whenever the model is a mock;
 `.agent()`/`.shared_agent()` remain for genuinely stateless or live agents.
 
+`MockModel` honors its `CancellationToken` as the `Model::invoke` contract
+requires: the stream observes the token at each poll and ends on the first
+fired observation, without emitting `Finish`. The token is *observed*, not
+awaited — a consumer that stops polling never learns the stream has ended,
+which is all a synchronous scripted stream can offer. An `invoke` called with
+an already-cancelled token yields an empty stream but still consumes its
+script, so "one script per `invoke`" holds regardless of cancellation timing.
+
+Cancelling part-way through a tool call leaves a truncated `args_delta`, which
+core's turn accumulator then fails to parse — matching what a real provider
+does when a connection drops mid-call. That is the point: it is now
+reproducible deterministically.
+
 ### `EvalRun`
 
 ```rust,ignore
