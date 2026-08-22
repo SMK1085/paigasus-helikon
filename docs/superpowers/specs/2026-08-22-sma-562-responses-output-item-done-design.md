@@ -47,7 +47,7 @@ A zero-argument strict tool (`{"type":"object","properties":{},"required":[],
 "additionalProperties":false}`, `tool_choice: "required"`) streams **one** argument delta,
 carrying `"{}"`. On `gpt-4o-mini-2024-07-18`:
 
-```
+```text
 response.output_item.added              arguments:"" call_id:call_8xWY… name:get_current_time
 response.function_call_arguments.delta  delta:"{}"
 response.function_call_arguments.done   arguments:"{}"
@@ -69,7 +69,7 @@ describes a tool call entirely on `output_item.done`. Sent `background: true, st
 4–8, then issued a **second, separate** request,
 `GET /v1/responses/{id}?stream=true&starting_after=9`:
 
-```
+```text
 response.output_item.done   item:{type:"function_call", call_id:"call_lQOsuE9…",
                                   name:"get_weather", arguments:"{\"city\":\"Berlin\"}"}
 response.completed          status:"completed"
@@ -159,7 +159,7 @@ its `arguments` may be truncated JSON). Both are absent from "every `function_ca
 One private helper plus two arms in `ResponsesTranslator::consume`. The helper is the single
 place the emission rule lives:
 
-```
+```rust
 fn emit_call_if_unseen(&mut self, item: &OutputItem) -> Option<ModelEvent>
 ```
 

@@ -782,7 +782,7 @@ The file is the header block below, then the capture's five events verbatim
 `response.completed`), with `response.created` and `response.in_progress` dropped, matching
 every sibling fixture in the directory.
 
-```
+```text
 : Provenance: CAPTURED against a real https://api.openai.com/v1/responses
 : request, model gpt-4o-mini-2024-07-18, on 2026-08-22, with ONE zero-argument
 : strict tool:
