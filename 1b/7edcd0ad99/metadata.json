@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "1b7edcd0ad99",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-562-openairesponses-reports-finishtoolcalls-for-a-function-call",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/1b/7edcd0ad99/0/metadata.json",
+      "transcript": "/1b/7edcd0ad99/0/full.jsonl",
+      "compact_transcript": "/1b/7edcd0ad99/0/transcript.jsonl",
+      "content_hash": "/1b/7edcd0ad99/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 588,
+    "cache_creation_tokens": 1098242,
+    "cache_read_tokens": 99645254,
+    "output_tokens": 256394,
+    "api_call_count": 294
+  }
+}
