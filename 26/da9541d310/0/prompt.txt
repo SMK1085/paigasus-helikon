@@ -1,0 +1,40 @@
+<task-notification>
+<task-id>ab6a3400d42296cb6</task-id>
+<tool-use-id>toolu_01SKooLZBuX8vXopE2XqJ5H6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/ab6a3400d42296cb6.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 3 fix DemoModel example" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Status: DONE
+Commit SHA: `2200afe2356c00729c172964afa6c1939320704b`
+Build summary: `cargo check -p paigasus-helikon --example langfuse_tracing --features runtime-tokio` finished clean, no errors/warnings.
+Concerns: none. Only `crates/paigasus-helikon/examples/langfuse_tracing.rs` touched; used the fully-qualified `futures_util::StreamExt::take_while` form per the brief's default; `cargo fmt --all` reflowed the closure call but is functionally identical to the brief's snippet.</result>
+<usage><subagent_tokens>71376</subagent_tokens><tool_uses>9</tool_uses><duration_ms>50989</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a936e7b39f46696f0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a936e7b39f46696f0.output</output-file>
+<status>completed</status>
+<summary>Agent "Tasks 4+5 RetryingModel pins" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>`.superpowers/` is gitignored, which is fine — the report file exists on disk as required, just not tracked by git. Both commits are clean and the working tree matches. Final status report:
+
+**Status: DONE**
+
+Commits:
+- Task 4: `55b657b9` — `test(runtime-tokio): SMA-563 pin cancellation after content starts`
+- Task 5: `a37dbc8a` — `test(runtime-tokio): SMA-563 cover cancellation during retry backoff`
+
+Mutation checks:
+- Task 4 (removed forwarding-loop cancel arm): test bit — failed on `rest.is_empty()`, leaked `Ok(Finish { reason: Stop })`.
+- Task 5 (unconditional sleep in `backoff()`): test bit on the non-obvious assertion exactly as the brief predicted — failed on `calls()` (left=2, right=1), `items.is_empty()` still passed.
+
+Both mutations were reverted by hand (no `git checkout`/`reset`), verified via `git diff`/`git diff --stat` before staging, and the full crate test suite (16 lib tests + integration tests) is green after each revert. Only `crates/paigasus-helikon-runtime-tokio/src/retry.rs` was touched; `cargo fmt --all` ran before each commit. Full report with code, outputs, and commentary written to `.superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-4-5-report.md`.
+
+No concerns.</result>
+<usage><subagent_tokens>91501</subagent_tokens><tool_uses>33</tool_uses><duration_ms>181254</duration_ms></usage>
+</task-notification>
