@@ -200,7 +200,11 @@ async fn send<Ctx: Send + Sync + 'static>(
 
     // Buffered mode: wait for the detached driver to reach the task's terminal.
     if handle.await.is_err() {
-        tracing::error!(task_id = %task_id, "a2a run task panicked");
+        tracing::error!(
+            target: "paigasus::runtime_agentcore::a2a",
+            task_id = %task_id,
+            "a2a run task panicked"
+        );
     }
 
     match state.tasks.get(&task_id).await {
@@ -607,7 +611,12 @@ async fn drive<Ctx: Send + Sync + 'static>(
             }
             AgentEvent::RunFailed { error } => {
                 outcome = TaskState::Failed;
-                tracing::debug!(task_id = %task_id, error = %error, "a2a run failed");
+                tracing::debug!(
+                    target: "paigasus::runtime_agentcore::a2a",
+                    task_id = %task_id,
+                    error = %error,
+                    "a2a run failed"
+                );
             }
             _ => {}
         }
@@ -620,7 +629,12 @@ async fn drive<Ctx: Send + Sync + 'static>(
             parts: vec![Part::Text { text: accumulated }],
         }];
         if let Err(e) = tasks.set_artifacts(&task_id, artifacts).await {
-            tracing::debug!(task_id = %task_id, error = %e, "could not store task artifacts");
+            tracing::debug!(
+                target: "paigasus::runtime_agentcore::a2a",
+                task_id = %task_id,
+                error = %e,
+                "could not store task artifacts"
+            );
         }
     }
 
@@ -654,7 +668,12 @@ async fn append(tasks: &Arc<dyn crate::TaskStore>, task_id: &str, payload: Value
         .append_event(task_id, crate::TaskEvent { seq: 0, payload })
         .await
     {
-        tracing::debug!(task_id = %task_id, error = %e, "could not append task event");
+        tracing::debug!(
+            target: "paigasus::runtime_agentcore::a2a",
+            task_id = %task_id,
+            error = %e,
+            "could not append task event"
+        );
     }
 }
 

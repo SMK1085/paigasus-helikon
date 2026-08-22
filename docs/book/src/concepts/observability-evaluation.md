@@ -133,6 +133,7 @@ two namespaces:
 | `paigasus::runtime_temporal` | `paigasus-helikon-runtime-temporal` | `activities`, `activity_input`, `worker`, `runner` | stable |
 | `paigasus::runtime_axum` | `paigasus-helikon-runtime-axum` | `registry`, `error`, `runs` | stable |
 | `paigasus::runtime_actix` | `paigasus-helikon-runtime-actix` | `registry`, `error`, `runs` | stable |
+| `paigasus::runtime_agentcore` | `paigasus-helikon-runtime-agentcore` | `server`, `invoke`, `mcp`, `a2a`, `agui` | stable |
 
 <!-- tracing-components:end -->
 
