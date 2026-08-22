@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use async_openai::traits::EventType as _;
 use async_openai::types::responses::{
-    CreateResponse, FunctionTool, InputItem, InputParam, OutputItem, ResponseFormatJsonSchema,
-    ResponseStreamEvent, ResponseTextParam, ResponseUsage, Status, TextResponseFormatConfiguration,
-    Tool, ToolChoiceOptions, ToolChoiceParam,
+    CreateResponse, FunctionTool, InputItem, InputParam, OutputItem, OutputStatus,
+    ResponseFormatJsonSchema, ResponseStreamEvent, ResponseTextParam, ResponseUsage, Status,
+    TextResponseFormatConfiguration, Tool, ToolChoiceOptions, ToolChoiceParam,
 };
 use async_stream::stream;
 use futures_core::stream::BoxStream;
@@ -272,6 +272,78 @@ impl ResponsesTranslator {
         }
     }
 
+    /// Emit a `ToolCallDelta` for `item` unless one has already been emitted
+    /// for it.
+    ///
+    /// This is the single place the reconciliation rule lives; both
+    /// `response.output_item.done` and `response.completed` call it, so they
+    /// compose idempotently — whichever arrives first emits, the other sees
+    /// `name_emitted` and returns `None`.
+    ///
+    /// Returns `None` for anything that is not a complete, emittable function
+    /// call:
+    /// - a non-`FunctionCall` item (`reasoning`, `message`, hosted-tool calls);
+    /// - `id: None` — `item_id` is the dedup correlator, and without it we
+    ///   cannot tell a fresh call from one whose deltas already streamed;
+    /// - `status: Some(Incomplete)` — a truncated turn's `arguments` is a
+    ///   partial JSON string, and emitting it would fail the whole turn in
+    ///   `ModelTurnAccumulator::finish` rather than dropping one call; checked
+    ///   before registering into `item_to_call` so an incomplete item never
+    ///   makes `has_tool_calls` true while emitting nothing (that combination
+    ///   is exactly the `Finish { ToolCalls }`-with-no-`ToolCallDelta` defect
+    ///   this method exists to remove);
+    /// - a call already emitted, per `name_emitted`.
+    ///
+    /// Emits no `Usage`, so SMA-522's ordering invariant is untouched.
+    fn emit_call_if_unseen(&mut self, item: &OutputItem) -> Option<ModelEvent> {
+        let OutputItem::FunctionCall(fc) = item else {
+            return None;
+        };
+        let Some(item_id) = fc.id.clone() else {
+            tracing::debug!(
+                target: "paigasus::openai::responses",
+                call_id = %fc.call_id,
+                "function_call item carries no `id`; cannot dedup, so not emitting"
+            );
+            return None;
+        };
+
+        if matches!(fc.status, Some(OutputStatus::Incomplete)) {
+            tracing::debug!(
+                target: "paigasus::openai::responses",
+                item_id = %item_id,
+                "function_call item is incomplete; arguments may be truncated, not emitting"
+            );
+            return None;
+        }
+
+        self.item_to_call
+            .entry(item_id.clone())
+            .or_insert_with(|| (fc.call_id.clone(), fc.name.clone()));
+
+        if self.name_emitted.contains(&item_id) {
+            return None;
+        }
+
+        // `done`/`output` carry the COMPLETE arguments string, so a buffer of
+        // out-of-order deltas is redundant — except when the terminal item
+        // reports empty arguments and the buffer does not, in which case the
+        // buffer is the better data.
+        let buffered = self.pending_args.remove(&item_id).unwrap_or_default();
+        let args_delta = if fc.arguments.is_empty() && !buffered.is_empty() {
+            buffered
+        } else {
+            fc.arguments.clone()
+        };
+
+        self.name_emitted.insert(item_id);
+        Some(ModelEvent::ToolCallDelta {
+            call_id: fc.call_id.clone(),
+            name: Some(fc.name.clone()),
+            args_delta,
+        })
+    }
+
     /// Consume one upstream SSE event and produce zero or more [`ModelEvent`]s,
     /// or an error if the server emits a `response.failed` / `error` event.
     ///
@@ -355,6 +427,23 @@ impl ResponsesTranslator {
                     }
                 }
                 Ok(vec![])
+            }
+
+            // Output item done — the item's authoritative terminal description,
+            // carrying `call_id`, `name` and the COMPLETE `arguments` together.
+            //
+            // This is the earliest point a call that streamed no argument
+            // deltas is fully known (SMA-562 §2.2: a resumed background stream
+            // has no `output_item.added` and no deltas at all). The dedup in
+            // `emit_call_if_unseen` makes it a no-op on the ordinary path,
+            // where the deltas already carried the arguments.
+            //
+            // Assumes `done` is terminal for its item: a delta arriving after
+            // it would append to an already-complete args string. Not observed
+            // on the wire — a resumed stream truncates a prefix, preserving
+            // order.
+            ResponseStreamEvent::ResponseOutputItemDone(e) => {
+                Ok(self.emit_call_if_unseen(&e.item).into_iter().collect())
             }
 
             // Function-call argument delta with name-emission gating.
@@ -517,8 +606,8 @@ fn terminal_events(
 #[cfg(test)]
 mod tests {
     use async_openai::types::responses::{
-        FunctionToolCall, OutputItem, ResponseFunctionCallArgumentsDeltaEvent,
-        ResponseOutputItemAddedEvent, ResponseStreamEvent,
+        FunctionToolCall, OutputItem, OutputStatus, ResponseFunctionCallArgumentsDeltaEvent,
+        ResponseOutputItemAddedEvent, ResponseOutputItemDoneEvent, ResponseStreamEvent,
     };
 
     use super::*;
@@ -546,6 +635,30 @@ mod tests {
                 id: Some(item_id.to_owned()),
                 status: None,
             }),
+        })
+    }
+
+    fn function_item(item_id: &str, call_id: &str, name: &str, arguments: &str) -> OutputItem {
+        OutputItem::FunctionCall(FunctionToolCall {
+            arguments: arguments.to_owned(),
+            call_id: call_id.to_owned(),
+            namespace: None,
+            name: name.to_owned(),
+            id: Some(item_id.to_owned()),
+            status: Some(OutputStatus::Completed),
+        })
+    }
+
+    fn done_event(
+        item_id: &str,
+        call_id: &str,
+        name: &str,
+        arguments: &str,
+    ) -> ResponseStreamEvent {
+        ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
+            sequence_number: 2,
+            output_index: 0,
+            item: function_item(item_id, call_id, name, arguments),
         })
     }
 
@@ -737,6 +850,100 @@ mod tests {
                 }) if reason == "failed"
             ),
             "expected Finish(Other(\"failed\")) regardless of has_tool_calls, got {events:?}"
+        );
+    }
+
+    /// SMA-562 §2.2 — a resumed background stream describes a tool call
+    /// entirely on `output_item.done`: no `output_item.added`, no argument
+    /// deltas. Ids and arguments are transcribed from the 2026-08-22 capture
+    /// (`GET /v1/responses/{id}?stream=true&starting_after=9`).
+    ///
+    /// Before this fix the translator emitted nothing here, because
+    /// `ToolCallDelta` came only from the argument-delta path.
+    #[test]
+    fn done_without_added_or_deltas_emits_tool_call() {
+        let mut t = ResponsesTranslator::new();
+
+        let evs = t
+            .consume(done_event(
+                "fc_0aae0e68b2ddb1af006a89d1c124c487d293f21c9ada8e4e5d",
+                "call_lQOsuE9Lx2s6d70xJ88uClEk",
+                "get_weather",
+                "{\"city\":\"Berlin\"}",
+            ))
+            .unwrap();
+
+        assert_eq!(evs.len(), 1, "expected one ToolCallDelta, got {evs:?}");
+        match &evs[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "call_lQOsuE9Lx2s6d70xJ88uClEk");
+                assert_eq!(name.as_deref(), Some("get_weather"));
+                assert_eq!(args_delta, "{\"city\":\"Berlin\"}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+    }
+
+    /// The dedup guard: once the argument deltas have carried the arguments,
+    /// `output_item.done` repeats the WHOLE string, so emitting it again would
+    /// duplicate them. Passes before the fix only because the arm did not
+    /// exist; it must keep passing after.
+    #[test]
+    fn done_after_deltas_does_not_double_emit() {
+        let mut t = ResponsesTranslator::new();
+
+        t.consume(added_event("fc_1", "call_1", "get_weather"))
+            .unwrap();
+        t.consume(delta_event("fc_1", "{\"city\":")).unwrap();
+        t.consume(delta_event("fc_1", "\"Berlin\"}")).unwrap();
+
+        let evs = t
+            .consume(done_event(
+                "fc_1",
+                "call_1",
+                "get_weather",
+                "{\"city\":\"Berlin\"}",
+            ))
+            .unwrap();
+
+        assert!(
+            evs.is_empty(),
+            "done must not re-emit arguments already carried by deltas; got {evs:?}"
+        );
+    }
+
+    /// A truncated turn can carry `status: "incomplete"` with partial,
+    /// unparseable `arguments`. Emitting it would make
+    /// `ModelTurnAccumulator::finish` fail the ENTIRE turn on a serde_json
+    /// error, which is strictly worse than today's silent drop. See spec §4.3.
+    #[test]
+    fn incomplete_status_item_is_not_emitted() {
+        let mut t = ResponsesTranslator::new();
+
+        let evs = t
+            .consume(ResponseStreamEvent::ResponseOutputItemDone(
+                ResponseOutputItemDoneEvent {
+                    sequence_number: 2,
+                    output_index: 0,
+                    item: OutputItem::FunctionCall(FunctionToolCall {
+                        arguments: "{\"cit".to_owned(),
+                        call_id: "call_trunc".to_owned(),
+                        namespace: None,
+                        name: "get_weather".to_owned(),
+                        id: Some("fc_trunc".to_owned()),
+                        status: Some(OutputStatus::Incomplete),
+                    }),
+                },
+            ))
+            .unwrap();
+
+        assert!(
+            evs.is_empty(),
+            "an incomplete item must not be emitted; got {evs:?}"
         );
     }
 }
