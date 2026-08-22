@@ -560,6 +560,36 @@ mod decorator_tests {
         assert_eq!(model.calls(), 1);
     }
 
+    /// Contract pin: once content has started, cancellation ends the stream
+    /// and `Finish` is withheld.
+    ///
+    /// Deterministic despite both branches being ready: the forwarding loop's
+    /// `select!` is `biased` with `cancelled()` first, and
+    /// `WaitForCancellationFuture` is `Ready` on its first poll for an
+    /// already-cancelled token — so the token always beats the ready item.
+    #[tokio::test]
+    async fn cancel_after_content_ends_stream_without_finish() {
+        let model = ScriptModel::new(vec![Resp::Ok]);
+        let cancel = CancellationToken::new();
+        let retrying = RetryingModel::shared(Arc::clone(&model), zero_backoff());
+        let mut stream = retrying
+            .invoke(ModelRequest::new(), cancel.clone())
+            .await
+            .unwrap();
+
+        let first = stream.next().await.unwrap().unwrap();
+        assert!(matches!(first, ModelEvent::TokenDelta { ref text } if text == "ok"));
+
+        cancel.cancel();
+
+        let rest = drain(stream).await;
+        assert!(
+            rest.is_empty(),
+            "cancellation must end the stream, got {rest:?}"
+        );
+        assert_eq!(model.calls(), 1, "no retry after content started");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn rate_limit_hint_is_awaited_then_retries() {
         let model = ScriptModel::new(vec![
