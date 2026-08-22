@@ -2,20 +2,38 @@
 #
 # Asserts that .markdownlint-cli2.jsonc is actually in force.
 #
-# Two silent-success modes are guarded, both observed while designing SMA-581:
+# What this file DOES assert, each as a distinct check with its own failure
+# message naming the cause:
 #
-#   1. An INVALID rule-option value silently disables the rule. A typo'd
-#      "MD060": { "style": "consistent" } -- not one of aligned/any/compact/tight
-#      -- yields "Summary: 0 issues in 0 files" with no error or warning. The
-#      gate then reports green while enforcing nothing.
+#   - Several areas the config is supposed to gate are each independently
+#     linted: a deep book path, a crate README location, and the repo root.
+#     Each is probed separately so a glob change that narrows to (or widens
+#     from) any ONE subtree -- e.g. adding "!crates/**", which would leave the
+#     book tree and the lint step both green while ungating every crate
+#     README -- is caught by name, not just proven for one path.
+#   - An explicitly excluded area (docs/superpowers/) is NOT linted.
+#   - The explicitly configured MD060 rule value is in force (its "style"
+#     option is not silently invalid).
+#   - Rules that are only on by virtue of "default": true (MD012, MD040) are
+#     still firing. This matters because a "default": false regression does
+#     NOT change which files appear in the output -- the explicitly configured
+#     MD060 rule still fires on every probe -- so a membership-only check
+#     ("does the probe path appear at all?") cannot catch it. A dedicated,
+#     by-name check for a default-on rule can.
+#   - The membership check itself is tied to a named rule (MD012) that is not
+#     MD060, so an MD060-only match can never be misread as proof that the
+#     glob set covers the probe (see the "default": false case above: MD060
+#     alone would still make the path appear even with default rules off).
 #
-#   2. The gated file set can silently collapse or widen. A --no-globs flag, an
-#      edit to "globs", or a lost "gitignore" setting changes what is linted with
-#      no signal at all.
+# What this does NOT prove: that every gated surface in the real glob tree is
+# covered (only the probed ones are), or that an unrelated/unknown rule option
+# is silently ignored (that failure mode is fail-safe -- the real rule stays
+# enabled -- and was verified separately; see the design doc).
 #
 # Mechanism: markdownlint-cli2 has no --list-files, and per-file lines appear
-# only for files WITH findings. So we write probe files that deliberately violate
-# MD060-compact and assert on whether each is reported.
+# only for files WITH findings. So we write probe files that deliberately
+# violate three rules at once and assert on whether -- and via which rule IDs
+# -- each probe path is reported.
 #
 # Assertions are positive markers (grep for an expected string), never
 # absence-of-findings -- an empty result must never be able to pass.
@@ -27,31 +45,49 @@ cd "$REPO_ROOT"
 
 EXPECTED_VERSION="0.23.2"
 
-# The probe deliberately violates TWO rules:
+# The probe deliberately violates THREE rules:
 #
-#   - MD012 (multiple consecutive blank lines) -- always on under "default": true
-#     and unaffected by any config this repo sets. Its only job is to make the
-#     probe file APPEAR in the output, which is how we detect glob membership.
-#   - MD060 with an unpadded body row -- valid under "any"/"tight", a violation
-#     under "compact". This is what proves the configured style is in force.
-#
-# Two rules, not one, so the two failure modes stay distinguishable: if only the
-# MD060 assertion fails we know the rule value is wrong, not the globs.
+#   - MD012 (multiple consecutive blank lines) -- always on under "default":
+#     true and unaffected by any config this repo sets. Used as the
+#     membership marker: a rule ID other than MD060, so this check cannot be
+#     satisfied by an MD060 line alone.
+#   - MD040 (fenced code block with no language specified) -- also always on
+#     under "default": true and otherwise untouched by this repo's config.
+#     Its only job is to prove "default": true is actually in force: with
+#     "default": false, MD012 and MD040 both stop firing while the
+#     explicitly-configured MD060 keeps firing, so the probe path would still
+#     appear in the output with neither of these two markers on it.
+#   - MD060 with an unpadded body row -- valid under "any"/"tight", a
+#     violation under "compact". This is what proves the configured style is
+#     in force.
 PROBE_BODY='# Probe
 
 
 Body.
+
+```
+untagged fence
+```
 
 | a | b |
 | --- | --- |
 |c|d|
 '
 
-GATED_PROBE="docs/book/src/__mdlint_probe.md"
+# Three areas the config is supposed to gate, probed independently so a glob
+# edit that narrows to (or widens from) just one of them cannot hide behind
+# the other two staying green.
+GATED_PROBES=(
+  "docs/book/src/__mdlint_probe.md"
+  "crates/paigasus-helikon-core/__mdlint_probe.md"
+  "__mdlint_probe.md"
+)
 EXCLUDED_PROBE="docs/superpowers/__mdlint_probe.md"
 
 cleanup() {
-  rm -f "$GATED_PROBE" "$EXCLUDED_PROBE"
+  for probe in "${GATED_PROBES[@]}" "$EXCLUDED_PROBE"; do
+    rm -f "$probe"
+  done
 }
 trap cleanup EXIT
 
@@ -80,38 +116,39 @@ ${help_output}"
 fi
 echo "ok: linter is v${EXPECTED_VERSION}"
 
-# --- Assertions 1 and 2: probe the gated tree -------------------------------
-# A violation in a DEEP gated path must be reported. This proves two things at
-# once: the glob recurses (it has not collapsed to the repo root), and the
-# MD060 "style" value is honoured rather than silently ignored.
-mkdir -p "$(dirname "$GATED_PROBE")"
-printf '%s' "$PROBE_BODY" > "$GATED_PROBE"
+# --- Write every probe, then lint once ---------------------------------------
+for probe in "${GATED_PROBES[@]}" "$EXCLUDED_PROBE"; do
+  mkdir -p "$(dirname "$probe")"
+  printf '%s' "$PROBE_BODY" > "$probe"
+done
 
 output="$(npx markdownlint-cli2 2>&1 || true)"
 
-# Membership: does the probe appear at all? Carried by MD012, which no config
-# here touches -- so this assertion is about the GLOBS and nothing else.
-if [[ "$output" != *"$GATED_PROBE"* ]]; then
-  fail "gated probe '$GATED_PROBE' was not linted at all -- the glob set has collapsed or 'gitignore' is excluding it"
-fi
-echo "ok: deep gated paths are linted"
+# --- Assertions 1-4, per gated probe -----------------------------------------
+for probe in "${GATED_PROBES[@]}"; do
+  if [[ "$output" != *"$probe"* ]]; then
+    fail "gated probe '$probe' was not linted at all -- the glob set has collapsed or narrowed to exclude this area, or 'gitignore' is excluding it"
+  fi
 
-# Rule value: does MD060 fire *on that same file*? Asserted separately from
-# membership so an invalid "style" value cannot be misreported as a glob fault.
-# `grep -F` without `-q` so it consumes all of stdin; see the SIGPIPE note above.
-probe_lines="$(printf '%s\n' "$output" | grep -F "$GATED_PROBE" || true)"
-if [[ "$probe_lines" != *MD060* ]]; then
-  fail "MD060 did not fire on '$GATED_PROBE' -- the rule's 'style' value is not in force. An invalid value (not one of aligned/any/compact/tight) disables the rule silently."
-fi
-echo "ok: MD060.style is in force"
+  # `grep -F` without `-q` so it consumes all of stdin; see the SIGPIPE note
+  # above.
+  probe_lines="$(printf '%s\n' "$output" | grep -F "$probe" || true)"
 
-# --- Assertion 3: the exclusion is in force ---------------------------------
-# The same violation in an EXCLUDED tree must NOT be reported.
-mkdir -p "$(dirname "$EXCLUDED_PROBE")"
-printf '%s' "$PROBE_BODY" > "$EXCLUDED_PROBE"
+  if [[ "$probe_lines" != *MD012* ]]; then
+    fail "MD012 did not fire on '$probe' -- membership was carried only by another rule (e.g. MD060), which cannot substitute for this check: it likely means 'default' is no longer true, since MD012 is a default-on rule with no explicit config in this repo"
+  fi
 
-output="$(npx markdownlint-cli2 2>&1 || true)"
+  if [[ "$probe_lines" != *MD040* ]]; then
+    fail "MD040 did not fire on '$probe' -- 'default' is no longer true. MD040 is a default-on rule with no explicit config in this repo, so it only fires while 'default': true is in force; a 'default': false regression disables every rule except the ones explicitly configured (MD013, MD060), and does not change which files appear in the output, so this is the only check that catches it"
+  fi
 
+  if [[ "$probe_lines" != *MD060* ]]; then
+    fail "MD060 did not fire on '$probe' -- the rule's 'style' value is not in force. An invalid value (not one of aligned/any/compact/tight) disables the rule silently."
+  fi
+done
+echo "ok: all gated probes (deep book path, a crate README location, and the repo root) are linted, with MD012/MD040 (default-on) and MD060 (explicitly configured) all firing"
+
+# --- Assertion 5: the exclusion is in force ----------------------------------
 if [[ "$output" == *"$EXCLUDED_PROBE"* ]]; then
   fail "excluded probe '$EXCLUDED_PROBE' WAS linted -- the docs/superpowers exclusion is not in force"
 fi

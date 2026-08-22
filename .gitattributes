@@ -24,6 +24,14 @@ crates/paigasus-helikon-providers-openai/tests/fixtures/*.txt text eol=lf
 # as the binary rule below.
 tests/provider-stream-conformance/fixtures/**/*.txt text eol=lf
 
+# Markdown is linted and auto-fixed by markdownlint-cli2; a Windows --fix would
+# otherwise rewrite every file with CRLF and diverge from the ubuntu-only CI gate.
+# Listed BEFORE the bedrock `binary` rule below on purpose -- gitattributes is
+# last-match-wins, so a broader `*.md` rule appended after `binary` would
+# silently text-normalize a `.md` file dropped into that fixture tree, exactly
+# the silent corruption the `binary` rule's own comment exists to prevent.
+*.md text eol=lf
+
 # Bedrock is the one subject with a binary wire format:
 # `application/vnd.amazon.eventstream` frames are a length-prefixed header block
 # wrapped in two CRC-32s, so *any* eol translation corrupts them into frames the
@@ -37,7 +45,3 @@ tests/provider-stream-conformance/fixtures/**/*.txt text eol=lf
 # directory cannot be silently corrupted on a Windows checkout — which would
 # present as the translator dropping unknown events, not as a checkout bug.
 tests/provider-stream-conformance/fixtures/bedrock/** binary
-
-# Markdown is linted and auto-fixed by markdownlint-cli2; a Windows --fix would
-# otherwise rewrite every file with CRLF and diverge from the ubuntu-only CI gate.
-*.md text eol=lf
