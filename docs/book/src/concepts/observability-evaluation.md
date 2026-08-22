@@ -123,6 +123,7 @@ two namespaces:
 
 | Component | Crate | Subsystems today | Status |
 | --- | --- | --- | --- |
+| `paigasus::core` | `paigasus-helikon-core` | `agent`, `workflow`, `session`, `compaction`, `permissions` | stable |
 | `paigasus::openai` | `paigasus-helikon-providers-openai` | `translate`, `chat`, `responses` | stable |
 | `paigasus::anthropic` | `paigasus-helikon-providers-anthropic` | `translate`, `stream`, `sse` | stable |
 | `paigasus::bedrock` | `paigasus-helikon-providers-bedrock` | `translate`, `stream`, `builder` | stable |

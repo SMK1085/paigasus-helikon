@@ -49,6 +49,7 @@ pub(crate) fn max_depth(run_config: Option<&RunConfig>) -> u32 {
 /// the `LlmAgent` run span (operation, agent name, Langfuse trace attributes).
 pub(crate) fn workflow_run_span(agent_name: &str, tracer: &TracerHandle) -> tracing::Span {
     let span = tracing::info_span!(
+        target: "paigasus::core::workflow",
         "agent.run",
         otel.name = tracing::field::Empty,
         otel.kind = "internal",

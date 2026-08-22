@@ -141,13 +141,22 @@ fn build_globset(pattern: &str) -> GlobSet {
             }
             Err(e) => {
                 debug_assert!(false, "invalid path-rule glob `{g}`: {e}");
-                tracing::warn!(glob = %g, error = %e, "invalid path-rule glob; this rule will not match");
+                tracing::warn!(
+                    target: "paigasus::core::permissions",
+                    glob = %g,
+                    error = %e,
+                    "invalid path-rule glob; this rule will not match"
+                );
             }
         }
     }
     builder.build().unwrap_or_else(|e| {
         debug_assert!(false, "path-rule globset build failed: {e}");
-        tracing::warn!(error = %e, "path-rule globset build failed; this rule will not match");
+        tracing::warn!(
+            target: "paigasus::core::permissions",
+            error = %e,
+            "path-rule globset build failed; this rule will not match"
+        );
         GlobSet::empty()
     })
 }
