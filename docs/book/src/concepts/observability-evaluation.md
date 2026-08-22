@@ -97,26 +97,22 @@ The example's `runtime-tokio` feature pulls in `TokioRunner`, which installs the
 
 ### Filtering by target
 
-Every `tracing` event and span carries a **target**. Helikon's targets come from
-two namespaces:
-
-- **`paigasus::<component>::<subsystem>`** — hand-chosen targets, written
-  explicitly at the call site and independent of the Rust module the code lives
-  in. Today these are the five model providers, plus one call site in
-  `paigasus-helikon-runtime-temporal`.
-- **`paigasus_helikon_*::…`** — ordinary Rust module paths, the `tracing`
-  default. Nearly everything in `paigasus-helikon-core` and the runtime crates
-  emits here.
+Every `tracing` event and span carries a **target**. Every Helikon event and
+span carries a `paigasus::<component>::<subsystem>` target, written explicitly
+at the call site and independent of the Rust module the code lives in — and a
+workspace lint (`tests/workspace-lints`) fails CI if a `tracing` call site
+under `crates/*/src` stops doing so.
 
 **`EnvFilter` matches a directive against a target by raw string prefix, not by
 `::` segment.** That one fact decides every recipe below:
 
 | Directive | Reaches |
 | --- | --- |
-| `paigasus` | **Both** namespaces — it is a raw prefix, so it also matches `paigasus_helikon_core::session`. |
-| `paigasus::` | The hand-chosen namespace only. The trailing `::` is what excludes the module paths. |
-| `paigasus::openai` | One component. |
-| `paigasus::openai::chat` | One subsystem. |
+| `paigasus` | Raw prefix. Also matches any *non-Helikon* target beginning `paigasus` — a consuming application's own, say. See below. |
+| `paigasus::` | The whole namespace. |
+| `paigasus::runtime` | Includes every runtime adapter. A prefix of five components rather than a component, so it is not promised to match *only* them. |
+| `paigasus::core` | One component. |
+| `paigasus::core::agent` | One subsystem. Debugging only; the leaf may change in any release. |
 
 <!-- tracing-components:start — keep in sync; asserted by
      tests/workspace-lints/tests/tracing_target_docs.rs -->
@@ -140,38 +136,66 @@ two namespaces:
 The **Subsystems today** column lists what exists at the time of writing, not a
 fixed set — see the stability rules below.
 
-#### What is not in this namespace
+#### Migrating from the old module-path targets
 
-`paigasus-helikon-core` and the runtime crates do **not** use hand-chosen
-targets, with the single exception of `paigasus::temporal::activities` noted
-below. Their events and spans land on module paths, so you select them by
-crate:
+Before this change, `paigasus-helikon-core` and the runtime crates emitted on
+ordinary Rust module paths (the `tracing` default) rather than hand-chosen
+targets, and only the five model providers plus one call site in
+`paigasus-helikon-runtime-temporal` used the `paigasus::` namespace. That is
+gone: every crate now emits exclusively on `paigasus::<component>::<subsystem>`,
+so a directive built against the old module paths **stops matching** — it does
+not become redundant, it goes silent.
 
-```
-paigasus_helikon_core
-paigasus_helikon_runtime_axum
-paigasus_helikon_runtime_actix
-paigasus_helikon_runtime_agentcore
-paigasus_helikon_runtime_temporal   # all but one site; see paigasus::temporal below
-paigasus_helikon_runtime_tokio
-```
+| Was | Now |
+| --- | --- |
+| `paigasus_helikon_core` | `paigasus::core` |
+| `paigasus_helikon_runtime_tokio` | `paigasus::runtime_tokio` |
+| `paigasus_helikon_runtime_temporal` | `paigasus::runtime_temporal` |
+| `paigasus_helikon_runtime_axum` | `paigasus::runtime_axum` |
+| `paigasus_helikon_runtime_actix` | `paigasus::runtime_actix` |
+| `paigasus_helikon_runtime_agentcore` | `paigasus::runtime_agentcore` |
+| `paigasus::temporal` | `paigasus::runtime_temporal` |
+
+Update any `RUST_LOG`/`EnvFilter` directive, alerting rule, or saved query
+built against a "Was" value. This lands together across every affected crate
+in one release each; check the crate's own `CHANGELOG.md` for the exact
+version rather than assuming — this page does not track version numbers.
+
+**If you export to an OTel backend, this affects more than logs.**
+`tracing-opentelemetry` sets `with_target: true` by default, which attaches
+the `target` as an **attribute** on every exported span and event — so a
+Langfuse, Jaeger, or Honeycomb saved search, sampling rule, or dashboard
+filter keyed on the old value (e.g. `target = "paigasus_helikon_core::agent"`)
+goes silent rather than erroring, and must be re-keyed to the new value (e.g.
+`"paigasus::core::agent"`). **Span names are unaffected** — this migration
+only changes the `target` attribute, so anything keyed on a span name (like
+`agent.run`) needs no change.
 
 This includes **the run/turn/chat trace tree described above** — the
-`agent.run`, `agent.turn`, `gen_ai.chat` and `tool.execute` spans come from
-`paigasus_helikon_core`, not from `paigasus::*`. (The `invoke_agent` /
-`agent.turn` / `chat` / `execute_tool` operation names used above are the
-`gen_ai.operation.name` fields set on these same spans.) Most are raised in
-`paigasus_helikon_core::agent`; the multi-agent constructs — the sequential,
-parallel and loop workflows, plus the graph and swarm agents — raise their own
-`agent.run` span in `paigasus_helikon_core::workflow`. Filter on
-`paigasus_helikon_core` to catch both: a narrower `paigasus_helikon_core::agent`
-silently misses a multi-agent run's top-level span.
+`agent.run`, `agent.turn`, `gen_ai.chat` and `tool.execute` spans now carry
+`paigasus::core::*` targets, not the old `paigasus_helikon_core::*` module
+paths. (The `invoke_agent` / `agent.turn` / `chat` / `execute_tool` operation
+names used above are the `gen_ai.operation.name` fields set on these same
+spans.) Most are raised under `paigasus::core::agent`; the multi-agent
+constructs — the sequential, parallel and loop workflows, plus the graph and
+swarm agents — raise their own top-level `agent.run` span under
+`paigasus::core::workflow`. Filter on `paigasus::core` to catch both: a
+narrower `paigasus::core::agent` silently misses a multi-agent run's
+top-level span — and `paigasus::core` is also the stable two-segment form the
+rules below already recommend for anything durable.
 
-`paigasus::temporal` is a single call site in a crate that is otherwise
-untargeted, which is why it is marked *provisional* above: it is listed so the
-namespace is completely described, but it does not carry the guarantee the
-provider components do. Whether the core and runtime crates should adopt
-hand-chosen targets is tracked as a follow-up.
+#### Components reserved but not yet emitting
+
+The component name is derived mechanically from the crate name: strip the
+`paigasus-helikon-` prefix, then a leading `providers-` if present, then
+replace remaining `-` with `_`. Seven crates have a name under this rule with
+no call site emitting on it yet, because those crates carry no `tracing`
+instrumentation today: `mcp`, `tools`, `evals`, `cli`, `sessions_sqlite`,
+`sessions_postgres`, `sessions_redis`. They are not in the table above — a row
+for a component nothing emits would fail the guard that checks the table
+against source — but the names are reserved: when one of those crates starts
+emitting, it uses the derived name, and no other component may claim it in
+the meantime (see the no-prefix-collision rule below).
 
 #### Stability
 
@@ -193,8 +217,16 @@ The namespace is a two-tier contract.
 
 So: use **exactly two segments** for anything durable — alerting rules,
 dashboards, saved queries. Use three segments for interactive debugging, and
-expect them to move. A bare `paigasus` is a raw prefix, not a namespace
-selector; reach for `paigasus::` when you mean the curated targets.
+expect them to move. Prefer `paigasus::` over a bare `paigasus` for two
+independent reasons. First, within Helikon's own targets `paigasus` and
+`paigasus::` currently reach the same events and spans only because the
+workspace lint enforces that every `tracing` call site under `crates/*/src`
+uses the `paigasus::` namespace — that is a checked fact about this codebase
+today, not a guarantee of the `EnvFilter` contract, so do not depend on it.
+Second, `paigasus` is a raw prefix: it also matches any *non-Helikon* target
+that happens to begin with `paigasus` — a consuming application's own module
+or hand-chosen target, say — while `paigasus::` excludes anything that isn't
+followed by the separator.
 
 This guarantee begins with this document and is not retroactive.
 
@@ -206,8 +238,8 @@ Warnings everywhere, one provider verbose:
 RUST_LOG='warn,paigasus::openai=debug'
 ```
 
-The hand-chosen namespace only, excluding core and runtime module paths — note
-the trailing `::`:
+The whole namespace, every component — note the trailing `::` (see above for
+why it matters):
 
 ```
 RUST_LOG='warn,paigasus::=debug'
@@ -225,7 +257,13 @@ The agent trace tree — the `agent.run` / `agent.turn` / `gen_ai.chat` /
 `tool.execute` spans:
 
 ```
-RUST_LOG='warn,paigasus_helikon_core=debug'
+RUST_LOG='warn,paigasus::core=debug'
+```
+
+Every runtime adapter, using the `paigasus::runtime` group selector:
+
+```
+RUST_LOG='warn,paigasus::runtime=debug'
 ```
 
 These set the level for a `tracing-subscriber` `EnvFilter`; see
