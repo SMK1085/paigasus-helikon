@@ -329,23 +329,30 @@ mocks only `POST /responses`; the resumed stream is a `GET .../{id}?stream=true&
 Serving it from the POST mock would be a fiction, so §2.2 drives test 1 as typed events and
 its bytes are quoted in §2.2 and in the test's doc comment instead.
 
-### 6.2 One thing to settle before transcribing (Task 0)
+### 6.2 The `[DONE]` sentinel — settled empirically
 
-Every existing fixture in that directory ends `data: [DONE]` (`responses_tool_call.txt:104`).
-**None of the four raw captures contains it** — the live endpoint did not send it. So either
-the new fixture diverges structurally from every sibling, or it adds a line the wire did not
-send while labelled CAPTURED.
+Every existing fixture in that directory ends `data: [DONE]`
+(`responses_tool_call.txt:104`). **None of the four raw captures contains it** — the live
+endpoint did not send one.
 
-Resolve empirically before writing the fixture: serve the byte-faithful capture through
-`run()` and see whether async-openai's SSE stream terminates cleanly without the sentinel.
+Resolved by probe on 2026-08-22, before this plan was written: the §2.1 capture was served
+through `run()` both byte-faithful and with `data: [DONE]\n\n` appended. **Both terminate
+cleanly with identical output** — zero errors, and in both cases exactly
+`[ToolCallDelta { call_id: "call_8xWY…", name: Some("get_current_time"), args_delta: "{}" },
+Usage { .. }, Finish { ToolCalls }]`. async-openai's SSE stream ends on body end; the
+sentinel is not required.
 
-- **If it terminates cleanly** — ship the fixture byte-faithful, with a header note that the
-  sentinel is absent because the endpoint did not send one.
-- **If the parser needs it** — add the line and disclose it in the header as an **addition**,
-  extending the header convention, which today has a slot for trims only.
+**Decision: ship the fixture byte-faithful, with no `[DONE]`**, and say in the provenance
+header that the sentinel is absent because the endpoint did not send one. Nothing is
+fabricated, and the CAPTURED label stays honest.
 
-Either way, note in the header that `responses_tool_call.txt`'s own `[DONE]` is now
-unexplained. Auditing that older fixture's provenance is a follow-up ticket, not this PR.
+That same probe independently confirms §2.1 end to end: the current translator already
+handles a zero-argument tool correctly, which is what makes it a regression pin (test 6)
+rather than a fix.
+
+The header also notes that `responses_tool_call.txt`'s own `[DONE]` is now unexplained —
+it claims faithful transcription of the same endpoint. Auditing that older fixture's
+provenance is a follow-up ticket, not this PR.
 
 ## 7. Documentation
 
