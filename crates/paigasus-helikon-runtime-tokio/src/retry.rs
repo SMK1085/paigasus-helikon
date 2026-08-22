@@ -555,7 +555,11 @@ mod decorator_tests {
             .await
             .unwrap();
         cancel.cancel();
-        // First poll: invoke #1 fails, enters backoff, cancellation wins → stream ends.
+        // First poll: invoke #1 runs, then the peek `select!` — `biased` with
+        // `cancelled()` first — returns immediately, so the scripted error is
+        // never observed and backoff is never entered. This test therefore
+        // covers the PRE-FIRED path only; `cancel_during_backoff_ends_stream`
+        // covers the actual backoff sleep.
         assert!(stream.next().await.is_none());
         assert_eq!(model.calls(), 1);
     }
@@ -588,6 +592,46 @@ mod decorator_tests {
             "cancellation must end the stream, got {rest:?}"
         );
         assert_eq!(model.calls(), 1, "no retry after content started");
+    }
+
+    /// The one `RetryingModel` cancellation path with real latency: parked in
+    /// `backoff()` between attempts. Untested before SMA-563 — the test named
+    /// `cancellation_aborts_backoff_promptly` never reaches backoff at all.
+    ///
+    /// `start_paused` makes tokio's clock virtual, so the hour-long delay costs
+    /// no wall-clock time; the drain is spawned so the token can be fired from
+    /// this task while the stream is parked.
+    #[tokio::test(start_paused = true)]
+    async fn cancel_during_backoff_ends_stream() {
+        let model = ScriptModel::new(vec![Resp::ErrFirst(ModelError::Unavailable), Resp::Ok]);
+        let policy = RetryPolicy::new()
+            .base_delay(Duration::from_secs(3600))
+            .jitter(false);
+        let cancel = CancellationToken::new();
+        let retrying = RetryingModel::shared(Arc::clone(&model), policy);
+        let stream = retrying
+            .invoke(ModelRequest::new(), cancel.clone())
+            .await
+            .unwrap();
+
+        let handle = tokio::spawn(drain(stream));
+
+        // Let the spawned task run: attempt #1 fails and parks in `backoff()`.
+        // `yield_now` under a paused clock hands over without advancing time,
+        // so the 1-hour sleep cannot elapse and mask the cancellation.
+        tokio::task::yield_now().await;
+        cancel.cancel();
+
+        let items = handle.await.unwrap();
+        assert!(
+            items.is_empty(),
+            "cancelling during backoff must end the stream with no items, got {items:?}"
+        );
+        assert_eq!(
+            model.calls(),
+            1,
+            "the retry must not fire after cancellation"
+        );
     }
 
     #[tokio::test(start_paused = true)]
