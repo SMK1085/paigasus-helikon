@@ -22,6 +22,8 @@
 > Both gates passed with wide margin (agent image at ~11% of the size budget;
 > cold start at ~20% of the latency budget).
 
+<!-- -->
+
 > **CI-observed 2026-08-07 on `ubuntu-24.04-arm`** (native arm64, no
 > emulation) — `agentcore-image`'s first cold run in `.github/workflows/integration.yml`
 > (PR #181, run 31206300324). Real numbers from that run, with

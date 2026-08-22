@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD025 -->
+
 # Summary
 
 [Introduction](./introduction.md)
