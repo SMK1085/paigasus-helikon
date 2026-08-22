@@ -104,6 +104,7 @@ const ACT_RENDER: &str = "AgentActivities::render_instructions";
 /// payload bytes: it lands in Temporal history, a persistence boundary.
 fn reject_legacy(activity: &str, arity: usize) -> PayloadConversionError {
     tracing::error!(
+        target: "paigasus::runtime_temporal::activity_input",
         activity,
         legacy_arity = arity,
         "refused a pre-envelope activity input; a worker on 0.2.1 or earlier queued this task"

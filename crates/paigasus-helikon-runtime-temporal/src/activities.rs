@@ -349,7 +349,7 @@ async fn race_with_activity_cancellation<T>(
         || async {
             if let Err(e) = activity_ctx.record_heartbeat(Vec::<u8>::new()).await {
                 tracing::debug!(
-                    target: "paigasus::temporal::activities",
+                    target: "paigasus::runtime_temporal::activities",
                     error = %e,
                     "record_heartbeat failed; continuing",
                 );
