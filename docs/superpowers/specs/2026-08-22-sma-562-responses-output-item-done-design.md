@@ -149,9 +149,10 @@ Deliberately scoped to `response.completed`. §4.3 says why `response.incomplete
 holds by construction — see §4.5 for why this differs from gating on `name_emitted` *instead
 of* reconciling (rejected) versus gating on it *after* reconciling (shipped). Two carve-outs
 are deliberate, not gaps in the guarantee: a `function_call` item with `id: None` is never
-emitted (§4.2 — no correlator to dedup on), and one with `status: Incomplete` is never
-emitted (§4.3 — its `arguments` may be truncated JSON). Both are absent from "every
-`function_call` item ... has had exactly one `ToolCallDelta`" by carve-out, not by defect.
+emitted (§4.2 — no correlator to dedup on), and one whose `status` is anything other than
+absent or `Completed` — i.e. `Incomplete` **or** `InProgress` — is never emitted (§4.3 —
+its `arguments` may be truncated JSON). Both are absent from "every `function_call` item
+... has had exactly one `ToolCallDelta`" by carve-out, not by defect.
 
 ## 4. The change
 
@@ -164,14 +165,18 @@ fn emit_call_if_unseen(&mut self, item: &OutputItem) -> Option<ModelEvent>
 
 Given an `OutputItem::FunctionCall(fc)` with `id: Some(item_id)`:
 
-1. **Skip if incomplete** — return `None` when `fc.status == Some(OutputStatus::Incomplete)`,
-   *before* registering into `item_to_call` (§4.3). Order matters: registering first and
-   checking incomplete second would let an incomplete item land in `item_to_call` while
-   emitting nothing — the same shape that makes a naive `has_tool_calls` check report
-   `ToolCalls` with zero `ToolCallDelta`s emitted (§3.1's post-condition would fail).
+1. **Skip unless complete** — return `None` when `fc.status` is anything other than `None`
+   or `Some(OutputStatus::Completed)` — i.e. a whitelist, not a blacklist of `Incomplete`
+   alone, so it also skips `Some(OutputStatus::InProgress)` — *before* registering into
+   `item_to_call` (§4.3). `OutputStatus` has exactly three variants and is not
+   `#[non_exhaustive]`, so a whitelist is total where a blacklist would silently admit any
+   future variant. Order matters: registering first and checking status second would let a
+   non-complete item land in `item_to_call` while emitting nothing — the same shape that
+   makes a naive `has_tool_calls` check report `ToolCalls` with zero `ToolCallDelta`s emitted
+   (§3.1's post-condition would fail).
 2. **Register** — `item_to_call.entry(item_id).or_insert((call_id, name))`, so
    `has_tool_calls` is correct even when `output_item.added` never arrived (§2.2). Because
-   step 1 already returned for an incomplete item, the helper only ever registers an item it
+   step 1 already returned for a non-complete item, the helper only ever registers an item it
    still intends to emit (modulo the "already emitted" skip below, which is an idempotent
    re-registration, not a false positive).
 3. **Skip if already emitted** — return `None` when `name_emitted` contains `item_id`.
@@ -241,16 +246,21 @@ would emit unparseable args and make `build_items` return
 `Err("invalid tool args for call_id=…")` (`crates/paigasus-helikon-core/src/model.rs:530-535`),
 failing the **entire turn** — a strictly worse unhappy path than the one being fixed.
 
-So: the `ResponseIncomplete` arm is untouched, and step 1 of the helper also skips
-`OutputStatus::Incomplete` items on the `completed` path. For `response.incomplete` this
-costs nothing at the finish reason, because `terminal_events` already ignores
+So: the `ResponseIncomplete` arm is untouched, and step 1 of the helper also skips any
+non-complete status — `OutputStatus::Incomplete` **and** `OutputStatus::InProgress` — on the
+`completed` path, not `Incomplete` alone: a whitelist of `None | Some(Completed)`, rather
+than a blacklist of `Incomplete`. `OutputStatus` has exactly three variants and is not
+`#[non_exhaustive]`, so the whitelist is total — it cannot silently admit some future fourth
+variant the way a blacklist would. For `response.incomplete` this costs nothing at the
+finish reason, because `terminal_events` already ignores
 `has_tool_calls` whenever `incomplete_reason` is `Some` (`:495-501`, guarded by an existing
 test at `:690`). **That reasoning does not transfer to `response.completed`**: there,
 `incomplete_reason` is `None`, so `has_tool_calls` does steer the finish reason. That is
 exactly why `response.completed`'s `has_tool_calls` reads `name_emitted` — set only when the
 helper actually emits — rather than `item_to_call`, which `output_item.added` still populates
-unconditionally, incomplete items included; reading `item_to_call` there would let a
-never-emitted incomplete call flip the finish reason to `ToolCalls`.
+unconditionally, non-complete items (`Incomplete` or `InProgress`) included; reading
+`item_to_call` there would let a never-emitted non-complete call flip the finish reason to
+`ToolCalls`.
 
 ### 4.4 Assumptions stated rather than left implicit
 
@@ -361,13 +371,15 @@ output recorded in the commit message, per AC 3. Tests 1–4 are unit tests in t
    asserts exactly one `ToolCallDelta` (`name == Some("get_current_time")`,
    `args_delta == "{}"`) followed by a terminal `Finish { ToolCalls }`.
    **Correction, post-implementation:** this was originally described as "the only place
-   §2.1's finding can be re-verified." It no longer is. SMA-562's own `response.completed`
-   reconciliation sweep makes a live stream with the `{}` delta and one without it produce
-   byte-identical `ModelEvent` sequences — the sweep synthesises the missing delta from
-   `response.output` — so §2.1's elision question is no longer observable through the public
-   `ModelEvent` stream, by this test or by test 6's fixture. That is the fix working as
-   intended, not a gap in this test. Its value is now an end-to-end pin against the live API
-   (name, args, finish reason), not a change-detector for the delta specifically.
+   §2.1's finding can be re-verified." It no longer is. For this real captured stream shape
+   (which does carry a `response.output_item.done`), it is the `output_item.done` arm — and,
+   for a stream lacking one, the `response.completed` sweep — that makes a live stream with
+   the `{}` delta and one without it produce byte-identical `ModelEvent` sequences — the
+   `output_item.done` arm synthesises the missing delta from the terminal item — so §2.1's
+   elision question is no longer observable through the public `ModelEvent` stream, by this
+   test or by test 6's fixture. That is the fix working as intended, not a gap in this test.
+   Its value is now an end-to-end pin against the live API (name, args, finish reason), not
+   a change-detector for the delta specifically.
 
 ### 6.1 Fixtures
 

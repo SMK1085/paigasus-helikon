@@ -67,10 +67,13 @@ async fn responses_smoke() {
 ///
 /// **What this test can no longer notice (final-review correction):** it was
 /// originally framed as "if OpenAI ever elides the `{}` delta, this is where
-/// it surfaces." That framing predates SMA-562's `response.completed`
-/// reconciliation sweep. The sweep synthesises a `ToolCallDelta` from
-/// `response.output` for any call that streamed no argument deltas at all, so
-/// a live response *with* the `{}` delta and one *without* it now produce
+/// it surfaces." That framing predates SMA-562's reconciliation logic. For
+/// this real captured stream shape (which does carry a
+/// `response.output_item.done`), it is the `output_item.done` arm — and, for
+/// a stream lacking one, the `response.completed` sweep — that synthesises a
+/// `ToolCallDelta` from the terminal item for any call that streamed no
+/// argument deltas at all, so a live response *with* the `{}` delta and one
+/// *without* it now produce
 /// byte-identical `ModelEvent` sequences through the public API — the two
 /// shapes are indistinguishable downstream of the translator, which is the
 /// fix working as intended, not a gap. This test therefore cannot detect

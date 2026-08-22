@@ -24,9 +24,12 @@
 : CORRECTION (final review, post-implementation): this header used to claim
 : `responses_zero_arg_tool_streams_a_delta` in `tests/live.rs` "is the
 : assertion that can [notice], and is the reason it exists." That is no
-: longer true. SMA-562's own `response.completed` reconciliation sweep
-: synthesises a ToolCallDelta from `response.output` for any call that
-: streamed no argument deltas at all, so a live stream WITH the `{}` delta
+: longer true. For this real captured stream shape -- which does carry a
+: `response.output_item.done` -- it is the `output_item.done` arm, not the
+: `response.completed` sweep, that synthesises a ToolCallDelta from the
+: terminal item for any call that streamed no argument deltas at all (the
+: sweep is a dedup no-op here; it only synthesises when a stream lacks an
+: `output_item.done`), so a live stream WITH the `{}` delta
 : and one WITHOUT it now produce byte-identical `ModelEvent` sequences
 : through the public API -- the two wire shapes are indistinguishable
 : downstream of the translator. That is the fix working as intended, not a
