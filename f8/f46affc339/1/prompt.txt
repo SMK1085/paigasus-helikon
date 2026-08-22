@@ -1,0 +1,138 @@
+<task-notification>
+<task-id>a920934a840540761</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a920934a840540761.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 implementer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>STATUS: DONE
+
+Commit SHA: `6553a8723fa16155f73637671ad9df8b5f65cf6a` (on top of `47868a49` from the original task-1 commit)
+
+Test summary: 11/11 pass in `backend::responses::tests`; both new/extended tests verified — Finding 1's mutation check confirmed the `item_to_call.is_empty()` assertion fails under the rejected order and passes under the correct one; `cargo fmt --all -- --check`, clippy, and `RUSTDOCFLAGS="-D warnings" cargo doc` all clean.
+
+Concerns: none. Full evidence (mutation-check failure text, new test code, gate outputs) appended to `.superpowers/sdd/2026-08-22-sma-562-responses-tool-call-reconciliation/task-1-report.md`.</result>
+<usage><subagent_tokens>111537</subagent_tokens><tool_uses>18</tool_uses><duration_ms>124016</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a454273ff102d6cca</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a454273ff102d6cca.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 fix re-review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean — the fix diff is test-only (38 lines added, no production code changes beyond what's already documented as part of the base commit `47868a49`). No new Critical/Important breakage possible from a test-only diff.
+
+## Verdict
+
+**Finding 1 (mutation-blind test) — ADDRESSED**
+`responses.rs:949` adds `assert!(t.item_to_call.is_empty(), ...)` to `incomplete_status_item_is_not_emitted`. Confirmed the current helper (`responses.rs:310-321`) checks `Incomplete` status *before* registering into `item_to_call` — the correct order. The report (`task-1-report.md:193-232`) contains real, observed mutation-check output: temporarily reordering registration before the `Incomplete` check, running the single test, and pasting the actual `FAILED`/panic output (`task-1-report.md:206-224`), followed by restoring the correct order and re-running the full 11-test module green. This is genuine evidence, not an unevidenced claim.
+
+**Finding 2 (untested branch) — ADDRESSED**
+New test `done_with_empty_arguments_prefers_buffered_deltas` (`responses.rs:960` / diff lines +17 to +50) buffers a `function_call_arguments.delta` for `"fc_buf"` with no prior `output_item.added`. Traced the buffering path: `ResponseFunctionCallArgumentsDelta` arm (`responses.rs:453-476`) only buffers into `pending_args` when `item_id` is absent from `item_to_call`, which it is here — `fc_buf` is never registered by an `added` event, so the delta genuinely goes into `pending_args["fc_buf"]`. The subsequent `done_event(..., arguments: "")` then hits `emit_call_if_unseen`'s branch at `responses.rs:330-334` (`fc.arguments.is_empty() &amp;&amp; !buffered.is_empty()`), and the test asserts the emitted `args_delta` equals the buffered text with `name: Some("get_weather")`. The branch is genuinely exercised, not bypassed.
+
+**New breakage introduced by this fix diff:** none. The diff is additive test-only (38 lines, one file), no production code (`responses.rs` non-test logic) is touched by this diff — it was already correct from the prior commit `47868a49`.
+
+**Gates evidenced clean on this commit (`6553a872`):**
+- `cargo fmt --all -- --check` — clean after one fmt pass (`task-1-report.md:283-287`)
+- `cargo clippy -p paigasus-helikon-providers-openai --all-features --all-targets -- -D warnings` — re-run after fmt, clean (`task-1-report.md:318-319`)
+- `RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-providers-openai --all-features --no-deps` — clean, no warnings (`task-1-report.md:289-294`)
+
+**Overall verdict: all addressed.** Both open findings are genuinely fixed with correct, mutation-evidenced tests, and all three required gates are shown clean on the exact commit under review.</result>
+<usage><subagent_tokens>73714</subagent_tokens><tool_uses>10</tool_uses><duration_ms>52072</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9ff838fed923895c</task-id>
+<tool-use-id>toolu_01LbDZmjPp4DHhvejim4ueTH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a9ff838fed923895c.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 implementer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Status: DONE
+
+Commit: `3ad2a42b8e37115521bb736f676e5c38584a4331` — "fix(providers-openai): SMA-562 reconcile unemitted tool calls at response.completed"
+
+Test summary: 15/15 in `backend::responses::tests` pass; pre-implementation run showed exactly the brief's predicted failure for `added_then_completed_without_deltas_emits_tool_call`, while `parallel_calls_emit_one_named_delta_each` was already green before Task 2 (Task 1's `done` arm already covers it — no red-to-green transition claimed for it). All four required gates (fmt, clippy, lib test, rustdoc) are clean.
+
+Concerns: none. Applied the controller's required strengthening to `completed_skips_incomplete_output_item` (asserts `Finish{Stop}` + empty `item_to_call`, not just "no delta"). Only the one intended file is staged/committed. Full detail in `.superpowers/sdd/2026-08-22-sma-562-responses-tool-call-reconciliation/task-2-report.md`.</result>
+<usage><subagent_tokens>94044</subagent_tokens><tool_uses>23</tool_uses><duration_ms>182402</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a223a49f99689e105</task-id>
+<tool-use-id>toolu_019cv2McvRLD4SMZvGuZR2jq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a223a49f99689e105.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 reviewer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Tree restored and verified clean; gates re-run independently (fmt clean, clippy clean, 15/15 tests pass).
+
+## Verdict 1 — Spec compliance: ✅
+
+Brief Steps 1–6 applied verbatim (helper, four tests, arm rewrite, commit). Both controller rulings applied: `completed_skips_incomplete_output_item` (`responses.rs:1218-1245`) now asserts no `ToolCallDelta` **plus** `Finish { Stop }` **plus** `t.item_to_call.is_empty()`, and those assertions do discriminate (dropping the incomplete check fails assertion 1; moving it after the `item_to_call` registration fails assertions 2 and 3). No test asserts the post-condition literally over an arbitrary `output` array. `terminal_events` untouched (`:594-631`), `ResponseIncomplete` untouched (`:519-532`), one file, no manifest changes. Nothing extra.
+
+## Verdict 2 — Task quality: Changes requested
+
+One Important finding: the arm's own comment claims an invariant the code does not deliver, and I confirmed the counter-example empirically.
+
+---
+
+### Important
+
+**1. `Finish { ToolCalls }` with zero `ToolCallDelta`s is still reachable through `consume`; the comment at `responses.rs:491-493` says otherwise.**
+
+`has_tool_calls` is `!self.item_to_call.is_empty()` (`:514`), but `item_to_call` has **two** writers, and only one of them is gated. `emit_call_if_unseen` gates on `id`/`Incomplete` (`:311-322`), while the `ResponseOutputItemAdded` arm registers unconditionally as long as `fc.id` is `Some` (`:404-411`) — it has to, since the delta path needs the mapping. So any ordering where `added` registers an item that the terminal sweep then declines to emit reproduces the exact defect this task exists to remove. I ran both, appending temporary probes and restoring the file:
+
+- `added("fc_1")` → `completed` with that item at `status:"incomplete"` → `[Usage, Finish { ToolCalls }]`, no delta.
+- `added("fc_1")` → `completed` with `output: []` → `[Usage, Finish { ToolCalls }]`, no delta.
+
+Note the first is exactly `completed_skips_incomplete_output_item` **plus one preceding `added_event`** — the test passes only because it starts from a fresh translator, which is not the shape a real stream has.
+
+The spec's §4.3 justification ("costs nothing at the finish reason, because `terminal_events` already ignores `has_tool_calls` whenever `incomplete_reason` is `Some`") holds for `response.incomplete` and does **not** transfer to the `response.completed` arm, where `incomplete_reason` is `None` and `has_tool_calls` does steer. So this is a spec/brief-level residual, not an implementer deviation — the implementer applied Step 4 as written. But this task's whole claim is "invariant rather than hope", and the comment states it unconditionally. As written the iff clause is conditional on (a) §2.3's "output always carries every call" and (b) an `Incomplete` item never appearing under `status: completed`.
+
+Minimal correct fix, and it is one line: after the sweep, `!self.name_emitted.is_empty()` is *by construction* "we emitted at least one named `ToolCallDelta`" (every writer of `name_emitted` — `:414`, `:459`, `:338` — emits in the same breath), so passing that to `terminal_events` at `:514` makes the iff true rather than assumed, with no behaviour change on any path where the current code is already right. Spec §4.5 rejects gating on `name_emitted` — but that rejection is aimed at gating *instead of* reconciling; applied *after* the sweep it drops nothing, because the sweep has already emitted everything emittable. If the controller prefers not to touch `:514`, then `:491-493` must be softened to state the two premises it rests on, and `emit_call_if_unseen`'s doc claim at `:290-294` ("so an incomplete item never makes `has_tool_calls` true while emitting nothing") — pre-existing from Task 1 — is likewise false in the presence of a prior `added` and should be scoped to the helper.
+
+### Minor
+
+**2. `parallel_calls_emit_one_named_delta_each` (`:1138`) does not exercise the code this task adds.** It passed before Step 4 (the report says so honestly) and still passes if the entire sweep at `:498-503` is deleted, because both calls get `done` events and are therefore already in `name_emitted`. Its "must not be double-counted between its `done` and the terminal reconciliation" comment (`:1183-1184`) describes a guard that `completed_after_deltas_emits_only_terminal_pair` already provides. Dropping the `done_event("fc_a", …)` line would make the sweep call A's only emission path and turn the test into a real reconciliation-under-parallelism guard at zero cost.
+
+**3. Orphan warning is placed correctly, but is narrower than the spec.** Placement (`:504-510`, after the sweep, before `terminal_events`) is right: I checked that `name_emitted ⊆ item_to_call` always holds, and every path that inserts into `name_emitted` first drains `pending_args` for that id — so no entry for an *emitted* item can survive the sweep, and the message's "never resolved" is accurate. However spec §4.4 says orphans are warned "in the terminal arm**s**" (plural); only `ResponseCompleted` got it, because this task's constraints forbid touching `ResponseIncomplete`. Controller call: assign to a later task or amend the spec.
+
+**4. The warning says "dropping" but `pending_args` is never cleared** (`:504-510`). Harmless today — the translator is per-response — but the message describes an action the code does not take.
+
+---
+
+### ⚠️ Cannot verify from diff
+
+- Whether OpenAI ever emits `response.completed` carrying an item with `status: "incomplete"`, or a `response.output` that omits a call which had `output_item.added`. Finding 1's severity depends on this; spec §2.3's four captures are asserted, not re-verified here. Finding 1 stands regardless as a comment-accuracy defect.
+- The report's `RUSTDOCFLAGS="-D warnings" cargo doc` run (I re-ran fmt, clippy, and the test module only).
+- Step 3's pre-implementation red run — reconstructed from the report, not reproduced.</result>
+<usage><subagent_tokens>93179</subagent_tokens><tool_uses>17</tool_uses><duration_ms>216182</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9ff838fed923895c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a9ff838fed923895c.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 implementer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Status: DONE
+
+Commit: `a41029938a1a11d21af3d59efc5ff5dfc9d82112` — "fix(providers-openai): SMA-562 gate has_tool_calls on name_emitted at response.completed"
+
+Test summary: 16/16 pass in `backend::responses::tests`; both mutation checks (reverting the `name_emitted` gate, and deleting the entire sweep) reproduced the expected failures, then were reverted and confirmed byte-identical via diff before finalizing.
+
+Concerns: none. All four findings addressed (has_tool_calls now gates on `name_emitted` post-sweep; `parallel_calls` test no longer masks sweep deletion; warning wording corrected; doc claim rescoped). All four gates clean; only the one intended file staged/committed. Fix-round details appended to `.superpowers/sdd/2026-08-22-sma-562-responses-tool-call-reconciliation/task-2-report.md`.</result>
+<usage><subagent_tokens>129452</subagent_tokens><tool_uses>37</tool_uses><duration_ms>256920</duration_ms></usage>
+</task-notification>
