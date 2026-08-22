@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bod3ku3li</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/bod3ku3li.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CodeRabbit review to complete" completed (exit code 0)</summary>
+</task-notification>
