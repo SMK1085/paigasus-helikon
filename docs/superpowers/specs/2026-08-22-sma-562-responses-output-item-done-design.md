@@ -181,8 +181,15 @@ Given an `OutputItem::FunctionCall(fc)` with `id: Some(item_id)`:
    `ToolCallDelta { call_id, name: Some(name), args_delta }`.
 
 Anything else — a non-`FunctionCall` item, or a `FunctionCall` with `id: None` — returns
-`None` after a `tracing::debug!`, preserving the log the trailing `other` arm gives those
-events today (§4.4).
+`None`. **Correction, post-implementation:** only the `id: None` case logs a `tracing::debug!`
+(preserving the log the trailing `other` arm gives those events today, §4.4); a non-
+`FunctionCall` item returns `None` silently, with no log. This is deliberate, not an
+oversight: the `response.completed` sweep calls this helper over *every* item in
+`response.output`, including every `message` and `reasoning` item on every response — logging
+there would debug-log once per non-tool output item on every single completed response, which
+is not the sparse, exceptional signal `tracing::debug!` is for elsewhere in this file. The
+`id: None` case stays logged because it is actually exceptional: a `FunctionCall` item is
+expected to always carry an `id`, so seeing one without is a signal worth surfacing.
 
 **Step A — `ResponseStreamEvent::ResponseOutputItemDone`** (this is AC 2). Calls the helper
 and yields its `Option` as a 0-or-1-element `Vec`. This is the earliest point a call is
@@ -249,9 +256,10 @@ never-emitted incomplete call flip the finish reason to `ToolCalls`.
 
 - **`output_item.done` is terminal for its item.** A delta arriving *after* its `done` would
   find `name_emitted` set and append to an already-complete args string, producing malformed
-  JSON. Not observed (a resumed stream truncates a prefix, so order is preserved). Recorded
-  in §4's arm comment because the translator elsewhere goes out of its way to tolerate
-  reordering.
+  JSON — e.g. `{"city":"Berlin"}{"city":"Berlin"}` — which fails `build_items` for the WHOLE
+  turn, not just this one call. Not observed (a resumed stream truncates a prefix, so order is
+  preserved). Recorded in §4's arm comment because the translator elsewhere goes out of its
+  way to tolerate reordering.
 - **`output_index` is ignored deliberately.** `item.id` is the unique per-item correlator;
   `output_index` adds nothing the maps do not already key on.
 - **Arguments pass through verbatim.** `build_items` normalizes blank args to `{}`
@@ -310,7 +318,9 @@ output recorded in the commit message, per AC 3. Tests 1–4 are unit tests in t
 `#[cfg(test)] mod tests` of `backend/responses.rs`, which constructs typed
 `ResponseStreamEvent` values directly (`:526-550`) and parses no SSE.
 
-1. **`resumed_stream_emits_tool_call_from_done`** — §2.2's sequence: `output_item.done` +
+1. **`done_without_added_or_deltas_emits_tool_call`** (shipped as this name; corrected
+   post-implementation from this draft's `resumed_stream_emits_tool_call_from_done`) — §2.2's
+   sequence: `output_item.done` +
    `response.completed`, no `added`, no deltas. Asserts one `ToolCallDelta`
    (`call_id == "call_lQOsuE9Lx2s6d70xJ88uClEk"`, `name == Some("get_weather")`,
    `args_delta == "{\"city\":\"Berlin\"}"`) and a terminal `Finish { ToolCalls }`.
@@ -322,9 +332,12 @@ output recorded in the commit message, per AC 3. Tests 1–4 are unit tests in t
    This is the test a `done`-only fix would still fail, which is why it exists. The sequence
    is **synthetic** — §2.1 could not capture it — and its doc comment says so, per this
    crate's fixture-provenance discipline.
-3. **`done_then_completed_does_not_double_emit`** — `added` → two deltas → `done` →
-   `completed`. Asserts `done` yields zero events, the `completed` arm yields only
-   `[Usage, Finish]`, and the arguments are not repeated. Passes today; must keep passing.
+3. **`done_after_deltas_does_not_double_emit`** (shipped name; corrected post-implementation
+   from this draft's `done_then_completed_does_not_double_emit` — and split in two: the
+   `done`-half above is this test, while the `completed`-half — `added` → delta → `completed`
+   yields only `[Usage, Finish]` with no repeated arguments — actually lives in the separate
+   `completed_after_deltas_emits_only_terminal_pair` test, not inside this one) — `added` →
+   two deltas → `done`. Asserts `done` yields zero events. Passes today; must keep passing.
 4. **`parallel_calls_emit_one_named_delta_each`** — two interleaved items:
    `added(A)`, `added(B)`, deltas for B only, `done(A)`, `done(B)`, `completed`. Asserts
    exactly one `name: Some(_)` delta per `call_id` and correct args attribution. The design
@@ -343,10 +356,18 @@ output recorded in the commit message, per AC 3. Tests 1–4 are unit tests in t
    `tests/responses_streaming.rs` over the §2.1 fixture: one `ToolCallDelta` with
    `args_delta == "{}"`, and `Finish { ToolCalls }`. A **regression pin**, nothing more — a
    frozen fixture cannot notice an upstream behaviour change.
-7. **`responses_zero_arg_tool_streams_a_delta`** — the assertion that *can* notice, in
-   `tests/live.rs`, `#[ignore]` and `OPENAI_API_KEY`-gated like its siblings (`:47-61`).
-   Drives a real zero-argument tool and asserts at least one `ToolCallDelta` precedes
-   `Finish { ToolCalls }`. This is the only place §2.1's finding can be re-verified.
+7. **`responses_zero_arg_tool_streams_a_delta`** — in `tests/live.rs`, `#[ignore]` and
+   `OPENAI_API_KEY`-gated like its siblings (`:47-61`). Drives a real zero-argument tool and
+   asserts exactly one `ToolCallDelta` (`name == Some("get_current_time")`,
+   `args_delta == "{}"`) followed by a terminal `Finish { ToolCalls }`.
+   **Correction, post-implementation:** this was originally described as "the only place
+   §2.1's finding can be re-verified." It no longer is. SMA-562's own `response.completed`
+   reconciliation sweep makes a live stream with the `{}` delta and one without it produce
+   byte-identical `ModelEvent` sequences — the sweep synthesises the missing delta from
+   `response.output` — so §2.1's elision question is no longer observable through the public
+   `ModelEvent` stream, by this test or by test 6's fixture. That is the fix working as
+   intended, not a gap in this test. Its value is now an end-to-end pin against the live API
+   (name, args, finish reason), not a change-detector for the delta specifically.
 
 ### 6.1 Fixtures
 
