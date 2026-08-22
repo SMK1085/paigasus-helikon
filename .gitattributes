@@ -37,3 +37,7 @@ tests/provider-stream-conformance/fixtures/**/*.txt text eol=lf
 # directory cannot be silently corrupted on a Windows checkout — which would
 # present as the translator dropping unknown events, not as a checkout bug.
 tests/provider-stream-conformance/fixtures/bedrock/** binary
+
+# Markdown is linted and auto-fixed by markdownlint-cli2; a Windows --fix would
+# otherwise rewrite every file with CRLF and diverge from the ubuntu-only CI gate.
+*.md text eol=lf

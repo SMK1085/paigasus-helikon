@@ -1,0 +1,9 @@
+{
+  "name": "paigasus-helikon-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Markdown lint tooling for the paigasus-helikon workspace. Not published; not part of the Rust build.",
+  "devDependencies": {
+    "markdownlint-cli2": "0.23.2"
+  }
+}
