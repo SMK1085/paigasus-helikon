@@ -3,6 +3,8 @@
 //! Internal, never published. See
 //! `docs/superpowers/specs/2026-08-19-sma-543-tracing-target-design.md`.
 
+use std::collections::BTreeSet;
+
 /// One `target =` / `parent =` argument found inside a `tracing` macro.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Offense {
@@ -118,9 +120,9 @@ pub fn scan(src: &str) -> Vec<Offense> {
 /// failure to the file it was reading — something a panic raised from
 /// inside this `&str`-only function cannot do on its own.
 pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
-    let (masked, line_comment_ranges) = mask_trivia(src);
-    let allow_lines = collect_allow_marker_lines(src, &line_comment_ranges);
-    let b = &masked[..];
+    let masked = mask_trivia(src);
+    let allow_lines = collect_allow_marker_lines(src, &masked.line_comments);
+    let b = &masked.buf[..];
     let aliases = collect_macro_aliases(b);
     let mut offenses = Vec::new();
     let mut i = 0;
@@ -169,6 +171,91 @@ pub fn try_scan(src: &str) -> Result<Vec<Offense>, MismatchedDelimiter> {
         i = j + 1;
     }
     Ok(offenses)
+}
+
+/// Distinct `<component>` segments of every `target: "paigasus::…"` literal in
+/// one file's source.
+///
+/// This is the source half of the doc-sync guard in
+/// `tests/workspace-lints/tests/tracing_target_docs.rs`: the components found
+/// here must match the ones the mdBook documents. It reports **components
+/// only** — the `::<subsystem>` leaf is explicitly free to change (SMA-557 D1),
+/// so guarding it would redden CI on legitimate refactors.
+///
+/// Comments, char literals and text nested inside a string literal are invisible
+/// to it, because it looks for `target:` in `mask_trivia`'s masked buffer and
+/// reads the literal's contents back out of the original source.
+///
+/// Not macro-aware: it keys on a `target:` token followed by a `paigasus::`
+/// literal, so a non-`tracing` field named `target` holding such a string would
+/// be a false positive. No such site exists in this workspace, and the failure
+/// mode is a loud mismatch rather than a silent miss.
+///
+/// A comment may sit between `target:` and its literal — `tracing` accepts
+/// `target: /* note */ "paigasus::x::y"` — and that form is recognised. What is
+/// **not** recognised is a target that is not a literal at all:
+/// `target: SOME_CONST`, a `const &'static str`, which `tracing` also accepts,
+/// yields no component. No such site exists in this workspace today.
+pub fn scan_targets(src: &str) -> BTreeSet<String> {
+    const NEEDLE: &[u8] = b"target:";
+    let masked = mask_trivia(src);
+    let b = &masked.buf[..];
+    let mut out = BTreeSet::new();
+    let mut i = 0;
+    while let Some(rel) = find_sub(&b[i..], NEEDLE) {
+        let after = i + rel + NEEDLE.len();
+        // Take the next literal whose span is separated from `target:` by
+        // nothing but whitespace *in the masked buffer*. That test is what
+        // makes a comment in the gap transparent: `mask_trivia` blanks
+        // comments to spaces, so they read as whitespace here, while any real
+        // token — an identifier, a `format!`, an opening paren — does not, and
+        // correctly rejects the match. Testing the raw source instead would
+        // stop at the comment's leading `/` and silently skip the site.
+        if let Some(&(start, end)) = masked.string_literals.iter().find(|&&(start, _)| {
+            start >= after && b[after..start].iter().all(u8::is_ascii_whitespace)
+        }) {
+            if let Some(component) = component_of(&src[start..end]) {
+                out.insert(component);
+            }
+        }
+        i = after;
+    }
+    out
+}
+
+/// The `<component>` of a `"paigasus::<component>::…"` string literal, given the
+/// literal's raw text **including** its delimiters.
+///
+/// Returns `None` for a literal outside the namespace, or one whose component
+/// segment is empty (`"paigasus::"`).
+fn component_of(literal: &str) -> Option<String> {
+    let open = literal.find('"')?;
+    let close = literal.rfind('"')?;
+    if close <= open {
+        return None;
+    }
+    let content = literal.get(open + 1..close)?;
+    let rest = content.strip_prefix("paigasus::")?;
+    let component = match rest.find("::") {
+        Some(k) => &rest[..k],
+        None => rest,
+    };
+    if component.is_empty() {
+        None
+    } else {
+        Some(component.to_owned())
+    }
+}
+
+/// Index of the first occurrence of `needle` in `haystack`, or `None`.
+///
+/// `std` has no substring search for `&[u8]`, and this crate takes no
+/// dependencies.
+fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn is_ident_byte(c: u8) -> bool {
@@ -294,6 +381,27 @@ fn blank(out: &mut [u8], from: usize, to: usize) {
     }
 }
 
+/// What [`mask_trivia`] found while masking one file's source.
+struct Masked {
+    /// Source bytes with comments and literals blanked to spaces, so a scan
+    /// over it sees only genuine code.
+    buf: Vec<u8>,
+    /// Byte ranges of genuine `//` line comments (including `///` and `//!`).
+    /// [`collect_allow_marker_lines`] uses these to tell a real
+    /// `// allow(tracing-target-syntax)` from that text inside a string.
+    line_comments: Vec<(usize, usize)>,
+    /// Byte ranges of string literals — plain, raw, byte and C strings —
+    /// delimiters included. Char literals are excluded: they cannot hold a
+    /// tracing target, and a lifetime (`'a`) is not a literal at all.
+    ///
+    /// `scan_targets` needs these because `buf` has blanked the very bytes a
+    /// target string is made of. Reporting the span instead of un-blanking
+    /// keeps one lexer authoritative over what counts as code — re-deriving
+    /// literal boundaries in a second scanner is what the note at
+    /// `collect_allow_marker_lines` warns against.
+    string_literals: Vec<(usize, usize)>,
+}
+
 /// Replace every byte inside a comment or literal with a space, preserving
 /// length, byte offsets and newlines so offsets still map onto the original.
 ///
@@ -305,10 +413,11 @@ fn blank(out: &mut [u8], from: usize, to: usize) {
 /// string, or a block comment — all of which this function also blanks, but
 /// does *not* record a range for, since only a line comment is a legitimate
 /// home for the marker.
-fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
+fn mask_trivia(src: &str) -> Masked {
     let b = src.as_bytes();
     let mut out = b.to_vec();
-    let mut line_comment_ranges = Vec::new();
+    let mut line_comments = Vec::new();
+    let mut string_literals = Vec::new();
     let mut i = 0;
     while i < b.len() {
         match b[i] {
@@ -318,7 +427,7 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
                     i += 1;
                 }
                 blank(&mut out, start, i);
-                line_comment_ranges.push((start, i));
+                line_comments.push((start, i));
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 let start = i;
@@ -340,6 +449,7 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
             b'r' | b'b' | b'c' => match raw_or_byte_string_end(b, i) {
                 Some(end) => {
                     blank(&mut out, i, end);
+                    string_literals.push((i, end));
                     i = end;
                 }
                 None => i += 1,
@@ -361,6 +471,7 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
                     }
                 }
                 blank(&mut out, start, i);
+                string_literals.push((start, i));
             }
             b'\'' => match char_literal_end(b, i) {
                 Some(end) => {
@@ -373,7 +484,11 @@ fn mask_trivia(src: &str) -> (Vec<u8>, Vec<(usize, usize)>) {
             _ => i += 1,
         }
     }
-    (out, line_comment_ranges)
+    Masked {
+        buf: out,
+        line_comments,
+        string_literals,
+    }
 }
 
 /// End (exclusive) of a raw or byte string starting at `i`, if one does.
@@ -892,5 +1007,122 @@ mod tests {
     fn unterminated_string_literal_does_not_panic() {
         let src = "let s = \"abc\\";
         assert_eq!(kinds(src), vec![]);
+    }
+
+    /// `mask_trivia` must report the byte span of every string literal, so a
+    /// later scan can read the literal's *contents* out of the original source
+    /// (the masked buffer has blanked them). Char literals are deliberately
+    /// excluded — they can never hold a tracing target.
+    #[test]
+    fn mask_trivia_reports_string_literal_spans() {
+        let src = "let a = \"one\"; let b = 'x'; let c = r#\"two\"#;";
+        let masked = mask_trivia(src);
+        let texts: Vec<&str> = masked
+            .string_literals
+            .iter()
+            .map(|&(s, e)| &src[s..e])
+            .collect();
+        assert_eq!(texts, vec!["\"one\"", "r#\"two\"#"]);
+    }
+
+    /// The existing line-comment reporting must survive the signature change.
+    #[test]
+    fn mask_trivia_still_reports_line_comments() {
+        let src = "// note\nlet a = 1;\n";
+        let masked = mask_trivia(src);
+        assert_eq!(masked.line_comments.len(), 1);
+        let (s, e) = masked.line_comments[0];
+        assert_eq!(&src[s..e], "// note");
+    }
+
+    /// The ordinary case: a component is taken from between the `paigasus::`
+    /// prefix and the next `::`.
+    #[test]
+    fn scan_targets_extracts_components() {
+        let src = concat!(
+            "tracing::debug!(target: \"paigasus::openai::chat\", \"m\");\n",
+            "tracing::warn!(target: \"paigasus::litellm::stream\", \"m\");\n",
+            "tracing::warn!(target: \"paigasus::openai::responses\", \"m\");\n",
+        );
+        let got: Vec<String> = scan_targets(src).into_iter().collect();
+        assert_eq!(got, vec!["litellm".to_owned(), "openai".to_owned()]);
+    }
+
+    /// A macro spanning several lines is the dominant real-world shape.
+    #[test]
+    fn scan_targets_handles_multiline_macros() {
+        let src = "tracing::warn!(\n    target: \"paigasus::bedrock::translate\",\n    \"m\"\n);\n";
+        let got: Vec<String> = scan_targets(src).into_iter().collect();
+        assert_eq!(got, vec!["bedrock".to_owned()]);
+    }
+
+    /// A literal with no second `::` still yields a component. This shape does
+    /// not occur in the workspace today; it must not panic.
+    #[test]
+    fn scan_targets_accepts_a_bare_component() {
+        let src = "tracing::warn!(target: \"paigasus::gemini\", \"m\");\n";
+        let got: Vec<String> = scan_targets(src).into_iter().collect();
+        assert_eq!(got, vec!["gemini".to_owned()]);
+    }
+
+    /// Targets outside the namespace are not components.
+    #[test]
+    fn scan_targets_ignores_foreign_targets() {
+        let src = "tracing::warn!(target: \"hyper::client\", \"m\");\n";
+        assert!(scan_targets(src).is_empty());
+    }
+
+    /// `target =` is the SMA-543 defect: it records an ordinary field and the
+    /// event never lands on that target, so it is not a target site at all.
+    #[test]
+    fn scan_targets_ignores_the_equals_form() {
+        let src = "tracing::warn!(target = \"paigasus::openai::chat\", \"m\");\n";
+        assert!(scan_targets(src).is_empty());
+    }
+
+    /// Comments are not code. This is not hypothetical: a `///` doc comment at
+    /// `crates/paigasus-helikon-providers-litellm/src/translate/request.rs:497`
+    /// made the spec's first inventory count 57 sites where there are 56.
+    #[test]
+    fn scan_targets_ignores_comments() {
+        for src in [
+            "// tracing::warn!(target: \"paigasus::ghost::x\", \"m\");\n",
+            "/// reinstates `target: \"paigasus::ghost::x\"` inside this\n",
+            "/* tracing::warn!(target: \"paigasus::ghost::x\"); */\n",
+        ] {
+            assert!(scan_targets(src).is_empty(), "leaked from: {src}");
+        }
+    }
+
+    /// `tracing` accepts a comment between `target:` and its literal. Such a
+    /// site must still be found — otherwise a new component written this way
+    /// would silently bypass the documentation drift guard.
+    #[test]
+    fn scan_targets_sees_through_a_comment_before_the_literal() {
+        for src in [
+            "tracing::warn!(target: /* note */ \"paigasus::openai::chat\", \"m\");\n",
+            "tracing::warn!(\n    target: // note\n    \"paigasus::openai::chat\",\n    \"m\"\n);\n",
+        ] {
+            let got: Vec<String> = scan_targets(src).into_iter().collect();
+            assert_eq!(got, vec!["openai".to_owned()], "missed site in: {src}");
+        }
+    }
+
+    /// The gap test must not be so permissive that a non-literal target matches
+    /// a later literal in the same invocation. `target: SOME_CONST` yields
+    /// nothing rather than picking up the message string.
+    #[test]
+    fn scan_targets_ignores_a_non_literal_target() {
+        let src = "tracing::warn!(target: SOME_CONST, \"paigasus::openai::chat\");\n";
+        assert!(scan_targets(src).is_empty());
+    }
+
+    /// A target inside an outer string literal is a test fixture, not a call
+    /// site. This property is what lets the guard scan its own source without
+    /// path-based self-exclusion.
+    #[test]
+    fn scan_targets_ignores_nested_literals() {
+        let src = "let fixture = \"tracing::warn!(target: \\\"paigasus::ghost::x\\\")\";\n";
+        assert!(scan_targets(src).is_empty());
     }
 }
