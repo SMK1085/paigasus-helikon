@@ -1346,14 +1346,25 @@ git log main..HEAD --format='%s%n%b' | grep -n 'BREAKING CHANGE\|^[a-z]*(.*)!:'
 
 Expected: no output.
 
-- [ ] Manual spot check (spec §7.4), using an example that actually reads
-      `RUST_LOG`:
+- [ ] **Optional** manual spot check (spec §7.4). Requires a live
+      `ANTHROPIC_API_KEY`, so it is not a gate:
 
 ```bash
-RUST_LOG='paigasus::core=debug' cargo run -p paigasus-helikon-runtime-agentcore --example echo_http
+RUST_LOG='paigasus::core=debug' cargo run -p paigasus-helikon-runtime-agentcore --example agent_http
 ```
 
 Expected: the `agent.run` / `agent.turn` / `gen_ai.chat` / `tool.execute` spans
 appear. Re-run with `RUST_LOG='paigasus_helikon_core=debug'` and confirm they do
-**not**. Do not use `crates/paigasus-helikon/examples/langfuse_tracing.rs` — it
-installs no `EnvFilter` and exits early without live Langfuse credentials.
+**not**.
+
+`agent_http` is the only example that both wires `EnvFilter` and drives a real
+`LlmAgent`. Do not substitute either of the two examples earlier drafts named:
+`langfuse_tracing.rs` installs no `EnvFilter` and exits early without live
+Langfuse credentials, and `echo_http.rs` wires `EnvFilter` but its `EchoAgent`
+implements `Agent` directly, never entering `LlmAgent`'s loop, so it raises none
+of the four spans at any `RUST_LOG` setting.
+
+Skipping this costs nothing: Task 8's assertion 4 proves core's four
+`info_span!` sites carry `paigasus::core::agent`, and Task 9's
+`two_segment_component_selects_only_that_component` proves
+`paigasus::core=debug` selects that target. Their composition is the claim.

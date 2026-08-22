@@ -1003,21 +1003,43 @@ Two rules follow, and both are load-bearing:
 - `mdbook build docs/book`.
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
 
-### 7.4 Manual spot check
+### 7.4 Manual spot check — **optional**
 
 Run an example that actually reads `RUST_LOG` with
 `RUST_LOG='paigasus::core=debug'` and confirm the `agent.run` / `agent.turn` /
 `gen_ai.chat` / `tool.execute` spans still appear; then re-run with the old
 `paigasus_helikon_core=debug` and confirm they do **not**.
 
-**Use `crates/paigasus-helikon-runtime-agentcore/examples/echo_http.rs`**, which
-already wires `EnvFilter::try_from_default_env()` (`:80-83`). Do **not** use
-`crates/paigasus-helikon/examples/langfuse_tracing.rs`: it installs
-`tracing_subscriber::registry().with(tracing_opentelemetry::layer()…)` with no
-`EnvFilter` and no `RUST_LOG` handling at all (`:150-152`), and `main` hard-`?`s
-on `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (`:133-134`), so without live
-Langfuse credentials it exits before emitting anything. An earlier draft of this
-spec named it; that check was not runnable as written.
+**Use `crates/paigasus-helikon-runtime-agentcore/examples/agent_http.rs`.** It is
+the only example that satisfies *both* halves of the check: it wires
+`EnvFilter::try_from_default_env()` (`:28-29`) **and** it drives a real
+`LlmAgent` (`:36`), which is what raises the four spans. It needs a live
+`ANTHROPIC_API_KEY` (`:33`) — unavoidable, since demonstrating the agent trace
+tree means running an agent, which means running a model.
+
+Two examples were named by earlier drafts and both were wrong. Neither is a
+valid substitute:
+
+- `crates/paigasus-helikon/examples/langfuse_tracing.rs` installs
+  `tracing_subscriber::registry().with(tracing_opentelemetry::layer()…)` with no
+  `EnvFilter` and no `RUST_LOG` handling at all (`:150-152`), and `main`
+  hard-`?`s on `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (`:133-134`), so
+  without live Langfuse credentials it exits before emitting anything.
+- `crates/paigasus-helikon-runtime-agentcore/examples/echo_http.rs` does wire
+  `EnvFilter`, but its `EchoAgent` implements `Agent` directly and never enters
+  `LlmAgent`'s loop — so it raises none of the four spans at any `RUST_LOG`
+  setting. Substituting it fixed the first example's missing `EnvFilter` while
+  silently breaking the half that mattered.
+
+**This check is optional, because the claim it tests is already covered
+mechanically, and more tightly.** §4.4's assertion 4 proves the four
+`info_span!` sites in `core` carry `paigasus::core::agent` — it fails if any
+does not — and §7.1's `two_segment_component_selects_only_that_component`
+proves an `EnvFilter` built from `paigasus::core=debug` selects that exact
+target. The composition of those two *is* the claim. Running the example adds
+confidence that a real subscriber is wired as expected; it adds no evidence of
+correctness that CI does not already carry, and it must never be treated as a
+gate — it cannot run without a paid API key.
 
 **What this does and does not de-risk.** Exported OTel span *names* are
 unaffected — `tracing-opentelemetry` 0.33 derives the span name from the
