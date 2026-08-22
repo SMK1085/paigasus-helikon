@@ -283,6 +283,18 @@ fn every_tracing_site_under_crates_carries_a_well_shaped_paigasus_target() {
         for inv in &invocations {
             // The marker suppresses the whole invocation: either trailing
             // its own line, or on the line immediately before it.
+            //
+            // Dead-by-design against this workspace's real source: the
+            // anti-vacuity `assert!(allow_lines.is_empty(), ...)` above fires
+            // first for every file scanned here, since no site under
+            // `crates/*/src` uses the escape hatch today, so `suppressed` can
+            // never actually be `true` in this test run. That composition —
+            // an untargeted site carrying the marker actually being skipped —
+            // is exercised separately, at unit level over an inline fixture,
+            // by `escape_hatch_marker_suppresses_an_untargeted_site` below.
+            // Don't "simplify" this check away just because it looks
+            // unreachable; it is reachable the moment the anti-vacuity assert
+            // above is ever relaxed or a marker is legitimately added.
             let suppressed = allow_lines.contains(&inv.line)
                 || (inv.line > 1 && allow_lines.contains(&(inv.line - 1)));
             if suppressed {
@@ -362,5 +374,56 @@ fn every_tracing_site_under_crates_carries_a_well_shaped_paigasus_target() {
         instrument_failures.is_empty(),
         "`#[tracing::instrument]` violation(s):\n{}",
         instrument_failures.join("\n")
+    );
+}
+
+/// Composition test for the escape hatch: an untargeted `tracing::warn!`
+/// carrying the `allow(tracing-target-coverage)` marker must be suppressed
+/// in both marker positions (preceding line, and trailing the invocation's
+/// own line), while an identical site without the marker is reported.
+///
+/// This exercises the same `suppressed` composition used in
+/// `every_tracing_site_under_crates_carries_a_well_shaped_paigasus_target`
+/// above, over an inline fixture rather than by adding a marker to real
+/// source — the real-source test's own anti-vacuity assert would otherwise
+/// make that branch unreachable (spec §4.5).
+#[test]
+fn escape_hatch_marker_suppresses_an_untargeted_site() {
+    fn reported_lines(src: &str) -> Vec<usize> {
+        let allow_lines = allow_marker_lines(src, ALLOW_MARKER_COVERAGE);
+        let invocations = scan_invocations(src).expect("well-formed fixture source");
+        invocations
+            .iter()
+            .filter(|inv| {
+                let suppressed = allow_lines.contains(&inv.line)
+                    || (inv.line > 1 && allow_lines.contains(&(inv.line - 1)));
+                !suppressed
+            })
+            .map(|inv| inv.line)
+            .collect()
+    }
+
+    // Marker on the line immediately before the invocation: suppressed.
+    let preceding = "// allow(tracing-target-coverage)\ntracing::warn!(\"m\");\n";
+    assert_eq!(
+        reported_lines(preceding),
+        Vec::<usize>::new(),
+        "a marker on the preceding line must suppress the untargeted site"
+    );
+
+    // Marker trailing the invocation's own line: suppressed.
+    let trailing = "tracing::warn!(\"m\"); // allow(tracing-target-coverage)\n";
+    assert_eq!(
+        reported_lines(trailing),
+        Vec::<usize>::new(),
+        "a marker trailing the invocation's own line must suppress it"
+    );
+
+    // No marker at all: the identical site IS reported.
+    let unmarked = "tracing::warn!(\"m\");\n";
+    assert_eq!(
+        reported_lines(unmarked),
+        vec![1],
+        "without the marker, the untargeted site must still be reported"
     );
 }

@@ -12,6 +12,9 @@ const T_CORE_WORKFLOW: &str = "paigasus::core::workflow";
 const T_OPENAI_CHAT: &str = "paigasus::openai::chat";
 const T_AXUM_REGISTRY: &str = "paigasus::runtime_axum::registry";
 const T_TOKIO_RETRY: &str = "paigasus::runtime_tokio::retry";
+const T_ACTIX_REGISTRY: &str = "paigasus::runtime_actix::registry";
+const T_AGENTCORE_SERVER: &str = "paigasus::runtime_agentcore::server";
+const T_TEMPORAL_WORKER: &str = "paigasus::runtime_temporal::worker";
 const T_MODULE_PATH: &str = "paigasus_helikon_core::session";
 const T_FOREIGN: &str = "hyper::client";
 
@@ -37,7 +40,7 @@ where
 /// **This is a `macro_rules!`, not a function, and that is load-bearing.** A
 /// `tracing` callsite caches its `Interest` globally, while `with_default`
 /// installs a subscriber only for the current thread. A shared helper
-/// *function* would give all four tests the same seven callsites, so whichever
+/// *function* would give all four tests the same ten callsites, so whichever
 /// test ran first would prime the interest cache for the rest — the classic
 /// interest-caching flake, and a green-when-wrong one. A macro expands at each
 /// invocation, so every test gets its own callsites and the tests stay
@@ -54,6 +57,9 @@ macro_rules! reaching {
             tracing::event!(target: T_OPENAI_CHAT, tracing::Level::DEBUG, "p");
             tracing::event!(target: T_AXUM_REGISTRY, tracing::Level::DEBUG, "p");
             tracing::event!(target: T_TOKIO_RETRY, tracing::Level::DEBUG, "p");
+            tracing::event!(target: T_ACTIX_REGISTRY, tracing::Level::DEBUG, "p");
+            tracing::event!(target: T_AGENTCORE_SERVER, tracing::Level::DEBUG, "p");
+            tracing::event!(target: T_TEMPORAL_WORKER, tracing::Level::DEBUG, "p");
             tracing::event!(target: T_MODULE_PATH, tracing::Level::DEBUG, "p");
             tracing::event!(target: T_FOREIGN, tracing::Level::DEBUG, "p");
         });
@@ -76,6 +82,9 @@ fn runtime_group_selector_reaches_every_adapter() {
     let got = reaching!("paigasus::runtime=debug");
     assert!(got.contains(&T_AXUM_REGISTRY.to_owned()));
     assert!(got.contains(&T_TOKIO_RETRY.to_owned()));
+    assert!(got.contains(&T_ACTIX_REGISTRY.to_owned()));
+    assert!(got.contains(&T_AGENTCORE_SERVER.to_owned()));
+    assert!(got.contains(&T_TEMPORAL_WORKER.to_owned()));
     assert!(!got.contains(&T_CORE_AGENT.to_owned()));
     assert!(!got.contains(&T_OPENAI_CHAT.to_owned()));
 }
