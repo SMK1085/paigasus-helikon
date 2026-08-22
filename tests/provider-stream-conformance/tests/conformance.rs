@@ -2966,9 +2966,14 @@ mod openai_responses {
     }
 
     /// `response.output_item.done`, the completed mirror of
-    /// [`output_item_added`]. Matches `responses_tool_call.txt` line 99 — the
-    /// same no-op-to-the-translator caveat as
-    /// [`function_call_arguments_done`] applies.
+    /// [`output_item_added`]. Matches `responses_tool_call.txt` line 99.
+    ///
+    /// No longer a no-op to the translator: since SMA-562 this event emits a
+    /// `ToolCallDelta` carrying the item's complete `arguments` when no
+    /// argument delta has already been emitted for it. In THIS scenario the
+    /// deltas always arrive first, so it stays a no-op here specifically —
+    /// which is the property the double-emit dedup guarantees, and worth
+    /// noticing if this suite ever goes red on a duplicated tool call.
     fn output_item_done(item_id: &str, call_id: &str, name: &str, arguments: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.output_item.done",
