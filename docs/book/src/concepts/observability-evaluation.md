@@ -242,14 +242,14 @@ This guarantee begins with this document and is not retroactive.
 
 Warnings everywhere, one provider verbose:
 
-```
+```bash
 RUST_LOG='warn,paigasus::openai=debug'
 ```
 
 The whole namespace, every component — note the trailing `::` (see above for
 why it matters):
 
-```
+```bash
 RUST_LOG='warn,paigasus::=debug'
 ```
 
@@ -257,20 +257,20 @@ One subsystem and nothing else. This is a three-segment selector, so treat it as
 a debugging tool: the `stream` leaf may be renamed in any release, and if this
 example ever stops matching, that is why.
 
-```
+```bash
 RUST_LOG='off,paigasus::litellm::stream=trace'
 ```
 
 The agent trace tree — the `agent.run` / `agent.turn` / `gen_ai.chat` /
 `tool.execute` spans:
 
-```
+```bash
 RUST_LOG='warn,paigasus::core=debug'
 ```
 
 Every runtime adapter, using the `paigasus::runtime` group selector:
 
-```
+```bash
 RUST_LOG='warn,paigasus::runtime=debug'
 ```
 
