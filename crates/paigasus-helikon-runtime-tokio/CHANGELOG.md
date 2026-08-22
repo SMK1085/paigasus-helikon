@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.23](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.22...paigasus-helikon-runtime-tokio-v0.1.23) - 2026-08-22
+
+### Added
+
+- *(core)* SMA-568 adopt paigasus:: tracing targets in core and the runtimes ([#216](https://github.com/SMK1085/paigasus-helikon/pull/216))
+
 ## [0.1.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.21...paigasus-helikon-runtime-tokio-v0.1.22) - 2026-08-22
 
 ### Fixed
