@@ -127,7 +127,10 @@ converted. After this ticket, `paigasus::` means *all Helikon events*, with no
 exception to document.
 
 `runtime-temporal`'s split personality resolves **by addition** — its other
-three sites gain targets — not by deleting `paigasus::temporal::activities`.
+three sites gain targets — rather than by deleting the one site that already had
+a target. That site survives; only its component segment is renamed, from
+`paigasus::temporal::activities` to `paigasus::runtime_temporal::activities`
+(D2).
 
 Rejected alternatives:
 
@@ -298,8 +301,15 @@ Rationale: without it, the namespace decays on the first bare `tracing::warn!`
 a contributor adds. That event lands on a module path and escapes every
 `paigasus::` filter — silently, with the build green — which is the precise
 failure mode this ticket exists to end, reintroduced one commit at a time.
-Coverage is what makes "`paigasus::` is complete" true *by construction* rather
-than by vigilance.
+Coverage is what replaces vigilance with a mechanism: CI fails when a covered
+invocation loses its target, instead of the loss going unnoticed until an
+operator's filter comes back empty.
+
+Note the bounded phrasing. This is **not** a claim that the namespace is
+complete by construction — §5.1 forbids the book from saying that, and the same
+discipline binds this document. The guard sees `tracing` macro invocations under
+`crates/*/src`; D7 bans the one construct it cannot see, and §4.3 leaves an
+escape hatch a future contributor may legitimately use.
 
 It is satisfiable today: the six crates with zero call sites impose no work, and
 the 97 sites are all converted by this ticket.
@@ -700,9 +710,16 @@ must-be-reported case catches it.
 
 `tests/workspace-lints` today has an **empty `[dependencies]`** and
 `[lints] workspace = true`, which means workspace-wide `missing_docs = "warn"`
-applies to it. Both new `pub` functions and the new `pub struct Untargeted`
-(including its fields) therefore need `///` docs, or the required `docs` job
-fails under `RUSTDOCFLAGS=-D warnings`.
+applies to it. Every item §4.1 adds therefore needs `///` docs — the
+`scan_invocations`, `allow_marker_lines` and `instrument_attribute_lines`
+functions, the `ALLOW_MARKER_COVERAGE` constant, `pub struct Invocation`
+including each of its fields, and `pub enum TargetArg` including each of its
+variants — or the required `docs` job fails under `RUSTDOCFLAGS=-D warnings`.
+
+A second rustdoc trap applies to those same doc comments: a `///` on a `pub`
+item must not use `[link]` syntax to reference a private item such as
+`mask_trivia`, because `rustdoc::private_intra_doc_links` fails the `docs` job
+while every test still passes. Use plain backticked prose.
 
 §7.1's `EnvFilter` test needs `tracing` and `tracing-subscriber` added as
 **dev-dependencies** (`workspace = true`; both are already pinned in the root
