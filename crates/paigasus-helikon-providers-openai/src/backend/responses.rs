@@ -483,12 +483,39 @@ impl ResponsesTranslator {
             }
 
             // Terminal: response completed.
-            ResponseStreamEvent::ResponseCompleted(e) => Ok(terminal_events(
-                e.response.usage,
-                e.response.status,
-                None,
-                !self.item_to_call.is_empty(),
-            )),
+            //
+            // Reconcile BEFORE building the terminal pair. `response.output`
+            // is the authoritative item list and always carries every function
+            // call in full (SMA-562 §2.3, confirmed on four captures), so this
+            // is the only point at which "did we emit every call we are about
+            // to report?" is decidable. Emitting here makes the post-condition
+            // an invariant: `Finish { ToolCalls }` iff at least one
+            // `ToolCallDelta` was emitted.
+            //
+            // `terminal_events` stays the sole constructor of `Usage` and
+            // still appends `Finish` last (SMA-522).
+            ResponseStreamEvent::ResponseCompleted(e) => {
+                let mut out: Vec<ModelEvent> = e
+                    .response
+                    .output
+                    .iter()
+                    .filter_map(|item| self.emit_call_if_unseen(item))
+                    .collect();
+                if !self.pending_args.is_empty() {
+                    tracing::warn!(
+                        target: "paigasus::openai::responses",
+                        orphans = self.pending_args.len(),
+                        "argument deltas were buffered for item_ids that never resolved; dropping"
+                    );
+                }
+                out.extend(terminal_events(
+                    e.response.usage,
+                    e.response.status,
+                    None,
+                    !self.item_to_call.is_empty(),
+                ));
+                Ok(out)
+            }
 
             // Terminal: response incomplete — map reason to FinishReason.
             ResponseStreamEvent::ResponseIncomplete(e) => {
@@ -983,5 +1010,238 @@ mod tests {
             }
             other => panic!("expected ToolCallDelta, got {other:?}"),
         }
+    }
+
+    /// Build a `response.completed` event carrying `output_json` as its
+    /// `output` array.
+    ///
+    /// Deserialized rather than struct-literal'd: `Response` has six required
+    /// fields (`id`, `object`, `created_at`, `model`, `status`, `output`) and
+    /// ~40 optional ones, so this is both shorter and closer to the wire.
+    fn completed_event(output_json: &str) -> ResponseStreamEvent {
+        let raw = format!(
+            r#"{{"type":"response.completed","sequence_number":9,"response":{{
+                "id":"resp_test","object":"response","created_at":1787416935,
+                "model":"gpt-4o-mini","status":"completed","output":{output_json},
+                "usage":{{"input_tokens":57,"input_tokens_details":{{"cached_tokens":0}},
+                "output_tokens":2,"output_tokens_details":{{"reasoning_tokens":0}},
+                "total_tokens":59}}}}}}"#
+        );
+        serde_json::from_str(&raw).expect("completed_event JSON must parse")
+    }
+
+    /// SMA-562 §3 — the shape the ticket literally reports, and the reason
+    /// `output_item.done` alone is not the fix: `output_item.added` registers
+    /// the call into `item_to_call`, no argument deltas stream, and NO
+    /// `output_item.done` arrives. `terminal_events` sees a non-empty
+    /// `item_to_call` and reports `ToolCalls` for a call that was never
+    /// emitted.
+    ///
+    /// This sequence is SYNTHETIC. §2.1's captures could not produce it — a
+    /// zero-argument tool streams one `"{}"` delta on every model tried — so
+    /// unlike the §2.2 fixture this one is constructed, and is labelled as
+    /// such per this crate's fixture-provenance discipline.
+    #[test]
+    fn added_then_completed_without_deltas_emits_tool_call() {
+        let mut t = ResponsesTranslator::new();
+
+        assert!(t
+            .consume(added_event("fc_1", "call_1", "get_weather"))
+            .unwrap()
+            .is_empty());
+
+        let evs = t
+            .consume(completed_event(
+                r#"[{"id":"fc_1","type":"function_call","status":"completed",
+                     "arguments":"{\"city\":\"Berlin\"}","call_id":"call_1",
+                     "name":"get_weather"}]"#,
+            ))
+            .unwrap();
+
+        let deltas: Vec<_> = evs
+            .iter()
+            .filter(|e| matches!(e, ModelEvent::ToolCallDelta { .. }))
+            .collect();
+        assert_eq!(
+            deltas.len(),
+            1,
+            "Finish(ToolCalls) must not be reported without a ToolCallDelta; got {evs:?}"
+        );
+        match deltas[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "call_1");
+                assert_eq!(name.as_deref(), Some("get_weather"));
+                assert_eq!(args_delta, "{\"city\":\"Berlin\"}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+
+        // The reconciled delta must precede the terminal pair.
+        assert!(
+            matches!(evs[0], ModelEvent::ToolCallDelta { .. }),
+            "ToolCallDelta must come before Usage/Finish; got {evs:?}"
+        );
+        assert!(
+            matches!(
+                evs.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::ToolCalls
+                })
+            ),
+            "expected Finish(ToolCalls) last, got {evs:?}"
+        );
+    }
+
+    /// The ordinary path must be unchanged: deltas carried the arguments, so
+    /// reconciliation at `completed` finds `name_emitted` set and adds nothing.
+    #[test]
+    fn completed_after_deltas_emits_only_terminal_pair() {
+        let mut t = ResponsesTranslator::new();
+
+        t.consume(added_event("fc_1", "call_1", "get_weather"))
+            .unwrap();
+        t.consume(delta_event("fc_1", "{\"city\":\"Berlin\"}"))
+            .unwrap();
+
+        let evs = t
+            .consume(completed_event(
+                r#"[{"id":"fc_1","type":"function_call","status":"completed",
+                     "arguments":"{\"city\":\"Berlin\"}","call_id":"call_1",
+                     "name":"get_weather"}]"#,
+            ))
+            .unwrap();
+
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
+            "completed must not re-emit arguments the deltas already carried; got {evs:?}"
+        );
+        assert!(matches!(evs[0], ModelEvent::Usage { .. }));
+        assert!(matches!(
+            evs.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ));
+    }
+
+    /// Parallel tool calls share one stream and are distinguished only by
+    /// `item.id`. Every map in the translator keys on it, but nothing asserted
+    /// that until now. The cross-provider conformance suite enforces the same
+    /// "exactly one named delta per call_id" rule, where a regression would
+    /// surface with no unit-level signal.
+    #[test]
+    fn parallel_calls_emit_one_named_delta_each() {
+        let mut t = ResponsesTranslator::new();
+
+        let mut all = Vec::new();
+        all.extend(
+            t.consume(added_event("fc_a", "call_a", "get_weather"))
+                .unwrap(),
+        );
+        all.extend(
+            t.consume(added_event("fc_b", "call_b", "get_time"))
+                .unwrap(),
+        );
+        // Only B streams arguments.
+        all.extend(t.consume(delta_event("fc_b", "{}")).unwrap());
+        all.extend(
+            t.consume(done_event(
+                "fc_a",
+                "call_a",
+                "get_weather",
+                "{\"city\":\"Rome\"}",
+            ))
+            .unwrap(),
+        );
+        all.extend(
+            t.consume(done_event("fc_b", "call_b", "get_time", "{}"))
+                .unwrap(),
+        );
+        all.extend(
+            t.consume(completed_event(
+                r#"[{"id":"fc_a","type":"function_call","status":"completed",
+                     "arguments":"{\"city\":\"Rome\"}","call_id":"call_a","name":"get_weather"},
+                    {"id":"fc_b","type":"function_call","status":"completed",
+                     "arguments":"{}","call_id":"call_b","name":"get_time"}]"#,
+            ))
+            .unwrap(),
+        );
+
+        let mut named: Vec<(&str, &str)> = all
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name: Some(name),
+                    ..
+                } => Some((call_id.as_str(), name.as_str())),
+                _ => None,
+            })
+            .collect();
+        named.sort_unstable();
+        assert_eq!(
+            named,
+            vec![("call_a", "get_weather"), ("call_b", "get_time")],
+            "expected exactly one named delta per call_id, got {all:?}"
+        );
+
+        // Args must be attributed to the right call, and A's must not be
+        // double-counted between its `done` and the terminal reconciliation.
+        let a_args: String = all
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    args_delta,
+                    ..
+                } if call_id == "call_a" => Some(args_delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(a_args, "{\"city\":\"Rome\"}");
+    }
+
+    /// §4.3 on the terminal path: an incomplete item in `response.output` must
+    /// not be emitted, because its `arguments` may be truncated JSON. Also
+    /// asserts the two consequences of skipping registration (controller
+    /// ruling on this task's brief): a turn whose only item is incomplete
+    /// must terminate `Stop`, not `ToolCalls`, and `item_to_call` must stay
+    /// empty. Asserting only "no delta" would pass even if the item wrongly
+    /// registered and the turn wrongly claimed `ToolCalls` — the same
+    /// mutation-blind gap Task 1's review caught.
+    #[test]
+    fn completed_skips_incomplete_output_item() {
+        let mut t = ResponsesTranslator::new();
+
+        let evs = t
+            .consume(completed_event(
+                r#"[{"id":"fc_1","type":"function_call","status":"incomplete",
+                     "arguments":"{\"cit","call_id":"call_1","name":"get_weather"}]"#,
+            ))
+            .unwrap();
+
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
+            "an incomplete item must not be emitted; got {evs:?}"
+        );
+        assert!(
+            matches!(
+                evs.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::Stop
+                })
+            ),
+            "an incomplete-only turn must report Stop, not ToolCalls; got {evs:?}"
+        );
+        assert!(
+            t.item_to_call.is_empty(),
+            "an incomplete item must not register into item_to_call"
+        );
     }
 }
