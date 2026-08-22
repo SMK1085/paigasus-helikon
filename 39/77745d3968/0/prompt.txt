@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b8wwpaa21</task-id>
+<tool-use-id>toolu_01Mkiri84dBi2AAdnX9nWq4q</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/b8wwpaa21.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CodeRabbit to post" completed (exit code 0)</summary>
+</task-notification>
