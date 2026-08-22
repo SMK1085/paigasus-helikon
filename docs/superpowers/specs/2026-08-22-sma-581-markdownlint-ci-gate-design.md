@@ -107,10 +107,14 @@ alongside it, unanchored (`!**/target/**`, not `!target/**`), because:
 - Root-anchored negations do not exclude nested copies. `target/package/` (produced
   by `cargo package` and by release-plz verification) contains full crate copies
   including `README.md`.
-- `.superpowers/` is excluded on this machine only via `.git/info/exclude`, which is
-  **machine-local and uncommitted**. `"gitignore": true` alone would therefore
-  behave differently on a contributor's machine. The explicit negation is what makes
-  the file set reproducible.
+- `"gitignore": true` delegates to globby, which honours only **committed**
+  `**/.gitignore` files — it never reads `.git/info/exclude`, and it reads a
+  user-global gitignore only under an opt-in option this repo's `.markdownlint-cli2.jsonc`
+  does not set. `.superpowers/` is excluded on this machine only via
+  `.git/info/exclude`, which is **machine-local and uncommitted**, so
+  `"gitignore": true` alone would not exclude it — and would behave differently on a
+  contributor's machine whose exclusion, if any, lives somewhere else again. The
+  explicit negation is what makes the file set reproducible across machines.
 
 Measured with this config: **51 files, 110 findings, 16 files dirty** — identical in
 the main checkout and in a clean worktree.
@@ -291,38 +295,59 @@ repo already learned once (CLAUDE.md, "Fixture line endings").
 ### Config self-test
 
 `scripts/check-markdownlint-config.sh`, run as a step in the `markdown-lint` job,
-guards two silent-success modes — **both hit during the design of this ticket**:
+guards silent-success modes found both during the design of this ticket and during
+a later whole-branch review (SMA-581 fix wave):
 
 1. **An invalid rule-option value silently disables the rule.** A typo'd
    `"MD060": { "style": "consistent" }` — not a documented value; the set is
    `aligned` / `any` / `compact` / `tight` — yields `Summary: 0 issues in 0 files`
    with no error. The gate reports green while enforcing nothing.
-2. **The gated file set can silently collapse.** A `--no-globs` flag, an edit to
-   `globs`, or a lost `gitignore` setting narrows or widens the set with no signal.
+2. **The gated file set can silently collapse, or narrow to a subtree.** A
+   `--no-globs` flag, an edit to `globs`, or a lost `gitignore` setting can affect
+   the whole set or just one area (e.g. `"!crates/**"` ungates every crate README
+   while leaving the book tree, and the lint step, green). A single probe under
+   `docs/book/**` cannot distinguish the two, so the script probes multiple gated
+   areas independently.
+3. **`"default": false` silently disables every rule except the ones explicitly
+   configured** (`MD013`, `MD060` here). No file's *membership* in the linted set
+   changes, so a membership-only check (does the probe path appear at all?) cannot
+   catch it — the probe still appears via the explicitly-configured `MD060` line.
 
 Mechanism — markdownlint-cli2 has no `--list-files`, and per-file lines appear only
 for files *with* findings, so the script uses **probe files that deliberately
-violate a rule**:
+violate three rules at once**: `MD012` (multiple consecutive blank lines) and
+`MD040` (fenced code block with no language tag), both default-on and otherwise
+untouched by this repo's config; and `MD060` in `"compact"` style (an unpadded
+table row), the one rule this repo explicitly configures.
 
 ```text
 set -euo pipefail; trap cleanup EXIT
 
 0. Assert the banner line reports v0.23.2 — the self-test must certify the
    same binary the gate runs.
-1. Write docs/book/src/__mdlint_probe.md containing an MD060-compact violation
-   (a table row written |c|d| under a | --- | --- | separator).
-   Assert the output names that path AND MD060.
-   -> proves deep paths are linted, and that MD060.style is honoured.
-2. Write docs/superpowers/__mdlint_probe.md with the same violation.
+1. Write the same MD012+MD040+MD060 violation into three gated probes:
+   docs/book/src/__mdlint_probe.md (deep book path), a crate README location
+   (crates/paigasus-helikon-core/__mdlint_probe.md), and the repo root
+   (__mdlint_probe.md).
+   For each: assert the path is linted at all; assert MD012 fires on it (a
+   rule ID other than MD060, so this check cannot be satisfied by an MD060
+   line alone); assert MD040 fires on it (proves "default": true is in
+   force, independent of file membership); assert MD060 fires on it (proves
+   the configured style value is honoured).
+   -> proves each gated area is linted, independently of the others, under
+      both default-on and explicitly-configured rules.
+2. Write the same violation into docs/superpowers/__mdlint_probe.md.
    Assert the output does NOT name that path.
    -> proves the exclusion is in force.
-3. Remove both probes.
+3. Remove all four probes.
 ```
 
-Assertions are **positive markers** (grep for the expected `MD060` string), never
+Assertions are **positive markers** (grep for an expected rule-ID string), never
 absence-of-findings — per the repo's own lesson in `audit.yml`'s `scheduled-audit`
 commentary. Set membership rather than a file **count**, because a count is brittle
-against ordinary additions and trains people to update it reflexively.
+against ordinary additions and trains people to update it reflexively. The
+membership check for each gated probe is itself tied to a named rule (`MD012`) that
+is not `MD060`, so an `MD060`-only match can never stand in for genuine membership.
 
 Not guarded: an unknown *rule name* (`"MD6O": false`) is also silently ignored, but
 that is fail-**safe** — the real rule stays enabled and a violation still fails the
