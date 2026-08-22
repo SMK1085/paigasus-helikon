@@ -283,6 +283,23 @@ mock-backed agent across cases is order-dependent under concurrency. Use
 case, selecting scripts by `case.id` — whenever the model is a mock;
 `.agent()`/`.shared_agent()` remain for genuinely stateless or live agents.
 
+`MockModel` honors its `CancellationToken` as the `Model::invoke` contract
+requires: the stream observes the token at each poll and ends on the first
+fired observation, without emitting `Finish`. The token is *observed*, not
+awaited — a consumer that stops polling never learns the stream has ended,
+which is all a synchronous scripted stream can offer. An `invoke` called with
+an already-cancelled token yields an empty stream but still consumes its
+script, so "one script per `invoke`" holds regardless of cancellation timing.
+
+Cancellation is a *model*-boundary event, not a run-level one: the loop treats
+the truncated turn as a complete turn. If the cut lands mid-JSON, `build_items`
+fails to parse the partial `args_delta` and the run fails with `invalid tool
+args for call_id=…` — matching what a real provider does when a connection
+drops mid-call, now reproducible deterministically. If the cut lands on a
+syntactically complete (or empty, hence normalized to `{}`) argument string,
+the tool call is well-formed and **the loop executes it**. Neither is specific
+to `MockModel`; both are what a real provider produces from the same cut.
+
 ### `EvalRun`
 
 ```rust,ignore

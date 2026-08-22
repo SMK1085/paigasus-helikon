@@ -77,7 +77,7 @@ impl Model for DemoModel {
     async fn invoke(
         &self,
         _req: ModelRequest,
-        _cancel: CancellationToken,
+        cancel: CancellationToken,
     ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
         let events = vec![
             Ok(ModelEvent::TokenDelta {
@@ -93,7 +93,12 @@ impl Model for DemoModel {
                 reason: FinishReason::Stop,
             }),
         ];
-        Ok(Box::pin(futures_util::stream::iter(events)))
+        // The `Model::invoke` contract requires the stream to end when the
+        // token fires, without emitting `Finish`.
+        Ok(Box::pin(futures_util::StreamExt::take_while(
+            futures_util::stream::iter(events),
+            move |_| std::future::ready(!cancel.is_cancelled()),
+        )))
     }
 
     fn capabilities(&self) -> ModelCapabilities {
