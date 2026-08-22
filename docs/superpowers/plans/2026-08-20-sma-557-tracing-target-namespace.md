@@ -29,11 +29,6 @@ Read it before starting; the section references below (§1.2, §4.2, …) point 
 - **No published crate may be touched.** `tests/workspace-lints` is
   `publish = false`; `docs/` is not packaged. If a task makes you want to edit
   anything under `crates/*/src`, stop — that is out of scope (spec §6).
-  *(Amended at Stage 6, after all four tasks were done: one published-crate file,
-  `crates/paigasus-helikon-tools/src/exec/mod.rs`, was changed by owner decision
-  to clear a Rust 1.98 `clippy::needless_late_init` failure that reddened the
-  required `clippy` gate on this PR and on `main`. See spec §7. This constraint
-  still binds Tasks 1–4 exactly as written.)*
 - **Commit scopes must come from `.versionrc:18`.** Use `test(lints)` for
   `tests/workspace-lints` and `docs(docs)` for the book. **There is no `book`
   scope** — do not invent one.
