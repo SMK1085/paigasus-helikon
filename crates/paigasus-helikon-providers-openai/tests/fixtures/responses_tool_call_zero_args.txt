@@ -1,0 +1,62 @@
+: Provenance: CAPTURED against a real https://api.openai.com/v1/responses
+: request, model gpt-4o-mini-2024-07-18, on 2026-08-22, with ONE zero-argument
+: strict tool:
+:
+:   {"type":"object","properties":{},"required":[],"additionalProperties":false}
+:
+: and "tool_choice":"required".
+:
+: This fixture is the NEGATIVE result for SMA-562. That ticket hypothesised
+: that a no-argument tool would stream zero `function_call_arguments.delta`
+: frames, leaving `Finish{ToolCalls}` with no `ToolCallDelta` to match it. It
+: does not: the API streams exactly one delta carrying the literal `{}`. The
+: same shape was confirmed on gpt-5-mini. The zero-delta stream SMA-562 fixes
+: is real, but it comes from resuming a stored background response past its
+: deltas -- which has no `output_item.added` either, so it cannot be served
+: from this directory's POST-only wiremock harness and is driven as typed
+: events in `backend/responses.rs`'s test module instead.
+:
+: So this file is a REGRESSION PIN, not a reproduction. It pins the behaviour
+: the translator already had, so that if OpenAI ever elides the `{}` delta the
+: assumption is at least written down. Note what a frozen fixture cannot do:
+: notice that change happening. `responses_zero_arg_tool_streams_a_delta` in
+: `tests/live.rs` is the assertion that can, and is the reason it exists.
+:
+: Two deliberate edits from the raw capture:
+:
+: 1. `response.created` and `response.in_progress` are dropped, matching every
+:    other fixture in this directory -- `ResponsesTranslator::consume` has no
+:    arm for either.
+:
+: 2. NOTHING is appended. Unlike every sibling fixture here, this file does NOT
+:    end with `data: [DONE]`, because the endpoint did not send one -- none of
+:    the four 2026-08-22 captures contains it. Verified before transcription:
+:    served through this directory's harness both byte-faithful and with the
+:    sentinel appended, the stream terminates identically and cleanly either
+:    way (async-openai ends the stream on body end). The byte-faithful form is
+:    kept so the CAPTURED label stays honest.
+:
+:    This leaves `responses_tool_call.txt`'s own trailing `[DONE]` unexplained:
+:    it claims faithful transcription of the same endpoint. Auditing that
+:    fixture's provenance is a follow-up, not this ticket.
+:
+: `event:` lines are kept, as in `responses_tool_call.txt` and for the same
+: reason -- async-openai dispatches purely off the `type` key inside `data:`,
+: so they are cosmetic to the parser, but a fixture claiming to be CAPTURED
+: should stay faithful to what the wire sent.
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"in_progress","arguments":"","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"},"output_index":0,"sequence_number":2}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"{}","item_id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","obfuscation":"EzdgyuuAsmTPs2","output_index":0,"sequence_number":3}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","arguments":"{}","item_id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","output_index":0,"sequence_number":4}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"completed","arguments":"{}","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"},"output_index":0,"sequence_number":5}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_0ce0b75b3b84617f006a89d167d25487d28d2a332550e69d61","object":"response","created_at":1787416935,"status":"completed","background":false,"completed_at":1787416937,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-4o-mini-2024-07-18","moderation":null,"output":[{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"completed","arguments":"{}","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"}],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"in_memory","reasoning":{"context":null,"effort":null,"summary":null},"safety_identifier":null,"service_tier":"default","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"required","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[{"type":"function","description":"Return the current server time. Takes no arguments.","name":"get_current_time","output_schema":null,"parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false},"strict":true}],"top_logprobs":0,"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":57,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":59},"user":null,"metadata":{}},"sequence_number":6}
+

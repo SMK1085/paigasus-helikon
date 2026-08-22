@@ -60,6 +60,44 @@ async fn responses_smoke() {
         .any(|r| matches!(r, Ok(ModelEvent::Finish { .. }))));
 }
 
+/// The assertion a frozen fixture cannot make: that the live API still streams
+/// at least one `function_call_arguments.delta` for a zero-argument tool.
+///
+/// `responses_tool_call_zero_args.txt` pins the 2026-08-22 capture, but a
+/// recording cannot notice upstream behaviour changing. If OpenAI ever elides
+/// the `"{}"` delta, this is where it surfaces. The translator handles that
+/// case correctly since SMA-562 — this test exists so the change is *seen*,
+/// not so it breaks anything.
+#[tokio::test]
+#[ignore]
+async fn responses_zero_arg_tool_streams_a_delta() {
+    if !key_set() {
+        return;
+    }
+    let model = OpenAiModel::responses("gpt-4o-mini").build().unwrap();
+    let mut req = ModelRequest::new();
+    req.messages = vec![user("What time is it right now? Use the tool.")];
+    req.tools = vec![ToolDef {
+        name: "get_current_time".to_owned(),
+        description: "Return the current server time. Takes no arguments.".to_owned(),
+        schema: serde_json::json!({"type": "object", "properties": {}}),
+    }];
+    let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
+    let events: Vec<_> = stream.collect().await;
+
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter_map(|r| match r {
+            Ok(ModelEvent::ToolCallDelta { args_delta, .. }) => Some(args_delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !deltas.is_empty(),
+        "a zero-argument tool call emitted no ToolCallDelta at all; got {events:#?}"
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn chat_tool_call_round_trip() {
