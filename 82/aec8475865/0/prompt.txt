@@ -1,0 +1,75 @@
+<task-notification>
+<task-id>a01e63852ebd31dcc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a01e63852ebd31dcc.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 write failing tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Commit SHA:** `791e2c73387ce89ebe935550f108ce460e085cb1`
+
+**Test summary:** 5 passed (incl. `uncancelled_invoke_yields_full_script`), 3 failed as expected (`cancel_mid_stream_ends_without_finish`, `pre_cancelled_invoke_is_empty_and_still_pops`, `cancel_mid_tool_call_truncates_the_args`) — matches the brief's Step 4 expectations exactly, no false passes on the cancellation tests.
+
+**Concerns:** None. `cargo fmt --all` made one cosmetic reflow (single `assert!` condition onto one line) inside `cancel_mid_stream_ends_without_finish`; no semantic change. Only `crates/paigasus-helikon-evals/tests/mock.rs` was staged/committed (explicit path, no `add -A`); `src/mock.rs` untouched. Full report with verbatim `cargo test` output is at `.superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-1-report.md`.</result>
+<usage><subagent_tokens>78076</subagent_tokens><tool_uses>10</tool_uses><duration_ms>87892</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1d1a71d98e1b05b0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a1d1a71d98e1b05b0.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review: Task 1 — SMA-563 MockModel cancellation acceptance tests
+
+### Spec compliance: ✅
+
+- **Test code verbatim.** Diffed the brief's Step 2 append block (174 lines) against the actual appended block in `crates/paigasus-helikon-evals/tests/mock.rs` (lines 76–249). The only differences are a leading blank line (natural consequence of appending after existing content), the `cargo fmt` reflow of the `!all.iter().any(...)` assertion from two lines to one, and a trailing newline. Zero semantic deviations — no changed assertion, no renamed test, no weakened message, no dropped assertion.
+- **Import change** matches Step 1 exactly: `FinishReason` added to the `paigasus_helikon_core` import.
+- **Scope**: `git diff --name-only 7b7c1269..791e2c73` shows only `crates/paigasus-helikon-evals/tests/mock.rs` changed. `crates/paigasus-helikon-evals/src/mock.rs` (Task 2's file) is untouched — confirmed by reading it: `invoke()` still ignores its `_cancel` parameter entirely, which is exactly the defect the tests pin.
+- **Formatting**: `cargo fmt --all -- --check` on the current tree is clean.
+- **Hygiene**: `git status --short` is clean (no untracked stragglers); the commit's file list is exactly the one path, staged explicitly (no `git add -A`).
+- **Commit format**: `test(evals): SMA-563 pin MockModel cancellation, currently failing` — type/scope/lowercase-subject all correct, `evals` is in `.versionrc`'s `scopeRegex` allowlist.
+- **Test outcome** (per the review prompt's pre-confirmed run, not re-verified here): 5 passed / 3 failed with the exact three failure messages specified — matches the brief's Step 4 expectation and the asymmetry (3 fail, 1 passes) that Task 1 is supposed to produce.
+
+One deviation from the brief, not from the test code itself:
+
+- **Step 5 instruction not followed**: the brief says *"Paste the three failure messages into the commit body."* `git log -1 --format=%B 791e2c73` shows the commit body contains only an `Entire-Checkpoint:` trailer — no failure messages. They exist in `task-1-report.md` instead, but not where the brief explicitly asked for them.
+
+### Task quality: Approved, with one Minor finding
+
+**Minor**
+- Commit body omits the three pasted failure messages the brief explicitly required in Step 5. Doesn't affect test correctness or reviewability (the report has them, and this review package captures them too), but it's a literal instruction that was skipped without comment.
+
+**Test robustness (assessed per the review's specific questions):**
+
+1. `cancel_mid_stream_ends_without_finish` — robust against partial fixes. It asserts `rest.is_empty()` (not merely "no Finish in rest"), so a fix that suppresses `Finish` but still leaks the remaining `TokenDelta`s, or one that emits a *different* terminal `Finish` (any reason) after truncation, both still fail it. The redundant `all.iter().any(Finish)` check is genuinely redundant here (already implied by `rest.is_empty()` plus the first item not being a `Finish`), but redundancy in a pinning test is harmless.
+2. `pre_cancelled_invoke_is_empty_and_still_pops` — directly targets the "empty stream but no pop" partial fix: invoke #2 uses a **fresh** cancellation token and asserts it gets `"second"`, not `"first"`. A fix that returns an empty stream without popping the queue would surface `"first"` on invoke #2 and get caught. Invoke #3's exhaustion check further guards against a double-pop or non-pop miscount.
+3. `uncancelled_invoke_yields_full_script` — traced its assertions: `assert_eq!(got.len(), 3, ...)` plus an explicit `matches!` on `got[2]` being `Finish { reason: Stop }`. A fix that dropped the trailing `Finish` universally (not just on cancellation) would fail the length assertion; a fix that emitted a different terminal event in its place would fail the `matches!`. It genuinely catches a dropped trailing `Finish`, and the docstring's stated rationale (`ModelTurnAccumulator` defaults `finish_reason` to `Stop`, masking the drop elsewhere) is accurate as a reason this specific guard is needed here.
+4. `cancel_mid_tool_call_truncates_the_args` — same shape and same robustness as test 1; the docstring correctly scopes it to the `Model` boundary and explicitly disclaims asserting the downstream JSON-parse consequence, which is honest rather than overreaching.
+
+No findings outside `crates/paigasus-helikon-evals/tests/mock.rs` — no scope violation.</result>
+<usage><subagent_tokens>80218</subagent_tokens><tool_uses>20</tool_uses><duration_ms>129263</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9346263f037e53ba</task-id>
+<tool-use-id>toolu_01S5MRRZLxEGuJzHHnYXu3Xb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a9346263f037e53ba.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 implement MockModel fix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 2 complete.
+
+**Status:** DONE
+**Commit SHA:** `c98c0dc7c4c26161a6f3252cd096a29e9b9ad2cf` — `fix(evals): SMA-563 terminate the MockModel stream on cancellation`
+**Test summary:** `mock.rs`: 8/8 pass (all 4 cancellation tests now green, guard test `uncancelled_invoke_yields_full_script` still passes). Whole `paigasus-helikon-evals` crate: all binaries green, no collateral damage.
+**Concerns:** none. Only `crates/paigasus-helikon-evals/src/mock.rs` was staged/committed; test file untouched. Full report at `.superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-2-report.md`.</result>
+<usage><subagent_tokens>75878</subagent_tokens><tool_uses>14</tool_uses><duration_ms>85752</duration_ms></usage>
+</task-notification>
