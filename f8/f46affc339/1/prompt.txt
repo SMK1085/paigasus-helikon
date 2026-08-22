@@ -136,3 +136,56 @@ Test summary: 16/16 pass in `backend::responses::tests`; both mutation checks (r
 Concerns: none. All four findings addressed (has_tool_calls now gates on `name_emitted` post-sweep; `parallel_calls` test no longer masks sweep deletion; warning wording corrected; doc claim rescoped). All four gates clean; only the one intended file staged/committed. Fix-round details appended to `.superpowers/sdd/2026-08-22-sma-562-responses-tool-call-reconciliation/task-2-report.md`.</result>
 <usage><subagent_tokens>129452</subagent_tokens><tool_uses>37</tool_uses><duration_ms>256920</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a8ae482ebf439e2a6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/0dbb4227-0852-49ae-97c2-9653320f196e/tasks/a8ae482ebf439e2a6.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 fix re-review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Restored the file after each experiment; final `shasum` matches the pre-experiment value and `git status`/`git diff` are clean.
+
+## Findings
+
+**Finding 1 (Important) — ADDRESSED.** `responses.rs:537` passes `!self.name_emitted.is_empty()` to `terminal_events`, inside the `ResponseCompleted` arm only, evaluated after the sweep (`.collect()` at `:524` fully drains the `filter_map` into `out` before the `out.extend(terminal_events(...))` argument is evaluated). `ResponseIncomplete` still passes `!self.item_to_call.is_empty()` (`:553`) — untouched. `terminal_events` body/signature unchanged. New test `added_then_completed_omitting_the_call_reports_stop` at `:1293` asserts both zero `ToolCallDelta`s (`:1303`) and `Finish { Stop }` (`:1310`). The *other* reproducing ordering (`added` → `completed` with `status:"incomplete"`) is covered by the extended `completed_skips_incomplete_output_item` at `:1246`, which now drives `added_event` first and asserts `Finish { Stop }` plus `name_emitted.is_empty()`. **I re-ran the mutation myself** (line 537 reverted to `item_to_call`): both tests fail, with panic messages verbatim identical to the report's. Report line numbers drift by 1–2 (report says `:1310`/`:1267`, actual run gives `:1308`/`:1266`) — the transcript is real output, just captured against a marginally different formatting of the file; substance reproduces exactly.
+
+**Finding 2 (Minor) — ADDRESSED.** `parallel_calls_emit_one_named_delta_each` (`:1167`) no longer drives `done_event("fc_a", …)`; B keeps its `done`. **Verified by mutation**: replacing the sweep with `Vec::new()` fails the test — `left: [("call_a"… missing)]`, matching the report's output (report `:1202`, actual `:1203`).
+
+**Finding 3 (Minor) — ADDRESSED.** `responses.rs:526-531` now reads "argument deltas remained buffered … they are not emitted"; no "dropping" claim. Accurate — `pending_args` is only ever `remove`d per-match, never cleared.
+
+**Finding 4 (Minor) — ADDRESSED.** `responses.rs:288-299` rescopes the claim to "this method itself never causes…", and names `ResponseOutputItemAdded` as the second unconditional writer.
+
+## Independent post-condition analysis
+
+Emission sites for `ModelEvent::ToolCallDelta` in production code are exactly three (`:345`, `:425`, `:467`); each is paired, in the same branch, with a `name_emitted.insert` (`:344`, `:424`, `:464` — `:467`'s only skips the insert when the id is already present). `name_emitted` has no `remove`/`clear`/`retain` anywhere (grepped). So over a stream: **`!name_emitted.is_empty()` ⟺ at least one `ToolCallDelta` was emitted**, in both directions. `ResponsesTranslator::new()` is per-stream (`invoke`, `:62`), so no cross-response leakage.
+
+Orderings I constructed and ran as temporary probe tests (added, executed, removed, file restored byte-identical):
+- orphan `delta` buffered, `added` never arrives, `completed` with `output: []` → `[Usage, Finish{Stop}]`, zero deltas. Holds.
+- `added`(incomplete item) + `added`(complete item), `completed` with one `incomplete` and one `completed` item → one delta for the complete call + `Finish{ToolCalls}`. Holds.
+- `added` → `done` (delta emitted) → `completed` with `output: []` → `Finish{ToolCalls}`, delta emitted earlier in the stream. Holds.
+- `completed` carrying a `function_call` with **no `id`** → `Finish{Stop}`, zero deltas. Holds.
+- `added` → empty-string `delta` → `completed` with `output: []` → `ToolCallDelta{args_delta:""}` + `Finish{ToolCalls}`. Holds (a delta *was* emitted; the empty-args delta is pre-existing arguments-delta-arm behaviour, outside this diff).
+
+I could construct no ordering reachable through `consume` where a `response.completed` yields `Finish{ToolCalls}` with zero deltas, or `Finish{Stop}` after a delta. The one residual gap is out of scope and deliberate: on the `ResponseIncomplete` path `has_tool_calls` still reads `item_to_call`, so `added` + `response.incomplete` with `incomplete_details: null` and `status: Completed` could still report `ToolCalls` with no delta — controller-mandated carve-out, unchanged.
+
+## New breakage in the fix diff
+
+No Critical or Important. One **Minor**: the identifier change left three doc/message sites asserting the old gate.
+- `responses.rs:222-223` (translator's module-level behaviour contract): "`response.completed` → … `Finish { ToolCalls }` when `item_to_call` is non-empty" — now false; it is `name_emitted`.
+- `responses.rs:606` (`terminal_events` doc): "the caller passes `!item_to_call.is_empty()` to resolve that" — now true only of the `ResponseIncomplete` caller.
+- `responses.rs:999` (test message in `incomplete_status_item_is_not_emitted`, Task 1's test): rationale "that would make `has_tool_calls` true with nothing emitted" no longer applies on the completed path; the assertion itself is still correct. (`:832`, a test-helper doc, has the same wording nit.)
+
+None of these affect behaviour; `:222` and `:606` are the two worth correcting since they are the public description of the exact rule this fix changed.
+
+## Gates
+
+All four re-run by me on this commit (`a4102993`, clean tree): `cargo fmt --all -- --check` clean; `cargo clippy -p paigasus-helikon-providers-openai --all-features --all-targets -- -D warnings` clean; `cargo test … --lib backend::responses::tests` 16/16 pass; `RUSTDOCFLAGS="-D warnings" cargo doc …` clean. The report's claims match.
+
+## Overall verdict
+
+**APPROVE** — all four findings genuinely addressed, both mutation checks independently reproduced, post-condition independently re-derived and holds. One Minor doc-staleness follow-up (`responses.rs:222-223`, `:606`, `:999`).</result>
+<usage><subagent_tokens>95686</subagent_tokens><tool_uses>22</tool_uses><duration_ms>223729</duration_ms></usage>
+</task-notification>
