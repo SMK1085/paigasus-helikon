@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.11...paigasus-helikon-v0.5.12) - 2026-08-22
+
+### Fixed
+
+- *(evals)* SMA-563 terminate the mockmodel stream on cancellation ([#214](https://github.com/SMK1085/paigasus-helikon/pull/214))
+
 ## [0.5.11](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.10...paigasus-helikon-v0.5.11) - 2026-08-22
 
 ### Other
