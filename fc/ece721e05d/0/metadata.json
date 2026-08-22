@@ -1,0 +1,479 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "fcece721e05d",
+  "session_id": "206cc047-18bf-4d3d-9bd4-81b868131dba",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-22T16:29:05.113654Z",
+  "branch": "feature/sma-568-decide-whether-core-and-the-runtime-crates-should-adopt",
+  "checkpoints_count": 25,
+  "save_step_count": 23,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-22-sma-568-tracing-target-adoption-design.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "d97855598565",
+  "checkpoint_transcript_start": 323,
+  "transcript_lines_at_start": 323,
+  "compact_transcript_start": 56,
+  "token_usage": {
+    "input_tokens": 362,
+    "cache_creation_tokens": 298207,
+    "cache_read_tokens": 62242435,
+    "output_tokens": 177215,
+    "api_call_count": 181,
+    "subagent_tokens": {
+      "input_tokens": 1150,
+      "cache_creation_tokens": 2079392,
+      "cache_read_tokens": 57201091,
+      "output_tokens": 349064,
+      "api_call_count": 575
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-feature-pipeline-2026-08-22T11:57:26.981272Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "feature-pipeline"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "dcc1329995af",
+      "timestamp": "2026-08-22T11:57:26.981272Z",
+      "native": {
+        "command": "/feature-pipeline"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/feature-pipeline",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PFTuqozGYyk44kqJpsSYiw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:using-git-worktrees"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d97855598565",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 78,
+        "end": 79,
+        "entry_ids": [
+          "a031325e-4d2e-45c3-b84a-fd48831920af"
+        ],
+        "tool_use_id": "toolu_01PFTuqozGYyk44kqJpsSYiw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PFTuqozGYyk44kqJpsSYiw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:using-git-worktrees",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01VK4JrRo2bV9i5g1V6i3tu9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d97855598565",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 101,
+        "end": 102,
+        "entry_ids": [
+          "7926ec9f-6ff7-4e83-9de8-457f1414b0d9"
+        ],
+        "tool_use_id": "toolu_01VK4JrRo2bV9i5g1V6i3tu9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VK4JrRo2bV9i5g1V6i3tu9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01P3yquywv9fwbcY5yCuMnpB",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d97855598565",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 507,
+        "end": 508,
+        "entry_ids": [
+          "0cb8e109-4567-44b8-991a-36bf88966868"
+        ],
+        "tool_use_id": "toolu_01P3yquywv9fwbcY5yCuMnpB"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01P3yquywv9fwbcY5yCuMnpB"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01EdFAJrM1XvvTk88NtCFBfb",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d97855598565",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 586,
+        "end": 587,
+        "entry_ids": [
+          "c5463e76-0d7c-4b91-943b-40ec031e46f0"
+        ],
+        "tool_use_id": "toolu_01EdFAJrM1XvvTk88NtCFBfb"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01EdFAJrM1XvvTk88NtCFBfb"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01GzknXXjrZv85KaAYNFZgkG",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:local-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d97855598565",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1199,
+        "end": 1200,
+        "entry_ids": [
+          "ecbcaa81-908b-4532-83fc-73b291daaa08"
+        ],
+        "tool_use_id": "toolu_01GzknXXjrZv85KaAYNFZgkG"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01GzknXXjrZv85KaAYNFZgkG"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:local-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01JrkBbWYaFDBJPNJYjz2nx9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:open-pr"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d97855598565",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1297,
+        "end": 1298,
+        "entry_ids": [
+          "761c6f33-9d21-40d8-94df-b9d38b857750"
+        ],
+        "tool_use_id": "toolu_01JrkBbWYaFDBJPNJYjz2nx9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01JrkBbWYaFDBJPNJYjz2nx9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:open-pr",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01BGvDSHzkA43LPLpNsTq1uX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d97855598565",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1356,
+        "end": 1357,
+        "entry_ids": [
+          "4c43120e-2a16-4274-beb4-de33a09f1ea8"
+        ],
+        "tool_use_id": "toolu_01BGvDSHzkA43LPLpNsTq1uX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01BGvDSHzkA43LPLpNsTq1uX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-22T16:29:04.93805Z",
+    "agent_lines": 470,
+    "agent_removed": 154,
+    "human_added": 13,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 492,
+    "total_lines_changed": 646,
+    "agent_percentage": 96.59442724458205,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 54,
+      "user_lines_removed": 10,
+      "agent_lines_added": 1,
+      "agent_lines_removed": 4,
+      "user_added_per_file": {
+        "crates/paigasus-helikon-runtime-agentcore/src/a2a/mod.rs": 5,
+        "crates/paigasus-helikon-runtime-agentcore/src/a2a/rpc.rs": 23,
+        "crates/paigasus-helikon-runtime-agentcore/src/a2a/store.rs": 1,
+        "crates/paigasus-helikon-runtime-agentcore/src/agui/mod.rs": 5,
+        "crates/paigasus-helikon-runtime-agentcore/src/invoke.rs": 5,
+        "crates/paigasus-helikon-runtime-agentcore/src/mcp.rs": 5,
+        "crates/paigasus-helikon-runtime-agentcore/src/server.rs": 5,
+        "docs/book/src/concepts/observability-evaluation.md": 5
+      },
+      "user_removed_per_file": {
+        "crates/paigasus-helikon-runtime-agentcore/src/a2a/mod.rs": 1,
+        "crates/paigasus-helikon-runtime-agentcore/src/a2a/rpc.rs": 4,
+        "crates/paigasus-helikon-runtime-agentcore/src/agui/mod.rs": 1,
+        "crates/paigasus-helikon-runtime-agentcore/src/invoke.rs": 1,
+        "crates/paigasus-helikon-runtime-agentcore/src/mcp.rs": 1,
+        "crates/paigasus-helikon-runtime-agentcore/src/server.rs": 1,
+        "docs/book/src/concepts/observability-evaluation.md": 1
+      }
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 12,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 13,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 14,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 15,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 16,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 17,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 18,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 19,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 20,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 21,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 22,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 23,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10,
+      "agent_lines_removed": 3
+    },
+    {
+      "checkpoint_number": 24,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
