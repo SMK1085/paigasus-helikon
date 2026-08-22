@@ -82,7 +82,8 @@ let model = LiteLlmModel::chat("prod-fast")
 
 Self-hosted LiteLLM often runs without a `master_key` inside a cluster. If no
 key is configured, no `Authorization` header is sent. Empty or whitespace-only
-keys are treated as absent rather than sent as a malformed `Bearer `.
+keys are treated as absent rather than sent as a `Bearer` header with an empty
+credential.
 
 ## Retries multiply
 

@@ -317,7 +317,7 @@ What `OsSandboxBackend` enforces varies by platform:
 **Linux** (kernel ≥ 5.13; x86_64 or aarch64):
 
 | Axis | Mechanism | Guarantee |
-|---|---|---|
+| --- | --- | --- |
 | Filesystem | Landlock (LSM, kernel ≥ 5.13) | Read+write only under the sandbox root; read-only for a system path set (`/usr`, `/bin`, `/lib`, …). Attempts to write outside the root fail at the OS layer — not just at the shell level. |
 | Network | seccomp-bpf | `socket(AF_INET)` and `socket(AF_INET6)` return `EPERM` by default. `AF_UNIX` (local sockets) is allowed. Pass `.allow_network(true)` to lift the IP egress restriction. |
 | Syscalls | seccomp-bpf | A small deny-list of dangerous syscalls (`ptrace`, `mount`, `pivot_root`, `chroot`, `setns`, `unshare`, `kexec_load`, `bpf`, `perf_event_open`) always returns `EPERM`. |
@@ -341,14 +341,14 @@ SandboxGuarantees {
 
 The macOS backend uses **Seatbelt** (`sandbox-exec`), Apple's sandbox MAC framework.
 `sandbox-exec` is Apple-deprecated but ships on every macOS release. The posture is
-**write-focused**: filesystem _write_ operations are denied outside the sandbox root,
+**write-focused**: filesystem *write* operations are denied outside the sandbox root,
 while reads are unrestricted (weaker than Linux's read+write containment). Network is
 all-or-nothing: denied by default, which also blocks `AF_UNIX` local sockets; pass
 `.allow_network(true)` to permit all socket families. Seatbelt is an operation MAC,
 not a syscall filter, so `syscalls` is `None`.
 
 | Axis | Mechanism | Guarantee |
-|---|---|---|
+| --- | --- | --- |
 | Filesystem | Seatbelt (sandbox-exec) | **Write-only containment**: writes outside the sandbox root are denied at the OS layer; reads are unrestricted. |
 | Network | Seatbelt (sandbox-exec) | All sockets denied by default (including `AF_UNIX`). Pass `.allow_network(true)` to allow all outbound traffic. |
 | Syscalls | — | No syscall filter; `Isolation::None`. |
@@ -366,7 +366,7 @@ SandboxGuarantees {
 ```
 
 > **macOS containment is weaker than Linux.** The `OsKernel` label on the filesystem
-> axis means OS-enforced, but only for _writes_. A sandboxed command can still read
+> axis means OS-enforced, but only for *writes*. A sandboxed command can still read
 > arbitrary files. Use the Linux backend (or a dedicated Linux CI environment) when
 > read isolation is required.
 

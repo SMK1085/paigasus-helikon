@@ -26,7 +26,7 @@ with the type and scope constrained as below. Three layers enforce
 this:
 
 | Layer | Fires when | Bypass |
-|---|---|---|
+| --- | --- | --- |
 | Local `commit-msg` hook | `git commit` | `git commit --no-verify` |
 | `ci / commits` job | PR open + sync | none — fix the message |
 | `pr-title / pr-title` job | PR open/edit/sync | none — fix the title |
@@ -40,7 +40,7 @@ mapping in effect today. The table below shows the **post-1.0**
 mapping that becomes operative after the first `1.0.0` release:
 
 | Type | Semver effect (post-1.0) | Use for |
-|---|---|---|
+| --- | --- | --- |
 | `feat` | minor | New user-visible capability |
 | `fix` | patch | Bug fix |
 | `feat!` or any type with `BREAKING CHANGE:` footer | major | API break |
@@ -295,7 +295,7 @@ Branch protection, branch-name enforcement, CODEOWNERS, and merge-method
 settings are checked in as JSON + a POSIX `sh` apply script:
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `.github/CODEOWNERS` | Review routing — currently `* @SMK1085`. |
 | `.github/rulesets/main-protection-checks.json` | Required status checks, linear history, no force-push, no deletion. Enforced on admins (no bypass). Required contexts: `fmt`, `clippy`, `test (ubuntu-latest, stable)`, `test (macos-latest, stable)` (required because it is the only gate that compiles and runs the Seatbelt backend), `docs`, `doc-coverage`, `book-build`, `commits`, `pr-title`, `audit`, `deny`, `sessions-it` (required because it is the only gate that runs the Postgres/Redis session backends against live servers), `build-no-default-features` (required because it is the only gate that compiles both `runtime-axum` and `runtime-actix` with `--no-default-features`, catching `openapi`-feature-gating regressions, plus a `cargo tree` assertion that axum does not leak into the `runtime-actix` feature graph). |
 | `.github/rulesets/main-protection-reviews.json` | 1 approval, dismiss stale, CODEOWNERS review, thread resolution. Admin role bypass — solo-maintainer self-merge is intentional and will auto-engage for non-admins once a second human joins. |
