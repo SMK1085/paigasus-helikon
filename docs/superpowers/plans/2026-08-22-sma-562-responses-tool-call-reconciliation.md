@@ -10,6 +10,25 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-22-sma-562-responses-output-item-done-design.md`
 
+> **Superseded during execution — the spec is the authority, not this plan.** This plan's
+> task bodies below are left as originally written and should NOT be used to "correct" the
+> shipped code. Three points drifted between plan and shipped implementation:
+>
+> 1. **Order of checks in `emit_call_if_unseen`.** Task 1 Step 4 below registers the item into
+>    `item_to_call` *before* checking `fc.status` for incomplete/non-complete. The shipped
+>    helper checks status *first* and only registers afterward — the spec's §4 step 1/2
+>    ordering, not this plan's.
+> 2. **`has_tool_calls` gate at `response.completed`.** Task 2 Step 4 below (and its
+>    surrounding prose) gates on `!self.item_to_call.is_empty()`. The shipped arm gates on
+>    `!self.name_emitted.is_empty()`, evaluated after the reconciliation sweep — see spec §4.5.
+> 3. **Conformance package name.** Tasks 3 and 7 below invoke `cargo test -p
+>    provider-stream-conformance`. The crate's real package name is
+>    `paigasus-helikon-provider-stream-conformance`; `-p provider-stream-conformance` does not
+>    resolve.
+>
+> Do not rewrite the task bodies to match — this note is the correction; the code and the spec
+> already agree.
+
 ## Global Constraints
 
 - **Crate:** all changes are in `crates/paigasus-helikon-providers-openai` except one comment fix in `tests/provider-stream-conformance/tests/conformance.rs`.
