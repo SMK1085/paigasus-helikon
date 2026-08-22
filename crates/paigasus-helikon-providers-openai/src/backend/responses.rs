@@ -945,5 +945,43 @@ mod tests {
             evs.is_empty(),
             "an incomplete item must not be emitted; got {evs:?}"
         );
+        assert!(
+            t.item_to_call.is_empty(),
+            "an incomplete item must not register into item_to_call; that would make \
+             has_tool_calls true with nothing emitted"
+        );
+    }
+
+    /// The buffer-preference branch of `emit_call_if_unseen`: when the
+    /// terminal item reports empty `arguments` but earlier out-of-order
+    /// deltas were buffered for its `item_id`, the buffered text — not the
+    /// empty string — must be what gets emitted.
+    #[test]
+    fn done_with_empty_arguments_prefers_buffered_deltas() {
+        let mut t = ResponsesTranslator::new();
+
+        // Delta arrives before any `output_item.added`/`done` — buffered.
+        assert!(t
+            .consume(delta_event("fc_buf", "{\"city\":\"Berlin\"}"))
+            .unwrap()
+            .is_empty());
+
+        let evs = t
+            .consume(done_event("fc_buf", "call_buf", "get_weather", ""))
+            .unwrap();
+
+        assert_eq!(evs.len(), 1, "expected one ToolCallDelta, got {evs:?}");
+        match &evs[0] {
+            ModelEvent::ToolCallDelta {
+                name, args_delta, ..
+            } => {
+                assert_eq!(
+                    args_delta, "{\"city\":\"Berlin\"}",
+                    "must prefer the buffered deltas over the terminal item's empty arguments"
+                );
+                assert_eq!(name.as_deref(), Some("get_weather"));
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
     }
 }
