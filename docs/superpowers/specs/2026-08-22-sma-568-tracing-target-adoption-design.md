@@ -344,14 +344,19 @@ crate's component today. D6 is green on arrival.
 The naming rule the map encodes, stated for future crates: **strip
 `paigasus-helikon-`, then strip a leading `providers-`, then replace `-` with
 `_`.** That yields every existing name — `openai`, `litellm`, `core`,
-`runtime_axum` — and predicts the seven not yet emitting anything: `mcp`,
-`tools`, `evals`, `cli`, `sessions_sqlite`, `sessions_postgres`,
-`sessions_redis`. None collides with an existing name or with another
-prediction. The providers' bare form is a historical exception preserved because
-those names are the user-facing vendor names; everything else uses its full
-suffix.
+`runtime_axum` — and predicts nine of the ten not yet emitting anything:
+`macros`, `mcp`, `tools`, `evals`, `cli`, `sessions_sqlite`,
+`sessions_postgres`, `sessions_redis`, `sessions_testkit`. None collides with
+an existing name or with another prediction. The providers' bare form is a
+historical exception preserved because those names are the user-facing vendor
+names; everything else uses its full suffix.
 
-These seven are **reserved, not documented**: the docs guard asserts source and
+The tenth, `facade` (for `paigasus-helikon`), is an exception to the rule
+itself rather than a tenth prediction from it: stripping
+`paigasus-helikon-` from `paigasus-helikon` leaves nothing, so the rule has no
+suffix left to derive from, and `facade` is reserved by fiat instead.
+
+These ten are **reserved, not documented**: the docs guard asserts source and
 book agree, so a book row for a component nothing emits would redden CI. The
 names live in this spec and in book prose *outside* the marked region, so the
 first person to add a log line to `tools` has an answer instead of a 2am
@@ -759,10 +764,11 @@ Inside the `tracing-components:start` / `:end` markers, which
 row to `runtime_temporal` — five additions plus one rename, so **six new names**
 and **eleven rows** in total. Set every Status cell to `stable`.
 
-The seven names D6 reserves (`mcp`, `tools`, `evals`, `cli`, `sessions_sqlite`,
-`sessions_postgres`, `sessions_redis`) must **not** get rows: the guard asserts
-book and source agree, so a row for a component nothing emits reddens CI. Record
-them in prose outside the marked region, together with D6's derivation rule.
+The ten names D6 reserves (`facade`, `macros`, `mcp`, `tools`, `evals`, `cli`,
+`sessions_sqlite`, `sessions_postgres`, `sessions_redis`, `sessions_testkit`)
+must **not** get rows: the guard asserts book and source agree, so a row for a
+component nothing emits reddens CI. Record them in prose outside the marked
+region, together with D6's derivation rule and the `facade` exception to it.
 
 The parser requires each body row's first cell to be exactly
 `` `paigasus::<component>` `` with the component matching `[a-z0-9_]+`. All six
