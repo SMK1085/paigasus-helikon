@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "cfa408c84fa0",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-563-paigasus-helikon-evals-mockmodel-ignores-its-cancellation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-evals/tests/mock.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cf/a408c84fa0/0/metadata.json",
+      "transcript": "/cf/a408c84fa0/0/full.jsonl",
+      "compact_transcript": "/cf/a408c84fa0/0/transcript.jsonl",
+      "content_hash": "/cf/a408c84fa0/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 30721,
+    "cache_read_tokens": 3553900,
+    "output_tokens": 10770,
+    "api_call_count": 17,
+    "subagent_tokens": {
+      "input_tokens": 78,
+      "cache_creation_tokens": 215991,
+      "cache_read_tokens": 3181501,
+      "output_tokens": 46965,
+      "api_call_count": 39
+    }
+  }
+}
