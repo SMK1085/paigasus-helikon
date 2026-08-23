@@ -79,7 +79,7 @@ staged.
 
 ```jsonc
 {
-  "gitignore": true,
+  // "gitignore" is deliberately absent (it defaults to false) — see below.
   "globs": [
     "**/*.md",
     "!docs/superpowers/**",
@@ -87,7 +87,8 @@ staged.
     "!**/target/**",
     "!**/node_modules/**",
     "!**/.claude/**",
-    "!**/.superpowers/**"
+    "!**/.superpowers/**",
+    "!docs/book/book/**"
   ]
 }
 ```
