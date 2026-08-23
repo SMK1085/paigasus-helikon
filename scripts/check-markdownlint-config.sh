@@ -62,6 +62,10 @@ cd "$REPO_ROOT"
 
 EXPECTED_VERSION="0.23.2"
 
+# The MD060 style this repo's .markdownlint-cli2.jsonc is expected to set.
+# Asserted by name below so a change to another VALID value cannot pass.
+MD060_STYLE="compact"
+
 # The probe deliberately violates THREE rules:
 #
 #   - MD012 (multiple consecutive blank lines) -- always on under "default":
@@ -74,9 +78,13 @@ EXPECTED_VERSION="0.23.2"
 #     "default": false, MD012 and MD040 both stop firing while the
 #     explicitly-configured MD060 keeps firing, so the probe path would still
 #     appear in the output with neither of these two markers on it.
-#   - MD060 with an unpadded body row -- valid under "any"/"tight", a
-#     violation under "compact". This is what proves the configured style is
-#     in force.
+#   - MD060 on a CONSISTENTLY TIGHT table -- valid under "any" and "tight",
+#     a violation under "compact". The table must be tight throughout: a
+#     table that MIXES styles (e.g. a padded header over an unpadded body)
+#     fires MD060 under EVERY style value, so it proves only that some style
+#     is set, not which -- a `compact` -> `any` weakening would pass. The
+#     assertion below additionally requires the message to NAME "compact",
+#     which pins the exact configured value.
 PROBE_BODY='# Probe
 
 
@@ -86,8 +94,8 @@ Body.
 untagged fence
 ```
 
-| a | b |
-| --- | --- |
+|a|b|
+|---|---|
 |c|d|
 '
 
@@ -102,6 +110,17 @@ GATED_PROBES=(
   "__mdlint_probe_root.md"
 )
 EXCLUDED_PROBE="docs/superpowers/__mdlint_probe.md"
+
+# Refuse to run if anything already occupies a probe path. `printf > "$probe"`
+# would truncate a real file (or write through a symlink), and cleanup would
+# then delete it -- this script must never destroy content it did not create.
+# Checked BEFORE the trap is installed, so an abort here removes nothing.
+for probe in "${GATED_PROBES[@]}" "$EXCLUDED_PROBE"; do
+  if [[ -e "$probe" || -L "$probe" ]]; then
+    echo "FAIL: '$probe' already exists; refusing to overwrite it. This path is reserved for a throwaway lint probe -- move or delete it and re-run." >&2
+    exit 1
+  fi
+done
 
 cleanup() {
   for probe in "${GATED_PROBES[@]}" "$EXCLUDED_PROBE"; do
@@ -164,8 +183,17 @@ for probe in "${GATED_PROBES[@]}"; do
     fail "MD040 did not fire on '$probe' -- 'default' is no longer true. MD040 is a default-on rule with no explicit config in this repo, so it only fires while 'default': true is in force; a 'default': false regression disables every rule except the ones explicitly configured (MD013, MD060), and does not change which files appear in the output, so this is the only check that catches it"
   fi
 
-  if [[ "$probe_lines" != *MD060* ]]; then
-    fail "MD060 did not fire on '$probe' -- the rule's 'style' value is not in force. An invalid value (not one of aligned/any/compact/tight) disables the rule silently."
+  # Require the message to name the configured style, not merely to exist.
+  # markdownlint-cli2 emits '... for style "<value>"', so this pins the exact
+  # value: an INVALID value (not one of aligned/any/compact/tight) disables
+  # the rule silently, and a VALID but weaker one ("any"/"tight") stops it
+  # firing on the tight probe altogether. Both are caught here.
+  if [[ "$probe_lines" != *"MD060"* ]]; then
+    fail "MD060 did not fire on '$probe' -- the rule's 'style' value is not in force. An invalid value (not one of aligned/any/compact/tight) disables the rule silently, and the valid-but-weaker values 'any'/'tight' accept the tight probe table."
+  fi
+
+  if [[ "$probe_lines" != *"for style \"${MD060_STYLE}\""* ]]; then
+    fail "MD060 fired on '$probe' but not for style '${MD060_STYLE}' -- the configured style has been changed to another valid value, which silently changes what the gate enforces"
   fi
 done
 echo "ok: all gated probes (deep book path, a crate README location, and the repo root) are linted, with MD012/MD040 (default-on) and MD060 (explicitly configured) all firing"

@@ -12,14 +12,15 @@
   //   - Root-anchored "!target/**" would not exclude nested copies, and
   //     target/package/ (cargo package, release-plz verify) holds full crate
   //     copies including README.md.
-  //   - "gitignore": true delegates to globby, which honours only COMMITTED
-  //     **/.gitignore files -- it never reads .git/info/exclude, and it reads a
+  //   - "gitignore": true delegates to globby, which honours every **/.gitignore
+  //     file it finds ON DISK -- tracked or not (verified: an untracked nested
+  //     .gitignore takes effect). It never reads .git/info/exclude, and reads a
   //     user-global gitignore only under an opt-in option we do not set here.
-  //     .superpowers/ is excluded on some machines only via .git/info/exclude,
-  //     which is machine-local and uncommitted, so "gitignore" alone would not
-  //     exclude it -- and would behave differently on a contributor's machine
-  //     whose exclusion, if any, lives somewhere else again. The explicit
-  //     negation is what makes the file set reproducible across machines.
+  //     So the effective file set depends on machine-local state twice over: an
+  //     exclusion living in .git/info/exclude is NOT honoured, while a stray
+  //     untracked .gitignore IS. .superpowers/ is excluded on some machines by
+  //     one and some by the other. The explicit negations are what pin the file
+  //     set to something reproducible across machines and on CI.
   "globs": [
     "**/*.md",
     "!docs/superpowers/**",
