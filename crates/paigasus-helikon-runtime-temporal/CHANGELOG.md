@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.4.4...paigasus-helikon-runtime-temporal-v0.4.5) - 2026-08-23
+
+### Other
+
+- *(workflows)* SMA-581 gate the published markdown surfaces with markdownlint-cli2 ([#220](https://github.com/SMK1085/paigasus-helikon/pull/220))
+
 ## [0.4.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.4.3...paigasus-helikon-runtime-temporal-v0.4.4) - 2026-08-22
 
 ### Added
