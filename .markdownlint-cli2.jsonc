@@ -2,25 +2,22 @@
   // Single source of truth for the gated file set. CI passes NO glob arguments,
   // so a bare `npx markdownlint-cli2` locally lints exactly what CI lints.
   //
-  // "gitignore" is load-bearing: without it a bare run in a developer checkout
-  // picks up untracked-but-ignored trees (measured: 121 files / 616 issues
-  // instead of 51 / 110) and the documented local gate becomes unusable.
-  "gitignore": true,
+  // NOTE: "gitignore" is deliberately NOT set (it defaults to false).
+  //
+  // Turning it on makes the gated file set depend on ignore files present on
+  // disk, and markdownlint-cli2 delegates that to globby, which reads every
+  // **/.gitignore it finds -- tracked or not -- while never reading
+  // .git/info/exclude. That is a hole, not a convenience: an untracked nested
+  // .gitignore (say docs/book/src/.gitignore containing "*.md") silently
+  // removes published pages from the gate, and a negation below CANNOT
+  // override it. The lint would pass locally having checked nothing.
+  //
+  // The negations below already produce the identical file set without it
+  // (measured: 51 files either way, with node_modules/, target/, .superpowers/
+  // and docs/book/book/ all present on disk), so leaving "gitignore" off costs
+  // nothing and makes the gated set a pure function of this committed file --
+  // which is what "a bare local run lints exactly what CI lints" requires.
 
-  // The explicit negations are kept alongside "gitignore" and are unanchored on
-  // purpose:
-  //   - Root-anchored "!target/**" would not exclude nested copies, and
-  //     target/package/ (cargo package, release-plz verify) holds full crate
-  //     copies including README.md.
-  //   - "gitignore": true delegates to globby, which honours every **/.gitignore
-  //     file it finds ON DISK -- tracked or not (verified: an untracked nested
-  //     .gitignore takes effect). It never reads .git/info/exclude, and reads a
-  //     user-global gitignore only under an opt-in option we do not set here.
-  //     So the effective file set depends on machine-local state twice over: an
-  //     exclusion living in .git/info/exclude is NOT honoured, while a stray
-  //     untracked .gitignore IS. .superpowers/ is excluded on some machines by
-  //     one and some by the other. The explicit negations are what pin the file
-  //     set to something reproducible across machines and on CI.
   "globs": [
     "**/*.md",
     "!docs/superpowers/**",
@@ -28,7 +25,11 @@
     "!**/target/**",
     "!**/node_modules/**",
     "!**/.claude/**",
-    "!**/.superpowers/**"
+    "!**/.superpowers/**",
+    // mdbook's build output. Ignored via a tracked docs/book/.gitignore, which
+    // no longer protects it now that "gitignore" is off; it holds no .md today
+    // but must not silently enter the gate if a future backend emits one.
+    "!docs/book/book/**"
   ],
 
   "config": {

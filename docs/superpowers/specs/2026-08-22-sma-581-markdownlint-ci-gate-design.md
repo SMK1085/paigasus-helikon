@@ -97,26 +97,28 @@ page is then gated automatically; an allowlist silently misses new surfaces — 
 is how the book drifted to 13 stub pages before anyone noticed. It also means
 `docker/forkd/README.md`, a surface the ticket never mentions, is gated anyway.
 
-**`"gitignore": true` is load-bearing, and so are the explicit negations.** Without
-it, a bare local run in the maintainer's own checkout lints **121 files / 616
-issues** instead of 51/110 — untracked `.superpowers/` SDD reports and other ignored
-trees leak in, and the documented local gate becomes unusable, destroying the
-"local == CI" property the config exists to provide. The negations are kept
-alongside it, unanchored (`!**/target/**`, not `!target/**`), because:
+**`"gitignore"` is deliberately left OFF, and the explicit negations carry the
+whole file set.** The first draft set `"gitignore": true` to stop a bare local run
+picking up ignored trees. Review showed that is a hole rather than a convenience:
+markdownlint-cli2 delegates it to globby, which reads **every `**/.gitignore` it
+finds on disk — tracked or not** — while never reading `.git/info/exclude`. So an
+untracked nested `docs/book/src/.gitignore` containing `*.md` silently removes
+published pages from the gate, and **a negation here cannot override it** — the
+lint passes having checked nothing. Reproduced, then re-run against the final
+config to confirm the file is linted again.
 
-- Root-anchored negations do not exclude nested copies. `target/package/` (produced
-  by `cargo package` and by release-plz verification) contains full crate copies
-  including `README.md`.
-- `"gitignore": true` delegates to globby, which honours every `**/.gitignore`
-  file it finds **on disk — tracked or not**. Verified: an untracked nested
-  `.gitignore` takes effect (1 file linted → 0). It never reads
-  `.git/info/exclude`, and reads a user-global gitignore only under an opt-in
-  option this repo's `.markdownlint-cli2.jsonc` does not set. So the effective
-  file set depends on machine-local state in **both** directions: an exclusion
-  living in `.git/info/exclude` is *not* honoured, while a stray untracked
-  `.gitignore` *is*. `.superpowers/` happens to be excluded by the former on
-  this machine and by the latter elsewhere. The explicit negations are what pin
-  the file set to something reproducible across machines and on CI.
+Measured: the negations alone produce the **identical 51-file set**, with
+`node_modules/`, `target/`, `.superpowers/` and `docs/book/book/` all present on
+disk. So turning `gitignore` off costs nothing and makes the gated set a pure
+function of this one committed file — which is what "a bare local run lints
+exactly what CI lints" actually requires.
+
+The negations are unanchored (`!**/target/**`, not `!target/**`) because
+root-anchored ones do not exclude nested copies: `target/package/` (produced by
+`cargo package` and by release-plz verification) contains full crate copies
+including `README.md`. `!docs/book/book/**` is listed explicitly because mdBook's
+output directory was previously covered only by a tracked `docs/book/.gitignore`,
+which no longer applies.
 
 Measured with this config: **51 files, 110 findings, 16 files dirty** — identical in
 the main checkout and in a clean worktree.
