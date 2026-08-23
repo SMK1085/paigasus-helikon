@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.26](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.25...paigasus-helikon-providers-openai-v0.2.26) - 2026-08-23
+
+### Fixed
+
+- *(providers-openai)* SMA-562 reconcile responses tool calls the translator never emitted ([#218](https://github.com/SMK1085/paigasus-helikon/pull/218))
+
 ## [0.2.25](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.24...paigasus-helikon-providers-openai-v0.2.25) - 2026-08-22
 
 ### Other
