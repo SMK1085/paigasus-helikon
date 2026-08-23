@@ -17,6 +17,7 @@ const LENGTH: &str = include_str!("fixtures/responses_incomplete_length.txt");
 const FILTER: &str = include_str!("fixtures/responses_incomplete_filter.txt");
 const FAILED: &str = include_str!("fixtures/responses_failed.txt");
 const TOOL_CALL: &str = include_str!("fixtures/responses_tool_call.txt");
+const ZERO_ARGS: &str = include_str!("fixtures/responses_tool_call_zero_args.txt");
 
 fn user(text: &str) -> Item {
     Item::UserMessage {
@@ -205,6 +206,43 @@ async fn tool_call_turn_finishes_with_tool_calls() {
             })
         ),
         "expected Finish(ToolCalls) as the last event, got {:?}",
+        unwrapped.last()
+    );
+}
+
+/// SMA-562's negative result, pinned. A zero-argument tool call streams one
+/// `function_call_arguments.delta` carrying `"{}"` — it does NOT stream zero
+/// deltas, which is what the ticket hypothesised. See the fixture header.
+#[tokio::test]
+async fn zero_argument_tool_streams_one_delta() {
+    let events = run(ZERO_ARGS).await;
+    let unwrapped: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
+
+    let named: Vec<(&str, &str, &str)> = unwrapped
+        .iter()
+        .filter_map(|e| match e {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name: Some(name),
+                args_delta,
+            } => Some((call_id.as_str(), name.as_str(), args_delta.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        named,
+        vec![("call_8xWY1dceitU93bp87yBo1ocG", "get_current_time", "{}")],
+        "expected exactly one named ToolCallDelta carrying `{{}}`, got {unwrapped:?}"
+    );
+
+    assert!(
+        matches!(
+            unwrapped.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ),
+        "expected Finish(ToolCalls) last, got {:?}",
         unwrapped.last()
     );
 }
