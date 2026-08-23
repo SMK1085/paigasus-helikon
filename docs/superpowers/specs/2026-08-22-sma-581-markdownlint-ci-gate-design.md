@@ -75,7 +75,7 @@ staged.
 ### Gated file set
 
 `.markdownlint-cli2.jsonc` at the repo root owns the file set, so a bare
-`npx markdownlint-cli2` locally lints exactly what CI lints:
+`npx markdownlint-cli2` locally applies the same rules to the same gated set as CI:
 
 ```jsonc
 {
@@ -112,7 +112,7 @@ Measured: the negations alone produce the **identical 51-file set**, with
 `node_modules/`, `target/`, `.superpowers/` and `docs/book/book/` all present on
 disk. So turning `gitignore` off costs nothing and makes the gated set a pure
 function of this one committed file — which is what "a bare local run lints
-exactly what CI lints" actually requires.
+the local/CI equivalence below actually requires.
 
 The negations are unanchored (`!**/target/**`, not `!target/**`) because
 root-anchored ones do not exclude nested copies: `target/package/` (produced by
@@ -123,6 +123,14 @@ which no longer applies.
 
 Measured with this config: **51 files, 110 findings, 16 files dirty** — identical in
 the main checkout and in a clean worktree.
+
+**Scope of the local/CI equivalence claim.** What is guaranteed is *same config,
+same globs, same rules* — not an identical file count. markdownlint-cli2 matches
+`**/*.md` against files **on disk**, not against git's index, so an **untracked**
+Markdown file is linted locally while a clean CI checkout does not contain it
+(verified: 51 files → 52 with one untracked `.md`). That asymmetry is desirable —
+you want a new page linted before you commit it — but it means "51 files" is a
+property of a clean checkout, and a local run showing 52 is not a config drift.
 
 ### Rule policy
 

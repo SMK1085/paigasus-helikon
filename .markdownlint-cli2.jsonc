@@ -1,6 +1,10 @@
 {
   // Single source of truth for the gated file set. CI passes NO glob arguments,
-  // so a bare `npx markdownlint-cli2` locally lints exactly what CI lints.
+  // so a bare `npx markdownlint-cli2` locally applies the same rules to the same
+  // gated set as CI. Note the set is matched against files ON DISK, not against
+  // git's index: an UNTRACKED .md is linted locally and is absent from CI's clean
+  // checkout. That is deliberate -- you want a new page linted before you commit
+  // it -- so the guarantee is "same config, same globs", not "same file count".
   //
   // NOTE: "gitignore" is deliberately NOT set (it defaults to false).
   //
@@ -16,7 +20,7 @@
   // (measured: 51 files either way, with node_modules/, target/, .superpowers/
   // and docs/book/book/ all present on disk), so leaving "gitignore" off costs
   // nothing and makes the gated set a pure function of this committed file --
-  // which is what "a bare local run lints exactly what CI lints" requires.
+  // which is what the local/CI equivalence above requires.
 
   "globs": [
     "**/*.md",
