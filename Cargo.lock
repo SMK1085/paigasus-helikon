@@ -3837,7 +3837,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "paigasus-helikon"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-litellm"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4126,7 +4126,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-actix"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "actix-web",
  "actix-ws",
@@ -4148,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-agentcore"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4175,7 +4175,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-axum"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4213,7 +4213,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-temporal"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4307,7 +4307,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-tools"
-version = "0.2.15"
+version = "0.2.16"
 dependencies = [
  "anyhow",
  "async-trait",
