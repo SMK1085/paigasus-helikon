@@ -1,0 +1,843 @@
+/feature-pipeline SMA-581
+
+---
+
+approved
+
+---
+
+<task-notification>
+<task-id>a9803493f69d44480</task-id>
+<tool-use-id>toolu_01SPp6R3WjTFq5zcHoH28Pc5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a9803493f69d44480.output</output-file>
+<status>completed</status>
+<summary>Agent "Adversarial spec challenge" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict: NEEDS REWORK
+
+The spec's instincts are right (denylist over allowlist, one rule disabled, a self-test against silent degradation, correcting the ticket's premise with real numbers) and its arithmetic is internally consistent. But three of its four concrete deliverables have defects that must be settled before code: the ruleset change is inert without an unmentioned manual step, the self-test is not implementable as written and would validate a different linter version than the gate, and the proposed glob set demonstrably breaks the "local run == CI run" invariant it is built around on the maintainer's own machine. One prescribed hand-fix also provably introduces new violations of a rule the same PR enables.
+
+## Findings
+
+### BLOCKER
+
+- **Editing `main-protection-checks.json` does not make the check required; nothing in the spec runs the applier** - The spec's only step is "`{ "context": "markdown-lint" }` is added to `.github/rulesets/main-protection-checks.json`", and Verification #5 asks only that the context "is **listed in**" that file. But `/private/tmp/.../wt-sma-581/CONTRIBUTING.md` (Repo configuration) states the JSON is applied by `scripts/apply-repo-config.sh` and that "There is no drift-check CI job — divergence is detected by the next maintainer running the script." | Why it matters: Two failure modes, both bad. If nobody runs the script, the repo *documents* a required gate that GitHub does not enforce — a green-looking policy that enforces nothing, which is exactly the class of bug the spec's own self-test section exists to prevent. If the script is run *before* the PR merges, `markdown-lint` becomes required while `main` has no such job, and **every** open PR (including this one, if run pre-merge on a stale head) is blocked with an unreportable context. | Suggested fix: Add an explicit ordered rollout step to the spec: (1) merge the PR to `main`; (2) maintainer runs `bash scripts/apply-repo-config.sh`; (3) verify with `gh api repos/SMK1085/paigasus-helikon/rulesets/...`; and a rollback step (remove the context from the JSON and re-apply) if the gate turns out to be wrong. Make Verification #5 assert *enforcement*, not *listing*.
+
+- **The self-test script is not implementable as specified — assertion 2 has no observable signal** - The spec requires asserting that `docs/book/src/SUMMARY.md` **is** in the linted set and a `docs/superpowers/` path **is not**, and then explicitly rejects a file-count assertion ("Deliberately assertions about set membership rather than a file **count**"). markdownlint-cli2 has no `--list-files`; on a clean run it prints only `Linting: N file(s)` and `Summary: 0 issue(s)`. The one machine-readable signal it emits — the count — is the one the spec forbids, and per-file lines appear only for files that *have* findings. | Why it matters: This is a named deliverable with its own verification criterion (Verification #2: "exits non-zero under each of its two mutations"). An implementer will either invent an undesigned mechanism, silently downgrade to the count the spec rejected, or write a script that passes vacuously. | Suggested fix: Prescribe the mechanism. A deterministic, implementable form: the script writes two throwaway probe files containing a known violation (e.g. `docs/book/src/__mdlint_probe.md` and `docs/superpowers/__mdlint_probe.md`), runs the real config, asserts the first path appears in the output and the second does not, then removes both in a `trap … EXIT`. Same trick makes assertion 1 concrete. Specify `set -euo pipefail` and a positive-marker assertion (grep for the expected `MD0xx` string), not absence-of-findings — per the repo's own lesson in `.github/workflows/audit.yml`'s `scheduled-audit` commentary.
+
+- **The self-test's invocation would run a *different* markdownlint version than the gate, and adds a network dependency to a required check** - The proposed job has exactly two steps (checkout + `DavidAnson/markdownlint-cli2-action`), no `actions/setup-node`. `scripts/check-markdownlint-config.sh` is said to "run as a step in the `markdown-lint` job", and Verification #2 invokes it as `bash scripts/check-markdownlint-config.sh`. If it shells out to `npx markdownlint-cli2` (the only invocation the spec ever names, in the Verification section and CONTRIBUTING), npm resolves **latest**, not the action's bundled 0.23.2. | Why it matters: (a) The self-test would then certify a config against a linter the gate does not use — the guard is decoupled from the thing it guards. (b) It puts an unpinned npm registry fetch inside a *required* status check, which is a genuine flake source; the spec's entire "no signal-first phase needed" argument rests on the job being deterministic. (c) It contradicts the spec's own supply-chain reasoning ("`npx markdownlint-cli2@0.23.2` … has no checksum at all"). | Suggested fix: Decide and state one of: (a) drop the action, add a pinned `actions/setup-node` + `npm ci` against a committed `package.json`/`package-lock.json` with `markdownlint-cli2@0.23.2` (checksummed by the lockfile, one version for both the gate and the self-test, and identical to what contributors run); or (b) keep the action and have the self-test reuse the action's own resolved binary path, asserting the version explicitly (`markdownlint-cli2 --version` == `0.23.2`) so a bundled-version drift fails loudly. Either way the script must assert the version it is testing.
+
+- **The proposed `globs` break the "bare `npx markdownlint-cli2` locally lints exactly what CI lints" invariant on this repo's own machines** - `.gitignore` line 12 ignores `.claude/worktrees/`, and `/private/tmp/.../wt-sma-581/tests/workspace-lints/tests/tracing_target_docs.rs:143-145` documents why it matters: "`.claude/worktrees/` can hold full checkouts of other branches, and scanning those would make this test's verdict depend on which unrelated worktrees a developer happens to have." markdownlint-cli2 does not honour `.gitignore` unless `"gitignore": true` is set, and it clearly traverses dot-directories here (the measured 51 includes `.github/PULL_REQUEST_TEMPLATE.md`). The negations are root-anchored, so `!docs/superpowers/**` does **not** exclude `.claude/worktrees/&lt;branch&gt;/docs/superpowers/**`. | Why it matters: The config file *is* the design's single source of truth, and this is a defect in it. On the maintainer's machine a bare local run would lint every `.md` in every checked-out worktree, including the 274 bare fences the spec deliberately excludes — the documented local gate is unusable, so contributors will stop running it and the "one source of truth" property evaporates. `target/package/` (produced by `cargo package` / release-plz verification) likewise contains full crate copies including `README.md`, so `!target/**` is load-bearing, not the "belt-and-braces" the spec calls it. | Suggested fix: Add `"gitignore": true` to `.markdownlint-cli2.jsonc` (which subsumes `target/`, `node_modules/`, `.claude/worktrees/`, and any future ignore), **and** keep the explicit negations as unanchored patterns (`!**/target/**`, `!**/node_modules/**`, `!**/.claude/**`) so the exclusion survives someone turning `gitignore` off. Add a self-test assertion that a path under `.claude/worktrees/` is not in the linted set.
+
+### MAJOR
+
+- **The prescribed `MD036` fix introduces four new `MD001` violations in the same file** - The spec says `4× MD036` in `docs/runbooks/forkd-live-validation.md` become `####`. The nearest preceding heading is `## Troubleshooting` at line 362; the four bold pseudo-headings are at lines 383, 388, 393, 398, with no `###` between them. `##` → `####` is a two-level skip, which is exactly what `MD001` (heading-increment, enabled by `"default": true`) forbids. | Why it matters: The fix set as written cannot satisfy Verification #1 ("exits 0 with `0 issues`"). Worse, an implementer who hits four fresh `MD001` errors is one bad decision away from adding `"MD001": false` repo-wide — the outcome the spec's "No rule is disabled repo-wide in order to dodge a finding" paragraph exists to prevent, and it would silently un-fix the `crates/paigasus-helikon-tools/README.md:9` finding in the same PR. | Suggested fix: Change the prescription to `###`, and add an explicit instruction: "if a heading-level fix produces a new `MD001`, adjust the level — never disable `MD001`."
+
+- **Dependabot's patch+minor group *can* change the bundled linter and enable new rules unattended** - The spec's safety argument is: "Dependabot's `github-actions` group is patch+minor only, so a v24→v25 bump never arrives unattended … Bumping it is a human act." That only covers *majors*. `markdownlint-cli2-action` ships new bundled `markdownlint-cli2` versions in **minor** releases, and markdownlint itself introduces new rules in minors (MD056/MD058/MD059/MD060 all arrived this way). Under `"default": true`, a new rule is live the moment it lands. | Why it matters: A routine grouped `chore(deps)` PR can redden a **required** gate for reasons nobody chose, on `main` as well as on the PR. And per the repo's own operational constraint, the `branch-names` ruleset blocks humans pushing to `dependabot/**`, so fixing a Dependabot PR in place is impossible — it needs a `feature/**` takeover PR. The grouped PR bundles every other action bump with it, so one new markdown rule blocks the whole group. | Suggested fix: State this failure mode explicitly and pick a mitigation: either (a) add `markdownlint-cli2-action` to a Dependabot `ignore` for minor updates and hand-bump it alongside `PROTOC_VERSION`/`NIGHTLY_TOOLCHAIN` in CLAUDE.md's list of untracked pins; or (b) decouple by pinning `markdownlint-cli2@0.23.2` in a lockfile (see the third BLOCKER) so an action bump cannot move the ruleset; or (c) accept it and document the runbook ("a red `markdown-lint` on a Dependabot PR usually means a new rule — triage before fixing content"), mirroring the existing "a red audit/deny gate is usually NOT your PR" pattern.
+
+- **Dropping `.markdownlint-cli2.jsonc` at the repo root changes CodeRabbit's behaviour, and the spec's stated alignment mechanism is the wrong one** - `/private/tmp/.../wt-sma-581/.coderabbit.yaml` configures only the Linear integration; there is no `tools.markdownlint` block. CodeRabbit auto-discovers repo-root markdownlint config. The spec justifies its version choice as "byte-identical to the version CodeRabbit runs, satisfying the ticket's alignment requirement" — but *version* parity is not what makes CodeRabbit and CI agree; *config* parity is, and that is a side effect the spec never analyses. | Why it matters: Two concrete consequences go unexamined. (1) Good: CodeRabbit will now honour `MD013: false` and `MD060: compact`, so its advisory comments stop diverging from CI. (2) Risky: the spec's own central mechanism is that command-line globs **union** with the config's `globs`. If CodeRabbit passes changed-file paths, the union with `**/*.md` means CodeRabbit may start reporting markdown findings on all 51 files on every PR, not just the diff — turning a helpful reviewer into noise, in the same PR that adds the gate. Separately, "byte-identical to what CodeRabbit runs" is a claim about a third party's internal pin that this repo cannot observe or hold stable; it will silently become false. | Suggested fix: Do not justify the pin by CodeRabbit parity — justify it on its own merits and state that config discovery, not version matching, is what aligns the two. Add a post-merge check to the plan: confirm on the first PR after merge that CodeRabbit's markdown comments are still diff-scoped, and add an explicit `tools.markdownlint` block to `.coderabbit.yaml` if not.
+
+- **The `--fix` diff is not "entirely whitespace and table-pipe padding"** - The auto-fixable 98 necessarily includes the single `MD034` (bare-URL) and `MD038` (spaces-inside-code-span) findings — that is how 77+10+4+4+3 reaches 98 and how the residual is exactly 12. `MD034`'s fix rewrites `https://x` to `&lt;https://x&gt;`; `MD038`'s fix deletes characters inside a code span. | Why it matters: The spec uses "entirely whitespace" to argue the diff is reviewable-at-a-glance and to bound the blast radius on crates.io/docs.rs pages. Both fixes are content edits, and if either lands in `crates/paigasus-helikon/README.md` it lands in rendered rustdoc (the facade README is `include_str!`'d into `crates/paigasus-helikon/src/lib.rs`). | Suggested fix: Correct the characterisation, and add the `MD034`/`MD038` files to the per-finding disposition table so a human eyeballs them rather than rubber-stamping "whitespace".
+
+- **The affected-crate list in Consequences is wrong — at least five crates bump, not four** - Consequences names `providers-litellm`, `runtime-actix`, `runtime-axum`, `runtime-temporal`. But the fix set explicitly edits `crates/paigasus-helikon-tools/README.md:9` (the `MD001` h1→h3 fix), and the `--fix` set is stated as 12 files without a per-file listing. | Why it matters: The spec is otherwise scrupulous about release-plz consequences, and CLAUDE.md's warning is that a README touch cascades. Getting the list wrong means the release PR contains a bump the reviewer was told not to expect — precisely the surprise this section exists to prevent. | Suggested fix: Enumerate all 12 `--fix`-touched files by path in the spec (the author already has the diff), derive the crate list from that, and state affirmatively that this is the **pure-auto** release path — release-plz performs the bumps itself, so `dependencies_update` cascades correctly and **no** manual `core`/facade bump is needed (CLAUDE.md's same-PR-manual-bump caveat does *not* apply here). Also consider the mitigation the spec never names: split into two PRs — a `docs(readme)`/`chore` PR carrying the whitespace, and a `ci(workflows)` PR carrying the gate — so the release churn is isolated from the plumbing.
+
+- **The `SUMMARY.md` fallback silently weakens the gate across 20 files, and a better third option exists** - The fallback is "a scoped `docs/book/src/.markdownlint.jsonc` containing `{ "MD025": false }`". That disables single-title checking for *every* book page, not the one file where the rule is genuinely wrong. | Why it matters: The spec's own stated principle is file-scoped disables, "never a repo-wide `false`" — the fallback violates the spirit of that on the repo's most-read published surface. Neither branch is verified before implementation, so the design is being handed off with a coin-flip in it. | Suggested fix: There is a third option that dodges the parse question entirely: `markdownlint-disable-file` is position-independent, so put the comment **after** the `# Summary` H1 (line 2 of `docs/book/src/SUMMARY.md`) or at end-of-file, rather than leading. mdBook 0.4.43's summary parser is very likely to tolerate a leading comment (its `parse_title` skips HTML events), but placing it after the title makes the question moot. Verify both placements against `mdbook build docs/book` **during design**, not during implementation, and delete the directory-wide fallback.
+
+- **"PR #218 must rebase" — the mechanism and the remedy are both wrong** - `.github/rulesets/main-protection-checks.json` sets `"strict_required_status_checks_policy": false`, so GitHub does *not* require the PR to be up to date with base. The reason the context never reports is not that "its head predates the workflow" but that no `pull_request` event fires when `main` moves. `.github/workflows/docs.yml` uses a bare `pull_request:` trigger, so the default types (`opened`, `synchronize`, `reopened`) apply. | Why it matters: The spec uses this cost estimate ("it need only rebase") as a load-bearing input to the required-immediately decision, and a rebase on a repo with `required_linear_history` plus signed commits is not free. | Suggested fix: Correct to: any event that re-triggers the workflow suffices — an empty commit, or simply close-and-reopen the PR (the `reopened` type is active). Note the corollary that this *also* means the new job runs on its own PR, so the chicken-and-egg is not a problem.
+
+- **The determinism argument is about the linter, not about the job — and the job as designed is not deterministic** - "markdownlint is deterministic. There is no flake rate to measure" is true of the tool in isolation. The job as specified adds (a) an npm/npx fetch inside the self-test step and (b) an action whose minor bumps change the ruleset. Both are non-determinism sources introduced *by this design*, not inherent to markdown linting. | Why it matters: The whole "no signal-first phase" case rests on this claim, and the required-immediately decision has repo-wide blast radius. | Suggested fix: Don't stage the gate — remove the non-determinism instead. Eliminate the network fetch (lockfile or reuse the action's binary), pin the linter independently of the action, and then the determinism argument is actually sound and the immediate-required decision is defensible. Add `timeout-minutes:` to the job so a hung npm fetch fails fast rather than sitting for six hours on a required context.
+
+- **No `.gitattributes` rule for `*.md`, while CONTRIBUTING will instruct contributors to run `--fix`** - `/private/tmp/.../wt-sma-581/.gitattributes` pins only `crates/paigasus-helikon-providers-anthropic/tests/fixtures/*.txt` to `text eol=lf`. | Why it matters: CI is ubuntu-only so the gate itself is stable, but the spec adds `npx markdownlint-cli2` to CONTRIBUTING's local-gates list, and the repo's CI matrix explicitly includes Windows contributors. A Windows `--fix` rewrites files with the platform newline, producing whole-file diffs and a CI/local mismatch that looks like a linter bug. This is the same failure the repo already learned once, documented in CLAUDE.md's "Fixture line endings" section. | Suggested fix: Add `*.md text eol=lf` to `.gitattributes` in the same PR, and mention it in the spec's file list.
+
+### MINOR
+
+- **The `MD028` disposition is ambiguous enough that two engineers build different things** - `docs/runbooks/agentcore-image-check.md` lines 3-23 and 25-40 are two deliberately separate blockquotes (a 2026-07-06 local measurement and a 2026-08-07 CI measurement). The spec's disposition is one word: "fix — blank line inside a blockquote." Merging them into one blockquote and inserting an `&lt;!-- --&gt;` separator render differently and mean different things. | Suggested fix: Prescribe the separator (`&lt;!-- --&gt;` between the two blockquotes), which preserves the authorial intent.
+
+- **The enumerated Markdown surfaces are incomplete, and two gated files are effectively vendored** - The Problem section lists `docs/book/`, `crates/*/README.md`, and four root files. The measured 51 also includes `/private/tmp/.../wt-sma-581/docker/forkd/README.md` (never mentioned anywhere), `CODE_OF_CONDUCT.md` (a verbatim copy of Contributor Covenant 2.1), and `CLAUDE.md`. | Suggested fix: List the full 51 by directory in the spec. Consider excluding `CODE_OF_CONDUCT.md` for the same reason `crates/*/CHANGELOG.md` is excluded — it is upstream text nobody here authored, and `--fix` diverges it from the canonical document.
+
+- **Glob-union asymmetry between CI and local** - The action's default `globs` input is `*.{md,markdown}`; the config supplies `**/*.md`. The union therefore includes root-level `*.markdown` files in CI that a bare local `npx markdownlint-cli2` would not lint. No such file exists today, so this is theoretical — but the spec asserts exact parity as a design property. | Suggested fix: Either add `**/*.markdown` to the config globs, or pass `globs: ""`/an explicit value in the workflow so the union is a no-op, and say which.
+
+- **`MD040` now interacts with the facade README's doctests** - `crates/paigasus-helikon/src/lib.rs` does `#![doc = include_str!("../README.md")]`, so every fenced block in `crates/paigasus-helikon/README.md` is compiled by `cargo test`. Enforcing "every fence needs a language" pushes authors toward ```` ```rust ````, which turns prose snippets into doctests. | Suggested fix: One sentence in the spec (and in CONTRIBUTING): in the facade README, use ```` ```text ```` or ```` ```ignore ````, never a bare ```` ```rust ```` for a snippet that needs network or keys.
+
+- **"No mdBook or crate-README *content* changes" contradicts the fix set** - The closing section says this, while the fix set explicitly changes a heading level in `crates/paigasus-helikon-tools/README.md` and `--fix` touches four more crate READMEs. | Suggested fix: Reword to "no *documentation content* is rewritten; the only README edits are the mechanical fixes enumerated above," and keep the conscious-skip statement about the mdBook prose pages.
+
+- **CLAUDE.md's CI section does not currently describe `docs.yml` at all** - It names `book-build` in the required-contexts list but never says which workflow hosts it, and enumerates `ci.yml` (eight jobs), `integration.yml`, `pr-title.yml`, `msrv.yml`, `audit`/`deny`/`sbom`. | Suggested fix: The doc update is not "append a line to the CI section" — it needs to introduce `docs.yml` as a required-check-bearing workflow first, otherwise `markdown-lint` appears in the roster with no home.
+
+- **One real argument for `ci.yml` over `docs.yml` that the spec does not weigh** - `docs.yml`'s `book-deploy` only `needs: book-build`, so a `markdown-lint` failure on a push to `main` reddens the `docs` **workflow run** while the Pages deploy still succeeds. That makes "the docs workflow is red" ambiguous between "the site failed to publish" and "a heading was wrong" — the same signal-legibility problem CLAUDE.md's signal-only-vs-required reasoning is built to avoid. | Suggested fix: Either move the job to `ci.yml` (where every other required non-book gate lives and where the run conclusion has one meaning), or state this consequence explicitly and accept it. The spec's current justification ("docs.yml is the Markdown/docs workflow and already carries a required check") is fine as far as it goes but does not address this.
+
+### QUESTIONS
+
+- What does `MD060: { "style": "any" }` mean if it yields 66 findings rather than 0? If `any` is the rule's *default*, then `"default": true` alone already carries 66 MD060 findings, and the Decisions table's framing of `compact` as a choice among four equals needs restating. This matters because it determines what happens if the `style` key is ever dropped.
+- Does markdownlint-cli2 0.23.2 error on an unknown *rule name* key (e.g. a typo'd `"MD6O": false`), or silently ignore it? The self-test's failure mode #1 covers an invalid option *value* only. If unknown names are also silent, the self-test has a third hole and needs a third assertion.
+- Would the `docs/book/src/.markdownlint.jsonc` fallback be copied into the published Pages output by mdBook's asset copier? (Probably not — mdBook skips dotfiles — but it should be checked before the fallback is offered, since it would publish repo tooling config to a public site.)
+- Who runs `scripts/apply-repo-config.sh`, and at what point relative to merging PR #218 and this PR? (See BLOCKER 1.)
+- How would anyone detect that CodeRabbit's bundled markdownlint version has drifted away from 0.23.2, given the spec makes that parity a stated requirement?
+- Why not `"gitignore": true` in the config? It is the single-line fix for three of the four exclusions and for the worktree problem; if it was rejected, the reason belongs in the spec.
+- Is `--fix` expected to touch `docs/book/src/concepts/observability-evaluation.md`? Verification #4 correctly guards `tests/workspace-lints/tests/tracing_target_docs.rs`, and I confirmed that test's parser (`.trim()` on cells, separator detection via `all(|c| c == '-' || c == ':')`) survives any `MD060` normalisation — but `MD058` (blanks-around-tables) could insert a blank line immediately after `&lt;!-- tracing-components:start --&gt;`. Worth stating that the guard was reasoned about, not just run.
+
+## What's good
+
+- **Denylist over allowlist, with a concrete failure citation.** Tying the choice to the observed drift ("13 stub pages through all of Stage 1") is exactly the right justification shape, and it means `docker/forkd/README.md` — a surface the spec's own prose forgot — is gated anyway. Keep this.
+- **The self-test *concept*.** Naming two specific silent-success modes, both hit during design, and preferring set-membership assertions over a brittle count is precisely the house style of `scripts/check-advisory-ignore-sync.sh` and `.github/actions/setup-protoc/selftest.sh`. The implementation needs rework; the instinct does not.
+- **Correcting the ticket with measured numbers, and arithmetic that actually reconciles.** 928 raw − 818 MD013 = 110 gated; 98 auto-fixable + 12 hand-fixes = 110; and the 12 in the disposition table sum correctly. That internal consistency is what made the `MD034`/`MD038` mischaracterisation findable at all. Also correct and non-obvious: excluding `crates/*/CHANGELOG.md` so a bot-authored release PR cannot go red for Markdown no human wrote.</result>
+<usage><subagent_tokens>107564</subagent_tokens><tool_uses>22</tool_uses><duration_ms>523185</duration_ms></usage>
+</task-notification>
+
+---
+
+approved
+
+---
+
+subagent
+
+---
+
+<task-notification>
+<task-id>ba9ey8x7t</task-id>
+<summary>Monitor event: "Task 1 report file appearing"</summary>
+<event>task-1-report.md written</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ba9ey8x7t</task-id>
+<tool-use-id>toolu_01RCjv2yEjzs1ENHfusobCPn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/ba9ey8x7t.output</output-file>
+<status>completed</status>
+<summary>Monitor "Task 1 report file appearing" stream ended</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7bec9f1c75dc933f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a7bec9f1c75dc933f.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 1 review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Exactly 5 diffs, matching the 5 files in the commit. No markdown files, no CI workflow files were touched.
+
+## Findings
+
+No Critical, Important, or Minor findings.
+
+**Verified details:**
+- `package.json` — verbatim match to brief (name, version `0.0.0`, `"private": true`, exact description, `markdownlint-cli2: "0.23.2"` with no range prefix).
+- `package-lock.json` — resolved `node_modules/markdownlint-cli2` version is exactly `0.23.2`; root manifest entry also pins `0.23.2` unranged; `lockfileVersion: 3`.
+- `.markdownlint-cli2.jsonc` — verbatim match to brief, including all explanatory comments, `"gitignore": true`, all 7 globs in order, `"MD013": false`, `"MD060": {"style": "compact"}`.
+- `.gitignore` — gained exactly the `node_modules/` line plus its comment, appended at the end.
+- `.gitattributes` — gained exactly the `*.md text eol=lf` line plus its comment, appended after the existing Bedrock rule.
+- Commit `7bff38b3` message is exactly `ci(repo): SMA-581 pin markdownlint-cli2 and add lint config`.
+- Commit contains exactly 5 files, matching file-for-file and diff-for-diff what the brief specifies (`git show --name-status` and diff's 5 `diff --git` headers agree).
+- No markdown file content was modified, no `--fix` was run, no CI workflow file was touched.
+- No stray files: `git status --ignored` shows only `node_modules/` (newly ignored, as intended), `.entire/logs/`, and `.superpowers/` (both pre-existing/unrelated ignores) — no `.env`, no other untracked additions.
+- Independent verification reproduced the exact required output: `Linting: 51 files` / `Summary: 110 issues in 16 files`.
+
+**Spec: ✅**
+**Task quality: Approved**</result>
+<usage><subagent_tokens>70574</subagent_tokens><tool_uses>15</tool_uses><duration_ms>58969</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aec3296106966abb2</task-id>
+<tool-use-id>toolu_01LJYYgYLjZEMWKK4uX4X6qG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/aec3296106966abb2.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 config self-test script" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- STATUS: DONE
+- COMMITS: bb2396fa
+- VERIFICATION: clean run passed (4 `ok:` lines + `markdownlint config self-test passed`, exit 0); all 3 mutations exited 1 and blamed 3 distinct correct causes (M1: MD060 style not in force, M2: gated probe not linted at all, M3: excluded probe was linted) — no assertion bleed, config and file tree fully restored.
+- CONCERNS: none</result>
+<usage><subagent_tokens>72906</subagent_tokens><tool_uses>11</tool_uses><duration_ms>86187</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aad1e9932b9e973b4</task-id>
+<tool-use-id>toolu_01X9LrA2G8nKw9wD3LMv9Jur</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/aad1e9932b9e973b4.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 2 review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review: Task 2 — `scripts/check-markdownlint-config.sh`
+
+### A. Spec compliance: ✅
+
+- Diffed the brief's prescribed script block (task-2-brief.md lines 15–134) against the committed/on-disk file byte-for-byte — **identical, no deviation**.
+- No `grep -q` in executable code; the only two `grep -q` occurrences are inside comments explaining the SIGPIPE rationale (lines 67–68).
+- The single `grep -F` (line 102) correctly omits `-q`.
+- The version assertion (`help_output`) matches the whole captured `npx markdownlint-cli2 --help 2&gt;&amp;1` output, not line 1, guarding against the `npm warn exec ...` prefix.
+- `set -euo pipefail` (line 23) and `trap cleanup EXIT` (line 56) both present.
+- All explanatory comments from the brief retained verbatim.
+- Commit `bb2396fa` contains exactly one file: `scripts/check-markdownlint-config.sh`, 120 insertions, mode 100755 (executable bit set as required by Step 2). No stray changes.
+- `EXPECTED_VERSION="0.23.2"` matches the pin in `package.json`/`package-lock.json` from Task 1.
+
+### B. Task quality: Approved
+
+Independently re-ran everything rather than trusting the report:
+
+- **Clean run**: exit 0, four `ok:` lines in order, then `markdownlint config self-test passed` — matches expected exactly.
+- **M1 (invalid `MD060.style`)**: exit 1, fails at the MD060 assertion only (`ok: linter…`, `ok: deep gated…`, then `FAIL: MD060 did not fire...`). Correct cause, no bleed into M2's message.
+- **M2 (collapsed globs `**/*.md` → `*.md`)**: exit 1, fails immediately at membership (`FAIL: gated probe ... was not linted at all...`). Correct cause.
+- **M3 (lost `docs/superpowers` exclusion)**: exit 1, all three prior `ok:` lines pass, fails only at the exclusion assertion (`FAIL: excluded probe ... WAS linted...`). Correct cause, no bleed into M2's message either.
+- No cross-contamination between assertion messages in any mutation — confirms the `grep -F`/pattern-matching approach genuinely isolates the three failure modes.
+- **Post-test state**: `git diff --exit-code .markdownlint-cli2.jsonc` clean; `git status --short` empty (no leaked `__mdlint_probe.md` files, confirming the `trap` fires correctly even on `fail()`'s `exit 1`).
+
+**Residual design limitation (not an implementer defect — inherited from the brief, worth flagging for future work):** the guard only tests glob *collapse* to the point of losing `docs/book/src/**` membership and the one `docs/superpowers` exclusion. It does not test glob *widening* — e.g. an accidental removal of `!**/node_modules/**` or `!**/target/**` would leave all four assertions green. This is a scope boundary set by the brief itself (Task 2 explicitly targets "collapse or narrow," and the design doc frames widening risk differently), not something Task 2's implementation deviated on, so I'm not flagging it against this task — noting it only in case a later task in the plan is expected to cover it and doesn't.
+
+No Critical or Important findings. No vacuous-pass path found within the assertions this script actually makes.</result>
+<usage><subagent_tokens>77411</subagent_tokens><tool_uses>13</tool_uses><duration_ms>95101</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abdbff48c832035b0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/abdbff48c832035b0.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 3 apply auto-fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- STATUS: DONE
+- COMMITS: 68415756
+- VERIFICATION: 12 residual findings (matches brief's enumerated list exactly, same files/lines); MD038 site hand-reworded per brief's exact wording (rejected the space-deleting auto-fix); `tracing_target_docs` test passed.
+- CONCERNS: none</result>
+<usage><subagent_tokens>74255</subagent_tokens><tool_uses>18</tool_uses><duration_ms>94529</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a463258a9cccaf853</task-id>
+<tool-use-id>toolu_018bEoV9ppzGwMANNGnoqiDd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a463258a9cccaf853.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 3 review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Summary
+
+I reviewed the worktree at `/private/tmp/claude-501/.../scratchpad/wt-sma-581`, read the brief, the implementer's report, and the full diff (`bb2396fa..68415756`), and independently re-ran every verification command.
+
+**Independent verification results (all passed):**
+- `npx markdownlint-cli2` → `Summary: 12 issues in 5 files`, and the 12 findings match the brief's enumerated list exactly (same files/lines/rule IDs).
+- `grep -n 'Bearer' crates/paigasus-helikon-providers-litellm/README.md` → line 85 reads `keys are treated as absent rather than sent as a \`Bearer\` header with an empty` (line 86 continues `credential.`) — matches the brief's Step 4 replacement text verbatim, not the original trailing-space form and not the raw `--fix` output.
+- `cargo test -p paigasus-helikon-workspace-lints --test tracing_target_docs` → 1 passed.
+- `bash scripts/check-markdownlint-config.sh` → all 4 self-tests pass, exit 0.
+- `git diff --name-only bb2396fa..68415756` → exactly the 12 files listed in the brief's staging command; `docs/book/src/concepts/observability-evaluation.md` is absent; none of `.markdownlint-cli2.jsonc`, `scripts/check-markdownlint-config.sh`, `package.json`, or any CI workflow appear.
+- `git rev-list --count bb2396fa..68415756` = 1, and `git log -1 --format='%s'` = `docs(repo): SMA-581 apply markdownlint automatic fixes` (exact match).
+- `git diff --stat bb2396fa..68415756` matches the `.diff` review package's stat/content byte-for-byte (297 diff lines both ways) — the review package is not stale or truncated relative to the actual commit.
+
+**Hunk-by-hunk task-quality audit (all 12 files, every hunk in `.superpowers/sdd/.../review-bb2396fa..68415756.diff`):**
+- `BENCHMARKS.md`, `CONTRIBUTING.md` (×3), `SECURITY.md`, `docker/forkd/README.md`, `crates/paigasus-helikon-runtime-actix/README.md` (×2), `crates/paigasus-helikon-runtime-axum/README.md` (×2), `docs/book/src/concepts/tools.md` (×2), `docs/runbooks/forkd-live-validation.md` (×1) — all table-separator/cell padding only (`|---|` → `| --- |` style), no cell text changed.
+- `CLAUDE.md` (×4), `crates/paigasus-helikon-runtime-temporal/README.md` (×1), `docs/runbooks/forkd-live-validation.md` (×9) — blank-line insertions around fenced code blocks / bullet lists (MD032), no text touched.
+- `docs/book/src/concepts/tools.md` (×2) — `_write_`/`_writes_` → `*write*`/`*writes*` emphasis-style conversion (MD049), same rendered meaning.
+- `CODE_OF_CONDUCT.md` — the approved MD034 mailto-link fix, plus a trailing-blank-line-at-EOF removal.
+- `crates/paigasus-helikon-providers-litellm/README.md` — the approved hand-reword replacing the meaning-inverting MD038 auto-fix.
+
+No hunk changes a command, code sample, URL, or path. `docs/runbooks/forkd-live-validation.md` (11 lines) and `docs/book/src/concepts/tools.md` (8 lines) — the two flagged for closest scrutiny — are entirely blank-line/table-padding/emphasis-style changes with zero prose or instruction content altered. The four crate READMEs (litellm, runtime-actix, runtime-axum, runtime-temporal) show only the one approved reword plus table padding / a single blank-line insertion — no route, feature-flag, or link text altered.
+
+One cosmetic observation, not a defect: in `SECURITY.md` the header/data rows lost padding but the separator row (`| ------------------- | ------------------ |`) was left untouched by `--fix`, so column widths are visually inconsistent in the raw source. This doesn't affect rendering (Markdown tables key off pipe delimiters, not dash count) and doesn't produce a new lint violation — confirmed by the clean 12-issue lint run above. No action needed.
+
+No Critical, Important, or Minor defects found.
+
+**A. Spec compliance: ✅**
+All requirements met — 12-file commit exactly matching the brief's staging list, `observability-evaluation.md` untouched, no out-of-scope files touched, residual findings unchanged at exactly 12 (Task 4's scope, not hand-fixed), commit message exact, and both flagged content edits handled correctly (CODE_OF_CONDUCT MD034 kept, litellm MD038 rejected and hand-reworded with the brief's exact wording).
+
+**B. Task quality: Approved**
+Every hunk in the diff was verified individually and is purely mechanical (table-pipe padding, blank-line insertion around lists/fences, emphasis-marker style) or one of the two explicitly authorized content edits. Nothing changes rendered meaning, commands, code samples, or URLs/paths.</result>
+<usage><subagent_tokens>88149</subagent_tokens><tool_uses>12</tool_uses><duration_ms>110625</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a303082a9e6bdc2bf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a303082a9e6bdc2bf.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 4 hand-fix residual findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- STATUS: DONE
+- COMMITS: 00fe4c71
+- VERIFICATION: `npx markdownlint-cli2` → `Summary: 0 issues` exit 0; `mdbook build` (docs/book) succeeded with linkcheck, exit 0; `git diff --stat docs/book/src/SUMMARY.md` → `1 file changed, 2 insertions(+)`, 0 deletions
+- CONCERNS: none — self-test script and `tracing_target_docs` cargo test both passed, exactly 5 files staged/committed, commit signed successfully, no new MD001 anywhere (verified via grep of the tools README heading sequence and the clean full-repo lint pass)</result>
+<usage><subagent_tokens>82826</subagent_tokens><tool_uses>29</tool_uses><duration_ms>142084</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aceb9cc1220947c0f</task-id>
+<tool-use-id>toolu_01E65CtosAqfvw6RaE4vxVis</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/aceb9cc1220947c0f.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 4 review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean (docs/book/book is gitignored, as expected). All diff hunks in the review package have already been checked line-by-line against the brief above; text of the 8 headings matches exactly (backticks, `…` character, quote marks preserved), the fence change is opening-only, the blockquote separator is correctly placed, and no unrelated prose/numbers were touched.
+
+## Verdict
+
+**A. SPEC COMPLIANCE: ✅**
+
+- `MD036`/forkd runbook: all eight bold pseudo-headings converted to `###` (one level under `## Troubleshooting`), not `####`, not just the four that fired the rule. Heading text verbatim including backticks and the `…` character.
+- `MD040`/forkd runbook: only the opening fence at the `### Expected output` block gained `text`; closing fence confirmed still bare (diff shows a single-line change, closing ` ``` ` untouched).
+- `MD028`/agentcore runbook: `&lt;!-- --&gt;` inserted exactly where the brief specifies; both blockquotes still render as two distinct quotes (verified visually — the 2026-07-06 and 2026-08-07 blocks are unmerged, all numbers/dates intact).
+- `MD001`/tools README: line 9 `###`→`##`. Verified full heading ladder with `grep -n '^#\{1,6\} '`: h1(1)→h2(9)→h3(41)→h2(73)→h2(87)→h2(109)→h2(115)→h2(121) — no skip anywhere, no rule disabled.
+- `MD025`/`SUMMARY.md` and `MD041`/PR template: both are file-scoped `&lt;!-- markdownlint-disable-file MD0xx --&gt;` comments, exactly 2 lines each (comment + blank), nothing else touched in either file.
+- `.markdownlint-cli2.jsonc` does **not** appear anywhere in the diff — confirmed via `git show --stat 00fe4c71`.
+- Exactly 5 files changed (`.github/PULL_REQUEST_TEMPLATE.md`, `crates/paigasus-helikon-tools/README.md`, `docs/book/src/SUMMARY.md`, `docs/runbooks/agentcore-image-check.md`, `docs/runbooks/forkd-live-validation.md`); commit message is exactly `docs(repo): SMA-581 hand-fix the residual markdownlint findings`, signed.
+
+**B. TASK QUALITY: Approved**
+
+Read every hunk — no prose, command, number, or measurement was altered beyond the prescribed structural fixes. All measurements in the agentcore runbook (image sizes, latencies, dates, run IDs) are byte-for-byte preserved on both sides of the new separator.
+
+**Independent verification results:**
+- `npx markdownlint-cli2` → `Summary: 0 issues in 0 files`, exit 0.
+- `bash scripts/check-markdownlint-config.sh` → all 4 self-test checks pass.
+- `cargo test -p paigasus-helikon-workspace-lints --test tracing_target_docs` → 1 passed, 0 failed.
+- `git diff --stat 68415756..00fe4c71 -- docs/book/src/SUMMARY.md` → exactly `2 insertions(+), 0 deletions`.
+- `cd docs/book &amp;&amp; mdbook build` → succeeded (html + linkcheck backends both ran clean, exit 0).
+- **Extra check (toc.js byte-identity):** built a second copy of the book with `SUMMARY.md` reverted to the pre-Task-4 baseline (commit `68415756`) in an isolated scratch directory, then diffed and SHA-256-hashed both `book/html/toc.js` outputs. They are byte-identical (`87a855452cc8830c8dd745023b38eb8203fb7a688bbac206347d25b0db07f936` both sides) — the generated sidebar is confirmed unchanged, not merely inferred from a successful build.
+
+No Critical, Important, or Minor findings.</result>
+<usage><subagent_tokens>78096</subagent_tokens><tool_uses>19</tool_uses><duration_ms>85632</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a73fc10056b6cc944</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a73fc10056b6cc944.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 5 add CI job" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>---
+
+## CONTRACT
+
+**STATUS:** DONE
+
+**COMMITS:** 29d55786
+
+**VERIFICATION:** 9 jobs total (build-no-default-features, clippy, commits, doc-coverage, docs, fmt, markdown-lint, sessions-it, test); path filters only in pre-existing sessions-it job, none in markdown-lint
+
+**CONCERNS:** None</result>
+<usage><subagent_tokens>54530</subagent_tokens><tool_uses>11</tool_uses><duration_ms>77183</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4378af0b2a984cce</task-id>
+<tool-use-id>toolu_011SKLovKjYF63fqcYX4oWNs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a4378af0b2a984cce.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 5 review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All checks line up. Package.json / package-lock.json are in sync (0.23.2, lockfileVersion 3), single root lockfile for `setup-node`'s `cache: npm` to key off, engines require node ≥22 and the job pins node 24. Both SHA pins verified byte-for-byte against GitHub's tag refs (`actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` = v7.0.1, `actions/setup-node@820762786026740c76f36085b0efc47a31fe5020` = v7.0.0), and both are exactly 40 hex chars. `actionlint` (via proto shim) ran clean on the new job — its one finding is a pre-existing shellcheck warning in an unrelated job (line 235, `sessions-it`), not introduced by this diff.
+
+## A. Spec compliance — ✅
+
+- YAML matches the brief verbatim: same job name, `timeout-minutes: 10`, step order, both `# action vX.Y.Z` comments above their SHA pins, and all three explanatory comments (no-path-filter rationale, no-glob-arguments rationale, separate self-test rationale) present and unaltered.
+- Both actions pinned to full 40-char SHAs with human-readable version comments — no `@vN` tags anywhere.
+- `actions/checkout` carries `persist-credentials: false`, consistent with every other job in the file (`build-no-default-features`, `sessions-it`, etc. all follow the same pattern).
+- No `paths:` / `dorny/paths-filter` inside `markdown-lint` — the only matches in the file are the pre-existing `sessions-it` job (lines 202-203) and its doc comment (line 14).
+- `npx markdownlint-cli2` invoked with zero glob arguments, matching the "config's `globs` is sole source of truth" design.
+- `npm ci`, not `npm install`.
+- Change confined to `.github/workflows/ci.yml`; `docs.yml` untouched.
+- `git diff --stat`: 1 file, 30 insertions(+), 0 deletions — pure append after `sessions-it`, existing 8 jobs byte-identical.
+- Commit message: `ci(workflows): SMA-581 add the markdown-lint job` (verified in the diff header) — exact match.
+- `python3 -c "import yaml..."` confirms 9 jobs total including `markdown-lint`.
+
+## B. Task quality — will it actually work on a fresh runner?
+
+- **`cache: npm` / lockfile discovery**: confirmed exactly one `package-lock.json` in the repo, tracked at the root, in sync with `package.json` (`markdownlint-cli2@0.23.2`, `lockfileVersion: 3`). `setup-node`'s default `**/package-lock.json` glob search will find it unambiguously — no `cache-dependency-path` needed, no "multiple lockfiles" ambiguity.
+- **`node-version: '24'`**: quoted string per the parsed YAML dump. `markdownlint-cli2@0.23.2` declares `engines.node &gt;= 22`, so Node 24 satisfies it comfortably.
+- **Permissions**: job defines no job-level `permissions:` block, so it inherits the workflow-level `{contents: read, pull-requests: read}`. The job needs neither write access nor `pull-requests: read` (that's for `sessions-it`'s `dorny/paths-filter`), but nothing in the new job requests anything beyond what's already granted — no excess added by this diff.
+- **`timeout-minutes: 10`**: present, and reasonable for an `npm ci` + lint of a markdown-only file set.
+- **Step ordering**: checkout → setup-node → `npm ci` → lint → self-test. Since `npm ci` installs `markdownlint-cli2` into `node_modules` within the same job/workspace, both the "Lint Markdown" and "Verify the lint config is in force" steps' `npx markdownlint-cli2` invocations resolve locally without a network fetch. Correct order.
+- **CI vs. local machine-state (`.git/info/exclude`) divergence**: this is the one area worth flagging explicitly, and I traced it through — it's handled correctly, not overlooked. `.markdownlint-cli2.jsonc`'s `globs` array carries an **explicit** `"!**/.superpowers/**"` negation alongside `"gitignore": true`, and the config's own comment says why: `.superpowers/` is excluded locally only via the machine-local, uncommitted `.git/info/exclude` (confirmed empty/absent expectations aside — checked this worktree's `.git/info/exclude`, which is itself not necessarily representative), so relying on `gitignore: true` alone would make the gated file set diverge between a contributor's machine and CI. Because the negation is explicit in versioned `globs`, the file set CI lints is reproducible and identical to what `scripts/check-markdownlint-config.sh`'s "excluded probe" test (`docs/superpowers/__mdlint_probe.md`) asserts against. I found no gap here — this was clearly designed for exactly the scenario the task asked me to check.
+- No other macOS-vs-`ubuntu-latest` divergence found: nothing in the job is OS-sensitive (no shell-specific syntax beyond a plain `bash` self-test step, no path separators).
+
+No Critical, Important, or Minor findings.
+
+**Spec: ✅**
+**Task quality: Approved**</result>
+<usage><subagent_tokens>74293</subagent_tokens><tool_uses>8</tool_uses><duration_ms>85452</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1359ec9d98614ce4</task-id>
+<tool-use-id>toolu_01666uVAARWDwBxxo1kFi4jV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a1359ec9d98614ce4.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 6 required gate and docs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- STATUS: DONE
+- COMMITS: 6156b9b6
+- VERIFICATION: 14 required contexts (markdown-lint last) — `npx markdownlint-cli2` → Summary: 0 issues, exit 0 — final full check (lint + self-test + mdbook build + workspace-lints tests + `git status --short`) all green, working tree clean
+- CONCERNS: none</result>
+<usage><subagent_tokens>83456</subagent_tokens><tool_uses>27</tool_uses><duration_ms>134803</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae9cdcfab15a95e86</task-id>
+<tool-use-id>toolu_019V2sUWKCRCNsEeNJNqrXRx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/ae9cdcfab15a95e86.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 6 review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>That's unrelated to Task 6 and unchanged. I now have everything needed to write the verdict.
+
+## Verdict
+
+**Spec: ✅** (all required checklist items satisfied; no out-of-bounds files touched)
+
+**Task quality: Approved, with one Important finding to fix before merge**
+
+### Independent verification results (all passed)
+
+- `python3 -m json.tool` → valid JSON
+- Ruleset walk → 14 contexts, the original 13 unchanged and in original order, `markdown-lint` appended last
+- `npx markdownlint-cli2` → `Summary: 0 issues in 0 files` (51 files linted, including the two just-edited docs)
+- `bash scripts/check-markdownlint-config.sh` → all 4 self-test assertions pass
+- `mdbook build` (`docs/book`) → clean, linkcheck backend ran, no errors
+- `cargo test -p paigasus-helikon-workspace-lints` → all suites pass
+- `git status --short` → clean before and after every check; exactly 3 files in the commit (`.github/rulesets/main-protection-checks.json`, `CLAUDE.md`, `CONTRIBUTING.md`); commit message exact match
+- No trace of `.markdownlint-cli2.jsonc`, `scripts/check-markdownlint-config.sh`, `package.json`, or `.github/workflows/ci.yml` in the diff — `apply-repo-config.sh` was not run (report explicitly disclaims it, and repo state shows no sign of it)
+
+### Findings
+
+**Important — CLAUDE.md:127, misplaced paragraph tail (documentation coherence bug).**
+The original CI section had one long paragraph ending "...`ci.yml` declares `contents: read` plus `pull-requests: read`... the workflow comment carries the rationale and the reason it must not be minimised away." The implementer inserted the new markdownlint-pin paragraph in the *middle* of that original paragraph — cutting it off after "(see CONTRIBUTING.md → "Repo configuration").") for the "required contexts" paragraph — but left the original tail ("Other matrix variants (`test (windows-latest, …)`, `test (…, 1.94)`) run as signals only. Concurrency cancels in-flight PR runs but lets `main` pushes complete. `ci.yml` declares `contents: read`...") appended onto the end of the *new* markdownlint-pin paragraph instead of keeping it with the required-contexts paragraph it belongs to (or giving it its own paragraph break). The result: the new paragraph opens on markdownlint's pinning rationale, correctly closes with "Do not fold it into the lint step; it must be able to fail independently.", and then non-sequiturs into three sentences about test-matrix variants, concurrency groups, and workflow permissions — topics that have nothing to do with markdownlint. A future maintainer reading this section will find it confusing. This is prose the maintainer will act on (the brief explicitly frames this as documentation contributors rely on), so it should be fixed by moving those three trailing sentences back to the end of the "required-status-check contexts" paragraph (where they sat before this diff), leaving the new markdownlint paragraph self-contained as the brief intended ("add a paragraph to the CI section recording the pin").
+
+### Other checks (all clean, no issues)
+
+- CLAUDE.md rationale paragraph is accurate and matches every element required by the review brief (action-version-is-linter-version, minor-release new-rules risk, Dependabot group scope, `branch-names` ruleset blocking dependabot/** fixups, npm not a Dependabot ecosystem, alignment with `PROTOC_VERSION`/`TEMPORAL_CLI_VERSION`/`NIGHTLY_TOOLCHAIN`) — text is verbatim from the brief, so no overclaiming or garbling.
+- "eight jobs"/"other seven" → "nine jobs"/"other eight" is internally consistent: 9 enumerated jobs (fmt, clippy, test, build-no-default-features, docs, doc-coverage, commits, sessions-it, markdown-lint), 1 PR-only (commits), 8 remaining run on push too — arithmetic checks out.
+- Three-way agreement confirmed: ruleset JSON (14, order X) = CLAUDE.md required-contexts sentence (14, same order) = CONTRIBUTING.md table row (14, same order, same per-context rationale clauses).
+- CONTRIBUTING.md local-gate additions are reproducible: states Node ≥ 22 requirement, mentions `--fix`, and warns that some fixes edit content and the diff needs review — matches Task B's reproducibility bar. Verified Node v22.22.3 is in fact what's active in this environment.
+- Facade-README fence note is placed sensibly in the "Documentation site" section, right after the mdBook output-path paragraph.
+
+No other spec or quality issues found. Recommend the Important finding be fixed (paragraph reflow in CLAUDE.md) before merge, but it does not gate any CI check and does not require touching any other file.</result>
+<usage><subagent_tokens>95899</subagent_tokens><tool_uses>20</tool_uses><duration_ms>154632</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1359ec9d98614ce4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a1359ec9d98614ce4.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 6 required gate and docs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- STATUS: DONE
+- COMMITS: 01d88972
+- VERIFICATION: `npx markdownlint-cli2` → Summary: 0 issues, exit 0; `bash scripts/check-markdownlint-config.sh` → all four checks ok, self-test passed, exit 0
+- CONCERNS: none</result>
+<usage><subagent_tokens>91872</subagent_tokens><tool_uses>9</tool_uses><duration_ms>58546</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7f8daad0abcf868f</task-id>
+<tool-use-id>toolu_016oPhA6SBiy1uJ13zdWShzy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a7f8daad0abcf868f.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 6 fix re-review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review Summary
+
+**Finding 1 (CLAUDE.md paragraph boundary): ADDRESSED**
+
+Evidence:
+- **Required-contexts paragraph (line 125)** now ends with the three moved sentences verbatim: "Other matrix variants (`test (windows-latest, …)`, `test (…, 1.94)`) run as signals only. Concurrency cancels in-flight PR runs but lets `main` pushes complete. `ci.yml` declares `contents: read` plus `pull-requests: read` — the latter for `sessions-it`'s `dorny/paths-filter`, which calls `pulls.listFiles` on PR events (SMA-487); the workflow comment carries the rationale and the reason it must not be minimised away."
+- **Markdownlint paragraph (line 127)** now ends cleanly at "Do not fold it into the lint step; it must be able to fail independently." with no extraneous sentences.
+- **Text is VERBATIM**: The moved sentences match exactly what was documented in the brief — no rewording, no duplicates, no drops. Confirmed by character-for-character comparison.
+- **Commit matches specification**: Message is exactly `docs(claude): SMA-581 restore the ci paragraph boundary` as required.
+
+**New breakage in the fix diff: NO**
+
+All verification commands passed:
+- `npx markdownlint-cli2`: Summary: **0 issues in 0 files**, exit 0 ✓
+- `bash scripts/check-markdownlint-config.sh`: All 4 checks passed (`linter version`, `deep gated paths`, `MD060.style`, `docs/superpowers/ excluded`) ✓
+- `git status --short`: Clean working tree (no output) ✓
+- `.markdownlint-cli2.jsonc`: Confirmed not touched by the fix ✓
+
+The fix diff shows exactly `1 file changed, 2 insertions(+), 2 deletions(-)` to CLAUDE.md only, which is consistent with a boundary move (blank-line position change). The reflow of paragraph-spanning text passed linting without needing any prose adjustments.
+
+**Verdict: Finding ADDRESSED — all checks pass, no new breakage introduced.**</result>
+<usage><subagent_tokens>57131</subagent_tokens><tool_uses>13</tool_uses><duration_ms>92782</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8fc13b8c4bb13e56</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a8fc13b8c4bb13e56.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification — all green
+
+| Command | Result |
+|---|---|
+| `npx markdownlint-cli2` | `Linting: 51 files` / `Summary: 0 issues in 0 files`, exit 0 |
+| `bash scripts/check-markdownlint-config.sh` | all 4 assertions pass, exit 0 |
+| `mdbook build docs/book` | success (html + linkcheck backends) |
+| `cargo test -p paigasus-helikon-workspace-lints` | 4 tests pass incl. `tracing_target_docs` |
+| ruleset JSON | valid; **14** required contexts |
+| `ci.yml` YAML parse | 9 jobs, `markdown-lint` last |
+| `convco check 5e46966e..HEAD` | `no errors in 10 commits` |
+| `git status --short` | clean (before and after all runs) |
+
+---
+
+## Critical
+
+**None.**
+
+## Important
+
+### I-1. The config guard does not close the failure mode it advertises — glob *narrowing to a subtree* passes all four assertions
+
+`scripts/check-markdownlint-config.sh:50` places the only gated probe at `docs/book/src/__mdlint_probe.md`. Assertion 1 therefore proves that *that one subtree* is linted — not that the published surface set is.
+
+I built an isolated replica (repo config + a crate README containing a real MD060-compact violation) and ran three edits:
+
+| `globs` edit | Lint step | Guard |
+|---|---|---|
+| `["docs/book/**/*.md", "!docs/superpowers/**"]` | `0 issues` | **PASS** |
+| adds `"!crates/**"` | `0 issues` | **PASS** |
+| adds `"!**/README.md"` | `0 issues` | **PASS** |
+| (control: repo config) | `4 issues in 1 file` | PASS |
+
+Failure scenario: a contributor hits an inconvenient MD0xx in a crate README, adds `"!crates/**"` to the globs, and ships. `markdown-lint` reports green, `check-markdownlint-config.sh` reports green, and **every crates.io landing page — the primary motivation in the spec's Problem section — is silently ungated from then on.** The guard's own failure message (`:95`) says "the glob set has collapsed", which is exactly what happened and was not caught.
+
+### I-2. A second vacuous-pass vector: `"default": false`
+
+Same replica, `.markdownlint-cli2.jsonc` `config` block changed from `"default": true` to `"default": false` (one token):
+
+- Findings on a file with a genuine `MD001` heading skip and an untagged `MD040` fence: **disappear** (6 issues → 4, all MD060).
+- Guard: **PASS** — because MD060 is still explicitly enabled, so assertions 1 and 2 both hold.
+
+The gate is reduced to a single table-pipe rule while everything reports success. This is the same class as I-1: a one-line config edit that produces no CI signal.
+
+### I-3. The documentation over-claims the guard's coverage
+
+`CLAUDE.md:127`: *"the gated file set can silently collapse — `scripts/check-markdownlint-config.sh` asserts against both"*. Per I-1 that is false for the realistic collapse shape. `scripts/check-markdownlint-config.sh:12-14` makes the same claim. Because this file is the repo's institutional memory, an over-claimed guard is how the next person concludes "the self-test has this covered" and merges a narrowing edit.
+
+**Cheapest closures (both small, either would do most of the work):**
+
+- Add a second gated probe under `crates/` (and optionally one at the repo root) and assert each appears — closes I-1.
+- Make the probe violate a third rule outside the configured set (it already violates `MD012`; add e.g. an untagged fence for `MD040`) and assert **each rule ID by name** appears on the probe line — closes I-2.
+- Or, a `Linting: N files` **lower bound** (`N &gt;= 40`) — not brittle to ordinary additions, unlike the exact count the spec correctly rejected.
+
+I would not block merge on these (the gate as configured today is genuinely correct and enforcing), but I'd fix I-3's wording *in this PR* since it is two sentences.
+
+---
+
+## Minor
+
+### M-1. Ledger triage — the deferred minor is correctly ruled, but it names the wrong gap
+
+`progress.md` records: *"the guard tests glob COLLAPSE but not glob WIDENING"*, ruled out of scope because widening is fail-loud.
+
+**The ruling holds** — I verified each negation independently:
+
+| Negation dropped | Consequence |
+|---|---|
+| `!**/node_modules/**` | still excluded (`.gitignore` + globby's built-in `defaultIgnoredDirectories`) — triple-covered |
+| `!**/target/**` | still excluded (`/target` in `.gitignore`; cargo has no nested targets here) |
+| `!docs/superpowers/**` | **loud red** — 2 tracked files here, hundreds of findings |
+| `!crates/*/CHANGELOG.md` | **loud red** — tracked, bot-generated |
+
+Widening is genuinely fail-loud; ship as-is. **But the ledger records collapse as *covered*, and per I-1 it is not.** The deferred-minor entry should be re-pointed at narrowing, not closed.
+
+### M-2. `.markdownlint-cli2.jsonc:15-17` — the stated rationale for the `.superpowers` negation is factually wrong
+
+The comment (and spec §"Gated file set") says `.superpowers/` "is excluded on some machines only via `.git/info/exclude`, which is machine-local and uncommitted, so `gitignore` alone is not reproducible."
+
+markdownlint-cli2 delegates `gitignore: true` to globby 16.2.2, which **never reads `.git/info/exclude`** and reads the user-level global gitignore only under an opt-in `globalGitignore` option that cli2 does not set (`node_modules/globby/ignore.js:696-773`, `index.js:261`). It reads `**/.gitignore` files only. In this worktree `.superpowers/` is currently excluded by an *untracked* `.superpowers/sdd/.gitignore`, not by `info/exclude`.
+
+The **conclusion is still right** (the explicit negation is what makes it reproducible) — and the true reason is stronger, not weaker. But the stated mechanism will mislead whoever next reasons about this file.
+
+### M-3. `CLAUDE.md:127` misattributes `PROTOC_VERSION`
+
+New text: *"alongside `PROTOC_VERSION`/`TEMPORAL_CLI_VERSION` in `integration.yml`"*. `PROTOC_VERSION` lives in `.github/actions/setup-protoc/install.sh`; `CLAUDE.md:118` (unchanged, four paragraphs earlier) states this correctly and lists only `TEMPORAL_CLI_VERSION`/`TEMPORAL_CLI_SHA256` for `integration.yml`. The new paragraph contradicts it.
+
+### M-4. `CLAUDE.md:20-31` "reproduce **every** CI gate locally (matches `ci.yml` job-for-job)" was not updated
+
+The block still lists only the five Rust gates. `CONTRIBUTING.md` *was* updated correctly (`npm ci` + `npx markdownlint-cli2`, plus the Node ≥ 22 note — which matches `markdownlint-cli2@0.23.2`'s `engines: {"node": "&gt;=22"}` and the job's `node-version: '24'`). The spec's "Docs to update" list didn't include this block, so it is spec-compliant, but the claim in CLAUDE.md is now false. Two lines to fix.
+
+### M-5. `.gitattributes:43` ordering defeats a deliberate defensive rule
+
+`*.md text eol=lf` is appended **after** `tests/provider-stream-conformance/fixtures/bedrock/** binary` (`:39`). gitattributes is last-match-wins, so a `.md` dropped into that tree in future would be text-normalized despite the `binary` marker. No `.md` matches today, but that line's own comment says it exists precisely *"so that a later fixture dropped into that directory cannot be silently corrupted."* Move `*.md text eol=lf` above line 39, or scope it.
+
+(Verified separately: no committed `.md` currently contains CRLF, so the new attribute causes no renormalization churn.)
+
+### M-6. `scripts/check-markdownlint-config.sh:92-93` — the two assertions are less independent than documented
+
+Comment claims membership is "Carried by MD012 … so this assertion is about the GLOBS and nothing else." Assertion 1 is a substring match on the probe path, and MD060 lines carry that path too. Verified: with `MD012: false` injected, assertion 1 still passes. Harmless today, but the stated diagnostic separation ("if only the MD060 assertion fails we know the rule value is wrong, not the globs") doesn't hold in the reverse direction.
+
+### M-7. `SECURITY.md:5-8` cosmetic
+
+Header row re-spaced to `| Version | Supported |` while the delimiter row kept its original 19/18-dash padding. Renders fine and MD060-compact only checks pipe spacing, but it now looks half-edited. Same pattern (harmless) in `runtime-actix/axum` READMEs and `docker/forkd/README.md`.
+
+---
+
+## Focus-area verdicts
+
+**1. Safe to merge; rollout order coherent.** `grep -rn apply-repo-config .github/ .cargo-husky/` returns nothing — the script is invoked only by hand, so the ruleset JSON edit is genuinely inert until the maintainer runs it. Merge → apply → verify via the API is correct. One thing the spec gets right and is worth restating in the PR body: PR #218's re-trigger works because `pull_request` runs execute the workflow file from the **merge ref**, so once `main` carries `markdown-lint` an empty commit or close/reopen is enough — no rebase.
+
+**2. The gate is real, not vacuous — for the config as written.** `MD060: {"style":"consistent"}` and a root-collapse are both caught. But two config edits defeat it while staying green (I-1, I-2). The ledger's widening ruling holds (M-1).
+
+**3. CI and local produce an identical gated set — proven arithmetically.** 234 tracked `.md` − 183 excluded (`docs/superpowers/**` + `crates/*/CHANGELOG.md`, the only exclusions that touch tracked files) = **51**, exactly the observed `Linting: 51 files`. Everything else the negations cover is untracked, so CI never sees it. `node_modules/` after `npm ci` is excluded three ways (`.gitignore` + explicit negation + globby's built-in `**/node_modules`). `.git/info/exclude` is a non-issue because globby never reads it (M-2). `docs/book/book/` after a local `mdbook build` contains zero `.md` and is covered by `docs/book/.gitignore`. **No divergence found.**
+
+**4. The rejected auto-fix is handled correctly.** `crates/paigasus-helikon-providers-litellm/README.md:85` now reads *"Empty or whitespace-only keys are treated as absent rather than sent as a `Bearer` header with an empty credential."* — accurate against `model.rs:255-266` (header only emitted when `cfg.auth` is `Some`) and `builder.rs:353,566` (empty/whitespace normalized to absent), and it reads well. `--fix`'s deletion is not present.
+
+I audited all 17 touched Markdown files. Exactly **three** content-bearing edits, all spec-authorized:
+- `CODE_OF_CONDUCT.md:40` — `dev@paigasus.com` → `&lt;dev@paigasus.com&gt;` (autolink; filled-in Covenant placeholder, not verbatim upstream)
+- `crates/paigasus-helikon-tools/README.md:9` — `###` → `##` (fixes the h1→h3 skip)
+- `docs/runbooks/forkd-live-validation.md:365-410` — all **8** bold pseudo-headings → `###`, text otherwise byte-identical
+
+Everything else is table-pipe spacing, blank lines around lists, `_x_`→`*x*`, a `text` fence tag, an invisible `&lt;!-- --&gt;` blockquote separator, and two `&lt;!-- markdownlint-disable-file --&gt;` headers. **No prose meaning altered anywhere.**
+
+**5. Conventions comply.** Checkout SHA `3d3c42e…` matches all 19 other sites repo-wide, with the `# actions/checkout v7.0.1` comment; `setup-node@820762…` carries `# actions/setup-node v7.0.0`; `persist-credentials: false` present, consistent with every other checkout. `convco check` clean; all six commit scopes (`claude`, `contributing`, `workflows`, `repo`, `plan`, `spec`) are in `.versionrc`'s `scopeRegex` **and** in `pr-title.yml`'s `scopes:` list as it exists on `main` — so no "new scope in its own PR" trap. Release-plz reasoning is correct: no version is bumped in this PR, so release-plz performs all five README-driven patch bumps itself, `dependencies_update` cascades to the facade normally, and CLAUDE.md's same-PR-manual-bump caveat does not apply. mdBook and crate-README currency rules: conscious, documented skips (CI plumbing).
+
+**6. Documentation: 3-way agreement confirmed, three nits.** Ruleset JSON, `CLAUDE.md:125`, and `CONTRIBUTING.md`'s repo-config table all list the same **14** contexts in the same order. Job-count arithmetic ("nine jobs", "the other eight also run on push to `main`") matches the parsed YAML. Nits are M-3, M-4, and I-3.
+
+---
+
+## Merge recommendation
+
+**Approve — merge as-is.** Nothing here can break `main` or block a PR: the ruleset edit is inert until applied by hand, the gate is green on a clean tree, and the gated set is provably identical on CI and locally.
+
+Two things I'd fold in before pushing, both trivial:
+- **I-3 + M-3 + M-4** — three sentence-level doc corrections in `CLAUDE.md`. I-3 matters most: don't leave CLAUDE.md asserting the guard covers a collapse it doesn't.
+- **M-5** — move `*.md text eol=lf` above the `bedrock/** binary` line.
+
+Everything else (I-1, I-2 guard hardening; M-2's rationale rewrite) is well-suited to a small follow-up ticket. And per the repo's own rule: after merge, watch the release-plz `chore: release` PR — it will carry five crate patch bumps plus the facade cascade, and its `markdown-lint` job will run against regenerated CHANGELOGs (correctly excluded by `!crates/*/CHANGELOG.md`).</result>
+<usage><subagent_tokens>138280</subagent_tokens><tool_uses>34</tool_uses><duration_ms>549928</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a03f8f0ef416cab20</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a03f8f0ef416cab20.output</output-file>
+<status>completed</status>
+<summary>Agent "Final review fix wave" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>STATUS: Complete. All 8 findings (I-1, I-2, M-6, I-3, M-2, M-3, M-4, M-5) addressed in two commits; DO NOT FIX item left untouched.
+
+COMMITS:
+- `1816d4aa` — `ci(repo): SMA-581 harden the markdownlint config self-test` (`scripts/check-markdownlint-config.sh`, `.markdownlint-cli2.jsonc`, `.gitattributes`)
+- `990f37da` — `docs(claude): SMA-581 correct the markdownlint gate documentation` (`CLAUDE.md`, `docs/superpowers/specs/2026-08-22-sma-581-markdownlint-ci-gate-design.md`)
+
+VERIFICATION: Clean run passed (exit 0, all `ok:` lines) and `npx markdownlint-cli2` reported `Summary: 0 issues in 0 files`, `mdbook build` succeeded, `cargo test -p paigasus-helikon-workspace-lints` all green, `git status --short` clean with no leaked `__mdlint_probe.md` files; all 5 required mutations failed with correctly-blamed causes — M1 (`!crates/**`) named the crates probe as unlinted, M2 (`default: false`) failed on MD012 not firing (proving membership no longer rides only on MD060), M3 (`style: consistent`) failed on MD060 not firing, M4 (`*.md`) named the now-uncovered book probe, M5 (removed superpowers negation) failed on the excluded probe being linted — and `git status --short` stayed clean through every mutation run and after final restore. Full verbatim output is in `.superpowers/sdd/2026-08-22-sma-581-markdownlint-ci-gate/final-fix-report.md` (git-excluded via `.git/info/exclude`, not committed).
+
+CONCERNS: None outstanding. One judgment call beyond the literal ask: I also rewrote the spec's "Config self-test" design-mechanism section (not just the "Gated file set" section explicitly named in M-2) so the spec doesn't describe the old, now-superseded two-probe/one-rule design — flag if you'd rather that section stayed untouched as pure historical record.</result>
+<usage><subagent_tokens>128075</subagent_tokens><tool_uses>52</tool_uses><duration_ms>449575</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5df39325caad3542</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a5df39325caad3542.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix wave re-review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree confirmed clean after my repro. Here is the full review.
+
+## Findings verdicts
+
+- **I-1 (probe multiple gated areas)** — **PARTIALLY ADDRESSED / NEW BUG.** The script now probes three areas (book, crate, repo root) and names the missing one on the prescribed mutation (`!crates/**` → correctly blames the crate probe). But the **repo-root leg is non-functional**: the root probe's path is literally `__mdlint_probe.md` with no directory prefix — a bare *substring/suffix* of every other probe's path (`docs/book/src/__mdlint_probe.md`, `crates/paigasus-helikon-core/__mdlint_probe.md`, `docs/superpowers/__mdlint_probe.md`). Both the membership check (`output != *"$probe"*`) and `grep -F "$probe"` for the root leg match on the book/crate probes' output lines by accident. I proved this concretely: excluding the root file specifically (`"!__mdlint_probe.md"` added to `globs`) makes `npx markdownlint-cli2` genuinely skip the root file (verified raw output), yet `check-markdownlint-config.sh` still exits 0 and prints `"ok: all gated probes ... are linted"`. This is a real regression in exactly the "silently collapse to a subtree" failure mode I-1 exists to catch, undetected by all 5 of the wave's own mutation tests and by the prescribed review matrix (none isolate a root-only exclusion). Fix: give the root probe a collision-proof name (e.g. `__mdlint_probe_root.md`) or anchor the grep (`^${probe}:`).
+
+- **I-2 (default:true→false must be caught)** — ADDRESSED. Reproduced independently: mutation fails with `FAIL: MD012 did not fire on 'docs/book/src/__mdlint_probe.md' ...`, correctly blaming the default-rule regression, not the globs.
+
+- **M-6 (membership tied to non-MD060 rule)** — ADDRESSED for the book/crate legs (membership now requires MD012, a non-MD060 rule, not a bare path substring). Note the fix's mechanism is what enables the I-1 root-leg bug above — the membership check is still a plain substring match, just now also gated behind a rule-name check, and the substring collision is what defeats it for the root probe specifically.
+
+- **I-3 (CLAUDE.md over-claim)** — ADDRESSED. The new CLAUDE.md sentence and script header state precisely what is asserted (multiple independently-probed areas, the exclusion, MD060's value, default-on rules) and explicitly list what is NOT proven. Text is accurate to the (intended) design; it is inaccurate only insofar as the root-probe bug above silently undermines one of the three claimed independent probes.
+
+- **M-2 (`.git/info/exclude` mechanism)** — ADDRESSED. Both `.markdownlint-cli2.jsonc`'s comment and the spec now correctly state globby only reads committed `**/.gitignore` files, never `.git/info/exclude`.
+
+- **M-3 (`PROTOC_VERSION` location)** — ADDRESSED. CLAUDE.md now says `.github/actions/setup-protoc/install.sh`, consistent with the rest of the file.
+
+- **M-4 (missing markdown gate in the "reproduce every CI gate" block)** — ADDRESSED. `npm ci` + `npx markdownlint-cli2` added, matching CONTRIBUTING.md.
+
+- **M-5 (`.gitattributes` last-match-wins ordering)** — ADDRESSED. Verified: `*.md text eol=lf` (line 33) now precedes the bedrock `binary` rule (line 47).
+
+## Mutation matrix (independently re-run)
+
+All 5 mutations + clean case matched the fix report exactly, each failing for the right reason, with `git status --short` showing only `.markdownlint-cli2.jsonc` modified (no leaked probe files) in every case, and the config verified byte-identical after restore:
+
+| Mutation | Exit | Blame |
+|---|---|---|
+| clean | 0 | — |
+| `!crates/**` added | 1 | crate probe not linted (correct) |
+| `default:true→false` | 1 | MD012 not firing (correct) |
+| `style: consistent` | 1 | MD060 not firing (correct) |
+| `**/*.md`→`*.md` | 1 | book probe not linted (correct) |
+| remove `!docs/superpowers/**` | 1 | excluded probe WAS linted (correct) |
+
+## New bypass I found
+
+A 1-line addition to `globs` — `"!__mdlint_probe.md",` (or any change that excludes only the bare repo-root filename/tree, e.g. anchoring negations at root) — silently defeats the root-probe leg of the guard while the guard reports full success (`exit 0`, `"ok: all gated probes ... are linted"`). Demonstrated above with raw `npx markdownlint-cli2` output confirming the root file was genuinely unlinted. This is new breakage introduced by this fix wave's I-1 remediation, not present before (the old script had no root probe).
+
+I also checked whether narrowing just the crate or book legs could hide similarly — no, those probes' full paths are unique strings not contained in any other probe's output, so those two legs are sound.
+
+## New-breakage checks
+
+- `npx markdownlint-cli2` — `Summary: 0 issues in 0 files`, exit 0. Clean.
+- `mdbook build` — succeeds, linkcheck renderer runs, exit 0.
+- `cargo test -p paigasus-helikon-workspace-lints` — all 9 tests pass.
+- `.gitattributes` ordering — `*.md` (line 33) before bedrock `binary` (line 47). Correct.
+- `git status --short` — clean throughout.
+- Touched files: exactly `.gitattributes`, `.markdownlint-cli2.jsonc`, `CLAUDE.md`, the spec, and `scripts/check-markdownlint-config.sh`. `.github/workflows/ci.yml` and `.github/rulesets/main-protection-checks.json` untouched, as required.
+- Commit messages match exactly: `ci(repo): SMA-581 harden the markdownlint config self-test`, `docs(claude): SMA-581 correct the markdownlint gate documentation`.
+
+No other new breakage found.
+
+## Judgment call: spec rewrite beyond M-2's literal ask
+
+Right call. The implementer updated the spec's "Config self-test" section to describe the actual new multi-probe/multi-rule design rather than leave it describing the superseded two-probe/one-rule design. Leaving the spec stale after a structural rewrite of the thing it documents would be a worse outcome than the minor scope stretch — it's the same file already in the M-2 diff, it doesn't touch unrelated sections, and CLAUDE.md's own convention is that design docs should reflect what shipped. The only issue is that the rewritten spec text (like the script's own header) now also over-states the root probe's actual coverage, per the bug above — that will need a follow-up correction once the root-probe bug is fixed.
+
+## Verdict
+
+**Findings remain.** 7 of 8 findings are solidly addressed and independently re-verified (mutation matrix, doc consistency, no new breakage in build/test/gitattributes). However, the fix wave's own centerpiece — I-1's three-way independent probing — introduced a new, real gap: the repo-root probe leg is silently non-functional due to a basename-substring collision, and I demonstrated a concrete 1-line config edit that exploits it undetected. This should go back for one more fix (rename the root probe or anchor the grep match) before this becomes a PR — it is exactly the class of "guard reports green while enforcing nothing" bug this whole review chain exists to catch.</result>
+<usage><subagent_tokens>108673</subagent_tokens><tool_uses>18</tool_uses><duration_ms>197856</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a03f8f0ef416cab20</task-id>
+<tool-use-id>toolu_01QD7a1Jks8wPiNHxuSmPsJ7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/a03f8f0ef416cab20.output</output-file>
+<status>completed</status>
+<summary>Agent "Final review fix wave" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>STATUS: Complete. The new bug (repo-root probe leg silently non-functional due to a bare-substring collision) is fixed and verified.
+
+COMMITS:
+- `b7b6fbf2` — `ci(repo): SMA-581 anchor the self-test probe matching` (`scripts/check-markdownlint-config.sh`, spec's "Config self-test" section)
+
+VERIFICATION: Bug reproduced first against the pre-fix script (exit 0 when it should have failed — confirmed the test didn't discriminate). Post-fix: clean run exits 0 with all `ok:` lines; all 6 mutations correctly exit 1 — M1 (`!crates/**`) names the crates probe, M2 (`default:false`) fails on MD012 not firing, M3 (`style:consistent`) fails on MD060 not firing, M4 (`*.md`) names the book probe, M5 (removed superpowers negation) fails on the excluded probe being linted, and the new **M6** (`!__mdlint_probe_root.md`) now correctly names the root probe as unlinted — confirming the fix discriminates exactly the bug the re-review found. Full branch check (`npx markdownlint-cli2` → 0 issues, guard script → pass, `mdbook build` → clean, `cargo test -p paigasus-helikon-workspace-lints` → all green) all passed in foreground, and `git status --short` stayed clean (no leaked `__mdlint_probe*.md`) through every mutation run and the final state. Verbatim output for all six mutations appended to `.superpowers/sdd/2026-08-22-sma-581-markdownlint-ci-gate/final-fix-report.md`.
+
+CONCERNS: None. Reviewed the "three independent probes" wording in the script header and `CLAUDE.md` as requested — both were already accurate once this fix landed and needed no correction; only the spec's "Config self-test" section (which named the stale root-probe filename and asserted independence without describing the mechanism) was updated.</result>
+<usage><subagent_tokens>161036</subagent_tokens><tool_uses>21</tool_uses><duration_ms>257754</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ade254ed66e1ed171</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/ade254ed66e1ed171.output</output-file>
+<status>completed</status>
+<summary>Agent "Root probe fix re-review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>This corroborates my independent run. Everything checks out consistently.
+
+## Verdict: Finding ADDRESSED
+
+**Root-probe collision fix — ADDRESSED**, with evidence:
+- Root probe renamed `__mdlint_probe.md` → `__mdlint_probe_root.md`; confirmed no probe path is a substring of any other (`docs/book/src/__mdlint_probe.md`, `crates/paigasus-helikon-core/__mdlint_probe.md`, `__mdlint_probe_root.md`, `docs/superpowers/__mdlint_probe.md` — all mutually distinct now, and none is a prefix/suffix substring of another).
+- Anchoring applied to **all four legs**, not just root: `lines_for_path()` (`scripts/check-markdownlint-config.sh:118-127`) is called uniformly in the per-gated-probe loop (line 153) *and* for the excluded-probe assertion (line 174) — the excluded-probe check was previously a bare `[[ "$output" == *"$EXCLUDED_PROBE"* ]]` and is now `lines_for_path` + non-empty check. No partial application.
+- `trap cleanup EXIT` (line 111) iterates `"${GATED_PROBES[@]}" "$EXCLUDED_PROBE"`, which now includes the renamed `__mdlint_probe_root.md` — verified no leaked probes after clean run or after any of the 8 mutations I threw at it.
+- Header comment and spec's "Config self-test" section both updated to describe the anchored-matching mechanism and name the substring-collision as failure mode 4, replacing the prior overstated "each is probed separately" claim.
+- Only `scripts/check-markdownlint-config.sh` and the spec file changed; commit message is exactly `ci(repo): SMA-581 anchor the self-test probe matching`.
+
+**Six-mutation matrix** — all six exited 1 with correctly, distinctly blamed causes; clean case exited 0:
+| Mutation | Exit | Blame |
+|---|---|---|
+| CLEAN | 0 | passed |
+| M6 root isolation | 1 | `__mdlint_probe_root.md` not linted |
+| M1 crates narrowing | 1 | `crates/paigasus-helikon-core/__mdlint_probe.md` not linted |
+| M2 default off | 1 | MD012 didn't fire (book probe) |
+| M3 bad rule value | 1 | MD060 didn't fire (book probe) |
+| M4 collapse to root glob | 1 | `docs/book/src/__mdlint_probe.md` not linted |
+| M5 lost exclusion | 1 | excluded probe WAS linted |
+
+Config restored to identical byte content after the run (`git diff --exit-code` clean).
+
+**Additional bypass attempts (beyond the prescribed set):**
+- Isolating the book area alone (`!docs/book/**`) — caught (root not linted... actually book probe not linted, correctly named).
+- Directly excluding all probe files by wildcard (`!**/__mdlint_probe*.md`) — caught (book probe named as cause; would also have failed on crates/root probes).
+- **`"!crates/*/README.md"` while leaving `crates/paigasus-helikon-core/__mdlint_probe.md` linted — succeeded as a bypass.** The guard exits 0 and prints "all gated probes ... are linted" while the real `crates/paigasus-helikon-core/README.md` becomes silently unlinted. This is a genuine gap, but it is not new in this diff and not the finding under review — it's the guard's already-documented, explicit non-goal ("What this does NOT prove: that every gated surface in the real glob tree is covered (only the probed ones are)"). Severity: low-to-moderate as a standing limitation (a maintainer could narrow exactly `*/README.md` without tripping the probe-based gate), but out of scope for SMA-581's root-collision finding — flagging it, not treating it as a blocker for this review.
+
+**New breakage:** No. `npx markdownlint-cli2` → `Summary: 0 issues`; `mdbook build` clean; `cargo test -p paigasus-helikon-workspace-lints` → all passing; `git status --short` clean throughout, no leaked probe files under any mutation.
+
+**Overall verdict: ready to merge.** The root-probe substring-collision finding is fully addressed, anchoring is applied uniformly to every leg (including the excluded-probe assertion the prior round might have skipped), cleanup covers the renamed probe, documentation is accurate, and the diff is scoped exactly as prescribed. The one residual gap found (README-specific negation bypassing probe-based coverage) is a pre-existing, explicitly documented limitation of the probe methodology itself, not a regression or an unaddressed instance of this finding.</result>
+<usage><subagent_tokens>81821</subagent_tokens><tool_uses>14</tool_uses><duration_ms>107358</duration_ms></usage>
+</task-notification>
+
+---
+
+keep going
+
+---
+
+<task-notification>
+<task-id>b0w4wtdqq</task-id>
+<summary>Monitor event: "PR 220 CI checks reaching completion"</summary>
+<event>NON-GREEN: test (windows-latest, 1.94): failure</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bxtke8nip</task-id>
+<tool-use-id>toolu_01EETohQvdVSY664K7YBE4yf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/851df2c8-94b1-4119-8ab2-ab939461c13e/tasks/bxtke8nip.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait out rate limit then re-trigger CodeRabbit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bn7zqgaz5</task-id>
+<summary>Monitor event: "CodeRabbit review landing on PR 220"</summary>
+<event>STILL RATE LIMITED: Next review available in:** **32 minutes**</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bz93a9ovy</task-id>
+<summary>Monitor event: "CodeRabbit review verdict on PR 220 (deduped)"</summary>
+<event>state -&gt; reviewing</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bz93a9ovy</task-id>
+<summary>Monitor event: "CodeRabbit review verdict on PR 220 (deduped)"</summary>
+<event>state -&gt; other</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
