@@ -236,6 +236,7 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
   bash scripts/check-doc-coverage.sh
 npm ci                                               # once, or after package-lock.json changes
 npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
+bash scripts/check-markdownlint-config.sh            # asserts that config is in force
 ```
 
 The Markdown gate needs Node (>= 22); everything else in that list needs only the

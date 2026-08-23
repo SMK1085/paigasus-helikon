@@ -165,6 +165,17 @@ git commit -m "ci(repo): SMA-581 pin markdownlint-cli2 and add lint config"
 
 ### Task 2: Config self-test script
 
+> **Superseded — read the spec, not this task, for the shipped design.** The
+> script below is the two-probe/one-rule version that was planned. Review found
+> two bypasses it missed (narrowing the globs to a subtree, and `"default":
+> false`), and the fix introduced then closed a third (a probe path that was a
+> bare substring of another). What shipped probes three gated areas with
+> anchored `^path:` matching and asserts MD012/MD040/MD060 plus the configured
+> style by name. The authoritative description is the "Config self-test"
+> section of
+> `docs/superpowers/specs/2026-08-22-sma-581-markdownlint-ci-gate-design.md`;
+> this task is kept as the historical record of what was planned.
+
 **Files:**
 - Create: `scripts/check-markdownlint-config.sh`
 

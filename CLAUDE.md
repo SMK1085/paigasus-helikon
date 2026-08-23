@@ -28,6 +28,7 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
   bash scripts/check-doc-coverage.sh                 # requires: rustup toolchain install nightly-2026-05-01
 npm ci                                               # once, or after package-lock.json changes
 npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
+bash scripts/check-markdownlint-config.sh            # asserts that config is in force
 ```
 
 The full list lives in `CONTRIBUTING.md` (single source of truth for contributor policies).
