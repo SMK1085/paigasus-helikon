@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "2c5f35905795",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-581-adopt-markdownlint-cli2-as-a-ci-gate-for-the-published",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "docs/superpowers/specs/2026-08-22-sma-581-markdownlint-ci-gate-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2c/5f35905795/0/metadata.json",
+      "transcript": "/2c/5f35905795/0/full.jsonl",
+      "compact_transcript": "/2c/5f35905795/0/transcript.jsonl",
+      "content_hash": "/2c/5f35905795/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 28338,
+    "cache_read_tokens": 11711275,
+    "output_tokens": 13524,
+    "api_call_count": 25
+  }
+}
