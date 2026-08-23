@@ -6,7 +6,7 @@ microVM controller with the Helikon egress proxy on a **x86_64 Linux KVM host**.
 ## What's here
 
 | File | Purpose |
-|------|---------|
+| ------ | --------- |
 | `Dockerfile` | Ubuntu 22.04 image: forkd v0.5.2 + iptables + the egress-proxy binary (mounted from host) |
 | `docker-compose.yml` | Compose config: `/dev/kvm` passthrough, `NET_ADMIN` cap, volume mounts |
 | `entrypoint.sh` | Loads per-netns iptables rules, asserts OUTPUT=DROP, starts proxy + controller |

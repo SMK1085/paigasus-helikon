@@ -2,10 +2,10 @@
 
 ## Supported Versions
 
-| Version             | Supported          |
+| Version | Supported |
 | ------------------- | ------------------ |
-| `0.x` (latest minor)| :white_check_mark: |
-| older `0.x`         | :x:                |
+| `0.x` (latest minor) | :white_check_mark: |
+| older `0.x` | :x: |
 
 Once a `1.x` line ships, this table will track the latest `1.x` line and the most recent `0.x` for one minor cycle.
 

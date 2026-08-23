@@ -68,7 +68,7 @@ See the [`curl_server`](https://github.com/SMK1085/paigasus-helikon/blob/main/cr
 ## Routes
 
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | `POST` | `/agents/{name}/runs` | One-shot run — blocks until complete, returns all events |
 | `POST` | `/agents/{name}/runs?stream=sse` | SSE streaming run — one JSON event per `data:` line |
 | `POST` | `/agents/{name}/runs?mode=async` | Async run — returns `202 Accepted` with a `run_id` immediately |
@@ -155,7 +155,7 @@ keeping its minor version aligned with this crate's.
 ## Features
 
 | Feature | Default | Description |
-|---------|---------|-------------|
+| --------- | --------- | ------------- |
 | `openapi` | yes | Generates and serves an OpenAPI 3.1 spec at `GET /openapi.json` via [utoipa](https://crates.io/crates/utoipa) |
 
 ## Links

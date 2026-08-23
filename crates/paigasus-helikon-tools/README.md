@@ -6,7 +6,7 @@ The filesystem tools operate inside a `Sandbox` — a directory opened as an OS-
 
 `BashTool` delegates execution to a pluggable `ExecutionBackend`. Use `HostBackend` (default, all platforms) for a cwd-pinned shell with env scrubbing and resource limits, `OsSandboxBackend` (feature `os-sandbox`) for OS-kernel-enforced containment — Linux via Landlock (filesystem) + seccomp-bpf (syscalls and network) with read+write restriction; macOS via Seatbelt (`sandbox-exec`) with **write-only** containment (reads unrestricted) and an all-or-nothing network toggle — or `ForkdBackend` (feature `microvm`, experimental) for microVM-level containment via the forkd Firecracker controller with optional domain-filtered egress enforcement via `EgressProxy` (SMA-437).
 
-### microVM egress enforcement (`microvm` feature, SMA-437)
+## microVM egress enforcement (`microvm` feature, SMA-437)
 
 `ForkdBackend` can report `Isolation::Proxied` on the network axis when the layered
 egress enforcement is deployed: a per-VM netns default-deny (iptables) that routes

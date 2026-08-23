@@ -121,6 +121,7 @@ check.
 ### v0 Constraint Set
 
 The Temporal runtime v0 explicitly does **not** support:
+
 - Hooks and guardrails (arbitrary async code cannot be made deterministic inside a workflow)
 - Handoffs (agent-to-agent transfers)
 - Nested agents (agent-as-tool is opaque to Temporal)

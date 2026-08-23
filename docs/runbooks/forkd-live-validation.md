@@ -228,6 +228,7 @@ sudo install -m0755 target/release/examples/egress_proxy /usr/local/bin/egress-p
 ## Step 7 — Apply per-netns proxy + rules (validated topology)
 
 In forkd's per-child netns topology:
+
 - The guest VM is behind `forkd-tap0` (host-side IP `10.42.0.1`, guest IP `10.42.0.2`).
 - Guest egress is **routed** (FORWARD chain) via `veth0` to the root namespace (SNAT'd).
 - The guest's packets do **NOT** traverse the netns OUTPUT chain.
@@ -319,7 +320,7 @@ cargo test -p paigasus-helikon-tools \
 
 ### Expected output
 
-```
+```text
 test live_forkd_runs_bash_in_a_microvm ... ok
 test live_forkd_denies_nonallowlisted_egress ... ok
 ```
@@ -347,7 +348,7 @@ gcloud compute instances delete forkd-kvm \
 ## Alternative hosts
 
 | Provider | Instance type | Notes |
-|----------|--------------|-------|
+| ---------- | -------------- | ------- |
 | **GCP** | `n2-standard-4` or larger | `--enable-nested-virtualization` flag; image family `ubuntu-2404-lts-amd64` (24.04 required); cheapest nested-virt option |
 | **AWS** | `c8i.*` (nested-virt) | Confirm `/dev/kvm` before starting; use Ubuntu 24.04 AMI |
 | **AWS** | `.metal` bare-metal | No nested-virt needed; `/dev/kvm` is directly available; use Ubuntu 24.04 AMI |
@@ -361,41 +362,49 @@ install the dependencies from Step 2 manually, then follow Steps 3–9.
 
 ## Troubleshooting
 
-**`forkd doctor` fails: "KVM not available"**
+### `forkd doctor` fails: "KVM not available"
+
 - Confirm `/dev/kvm` exists and is readable: `ls -l /dev/kvm`.
 - For GCP: ensure `--enable-nested-virtualization` was set at VM creation (cannot be added after).
 - For Docker: confirm `devices: ["/dev/kvm:/dev/kvm"]` is in `docker-compose.yml` and the host has KVM.
 
-**`forkd from-image` fails with "build-rootfs.sh not found" or similar**
+### `forkd from-image` fails with "build-rootfs.sh not found" or similar
+
 - `FORKD_SCRIPTS_DIR` must point to the `scripts/` directory of a `git clone
   https://github.com/deeplethe/forkd`. The release tarball does not include scripts.
 
-**`forkd` or `forkd-controller` fails with "GLIBC_2.3x not found"**
+### `forkd` or `forkd-controller` fails with "GLIBC_2.3x not found"
+
 - The host OS is too old. forkd v0.5.2 binaries require glibc ≥2.38. Upgrade to
   Ubuntu 24.04 (glibc 2.39).
 
-**`entrypoint.sh` exits with "FATAL: netns … missing FORWARD drop rule"**
+### `entrypoint.sh` exits with "FATAL: netns … missing FORWARD drop rule"
+
 - The iptables rules failed to load or the interface names don't match. Check
   `ip netns list` and `ip netns exec <ns> ip link list` to confirm `GUEST_IF`/`UPLINK_IF`
   values. If forkd uses different interface names, set `GUEST_IF` and `UPLINK_IF`
   environment variables accordingly.
 
-**TLS handshake failure in tests**
+### TLS handshake failure in tests
+
 - Confirm `FORKD_CA` points to the correct cert PEM.
 - The cert SAN must include the VM's IP used in `FORKD_URL`. Regenerate with the correct
   `-addext "subjectAltName=IP:…"` if needed.
 
-**Egress-deny test hangs (> 8 seconds)**
+### Egress-deny test hangs (> 8 seconds)
+
 - The netns FORWARD-chain default-deny is not in effect.
 - Verify: `ip netns exec <ns> iptables -S FORWARD` shows `-A FORWARD -i forkd-tap0 -o veth0 -j DROP`.
 - Do NOT look for `OUTPUT DROP` — that is the old (incorrect) approach.
 
-**In-netns proxy fails to resolve CONNECT targets**
+### In-netns proxy fails to resolve CONNECT targets
+
 - Check that `/etc/netns/<ns>/resolv.conf` exists and contains a valid `nameserver` line.
 - Without this file, the proxy uses the host's resolver configuration, which may not be
   visible from inside the netns.
 
-**Secret scan fails**
+### Secret scan fails
+
 - Check `grep -RInE '(BEGIN [A-Z ]*PRIVATE KEY|AKIA…|Bearer …)' "$WORK/rootfs"` output.
 - Never copy service account key files or tokens into the rootfs staging directory.
 

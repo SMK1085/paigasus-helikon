@@ -1,0 +1,56 @@
+{
+  // Single source of truth for the gated file set. CI passes NO glob arguments,
+  // so a bare `npx markdownlint-cli2` locally applies the same rules to the same
+  // gated set as CI. Note the set is matched against files ON DISK, not against
+  // git's index: an UNTRACKED .md is linted locally and is absent from CI's clean
+  // checkout. That is deliberate -- you want a new page linted before you commit
+  // it -- so the guarantee is "same config, same globs", not "same file count".
+  //
+  // NOTE: "gitignore" is deliberately NOT set (it defaults to false).
+  //
+  // Turning it on makes the gated file set depend on ignore files present on
+  // disk, and markdownlint-cli2 delegates that to globby, which reads every
+  // **/.gitignore it finds -- tracked or not -- while never reading
+  // .git/info/exclude. That is a hole, not a convenience: an untracked nested
+  // .gitignore (say docs/book/src/.gitignore containing "*.md") silently
+  // removes published pages from the gate, and a negation below CANNOT
+  // override it. The lint would pass locally having checked nothing.
+  //
+  // The negations below already produce the identical file set without it
+  // (measured: 51 files either way, with node_modules/, target/, .superpowers/
+  // and docs/book/book/ all present on disk), so leaving "gitignore" off costs
+  // nothing and makes the gated set a pure function of this committed file --
+  // which is what the local/CI equivalence above requires.
+
+  "globs": [
+    "**/*.md",
+    "!docs/superpowers/**",
+    "!crates/*/CHANGELOG.md",
+    "!**/target/**",
+    "!**/node_modules/**",
+    "!**/.claude/**",
+    "!**/.superpowers/**",
+    // mdbook's build output. Ignored via a tracked docs/book/.gitignore, which
+    // no longer protects it now that "gitignore" is off; it holds no .md today
+    // but must not silently enter the gate if a future backend emits one.
+    "!docs/book/book/**"
+  ],
+
+  "config": {
+    "default": true,
+
+    // Line length. 818 of 928 raw findings, and it does not affect rendering.
+    // This is the ONLY rule disabled repo-wide.
+    "MD013": false,
+
+    // Table pipe style. "compact" is the `| --- | --- |` single-space form this
+    // repo already predominantly writes; the rule default is "any" (66 findings)
+    // and "aligned" would be 912 and force re-padding on every table edit.
+    //
+    // WARNING: an INVALID value here (e.g. "consistent", which is not one of
+    // aligned/any/compact/tight) silently disables the rule and the gate reports
+    // green while enforcing nothing. scripts/check-markdownlint-config.sh
+    // asserts against exactly that.
+    "MD060": { "style": "compact" }
+  }
+}

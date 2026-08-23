@@ -40,5 +40,5 @@ GitHub Actions job (`workflow_dispatch`). Local macOS/arm64 figures are
 indicative only (~0.1 µs on an Apple-silicon dev box).
 
 | Date | Platform | Runner | `tool_dispatch` | Target |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | 2026-06-02 | Linux x86_64 | GitHub `ubuntu-latest` | **178 ns/call** (200k iters) | < 50 µs |

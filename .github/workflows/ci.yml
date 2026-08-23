@@ -253,3 +253,33 @@ jobs:
             echo "attempt $attempt failed; retrying in 5s"; sleep 5
           done
           exit 1
+
+  markdown-lint:
+    runs-on: ubuntu-latest
+    # Bounds a hung `npm ci`. A required check that sits for six hours is worse
+    # than one that fails.
+    timeout-minutes: 10
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-node v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install pinned markdownlint-cli2
+        run: npm ci
+      # No glob arguments: .markdownlint-cli2.jsonc's "globs" is the sole source
+      # of truth, so this run and a bare local run lint an identical set by
+      # construction. Deliberately NOT path-filtered -- a path-filtered REQUIRED
+      # check never reports on a PR that touches no Markdown, and blocks it
+      # forever (the trap sessions-it avoids with step-level guards).
+      - name: Lint Markdown
+        run: npx markdownlint-cli2
+      # Asserts the config above is actually in force. An invalid rule-option
+      # value disables a rule silently, and the gated file set can collapse with
+      # no signal -- either would make the step above a green no-op.
+      - name: Verify the lint config is in force
+        run: bash scripts/check-markdownlint-config.sh
