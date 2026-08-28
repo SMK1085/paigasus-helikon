@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "e4a1722c6364",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 12,
+  "files_touched": [
+    ".superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/fix-wave-report.md",
+    ".superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-1-report.md",
+    ".superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-2-report.md",
+    ".superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-3-report.md",
+    ".superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-4-5-report.md",
+    ".superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-6-report.md",
+    ".superpowers/sdd/2026-08-22-sma-563-mockmodel-cancellation/task-7-report.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/a1722c6364/0/metadata.json",
+      "transcript": "/e4/a1722c6364/0/full.jsonl",
+      "compact_transcript": "/e4/a1722c6364/0/transcript.jsonl",
+      "content_hash": "/e4/a1722c6364/0/content_hash.txt",
+      "prompt": "/e4/a1722c6364/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 122,
+    "cache_creation_tokens": 730651,
+    "cache_read_tokens": 20333796,
+    "output_tokens": 18678,
+    "api_call_count": 62,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  }
+}
