@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "7e65e032ee1d",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-591-trim-claudemd-into-docsrunbooks-references",
+  "checkpoints_count": 11,
+  "files_touched": [
+    "CLAUDE.md",
+    "docs/runbooks/ci-architecture.md",
+    "docs/runbooks/github-actions-pinning.md",
+    "docs/runbooks/local-hooks.md",
+    "docs/runbooks/release-ascend.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7e/65e032ee1d/0/metadata.json",
+      "transcript": "/7e/65e032ee1d/0/full.jsonl",
+      "compact_transcript": "/7e/65e032ee1d/0/transcript.jsonl",
+      "content_hash": "/7e/65e032ee1d/0/content_hash.txt",
+      "prompt": "/7e/65e032ee1d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 124,
+    "cache_creation_tokens": 291136,
+    "cache_read_tokens": 12782017,
+    "output_tokens": 77557,
+    "api_call_count": 62,
+    "subagent_tokens": {
+      "input_tokens": 360,
+      "cache_creation_tokens": 541185,
+      "cache_read_tokens": 6752781,
+      "output_tokens": 1650,
+      "api_call_count": 98
+    }
+  }
+}
