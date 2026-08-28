@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "bdba539355c8",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".superpowers/sdd/2026-08-20-sma-557-tracing-target-namespace/final-fix-report.md",
+    ".superpowers/sdd/2026-08-20-sma-557-tracing-target-namespace/progress.md",
+    ".superpowers/sdd/2026-08-20-sma-557-tracing-target-namespace/task-1-report.md",
+    ".superpowers/sdd/2026-08-20-sma-557-tracing-target-namespace/task-2-report.md",
+    ".superpowers/sdd/2026-08-20-sma-557-tracing-target-namespace/task-3-report.md",
+    ".superpowers/sdd/2026-08-20-sma-557-tracing-target-namespace/task-4-report.md",
+    "crates/paigasus-helikon-providers-openai/src/backend/chat.rs",
+    "crates/paigasus-helikon-providers-openai/src/translate/request.rs",
+    "tests/workspace-lints/tests/tracing_target_docs.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/ba539355c8/0/metadata.json",
+      "transcript": "/bd/ba539355c8/0/full.jsonl",
+      "compact_transcript": "/bd/ba539355c8/0/transcript.jsonl",
+      "content_hash": "/bd/ba539355c8/0/content_hash.txt",
+      "prompt": "/bd/ba539355c8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 627,
+    "cache_creation_tokens": 1035781,
+    "cache_read_tokens": 110544651,
+    "output_tokens": 242547,
+    "api_call_count": 330,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  }
+}
