@@ -1,0 +1,432 @@
+{
+  "cli_version": "0.10.3",
+  "checkpoint_id": "3727b2ee31c6",
+  "session_id": "b89e4975-2c4e-47c5-93e6-1f8ba92578bf",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-28T12:53:33.151183Z",
+  "branch": "main",
+  "checkpoints_count": 27,
+  "save_step_count": 28,
+  "files_touched": [
+    ".gitattributes",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/progress.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-1-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-10-brief.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-10-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-11-brief.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-11-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-12-brief.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-12-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-13-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-14-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-2-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-3-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-4-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-5-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-6-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-7-brief.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-7-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-8-brief.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-8-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-9-brief.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-9-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-cleanup-report.md",
+    ".superpowers/sdd/2026-08-20-sma-533-stream-conformance/task-final-fix-report.md",
+    "Cargo.toml",
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-core/src/model.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/model.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/stream.rs",
+    "crates/paigasus-helikon-providers-gemini/src/model.rs",
+    "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "crates/paigasus-helikon-providers-openai/src/backend/chat.rs",
+    "crates/paigasus-helikon-providers-openai/src/backend/responses.rs",
+    "crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt",
+    "crates/paigasus-helikon-providers-openai/tests/responses_streaming.rs",
+    "docs/book/src/concepts/model-providers.md",
+    "docs/book/src/reference/crates.md",
+    "docs/superpowers/specs/2026-08-19-sma-533-stream-conformance-design.md",
+    "release-plz.toml",
+    "tests/provider-stream-conformance/Cargo.toml",
+    "tests/provider-stream-conformance/src/check.rs",
+    "tests/provider-stream-conformance/src/declines.rs",
+    "tests/provider-stream-conformance/src/eventstream.rs",
+    "tests/provider-stream-conformance/src/fakes.rs",
+    "tests/provider-stream-conformance/src/lib.rs",
+    "tests/provider-stream-conformance/src/server.rs",
+    "tests/provider-stream-conformance/tests/conformance.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "768f38463a97",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 964,
+    "cache_creation_tokens": 5355127,
+    "cache_read_tokens": 239193901,
+    "output_tokens": 477525,
+    "api_call_count": 447,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-feature-pipeline-2026-08-19T20:37:37.758171Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "feature-pipeline"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "e9a963984f06",
+      "timestamp": "2026-08-19T20:37:37.758171Z",
+      "native": {
+        "command": "/feature-pipeline"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/feature-pipeline",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01G2pnqPQHULhPTTCYu8QWPZ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "768f38463a97",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 119,
+        "end": 120,
+        "entry_ids": [
+          "af1eb13d-96f1-4a49-b3ae-f301ea183635"
+        ],
+        "tool_use_id": "toolu_01G2pnqPQHULhPTTCYu8QWPZ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01G2pnqPQHULhPTTCYu8QWPZ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01C3SHMA2vUFauLXKpDAUUHo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "768f38463a97",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 347,
+        "end": 348,
+        "entry_ids": [
+          "589caeaf-9520-4085-906c-bdfa62944d19"
+        ],
+        "tool_use_id": "toolu_01C3SHMA2vUFauLXKpDAUUHo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01C3SHMA2vUFauLXKpDAUUHo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0191s689imGTZ3iHx7q1Jotc",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "768f38463a97",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 400,
+        "end": 401,
+        "entry_ids": [
+          "94f92486-311f-432a-ac52-802eb4b335b8"
+        ],
+        "tool_use_id": "toolu_0191s689imGTZ3iHx7q1Jotc"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0191s689imGTZ3iHx7q1Jotc"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01FawZPqP2tLWZ4fQd92w1ut",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "768f38463a97",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1817,
+        "end": 1818,
+        "entry_ids": [
+          "77c5502d-14cb-416a-8071-e2cceb38d562"
+        ],
+        "tool_use_id": "toolu_01FawZPqP2tLWZ4fQd92w1ut"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01FawZPqP2tLWZ4fQd92w1ut"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 54
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-28T12:53:32.983304Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 13458,
+    "human_modified": 43,
+    "human_removed": 0,
+    "total_committed": 13458,
+    "total_lines_changed": 13688,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 12,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 13,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 14,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 15,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 16,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 17,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 18,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 19,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 20,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 21,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 22,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 23,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 24,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 25,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 26,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 27,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 28,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
