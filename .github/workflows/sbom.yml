@@ -33,7 +33,7 @@ jobs:
       # Swatinem/rust-cache v2.9.2
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       # taiki-e/install-action v2.85.11
-      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
+      - uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d
         with:
           tool: cargo-cyclonedx
 
