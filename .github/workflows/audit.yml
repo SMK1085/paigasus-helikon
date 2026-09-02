@@ -48,7 +48,7 @@ jobs:
         with:
           cache-directories: "~/.cargo/advisory-db"
       # taiki-e/install-action v2.85.11
-      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
+      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf
         with:
           tool: cargo-audit
       # cargo-audit fetches the advisory DB on every run unless -n/--no-fetch,
