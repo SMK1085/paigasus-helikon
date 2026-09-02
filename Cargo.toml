@@ -147,7 +147,7 @@ aws-smithy-runtime     = { version = "1.11.3", default-features = false, feature
 aws-smithy-http-client = { version = "1.1.13", default-features = false, features = ["rustls-aws-lc"] }
 
 # Internal — single source of truth so members depend via `workspace = true`
-paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.5.16" }
+paigasus-helikon                     = { path = "crates/paigasus-helikon", version = "0.5.17" }
 paigasus-helikon-core                = { path = "crates/paigasus-helikon-core", version = "0.5.19" }
 paigasus-helikon-macros              = { path = "crates/paigasus-helikon-macros", version = "0.2.4" }
 paigasus-helikon-providers-openai    = { path = "crates/paigasus-helikon-providers-openai", version = "0.2.26" }
@@ -159,7 +159,7 @@ paigasus-helikon-runtime-axum        = { path = "crates/paigasus-helikon-runtime
 paigasus-helikon-runtime-actix       = { path = "crates/paigasus-helikon-runtime-actix", version = "0.2.6", default-features = false }
 paigasus-helikon-runtime-temporal    = { path = "crates/paigasus-helikon-runtime-temporal", version = "0.4.5" }
 paigasus-helikon-runtime-agentcore   = { path = "crates/paigasus-helikon-runtime-agentcore", version = "0.2.9" }
-paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals", version = "0.1.10" }
+paigasus-helikon-evals               = { path = "crates/paigasus-helikon-evals", version = "0.1.11" }
 paigasus-helikon-sessions-sqlite     = { path = "crates/paigasus-helikon-sessions-sqlite", version = "0.1.25" }
 paigasus-helikon-sessions-postgres   = { path = "crates/paigasus-helikon-sessions-postgres", version = "0.1.6" }
 paigasus-helikon-sessions-redis      = { path = "crates/paigasus-helikon-sessions-redis", version = "0.1.6" }
