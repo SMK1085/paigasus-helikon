@@ -14,7 +14,7 @@ For orientation — how to pick crates and add them to your `Cargo.toml` — see
 
 ## Crate table
 
-This table deliberately carries no version numbers. Each crate name links to its [docs.rs](https://docs.rs) page, which always shows the current published version; for the in-tree version, read that crate's `Cargo.toml`. Versions move every release, so any number mirrored here would be wrong within days.
+This table deliberately carries no version numbers. Each published crate's name links to its [docs.rs](https://docs.rs) page, which always shows the current published version; for the in-tree version, read that crate's `Cargo.toml`. The internal `paigasus-helikon-sessions-testkit` row is the one exception — it is `publish = false`, so it has no docs.rs page and no version to report. Versions move every release, so any number mirrored here would be wrong within days.
 
 | Crate | Concern | State |
 | --- | --- | --- |

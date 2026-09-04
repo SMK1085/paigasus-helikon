@@ -72,8 +72,15 @@ The cells contain no escaped pipes (verified: `grep -c '\\|'` over the range ret
 the final `| … |` pair is safe and mechanical:
 
 ```bash
+# macOS / BSD sed (what this change was executed with):
 sed -i '' -E '19,41 s/[[:space:]]*\|[^|]*\|[[:space:]]*$/ |/' docs/book/src/reference/crates.md
+
+# GNU sed (Linux) takes no argument after -i:
+# sed -i -E '19,41 s/[[:space:]]*\|[^|]*\|[[:space:]]*$/ |/' docs/book/src/reference/crates.md
 ```
+
+`sed -i ''` is BSD/macOS syntax; GNU sed rejects the empty argument. Use whichever line matches your
+platform, or run the substitution through `perl -i -pe` if you want one form that works on both.
 
 This turns `| … | published | \`0.5.17\` |` into `| … | published |`, the header
 `| Crate | Concern | State | Version |` into `| Crate | Concern | State |`, and the delimiter
@@ -418,7 +425,7 @@ cargo add anyhow@1 schemars@1 serde_json@1
 ```
 
 Then copy the quickstart's Rust program — the single fenced `rust` block, currently
-`quickstart.md:31-145` — into `src/qs/src/main.rs`, and:
+`quickstart.md:31-145` — into this crate's `src/main.rs` (you are already inside `$SCRATCH/qs`), and:
 
 ```bash
 cargo check
