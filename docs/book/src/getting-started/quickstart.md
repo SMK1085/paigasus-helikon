@@ -2,16 +2,19 @@
 
 A complete, copy-pasteable agent: a personal-finance **budgeting assistant** that calls two tools to look up the user's spending and budget, then advises in plain text. It exercises the tool-calling loop end-to-end against OpenAI.
 
-## 1. Add the dependency
+## 1. Add the dependencies
 
-```toml
-[dependencies]
-paigasus-helikon = { version = "0.3", features = ["openai", "macros"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-schemars = "1"
+```bash
+cargo add paigasus-helikon --features openai,macros
+cargo add tokio@1 --features macros,rt-multi-thread
+cargo add serde@1 --features derive
+cargo add anyhow@1 schemars@1 serde_json@1
 ```
+
+`paigasus-helikon` is deliberately unpinned so you get the current release; the companions keep their
+major because `serde` and `schemars` appear in the SDK's own public API and must not diverge.
+`serde_json` is required even though you never name it: the `#[tool]` macro expands to
+`::serde_json::` paths in your crate.
 
 The `openai` feature pulls in `paigasus_helikon::openai::OpenAiModel`; the `macros` feature pulls in the `#[tool]` attribute and the `tools!` macro. `paigasus_helikon::core` is always available.
 
@@ -156,7 +159,7 @@ What each piece does:
 ## 4. Run it
 
 ```bash
-OPENAI_API_KEY=sk-... cargo run --features openai,macros
+OPENAI_API_KEY=sk-... cargo run
 ```
 
 The same code ships as a runnable example in the workspace:
