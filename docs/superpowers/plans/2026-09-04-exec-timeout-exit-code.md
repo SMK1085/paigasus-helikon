@@ -138,14 +138,24 @@ Add after the `test (macos-latest, stable)` entry:
 Only the `stable` leg; `test (windows-latest, 1.94)` stays signal-only, matching how
 `ubuntu` and `macos` are already declared.
 
-**Verify:** `jq empty .github/rulesets/main-protection-checks.json`
+**Verify:** parsing alone proves nothing about the contract, so assert the required set itself —
+the windows `stable` leg present, the `1.94` leg absent:
+
+```sh
+jq -e '
+  [.rules[] | select(.type=="required_status_checks")
+            | .parameters.required_status_checks[].context] as $c
+  | ($c | index("test (windows-latest, stable)") != null)
+    and ($c | index("test (windows-latest, 1.94)") == null)
+' .github/rulesets/main-protection-checks.json
+```
 
 ## Task 5 — sync the three docs that mirror the required list
 
 The ruleset JSON is canonical, but three places restate it and drift silently otherwise.
 
 | File | Where |
-|---|---|
+| --- | --- |
 | `CLAUDE.md` | ~line 108 — the required-contexts sentence and its "required because" rationales |
 | `CONTRIBUTING.md` | ~line 314 — the repo-configuration table row |
 | `docs/runbooks/ci-architecture.md` | the required-check narrative |

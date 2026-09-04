@@ -215,7 +215,7 @@ Cost, stated plainly: every future PR now gates on the slowest runner in the mat
 ### Files this touches
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `.github/rulesets/main-protection-checks.json` | Add `{ "context": "test (windows-latest, stable)" }` |
 | `CONTRIBUTING.md` (~line 314) | Add to the required-contexts table with its rationale |
 | `CLAUDE.md` (~line 108) | Add to the required-contexts list with its rationale |
@@ -263,8 +263,10 @@ neither `exit_code` nor `timed_out` appears anywhere in `docs/book/` or in
 `crates/paigasus-helikon-tools/README.md`, and the public API is unchanged (only a doc comment
 and an internal code path move). No book or README edit needed.
 
-**No companion plan doc.** CLAUDE.md pairs specs with `docs/superpowers/plans/`, but this is a
-two-line production change plus one test file; the skeleton above is the plan.
+**Companion plan:** `docs/superpowers/plans/2026-09-04-exec-timeout-exit-code.md`, per CLAUDE.md's
+spec/plan pairing convention. (An earlier draft of this spec argued the change was small enough to
+skip one; Gate 1 widened the scope to include the required-check promotion, which spans four more
+files and a gated live-apply step, so a plan earns its place.)
 
 ## Acceptance criteria
 
