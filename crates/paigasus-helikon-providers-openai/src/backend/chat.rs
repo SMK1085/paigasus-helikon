@@ -514,6 +514,34 @@ impl ChatTranslator {
         );
         slot.args.insert_str(0, &old.args);
 
+        // The canonical slot has already emitted its name, so this fragment
+        // can never reach a consumer: the flush condition tests
+        // `name_emitted` and will not fire again for this call. It must not be
+        // left sitting in `pending` either — `flush_buffered_names` skips
+        // entries whose index already emitted. Dropping it silently would
+        // recreate the undiagnosed loss SMA-550 exists to eliminate, so drop
+        // it loudly and record it the same way a late wire fragment is
+        // recorded.
+        if !old.name.is_empty() {
+            if let Some(emitted) = self.name_emitted.get(&owner) {
+                if self.warned_late_name.insert(owner) {
+                    tracing::warn!(
+                        target: "paigasus::openai::chat",
+                        %call_id,
+                        fragment = %old.name,
+                        emitted = %emitted,
+                        "tool-call name fragment buffered under another wire index \
+                         arrived after the name was emitted; it cannot be recovered \
+                         and is dropped"
+                    );
+                }
+                if old.seq < slot.seq {
+                    slot.seq = old.seq;
+                }
+                return owner;
+            }
+        }
+
         // A migrating fragment identical to what the canonical slot already
         // holds is a whole-name repeat, not a continuation — the same case the
         // wire path guards, for the same reason: a backend that resends the
@@ -1515,5 +1543,31 @@ mod tests {
             ],
         );
         assert_eq!(named(&evs), vec![("c1".to_owned(), "AADDBBCC".to_owned())]);
+    }
+
+    /// A fragment migrating into a slot that has already emitted its name
+    /// cannot reach a consumer — the event is downstream and the flush
+    /// condition will not fire again for this call. It must be dropped
+    /// *loudly* and recorded, never silently: a silent drop here is exactly
+    /// the undiagnosed loss SMA-550 existed to eliminate.
+    ///
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-566, which emits `Some("get_")` and then `Some("beta")`.
+    #[test]
+    fn fragment_migrating_into_an_emitted_slot_is_recorded_not_stranded() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(1, None, Some("beta"), None),
+                make_chunk(0, Some("c1"), Some("get_"), Some("{}")),
+                make_chunk(1, Some("c1"), None, None),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "get_".to_owned())]);
+        assert!(
+            t.warned_late_name.contains(&0),
+            "the unrecoverable fragment must be recorded against the canonical index"
+        );
     }
 }
