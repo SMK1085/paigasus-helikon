@@ -257,6 +257,14 @@ impl PendingToolCall {
 pub(crate) struct ChatTranslator {
     /// index → call_id after the first delta for that tool call.
     tool_calls: HashMap<u32, String>,
+    /// Non-blank call_id → the wire index that owns its correlation state.
+    ///
+    /// The first index to resolve a given call_id becomes its owner; every
+    /// later index resolving the same call_id aliases onto it, so one
+    /// `call_id` owns exactly one entry in `pending`, `name_emitted` and
+    /// `warned_late_name`. Blank ids are never inserted — see
+    /// [`Self::canonicalize`].
+    canonical: HashMap<String, u32>,
     /// index → the tool name already emitted to the consumer.
     ///
     /// Holds the *value*, not just the index, so a late fragment can be
@@ -266,6 +274,10 @@ pub(crate) struct ChatTranslator {
     /// Indices for which the late-name-fragment warning has already fired,
     /// so a chatty backend cannot produce one warn per argument chunk.
     warned_late_name: HashSet<u32>,
+    /// Wire indices for which the blank-id warning has already fired, so a
+    /// backend that sends `"id": ""` on every delta warns once per call
+    /// rather than once per chunk.
+    warned_blank_id: HashSet<u32>,
     /// index → buffered name/args.
     ///
     /// `args` is drain-once: taken on the first delta after the call_id is
@@ -284,8 +296,10 @@ impl ChatTranslator {
     pub(crate) fn new() -> Self {
         Self {
             tool_calls: HashMap::new(),
+            canonical: HashMap::new(),
             name_emitted: HashMap::new(),
             warned_late_name: HashSet::new(),
+            warned_blank_id: HashSet::new(),
             pending: HashMap::new(),
             next_seq: 0,
             finish_reason: None,
@@ -443,6 +457,41 @@ impl ChatTranslator {
         out
     }
 
+    /// Resolve the wire `index` to the canonical index owning `call_id`.
+    ///
+    /// The first index to resolve a given `call_id` owns its state; every
+    /// later index resolving the same `call_id` aliases onto it. That is what
+    /// makes "exactly one name-carrying `ToolCallDelta` per `call_id`" hold by
+    /// construction rather than by guard (SMA-566).
+    ///
+    /// `providers-litellm` achieves the same property with a `Key { Index, Id }`
+    /// enum, because its `index` is optional and one call can arrive under two
+    /// different key spaces. Here `ChatCompletionMessageToolCallChunk::index`
+    /// is a required `u32`, so there is only ever one key space and
+    /// canonicalization is a many-to-one map *within* it. The two crates agree
+    /// observably and differ structurally, for that reason.
+    fn canonicalize(&mut self, index: u32, call_id: &str) -> u32 {
+        // An empty `id` is not an identity. A backend that sends `"id": ""` on
+        // every entry would otherwise collapse every one of its parallel calls
+        // into a single slot, and all but the first would vanish from the
+        // stream entirely — a strictly worse outcome than the dual-index
+        // keying this function exists to fix. Leave such deltas on their wire
+        // index, which keeps distinct calls distinct.
+        if call_id.is_empty() {
+            if self.warned_blank_id.insert(index) {
+                tracing::warn!(
+                    target: "paigasus::openai::chat",
+                    index,
+                    "tool-call delta carries an empty id; correlating by wire index \
+                     instead, since an empty id cannot identify a call"
+                );
+            }
+            return index;
+        }
+
+        *self.canonical.entry(call_id.to_owned()).or_insert(index)
+    }
+
     /// Correlate one tool-call delta and emit any completed name/args.
     ///
     /// **Divergence from `providers-litellm` (SMA-550), deliberate.** That
@@ -499,6 +548,9 @@ impl ChatTranslator {
             entry.args.push_str(args_frag);
             return;
         };
+
+        // From here on, one call_id owns exactly one state entry.
+        let index = self.canonicalize(index, &call_id);
 
         // A name fragment arriving after the name was emitted cannot be
         // recovered — the event is already downstream. Warn once per call,
@@ -610,6 +662,52 @@ mod tests {
                 arguments: arguments.map(|s| s.to_owned()),
             }),
         }
+    }
+
+    /// Drive every chunk through `handle_tool_call_chunk`, then `finish`,
+    /// collecting all events.
+    ///
+    /// Collecting across both is required: the invariant is per-stream, and an
+    /// assertion made only over `finish()` passes vacuously against the
+    /// pre-fix translator, whose violation is two *mid-stream* emissions.
+    fn drive(
+        t: &mut ChatTranslator,
+        chunks: Vec<ChatCompletionMessageToolCallChunk>,
+    ) -> Vec<ModelEvent> {
+        let mut out = Vec::new();
+        for c in chunks {
+            t.handle_tool_call_chunk(&c, &mut out);
+        }
+        out.extend(t.finish());
+        out
+    }
+
+    /// `(call_id, name)` for every delta carrying `Some(name)`, in order.
+    fn named(evs: &[ModelEvent]) -> Vec<(String, String)> {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name: Some(n),
+                    ..
+                } => Some((call_id.clone(), n.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Concatenated `args_delta` across every delta carrying `want`, in order.
+    fn args_of(evs: &[ModelEvent], want: &str) -> String {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    args_delta,
+                    ..
+                } if call_id == want => Some(args_delta.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Chunk 1: name arrives without an id.
@@ -1145,6 +1243,96 @@ mod tests {
             t.name_emitted.get(&0).map(String::as_str),
             Some("get_"),
             "the already-emitted name is not retroactively changed"
+        );
+    }
+
+    /// SMA-566 acceptance criterion: two deltas carrying different `index`
+    /// values but the same `id` are one call, and yield one name.
+    ///
+    /// The merged name `alphabeta` is not "correct" in any deep sense — the
+    /// input is malformed, since an `id` identifies a call — but it is one
+    /// name for one `call_id`, which is the invariant under test, and it is
+    /// character-for-character what `providers-litellm` emits for this input
+    /// (`stream.rs`'s `two_indexes_with_one_id_merge_into_a_single_call`).
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("beta")` from `handle_tool_call_chunk` and then `Some("alpha")`
+    /// from `finish`.
+    #[test]
+    fn two_indexes_with_one_id_merge_into_a_single_call() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some("c1"), Some("alpha"), None),
+                make_chunk(1, Some("c1"), Some("beta"), Some("{}")),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "alphabeta".to_owned())],
+            "exactly one name-carrying delta per call_id, across both entry points"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "{}",
+            "merging the names must not swallow the args"
+        );
+    }
+
+    /// The same invariant with the flush happening mid-stream rather than at
+    /// `finish`, so the test cannot pass for the wrong reason.
+    ///
+    /// The expected name is `get_`, **not** `get_weather`: the first delta
+    /// carries arguments, so the name flushes immediately and is already
+    /// downstream when the second index aliases in. The migrating fragment
+    /// cannot be recovered (design spec §4 row 1b).
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("get_")` and then `Some("weather")`.
+    #[test]
+    fn dual_index_call_emits_at_most_one_name_mid_stream() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some("c1"), Some("get_"), Some("{")),
+                make_chunk(1, Some("c1"), Some("weather"), Some("}")),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "get_".to_owned())]);
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "{}",
+            "suppressing the second name must not swallow its args"
+        );
+    }
+
+    /// A blank `id` is not an identity. Canonicalizing on it would collapse
+    /// every parallel blank-id call into one slot and all but the first would
+    /// vanish — strictly worse than the defect being fixed. Such deltas stay
+    /// on their wire index instead.
+    ///
+    /// Passes against the pre-fix translator too: index keying already keeps
+    /// them distinct. This is a regression guard for the alias map, not a
+    /// defect proof.
+    #[test]
+    fn blank_ids_do_not_collapse_distinct_calls() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some(""), Some("alpha"), Some("{}")),
+                make_chunk(1, Some(""), Some("beta"), Some("{}")),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "two blank-id calls must both emit; an empty id cannot merge them"
         );
     }
 }
