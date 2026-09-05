@@ -68,9 +68,18 @@ pub const DEFAULT_MAX_OUTPUT: usize = 1 << 20;
 pub const DEFAULT_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME"];
 
 /// Environment variable names a child process receives when the caller does not
-/// override the allowlist. See the unix arm for the full per-platform list;
-/// on Windows it is `PATH`, `SystemRoot`, `PATHEXT`, `TEMP`, `TMP`,
-/// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`.
+/// override the allowlist.
+///
+/// The list is platform-specific, because a minimal-but-working environment is:
+///
+/// - **unix:** `PATH`, `HOME`
+/// - **Windows:** `PATH`, `SystemRoot`, `PATHEXT`, `TEMP`, `TMP`, `USERPROFILE`,
+///   `APPDATA`, `LOCALAPPDATA`
+///
+/// Both lists are spelled out here (rather than one arm pointing at the other)
+/// because docs.rs renders only the Linux build, so a Windows reader building
+/// this crate's rustdoc locally would otherwise follow a pointer to an arm that
+/// does not exist on this target.
 #[cfg(windows)]
 pub const DEFAULT_ENV_ALLOWLIST: &[&str] = &[
     "PATH",
@@ -352,7 +361,9 @@ fn build_command(prefix: &[OsString], command: &str) -> tokio::process::Command 
     #[cfg(windows)]
     {
         // `prefix` is always empty on Windows; bind it to avoid `unused_variables`
-        // under `-D warnings` (clippy runs on ubuntu; Windows is signal-only).
+        // under `-D warnings` (clippy itself runs on ubuntu only, but
+        // `test (windows-latest, stable)` is a required gate and compiles this
+        // arm, so an unused-variable warning here would still be visible).
         let _ = prefix;
         let mut c = tokio::process::Command::new("cmd");
         c.arg("/C").arg(command);

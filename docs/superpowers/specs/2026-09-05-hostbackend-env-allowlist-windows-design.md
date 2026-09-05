@@ -105,7 +105,7 @@ always see `["PATH", "HOME"]` and their behaviour is byte-for-byte unchanged.
 #### Inclusion principle
 
 > **What a shell plus a config-reading CLI needs in order to start, excluding
-> anything that can carry a credential or redirect execution.**
+> anything that can carry a credential.**
 
 Every entry below is justified against that principle, and the principle also
 generates the exclusions.
@@ -122,11 +122,17 @@ generates the exclusions.
 Deliberately excluded:
 
 - **`COMSPEC`** — `cmd.exe` reads it to locate the program it spawns for pipes,
-  `for /f`, and `start`, and it falls back to `%SystemRoot%\system32\cmd.exe`. By
-  the first draft's own admission it was "belt-and-braces", i.e. no demonstrated
-  benefit; and it is the one candidate that lets a poisoned parent environment
-  redirect execution, which the principle's second clause excludes. There is
-  precedent for the alternative: `SANDBOX_EXEC` at
+  `for /f`, and `start`, and it has a documented fallback to
+  `%SystemRoot%\system32\cmd.exe` when unset. By the first draft's own admission
+  it was "belt-and-braces", i.e. no demonstrated need: nobody has named a failing
+  command that requires it, and the fallback path covers the ordinary case. (Note
+  that "can redirect execution if poisoned" is not what distinguishes it from the
+  included names — a poisoned `PATH` changes which `foo` runs, a poisoned
+  `PATHEXT` changes which extension `foo` resolves to, and a poisoned `SystemRoot`
+  changes the system DLL search path; all three are on the list. The bar for
+  exclusion here is "no demonstrated need", not "can influence what runs".) There
+  is precedent for the no-demonstrated-need-yet stance turning into an absolute
+  path instead of an inherited variable: `SANDBOX_EXEC` at
   `src/exec/os_sandbox_seatbelt.rs:32` is an absolute path *precisely* so a scrubbed
   `PATH` cannot hide it. If a nested-shell failure is ever observed, fix it that way
   — with an absolute `cmd.exe` path — not by inheriting `COMSPEC`.
@@ -289,11 +295,18 @@ const SH_INJECTED: &[&str] = &["PWD", "SHLVL", "_"];
 ```
 
 Assert the observed set contains `PATH`, and that every observed name is in
-`DEFAULT_ENV_ALLOWLIST ∪ SH_INJECTED`. Widening the unix default to
-`["PATH", "HOME", "AWS_SECRET_ACCESS_KEY"]` fails this; the first draft's
-`test -n "$PATH" && test -n "$HOME"` would have passed it unchanged. It also cannot
-false-fail when the parent has no `HOME` — an absent `HOME` merely yields a smaller
-subset — which the first draft's version could, on two required gates.
+`DEFAULT_ENV_ALLOWLIST ∪ SH_INJECTED`. This is the **no-leak** guard — it goes red
+if `env_clear()` is ever dropped, or if a hidden platform floor is added inside
+`spawn_capped` — and it also cannot false-fail when the parent has no `HOME` (an
+absent `HOME` merely yields a smaller subset), which the first draft's
+`test -n "$PATH" && test -n "$HOME"` could, on two required gates.
+
+It is **not** the anti-widening guard: `permitted` is built *from*
+`DEFAULT_ENV_ALLOWLIST`, so widening the unix default to
+`["PATH", "HOME", "AWS_SECRET_ACCESS_KEY"]` widens `permitted` in lockstep and
+this test stays green. The anti-widening guard is the exact-equality pin
+`unix_default_allowlist_is_unchanged` in `src/exec/mod.rs` (see below); that pin
+must not be deleted as redundant with this test.
 
 ### `#[cfg(test)] mod tests` in `src/exec/mod.rs` (new)
 
@@ -321,7 +334,7 @@ Quoted verbatim from SMA-614, so the mapping is checkable without Linear access.
 | "A default-configured `HostBackend` can run an ordinary networked command on Windows without a caller-supplied allowlist." | `exec_env_defaults.rs` Windows probe (primary, deterministic) + `ping` smoke (secondary) |
 | "The bespoke `ENV_ALLOWLIST` workaround in `tests/exec_timeout_portable.rs` can be deleted, and the test still passes on Windows using the default." | `exec_timeout_portable.rs` diff, verified on `test (windows-latest, stable)` |
 | "The doc comment on `HostBackend::builder` (which currently reads `["PATH","HOME"]` env allowlist) is corrected to describe the per-platform default." | `host.rs:97` (and `:41`, `os_sandbox.rs:64`, `os_sandbox_seatbelt.rs:63`), each enumerating both lists literally for docs.rs readers |
-| "No widening of the unix default — this is about Windows correctness, not about inheriting more environment everywhere." | Exact-equality const pin in `exec/mod.rs` **and** the unix `env`-set scrub assertion |
+| "No widening of the unix default — this is about Windows correctness, not about inheriting more environment everywhere." | The exact-equality const pin `unix_default_allowlist_is_unchanged` in `exec/mod.rs` — the unix `env`-set scrub assertion in `exec_env_defaults.rs` is a no-leak guard, not an anti-widening one, since it is built *from* `DEFAULT_ENV_ALLOWLIST` and widens in lockstep with it |
 
 ## Release mechanics
 

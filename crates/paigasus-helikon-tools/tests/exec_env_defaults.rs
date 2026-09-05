@@ -3,6 +3,7 @@
 //! `.env_allowlist()` — that is the whole point.
 #![allow(missing_docs)]
 
+#[cfg(unix)]
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -25,7 +26,14 @@ const SH_INJECTED: &[&str] = &["PWD", "SHLVL", "_"];
 /// Requiring full presence would make the test fail for a reason unrelated to
 /// SMA-614.
 ///
-/// This is the mechanical guard for SMA-614's "no widening of the unix default".
+/// This is the **no-leak** guard: it goes red if `env_clear()` is ever dropped
+/// from `spawn_capped`, or if someone adds a hidden platform floor there. It is
+/// NOT the anti-widening guard — `permitted` is built *from*
+/// `DEFAULT_ENV_ALLOWLIST`, so widening the const (e.g. adding
+/// `"AWS_SECRET_ACCESS_KEY"` and exporting it in the parent) widens `permitted`
+/// in lockstep and this test stays green. The anti-widening guard is the
+/// exact-equality pin `unix_default_allowlist_is_unchanged` in `src/exec/mod.rs`;
+/// that pin must not be deleted as redundant with this test.
 #[tokio::test]
 #[cfg(unix)]
 async fn unix_default_env_is_exactly_the_allowlist() {
@@ -61,19 +69,29 @@ async fn unix_default_env_is_exactly_the_allowlist() {
     );
 }
 
-/// The primary Windows assertion. `cmd` echoes a literal `%NAME%` for a variable
-/// it cannot expand, so a missing entry shows up as an unexpanded `%NAME%` token
-/// in stdout. This fails deterministically without the SMA-614 fix and does not
-/// depend on any hypothesis about Winsock.
+/// The primary Windows assertion. `cmd`'s `if defined NAME (...)` tests whether a
+/// variable is set WITHOUT expanding its value, so this probe never interpolates
+/// an env value into the command line — unlike a `%NAME%`-expansion probe, it
+/// cannot be tricked by value content that is itself re-parsed as `cmd` syntax
+/// (e.g. a `PATH` entry containing `&`, `|`, `<`, `>` or `^`, which `cmd` expands
+/// *before* it parses separators) and it has no false-match hole equivalent to a
+/// `PATH`/`APPDATA`/etc. value that happens to contain the literal text of
+/// another allowlisted name's `%TOKEN%`. This fails deterministically without the
+/// SMA-614 fix and does not depend on any hypothesis about Winsock.
 ///
-/// The probe is built from [`DEFAULT_ENV_ALLOWLIST`] itself, and each entry is
-/// checked individually for its own unexpanded `%NAME%` token (rather than one
-/// blanket `stdout.contains('%')`), so: (a) the test can never drift out of
-/// sync if the const's entries change, and (b) it stays correct now that
-/// `%PATH%` is included — `PATH` is long, machine-dependent, and could in
-/// principle contain a literal `%`, which would false-fail a blanket check but
-/// can never match a specific `%PATH%` token unless `PATH` itself failed to
-/// expand.
+/// The probe is built from [`DEFAULT_ENV_ALLOWLIST`] itself — that property is
+/// load-bearing and must not regress — but only over names actually set in the
+/// *parent* process's environment. Requiring all eight to be present in the
+/// parent (as the unix test's doc comment already explains for `HOME`) would
+/// false-fail under `windows/servercore`, a SYSTEM/service account, or a future
+/// runner image that lacks e.g. `APPDATA` or `TMP`, while the code under test
+/// remains entirely correct.
+///
+/// `SystemRoot` is asserted unconditionally in addition to the loop: it is
+/// always set on Windows, so this can never false-fail, and it is what stops a
+/// revert of the const back to `["PATH", "HOME"]` from passing silently — such a
+/// revert would simply drop every other name out of the "present in parent" loop
+/// and leave nothing to fail on.
 #[tokio::test]
 #[cfg(windows)]
 async fn windows_default_env_expands_every_allowlisted_name() {
@@ -82,25 +100,37 @@ async fn windows_default_env_expands_every_allowlisted_name() {
         .timeout(Duration::from_secs(10))
         .build();
 
-    let command = format!(
-        "echo {}",
-        DEFAULT_ENV_ALLOWLIST
-            .iter()
-            .map(|name| format!("[%{name}%]"))
-            .collect::<Vec<_>>()
-            .join("")
+    let present: Vec<&str> = DEFAULT_ENV_ALLOWLIST
+        .iter()
+        .copied()
+        .filter(|name| std::env::var_os(name).is_some())
+        .collect();
+    assert!(
+        present.contains(&"SystemRoot"),
+        "SystemRoot is always set on Windows"
     );
+
+    let command = present
+        .iter()
+        .map(|name| format!("if defined {name} (echo OK_{name})"))
+        .collect::<Vec<_>>()
+        .join(" & ");
     let out = backend.run(ExecRequest::new(command)).await.unwrap();
 
     assert_eq!(out.exit_code, Some(0), "stderr: {}", out.stderr);
-    for name in DEFAULT_ENV_ALLOWLIST {
-        let token = format!("%{name}%");
+    for name in &present {
+        let token = format!("OK_{name}");
         assert!(
-            !out.stdout.contains(&token),
-            "{token} was not expanded, so {name} never reached the child: {}",
+            out.stdout.contains(&token),
+            "{token} was not printed, so {name} never reached the child: {}",
             out.stdout.trim()
         );
     }
+    assert!(
+        out.stdout.contains("OK_SystemRoot"),
+        "SystemRoot must reach the child: {}",
+        out.stdout.trim()
+    );
 }
 
 /// SMA-614's acceptance criterion verbatim: "a default-configured `HostBackend`
