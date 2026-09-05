@@ -318,7 +318,7 @@ one arm and one test and changes nothing else in this design.
   calls violate the conformance suite's "exactly once" assertion both before and after
   this change; that is a property of an id that cannot identify, not something this
   change can fix. `providers-litellm` carries the identical hole
-  (`stream.rs:554-597`) — see §5.3.
+  (`stream.rs:554-597`), tracked as SMA-616 — see §5.3.
 
 ## 4. Observable behaviour change
 
@@ -385,7 +385,7 @@ of the alignment rather than being kept and expanded.
   not *injectivity*, and it does not close the gap. **The reason this is out of scope
   is scope**: the ticket names `openai/chat` in its title, body, and acceptance
   criteria. The suite has an `openai_responses` subject and the assertion applies to
-  it, so this should be ticketed rather than left in a comment.
+  it, so this is tracked as SMA-617 rather than left in a comment.
 - **A new conformance-suite scenario.** The shape has no capture, and the suite's
   provenance rule forbids invented fixtures. The litellm precedent explicitly parks
   this guard in the crate's unit tests.
@@ -412,8 +412,8 @@ of the alignment rather than being kept and expanded.
 name there. Fixing it is a two-line change in a file this PR already touches
 doc-only — but it is a behaviour change to a second crate for a defect the ticket
 does not name, and it would turn a doc-only edit into a code edit with its own
-version bump. **Recommendation: ticket it, do not fix it here**, and cite the new
-ticket from §3.6's comment so the asymmetry is deliberate and findable.
+version bump. **Decision: tracked as SMA-616, not fixed here.** §3.6's guard comment cites it
+by number so the asymmetry is deliberate and findable.
 
 ## 6. Testing
 
