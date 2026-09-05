@@ -13,7 +13,15 @@ Two macros:
 cargo add paigasus-helikon-macros
 ```
 
-Most users enable the `macros` feature on the [`paigasus-helikon`](https://crates.io/crates/paigasus-helikon) facade instead, which re-exports both macros as `paigasus_helikon::tool` and `paigasus_helikon::tools`. The macros expand against `paigasus-helikon-core` types, so that crate must also be in scope (the facade brings it in automatically).
+Most users enable the `macros` feature on the [`paigasus-helikon`](https://crates.io/crates/paigasus-helikon) facade instead, which re-exports both macros as `paigasus_helikon::tool` and `paigasus_helikon::tools`. The macros expand against `paigasus-helikon-core` types, so that crate must also be in scope (the facade brings it in automatically). That is what the example below assumes:
+
+```bash
+cargo add paigasus-helikon --features macros
+cargo add serde@1 --features derive
+cargo add schemars@1 serde_json@1
+```
+
+`serde_json` is required even though you never name it: `#[tool]` expands to `::serde_json::` paths in your own crate, and the facade does not re-export it. Without it the example fails to compile with `E0433: cannot find serde_json in the crate root`.
 
 ## Example
 
