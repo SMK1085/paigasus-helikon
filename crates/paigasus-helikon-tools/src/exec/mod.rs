@@ -313,7 +313,14 @@ pub(crate) async fn spawn_capped(
         }
         // `raw_handle()` is `None` once the child has exited — vanishingly rare
         // this soon after spawn, but it degrades the same way.
-        None => None,
+        None => {
+            tracing::debug!(
+                target: "paigasus::tools::exec",
+                "child had already exited before it could be put in a job object; \
+                 a timeout will kill only the direct child"
+            );
+            None
+        }
     };
 
     let stdout_pipe = child.stdout.take().expect("piped stdout");
@@ -342,14 +349,26 @@ pub(crate) async fn spawn_capped(
                 // exactly today's behaviour. Without the `start_kill` fallback a
                 // failed terminate would kill *nothing*, not even `cmd.exe`,
                 // which is strictly worse than not having the job at all.
-                if !job.as_ref().is_some_and(JobObject::terminate) {
-                    tracing::warn!(
-                        target: "paigasus::tools::exec",
-                        "job object unavailable or terminate failed; killed only the \
-                         direct child, so processes it spawned may have survived the \
-                         timeout"
-                    );
-                    let _ = child.start_kill();
+                match job.as_ref().map(JobObject::terminate) {
+                    Some(Ok(())) => {}
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            target: "paigasus::tools::exec",
+                            error = %e,
+                            "job object terminate failed; killed only the direct \
+                             child, so processes it spawned may have survived the \
+                             timeout"
+                        );
+                        let _ = child.start_kill();
+                    }
+                    None => {
+                        tracing::warn!(
+                            target: "paigasus::tools::exec",
+                            "job object unavailable; killed only the direct child, \
+                             so processes it spawned may have survived the timeout"
+                        );
+                        let _ = child.start_kill();
+                    }
                 }
             }
             #[cfg(not(any(unix, windows)))]
@@ -357,10 +376,11 @@ pub(crate) async fn spawn_capped(
                 let _ = child.start_kill();
             }
             // Reap the child (bounded by GRACE) but ignore its status: a killed
-            // process has no meaningful exit code. On Windows `start_kill()` is
-            // `TerminateProcess`, which assigns a real code; on unix the child can
-            // still win the race to exit normally before our SIGKILL lands. Both
-            // would otherwise contradict the `ExecOutput::exit_code` contract.
+            // process has no meaningful exit code. On Windows, `TerminateJobObject`
+            // and its `start_kill()`/`TerminateProcess` fallback both assign a real
+            // exit code; on unix the child can still win the race to exit normally
+            // before our SIGKILL lands. All of those would otherwise contradict the
+            // `ExecOutput::exit_code` contract.
             let _ = tokio::time::timeout(GRACE, child.wait()).await;
             None
         }

@@ -56,12 +56,15 @@ impl JobObject {
         Ok(job)
     }
 
-    /// Terminate every process in the job. Returns `false` if the call failed,
+    /// Terminate every process in the job. Returns `Err` if the call failed,
     /// which the caller must treat as "nothing was killed" and fall back.
-    pub(crate) fn terminate(&self) -> bool {
+    pub(crate) fn terminate(&self) -> io::Result<()> {
         // SAFETY: the handle is valid for the lifetime of `self`. The exit code
         // becomes every member's, which is harmless: the timeout path reports
         // `exit_code: None` regardless, per `ExecOutput::exit_code`.
-        unsafe { TerminateJobObject(self.0.as_raw_handle() as HANDLE, 1) != 0 }
+        if unsafe { TerminateJobObject(self.0.as_raw_handle() as HANDLE, 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 }
