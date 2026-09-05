@@ -229,10 +229,6 @@ struct PendingToolCall {
     /// keyed on the canonical wire `index`, which is the model's declared
     /// call position. `providers-litellm` uses its `seq` for both because its
     /// `index` is optional and may be absent entirely; here it never is.
-    #[expect(
-        dead_code,
-        reason = "consumed by ChatTranslator::canonicalize, added in a later SMA-566 task"
-    )]
     seq: u64,
     name: String,
     args: String,
@@ -489,7 +485,66 @@ impl ChatTranslator {
             return index;
         }
 
-        *self.canonical.entry(call_id.to_owned()).or_insert(index)
+        let owner = *self.canonical.entry(call_id.to_owned()).or_insert(index);
+        if owner == index {
+            // The common path: this index owns the call. Every well-formed
+            // stream takes it on every delta, and no migration ever runs.
+            return index;
+        }
+
+        let Some(old) = self.pending.remove(&index) else {
+            return owner;
+        };
+        self.ensure_pending(owner);
+        let slot = self
+            .pending
+            .get_mut(&owner)
+            .expect("ensure_pending just inserted this index");
+
+        // A resolved slot drains `args` on every delta and is removed once
+        // both fields are empty, so `slot.args` is always empty here — which
+        // makes `insert_str(0, ..)` an assignment in practice rather than a
+        // splice. The assert does not guard correctness: `insert_str(0, ..)`
+        // stays order-preserving either way. It exists so that a future
+        // relaxation of drain-once surfaces here for a deliberate
+        // re-decision.
+        debug_assert!(
+            slot.args.is_empty(),
+            "a resolved slot drains its args on every delta"
+        );
+        slot.args.insert_str(0, &old.args);
+
+        // A migrating fragment identical to what the canonical slot already
+        // holds is a whole-name repeat, not a continuation — the same case the
+        // wire path guards, for the same reason: a backend that resends the
+        // complete name under a second index would otherwise get
+        // "search" + "search" -> "searchsearch".
+        if !old.name.is_empty() && old.name != slot.name {
+            if !slot.name.is_empty() {
+                tracing::warn!(
+                    target: "paigasus::openai::chat",
+                    %call_id,
+                    "tool-call name fragments for one call arrived under two wire \
+                     indexes; merging in buffer-creation order, which may misorder \
+                     them if the two indexes interleaved"
+                );
+            }
+            // Order by creation `seq`, not by which buffer is migrating. Both
+            // orderings are reachable, and a plain prepend or a plain append
+            // is wrong in exactly one of them.
+            if old.seq < slot.seq {
+                slot.name.insert_str(0, &old.name);
+            } else {
+                slot.name.push_str(&old.name);
+            }
+        }
+        // Claimed whenever the migrating buffer is the older one, even if its
+        // name was a repeat or empty: `seq` must stay accurate for any
+        // subsequent merge into this same slot.
+        if old.seq < slot.seq {
+            slot.seq = old.seq;
+        }
+        owner
     }
 
     /// Correlate one tool-call delta and emit any completed name/args.
@@ -1334,5 +1389,130 @@ mod tests {
             ],
             "two blank-id calls must both emit; an empty id cannot merge them"
         );
+    }
+
+    /// A fragment buffered under a second index, before that index's `id`
+    /// resolved, must survive the alias rather than being stranded.
+    ///
+    /// This is the *prepend* branch of the merge: the migrating buffer was
+    /// created first, so its fragment belongs in front. Its mirror is
+    /// `owner_index_buffered_first_appends_on_merge`; a naive unconditional
+    /// append yields `"alphabeta"` here.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("alpha")` and then `Some("beta")`.
+    #[test]
+    fn fragment_buffered_under_a_second_index_is_not_stranded() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(1, None, Some("beta"), None),
+                make_chunk(0, Some("c1"), Some("alpha"), None),
+                make_chunk(1, Some("c1"), None, Some("{}")),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "betaalpha".to_owned())]);
+    }
+
+    /// The *append* branch, mirror of the test above: here the canonical slot
+    /// was created first, so the migrating fragment belongs behind it. A naive
+    /// unconditional prepend yields `"betaalpha"` here.
+    ///
+    /// Together these two are why `PendingToolCall` carries a `seq`: both
+    /// orderings are reachable, and a plain prepend or a plain append is wrong
+    /// in exactly one of them.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("alpha")` and then `Some("beta")`.
+    #[test]
+    fn owner_index_buffered_first_appends_on_merge() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some("c1"), Some("alpha"), None),
+                make_chunk(1, None, Some("beta"), None),
+                make_chunk(1, Some("c1"), None, Some("{}")),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "alphabeta".to_owned())]);
+    }
+
+    /// A migrating fragment identical to what the canonical slot already holds
+    /// is a whole-name repeat, not a continuation — the same case the SMA-547
+    /// wire-path guard handles, for the same reason. Without this, a backend
+    /// that resends the complete name under a second index yields
+    /// `"searchsearch"`, which resolves to no registered tool.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("search")` twice.
+    #[test]
+    fn repeated_whole_name_is_not_doubled_across_the_alias_boundary() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(1, None, Some("search"), None),
+                make_chunk(0, Some("c1"), Some("search"), None),
+                make_chunk(1, Some("c1"), None, Some("{}")),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "search".to_owned())]);
+    }
+
+    /// Pins `slot.seq = old.seq` in `canonicalize`. When the migrating buffer
+    /// is the older one, the canonical slot must inherit its creation order —
+    /// otherwise a *third* index aliasing into the same call merges on the
+    /// wrong side.
+    ///
+    /// Without that line the third merge prepends instead of appending and
+    /// yields `"GBAx"`.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits three
+    /// separate names.
+    #[test]
+    fn migrated_buffer_donates_its_creation_order() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(1, None, Some("B"), None),
+                make_chunk(2, None, Some("G"), None),
+                make_chunk(0, Some("c1"), Some("A"), None),
+                make_chunk(1, Some("c1"), Some("x"), None),
+                make_chunk(2, Some("c1"), None, Some("{}")),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "BAxG".to_owned())]);
+    }
+
+    /// The accepted residual: when two indexes for one call interleave at
+    /// *fragment* level, no buffer-level order reconstructs the wire sequence,
+    /// so the merge misorders the fragments — though it loses none of them.
+    ///
+    /// Wire order is `AA BB CC DD`; the merge yields `AADDBBCC`. This is
+    /// pinned deliberately rather than left undefined, matching
+    /// `providers-litellm`'s `interleaved_dual_keying_is_lossless_and_misordered`.
+    /// It is still strictly better than the pre-fix translator, which emits
+    /// two separate names. Do not "fix" the misordering without adding
+    /// per-fragment sequencing and re-deciding the trade-off.
+    ///
+    /// Confirmed to FAIL against the pre-fix translator, which emits
+    /// `Some("BBCC")` and then `Some("AADD")`.
+    #[test]
+    fn interleaved_aliasing_is_lossless_and_misordered() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(1, None, Some("AA"), None),
+                make_chunk(0, Some("c1"), Some("BB"), None),
+                make_chunk(0, None, Some("CC"), None),
+                make_chunk(1, None, Some("DD"), None),
+                make_chunk(1, Some("c1"), None, Some("{}")),
+            ],
+        );
+        assert_eq!(named(&evs), vec![("c1".to_owned(), "AADDBBCC".to_owned())]);
     }
 }
