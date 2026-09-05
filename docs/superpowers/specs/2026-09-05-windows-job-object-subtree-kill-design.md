@@ -488,9 +488,20 @@ checks for that target — `clippy` and `check` do not link, so no mingw toolcha
 needed):
 
 ```bash
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools -- -D warnings
 cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools \
-  --all-targets -- -D warnings
+  --test exec_timeout_portable -- -D warnings
 ```
+
+**Scoped, not `--all-targets`** — corrected during implementation. `--all-targets`
+on the Windows target fails on pre-existing `missing_docs`/`dead_code` in unrelated
+test files that are `#![cfg(unix)]`-gated and therefore near-empty on Windows
+(`bash.rs`, `forkd_tls`, `egress_proxy`, `sandbox_navigation`). The first check of
+this command missed that, because the build stopped at a lib error before it ever
+reached the test targets. Cleaning those files up is a repo-wide job outside this
+ticket; the two scoped commands cover exactly the code SMA-613 adds — the lib
+(including `job_object.rs` and the `spawn_capped` wiring) and the one test target
+carrying the new Windows test.
 
 **Clippy, not `check`** — and this is the point. `clippy` runs on `ubuntu-latest`
 only (`ci.yml:43-44`), so `-D warnings`, a required gate, structurally cannot reach

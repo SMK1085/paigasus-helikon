@@ -34,14 +34,27 @@
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: a green `cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools --all-targets -- -D warnings`, relied on by every later task.
+- Produces: a green Windows-target clippy for the lib and for the
+  `exec_timeout_portable` test target, relied on by every later task.
+
+> **Scope note (ruling, 2026-09-05).** These commands were originally written as a
+> single `--all-targets` invocation. That is **not achievable** and never was:
+> `--all-targets` on the Windows target trips pre-existing `missing_docs` and
+> `dead_code` failures across unrelated test files (`bash.rs`, `forkd_tls`,
+> `egress_proxy`, `sandbox_navigation`) which are `#![cfg(unix)]`-gated and go
+> near-empty on Windows. The earlier verification missed this because the build
+> stopped at the lib error before reaching the test targets. Fixing those files is
+> a repo-wide cleanup outside SMA-613, so the gate is scoped to the lib plus the
+> one test target this ticket touches.
 
 - [ ] **Step 1: Observe the existing failure**
 
 Run:
 
 ```bash
-cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools --all-targets -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools \
+  --test exec_timeout_portable -- -D warnings
 ```
 
 Expected: FAIL with
@@ -79,7 +92,9 @@ to:
 Run:
 
 ```bash
-cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools --all-targets -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools \
+  --test exec_timeout_portable -- -D warnings
 ```
 
 Expected: PASS, no warnings.
@@ -263,7 +278,9 @@ Expected: PASS again. Confirm `git diff crates/paigasus-helikon-tools/src/exec/m
 Run:
 
 ```bash
-cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools --all-targets -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools \
+  --test exec_timeout_portable -- -D warnings
 ```
 
 Expected: PASS. This compiles the `#[cfg(windows)]` consts and the test body; it cannot run them.
@@ -470,7 +487,9 @@ Finally, replace the timeout arm's `#[cfg(not(unix))]` block with:
 Run:
 
 ```bash
-cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools --all-targets -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools \
+  --test exec_timeout_portable -- -D warnings
 ```
 
 Expected: PASS. This is the only lint coverage this code will ever get.
@@ -745,7 +764,9 @@ Expected: all PASS.
 - [ ] **Step 3: Run the Windows-target lint one final time**
 
 ```bash
-cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools --all-targets -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools -- -D warnings
+cargo clippy --target x86_64-pc-windows-gnu -p paigasus-helikon-tools \
+  --test exec_timeout_portable -- -D warnings
 ```
 
 Expected: PASS.
