@@ -168,34 +168,36 @@ async fn host_backend_resolves_a_relative_path_in_the_sandbox() {
     );
 }
 
-/// **Round-1 oracle (SMA-615) — its expected answer is NOT known.**
+/// Characterization guard for **why** the cwd contract holds on Windows
+/// (SMA-615). Measured on `test (windows-latest, stable)` and
+/// `test (windows-latest, 1.94)` on 2026-09-05: given the verbatim working
+/// directory `\\?\C:\Users\runneradmin\AppData\Local\Temp\.tmpTg6QTA`, the child
+/// reported `C:\Users\runneradmin\AppData\Local\Temp\.tmpTg6QTA` and stderr was
+/// empty — no UNC banner.
 ///
-/// `host_backend_pins_cwd_to_the_sandbox_root` cannot tell two refuting worlds
-/// apart, because it compares canonicalized forms. The child may report
-/// `C:\Users\...` (Windows normalized the verbatim prefix away before `cmd.exe`
-/// ever saw it) or `\\?\C:\Users\...` (`cmd.exe` tolerated a verbatim working
-/// directory). Both pass that test; only the second justifies saying "a verbatim
-/// path is a fine `cmd.exe` cwd".
+/// So `CreateProcessW` normalizes the verbatim prefix away before the child
+/// observes it, and `cmd.exe` never sees a path beginning `\\`. The ticket's
+/// suspicion fails for *that* reason — **not** because `cmd.exe` tolerates
+/// verbatim working directories, which was never tested and is not claimed here.
 ///
-/// This test asserts the RAW, un-normalized report, so whichever way it falls its
-/// message names the observed string. It exists to be read once, on
-/// `test (windows-latest, stable)`, and is then rewritten to assert whatever was
-/// observed — at which point it becomes a characterization guard that goes red if
-/// a future Rust or Windows release changes this behaviour underneath us.
-///
-/// DO NOT delete this without replacing it with the observed truth.
+/// Pinned so the assumption cannot rot silently. If a future Rust changes how
+/// `Command::current_dir` passes `lpCurrentDirectory`, or a future Windows stops
+/// normalizing, the verbatim path would reach `cmd.exe` and the working directory
+/// would stop being pinned — `host_backend_pins_cwd_to_the_sandbox_root` would go
+/// red alongside this, and the fix would be to strip the prefix in
+/// `Sandbox::open` (`dunce::canonicalize`).
 #[tokio::test]
 #[cfg(windows)]
-async fn windows_child_reports_a_verbatim_cwd() {
+async fn windows_child_reports_a_normalized_cwd() {
     let tmp = tempfile::tempdir().unwrap();
     let (out, root) = run_in_sandbox(tmp.path(), PRINT_CWD).await;
     let reported = reported_cwd(&out);
 
     assert!(
-        reported.starts_with(r"\\?\"),
-        "ORACLE: the child reported {reported:?} for a working directory passed \
-         as {}; the verbatim prefix did not survive into the child. \
-         stdout={:?} stderr={:?}",
+        !reported.starts_with(r"\\?\"),
+        "the child reported the verbatim path {reported:?} for a working \
+         directory passed as {}; CreateProcessW no longer normalizes it, so \
+         cmd.exe may stop honouring the sandbox root. stdout={:?} stderr={:?}",
         root.display(),
         out.stdout,
         out.stderr

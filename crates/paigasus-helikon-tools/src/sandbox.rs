@@ -32,6 +32,31 @@ impl Sandbox {
                 source,
             }
         })?;
+        // Deliberately a plain `canonicalize()`, verbatim `\\?\` prefix and all.
+        //
+        // SMA-615 suspected this broke cwd pinning on Windows: `canonicalize`
+        // returns `\\?\C:\...`, that path becomes `ExecConfig::cwd`, and
+        // `cmd.exe` treats a working directory beginning `\\` as a UNC path —
+        // printing "UNC paths are not supported. Defaulting to Windows
+        // directory" and resetting to `%SystemRoot%`.
+        //
+        // Measured on `test (windows-latest, stable)` and `(windows-latest,
+        // 1.94)` on 2026-09-05: it does not. Handed
+        // `\\?\C:\Users\runneradmin\AppData\Local\Temp\.tmpTg6QTA`, the child
+        // reported `C:\Users\runneradmin\AppData\Local\Temp\.tmpTg6QTA` with an
+        // empty stderr and no banner. `Command::current_dir` passes the path as
+        // `CreateProcessW`'s `lpCurrentDirectory`, which normalizes the prefix
+        // away before the child observes it, so `cmd.exe` never sees a leading
+        // `\\`. Note that is the reason it works — NOT that `cmd.exe` tolerates
+        // verbatim working directories, which was never tested.
+        //
+        // `tests/exec_cwd.rs` is the standing evidence and goes red if this
+        // changes; the fix then is `dunce::canonicalize` here.
+        //
+        // Scope: one runner image. `HKCU\Software\Microsoft\Command Processor\
+        // DisableUNCCheck` and cmd.exe differences across Windows Server
+        // releases can change `cmd.exe`'s half of this on other hosts — but the
+        // normalization above happens before `cmd.exe` is involved at all.
         let canonical = root.canonicalize().map_err(|source| SandboxError::Open {
             path: root.to_path_buf(),
             source,
