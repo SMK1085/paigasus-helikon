@@ -276,6 +276,15 @@ pub(crate) struct ChatTranslator {
     /// backend that sends `"id": ""` on every delta warns once per call
     /// rather than once per chunk.
     warned_blank_id: HashSet<u32>,
+    /// Wire indices that have already emitted a `ToolCallDelta` while their
+    /// `call_id` was still blank.
+    ///
+    /// Gates the blank-id replacement rule below. Once a delta has gone out
+    /// under `""`, upgrading the index to a real id would split one call
+    /// across two `call_id`s and leave the real one with zero name-carrying
+    /// deltas — an "exactly once" violation on a *non-blank* id, which is
+    /// worse than the stuck blank this rule exists to fix (SMA-566).
+    blank_emitted: HashSet<u32>,
     /// index → buffered name/args.
     ///
     /// `args` is drain-once: taken on the first delta after the call_id is
@@ -298,6 +307,7 @@ impl ChatTranslator {
             name_emitted: HashMap::new(),
             warned_late_name: HashSet::new(),
             warned_blank_id: HashSet::new(),
+            blank_emitted: HashSet::new(),
             pending: HashMap::new(),
             next_seq: 0,
             finish_reason: None,
@@ -673,6 +683,10 @@ impl ChatTranslator {
             .and_then(|f| f.arguments.as_deref())
             .unwrap_or("");
 
+        // Captured before the match so the guard below reads a plain `bool`
+        // rather than borrowing `self` while `tool_calls` is borrowed mutably.
+        let blank_already_emitted = self.blank_emitted.contains(&index);
+
         // Register or replace the call_id for this wire index.
         if let Some(id) = tc.id.as_deref() {
             match self.tool_calls.get_mut(&index) {
@@ -684,7 +698,18 @@ impl ChatTranslator {
                 // replace it — otherwise the blank sticks and the call reaches
                 // the consumer under an empty `call_id` even though the
                 // backend eventually supplied a real one.
-                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                //
+                // The upgrade is withheld once this index has already emitted
+                // a delta under the blank id. Replacing then would split one
+                // call across two `call_id`s: the name would have gone out
+                // under `""` and every later delta under the real id, leaving
+                // the real id with zero name-carrying deltas. That is an
+                // "exactly once" violation on a *non-blank* `call_id` — worse
+                // than the stuck blank, and one the pre-SMA-566 translator did
+                // not have. Keeping the blank keeps the call whole.
+                Some(existing)
+                    if existing.is_empty() && !id.is_empty() && !blank_already_emitted =>
+                {
                     *existing = id.to_owned();
                 }
                 Some(_) => {}
@@ -789,6 +814,12 @@ impl ChatTranslator {
         // arguments on a bare id-carrying delta.
         if name_to_emit.is_none() && args_out.is_empty() {
             return;
+        }
+
+        // Record that this index has emitted under a blank id, so the
+        // replacement rule above cannot later split the call in two.
+        if call_id.is_empty() {
+            self.blank_emitted.insert(index);
         }
 
         out.push(ModelEvent::ToolCallDelta {
@@ -1653,6 +1684,46 @@ mod tests {
         assert!(
             t.warned_late_name.contains(&0),
             "the unrecoverable fragment must be recorded against the canonical index"
+        );
+    }
+
+    /// A real `id` must NOT replace a blank one once this index has already
+    /// emitted a delta under the blank.
+    ///
+    /// Replacing then splits one call across two `call_id`s: `"alpha"` has
+    /// already gone out under `""`, so every later delta would arrive under
+    /// `"c1"` with no name — leaving a *non-blank* `call_id` with zero
+    /// name-carrying deltas. That is an "exactly once" violation on a real id,
+    /// which the translator on `main` did not have (it kept everything under
+    /// `""`). Withholding the upgrade keeps the call whole and matches `main`
+    /// on this shape.
+    ///
+    /// The counterpart to `a_real_id_replaces_a_blank_one_on_the_same_wire_index`,
+    /// where nothing had been emitted yet and the upgrade is correct.
+    #[test]
+    fn a_real_id_does_not_replace_a_blank_one_after_the_index_emitted() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some(""), Some("alpha"), Some("{}")),
+                make_chunk(0, Some("c1"), None, Some("[]")),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![(String::new(), "alpha".to_owned())],
+            "the name stays under the blank id it was emitted with"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "no delta may arrive under the real id, or it would carry no name"
+        );
+        assert_eq!(
+            args_of(&evs, ""),
+            "{}[]",
+            "every delta for this call stays under the one call_id"
         );
     }
 

@@ -341,26 +341,33 @@ input for the same reason. An implementer must not write test 2 expecting
 
 **Row 2 is the §3.5 inclusion** and is severable from the rest.
 
-**Row 2 has an unenumerated third sub-case: a blank id that has already flushed a
-name before the real id arrives.**
+**Row 2 is withheld once the index has already emitted.** A blank id that has
+already flushed a name before the real id arrives is the one case where the §3.5
+upgrade must *not* fire:
 
 ```text
 {index:0, id:"",   name:"alpha", arguments:"{}"}
 {index:0, id:"c1", name:"beta",  arguments:"[]"}
 ```
 
-`main` emits `[("", Some("alpha"), "{}"), ("", None, "[]")]`; this branch emits
-`[("", Some("alpha"), "{}"), ("c1", None, "[]")]` — so a **non-blank** `call_id`
-(`"c1"`) reaches the consumer carrying **zero** name-bearing deltas. Like every row
-in this table, the shape is unobserved from any backend, and `main` is equally
-broken on it — it just loses differently, discarding the real id entirely rather than
-discarding the second name. §3.6's "the at-most-one invariant is scoped to non-blank
-`call_id`s" note does not excuse this: that note is about two *blank* ids colliding at
-`""`, not about a *non-blank* id that ends up starved of any name-carrying delta once
-its predecessor on the same index already flushed under a blank id. It is recorded
-here for completeness, not fixed — closing it would need its own decision about what
-a blank id that already flushed should do with a real id arriving after it, which
-this design does not make.
+An unguarded §3.5 emits `[("", Some("alpha"), "{}"), ("c1", None, "[]")]` — splitting
+one call across two `call_id`s and leaving the **non-blank** `"c1"` with **zero**
+name-bearing deltas. That is an "exactly once" violation on a *real* id, and it is one
+`main` does not have: `main` keeps everything under `""`, which satisfies the assertion
+for `""` and merely wastes the real id. Introducing a new violation on a non-blank id
+to fix a stuck blank one is a bad trade.
+
+§3.6's "the at-most-one invariant is scoped to non-blank `call_id`s" note does not
+excuse it either — that note is about two *blank* ids colliding at `""`, not about a
+non-blank id starved of any name-carrying delta.
+
+So the upgrade is gated on `blank_emitted: HashSet<u32>`, which records wire indexes
+that have emitted a delta while their `call_id` was blank. With the gate, this shape
+emits `[("", Some("alpha"), "{}"), ("", None, "[]")]` — identical to `main`, one call
+under one id — while the §3.5 improvement still applies whenever nothing has gone out
+yet. Pinned by `a_real_id_does_not_replace_a_blank_one_after_the_index_emitted`, whose
+counterpart `a_real_id_replaces_a_blank_one_on_the_same_wire_index` pins the upgrade
+that does fire. Found by CodeRabbit on PR #240.
 
 **For every well-formed shape, output is unchanged — including end-of-stream emission
 order.** That is the load-bearing claim of this design, and it rests on two specific
