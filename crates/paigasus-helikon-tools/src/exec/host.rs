@@ -93,6 +93,7 @@ impl HostBackendBuilder {
                 timeout: self.timeout,
                 max_output_bytes: self.max_output_bytes,
             },
+            #[cfg(unix)]
             limits: self.limits,
         })
     }
@@ -102,6 +103,7 @@ impl HostBackendBuilder {
 /// security boundary.
 pub struct HostBackend {
     cfg: ExecConfig,
+    #[cfg(unix)]
     limits: ResourceLimits,
 }
 
@@ -129,6 +131,11 @@ impl HostBackend {
 #[async_trait]
 impl ExecutionBackend for HostBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
+        // Consumed only by the `#[cfg(unix)]` `pre_exec` hook below; on Windows
+        // the closure captures nothing. Without the gate this is an
+        // `unused_variables` error under `-D warnings` on the Windows target —
+        // which CI cannot see, because clippy runs on ubuntu only.
+        #[cfg(unix)]
         let limits = self.limits.clone();
         spawn_capped(&self.cfg, &[], &req.command, move |_cmd| {
             #[cfg(unix)]
