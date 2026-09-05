@@ -1,8 +1,10 @@
 //! Exec tests that spawn a **real** child through `spawn_capped` and are NOT
-//! `cfg`-gated. Every other real-process exec test in this crate is unix-only
-//! (`tests/host_backend.rs` is file-level `#![cfg(unix)]`); `tests/exec_backend.rs`
-//! is ungated but drives a `MockBackend` and never spawns anything. This file is
-//! the one that must compile and pass on Windows too — keep it that way.
+//! `cfg`-gated. Two sibling files are the same shape — `tests/exec_env_defaults.rs`
+//! (SMA-614) and `tests/exec_cwd.rs` (SMA-615). The unix-only ones are
+//! `tests/host_backend.rs` and `tests/exec_env_non_unicode.rs`, both file-level
+//! `#![cfg(unix)]`; `tests/exec_backend.rs` is ungated but drives a `MockBackend`
+//! and never spawns anything. These three ungated files must compile and pass on
+//! Windows too — keep them that way.
 #![allow(missing_docs)]
 
 use std::path::Path;
