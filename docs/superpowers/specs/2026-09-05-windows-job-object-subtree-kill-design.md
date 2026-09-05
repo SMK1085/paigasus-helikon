@@ -233,6 +233,8 @@ impl JobObject {
     pub(crate) fn assign(process: RawHandle) -> std::io::Result<Self>;
 
     /// Terminate every process in the job. `false` if the call failed.
+    // Amended during implementation: ships as `-> std::io::Result<()>`, so the
+    // timeout-path `warn!` can name the OS error rather than only the consequence.
     pub(crate) fn terminate(&self) -> bool;
 }
 ```
@@ -426,8 +428,22 @@ so the grandchild-survives property is unchanged, with no `START` involved.
 
 | | command | script |
 | -- | -- | -- |
-| unix | `sh grandchild.sh; true` | `echo started > started`; `sleep 4`; `echo alive > alive` |
-| Windows | `cmd /C grandchild.cmd` | `echo started>started`; `ping -n 5 127.0.0.1 >NUL`; `echo alive>alive` |
+| unix | `sh "<abs script>"; true` | `echo started > "<abs>"`; `sleep 4`; `echo alive > "<abs>"` |
+| Windows | `cmd /C <abs script>` (unquoted) | `echo started>"<abs>"`; `ping -n 5 127.0.0.1 >NUL`; `echo alive>"<abs>"` |
+
+**Amended during implementation, twice.** The paths became **absolute** because
+`Sandbox::open` canonicalizes and on Windows that yields a verbatim `\\?\C:\...`
+path `cmd.exe` may reject as UNC, resetting its cwd to `%SystemRoot%` — which would
+fail the positive control for a reason unrelated to the subtree kill (see SMA-615).
+And the Windows invocation is **unquoted**, unlike unix: `Command::arg`'s escaper
+rewrites every `"` to `\"`, and `cmd.exe`'s escape character is `^`, not `\`, so a
+quoted path arrives as literal backslash-quote text and the nested `cmd /C` cannot
+find the script. **No literal `"` can survive the trip through `spawn_capped` to
+`cmd /C`.** The quotes *inside* the generated script are fine — that file is read
+from disk and parsed once. The unix arm keeps its quotes, because `sh -c` receives
+its argument through `execve` unmangled. A loud skip covers a dev machine whose
+`TEMP` contains a space; `windows-latest` uses the 8.3 `RUNNER~1` form, so CI runs
+the test for real.
 
 The unix `; true` is load-bearing: without it `sh -c` applies its single-command
 `exec` optimisation and replaces the outer shell, collapsing the tree so the

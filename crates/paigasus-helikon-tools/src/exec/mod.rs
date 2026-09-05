@@ -146,8 +146,10 @@ pub struct ExecOutput {
     pub exit_code: Option<i32>,
     /// Whether the command was killed because it exceeded the timeout.
     ///
-    /// A timeout kills the whole spawned subtree, not just the direct child: a
-    /// process group `SIGKILL` on unix, a Job Object termination on Windows.
+    /// On unix and Windows a timeout kills the whole spawned subtree, not just
+    /// the direct child: a process group `SIGKILL` on unix, a Job Object
+    /// termination on Windows. On any other target no subtree mechanism is
+    /// available and only the direct child is killed.
     ///
     /// One accepted gap on Windows: a process spawned in the brief window
     /// between the shell starting and its assignment to the job object is not a
@@ -366,28 +368,28 @@ pub(crate) async fn spawn_capped(
                 // exactly today's behaviour. Without the `start_kill` fallback a
                 // failed terminate would kill *nothing*, not even `cmd.exe`,
                 // which is strictly worse than not having the job at all.
-                match job.as_ref() {
-                    Ok(j) => {
-                        if let Err(e) = j.terminate() {
-                            tracing::warn!(
-                                target: "paigasus::tools::exec",
-                                error = %e,
-                                "job object terminate failed; killed only the direct \
-                                 child, so processes it spawned may have survived the \
-                                 timeout"
-                            );
-                            let _ = child.start_kill();
-                        }
-                    }
-                    Err(cause) => {
-                        tracing::warn!(
-                            target: "paigasus::tools::exec",
-                            cause = %cause,
-                            "job object unavailable; killed only the direct child, \
-                             so processes it spawned may have survived the timeout"
-                        );
-                        let _ = child.start_kill();
-                    }
+                let cause: Option<String> = match job.as_ref() {
+                    Ok(j) => j.terminate().err().map(|e| e.to_string()),
+                    Err(e) => Some(e.to_string()),
+                };
+                if let Some(cause) = cause {
+                    // `start_kill()` can itself fail, and its error is not one the
+                    // caller ever sees: a timed-out run reports `timed_out: true`
+                    // and never returns `Err`, per the timeout contract. Record the
+                    // outcome instead of dropping it — otherwise the one case where
+                    // even the direct child survives is indistinguishable in the log
+                    // from the case where only its grandchildren did.
+                    let fallback = match child.start_kill() {
+                        Ok(()) => "direct child killed".to_owned(),
+                        Err(e) => format!("start_kill also failed: {e}"),
+                    };
+                    tracing::warn!(
+                        target: "paigasus::tools::exec",
+                        cause = %cause,
+                        fallback = %fallback,
+                        "job object kill unavailable; processes the child spawned may \
+                         have survived the timeout"
+                    );
                 }
             }
             #[cfg(not(any(unix, windows)))]

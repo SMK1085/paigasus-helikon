@@ -69,6 +69,11 @@ impl HostBackendBuilder {
 
     /// Override the resource limits. Replaces the defaults
     /// (`RLIMIT_CPU` = timeout+5s, `RLIMIT_FSIZE` = 1 GiB, `RLIMIT_AS` = unset).
+    ///
+    /// **unix only.** [`ResourceLimits`] is applied through `setrlimit`, which has
+    /// no Windows equivalent, so on Windows this call is accepted and has no
+    /// effect. That has always been the behaviour; it is stated here because the
+    /// `RLIMIT_*` names above are the only thing that previously implied it.
     pub fn rlimits(mut self, limits: ResourceLimits) -> Self {
         self.limits = limits;
         self.limits_set = true;

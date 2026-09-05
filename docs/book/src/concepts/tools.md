@@ -380,10 +380,11 @@ The default backend. Pins the working directory to the sandbox root and scrubs t
 environment to a configurable allowlist, but spawned commands have the same OS
 access as the parent process.
 
-When a command exceeds its timeout the **whole spawned subtree** is killed, not
-just the shell: a process-group `SIGKILL` on unix, a Job Object termination on
-Windows. `ExecOutput::timed_out` is `true` and `exit_code` is `None` on every
-platform — a killed process has no meaningful exit code.
+When a command exceeds its timeout the **whole spawned subtree** is killed on unix
+and Windows, not just the shell: a process-group `SIGKILL` on unix, a Job Object
+termination on Windows. On any other target there is no subtree mechanism and only
+the direct child is killed. `ExecOutput::timed_out` is `true` and `exit_code` is
+`None` on every platform — a killed process has no meaningful exit code.
 
 One accepted gap on Windows: a process spawned in the brief window between the
 shell starting and its assignment to the job object is not a member of it, and

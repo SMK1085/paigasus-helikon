@@ -138,6 +138,16 @@ TDD, adapted to a platform that cannot be run locally. The test is **portable**:
 
 - [ ] **Step 1: Write the failing test**
 
+> **Amended during implementation.** The shipped test differs from the code below in
+> two ways, both forced by Windows. (1) The script path and both sentinel paths are
+> **absolute**, built at runtime with `format!`, because `Sandbox::open` canonicalizes
+> and on Windows that yields a verbatim `\\?\C:\...` path `cmd.exe` may reject as UNC —
+> see SMA-615. (2) The Windows invocation is **unquoted**: `Command::arg`'s escaper
+> rewrites `"` to `\"` and `cmd.exe`'s escape character is `^`, so no literal quote
+> survives the trip to a nested `cmd /C`. The quotes inside the generated script are
+> fine, and the unix arm keeps its quotes because `execve` does not mangle them.
+> Read `tests/exec_timeout_portable.rs` for the shipped form.
+
 Append to `crates/paigasus-helikon-tools/tests/exec_timeout_portable.rs`:
 
 ```rust
@@ -267,7 +277,9 @@ This is the red half of the cycle, and the only place in this plan where the gua
 Run:
 
 ```bash
-git checkout -- crates/paigasus-helikon-tools/src/exec/mod.rs
+# Reverses ONLY the falsification hunk. Do not use `git checkout -- <file>`:
+# that discards every uncommitted change in the file, not just this one.
+git diff -- crates/paigasus-helikon-tools/src/exec/mod.rs | git apply -R
 cargo test -p paigasus-helikon-tools --test exec_timeout_portable timeout_kills_the_whole_subtree
 ```
 
@@ -314,6 +326,13 @@ Expected red on Windows until the Job Object lands."
 **Interfaces:**
 - Consumes: `timeout_kills_the_whole_subtree` from Task 2 as the acceptance test.
 - Produces: `pub(crate) struct JobObject` with `assign(process: RawHandle) -> std::io::Result<Self>` and `terminate(&self) -> bool`, used only by `spawn_capped`.
+
+> **Amended during implementation.** `terminate` ships as
+> `-> std::io::Result<()>`, not `-> bool`, so the timeout-path `warn!` can name the
+> OS error; the caller matches on the `Result` rather than using `is_some_and`. The
+> `bool` form shown in the steps below is the pre-review design, kept for the record.
+> Likewise, the regression test in Task 2 ships with **absolute** script and sentinel
+> paths and an **unquoted** Windows invocation — see the amendment note in Task 2.
 
 - [ ] **Step 1: Add the dependencies**
 
