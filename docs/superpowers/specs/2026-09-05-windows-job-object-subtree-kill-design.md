@@ -5,7 +5,7 @@
 **Crate:** `paigasus-helikon-tools`
 **Linear:** [SMA-613](https://linear.app/smaschek/issue/SMA-613/exec-timeout-does-not-kill-the-process-subtree-on-windows-so)
 **Split out of:** SMA-569, where it was recorded as an accepted gap.
-**Base:** `2ede539` (after SMA-614 merged).
+**Base:** `bd742ac` (after SMA-614 and the 0.2.18 release merged).
 
 ## Problem
 
@@ -517,8 +517,14 @@ This is a documented pre-PR step, not a suggestion. It cannot *run* the test:
 - **Silent degrade.** Per Decision 5 there is no signal when containment falls back
   to `start_kill()`. Known limitation, taken on scope grounds.
 - **SMA-614 overlap — resolved.** SMA-614 merged as `2ede539` and this branch is
-  rebased onto it. Its `DEFAULT_ENV_ALLOWLIST` work removed the bespoke
+  rebased past it. Its `DEFAULT_ENV_ALLOWLIST` work removed the bespoke
   `ENV_ALLOWLIST` from `exec_timeout_portable.rs` and added a `#[cfg(test)] mod
   tests` at the end of `exec/mod.rs`; neither collides with this change, which edits
-  the timeout arm. Release PR #235 (tools 0.2.17 → 0.2.18) is still in flight, so
-  one more rebase onto `main` is expected before opening the PR.
+  the timeout arm. Release PR #235 has since landed as `bd742ac` (tools 0.2.18,
+  facade 0.5.19, both published), so `main` is settled and no further rebase is
+  pending.
+- **`test (windows-latest, stable)` costs ~14 min.** It is the only execution gate
+  for this work, and it ran green on both SMA-614 and the release PR under the new
+  8-variable Windows default — so a red result on this PR indicts this change, not
+  the repo. Budget for slow iteration: every behavioural correction is a full CI
+  round trip.
