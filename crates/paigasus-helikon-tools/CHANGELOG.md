@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.17...paigasus-helikon-tools-v0.2.18) - 2026-09-05
+
+### Added
+
+- *(tools)* SMA-614 give windows children 8 default env vars, not just PATH ([#234](https://github.com/SMK1085/paigasus-helikon/pull/234))
+
 ## [0.2.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.16...paigasus-helikon-tools-v0.2.17) - 2026-09-05
 
 ### Fixed
