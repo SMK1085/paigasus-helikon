@@ -153,6 +153,10 @@ pub struct ExecOutput {
     /// between the shell starting and its assignment to the job object is not a
     /// member, and survives. Closing it requires APIs that are nightly-only on
     /// stable Rust today.
+    ///
+    /// A second, degraded-path gap: if the job object cannot be created or its
+    /// termination call fails, only the direct child is killed and a warning is
+    /// emitted on the `paigasus::tools::exec` target.
     pub timed_out: bool,
     /// Whether either stream was truncated at the output cap.
     pub truncated: bool,
@@ -308,18 +312,20 @@ pub(crate) async fn spawn_capped(
 
     // Assign as the very next statement after spawn: a grandchild spawned in
     // the window before this lands escapes the job (accepted gap, SMA-613).
+    //
+    // Held as `Result`, not `Option`: the timeout path below needs the cause of
+    // a failed assign, not just the fact that it failed, so an operator seeing
+    // "containment degraded" on the timeout warning also sees why.
     #[cfg(windows)]
-    let job = match child.raw_handle().map(JobObject::assign) {
-        Some(Ok(j)) => Some(j),
-        Some(Err(e)) => {
+    let job: Result<JobObject, std::io::Error> = match child.raw_handle() {
+        Some(handle) => JobObject::assign(handle).inspect_err(|e| {
             tracing::debug!(
                 target: "paigasus::tools::exec",
                 error = %e,
                 "could not put the child in a job object; a timeout will kill only \
                  the direct child"
             );
-            None
-        }
+        }),
         // `raw_handle()` is `None` once the child has exited — vanishingly rare
         // this soon after spawn, but it degrades the same way.
         None => {
@@ -328,7 +334,9 @@ pub(crate) async fn spawn_capped(
                 "child had already exited before it could be put in a job object; \
                  a timeout will kill only the direct child"
             );
-            None
+            Err(std::io::Error::other(
+                "child had already exited before it could be put in a job object",
+            ))
         }
     };
 
@@ -358,21 +366,23 @@ pub(crate) async fn spawn_capped(
                 // exactly today's behaviour. Without the `start_kill` fallback a
                 // failed terminate would kill *nothing*, not even `cmd.exe`,
                 // which is strictly worse than not having the job at all.
-                match job.as_ref().map(JobObject::terminate) {
-                    Some(Ok(())) => {}
-                    Some(Err(e)) => {
-                        tracing::warn!(
-                            target: "paigasus::tools::exec",
-                            error = %e,
-                            "job object terminate failed; killed only the direct \
-                             child, so processes it spawned may have survived the \
-                             timeout"
-                        );
-                        let _ = child.start_kill();
+                match job.as_ref() {
+                    Ok(j) => {
+                        if let Err(e) = j.terminate() {
+                            tracing::warn!(
+                                target: "paigasus::tools::exec",
+                                error = %e,
+                                "job object terminate failed; killed only the direct \
+                                 child, so processes it spawned may have survived the \
+                                 timeout"
+                            );
+                            let _ = child.start_kill();
+                        }
                     }
-                    None => {
+                    Err(cause) => {
                         tracing::warn!(
                             target: "paigasus::tools::exec",
+                            cause = %cause,
                             "job object unavailable; killed only the direct child, \
                              so processes it spawned may have survived the timeout"
                         );

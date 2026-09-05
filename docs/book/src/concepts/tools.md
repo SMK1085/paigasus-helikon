@@ -388,7 +388,9 @@ platform — a killed process has no meaningful exit code.
 One accepted gap on Windows: a process spawned in the brief window between the
 shell starting and its assignment to the job object is not a member of it, and
 survives the kill. Closing that window needs Win32 process-attribute APIs that
-are nightly-only on stable Rust today.
+are nightly-only on stable Rust today. A second, degraded-path gap: if the job
+object cannot be created or its termination call fails, only the direct child
+is killed and a warning is emitted on the `paigasus::tools::exec` target.
 
 ```rust,ignore
 use paigasus_helikon_tools::{BashTool, HostBackend, Sandbox};
