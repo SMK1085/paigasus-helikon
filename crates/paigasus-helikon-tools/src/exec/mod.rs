@@ -263,7 +263,9 @@ pub(crate) async fn spawn_capped(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for name in &cfg.env_allowlist {
-        if let Ok(val) = std::env::var(name) {
+        // `var_os`, not `var`: a value that is not valid Unicode must be passed
+        // through, not silently dropped. `Command::env` takes `AsRef<OsStr>`.
+        if let Some(val) = std::env::var_os(name) {
             cmd.env(name, val);
         }
     }
