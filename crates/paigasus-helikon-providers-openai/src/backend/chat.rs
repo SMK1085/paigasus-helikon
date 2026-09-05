@@ -614,13 +614,28 @@ impl ChatTranslator {
             .and_then(|f| f.arguments.as_deref())
             .unwrap_or("");
 
-        // Resolve or register the call_id.
-        let call_id = if let Some(id) = self.tool_calls.get(&index) {
-            id.clone()
-        } else if let Some(id) = tc.id.as_deref() {
-            self.tool_calls.insert(index, id.to_owned());
-            id.to_owned()
-        } else {
+        // Register or replace the call_id for this wire index.
+        if let Some(id) = tc.id.as_deref() {
+            match self.tool_calls.get_mut(&index) {
+                // First id wins, so a backend that changes a call's id
+                // mid-stream cannot re-point an in-flight call. The one
+                // exception is an id already recorded as empty: `canonicalize`
+                // treats a blank id as "no identity yet" rather than as an
+                // identity, so a real id arriving later must be allowed to
+                // replace it — otherwise the blank sticks and the call reaches
+                // the consumer under an empty `call_id` even though the
+                // backend eventually supplied a real one.
+                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                    *existing = id.to_owned();
+                }
+                Some(_) => {}
+                None => {
+                    self.tool_calls.insert(index, id.to_owned());
+                }
+            }
+        }
+
+        let Some(call_id) = self.tool_calls.get(&index).cloned() else {
             // No call_id yet — buffer both fields so neither is dropped.
             self.ensure_pending(index);
             let entry = self
@@ -1568,6 +1583,35 @@ mod tests {
         assert!(
             t.warned_late_name.contains(&0),
             "the unrecoverable fragment must be recorded against the canonical index"
+        );
+    }
+
+    /// A real `id` arriving after a blank one on the same wire index must win.
+    ///
+    /// Registration is otherwise first-id-wins, so a backend that changes a
+    /// call's id mid-stream cannot re-point an in-flight call. A blank id is
+    /// the one exception: `canonicalize` treats it as "no identity yet" rather
+    /// than as an identity, so a real id arriving later must be allowed to
+    /// replace it — otherwise the blank sticks and the call reaches the
+    /// consumer under an empty `call_id` the agent loop cannot submit a
+    /// result against.
+    ///
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-566, which emits `call_id: ""`.
+    #[test]
+    fn a_real_id_replaces_a_blank_one_on_the_same_wire_index() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some(""), Some("foo"), None),
+                make_chunk(0, Some("c1"), None, Some("{}")),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![("c1".to_owned(), "foo".to_owned())],
+            "the real id must replace the blank one, and the buffered name must survive"
         );
     }
 }
