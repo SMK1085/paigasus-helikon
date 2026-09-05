@@ -26,7 +26,7 @@ Paigasus is the umbrella; Helikon is the spring. The SDK is the artifact you dra
 cargo add paigasus-helikon --features openai,macros
 ```
 
-Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `litellm`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `sessions-postgres`, `sessions-redis`, `runtime-tokio`, `runtime-axum`, `runtime-actix`, `runtime-temporal`, `runtime-agentcore`, `evals`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map and current published versions.
+Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `litellm`, `mcp`, `tools`, `tools-web`, `tools-os-sandbox`, `tools-microvm`, `sessions-sqlite`, `sessions-postgres`, `sessions-redis`, `runtime-tokio`, `runtime-axum`, `runtime-actix`, `runtime-temporal`, `runtime-agentcore`, `evals`, `macros`. See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for the full feature → crate map, and [docs.rs](https://docs.rs/paigasus-helikon) for the current published version.
 
 ## Workspace at a glance
 
@@ -49,7 +49,7 @@ Twenty-one crates under `crates/`. Twenty are published to crates.io; one is an 
 - **`paigasus-helikon-cli`** — published binary crate: `helikon` and `paigasus-helikon` binaries (`cargo install paigasus-helikon-cli`) with `repl`, `eval run`, and `mcp serve` subcommands driven by an `agents.toml` sidecar; its lib target publishes only so `cargo install` works, and carries no stability guarantee.
 - **`paigasus-helikon-evals`** — evaluation harness: JSONL datasets, an `Evaluator` trait with four built-ins (`ExactMatch`, `JsonSchemaConformance`, `LlmJudge`, `ToolUseTrajectory`), a `MockModel` for deterministic replay, and SQLite/Parquet trace sinks.
 
-See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for each crate's concern, published state, and current version.
+See the [crate roster](https://smk1085.github.io/paigasus-helikon/reference/crates.html) for each crate's concern and published state; each published crate's row links to its docs.rs page for the current version.
 
 ## Documentation
 

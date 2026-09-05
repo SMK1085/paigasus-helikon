@@ -122,4 +122,4 @@ The crate's own error type is `McpError` (`#[non_exhaustive]`): variants cover t
 
 Connect child-process transports from a multi-thread tokio runtime (`#[tokio::main]`'s default). Under a current-thread runtime the `initialize` handshake can stall against the child's pipe I/O.
 
-See [Tools](./tools.md) for the `Tool<Ctx>` trait these adapters implement, and the [crate reference](../reference/crates.md) for version and feature details.
+See [Tools](./tools.md) for the `Tool<Ctx>` trait these adapters implement, and the [crate reference](../reference/crates.md) for ownership and feature details.

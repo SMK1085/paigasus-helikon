@@ -5,7 +5,7 @@ Paigasus Helikon is a Cargo workspace of **21 crates** under `crates/`, all in t
 `paigasus-helikon-core` trait crate, or — more commonly — the `paigasus-helikon` **facade**,
 which re-exports `core` plus the optional sibling crates behind Cargo features.
 
-This page is about **how to depend** on the SDK. For the per-crate version and ownership table,
+This page is about **how to depend** on the SDK. For the per-crate ownership table,
 see [Crates reference](../reference/crates.md).
 
 ## The facade
@@ -79,21 +79,18 @@ workspace's 21 without publishing is `paigasus-helikon-sessions-testkit`, an int
 **Depend on `core` alone** when you only need the trait definitions — for example a crate that
 implements its own `Model` or `Tool<Ctx>` and doesn't pull in any provider:
 
-```toml
-[dependencies]
-paigasus-helikon-core = "0.5"
+```bash
+cargo add paigasus-helikon-core
 ```
 
 **Depend on the facade** for everything else, selecting only the features you use. A typical
 single-agent app with OpenAI, the tool macros, and SQLite-backed sessions:
 
-```toml
-[dependencies]
-paigasus-helikon = { version = "0.4", features = ["openai", "macros", "sessions-sqlite"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-schemars = "1"
+```bash
+cargo add paigasus-helikon --features openai,macros,sessions-sqlite
+cargo add tokio@1 --features macros,rt-multi-thread
+cargo add serde@1 --features derive
+cargo add anyhow@1 schemars@1 serde_json@1
 ```
 
 That pulls `paigasus-helikon-providers-openai`, `paigasus-helikon-macros`, and
@@ -116,4 +113,4 @@ for the runner boundary.
 - [Quickstart](./quickstart.md) — a complete first agent.
 - [Core primitives](../concepts/core-primitives.md) — the seven traits `core` defines.
 - [Model providers](../concepts/model-providers.md) — `OpenAiModel` and `AnthropicModel`.
-- [Crates reference](../reference/crates.md) — per-crate versions and ownership.
+- [Crates reference](../reference/crates.md) — per-crate ownership and dependency direction.
