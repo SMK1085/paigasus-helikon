@@ -409,6 +409,18 @@ impl ChatTranslator {
         let mut indices: Vec<u32> = self.pending.keys().copied().collect();
         indices.sort_unstable();
 
+        // Seeded from indexes that already emitted, so a call flushed
+        // mid-stream cannot be re-emitted here under a second index. Blank
+        // call_ids are filtered out for the same reason they are excluded
+        // below.
+        let mut already: HashSet<String> = self
+            .name_emitted
+            .keys()
+            .filter_map(|i| self.tool_calls.get(i))
+            .filter(|c| !c.is_empty())
+            .cloned()
+            .collect();
+
         let mut out = Vec::new();
         for index in indices {
             if self.name_emitted.contains_key(&index) {
@@ -421,6 +433,37 @@ impl ChatTranslator {
                 continue;
             };
             if entry.name.is_empty() {
+                continue;
+            }
+            // Claimed only once this index is known to have a name to flush —
+            // claiming earlier would let an empty-name entry suppress another
+            // that does have one.
+            //
+            // Unreachable for a non-blank call_id since SMA-566: aliasing
+            // gives each one exactly one pending index. Kept as a net because
+            // it enforces the invariant at the point of emission, independent
+            // of the keying discipline upstream — which is precisely what the
+            // SMA-533 cross-provider suite asserts. Loud rather than a bare
+            // `continue`: if the keying is ever loosened, a silent drop here
+            // would recreate the exact undiagnosed loss SMA-550 existed to fix.
+            //
+            // Blank call_ids are excluded deliberately. They bypass
+            // canonicalization (an empty id cannot identify a call), so two
+            // parallel blank-id calls both resolve to "". Claiming "" here
+            // would drop the second call's name and blame a keying regression
+            // that did not happen. The at-most-one invariant is therefore
+            // scoped to non-blank call_ids; `providers-litellm` carries the
+            // unguarded version of this net and loses that name today
+            // (SMA-616). Pinned by `blank_ids_do_not_collapse_at_end_of_stream`.
+            if !call_id.is_empty() && !already.insert(call_id.clone()) {
+                tracing::error!(
+                    target: "paigasus::openai::chat",
+                    %call_id,
+                    index,
+                    "two pending indexes resolved to one call_id after \
+                     canonicalization; dropping the second buffered name. This is \
+                     a correlation-keying regression, not a backend quirk"
+                );
                 continue;
             }
             let name = std::mem::take(&mut entry.name);
@@ -1612,6 +1655,66 @@ mod tests {
             named(&evs),
             vec![("c1".to_owned(), "foo".to_owned())],
             "the real id must replace the blank one, and the buffered name must survive"
+        );
+    }
+
+    /// Two parallel **zero-argument** blank-id calls must both emit their name
+    /// at end-of-stream.
+    ///
+    /// Zero-argument is load-bearing: with arguments both calls flush
+    /// mid-stream and never reach `flush_buffered_names`, so this is the only
+    /// shape that exercises the call_id dedup net there. An unguarded net
+    /// claims `""` for the first call and silently drops the second, which is
+    /// why the net is written against this test rather than the other way
+    /// round. `providers-litellm` carries the unguarded version and loses that
+    /// name today (SMA-616).
+    ///
+    /// Passes both before and after the fix — a guard, not a defect proof.
+    #[test]
+    fn blank_ids_do_not_collapse_at_end_of_stream() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some(""), Some("alpha"), None),
+                make_chunk(1, Some(""), Some("beta"), None),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "an empty id cannot identify a call, so the dedup net must not claim it"
+        );
+    }
+
+    /// End-of-stream flush order follows the wire `index` — the model's
+    /// declared call position — not the lexicographic order of `call_id`.
+    ///
+    /// Passes both before and after the fix. It pins the decision to keep
+    /// `flush_buffered_names`'s index sort: aliasing could have moved
+    /// `pending` onto a synthetic creation counter (as `providers-litellm`
+    /// does, because its `index` is optional), which would silently reorder
+    /// parallel calls whenever arrival order differed from index order.
+    #[test]
+    fn flush_order_follows_the_wire_index() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                make_chunk(0, Some("c_z"), Some("zulu"), None),
+                make_chunk(1, Some("c_a"), Some("alpha"), None),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                ("c_z".to_owned(), "zulu".to_owned()),
+                ("c_a".to_owned(), "alpha".to_owned()),
+            ],
+            "wire order (index 0 then 1), not lexicographic by call_id"
         );
     }
 }
