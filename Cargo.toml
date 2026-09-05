@@ -99,6 +99,18 @@ htmd                  = "0.5"
 wiremock              = "0.6"
 rcgen                 = "0.14"
 tokio-rustls          = "0.26"
+# Windows Job Objects, for the exec-timeout subtree kill (SMA-613). Already in
+# Cargo.lock transitively via tokio/mio, so this adds an edge, not a package.
+# Win32_Security is required, not cosmetic: CreateJobObjectW is gated
+# #[cfg(feature = "Win32_Security")] because its signature names
+# SECURITY_ATTRIBUTES. Win32_Foundation is transitively implied
+# (Win32_System_JobObjects -> Win32_System -> Win32 -> Win32_Foundation) and is
+# listed only because the code names its types directly.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+] }
 
 # Temporal Rust SDK (Public Preview; crates.io since 2026-02-19). TLS risk (requires
 # verification on every temporalio-* bump): temporalio-common → opentelemetry-otlp

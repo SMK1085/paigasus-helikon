@@ -12,6 +12,11 @@ use paigasus_helikon_core::ToolError;
 mod host;
 pub use host::{HostBackend, HostBackendBuilder};
 
+#[cfg(windows)]
+mod job_object;
+#[cfg(windows)]
+use job_object::JobObject;
+
 #[cfg(all(
     feature = "os-sandbox",
     target_os = "linux",
@@ -292,6 +297,25 @@ pub(crate) async fn spawn_capped(
     #[cfg(unix)]
     let pgid = child.id();
 
+    // Assign as the very next statement after spawn: a grandchild spawned in
+    // the window before this lands escapes the job (accepted gap, SMA-613).
+    #[cfg(windows)]
+    let job = match child.raw_handle().map(JobObject::assign) {
+        Some(Ok(j)) => Some(j),
+        Some(Err(e)) => {
+            tracing::debug!(
+                target: "paigasus::tools::exec",
+                error = %e,
+                "could not put the child in a job object; a timeout will kill only \
+                 the direct child"
+            );
+            None
+        }
+        // `raw_handle()` is `None` once the child has exited — vanishingly rare
+        // this soon after spawn, but it degrades the same way.
+        None => None,
+    };
+
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
 
@@ -312,7 +336,23 @@ pub(crate) async fn spawn_capped(
                     let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                // Any Win32 failure — including a failed terminate — degrades to
+                // exactly today's behaviour. Without the `start_kill` fallback a
+                // failed terminate would kill *nothing*, not even `cmd.exe`,
+                // which is strictly worse than not having the job at all.
+                if !job.as_ref().is_some_and(JobObject::terminate) {
+                    tracing::warn!(
+                        target: "paigasus::tools::exec",
+                        "job object unavailable or terminate failed; killed only the \
+                         direct child, so processes it spawned may have survived the \
+                         timeout"
+                    );
+                    let _ = child.start_kill();
+                }
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 let _ = child.start_kill();
             }
