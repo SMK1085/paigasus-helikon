@@ -1399,8 +1399,8 @@ mod tests {
     /// `owner_index_buffered_first_appends_on_merge`; a naive unconditional
     /// append yields `"alphabeta"` here.
     ///
-    /// Confirmed to FAIL against the pre-fix translator, which emits
-    /// `Some("alpha")` and then `Some("beta")`.
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-566, which emits `Some("beta")` and then `Some("alpha")`.
     #[test]
     fn fragment_buffered_under_a_second_index_is_not_stranded() {
         let mut t = ChatTranslator::new();
@@ -1423,8 +1423,8 @@ mod tests {
     /// orderings are reachable, and a plain prepend or a plain append is wrong
     /// in exactly one of them.
     ///
-    /// Confirmed to FAIL against the pre-fix translator, which emits
-    /// `Some("alpha")` and then `Some("beta")`.
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-566, which emits `Some("beta")` and then `Some("alpha")`.
     #[test]
     fn owner_index_buffered_first_appends_on_merge() {
         let mut t = ChatTranslator::new();
@@ -1445,8 +1445,8 @@ mod tests {
     /// that resends the complete name under a second index yields
     /// `"searchsearch"`, which resolves to no registered tool.
     ///
-    /// Confirmed to FAIL against the pre-fix translator, which emits
-    /// `Some("search")` twice.
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-566, which emits `Some("search")` twice.
     #[test]
     fn repeated_whole_name_is_not_doubled_across_the_alias_boundary() {
         let mut t = ChatTranslator::new();
@@ -1469,8 +1469,9 @@ mod tests {
     /// Without that line the third merge prepends instead of appending and
     /// yields `"GBAx"`.
     ///
-    /// Confirmed to FAIL against the pre-fix translator, which emits three
-    /// separate names.
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-566, which emits `Some("G")`, `Some("A")` and `Some("Bx")` — three
+    /// names for one call_id.
     #[test]
     fn migrated_buffer_donates_its_creation_order() {
         let mut t = ChatTranslator::new();
@@ -1498,8 +1499,8 @@ mod tests {
     /// two separate names. Do not "fix" the misordering without adding
     /// per-fragment sequencing and re-deciding the trade-off.
     ///
-    /// Confirmed to FAIL against the pre-fix translator, which emits
-    /// `Some("BBCC")` and then `Some("AADD")`.
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-566, which emits `Some("AADD")` and then `Some("BBCC")`.
     #[test]
     fn interleaved_aliasing_is_lossless_and_misordered() {
         let mut t = ChatTranslator::new();
