@@ -341,6 +341,27 @@ input for the same reason. An implementer must not write test 2 expecting
 
 **Row 2 is the §3.5 inclusion** and is severable from the rest.
 
+**Row 2 has an unenumerated third sub-case: a blank id that has already flushed a
+name before the real id arrives.**
+
+```text
+{index:0, id:"",   name:"alpha", arguments:"{}"}
+{index:0, id:"c1", name:"beta",  arguments:"[]"}
+```
+
+`main` emits `[("", Some("alpha"), "{}"), ("", None, "[]")]`; this branch emits
+`[("", Some("alpha"), "{}"), ("c1", None, "[]")]` — so a **non-blank** `call_id`
+(`"c1"`) reaches the consumer carrying **zero** name-bearing deltas. Like every row
+in this table, the shape is unobserved from any backend, and `main` is equally
+broken on it — it just loses differently, discarding the real id entirely rather than
+discarding the second name. §3.6's "the at-most-one invariant is scoped to non-blank
+`call_id`s" note does not excuse this: that note is about two *blank* ids colliding at
+`""`, not about a *non-blank* id that ends up starved of any name-carrying delta once
+its predecessor on the same index already flushed under a blank id. It is recorded
+here for completeness, not fixed — closing it would need its own decision about what
+a blank id that already flushed should do with a real id arriving after it, which
+this design does not make.
+
 **For every well-formed shape, output is unchanged — including end-of-stream emission
 order.** That is the load-bearing claim of this design, and it rests on two specific
 properties: the key type never changes (§2.1), and `flush_buffered_names` keeps its
