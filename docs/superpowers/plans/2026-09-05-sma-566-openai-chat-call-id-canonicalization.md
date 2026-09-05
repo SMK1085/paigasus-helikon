@@ -83,7 +83,7 @@ Pure refactor. No behaviour change, no new test. The 18 existing tests are the p
   `ChatTranslator::ensure_pending(&mut self, index: u32)`, field
   `ChatTranslator::next_seq: u64`.
 
-- [ ] **Step 1: Replace the `PendingToolCall` definition**
+- [x] **Step 1: Replace the `PendingToolCall` definition**
 
 Find the `#[derive(Default)]` struct at `chat.rs:215-221`. Keep its existing doc
 comment paragraphs, and append the two new ones. Replace the derive and body:
@@ -124,7 +124,7 @@ impl PendingToolCall {
 }
 ```
 
-- [ ] **Step 2: Add `next_seq` to the struct and `new`**
+- [x] **Step 2: Add `next_seq` to the struct and `new`**
 
 In `ChatTranslator`, directly after the `pending` field, add:
 
@@ -139,7 +139,7 @@ In `ChatTranslator::new`, after `pending: HashMap::new(),` add:
             next_seq: 0,
 ```
 
-- [ ] **Step 3: Add `ensure_pending`**
+- [x] **Step 3: Add `ensure_pending`**
 
 Insert as the first method in `impl ChatTranslator`, directly after `new`:
 
@@ -160,7 +160,7 @@ Insert as the first method in `impl ChatTranslator`, directly after `new`:
     }
 ```
 
-- [ ] **Step 4: Replace both `.or_default()` call sites**
+- [x] **Step 4: Replace both `.or_default()` call sites**
 
 There are exactly two in `handle_tool_call_chunk`. The first is in the no-id-yet
 branch:
@@ -203,7 +203,7 @@ becomes:
             .expect("ensure_pending just inserted this index");
 ```
 
-- [ ] **Step 5: Verify nothing changed behaviourally**
+- [x] **Step 5: Verify nothing changed behaviourally**
 
 Run: `cargo test -p paigasus-helikon-providers-openai`
 Expected: PASS. All 18 `backend::chat::tests::*` green, unmodified.
@@ -211,7 +211,7 @@ Expected: PASS. All 18 `backend::chat::tests::*` green, unmodified.
 If `late_name_fragment_warns_once` fails, stop — that is the signal this task was
 supposed to preserve.
 
-- [ ] **Step 6: Lint and commit**
+- [x] **Step 6: Lint and commit**
 
 ```bash
 cargo fmt --all
@@ -235,7 +235,7 @@ git commit -m "refactor(providers-openai): SMA-566 stamp tool-call buffers with 
   test helpers `drive(&mut ChatTranslator, Vec<ChatCompletionMessageToolCallChunk>) -> Vec<ModelEvent>`,
   `named(&[ModelEvent]) -> Vec<(String, String)>`, `args_of(&[ModelEvent], &str) -> String`.
 
-- [ ] **Step 1: Write the test helpers and the failing acceptance test**
+- [x] **Step 1: Write the test helpers and the failing acceptance test**
 
 Add to `mod tests`, directly after the existing `make_chunk` helper:
 
@@ -381,7 +381,7 @@ Then append the three tests for this task at the end of `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify the two defect proofs fail**
+- [x] **Step 2: Run the tests to verify the two defect proofs fail**
 
 Run: `cargo test -p paigasus-helikon-providers-openai backend::chat::tests`
 Expected: FAIL — `two_indexes_with_one_id_merge_into_a_single_call` with
@@ -392,7 +392,7 @@ Expected: FAIL — `two_indexes_with_one_id_merge_into_a_single_call` with
 
 Record the two observed `left:` values; they are what the doc comments claim.
 
-- [ ] **Step 3: Add the two new fields**
+- [x] **Step 3: Add the two new fields**
 
 In `ChatTranslator`, after the `tool_calls` field:
 
@@ -418,7 +418,7 @@ After `warned_late_name`:
 
 In `new`, add `canonical: HashMap::new(),` and `warned_blank_id: HashSet::new(),`.
 
-- [ ] **Step 4: Add `canonicalize` (aliasing only, no migration yet)**
+- [x] **Step 4: Add `canonicalize` (aliasing only, no migration yet)**
 
 Insert directly before `handle_tool_call_chunk`:
 
@@ -459,7 +459,7 @@ Insert directly before `handle_tool_call_chunk`:
     }
 ```
 
-- [ ] **Step 5: Call it from `handle_tool_call_chunk`**
+- [x] **Step 5: Call it from `handle_tool_call_chunk`**
 
 Immediately after the `let call_id = if let Some(id) = self.tool_calls.get(&index) { ... }`
 block that resolves `call_id` (the block ending with the `};` before the late-name
@@ -474,12 +474,12 @@ The shadowing `let index` is intentional: every use below — the late-name warn
 `already_emitted` check, `ensure_pending`, the flush condition, `name_emitted` — must
 read the canonical index, not the wire one.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `cargo test -p paigasus-helikon-providers-openai`
 Expected: PASS — all 18 pre-existing plus the 3 new.
 
-- [ ] **Step 7: Lint and commit**
+- [x] **Step 7: Lint and commit**
 
 ```bash
 cargo fmt --all
@@ -503,7 +503,7 @@ handles the shape where something was.
 - Consumes: `canonicalize`, `ensure_pending`, `PendingToolCall::seq` (Tasks 1-2).
 - Produces: no new signatures — `canonicalize` gains a migration body.
 
-- [ ] **Step 1: Write the four failing tests**
+- [x] **Step 1: Write the four failing tests**
 
 Append to `mod tests`:
 
@@ -634,13 +634,13 @@ Append to `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run to verify all five fail**
+- [x] **Step 2: Run to verify all five fail**
 
 Run: `cargo test -p paigasus-helikon-providers-openai backend::chat::tests`
 Expected: FAIL on all five new tests. Record each observed `left:` value and confirm
 it matches the doc comment; correct the comment if it does not.
 
-- [ ] **Step 3: Add the migration body to `canonicalize`**
+- [x] **Step 3: Add the migration body to `canonicalize`**
 
 Replace the final line of `canonicalize` (`*self.canonical.entry(...).or_insert(index)`)
 with:
@@ -708,12 +708,12 @@ with:
         owner
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `cargo test -p paigasus-helikon-providers-openai`
 Expected: PASS — 18 pre-existing + 8 new.
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 cargo fmt --all
@@ -734,7 +734,7 @@ git commit -m "fix(providers-openai): SMA-566 migrate buffered fragments in crea
 - Consumes: `canonicalize`'s migration body (Task 3).
 - Produces: no new signatures.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `mod tests`:
 
@@ -766,12 +766,12 @@ Append to `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p paigasus-helikon-providers-openai backend::chat::tests::fragment_migrating_into_an_emitted_slot_is_recorded_not_stranded`
 Expected: FAIL with `left: [("c1", "get_"), ("c1", "beta")]`.
 
-- [ ] **Step 3: Add the loud-drop branch**
+- [x] **Step 3: Add the loud-drop branch**
 
 In `canonicalize`, between the `slot.args.insert_str(0, &old.args);` line and the
 whole-name-repeat guard, insert:
@@ -811,12 +811,12 @@ returns early. `slot` borrows `self.pending`; `self.name_emitted` and
 `self.warned_late_name` are disjoint fields, so the borrow checker accepts all three
 in scope at once — this is why `ensure_pending` returns `()` rather than a reference.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cargo test -p paigasus-helikon-providers-openai`
 Expected: PASS — 18 + 9.
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 cargo fmt --all
@@ -837,7 +837,7 @@ git commit -m "fix(providers-openai): SMA-566 report a fragment migrating into a
 - Consumes: `canonicalize` (Tasks 2-4), `ensure_pending` (Task 1).
 - Produces: no new signatures — the id-resolution chain is restructured in place.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `mod tests`:
 
@@ -872,12 +872,12 @@ Append to `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p paigasus-helikon-providers-openai backend::chat::tests::a_real_id_replaces_a_blank_one_on_the_same_wire_index`
 Expected: FAIL with `left: [("", "foo")]`.
 
-- [ ] **Step 3: Restructure the id-resolution chain**
+- [x] **Step 3: Restructure the id-resolution chain**
 
 Replace this block in `handle_tool_call_chunk`:
 
@@ -941,12 +941,12 @@ with registration separated from resolution:
 The `let index = self.canonicalize(index, &call_id);` line added in Task 2 stays
 immediately below this, unchanged.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cargo test -p paigasus-helikon-providers-openai`
 Expected: PASS — 18 + 10.
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 cargo fmt --all
@@ -971,7 +971,7 @@ is how the bug ships.
 - Consumes: everything from Tasks 1-5.
 - Produces: no new signatures.
 
-- [ ] **Step 1: Write both guard tests — they must PASS immediately**
+- [x] **Step 1: Write both guard tests — they must PASS immediately**
 
 Append to `mod tests`:
 
@@ -1037,12 +1037,12 @@ Append to `mod tests`:
     }
 ```
 
-- [ ] **Step 2: Run to confirm both pass**
+- [x] **Step 2: Run to confirm both pass**
 
 Run: `cargo test -p paigasus-helikon-providers-openai backend::chat::tests`
 Expected: PASS — 18 + 12. Both new tests green.
 
-- [ ] **Step 3: Add the net to `flush_buffered_names`**
+- [x] **Step 3: Add the net to `flush_buffered_names`**
 
 After `indices.sort_unstable();` add the seeding:
 
@@ -1102,14 +1102,14 @@ no conflict. If the borrow checker objects, move the `already` check above the
 `self.pending.get_mut(&index)` binding and re-read `entry.name.is_empty()` through
 `self.pending[&index].name` instead.
 
-- [ ] **Step 4: Run to verify everything still passes**
+- [x] **Step 4: Run to verify everything still passes**
 
 Run: `cargo test -p paigasus-helikon-providers-openai`
 Expected: PASS — 18 + 12. In particular
 `blank_ids_do_not_collapse_at_end_of_stream` must still be green; if it now fails, the
 `!call_id.is_empty() &&` guard was omitted.
 
-- [ ] **Step 5: Lint and commit**
+- [x] **Step 5: Lint and commit**
 
 ```bash
 cargo fmt --all
@@ -1133,7 +1133,7 @@ here. All three become false with Task 6 merged.
 **Interfaces:**
 - Consumes: everything. Produces: nothing — documentation only.
 
-- [ ] **Step 1: Confirm there is no fourth site**
+- [x] **Step 1: Confirm there is no fourth site**
 
 Run:
 
@@ -1149,7 +1149,7 @@ Expected: hits only in the three files above. If `tests/provider-stream-conforma
 or `src/check.rs` also asserts the divergence, add it to this task's file list and
 update it the same way.
 
-- [ ] **Step 2: Replace the `chat.rs` divergence paragraph**
+- [x] **Step 2: Replace the `chat.rs` divergence paragraph**
 
 In `handle_tool_call_chunk`'s doc comment, delete the two paragraphs beginning
 *"**Divergence from `providers-litellm` (SMA-550), deliberate.**"* and
@@ -1179,7 +1179,7 @@ through *"closing it needs its own ticket."* Replace with:
     /// (SMA-616).
 ```
 
-- [ ] **Step 3: Replace the litellm test's doc comment**
+- [x] **Step 3: Replace the litellm test's doc comment**
 
 In `crates/paigasus-helikon-providers-litellm/src/stream.rs`, find
 `two_indexes_with_one_id_merge_into_a_single_call` and replace the sentence
@@ -1197,7 +1197,7 @@ In `crates/paigasus-helikon-providers-litellm/src/stream.rs`, find
 Leave the rest of that doc comment, including the pre-fix `Some("beta")` note,
 untouched.
 
-- [ ] **Step 4: Add the openai_chat counterpart note to the conformance suite**
+- [x] **Step 4: Add the openai_chat counterpart note to the conformance suite**
 
 In `tests/provider-stream-conformance/tests/conformance.rs`, append a section to the
 `openai_chat` module doc, directly before `mod openai_chat {`, mirroring the `litellm`
@@ -1224,7 +1224,7 @@ own unit tests, not here"* section:
 /// that would be the fixture to add here; none currently committed does.
 ```
 
-- [ ] **Step 5: Verify the docs build clean**
+- [x] **Step 5: Verify the docs build clean**
 
 Run:
 
@@ -1236,7 +1236,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-providers-openai -p pai
 Expected: PASS on both. `-D warnings` catches a broken intra-doc link such as
 `[`Self::canonicalize`]` resolving to nothing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cargo fmt --all
@@ -1252,7 +1252,7 @@ git commit -m "docs(providers): SMA-566 record the openai/litellm alignment at a
 
 **Files:** none modified unless a gate fails.
 
-- [ ] **Step 1: Run every gate `ci.yml` runs**
+- [x] **Step 1: Run every gate `ci.yml` runs**
 
 ```bash
 cargo fmt --all -- --check
@@ -1266,7 +1266,7 @@ Expected: all four PASS. The conformance suite
 and `litellm::conforms` both run here — they must stay green, since this change must
 not alter behaviour on any captured wire shape.
 
-- [ ] **Step 2: Confirm no version bumps or stray files crept in**
+- [x] **Step 2: Confirm no version bumps or stray files crept in**
 
 ```bash
 git diff main --stat
@@ -1275,7 +1275,7 @@ git diff main --stat
 Expected: exactly four files — the spec, this plan, `chat.rs`, `stream.rs`,
 `conformance.rs`. **No `Cargo.toml`, no `CHANGELOG.md`** — release-plz owns those.
 
-- [ ] **Step 3: Confirm the test count**
+- [x] **Step 3: Confirm the test count**
 
 ```bash
 cargo test -p paigasus-helikon-providers-openai backend::chat::tests 2>&1 | tail -3
@@ -1283,7 +1283,7 @@ cargo test -p paigasus-helikon-providers-openai backend::chat::tests 2>&1 | tail
 
 Expected: 30 tests (18 pre-existing + 12 new), 0 failed.
 
-- [ ] **Step 4: Mark the plan complete and commit**
+- [x] **Step 4: Mark the plan complete and commit**
 
 Tick every checkbox in this file, then:
 
