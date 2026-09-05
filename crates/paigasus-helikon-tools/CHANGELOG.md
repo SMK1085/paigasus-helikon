@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.16...paigasus-helikon-tools-v0.2.17) - 2026-09-05
+
+### Fixed
+
+- *(tools)* SMA-569 report exit_code None on every timeout path ([#230](https://github.com/SMK1085/paigasus-helikon/pull/230))
+
 ## [0.2.16](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.15...paigasus-helikon-tools-v0.2.16) - 2026-08-23
 
 ### Other

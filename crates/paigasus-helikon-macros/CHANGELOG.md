@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.2.4...paigasus-helikon-macros-v0.2.5) - 2026-09-05
+
+### Other
+
+- *(docs)* SMA-574 drop the hand-maintained version column from the crate roster ([#231](https://github.com/SMK1085/paigasus-helikon/pull/231))
+
 ## [0.2.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.2.3...paigasus-helikon-macros-v0.2.4) - 2026-08-04
 
 ### Other
