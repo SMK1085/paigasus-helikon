@@ -38,7 +38,20 @@ impl HostBackendBuilder {
         self
     }
 
-    /// Env var names to pass through (REPLACES the default `["PATH","HOME"]`).
+    /// Env var names to pass through to the child.
+    ///
+    /// This **replaces** [`DEFAULT_ENV_ALLOWLIST`] rather than extending it. On
+    /// Windows a list that omits `SystemRoot` will break networked commands, so
+    /// prefer extending:
+    ///
+    /// ```ignore
+    /// .env_allowlist(DEFAULT_ENV_ALLOWLIST.iter().copied().chain(["MY_VAR"]))
+    /// ```
+    ///
+    /// A name that is absent from this process's environment is dropped
+    /// **without diagnostic** — the child simply never sees it.
+    ///
+    /// To reproduce the pre-SMA-614 minimal environment, pass `["PATH"]`.
     pub fn env_allowlist<I, S>(mut self, names: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -94,7 +107,10 @@ pub struct HostBackend {
 
 impl HostBackend {
     /// Start building a `HostBackend` over `sandbox` (cwd = `sandbox.root()`),
-    /// with a 30s timeout, `["PATH","HOME"]` env allowlist, 1 MiB output cap.
+    /// with a 30s timeout, a 1 MiB output cap, and the platform default env
+    /// allowlist — `["PATH", "HOME"]` on unix, and on Windows `["PATH",
+    /// "SystemRoot", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "APPDATA",
+    /// "LOCALAPPDATA"]`. See [`DEFAULT_ENV_ALLOWLIST`].
     pub fn builder(sandbox: Sandbox) -> HostBackendBuilder {
         HostBackendBuilder {
             sandbox,

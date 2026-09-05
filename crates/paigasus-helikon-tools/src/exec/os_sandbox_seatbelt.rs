@@ -60,7 +60,13 @@ impl OsSandboxBackendBuilder {
         self.timeout = timeout;
         self
     }
-    /// Env var names to pass through (REPLACES the default `["PATH","HOME"]`).
+    /// Env var names to pass through to the child.
+    ///
+    /// This **replaces** [`DEFAULT_ENV_ALLOWLIST`] rather than extending it.
+    /// This backend is unix-only, so that default is `["PATH", "HOME"]`.
+    ///
+    /// A name that is absent from this process's environment is dropped
+    /// without diagnostic.
     pub fn env_allowlist<I, S>(mut self, names: I) -> Self
     where
         I: IntoIterator<Item = S>,

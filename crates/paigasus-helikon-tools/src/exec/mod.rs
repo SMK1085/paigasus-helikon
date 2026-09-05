@@ -42,7 +42,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_MAX_OUTPUT: usize = 1 << 20;
 
 /// Environment variable names a child process receives when the caller does not
-/// override the allowlist with [`HostBackend::builder`]'s `env_allowlist`.
+/// override the allowlist with [`HostBackendBuilder::env_allowlist`].
 ///
 /// The list is platform-specific, because a minimal-but-working environment is:
 ///
