@@ -1497,12 +1497,18 @@ mod tests {
         let evs = drive(
             &mut t,
             vec![
-                make_chunk(1, None, Some("beta"), None),
+                make_chunk(1, None, Some("beta"), Some("{\"x\":")),
                 make_chunk(0, Some("c1"), Some("alpha"), None),
-                make_chunk(1, Some("c1"), None, Some("{}")),
+                make_chunk(1, Some("c1"), None, Some("1}")),
             ],
         );
         assert_eq!(named(&evs), vec![("c1".to_owned(), "betaalpha".to_owned())]);
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "{\"x\":1}",
+            "args buffered under the non-owner index before its call_id resolved \
+             must survive the alias onto the owning index, not be truncated"
+        );
     }
 
     /// The *append* branch, mirror of the test above: here the canonical slot
