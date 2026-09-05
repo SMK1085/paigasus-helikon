@@ -67,7 +67,8 @@ writer. Correcting that comment is in scope for this PR (see "Documentation").
 
 - **No `CREATE_SUSPENDED`.** See Decision 2.
 - **No `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.** See Decision 3.
-- **No `tracing` dependency.** See Decision 5.
+- No instrumentation of the *success* path. Decision 5 instruments only the
+  containment degrade.
 - No change to `OsSandboxBackend` or `ForkdBackend`. Neither spawns a local
   process on Windows: `os_sandbox` is Linux/macOS-gated, `forkd` is a REST client.
 - No new public API. `SandboxGuarantees` has axes for filesystem, network and
@@ -179,22 +180,42 @@ the run to burn the full 5 s `GRACE` reap and return with a live subtree. That
 would be strictly *worse* than the status quo, contradicting this decision's own
 invariant.
 
-### Decision 5 — no `tracing`; the degrade path is silent
+### Decision 5 — instrument the degrade path (`paigasus::tools::exec`)
 
-`paigasus-helikon-tools` has no `tracing` dependency today. Adding one to log a
-containment downgrade is not a one-liner in this repo: `tests/workspace-lints/`
-requires every span/event to carry an explicit `target: "paigasus::tools::<subsystem>"`
-literal (`tracing_target_coverage.rs`) *and* a matching row in the mdBook component
-table (`tracing_target_docs.rs`).
+**Reversed on review.** The first draft declined `tracing` on scope grounds. A
+security-adjacent guarantee that degrades invisibly is unverifiable in production —
+the operator sees `timed_out: true` and reasonably infers the subtree died — so the
+degrade path is instrumented.
 
-Decision: **do not add it here.** The degrade path is Windows-only and expected to
-be unreachable on supported runners; the fallback is exactly today's behaviour, so
-a silent degrade returns the system to its current, documented state rather than to
-an unknown one. Recorded as a known limitation rather than an omission.
+`tracing = "0.1"` is already in `[workspace.dependencies]`; the crate adds
+`tracing = { workspace = true }`. This makes `paigasus-helikon-tools` a **newly
+emitting component**, which carries three conformance obligations, all enforced by
+`tests/workspace-lints/`:
 
-This is the one decision in this spec taken on scope grounds rather than on
-correctness grounds, and is the natural candidate to overturn if observability of
-containment matters more than PR size.
+1. Every invocation carries an explicit `target: "paigasus::tools::exec"` string
+   **literal** — not a computed expression, which satisfies coverage but cannot be
+   shape-checked (`tracing_target_coverage.rs`).
+2. **No `#[tracing::instrument]`** anywhere under `crates/*/src`. The scanner keys
+   on `ident !` and cannot see an attribute, so an instrumented function would
+   silently emit on its module path instead (SMA-568 D7).
+3. The book's component table and the source component set must be **equal**
+   (`tracing_target_docs.rs`). See "Documentation" — this is two edits, not one.
+
+**Levels, chosen so a broken environment is diagnosable without being deafening:**
+
+| Site | Level | Why |
+| -- | -- | -- |
+| `JobObject::assign` fails at spawn | `debug!` | Carries the OS error for diagnosis. Fires once per *run*, so at `warn!` a fully degraded host would log on every Bash call, including the overwhelming majority that never time out and for which the degrade has no consequence. |
+| timeout arm falls back to `start_kill()` | `warn!` | Fires only when the degrade actually *has* consequence: a kill happened and the subtree may have survived it. This is the line an operator needs. |
+
+Both sites are `#[cfg(windows)]`. The success path is deliberately not
+instrumented — the ask is observability of the *degrade*, and a per-run event for
+the normal case earns nothing.
+
+Note this means the two events cannot share state: the OS error is known at spawn,
+the consequence only at timeout. Rather than thread a `Result` through the
+function, each site logs what it knows — the `debug!` the cause, the `warn!` the
+effect.
 
 ## Design
 
@@ -340,9 +361,17 @@ windows-sys = { version = "0.61", features = [
 `crates/paigasus-helikon-tools/Cargo.toml`:
 
 ```toml
+[dependencies]
+tracing = { workspace = true }      # Decision 5; unconditional, not cfg-gated
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 ```
+
+`tracing` is a plain dependency rather than a `cfg(windows)` one even though both
+call sites are Windows-only: a target-gated dependency whose absence is felt on
+only one platform is a trap for the next person to add an event, and `tracing`'s
+cost when nothing subscribes is negligible.
 
 `Win32_Security` is the non-obvious one and is genuinely required:
 `CreateJobObjectW` is gated `#[cfg(feature = "Win32_Security")]`
@@ -494,6 +523,17 @@ This is a documented pre-PR step, not a suggestion. It cannot *run* the test:
   otherwise reuse.
 - `docs/book/src/concepts/tools.md`, `HostBackend` section — add a short paragraph
   on timeout semantics including the accepted gap. The book says nothing today.
+- `docs/book/src/concepts/observability-evaluation.md` — **two edits, and the lint
+  fails on either alone.** `paigasus-helikon-tools` goes from reserved to emitting:
+  1. Add a row inside the `tracing-components:start`/`:end` markers:
+     `` | `paigasus::tools` | `paigasus-helikon-tools` | `exec` | provisional | ``.
+     `provisional` is the honest status for a brand-new component with one
+     Windows-only subsystem — per that page's own stability rules it carries no
+     rename promise, whereas `stable` would.
+  2. Update the "Components reserved but not yet emitting" prose below it:
+     "Ten crates … (nine derived, plus the facade's `facade`)" becomes **nine** and
+     **eight**, and `tools` is removed from the enumerated list. The list is prose,
+     not parsed, so nothing fails if it is missed — it just silently becomes a lie.
 - `crates/paigasus-helikon-tools/README.md` — **no edit.** It does not discuss
   timeouts or exec containment, and this change adds no public API and no feature
   flag. Conscious call per CLAUDE.md.
@@ -514,8 +554,10 @@ This is a documented pre-PR step, not a suggestion. It cannot *run* the test:
 - **Windows-only code path with one execution gate.** Cross-target clippy covers
   compilation and lints; behaviour is verified only by
   `test (windows-latest, stable)`.
-- **Silent degrade.** Per Decision 5 there is no signal when containment falls back
-  to `start_kill()`. Known limitation, taken on scope grounds.
+- **New emitting component.** Per Decision 5, `paigasus::tools` goes live. Two
+  workspace-lint tests (`tracing_target_coverage`, `tracing_target_docs`) and the
+  book must agree, and they fail independently — a correct `target:` literal with
+  no book row still reddens, and vice versa.
 - **SMA-614 overlap — resolved.** SMA-614 merged as `2ede539` and this branch is
   rebased past it. Its `DEFAULT_ENV_ALLOWLIST` work removed the bespoke
   `ENV_ALLOWLIST` from `exec_timeout_portable.rs` and added a `#[cfg(test)] mod
