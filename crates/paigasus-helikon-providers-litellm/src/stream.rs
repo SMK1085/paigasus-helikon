@@ -1673,7 +1673,7 @@ mod tests {
     /// since SMA-566, via an index alias rather than this crate's `Key` enum —
     /// see the doc comment on its `handle_tool_call_chunk`. The two
     /// translators agree observably and differ structurally, because this
-    /// crate's `index` is optional and its `index` is required.
+    /// crate's `index` is optional and `providers-openai`'s is required.
     ///
     /// Confirmed to FAIL against the pre-fix translator (`Some("beta")`).
     #[test]
