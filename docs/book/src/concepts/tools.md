@@ -383,11 +383,31 @@ access as the parent process.
 ```rust,ignore
 use paigasus_helikon_tools::{BashTool, HostBackend, Sandbox};
 
+// Uses the platform default env allowlist.
 let backend = HostBackend::builder(Sandbox::open("./workspace")?)
     .timeout(std::time::Duration::from_secs(10))
-    .env_allowlist(["PATH", "HOME"])
     .build();
 let tool = BashTool::<()>::new(backend);
+```
+
+The default allowlist is platform-specific, because a minimal-but-working
+environment is: `PATH` and `HOME` on unix; `PATH`, `SystemRoot`, `PATHEXT`,
+`TEMP`, `TMP`, `USERPROFILE`, `APPDATA` and `LOCALAPPDATA` on Windows. `HOME` is
+commonly absent from native Windows environments, so a unix-shaped list leaves a
+Windows child with `PATH`
+alone — which can break Winsock initialization and temp-file writes, and makes
+`cmd.exe` fall back to its built-in extension list rather than the machine's
+`PATHEXT`.
+
+`env_allowlist` **replaces** that default rather than extending it, so keep the
+platform names when you add your own:
+
+```rust,ignore
+use paigasus_helikon_tools::DEFAULT_ENV_ALLOWLIST;
+
+let backend = HostBackend::builder(Sandbox::open("./workspace")?)
+    .env_allowlist(DEFAULT_ENV_ALLOWLIST.iter().copied().chain(["MY_VAR"]))
+    .build();
 ```
 
 `HostBackend::guarantees()` returns:

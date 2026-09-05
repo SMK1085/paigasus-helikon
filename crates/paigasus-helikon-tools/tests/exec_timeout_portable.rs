@@ -22,16 +22,6 @@ const HANG: &str = "sleep 5";
 #[cfg(windows)]
 const HANG: &str = "ping -n 5 127.0.0.1 >NUL 2>&1";
 
-/// `HostBackend`'s default allowlist is `["PATH", "HOME"]` — unix-shaped.
-#[cfg(unix)]
-const ENV_ALLOWLIST: &[&str] = &["PATH", "HOME"];
-
-/// On Windows `HOME` does not exist, and `spawn_capped` calls `env_clear()`, so
-/// without `SystemRoot` Winsock cannot resolve its provider DLLs: `ping` would
-/// exit in milliseconds, before the timeout ever fires.
-#[cfg(windows)]
-const ENV_ALLOWLIST: &[&str] = &["PATH", "SystemRoot", "windir", "PATHEXT", "TEMP", "TMP"];
-
 /// A timed-out run reports `exit_code: None` on every platform, per the contract
 /// documented on `ExecOutput::exit_code`.
 ///
@@ -45,7 +35,6 @@ async fn timeout_reports_no_exit_code() {
     let tmp = tempfile::tempdir().unwrap();
     let backend = HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
         .timeout(Duration::from_millis(200))
-        .env_allowlist(ENV_ALLOWLIST.iter().copied())
         .build();
 
     // Budget mirrors `tests/bash.rs` — backend timeout (0.2s) + GRACE reap (5s) +

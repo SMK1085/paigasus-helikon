@@ -1,0 +1,176 @@
+//! `HostBackend`'s **default** environment allowlist, asserted end-to-end on
+//! every platform (SMA-614). Every backend here is built WITHOUT calling
+//! `.env_allowlist()` — that is the whole point.
+#![allow(missing_docs)]
+
+#[cfg(unix)]
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use paigasus_helikon_tools::{ExecRequest, HostBackend, Sandbox, DEFAULT_ENV_ALLOWLIST};
+
+/// `sh` exports a few names of its own regardless of what we pass in: dash
+/// exports `PWD`; bash-as-sh also exports `SHLVL` and `_`. Asserting a subset
+/// keeps the test shell-agnostic across the ubuntu and macOS runners.
+#[cfg(unix)]
+const SH_INJECTED: &[&str] = &["PWD", "SHLVL", "_"];
+
+/// Running `env` and checking the exported name set proves the no-leak half of
+/// the default allowlist: nothing beyond the allowlist (plus what `sh` injects
+/// on its own) reaches the child. It only spot-checks the other half — that
+/// `PATH` itself arrives — rather than requiring every allowlisted name to be
+/// present, because the *parent* running this test is not guaranteed to have
+/// `HOME` set (e.g. some CI/sandboxed invocations), and a name absent from the
+/// parent is legitimately absent from the child too (see
+/// `HostBackendBuilder::env_allowlist`'s "dropped without diagnostic" note).
+/// Requiring full presence would make the test fail for a reason unrelated to
+/// SMA-614.
+///
+/// This is the **no-leak** guard: it goes red if `env_clear()` is ever dropped
+/// from `spawn_capped`, or if someone adds a hidden platform floor there. It is
+/// NOT the anti-widening guard — `permitted` is built *from*
+/// `DEFAULT_ENV_ALLOWLIST`, so widening the const (e.g. adding
+/// `"AWS_SECRET_ACCESS_KEY"` and exporting it in the parent) widens `permitted`
+/// in lockstep and this test stays green. The anti-widening guard is the
+/// exact-equality pin `unix_default_allowlist_is_unchanged` in `src/exec/mod.rs`;
+/// that pin must not be deleted as redundant with this test.
+#[tokio::test]
+#[cfg(unix)]
+async fn unix_default_env_is_exactly_the_allowlist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let backend = HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .timeout(Duration::from_secs(10))
+        .build();
+
+    let out = backend.run(ExecRequest::new("env")).await.unwrap();
+    assert_eq!(out.exit_code, Some(0), "stderr: {}", out.stderr);
+
+    let observed: BTreeSet<&str> = out
+        .stdout
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, _)| name)
+        .collect();
+
+    let permitted: BTreeSet<&str> = DEFAULT_ENV_ALLOWLIST
+        .iter()
+        .copied()
+        .chain(SH_INJECTED.iter().copied())
+        .collect();
+
+    let leaked: Vec<&&str> = observed.difference(&permitted).collect();
+    assert!(
+        leaked.is_empty(),
+        "the child saw names outside the default allowlist: {leaked:?}"
+    );
+    assert!(
+        observed.contains("PATH"),
+        "PATH is allowlisted and must reach the child; saw {observed:?}"
+    );
+}
+
+/// The primary Windows assertion. `cmd`'s `if defined NAME (...)` tests whether a
+/// variable is set WITHOUT expanding its value, so this probe never interpolates
+/// an env value into the command line — unlike a `%NAME%`-expansion probe, it
+/// cannot be tricked by value content that is itself re-parsed as `cmd` syntax
+/// (e.g. a `PATH` entry containing `&`, `|`, `<`, `>` or `^`, which `cmd` expands
+/// *before* it parses separators) and it has no false-match hole equivalent to a
+/// `PATH`/`APPDATA`/etc. value that happens to contain the literal text of
+/// another allowlisted name's `%TOKEN%`. This fails deterministically without the
+/// SMA-614 fix and does not depend on any hypothesis about Winsock.
+///
+/// The probe is built from [`DEFAULT_ENV_ALLOWLIST`] itself — that property is
+/// load-bearing and must not regress — but only over names actually set in the
+/// *parent* process's environment. Requiring all eight to be present in the
+/// parent (as the unix test's doc comment already explains for `HOME`) would
+/// false-fail under `windows/servercore`, a SYSTEM/service account, or a future
+/// runner image that lacks e.g. `APPDATA` or `TMP`, while the code under test
+/// remains entirely correct.
+///
+/// `SystemRoot` is asserted unconditionally in addition to the loop: it is
+/// always set on Windows, so this can never false-fail, and it is what stops a
+/// revert of the const back to `["PATH", "HOME"]` from passing silently — such a
+/// revert would simply drop every other name out of the "present in parent" loop
+/// and leave nothing to fail on.
+#[tokio::test]
+#[cfg(windows)]
+async fn windows_default_env_expands_every_allowlisted_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let backend = HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .timeout(Duration::from_secs(10))
+        .build();
+
+    let present: Vec<&str> = DEFAULT_ENV_ALLOWLIST
+        .iter()
+        .copied()
+        .filter(|name| std::env::var_os(name).is_some())
+        .collect();
+    assert!(
+        present.contains(&"SystemRoot"),
+        "SystemRoot is always set on Windows"
+    );
+
+    let command = present
+        .iter()
+        .map(|name| format!("if defined {name} (echo OK_{name})"))
+        .collect::<Vec<_>>()
+        .join(" & ");
+    let out = backend.run(ExecRequest::new(command)).await.unwrap();
+
+    assert_eq!(out.exit_code, Some(0), "stderr: {}", out.stderr);
+
+    // Match whole lines, not substrings: `OK_PATH` is a prefix of `OK_PATHEXT`, so a
+    // `contains` check would report `PATH` as present purely on the strength of the
+    // `PATHEXT` line — masking exactly the regression this test exists to catch (a
+    // `spawn_capped` that stops forwarding `PATH`). `cmd`'s `echo` ends lines with
+    // CRLF and `str::lines` splits on `\n`, so the `\r` has to come off first.
+    let printed = |token: &str| {
+        out.stdout
+            .lines()
+            .any(|line| line.trim_end_matches('\r') == token)
+    };
+
+    for name in &present {
+        let token = format!("OK_{name}");
+        assert!(
+            printed(&token),
+            "{token} was not printed, so {name} never reached the child: {}",
+            out.stdout.trim()
+        );
+    }
+    assert!(
+        printed("OK_SystemRoot"),
+        "SystemRoot must reach the child: {}",
+        out.stdout.trim()
+    );
+}
+
+/// SMA-614's acceptance criterion verbatim: "a default-configured `HostBackend`
+/// can run an ordinary networked command on Windows without a caller-supplied
+/// allowlist."
+///
+/// Treat this as a **smoke test only**. Its discriminating power is unverified —
+/// nobody has confirmed that `ping` actually fails without `%SystemRoot%`, so it
+/// may well pass with or without the fix. The real guard is
+/// `windows_default_env_expands_every_allowlisted_name` above.
+#[tokio::test]
+#[cfg(windows)]
+async fn windows_default_env_runs_a_networked_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let backend = HostBackend::builder(Sandbox::open(tmp.path()).unwrap())
+        .timeout(Duration::from_secs(10))
+        .build();
+
+    // Outer budget so a regression fails fast instead of stalling the required
+    // Windows gate for the full backend timeout. Mirrors exec_timeout_portable.rs.
+    let out = tokio::time::timeout(
+        Duration::from_secs(30),
+        backend.run(ExecRequest::new("ping -n 1 127.0.0.1")),
+    )
+    .await
+    .expect("run must return promptly, not hang")
+    .unwrap();
+
+    assert!(!out.timed_out, "a single loopback ping must not time out");
+    assert_eq!(out.exit_code, Some(0), "stderr: {}", out.stderr);
+}

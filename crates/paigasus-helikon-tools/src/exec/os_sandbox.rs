@@ -20,7 +20,7 @@ use seccompiler::{
 
 use super::{
     spawn_capped, ExecConfig, ExecOutput, ExecRequest, ExecutionBackend, Isolation, ResourceLimits,
-    SandboxGuarantees, DEFAULT_MAX_OUTPUT, DEFAULT_TIMEOUT,
+    SandboxGuarantees, DEFAULT_ENV_ALLOWLIST, DEFAULT_MAX_OUTPUT, DEFAULT_TIMEOUT,
 };
 use crate::sandbox::Sandbox;
 
@@ -61,7 +61,13 @@ impl OsSandboxBackendBuilder {
         self.timeout = timeout;
         self
     }
-    /// Env var names to pass through (REPLACES the default `["PATH","HOME"]`).
+    /// Env var names to pass through to the child.
+    ///
+    /// This **replaces** [`DEFAULT_ENV_ALLOWLIST`] rather than extending it.
+    /// This backend is unix-only, so that default is `["PATH", "HOME"]`.
+    ///
+    /// A name that is absent from this process's environment is dropped
+    /// without diagnostic.
     pub fn env_allowlist<I, S>(mut self, names: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -224,7 +230,10 @@ impl OsSandboxBackend {
         OsSandboxBackendBuilder {
             sandbox,
             timeout: DEFAULT_TIMEOUT,
-            env_allowlist: vec!["PATH".to_owned(), "HOME".to_owned()],
+            env_allowlist: DEFAULT_ENV_ALLOWLIST
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
             max_output_bytes: DEFAULT_MAX_OUTPUT,
             limits: ResourceLimits::default(),
             allow_network: false,
