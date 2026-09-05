@@ -127,6 +127,15 @@ documented pre-PR step for SMA-613."
 
 ### Task 2: The regression test, red on Windows by construction
 
+> ## ⚠️ PARTIALLY SUPERSEDED
+>
+> The test below is the point-in-time execution record. The shipped test uses
+> **absolute** script and sentinel paths and an **unquoted** Windows invocation — both
+> forced by Windows, both explained in the amendment note at Step 1. **Do not copy the
+> code from this task.**
+>
+> **Authoritative source:** `crates/paigasus-helikon-tools/tests/exec_timeout_portable.rs`.
+
 TDD, adapted to a platform that cannot be run locally. The test is **portable**: on unix it passes immediately (it guards the existing `process_group(0)` kill, which has no test of its own today), and it can be *falsified* locally by degrading the unix kill — which proves it is not vacuous. On Windows it will fail until Task 3, which is correct: it encodes the bug.
 
 **Files:**
@@ -315,6 +324,21 @@ Expected red on Windows until the Job Object lands."
 ---
 
 ### Task 3: Job Object kill, instrumented
+
+> ## ⚠️ PARTIALLY SUPERSEDED
+>
+> The steps below are the point-in-time execution record. Two things changed during
+> implementation and review, so **do not copy the code from this task**:
+>
+> - `JobObject::terminate` ships as `-> std::io::Result<()>`, not `-> bool`, and the
+>   caller matches on the `Result` rather than using `is_some_and` — so the
+>   timeout-path `warn!` can name the OS error, not just the consequence.
+> - The Windows degrade arms were later collapsed into one path that also records
+>   the outcome of the `start_kill()` fallback.
+>
+> **Authoritative sources:** `crates/paigasus-helikon-tools/src/exec/job_object.rs`
+> and the timeout arm of `crates/paigasus-helikon-tools/src/exec/mod.rs`, with the
+> rationale in `docs/superpowers/specs/2026-09-05-windows-job-object-subtree-kill-design.md`.
 
 **Files:**
 - Create: `crates/paigasus-helikon-tools/src/exec/job_object.rs`
