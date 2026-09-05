@@ -145,6 +145,14 @@ pub struct ExecOutput {
     /// this on every platform.
     pub exit_code: Option<i32>,
     /// Whether the command was killed because it exceeded the timeout.
+    ///
+    /// A timeout kills the whole spawned subtree, not just the direct child: a
+    /// process group `SIGKILL` on unix, a Job Object termination on Windows.
+    ///
+    /// One accepted gap on Windows: a process spawned in the brief window
+    /// between the shell starting and its assignment to the job object is not a
+    /// member, and survives. Closing it requires APIs that are nightly-only on
+    /// stable Rust today.
     pub timed_out: bool,
     /// Whether either stream was truncated at the output cap.
     pub truncated: bool,
@@ -260,7 +268,8 @@ use tokio::io::AsyncReadExt;
 const GRACE: Duration = Duration::from_secs(5);
 
 /// Spawn `command` under `cfg`, draining stdout/stderr concurrently, killing the
-/// whole process group on timeout. `prefix`, when non-empty, is prepended as
+/// whole process subtree on timeout — a process group on unix, a Job Object on
+/// Windows. `prefix`, when non-empty, is prepended as
 /// `program [args...]` ahead of `sh -c <command>` (used by the macOS Seatbelt
 /// backend to wrap the shell in `sandbox-exec`). `configure_child` runs in the
 /// **parent** to install backend-specific `pre_exec` hooks before spawn.

@@ -1,5 +1,5 @@
 //! [`HostBackend`] — the default execution backend. A cwd-pinned shell with env
-//! scrubbing, an output cap, a timeout (process-group kill), and `rlimit`s.
+//! scrubbing, an output cap, a timeout (whole-subtree kill), and `rlimit`s.
 //! **NOT a security boundary:** a spawned command can read/write anything this
 //! process can. Gate it with a `PermissionPolicy` or use [`OsSandboxBackend`]
 //! for OS-enforced containment.
@@ -32,7 +32,7 @@ pub struct HostBackendBuilder {
 }
 
 impl HostBackendBuilder {
-    /// Wall-clock timeout before the process group is killed (default 30s).
+    /// Wall-clock timeout before the whole process subtree is killed (default 30s).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self

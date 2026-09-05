@@ -380,6 +380,16 @@ The default backend. Pins the working directory to the sandbox root and scrubs t
 environment to a configurable allowlist, but spawned commands have the same OS
 access as the parent process.
 
+When a command exceeds its timeout the **whole spawned subtree** is killed, not
+just the shell: a process-group `SIGKILL` on unix, a Job Object termination on
+Windows. `ExecOutput::timed_out` is `true` and `exit_code` is `None` on every
+platform — a killed process has no meaningful exit code.
+
+One accepted gap on Windows: a process spawned in the brief window between the
+shell starting and its assignment to the job object is not a member of it, and
+survives the kill. Closing that window needs Win32 process-attribute APIs that
+are nightly-only on stable Rust today.
+
 ```rust,ignore
 use paigasus_helikon_tools::{BashTool, HostBackend, Sandbox};
 

@@ -15,10 +15,14 @@ use paigasus_helikon_tools::{ExecRequest, HostBackend, Sandbox};
 const HANG: &str = "sleep 5";
 
 /// `ping` ships with every Windows install; `-n 5` blocks ~4s, 20x the 200ms
-/// timeout. Output is redirected to `NUL` so the grandchild never inherits our
-/// stdout/stderr pipe handles: Windows has no process-group kill, so `ping`
-/// outlives the `TerminateProcess` of `cmd.exe`, and a surviving pipe *writer*
-/// would stall the reader drain past the guard below.
+/// timeout. Output goes to `NUL` to keep the captured streams clean.
+///
+/// Note this redirect does **not** stop `ping` holding our stdout/stderr pipe
+/// write ends: `CreateProcess` runs with `bInheritHandles = TRUE`, so every
+/// inheritable handle in `cmd.exe` is duplicated into `ping` regardless of where
+/// `cmd.exe` points its `hStdOutput`. Before SMA-613 that inherited writer is
+/// exactly why this test took ~4s on Windows against ~0.2s on unix — the reader
+/// drain waited out the orphaned grandchild.
 #[cfg(windows)]
 const HANG: &str = "ping -n 5 127.0.0.1 >NUL 2>&1";
 
