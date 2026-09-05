@@ -213,10 +213,40 @@ fn translate_tool_choice(tc: &ToolChoice) -> ChatCompletionToolChoiceOption {
 ///
 /// Both `name` and `args` use `push_str` concatenation so that fragmented
 /// deltas (e.g. `"sea"` + `"rch"` → `"search"`) are assembled correctly.
-#[derive(Default)]
+///
+/// **No `Default` impl, deliberately.** Every buffer must carry the `seq` it
+/// was created with, so construction goes through [`PendingToolCall::new`] via
+/// [`ChatTranslator::ensure_pending`]. Deriving `Default` would let an
+/// `.or_default()` call site silently mint a buffer with `seq: 0`, which would
+/// corrupt the merge order in [`ChatTranslator::canonicalize`] (SMA-566). The
+/// absence of the derive is what makes that a compile error rather than a
+/// latent bug.
 struct PendingToolCall {
+    /// Monotonic creation order across all buffers in one stream.
+    ///
+    /// Its sole consumer is the merge in [`ChatTranslator::canonicalize`].
+    /// It is deliberately **not** the end-of-stream flush order — that stays
+    /// keyed on the canonical wire `index`, which is the model's declared
+    /// call position. `providers-litellm` uses its `seq` for both because its
+    /// `index` is optional and may be absent entirely; here it never is.
+    #[expect(
+        dead_code,
+        reason = "consumed by ChatTranslator::canonicalize, added in a later SMA-566 task"
+    )]
+    seq: u64,
     name: String,
     args: String,
+}
+
+impl PendingToolCall {
+    /// An empty buffer stamped with its creation order.
+    fn new(seq: u64) -> Self {
+        Self {
+            seq,
+            name: String::new(),
+            args: String::new(),
+        }
+    }
 }
 
 /// Accumulates Chat Completions SSE deltas and emits [`ModelEvent`]s.
@@ -242,6 +272,8 @@ pub(crate) struct ChatTranslator {
     /// known and never re-prepended. `name` accumulates across every delta
     /// for the call and is cleared only when the name flushes (SMA-547 §1).
     pending: HashMap<u32, PendingToolCall>,
+    /// Next value handed out by [`Self::ensure_pending`]; never reused.
+    next_seq: u64,
     /// Finish reason observed so far, emitted only by [`Self::finish`] at
     /// end-of-stream. Last observed value wins.
     finish_reason: Option<FinishReason>,
@@ -255,7 +287,23 @@ impl ChatTranslator {
             name_emitted: HashMap::new(),
             warned_late_name: HashSet::new(),
             pending: HashMap::new(),
+            next_seq: 0,
             finish_reason: None,
+        }
+    }
+
+    /// Ensure a buffer exists for `index`, stamping a fresh `seq` on creation.
+    ///
+    /// Deliberately returns nothing rather than `&mut PendingToolCall`:
+    /// callers then reach the buffer through `self.pending.get_mut(..)`, which
+    /// borrows one field instead of all of `self` and so leaves the
+    /// surrounding disjoint-field borrows of `name_emitted` and `tool_calls`
+    /// intact.
+    fn ensure_pending(&mut self, index: u32) {
+        if !self.pending.contains_key(&index) {
+            self.pending
+                .insert(index, PendingToolCall::new(self.next_seq));
+            self.next_seq += 1;
         }
     }
 
@@ -442,7 +490,11 @@ impl ChatTranslator {
             id.to_owned()
         } else {
             // No call_id yet — buffer both fields so neither is dropped.
-            let entry = self.pending.entry(index).or_default();
+            self.ensure_pending(index);
+            let entry = self
+                .pending
+                .get_mut(&index)
+                .expect("ensure_pending just inserted this index");
             entry.name.push_str(name_frag);
             entry.args.push_str(args_frag);
             return;
@@ -475,7 +527,11 @@ impl ChatTranslator {
         // cannot change which deltas flush.
         let already_emitted = self.name_emitted.contains_key(&index);
 
-        let entry = self.pending.entry(index).or_default();
+        self.ensure_pending(index);
+        let entry = self
+            .pending
+            .get_mut(&index)
+            .expect("ensure_pending just inserted this index");
         // A name fragment identical to the name accumulated so far is treated
         // as a whole-name repeat and skipped, not appended -- otherwise a
         // backend that resends the complete function name on every delta
