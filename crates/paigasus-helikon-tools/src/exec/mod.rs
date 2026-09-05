@@ -12,6 +12,11 @@ use paigasus_helikon_core::ToolError;
 mod host;
 pub use host::{HostBackend, HostBackendBuilder};
 
+#[cfg(windows)]
+mod job_object;
+#[cfg(windows)]
+use job_object::JobObject;
+
 #[cfg(all(
     feature = "os-sandbox",
     target_os = "linux",
@@ -140,6 +145,20 @@ pub struct ExecOutput {
     /// this on every platform.
     pub exit_code: Option<i32>,
     /// Whether the command was killed because it exceeded the timeout.
+    ///
+    /// On unix and Windows a timeout kills the whole spawned subtree, not just
+    /// the direct child: a process group `SIGKILL` on unix, a Job Object
+    /// termination on Windows. On any other target no subtree mechanism is
+    /// available and only the direct child is killed.
+    ///
+    /// One accepted gap on Windows: a process spawned in the brief window
+    /// between the shell starting and its assignment to the job object is not a
+    /// member, and survives. Closing it requires APIs that are nightly-only on
+    /// stable Rust today.
+    ///
+    /// A second, degraded-path gap: if the job object cannot be created or its
+    /// termination call fails, only the direct child is killed and a warning is
+    /// emitted on the `paigasus::tools::exec` target.
     pub timed_out: bool,
     /// Whether either stream was truncated at the output cap.
     pub truncated: bool,
@@ -255,7 +274,8 @@ use tokio::io::AsyncReadExt;
 const GRACE: Duration = Duration::from_secs(5);
 
 /// Spawn `command` under `cfg`, draining stdout/stderr concurrently, killing the
-/// whole process group on timeout. `prefix`, when non-empty, is prepended as
+/// whole process subtree on timeout — a process group on unix, a Job Object on
+/// Windows. `prefix`, when non-empty, is prepended as
 /// `program [args...]` ahead of `sh -c <command>` (used by the macOS Seatbelt
 /// backend to wrap the shell in `sandbox-exec`). `configure_child` runs in the
 /// **parent** to install backend-specific `pre_exec` hooks before spawn.
@@ -292,6 +312,36 @@ pub(crate) async fn spawn_capped(
     #[cfg(unix)]
     let pgid = child.id();
 
+    // Assign as the very next statement after spawn: a grandchild spawned in
+    // the window before this lands escapes the job (accepted gap, SMA-613).
+    //
+    // Held as `Result`, not `Option`: the timeout path below needs the cause of
+    // a failed assign, not just the fact that it failed, so an operator seeing
+    // "containment degraded" on the timeout warning also sees why.
+    #[cfg(windows)]
+    let job: Result<JobObject, std::io::Error> = match child.raw_handle() {
+        Some(handle) => JobObject::assign(handle).inspect_err(|e| {
+            tracing::debug!(
+                target: "paigasus::tools::exec",
+                error = %e,
+                "could not put the child in a job object; a timeout will kill only \
+                 the direct child"
+            );
+        }),
+        // `raw_handle()` is `None` once the child has exited — vanishingly rare
+        // this soon after spawn, but it degrades the same way.
+        None => {
+            tracing::debug!(
+                target: "paigasus::tools::exec",
+                "child had already exited before it could be put in a job object; \
+                 a timeout will kill only the direct child"
+            );
+            Err(std::io::Error::other(
+                "child had already exited before it could be put in a job object",
+            ))
+        }
+    };
+
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
 
@@ -312,15 +362,46 @@ pub(crate) async fn spawn_capped(
                     let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                // Any Win32 failure — including a failed terminate — degrades to
+                // exactly today's behaviour. Without the `start_kill` fallback a
+                // failed terminate would kill *nothing*, not even `cmd.exe`,
+                // which is strictly worse than not having the job at all.
+                let cause: Option<String> = match job.as_ref() {
+                    Ok(j) => j.terminate().err().map(|e| e.to_string()),
+                    Err(e) => Some(e.to_string()),
+                };
+                if let Some(cause) = cause {
+                    // `start_kill()` can itself fail, and its error is not one the
+                    // caller ever sees: a timed-out run reports `timed_out: true`
+                    // and never returns `Err`, per the timeout contract. Record the
+                    // outcome instead of dropping it — otherwise the one case where
+                    // even the direct child survives is indistinguishable in the log
+                    // from the case where only its grandchildren did.
+                    let fallback = match child.start_kill() {
+                        Ok(()) => "direct child killed".to_owned(),
+                        Err(e) => format!("start_kill also failed: {e}"),
+                    };
+                    tracing::warn!(
+                        target: "paigasus::tools::exec",
+                        cause = %cause,
+                        fallback = %fallback,
+                        "job object kill unavailable; processes the child spawned may \
+                         have survived the timeout"
+                    );
+                }
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 let _ = child.start_kill();
             }
             // Reap the child (bounded by GRACE) but ignore its status: a killed
-            // process has no meaningful exit code. On Windows `start_kill()` is
-            // `TerminateProcess`, which assigns a real code; on unix the child can
-            // still win the race to exit normally before our SIGKILL lands. Both
-            // would otherwise contradict the `ExecOutput::exit_code` contract.
+            // process has no meaningful exit code. On Windows, `TerminateJobObject`
+            // and its `start_kill()`/`TerminateProcess` fallback both assign a real
+            // exit code; on unix the child can still win the race to exit normally
+            // before our SIGKILL lands. All of those would otherwise contradict the
+            // `ExecOutput::exit_code` contract.
             let _ = tokio::time::timeout(GRACE, child.wait()).await;
             None
         }

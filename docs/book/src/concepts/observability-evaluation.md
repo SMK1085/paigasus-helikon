@@ -120,6 +120,7 @@ under `crates/*/src` stops doing so.
 | Component | Crate | Subsystems today | Status |
 | --- | --- | --- | --- |
 | `paigasus::core` | `paigasus-helikon-core` | `agent`, `workflow`, `session`, `compaction`, `permissions` | stable |
+| `paigasus::tools` | `paigasus-helikon-tools` | `exec` | provisional |
 | `paigasus::openai` | `paigasus-helikon-providers-openai` | `translate`, `chat`, `responses` | stable |
 | `paigasus::anthropic` | `paigasus-helikon-providers-anthropic` | `translate`, `stream`, `sse` | stable |
 | `paigasus::bedrock` | `paigasus-helikon-providers-bedrock` | `translate`, `stream`, `builder` | stable |
@@ -195,9 +196,9 @@ one exception to the rule itself rather than to its output: stripping the
 `paigasus-helikon-` prefix leaves nothing to work with (there is no trailing
 `-<name>`), so its component is `facade` by fiat, not by the derivation.
 
-Ten crates have a name under this rule (nine derived, plus the facade's
+Nine crates have a name under this rule (eight derived, plus the facade's
 `facade`) with no call site emitting on it yet, because those crates carry no
-`tracing` instrumentation today: `facade`, `macros`, `mcp`, `tools`, `evals`,
+`tracing` instrumentation today: `facade`, `macros`, `mcp`, `evals`,
 `cli`, `sessions_sqlite`, `sessions_postgres`, `sessions_redis`,
 `sessions_testkit`. They are not in the table above — a row for a component
 nothing emits would fail the guard that checks the table against source — but

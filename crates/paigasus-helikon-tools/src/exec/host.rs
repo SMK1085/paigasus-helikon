@@ -1,5 +1,5 @@
 //! [`HostBackend`] — the default execution backend. A cwd-pinned shell with env
-//! scrubbing, an output cap, a timeout (process-group kill), and `rlimit`s.
+//! scrubbing, an output cap, a timeout (whole-subtree kill), and `rlimit`s.
 //! **NOT a security boundary:** a spawned command can read/write anything this
 //! process can. Gate it with a `PermissionPolicy` or use [`OsSandboxBackend`]
 //! for OS-enforced containment.
@@ -32,7 +32,7 @@ pub struct HostBackendBuilder {
 }
 
 impl HostBackendBuilder {
-    /// Wall-clock timeout before the process group is killed (default 30s).
+    /// Wall-clock timeout before the whole process subtree is killed (default 30s).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -69,6 +69,11 @@ impl HostBackendBuilder {
 
     /// Override the resource limits. Replaces the defaults
     /// (`RLIMIT_CPU` = timeout+5s, `RLIMIT_FSIZE` = 1 GiB, `RLIMIT_AS` = unset).
+    ///
+    /// **unix only.** [`ResourceLimits`] is applied through `setrlimit`, which has
+    /// no Windows equivalent, so on Windows this call is accepted and has no
+    /// effect. That has always been the behaviour; it is stated here because the
+    /// `RLIMIT_*` names above are the only thing that previously implied it.
     pub fn rlimits(mut self, limits: ResourceLimits) -> Self {
         self.limits = limits;
         self.limits_set = true;
@@ -93,6 +98,7 @@ impl HostBackendBuilder {
                 timeout: self.timeout,
                 max_output_bytes: self.max_output_bytes,
             },
+            #[cfg(unix)]
             limits: self.limits,
         })
     }
@@ -102,6 +108,7 @@ impl HostBackendBuilder {
 /// security boundary.
 pub struct HostBackend {
     cfg: ExecConfig,
+    #[cfg(unix)]
     limits: ResourceLimits,
 }
 
@@ -129,6 +136,11 @@ impl HostBackend {
 #[async_trait]
 impl ExecutionBackend for HostBackend {
     async fn run(&self, req: ExecRequest) -> Result<ExecOutput, ToolError> {
+        // Consumed only by the `#[cfg(unix)]` `pre_exec` hook below; on Windows
+        // the closure captures nothing. Without the gate this is an
+        // `unused_variables` error under `-D warnings` on the Windows target —
+        // which CI cannot see, because clippy runs on ubuntu only.
+        #[cfg(unix)]
         let limits = self.limits.clone();
         spawn_capped(&self.cfg, &[], &req.command, move |_cmd| {
             #[cfg(unix)]
