@@ -97,10 +97,14 @@ fn grandchild_script(started: &Path, alive: &Path) -> String {
 /// `started`/`alive` are absolute paths baked in with `format!` rather than bare
 /// relative names.
 ///
-/// The redirection targets are quoted (`echo started>"<path>"`) so a temp
-/// directory containing a space in one of its components — e.g. a Windows user
-/// profile path with a space in the username — does not get split by `cmd.exe`
-/// into a bogus extra token.
+/// The redirection targets INSIDE this script body are quoted
+/// (`echo started>"<path>"`) so a temp directory containing a space in one of
+/// its components — e.g. a Windows user profile path with a space in the
+/// username — does not get split by `cmd.exe` into a bogus extra token. This
+/// is safe because the script is a file on disk, read and parsed once by the
+/// inner `cmd.exe` that runs it — unlike the *invocation line* built by
+/// [`spawns_grandchild`], these quotes never pass through `Command::arg`'s
+/// escaping and so are not subject to its mangling.
 #[cfg(windows)]
 fn grandchild_script(started: &Path, alive: &Path) -> String {
     format!(
@@ -113,10 +117,11 @@ fn grandchild_script(started: &Path, alive: &Path) -> String {
 /// A command whose sentinel-writer is a **grandchild** of the shell `spawn_capped`
 /// spawns, so killing only the direct child leaves it running.
 ///
-/// `script` is invoked by ABSOLUTE path (quoted, for the same reason as the
-/// sentinel paths above: `cmd.exe`'s UNC misdetection on a canonicalized
-/// Windows cwd would otherwise leave `cmd /C <relative-name>` unable to find
-/// the file at all) rather than relying on the child's working directory.
+/// `script` is invoked by ABSOLUTE path (quoted, since `sh` receives its
+/// argument via `execve` unmangled and a temp path containing a space is
+/// otherwise split into two words) rather than relying on the child's working
+/// directory — for the same UNC-misdetection reason documented on
+/// [`grandchild_script`].
 ///
 /// The trailing `; true` is load-bearing: without it `sh -c` applies its
 /// single-command `exec` optimisation and replaces the outer shell, collapsing
@@ -127,7 +132,24 @@ fn spawns_grandchild(script: &Path) -> String {
     format!("sh \"{}\"; true", script.display())
 }
 
-/// `build_command` turns this into `cmd /C "cmd /C \"<script>\""`, so the outer
+/// Deliberately UNQUOTED, unlike the unix arm: `build_command` passes this
+/// whole string through `Command::new("cmd").arg("/C").arg(s)`, and std's
+/// argument escaper unconditionally rewrites every embedded `"` to `\"` before
+/// `cmd.exe` ever sees it (`cmd.exe`'s own escape character is `^`, not `\`, so
+/// those backslashes land as literal text). With a quoted `script` this string
+/// would contain four quote characters after escaping and `cmd`'s `/C`
+/// quote-stripping rule (`cmd /?`) only special-cases *exactly* two; falling
+/// through to its legacy behaviour strips just the first and last character,
+/// leaving a leading `\"` that is not a valid path prefix — the outer `cmd /C`
+/// dispatch then fails to find the script at all (no `started` sentinel, the
+/// positive control fires). No literal `"` can survive this trip, so this
+/// string must resolve to an ABSOLUTE path with NO embedded quotes — which
+/// means, in turn, this test cannot tolerate a space in `script`'s path; see
+/// the loud skip in `timeout_kills_the_whole_subtree`.
+///
+/// With no quoting, `build_command` turns this into `cmd /C "cmd /C <script>"`
+/// (exactly two quote characters — the outer wrap `build_command` itself adds),
+/// which `cmd`'s stripping rule reduces cleanly to `cmd /C <script>`: the outer
 /// `cmd.exe` spawns an inner `cmd.exe` that runs the batch and waits.
 ///
 /// Deliberately not `start /B`: `START` is the documented `CREATE_BREAKAWAY_FROM_JOB`
@@ -136,7 +158,7 @@ fn spawns_grandchild(script: &Path) -> String {
 /// than no test. A plain nested `cmd` needs no such escape.
 #[cfg(windows)]
 fn spawns_grandchild(script: &Path) -> String {
-    format!("cmd /C \"{}\"", script.display())
+    format!("cmd /C {}", script.display())
 }
 
 /// A timed-out run kills the whole spawned subtree, not just the direct child.
@@ -149,6 +171,26 @@ fn spawns_grandchild(script: &Path) -> String {
 async fn timeout_kills_the_whole_subtree() {
     let tmp = tempfile::tempdir().unwrap();
     let script_path = tmp.path().join(GRANDCHILD_SCRIPT_NAME);
+
+    // `spawns_grandchild`'s Windows arm cannot quote `script_path` (see its doc
+    // comment: any literal `"` is mangled by std's argument escaping before
+    // `cmd.exe` ever sees it), so a space anywhere in the temp path would make
+    // this test fail its positive control for a reason that has nothing to do
+    // with the subtree kill. `windows-latest`'s `TEMP` is the 8.3
+    // `C:\Users\RUNNER~1\...` form and `tempfile` adds no spaces, so this never
+    // triggers in CI — it only guards a dev machine with a spacey `%TEMP%`.
+    #[cfg(windows)]
+    if script_path.display().to_string().contains(' ') {
+        eprintln!(
+            "SKIP timeout_kills_the_whole_subtree: script path {} contains a space; \
+             the nested `cmd /C` invocation cannot accept a quoted path on Windows \
+             (see `spawns_grandchild`'s doc comment), so this test cannot run from a \
+             TEMP directory with a space in it",
+            script_path.display()
+        );
+        return;
+    }
+
     let started_path = tmp.path().join("started");
     let alive_path = tmp.path().join("alive");
     std::fs::write(&script_path, grandchild_script(&started_path, &alive_path)).unwrap();
