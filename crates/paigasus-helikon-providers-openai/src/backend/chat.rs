@@ -580,6 +580,12 @@ impl ChatTranslator {
                          and is dropped"
                     );
                 }
+                // Write-only here: once `name_emitted[owner]` is set,
+                // `slot.name` can never merge again, so this particular
+                // `seq` is never read afterwards. It is defensive symmetry
+                // with the tail copy below (which mutation testing proved
+                // live), not a necessity of this branch — kept so the two
+                // copies stay identical rather than one silently drifting.
                 if old.seq < slot.seq {
                     slot.seq = old.seq;
                 }
