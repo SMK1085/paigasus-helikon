@@ -41,6 +41,48 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default per-stream output cap, in bytes (1 MiB).
 pub const DEFAULT_MAX_OUTPUT: usize = 1 << 20;
 
+/// Environment variable names a child process receives when the caller does not
+/// override the allowlist with [`HostBackend::builder`]'s `env_allowlist`.
+///
+/// The list is platform-specific, because a minimal-but-working environment is:
+///
+/// - **unix:** `PATH`, `HOME`
+/// - **Windows:** `PATH`, `SystemRoot`, `PATHEXT`, `TEMP`, `TMP`, `USERPROFILE`,
+///   `APPDATA`, `LOCALAPPDATA`
+///
+/// Both lists are spelled out because docs.rs renders only the Linux build, so a
+/// Windows reader would otherwise see the unix arm and nothing else.
+///
+/// `env_allowlist` *replaces* this list rather than extending it. To keep the
+/// platform defaults and add your own name:
+///
+/// ```
+/// use paigasus_helikon_tools::DEFAULT_ENV_ALLOWLIST;
+///
+/// let names: Vec<&str> =
+///     DEFAULT_ENV_ALLOWLIST.iter().copied().chain(["MY_VAR"]).collect();
+/// assert!(names.contains(&"PATH"));
+/// assert!(names.contains(&"MY_VAR"));
+/// ```
+#[cfg(unix)]
+pub const DEFAULT_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME"];
+
+/// Environment variable names a child process receives when the caller does not
+/// override the allowlist. See the unix arm for the full per-platform list;
+/// on Windows it is `PATH`, `SystemRoot`, `PATHEXT`, `TEMP`, `TMP`,
+/// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`.
+#[cfg(windows)]
+pub const DEFAULT_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "SystemRoot",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+];
+
 /// A backend that runs one shell command under some containment tier.
 ///
 /// Object-safe and not generic over the agent context, so one value is shared as
@@ -368,4 +410,43 @@ pub(crate) fn apply_rlimits(limits: &ResourceLimits) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_ENV_ALLOWLIST;
+
+    /// Exact equality, not `contains`: this is what stops a future change from
+    /// quietly adding a credential-bearing name to either platform's default.
+    #[test]
+    #[cfg(unix)]
+    fn unix_default_allowlist_is_unchanged() {
+        assert_eq!(
+            DEFAULT_ENV_ALLOWLIST,
+            ["PATH", "HOME"].as_slice(),
+            "SMA-614 must not widen the unix default"
+        );
+    }
+
+    /// The Windows list must stay the minimum-to-function set the spec argues
+    /// for. `COMSPEC`, `windir` and `HOME` were considered and excluded.
+    #[test]
+    #[cfg(windows)]
+    fn windows_default_allowlist_is_the_agreed_set() {
+        assert_eq!(
+            DEFAULT_ENV_ALLOWLIST,
+            [
+                "PATH",
+                "SystemRoot",
+                "PATHEXT",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+            ]
+            .as_slice(),
+            "SMA-614 pins the Windows default; changing it needs a spec update"
+        );
+    }
 }

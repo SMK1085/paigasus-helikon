@@ -23,7 +23,7 @@ use paigasus_helikon_core::ToolError;
 
 use super::{
     spawn_capped, ExecConfig, ExecOutput, ExecRequest, ExecutionBackend, Isolation, ResourceLimits,
-    SandboxGuarantees, DEFAULT_MAX_OUTPUT, DEFAULT_TIMEOUT,
+    SandboxGuarantees, DEFAULT_ENV_ALLOWLIST, DEFAULT_MAX_OUTPUT, DEFAULT_TIMEOUT,
 };
 use crate::sandbox::Sandbox;
 
@@ -216,7 +216,10 @@ impl OsSandboxBackend {
         OsSandboxBackendBuilder {
             sandbox,
             timeout: DEFAULT_TIMEOUT,
-            env_allowlist: vec!["PATH".to_owned(), "HOME".to_owned()],
+            env_allowlist: DEFAULT_ENV_ALLOWLIST
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
             max_output_bytes: DEFAULT_MAX_OUTPUT,
             limits: ResourceLimits::default(),
             allow_network: false,

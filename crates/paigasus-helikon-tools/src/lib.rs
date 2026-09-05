@@ -39,7 +39,7 @@ pub use bash::{BashTool, BashToolBuilder};
 pub use edit::EditTool;
 pub use exec::{
     ExecOutput, ExecRequest, ExecutionBackend, HostBackend, HostBackendBuilder, Isolation,
-    ResourceLimits, SandboxGuarantees,
+    ResourceLimits, SandboxGuarantees, DEFAULT_ENV_ALLOWLIST,
 };
 /// forkd microVM backend types.
 #[cfg(feature = "microvm")]
