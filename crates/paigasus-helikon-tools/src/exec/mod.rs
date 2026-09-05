@@ -83,7 +83,10 @@ pub struct ExecOutput {
     pub stdout: String,
     /// Captured stderr (lossy UTF-8, truncated at the backend's output cap).
     pub stderr: String,
-    /// Process exit code, or `None` if killed by signal / timeout.
+    /// Process exit code. Always `None` when [`ExecOutput::timed_out`] is `true`,
+    /// and `None` for a process killed by a signal — a killed process has no
+    /// meaningful exit code. Implementors of [`ExecutionBackend`] must uphold
+    /// this on every platform.
     pub exit_code: Option<i32>,
     /// Whether the command was killed because it exceeded the timeout.
     pub timed_out: bool,
@@ -260,10 +263,13 @@ pub(crate) async fn spawn_capped(
             {
                 let _ = child.start_kill();
             }
-            match tokio::time::timeout(GRACE, child.wait()).await {
-                Ok(Ok(status)) => status.code(),
-                _ => None,
-            }
+            // Reap the child (bounded by GRACE) but ignore its status: a killed
+            // process has no meaningful exit code. On Windows `start_kill()` is
+            // `TerminateProcess`, which assigns a real code; on unix the child can
+            // still win the race to exit normally before our SIGKILL lands. Both
+            // would otherwise contradict the `ExecOutput::exit_code` contract.
+            let _ = tokio::time::timeout(GRACE, child.wait()).await;
+            None
         }
     };
 
