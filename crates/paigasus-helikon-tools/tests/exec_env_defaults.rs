@@ -118,16 +118,28 @@ async fn windows_default_env_expands_every_allowlisted_name() {
     let out = backend.run(ExecRequest::new(command)).await.unwrap();
 
     assert_eq!(out.exit_code, Some(0), "stderr: {}", out.stderr);
+
+    // Match whole lines, not substrings: `OK_PATH` is a prefix of `OK_PATHEXT`, so a
+    // `contains` check would report `PATH` as present purely on the strength of the
+    // `PATHEXT` line — masking exactly the regression this test exists to catch (a
+    // `spawn_capped` that stops forwarding `PATH`). `cmd`'s `echo` ends lines with
+    // CRLF and `str::lines` splits on `\n`, so the `\r` has to come off first.
+    let printed = |token: &str| {
+        out.stdout
+            .lines()
+            .any(|line| line.trim_end_matches('\r') == token)
+    };
+
     for name in &present {
         let token = format!("OK_{name}");
         assert!(
-            out.stdout.contains(&token),
+            printed(&token),
             "{token} was not printed, so {name} never reached the child: {}",
             out.stdout.trim()
         );
     }
     assert!(
-        out.stdout.contains("OK_SystemRoot"),
+        printed("OK_SystemRoot"),
         "SystemRoot must reach the child: {}",
         out.stdout.trim()
     );

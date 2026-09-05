@@ -11,9 +11,11 @@
 `.env_clear()` (`src/exec/mod.rs:219`) and then re-adds only allowlisted names, so
 the allowlist is the *entire* environment the child sees.
 
-`HOME` does not exist on Windows, so `std::env::var` returns `Err` and the entry is
-silently a no-op. A default-configured `HostBackend` on Windows therefore hands the
-child exactly one variable: `PATH`. That is a materially broken environment, and it
+`HOME` is commonly absent from native Windows environments (MSYS, Git for Windows,
+or the caller can define it, but nothing on the platform sets it by default), so
+`std::env::var` returns `Err` and the entry is silently a no-op. A
+default-configured `HostBackend` on Windows therefore hands the child exactly one
+variable: `PATH`. That is a materially broken environment, and it
 fails in ways that look like the *command* is wrong rather than the backend's
 default.
 

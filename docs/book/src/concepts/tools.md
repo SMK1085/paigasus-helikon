@@ -392,8 +392,9 @@ let tool = BashTool::<()>::new(backend);
 
 The default allowlist is platform-specific, because a minimal-but-working
 environment is: `PATH` and `HOME` on unix; `PATH`, `SystemRoot`, `PATHEXT`,
-`TEMP`, `TMP`, `USERPROFILE`, `APPDATA` and `LOCALAPPDATA` on Windows. `HOME` does
-not exist on Windows, so a unix-shaped list leaves a Windows child with `PATH`
+`TEMP`, `TMP`, `USERPROFILE`, `APPDATA` and `LOCALAPPDATA` on Windows. `HOME` is
+commonly absent from native Windows environments, so a unix-shaped list leaves a
+Windows child with `PATH`
 alone — which can break Winsock initialization and temp-file writes, and makes
 `cmd.exe` fall back to its built-in extension list rather than the machine's
 `PATHEXT`.
