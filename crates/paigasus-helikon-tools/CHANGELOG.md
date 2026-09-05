@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.18...paigasus-helikon-tools-v0.2.19) - 2026-09-05
+
+### Added
+
+- *(tools)* SMA-613 kill the whole process subtree on a windows exec timeout ([#236](https://github.com/SMK1085/paigasus-helikon/pull/236))
+
 ## [0.2.18](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.17...paigasus-helikon-tools-v0.2.18) - 2026-09-05
 
 ### Added
