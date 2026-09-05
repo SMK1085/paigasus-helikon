@@ -1272,7 +1272,7 @@ not alter behaviour on any captured wire shape.
 git diff main --stat
 ```
 
-Expected: exactly four files — the spec, this plan, `chat.rs`, `stream.rs`,
+Expected: exactly five files — the spec, this plan, `chat.rs`, `stream.rs`,
 `conformance.rs`. **No `Cargo.toml`, no `CHANGELOG.md`** — release-plz owns those.
 
 - [x] **Step 3: Confirm the test count**
