@@ -412,9 +412,15 @@ impl ChatTranslator {
         indices.sort_unstable();
 
         // Seeded from indexes that already emitted, so a call flushed
-        // mid-stream cannot be re-emitted here under a second index. Blank
-        // call_ids are filtered out for the same reason they are excluded
-        // below.
+        // mid-stream cannot be re-emitted here under a second index. The
+        // `.filter(|c| !c.is_empty())` below is redundant on its own: the loop
+        // guard further down (`!call_id.is_empty() && !already.insert(...)`)
+        // already short-circuits before `insert` ever runs for a blank id, so
+        // a blank entry in `already` could never change what gets claimed.
+        // Kept anyway so this seed states the same "blank ids are exempt"
+        // rule as the guard below, in the same place — and so it matches
+        // `providers-litellm`'s seed once SMA-616 aligns the two (that seed
+        // is currently unfiltered).
         let mut already: HashSet<String> = self
             .name_emitted
             .keys()
