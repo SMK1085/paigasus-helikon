@@ -1626,6 +1626,11 @@ mod tests {
                 make_chunk(1, Some("c1"), None, None),
             ],
         );
+        assert!(
+            !t.pending.contains_key(&0),
+            "the unrecoverable fragment must not be left sitting in `pending` \
+             once it has been recorded and dropped"
+        );
         assert_eq!(named(&evs), vec![("c1".to_owned(), "get_".to_owned())]);
         assert!(
             t.warned_late_name.contains(&0),
