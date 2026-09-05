@@ -573,9 +573,11 @@ mod bedrock {
 /// # SMA-566's alias regression coverage lives in the crate's own unit tests
 ///
 /// Every tool-call delta this module scripts carries an explicit `"index":0`,
-/// and every one of them carries the same `id`. The two-index-one-id shape
-/// that `ChatTranslator::canonicalize` exists to merge therefore never arises
-/// from these bytes, and assertion 7 passes here without exercising it. Under
+/// and no delta ever introduces a second `id` — the continuation frames
+/// (`tool_call_name_fragment`, `tool_call_args`) omit the key entirely. Only
+/// one index value is ever in play, so the two-index-one-id shape that
+/// `ChatTranslator::canonicalize` exists to merge never arises from these
+/// bytes, and assertion 7 passes here without exercising it. Under
 /// this suite's fixture-provenance rule the shape has no capture anywhere in
 /// the repo and must not be invented, so it is not registered as a scenario —
 /// exactly as `litellm` records for its own `canonicalize`.

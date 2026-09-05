@@ -249,11 +249,9 @@ impl PendingToolCall {
 ///
 /// Maps upstream tool-call `index` values to their `call_id` once a first
 /// delta with `id` arrives; subsequent deltas for the same index reuse the
-/// stored `call_id`. Once a call's `id` resolves, the first wire index to
-/// resolve it owns that call's correlation state, and any later index
-/// resolving the same `id` aliases onto the owner rather than starting a
-/// second entry — so one `call_id` owns exactly one entry throughout. See
-/// [`Self::canonicalize`] for how the aliasing itself works.
+/// stored `call_id`. One `call_id` owns exactly one correlation entry no
+/// matter how many indexes resolve it — see [`Self::canonicalize`] for the
+/// aliasing mechanism.
 pub(crate) struct ChatTranslator {
     /// index → call_id after the first delta for that tool call.
     tool_calls: HashMap<u32, String>,
