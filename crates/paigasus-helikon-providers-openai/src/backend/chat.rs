@@ -249,7 +249,11 @@ impl PendingToolCall {
 ///
 /// Maps upstream tool-call `index` values to their `call_id` once a first
 /// delta with `id` arrives; subsequent deltas for the same index reuse the
-/// stored `call_id`.
+/// stored `call_id`. Once a call's `id` resolves, the first wire index to
+/// resolve it owns that call's correlation state, and any later index
+/// resolving the same `id` aliases onto the owner rather than starting a
+/// second entry — so one `call_id` owns exactly one entry throughout. See
+/// [`Self::canonicalize`] for how the aliasing itself works.
 pub(crate) struct ChatTranslator {
     /// index → call_id after the first delta for that tool call.
     tool_calls: HashMap<u32, String>,
@@ -620,24 +624,26 @@ impl ChatTranslator {
 
     /// Correlate one tool-call delta and emit any completed name/args.
     ///
-    /// **Divergence from `providers-litellm` (SMA-550), deliberate.** That
-    /// crate canonicalizes its correlation state onto the resolved `call_id`,
-    /// because its `index` is optional on the wire and one call can arrive
-    /// under two different keys. This translator does not, and does not need
-    /// to for that case: `ChatCompletionMessageToolCallChunk::index` is a
-    /// required `u32`, so there is exactly one key space here.
+    /// **Aligned with `providers-litellm` since SMA-566; the implementations
+    /// differ, the behaviour does not.** Both translators guarantee exactly
+    /// one name-carrying `ToolCallDelta` per non-blank `call_id`, and both
+    /// merge the malformed shape — two deltas carrying different `index`
+    /// values but the same `id` — into a single call rather than emitting two
+    /// names.
     ///
-    /// It is not fully aligned, though, and the gap runs the *other* way.
-    /// Given two deltas carrying different `index` values but the **same**
-    /// `id` — malformed, since an `id` identifies a call — litellm merges them
-    /// into one call emitting one name, while this translator keeps two
-    /// indexes and emits a name for each: two name-carrying `ToolCallDelta`s
-    /// for one `call_id`. `flush_buffered_names` above has no `call_id`-level
-    /// dedup, so nothing catches it. That shape is unobserved from any
-    /// backend, which is why SMA-550 documented it here rather than changing
-    /// this code. A cross-provider conformance suite asserting "at most one
-    /// name-carrying delta per `call_id`" would fail here and pass for
-    /// litellm; closing it needs its own ticket.
+    /// They reach it differently, for a reason rooted in the wire. litellm's
+    /// `index` is optional, so one call can arrive under two key *spaces*, and
+    /// it canonicalizes with a `Key { Index(u32), Id(String) }` enum. Here
+    /// `ChatCompletionMessageToolCallChunk::index` is a required `u32`, so
+    /// there is exactly one key space and canonicalization is a many-to-one
+    /// map within it: [`Self::canonicalize`] aliases every index resolving a
+    /// given `call_id` onto the first index that owned it. Keeping the `u32`
+    /// key is what lets `flush_buffered_names` go on sorting by the model's
+    /// declared call position rather than by a synthetic creation counter.
+    ///
+    /// The one remaining asymmetry is deliberate and ticketed: this crate's
+    /// end-of-stream dedup net excludes blank `call_id`s, litellm's does not
+    /// (SMA-616).
     fn handle_tool_call_chunk(
         &mut self,
         tc: &ChatCompletionMessageToolCallChunk,

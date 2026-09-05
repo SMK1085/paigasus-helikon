@@ -1669,8 +1669,11 @@ mod tests {
     /// The merged name `alphabeta` is not "correct" in any deep sense — the
     /// input is malformed, since an `id` identifies a call — but it is one
     /// name for one call_id, which is the invariant under test.
-    /// `providers-openai` emits TWO names here; see the divergence comment in
-    /// its `chat.rs`.
+    /// `providers-openai`'s `chat.rs` emits the same single `alphabeta` here
+    /// since SMA-566, via an index alias rather than this crate's `Key` enum —
+    /// see the doc comment on its `handle_tool_call_chunk`. The two
+    /// translators agree observably and differ structurally, because this
+    /// crate's `index` is optional and its `index` is required.
     ///
     /// Confirmed to FAIL against the pre-fix translator (`Some("beta")`).
     #[test]
