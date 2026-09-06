@@ -74,13 +74,13 @@ jobs:
             [ -n "${size}" ] || continue
             total=$((total + size))
             count=$((count + 1))
-            human="$(numfmt --to=iec --suffix=B "${size}")"
+            human="$(numfmt --to=iec-i --suffix=B "${size}")"
             printf '%10s  %-24s %s\n' "${human}" "${ref}" "${key}"
             printf '| %s | `%s` | `%s` |\n' "${human}" "${ref}" "${key}" \
               >> "${GITHUB_STEP_SUMMARY}"
           done <<< "${rows}"
 
-          human_total="$(numfmt --to=iec --suffix=B "${total}")"
+          human_total="$(numfmt --to=iec-i --suffix=B "${total}")"
           echo
           echo "total: ${human_total} across ${count} entries"
           {
@@ -89,5 +89,5 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
           if [ "${total}" -gt "${WARN_BYTES}" ]; then
-            echo "::warning::Actions cache usage is ${human_total}, above the $(numfmt --to=iec --suffix=B "${WARN_BYTES}") warning line. GitHub's hard limit is 10 GB and eviction is silent. See docs/runbooks/ci-architecture.md -> Actions cache budget."
+            echo "::warning::Actions cache usage is ${human_total}, above the $(numfmt --to=iec-i --suffix=B "${WARN_BYTES}") warning line. GitHub's hard limit is 10 GB and eviction is silent. See docs/runbooks/ci-architecture.md -> Actions cache budget."
           fi
