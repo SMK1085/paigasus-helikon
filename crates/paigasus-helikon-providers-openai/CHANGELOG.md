@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.27](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.26...paigasus-helikon-providers-openai-v0.2.27) - 2026-09-06
+
+### Fixed
+
+- *(providers-openai)* SMA-566 alias tool-call indexes onto the owning call_id ([#240](https://github.com/SMK1085/paigasus-helikon/pull/240))
+
 ## [0.2.26](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.25...paigasus-helikon-providers-openai-v0.2.26) - 2026-08-23
 
 ### Fixed
