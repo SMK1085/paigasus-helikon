@@ -429,8 +429,7 @@ impl ChatTranslator {
         // a blank entry in `already` could never change what gets claimed.
         // Kept anyway so this seed states the same "blank ids are exempt"
         // rule as the guard below, in the same place — and so it matches
-        // `providers-litellm`'s seed once SMA-616 aligns the two (that seed
-        // is currently unfiltered).
+        // `providers-litellm`'s seed, which states it identically (SMA-616).
         let mut already: HashSet<String> = self
             .name_emitted
             .keys()
@@ -471,8 +470,8 @@ impl ChatTranslator {
             // would drop the second call's name and blame a keying regression
             // that did not happen. The at-most-one invariant is therefore
             // scoped to non-blank call_ids; `providers-litellm` carries the
-            // unguarded version of this net and loses that name today
-            // (SMA-616). Pinned by `blank_ids_do_not_collapse_at_end_of_stream`.
+            // same guard (SMA-616). Pinned by
+            // `blank_ids_do_not_collapse_at_end_of_stream`.
             if !call_id.is_empty() && !already.insert(call_id.clone()) {
                 tracing::error!(
                     target: "paigasus::openai::chat",
@@ -661,9 +660,12 @@ impl ChatTranslator {
     /// key is what lets `flush_buffered_names` go on sorting by the model's
     /// declared call position rather than by a synthetic creation counter.
     ///
-    /// The one remaining asymmetry is deliberate and ticketed: this crate's
-    /// end-of-stream dedup net excludes blank `call_id`s, litellm's does not
-    /// (SMA-616).
+    /// The one remaining asymmetry is deliberate and ticketed: this crate
+    /// gates the blank→real `call_id` upgrade on `blank_emitted`, so a call
+    /// that has already emitted under `""` keeps the blank rather than
+    /// splitting across two ids; litellm upgrades unconditionally (SMA-619).
+    /// The end-of-stream dedup net is no longer asymmetric — both crates
+    /// exempt blank `call_id`s from it (SMA-616).
     fn handle_tool_call_chunk(
         &mut self,
         tc: &ChatCompletionMessageToolCallChunk,
@@ -1764,8 +1766,8 @@ mod tests {
     /// shape that exercises the call_id dedup net there. An unguarded net
     /// claims `""` for the first call and silently drops the second, which is
     /// why the net is written against this test rather than the other way
-    /// round. `providers-litellm` carries the unguarded version and loses that
-    /// name today (SMA-616).
+    /// round. `providers-litellm` carries the same guard and a test of the
+    /// same name (SMA-616).
     ///
     /// Passes both before and after the fix — a guard, not a defect proof.
     #[test]
