@@ -452,7 +452,7 @@ script.
 ```bash
 git add scripts/check-cargo-profile-env-sync.sh \
         scripts/check-cargo-profile-env-sync-selftest.sh
-git commit -m "ci(scripts): SMA-618 add the cargo-visible env drift guard"
+git commit -m "ci(workflows): SMA-618 add the cargo-visible env drift guard"
 ```
 
 ---
@@ -828,7 +828,7 @@ Expected: a table plus a total. As of 2026-09-06 that total is ~13.7 GB across
 
 ```bash
 git add .github/workflows/cache-budget.yml
-git commit -m "ci(cache-budget): SMA-618 report actions cache usage daily"
+git commit -m "ci(workflows): SMA-618 report actions cache usage daily"
 ```
 
 ---
