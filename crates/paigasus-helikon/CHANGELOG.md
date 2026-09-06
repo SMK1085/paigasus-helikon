@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.21...paigasus-helikon-v0.5.22) - 2026-09-06
+
+### Other
+
+- updated the following local packages: paigasus-helikon-providers-litellm, paigasus-helikon-providers-openai
+
 ## [0.5.21](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.20...paigasus-helikon-v0.5.21) - 2026-09-05
 
 ### Other
