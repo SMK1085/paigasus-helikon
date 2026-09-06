@@ -191,7 +191,10 @@ pub enum ModelEvent {
     /// and an empty id cannot identify a call — so a provider MUST NOT merge
     /// two parallel blank-id calls, and two such calls therefore each carry a
     /// name under `""`. Consumers that need one entry per call should key on
-    /// a non-blank `call_id` and treat `""` as "unidentified".
+    /// a non-blank `call_id` and treat `""` as "unidentified". This crate's
+    /// own `ModelTurnAccumulator` does not follow that advice: it deliberately
+    /// merges blank-id calls together, first-name-wins, the same as any other
+    /// `call_id`.
     ToolCallDelta {
         /// Provider-assigned identifier for the call.
         call_id: String,
