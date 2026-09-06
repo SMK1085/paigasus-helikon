@@ -202,6 +202,34 @@ YAML
 done
 expect 1 "an empty computed baseline fails rather than vacuously agreeing" "${d}"
 
+# --- case 12: env: declared BEFORE uses: on a rust-cache step is rejected ---
+# YAML mapping keys are unordered, so this step is as valid as case 8's. A
+# parser that scans forward from the `uses:` line never sees this `env:` and
+# reports agreement while that job's cache key has silently diverged — which is
+# exactly the drift this guard exists to catch.
+d="${tmp}/stepenv-before-uses"
+make_workflow "${d}" alpha "  CARGO_TERM_COLOR: always"
+mkdir -p "${d}"
+cat > "${d}/beta.yml" <<'YAML'
+name: beta
+on:
+  push:
+    branches: [main]
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Swatinem/rust-cache v2.9.2
+      - env:
+          CARGO_INCREMENTAL: 0
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: cargo build
+YAML
+expect 1 "env: before uses: on a rust-cache step fails" "${d}"
+
 echo
 if [[ "${failures}" == "0" ]]; then
   echo "check-cargo-profile-env-sync selftest: all cases passed"

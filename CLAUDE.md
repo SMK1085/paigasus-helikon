@@ -30,6 +30,7 @@ npm ci                                               # once, or after package-lo
 npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
 bash scripts/check-markdownlint-config.sh            # asserts that config is in force
 bash scripts/check-cargo-profile-env-sync.sh         # cargo-visible workflow env is uniform
+bash scripts/check-cargo-profile-env-sync-selftest.sh # …and its parser still parses (fmt runs both)
 ```
 
 The full list lives in `CONTRIBUTING.md` (single source of truth for contributor policies).

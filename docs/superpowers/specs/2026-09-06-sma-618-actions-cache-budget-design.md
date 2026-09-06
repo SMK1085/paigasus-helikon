@@ -183,11 +183,17 @@ Literal `'refs/heads/main'` rather than
 `github.event.repository.default_branch`, for consistency with the workflow
 triggers and `main-protection-checks.json`, and because a literal is greppable.
 
+A `workflow_dispatch` run carries whatever ref the caller selected, so only a
+dispatch against `main` satisfies the expression; a dispatch against any other
+branch restores normally and saves nothing. That is the intended behaviour —
+a manual run on a feature branch has no business writing to the shared budget —
+but it is a property of the selected ref, not of the event type.
+
 | Workflow | Triggers | Saves on |
 | -- | -- | -- |
 | `ci.yml`, `msrv.yml` | push `main`, PR | push to `main` |
-| `audit.yml`, `deny.yml`, `integration.yml` | push `main`, PR, cron, dispatch | push to `main`, cron, dispatch (all resolve `github.ref` to `refs/heads/main`) |
-| `bench.yml` | dispatch only | reader — see D |
+| `audit.yml`, `deny.yml`, `integration.yml` | push `main`, PR, cron, dispatch | push to `main`, cron, and a dispatch **targeting `main`** |
+| `bench.yml` | dispatch only | a dispatch targeting `main`; restore-only otherwise |
 | `sbom.yml` | push tag | reader — see D |
 
 Fork PRs never save under this expression, which is the desired behaviour and is
@@ -390,10 +396,27 @@ re-proposed.
 
 `scripts/check-cargo-profile-env-sync.sh`, modeled on
 `scripts/check-advisory-ignore-sync.sh` — same "header comment explains why this
-exists" style, same honest statement of limitations. Bash plus `yq`, preflighted
-the way `scripts/apply-repo-config.sh` preflights `jq`. The implementation task
-confirms `yq` is present on the `ubuntu-latest` image and adds an install step to
-the `fmt` job if it is not.
+exists" style, same honest statement of limitations.
+
+**Superseded during implementation: bash + `yq` → bash + `awk` + a self-test.**
+This section originally specified `yq`, preflighted the way
+`scripts/apply-repo-config.sh` preflights `jq`. Rejected while planning: `yq` is
+not an established dependency here (the script toolchain is bash + `jq`), its
+presence on the `ubuntu-latest` image could not be confirmed, and adding it means
+either an unpinned install step or a contributor-facing `brew install`. What
+shipped is a line-oriented `awk` parser whose contract is pinned by
+`scripts/check-cargo-profile-env-sync-selftest.sh`, which `fmt` runs alongside
+the guard — the self-test is what makes a hand-rolled parser acceptable, and it
+covers the two ways a parser can fail silently: agreeing vacuously when it stops
+matching entirely, and missing a step-level `env:` declared before `uses:`.
+`scripts/check-cargo-profile-env-sync.sh` is the authoritative description.
+
+**Assertions 1 and 2 ship in PR 1; assertion 3 is PR 2.** Assertion 3 below is
+written in terms of `shared-key`, which does not exist until PR 2 introduces it,
+so PR 1's guard cannot express it. For the same reason assertion 1 ships scoped
+to *every cache-bearing workflow* rather than to a sharing set — with no
+`shared-key` in the tree there is no sharing set to scope to, and uniformity
+across all of them is the stricter reading.
 
 Three assertions, not one:
 

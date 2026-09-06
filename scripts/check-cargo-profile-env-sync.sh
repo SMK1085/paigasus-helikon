@@ -93,11 +93,38 @@ job_env_names() {
 }
 
 # Emit a marker line per rust-cache step that carries its own env: (2b).
+#
+# This buffers each step block and inspects it as a whole rather than scanning
+# forward from the `uses:` line. YAML mapping keys are unordered, so
+#
+#     - env:
+#         CARGO_INCREMENTAL: 0
+#       uses: Swatinem/rust-cache@...
+#
+# is a perfectly valid step, and a scan that starts at the `uses:` line never
+# sees that `env:` — the variable silently diverges that job's cache key while
+# this guard reports agreement. A step block runs from a `-` item at six spaces
+# until the next such item or the first non-blank line indented less than six.
 cache_step_env() {
   awk '
-    /Swatinem\/rust-cache@/ { instep = 1; next }
-    instep && /^      - / { instep = 0 }
-    instep && /^        env:[[:space:]]*$/ { print FILENAME ": rust-cache step has its own env:" }
+    function indent(s,   n) { n = 0; while (substr(s, n + 1, 1) == " ") n++; return n }
+    function flush() {
+      if (has_cache && has_env) {
+        print FILENAME ": a Swatinem/rust-cache step declares its own env:"
+      }
+      has_cache = 0; has_env = 0
+    }
+    /^      - / { flush(); instep = 1 }
+    instep && $0 !~ /^[[:space:]]*$/ && indent($0) < 6 && $0 !~ /^      - / {
+      flush(); instep = 0
+    }
+    instep && /Swatinem\/rust-cache@/ { has_cache = 1 }
+    # `env:` as a later key of the step, at eight spaces.
+    instep && indent($0) == 8 && $0 ~ /^ *env:[[:space:]]*$/ { has_env = 1 }
+    # `env:` as the FIRST key of the step, where it shares the `- ` item line
+    # and therefore sits at six spaces. Missing this was the original bug.
+    instep && $0 ~ /^      - env:[[:space:]]*$/ { has_env = 1 }
+    END { flush() }
   ' "$1" || true
 }
 
