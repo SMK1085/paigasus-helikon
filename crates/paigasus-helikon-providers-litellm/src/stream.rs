@@ -551,10 +551,21 @@ impl ChatTranslator {
         let mut keys: Vec<Key> = self.pending.keys().cloned().collect();
         keys.sort_by_key(|k| self.pending[k].seq);
 
+        // Seeded from keys that already emitted, so a call flushed mid-stream
+        // cannot be re-emitted here. The `.filter(|c| !c.is_empty())` is
+        // redundant on its own: the loop guard further down
+        // (`!call_id.is_empty() && !already.insert(...)`) already
+        // short-circuits before `insert` ever runs for a blank id, so a blank
+        // entry in `already` could never change what gets claimed. Kept anyway
+        // so this seed states the same "blank ids are exempt" rule as the
+        // guard below, in the same place — and so it matches
+        // `providers-openai`'s seed, which states it identically (SMA-616).
         let mut already: HashSet<String> = self
             .name_emitted
             .keys()
-            .filter_map(|k| self.tool_calls.get(k).cloned())
+            .filter_map(|k| self.tool_calls.get(k))
+            .filter(|c| !c.is_empty())
+            .cloned()
             .collect();
 
         let mut out = Vec::new();
@@ -575,16 +586,25 @@ impl ChatTranslator {
             // — claiming earlier would, were two entries for one call_id ever
             // possible again, let an empty-name entry suppress another that
             // does have one.
-            if !already.insert(call_id.clone()) {
-                // Unreachable since SMA-550: canonicalization gives each
-                // call_id exactly one pending key, so two keys can no longer
-                // resolve to one call_id. Kept as a net because it enforces
-                // the at-most-one-name invariant at the point of emission,
-                // independent of the keying discipline upstream — which is
-                // precisely what a cross-provider conformance suite asserts.
-                // Loud rather than a bare `continue`: if the keying is ever
-                // loosened again, a silent drop here would recreate the exact
-                // undiagnosed loss SMA-550 existed to fix.
+            //
+            // Unreachable for a non-blank call_id since SMA-550:
+            // canonicalization gives each one exactly one pending key. Kept as
+            // a net because it enforces the invariant at the point of
+            // emission, independent of the keying discipline upstream — which
+            // is precisely what the SMA-533 cross-provider suite asserts. Loud
+            // rather than a bare `continue`: if the keying is ever loosened, a
+            // silent drop here would recreate the exact undiagnosed loss
+            // SMA-550 existed to fix.
+            //
+            // Blank call_ids are excluded deliberately. They bypass
+            // canonicalization (an empty id cannot identify a call), so two
+            // parallel blank-id calls both resolve to "". Claiming "" here
+            // would drop the second call's name and blame a keying regression
+            // that did not happen. The at-most-one invariant is therefore
+            // scoped to non-blank call_ids; `providers-openai` carries the
+            // same guard (SMA-566). Pinned by
+            // `blank_ids_do_not_collapse_at_end_of_stream`.
+            if !call_id.is_empty() && !already.insert(call_id.clone()) {
                 tracing::error!(
                     target: "paigasus::litellm::stream",
                     %call_id,
@@ -1927,6 +1947,38 @@ mod tests {
                 (String::new(), "beta".to_owned()),
             ],
             "a blank id must not merge two distinct calls"
+        );
+    }
+
+    /// Two parallel **zero-argument** blank-id calls must both emit their name
+    /// at end-of-stream.
+    ///
+    /// Zero-argument is load-bearing: with arguments both calls flush
+    /// mid-stream and never reach `flush_buffered_names`, so this is the only
+    /// shape that exercises the `call_id` dedup net there —
+    /// `blank_ids_do_not_collapse_distinct_calls` drives `"arguments": "{}"`
+    /// and therefore covers the other path only.
+    ///
+    /// An unguarded net claims `""` for the first call and silently drops the
+    /// second under an `error!` blaming a correlation-keying regression that
+    /// did not happen. `openai/chat` carries the same guard (SMA-566).
+    #[test]
+    fn blank_ids_do_not_collapse_at_end_of_stream() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"index": 0, "id": "", "function": {"name": "alpha"}},
+                {"index": 1, "id": "", "function": {"name": "beta"}}
+            ]))],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "an empty id cannot identify a call, so the dedup net must not claim it"
         );
     }
 }
