@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.21...paigasus-helikon-mcp-v0.1.22) - 2026-09-06
+
+### Other
+
+- updated the following local packages: paigasus-helikon-core
+
 ## [0.1.21](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.20...paigasus-helikon-mcp-v0.1.21) - 2026-08-22
 
 ### Other

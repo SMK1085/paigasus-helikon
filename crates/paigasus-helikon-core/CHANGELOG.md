@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.20](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.19...paigasus-helikon-core-v0.5.20) - 2026-09-06
+
+### Fixed
+
+- *(providers)* SMA-616 stop litellm dropping a blank-id call's name ([#243](https://github.com/SMK1085/paigasus-helikon/pull/243))
+
 ## [0.5.19](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.18...paigasus-helikon-core-v0.5.19) - 2026-08-22
 
 ### Added
