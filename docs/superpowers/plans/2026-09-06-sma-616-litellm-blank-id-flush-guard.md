@@ -25,6 +25,12 @@ tests. No new dependencies.
   place (it needs *both* fixes). Do not reorder Tasks 1 and 2.
 - **Commit prefix:** `<type>(<scope>): SMA-### <message>`, subject lowercase after the
   ticket id. `convco check` runs as a `commit-msg` hook and as a required CI job.
+- **Valid scopes are an allowlist.** `.versionrc`'s `scopeRegex` and
+  `.github/workflows/pr-title.yml`'s `scopes:` list are kept in sync and contain
+  `providers`, `providers-openai`, `providers-anthropic` — but **no
+  `providers-litellm`**. litellm work uses the generic `providers` scope (as 9 prior
+  commits do). Using `providers-litellm` reddens both the `commits` job and, for the
+  PR title, `pr-title`.
 - **Every commit message ends with:**
 
   ```text
@@ -228,7 +234,7 @@ git add crates/paigasus-helikon-providers-litellm/src/stream.rs
 ```
 
 Commit with subject
-`fix(providers-litellm): SMA-616 exempt blank call_ids from the flush dedup net`
+`fix(providers): SMA-616 exempt blank call_ids from the flush dedup net`
 plus the two trailer lines from Global Constraints.
 
 ---
@@ -374,7 +380,7 @@ git add crates/paigasus-helikon-providers-litellm/src/stream.rs
 ```
 
 Commit with subject
-`fix(providers-litellm): SMA-616 treat a blank id as absent when choosing the wire key`
+`fix(providers): SMA-616 treat a blank id as absent when choosing the wire key`
 plus the two trailer lines.
 
 ---
@@ -493,7 +499,7 @@ git add crates/paigasus-helikon-providers-litellm/src/stream.rs
 ```
 
 Commit with subject
-`docs(providers-litellm): SMA-616 scope the at-most-one invariant to non-blank call_ids`
+`docs(providers): SMA-616 scope the at-most-one invariant to non-blank call_ids`
 plus the two trailer lines.
 
 ---
