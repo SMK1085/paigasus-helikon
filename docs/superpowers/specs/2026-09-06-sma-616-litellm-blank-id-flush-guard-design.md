@@ -209,6 +209,28 @@ backend is known to emit it, the drop is loud rather than silent, and what was
 call regardless (§1.2). It is recorded here so the consequence is a decision rather
 than a side effect; no test pins it, and the skip arm has no test either way.
 
+**A second, untraced consequence: resolving against an earlier chunk.** The mixed-array
+trade above is not the only thing a blank-id/no-index delta can hit. `tool_calls` is
+per-stream state, so such a delta at position *p* now resolves against whatever
+`Key::Index(p)` already holds from an **earlier** chunk, rather than against a
+synthesized `""`. Two sub-cases:
+
+- *Beneficial:* `[{"index":0,"id":"c1","function":{"name":"search"}}]` followed later
+  by `[{"id":"","function":{"arguments":"{}"}}]` — the arguments now land on `c1`
+  (`Key::Index(0)` resolves to `"c1"`, which canonicalizes to `Key::Id("c1")`) instead
+  of on a phantom `""` call. Strictly better, and it is exactly what an *absent* id
+  already did before this change.
+- *Adverse:* a genuinely distinct parallel call sent as blank-id/no-index at a position
+  already owned by another call now merges into that call, where before it surfaced
+  under `""` on its own. Doubly non-conforming, no backend is known to emit it, and the
+  "blank == absent" rule makes this consistent by construction rather than a special
+  case.
+
+The conclusion is unchanged from the mixed-array trade: accepted, for the same reasons
+— no known backend produces either shape, and "a blank id is not an identity" is
+exactly what makes "resolve against whatever the position already means" the correct
+call rather than an oversight.
+
 ### 3.4 Scope the invariant in the doc comments — four sites
 
 `openai/chat` already says "exactly one name-carrying `ToolCallDelta` per **non-blank**
@@ -379,9 +401,10 @@ Every existing test in both crates, and the conformance suite. Verification that
 - **Scoping `check.rs`'s assertion 7** to non-blank `call_id`s — §4.1 adds the doc
   note only.
 - **The litellm `README.md` `Limitations` section** (`README.md:119-132`) documents
-  wire-shape caveats of exactly this class. It is left alone: this PR *removes* two
-  such caveats rather than adding one, and the residual (`blank_emitted`) belongs to
-  the follow-up ticket that owns it.
+  wire-shape caveats of exactly this class. It is left alone: the section never
+  documented per-array-position behaviour at the granularity of §3.3's mixed-array
+  drop, so that trade does not obsolete anything already written there, and the
+  residual (`blank_emitted`) belongs to the follow-up ticket that owns it.
 - **mdBook** — no page under `docs/book/src/` documents per-`call_id` name semantics
   beyond the event shape (`concepts/agent-loop.md:57`,
   `concepts/model-providers.md:56`). A conscious skip under CLAUDE.md's rule.
