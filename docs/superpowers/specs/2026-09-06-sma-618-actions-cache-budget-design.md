@@ -429,7 +429,9 @@ The repository sat at 37% over for months with nothing red. After this change th
 same silence returns, and there are now *more* ways to drift over. Add a new,
 separate workflow, `cache-budget.yml`, on its own daily `schedule` plus
 `workflow_dispatch`, that reads `actions/caches` and emits `::warning::` above
-8.5 GB.
+8.5 GiB (9126805504 bytes — binary, matching the shipped `WARN_BYTES` and the
+`numfmt --to=iec-i` rendering, so the report never labels a binary figure with a
+decimal unit).
 
 This is what makes the 10 GB budget an enforceable standing constraint in
 `CLAUDE.md` rather than an aspiration. It needs the `actions: read` permission,
