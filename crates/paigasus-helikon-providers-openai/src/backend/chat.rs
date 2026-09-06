@@ -517,8 +517,8 @@ impl ChatTranslator {
     ///
     /// The first index to resolve a given `call_id` owns its state; every
     /// later index resolving the same `call_id` aliases onto it. That is what
-    /// makes "exactly one name-carrying `ToolCallDelta` per `call_id`" hold by
-    /// construction rather than by guard (SMA-566).
+    /// makes "exactly one name-carrying `ToolCallDelta` per non-blank
+    /// `call_id`" hold by construction rather than by guard (SMA-566).
     ///
     /// `providers-litellm` achieves the same property with a `Key { Index, Id }`
     /// enum, because its `index` is optional and one call can arrive under two
