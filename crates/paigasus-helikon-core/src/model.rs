@@ -180,21 +180,30 @@ pub enum ModelEvent {
         /// The text fragment.
         text: String,
     },
-    /// A partial tool call. `name` is `Some` exactly once per `call_id`, on
-    /// the first delta for which the provider can establish the name is
-    /// complete, and `None` on every other delta. When `Some`, the value is
-    /// the whole name so far as the provider can determine — a provider
-    /// receiving the name in fragments MUST buffer and concatenate them, and
-    /// MUST NOT emit a name it can detect is still incomplete.
+    /// A partial tool call. `name` is `Some` exactly once per non-blank
+    /// `call_id`, on the first delta for which the provider can establish the
+    /// name is complete, and `None` on every other delta. When `Some`, the
+    /// value is the whole name so far as the provider can determine — a
+    /// provider receiving the name in fragments MUST buffer and concatenate
+    /// them, and MUST NOT emit a name it can detect is still incomplete.
+    ///
+    /// The non-blank qualifier is deliberate. A backend may send `"id": ""`,
+    /// and an empty id cannot identify a call — so a provider MUST NOT merge
+    /// two parallel blank-id calls, and two such calls therefore each carry a
+    /// name under `""`. Consumers that need one entry per call should key on
+    /// a non-blank `call_id` and treat `""` as "unidentified". This crate's
+    /// own `ModelTurnAccumulator` does not follow that advice: it deliberately
+    /// merges blank-id calls together, first-name-wins, the same as any other
+    /// `call_id`.
     ToolCallDelta {
         /// Provider-assigned identifier for the call.
         call_id: String,
-        /// `Some` exactly once per `call_id`, on the first delta for which
-        /// the provider can establish the name is complete, and `None` on
-        /// every other delta. When `Some`, the value is the whole name so
-        /// far as the provider can determine — a provider receiving the
-        /// name in fragments MUST buffer and concatenate them, and MUST NOT
-        /// emit a name it can detect is still incomplete.
+        /// `Some` exactly once per non-blank `call_id`, on the first delta
+        /// for which the provider can establish the name is complete, and
+        /// `None` on every other delta. When `Some`, the value is the whole
+        /// name so far as the provider can determine — a provider receiving
+        /// the name in fragments MUST buffer and concatenate them, and MUST
+        /// NOT emit a name it can detect is still incomplete.
         name: Option<String>,
         /// JSON-encoded argument fragment.
         args_delta: String,

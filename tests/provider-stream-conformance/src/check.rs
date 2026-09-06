@@ -78,6 +78,15 @@ pub fn classify(
     // to nothing on replay, which is precisely the bug this rule exists to
     // catch. Groups are built preserving first-seen `call_id` order so the
     // reported violation is deterministic.
+    //
+    // Known, deliberate exception: a blank `call_id`. An empty id cannot
+    // identify a call, so both first-party chat translators refuse to merge
+    // parallel blank-id calls and each such call carries its own name under
+    // "" (SMA-566, SMA-616). Two of them therefore report `count: 2` here.
+    // The assertion is deliberately NOT scoped to non-blank ids: no fixture
+    // exercises the shape today, and narrowing a shared cross-provider gate
+    // deserves its own decision rather than a drive-by. If you are adding the
+    // first blank-id capture and this fires, that is the decision to make.
     let mut name_counts: Vec<(String, usize)> = Vec::new();
     for event in events {
         if let Ok(ModelEvent::ToolCallDelta { call_id, name, .. }) = event {

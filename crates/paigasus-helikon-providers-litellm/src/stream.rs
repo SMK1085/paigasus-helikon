@@ -26,8 +26,11 @@
 //!    `id`, the key becomes `Key::Id(call_id)` and any fragments buffered
 //!    under the pre-canonical key migrate into that slot in buffer-creation
 //!    order. One `call_id` therefore owns exactly one state entry, which is
-//!    what makes "at most one name-carrying delta per `call_id`" structural
-//!    rather than guarded (SMA-550).
+//!    what makes "at most one name-carrying delta per non-blank `call_id`"
+//!    structural rather than guarded (SMA-550). The qualifier is load-bearing:
+//!    a blank `id` is not an identity, so it is filtered out of the wire key
+//!    and exempted from the end-of-stream dedup net, and two parallel
+//!    blank-id calls therefore emit two names under `""` (SMA-616).
 
 use std::collections::{HashMap, HashSet};
 
@@ -171,17 +174,22 @@ impl ChatTranslator {
     ///
     /// Every delta for one call — however it was keyed on the wire — shares a
     /// single state entry from here on. That is what makes "at most one
-    /// name-carrying `ToolCallDelta` per `call_id`" hold by construction
-    /// rather than by guard, and it is what lets a name fragmented across the
-    /// `Key::Index` / `Key::Id` boundary reassemble instead of losing a
-    /// fragment (SMA-550).
+    /// name-carrying `ToolCallDelta` per non-blank `call_id`" hold by
+    /// construction rather than by guard, and it is what lets a name
+    /// fragmented across the `Key::Index` / `Key::Id` boundary reassemble
+    /// instead of losing a fragment (SMA-550). Blank ids are excluded: this
+    /// function returns them unchanged rather than canonicalizing them, so
+    /// they carry no per-`call_id` invariant at all (SMA-616).
     fn canonicalize(&mut self, key: Key, call_id: &str) -> Key {
         // An empty `id` is not an identity. A backend that sends `"id": ""` on
         // every entry would otherwise collapse every one of its parallel calls
         // into a single `Key::Id("")` slot, and all but the first would vanish
         // from the stream entirely — a strictly worse outcome than the
         // dual-keying this function exists to fix. Leave such deltas on their
-        // wire key, which keeps distinct calls distinct.
+        // wire key. That keeps distinct calls distinct only because a blank id
+        // is filtered out when the wire key is chosen (see `handle_tool_call`)
+        // — otherwise two blank-id entries with no `index` would both arrive
+        // here already sharing one `Key::Id("")` slot (SMA-616).
         if call_id.is_empty() {
             if self.warned_blank_id.insert(key.clone()) {
                 tracing::warn!(
@@ -370,7 +378,16 @@ impl ChatTranslator {
         any_explicit_index: bool,
         out: &mut Vec<ModelEvent>,
     ) {
-        let key = match (tc.index, tc.id.as_deref()) {
+        // A blank `id` is not an identity, so it must not become `Key::Id("")`
+        // — two such entries would share one slot and merge into a single
+        // call. Filtering it out here sends the delta to the same arms that
+        // handle an absent id: positional keying, or the loud skip when
+        // another entry in this array carries an explicit index. Registration
+        // into `tool_calls` below still reads `tc.id` directly, so a blank id
+        // that reaches it is still recorded and still resolves to `""`. An
+        // entry taking the ambiguity skip returns before that point, so it is
+        // neither registered nor canonicalized (SMA-616).
+        let key = match (tc.index, tc.id.as_deref().filter(|id| !id.is_empty())) {
             (Some(i), _) => Key::Index(i),
             (None, Some(id)) => Key::Id(id.to_owned()),
             (None, None) if any_explicit_index => {
@@ -542,6 +559,11 @@ impl ChatTranslator {
     /// entries whose resolved `call_id` already emitted a name. Since SMA-550
     /// the latter check is redundant — canonicalization gives each `call_id`
     /// one key — and is kept as a net; see the comment at its `continue`.
+    ///
+    /// The at-most-one invariant the net enforces is scoped to **non-blank**
+    /// `call_id`s. A blank id cannot identify a call, so it is never claimed;
+    /// two parallel blank-id calls each flush their own name under `""`
+    /// (SMA-616).
     fn flush_buffered_names(&mut self) -> Vec<ModelEvent> {
         // Sorted by buffer-creation order, not by `Key`. After SMA-550 every
         // resolved key is `Key::Id(call_id)`, so sorting by `Key` would mean
@@ -551,10 +573,21 @@ impl ChatTranslator {
         let mut keys: Vec<Key> = self.pending.keys().cloned().collect();
         keys.sort_by_key(|k| self.pending[k].seq);
 
+        // Seeded from keys that already emitted, so a call flushed mid-stream
+        // cannot be re-emitted here. The `.filter(|c| !c.is_empty())` is
+        // redundant on its own: the loop guard further down
+        // (`!call_id.is_empty() && !already.insert(...)`) already
+        // short-circuits before `insert` ever runs for a blank id, so a blank
+        // entry in `already` could never change what gets claimed. Kept anyway
+        // so this seed states the same "blank ids are exempt" rule as the
+        // guard below, in the same place — and so it matches
+        // `providers-openai`'s seed, which states it identically (SMA-616).
         let mut already: HashSet<String> = self
             .name_emitted
             .keys()
-            .filter_map(|k| self.tool_calls.get(k).cloned())
+            .filter_map(|k| self.tool_calls.get(k))
+            .filter(|c| !c.is_empty())
+            .cloned()
             .collect();
 
         let mut out = Vec::new();
@@ -575,16 +608,25 @@ impl ChatTranslator {
             // — claiming earlier would, were two entries for one call_id ever
             // possible again, let an empty-name entry suppress another that
             // does have one.
-            if !already.insert(call_id.clone()) {
-                // Unreachable since SMA-550: canonicalization gives each
-                // call_id exactly one pending key, so two keys can no longer
-                // resolve to one call_id. Kept as a net because it enforces
-                // the at-most-one-name invariant at the point of emission,
-                // independent of the keying discipline upstream — which is
-                // precisely what a cross-provider conformance suite asserts.
-                // Loud rather than a bare `continue`: if the keying is ever
-                // loosened again, a silent drop here would recreate the exact
-                // undiagnosed loss SMA-550 existed to fix.
+            //
+            // Unreachable for a non-blank call_id since SMA-550:
+            // canonicalization gives each one exactly one pending key. Kept as
+            // a net because it enforces the invariant at the point of
+            // emission, independent of the keying discipline upstream — which
+            // is precisely what the SMA-533 cross-provider suite asserts. Loud
+            // rather than a bare `continue`: if the keying is ever loosened, a
+            // silent drop here would recreate the exact undiagnosed loss
+            // SMA-550 existed to fix.
+            //
+            // Blank call_ids are excluded deliberately. They bypass
+            // canonicalization (an empty id cannot identify a call), so two
+            // parallel blank-id calls both resolve to "". Claiming "" here
+            // would drop the second call's name and blame a keying regression
+            // that did not happen. The at-most-one invariant is therefore
+            // scoped to non-blank call_ids; `providers-openai` carries the
+            // same guard (SMA-566). Pinned by
+            // `blank_ids_do_not_collapse_at_end_of_stream`.
+            if !call_id.is_empty() && !already.insert(call_id.clone()) {
                 tracing::error!(
                     target: "paigasus::litellm::stream",
                     %call_id,
@@ -1927,6 +1969,71 @@ mod tests {
                 (String::new(), "beta".to_owned()),
             ],
             "a blank id must not merge two distinct calls"
+        );
+    }
+
+    /// Two parallel **zero-argument** blank-id calls must both emit their name
+    /// at end-of-stream.
+    ///
+    /// Zero-argument is load-bearing: with arguments both calls flush
+    /// mid-stream and never reach `flush_buffered_names`, so this is the only
+    /// shape that exercises the `call_id` dedup net there —
+    /// `blank_ids_do_not_collapse_distinct_calls` drives `"arguments": "{}"`
+    /// and therefore covers the other path only.
+    ///
+    /// An unguarded net claims `""` for the first call and silently drops the
+    /// second under an `error!` blaming a correlation-keying regression that
+    /// did not happen. `openai/chat` carries the same guard (SMA-566).
+    #[test]
+    fn blank_ids_do_not_collapse_at_end_of_stream() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"index": 0, "id": "", "function": {"name": "alpha"}},
+                {"index": 1, "id": "", "function": {"name": "beta"}}
+            ]))],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "an empty id cannot identify a call, so the dedup net must not claim it"
+        );
+    }
+
+    /// Blank-id calls with **no `index`** must not collide on one wire key.
+    ///
+    /// The wire key is `(tc.index, tc.id)`, and litellm's `index` is optional
+    /// — so before SMA-616 an array of blank-id entries with no index gave
+    /// every one of them `Key::Id("")`. They shared a single `Pending` slot,
+    /// the SMA-547 whole-name-repeat guard did not fire (`"alpha" != "beta"`),
+    /// and the two names concatenated into one `("", "alphabeta")` delta.
+    ///
+    /// This is a strictly deeper collision than the dedup net's: it happens at
+    /// key construction, before `canonicalize` is ever called, so the
+    /// `!call_id.is_empty()` guard in `flush_buffered_names` cannot reach it.
+    /// The shape is impossible in `openai/chat`, whose `index` is a required
+    /// `u32`.
+    #[test]
+    fn blank_ids_without_index_do_not_collapse() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"id": "", "function": {"name": "alpha"}},
+                {"id": "", "function": {"name": "beta"}}
+            ]))],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "a blank id is not an identity, so it must not become the wire key"
         );
     }
 }
