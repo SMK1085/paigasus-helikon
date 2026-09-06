@@ -237,7 +237,7 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
 npm ci                                               # once, or after package-lock.json changes
 npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
 bash scripts/check-markdownlint-config.sh            # asserts that config is in force
-bash scripts/check-cargo-profile-env-sync.sh   # cargo-visible workflow env is uniform
+bash scripts/check-cargo-profile-env-sync.sh         # cargo-visible workflow env is uniform
 ```
 
 The Markdown gate needs Node (>= 22); everything else in that list needs only the
@@ -277,7 +277,7 @@ Three workflows complement CI and gate PRs alongside the build matrix:
   `scripts/check-advisory-ignore-sync.sh`, which fails if the
   `[advisories].ignore` lists in `deny.toml` and `.cargo/audit.toml` have
   diverged — keep the two in sync, as the note below requires.
-- `sbom` — on every `v*` tag push, generates a CycloneDX SBOM via
+- `sbom` — on every `paigasus-helikon-v*` tag push, generates a CycloneDX SBOM via
   `cargo-cyclonedx` and uploads it as a release asset.
 
 Local repro:

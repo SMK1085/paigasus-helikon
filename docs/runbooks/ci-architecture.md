@@ -63,7 +63,8 @@ Going over it is not an error anywhere in the UI or API — it is silent LRU
 eviction, one entry at a time, with no warning and no red gate. SMA-618 found
 this repository sitting **37% over the limit**, which meant a different CI leg
 started cold on essentially every run; one measured `test (windows-latest,
-stable)` run cost 42m40s for that reason alone. Full derivation, the two-cause
+stable)` run cost 42m40s for that reason alone (SMA-618 records this as the
+true cost of a cold run of that leg, against a warm 34m09s). Full derivation, the two-cause
 breakdown, and the size-reduction work reserved for the follow-up PR live in
 `docs/superpowers/specs/2026-09-06-sma-618-actions-cache-budget-design.md`.
 
@@ -83,7 +84,7 @@ github.ref == 'refs/heads/main' }}`. `save-if` gates only the action's save
 (post) step — the restore step is unconditional, and a `refs/pull/N/merge` run
 can still read an entry that `main` wrote, so a PR is no colder than before.
 What it no longer does is write a competing `refs/pull/N/merge` entry that
-evicts `main`'s. `sbom.yml` is triggered only on `v*` tag pushes, so its
+evicts `main`'s. `sbom.yml` is triggered only on `paigasus-helikon-v*` tag pushes, so its
 `save-if` expression is never true and the step is permanently restore-only —
 intended, and commented in the file, because `main` never runs the `sbom` job
 and there is no `sbom`-keyed entry for a tag build to restore either.
@@ -144,7 +145,7 @@ gh api repos/SMK1085/paigasus-helikon/actions/caches --paginate \
 ```
 
 Live on 2026-09-06, mid-way through this work, the repository measured **10.08
-GB across 7 entries** — still over the 10 GB limit, because the stale
+GiB across 7 entries** — still over the 10 GB limit, because the stale
 PR-scoped entries from before this fix had not yet aged out and `main`'s own
 15-entry footprint (Cause 2, above) is untouched by this PR.
 

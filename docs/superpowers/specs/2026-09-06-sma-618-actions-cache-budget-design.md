@@ -59,7 +59,9 @@ Directly observable consequence: on run `33992753929` — a push to `main` at
 `4eb98545` — **9 of the 11 cached `ci.yml` jobs logged `No cache found.`**,
 including `test (ubuntu-latest, stable)`, which then took 15 minutes. The two
 that restored did so `full match: false`, i.e. prefix-only via the fallback
-restore key. `main` is running nearly as cold as the PRs.
+restore key. `main` is running nearly as cold as the PRs. SMA-618 itself
+records the more expensive case: a cold `test (windows-latest, stable)` run
+took 42m40s, not 34m09s — 42m40s is the true cost of a cold run of that leg.
 
 ### What this means for the issue's plan
 
