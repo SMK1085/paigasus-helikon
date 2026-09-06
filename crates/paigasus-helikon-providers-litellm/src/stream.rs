@@ -26,8 +26,11 @@
 //!    `id`, the key becomes `Key::Id(call_id)` and any fragments buffered
 //!    under the pre-canonical key migrate into that slot in buffer-creation
 //!    order. One `call_id` therefore owns exactly one state entry, which is
-//!    what makes "at most one name-carrying delta per `call_id`" structural
-//!    rather than guarded (SMA-550).
+//!    what makes "at most one name-carrying delta per non-blank `call_id`"
+//!    structural rather than guarded (SMA-550). The qualifier is load-bearing:
+//!    a blank `id` is not an identity, so it is filtered out of the wire key
+//!    and exempted from the end-of-stream dedup net, and two parallel
+//!    blank-id calls therefore emit two names under `""` (SMA-616).
 
 use std::collections::{HashMap, HashSet};
 
@@ -171,10 +174,12 @@ impl ChatTranslator {
     ///
     /// Every delta for one call — however it was keyed on the wire — shares a
     /// single state entry from here on. That is what makes "at most one
-    /// name-carrying `ToolCallDelta` per `call_id`" hold by construction
-    /// rather than by guard, and it is what lets a name fragmented across the
-    /// `Key::Index` / `Key::Id` boundary reassemble instead of losing a
-    /// fragment (SMA-550).
+    /// name-carrying `ToolCallDelta` per non-blank `call_id`" hold by
+    /// construction rather than by guard, and it is what lets a name
+    /// fragmented across the `Key::Index` / `Key::Id` boundary reassemble
+    /// instead of losing a fragment (SMA-550). Blank ids are excluded: this
+    /// function returns them unchanged rather than canonicalizing them, so
+    /// they carry no per-`call_id` invariant at all (SMA-616).
     fn canonicalize(&mut self, key: Key, call_id: &str) -> Key {
         // An empty `id` is not an identity. A backend that sends `"id": ""` on
         // every entry would otherwise collapse every one of its parallel calls
@@ -552,6 +557,11 @@ impl ChatTranslator {
     /// entries whose resolved `call_id` already emitted a name. Since SMA-550
     /// the latter check is redundant — canonicalization gives each `call_id`
     /// one key — and is kept as a net; see the comment at its `continue`.
+    ///
+    /// The at-most-one invariant the net enforces is scoped to **non-blank**
+    /// `call_id`s. A blank id cannot identify a call, so it is never claimed;
+    /// two parallel blank-id calls each flush their own name under `""`
+    /// (SMA-616).
     fn flush_buffered_names(&mut self) -> Vec<ModelEvent> {
         // Sorted by buffer-creation order, not by `Key`. After SMA-550 every
         // resolved key is `Key::Id(call_id)`, so sorting by `Key` would mean
