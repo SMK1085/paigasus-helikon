@@ -181,7 +181,10 @@ impl ChatTranslator {
         // into a single `Key::Id("")` slot, and all but the first would vanish
         // from the stream entirely — a strictly worse outcome than the
         // dual-keying this function exists to fix. Leave such deltas on their
-        // wire key, which keeps distinct calls distinct.
+        // wire key. That keeps distinct calls distinct only because a blank id
+        // is filtered out when the wire key is chosen (see `handle_tool_call`)
+        // — otherwise two blank-id entries with no `index` would both arrive
+        // here already sharing one `Key::Id("")` slot (SMA-616).
         if call_id.is_empty() {
             if self.warned_blank_id.insert(key.clone()) {
                 tracing::warn!(
@@ -370,7 +373,14 @@ impl ChatTranslator {
         any_explicit_index: bool,
         out: &mut Vec<ModelEvent>,
     ) {
-        let key = match (tc.index, tc.id.as_deref()) {
+        // A blank `id` is not an identity, so it must not become `Key::Id("")`
+        // — two such entries would share one slot and merge into a single
+        // call. Filtering it out here sends the delta to the same arms that
+        // handle an absent id: positional keying, or the loud skip when
+        // another entry in this array carries an explicit index. Registration
+        // into `tool_calls` below still reads `tc.id` directly, so a blank id
+        // is still recorded and still resolves to `""` (SMA-616).
+        let key = match (tc.index, tc.id.as_deref().filter(|id| !id.is_empty())) {
             (Some(i), _) => Key::Index(i),
             (None, Some(id)) => Key::Id(id.to_owned()),
             (None, None) if any_explicit_index => {
@@ -1979,6 +1989,39 @@ mod tests {
                 (String::new(), "beta".to_owned()),
             ],
             "an empty id cannot identify a call, so the dedup net must not claim it"
+        );
+    }
+
+    /// Blank-id calls with **no `index`** must not collide on one wire key.
+    ///
+    /// The wire key is `(tc.index, tc.id)`, and litellm's `index` is optional
+    /// — so before SMA-616 an array of blank-id entries with no index gave
+    /// every one of them `Key::Id("")`. They shared a single `Pending` slot,
+    /// the SMA-547 whole-name-repeat guard did not fire (`"alpha" != "beta"`),
+    /// and the two names concatenated into one `("", "alphabeta")` delta.
+    ///
+    /// This is a strictly deeper collision than the dedup net's: it happens at
+    /// key construction, before `canonicalize` is ever called, so the
+    /// `!call_id.is_empty()` guard in `flush_buffered_names` cannot reach it.
+    /// The shape is impossible in `openai/chat`, whose `index` is a required
+    /// `u32`.
+    #[test]
+    fn blank_ids_without_index_do_not_collapse() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![tc_chunk(serde_json::json!([
+                {"id": "", "function": {"name": "alpha"}},
+                {"id": "", "function": {"name": "beta"}}
+            ]))],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "a blank id is not an identity, so it must not become the wire key"
         );
     }
 }
