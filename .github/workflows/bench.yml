@@ -28,6 +28,9 @@ jobs:
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run tool-dispatch benchmark
         run: cargo bench -p paigasus-helikon --bench tool_dispatch

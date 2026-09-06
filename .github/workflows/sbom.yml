@@ -31,7 +31,15 @@ jobs:
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
+      # sbom.yml is tag-triggered only, so this expression never holds
+      # and the step becomes restore-only. That is intended: main never runs
+      # `sbom`, so there is no sbom-keyed entry to restore either, and the step
+      # is inert until PR 2 makes it a registry reader. Do not "fix" it to save
+      # on tags — that would spend budget on the release path this ticket frees.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # taiki-e/install-action v2.85.11
       - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf
         with:

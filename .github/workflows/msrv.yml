@@ -40,7 +40,10 @@ jobs:
       # version and its digests live in the action (SMA-458).
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # taiki-e/install-action v2.85.11
       - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf
         with:
