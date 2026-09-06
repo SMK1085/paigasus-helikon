@@ -237,6 +237,7 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
 npm ci                                               # once, or after package-lock.json changes
 npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
 bash scripts/check-markdownlint-config.sh            # asserts that config is in force
+bash scripts/check-cargo-profile-env-sync.sh   # cargo-visible workflow env is uniform
 ```
 
 The Markdown gate needs Node (>= 22); everything else in that list needs only the

@@ -29,6 +29,7 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
 npm ci                                               # once, or after package-lock.json changes
 npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
 bash scripts/check-markdownlint-config.sh            # asserts that config is in force
+bash scripts/check-cargo-profile-env-sync.sh         # cargo-visible workflow env is uniform
 ```
 
 The full list lives in `CONTRIBUTING.md` (single source of truth for contributor policies).
@@ -110,6 +111,8 @@ The required-status-check contexts gated on `main` are (bare job names, as poste
 Four pins are hand-bumped with nothing tracking them: `PROTOC_VERSION` and its three digests in `.github/actions/setup-protoc/install.sh`, `TEMPORAL_CLI_VERSION`/`TEMPORAL_CLI_SHA256` in `integration.yml`, `NIGHTLY_TOOLCHAIN` in `ci.yml`, and `markdownlint-cli2` via `package-lock.json`. **A checksum mismatch is never a signal to update the digest** — the causes are, in order, a truncated download, an upstream re-tag, and tampering; verify upstream independently first.
 
 Job-by-job rationale, the protoc bump runbook, the audit/deny signal semantics, and the incident history behind all of the above: `docs/runbooks/ci-architecture.md`.
+
+**GitHub's 10 GB Actions cache limit is a standing constraint, not a one-time cleanup** (SMA-618): it is not raisable, and going over it fails nothing — it just triggers silent LRU eviction that makes CI legs run cold at random. `cache-budget.yml` monitors it daily and warns (never fails) above 8.5 GiB. Caches are saved **only** from `main` (`save-if: ${{ github.ref == 'refs/heads/main' }}` on every `Swatinem/rust-cache` site) so a PR job can still restore an entry `main` wrote but never writes a competing `refs/pull/N/merge` entry that evicts it. The `CARGO_*`/`RUST*`-prefixed workflow env that `rust-cache` hashes into its key must stay byte-identical across every cache-bearing workflow, enforced by `scripts/check-cargo-profile-env-sync.sh` running as a step in `fmt`. `audit` and `deny` deliberately cache no `target/` directory — neither compiles the workspace, so it was pure waste against the fixed budget. Full rationale: `docs/runbooks/ci-architecture.md` → "Actions cache budget".
 
 The **`microvm`/forkd live-KVM path is not validated locally or in GitHub CI** — the dev host is arm64 macOS (no `/dev/kvm`) and GitHub runners have none. Validate it on a **GCP nested-virtualization VM** (Ubuntu 24.04 — the forkd binaries need glibc ≥ 2.38; Intel `n2`) per `docs/runbooks/forkd-live-validation.md`. The `tests/forkd_live.rs` tests are env-gated (`FORKD_URL` / `FORKD_TOKEN` / `FORKD_SNAPSHOT`) and loud-skip when no controller is configured, so `cargo test` stays green without one.
 
