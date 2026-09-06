@@ -49,8 +49,17 @@ jobs:
           # latter reporting active_caches_count: 4 while the list returned six
           # rows; the byte totals agreed, so the count field is unreliable and
           # the list is the source of truth.
-          rows="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/caches" \
-            --jq '.actions_caches[] | [.size_in_bytes, .ref, .key] | @tsv')"
+          #
+          # Guarded rather than a bare assignment: under `set -e`, an
+          # unguarded `rows="$(gh api ...)"` would abort the script on any
+          # `gh api` failure (rate limit, transient 5xx, denied `actions:
+          # read`, network blip) and redden this run — defeating the
+          # warns-never-fails contract this workflow exists to keep.
+          if ! rows="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/caches" \
+            --jq '.actions_caches[] | [.size_in_bytes, .ref, .key] | @tsv')"; then
+            echo "::warning::Could not query Actions cache usage via gh api; skipping this run's report."
+            exit 0
+          fi
 
           total=0
           count=0
