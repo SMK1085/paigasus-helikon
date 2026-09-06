@@ -62,10 +62,12 @@ GitHub's Actions cache limit is **10 GB per repository and is not raisable**.
 Going over it is not an error anywhere in the UI or API — it is silent LRU
 eviction, one entry at a time, with no warning and no red gate. SMA-618 found
 this repository sitting **37% over the limit**, which meant a different CI leg
-started cold on essentially every run; one measured `test (windows-latest,
-stable)` run cost 42m40s for that reason alone (SMA-618 records this as the
-true cost of a cold run of that leg, against a warm 34m09s). Full derivation, the two-cause
-breakdown, and the size-reduction work reserved for the follow-up PR live in
+started cold on essentially every run; SMA-618 records a cold `test
+(windows-latest, stable)` run costing 42m40s — the true cost of a cold run of
+that leg, against an earlier, incomplete cold measurement of 34m09s from a run
+that aborted early at a failing test before it ever reached the later
+binaries. Full derivation, the two-cause breakdown, and the size-reduction
+work reserved for the follow-up PR live in
 `docs/superpowers/specs/2026-09-06-sma-618-actions-cache-budget-design.md`.
 
 Two independent causes fed the overage. First, every `Swatinem/rust-cache` site
