@@ -1,7 +1,7 @@
 # CI Architecture Reference
 
 > **Scope:** why the CI, integration and supply-chain workflows are shaped the way
-> they are, and the incidents that shaped them (SMA-306/330/335/452/457/458/479/486/487/581).
+> they are, and the incidents that shaped them (SMA-306/330/335/452/457/458/479/486/487/581/618).
 > This runbook is **not** linked from the public mdBook — it lives standalone under
 > `docs/runbooks/` to avoid linkcheck coupling. It holds the *rationale and incident
 > history*; the operative rules stay in `CLAUDE.md`.
@@ -75,9 +75,12 @@ used the default `save-if: true`, so every PR job saved its own entry scoped to
 `refs/pull/N/merge` — read a handful of times, then dead, but evicting `main`'s
 entries while it lived. Second, `main`'s own footprint — 15 entries across five
 workflows — exceeds 10 GB by itself, independent of any PR activity; that half
-is out of scope for this PR and addressed separately. This PR (SMA-618, PR 1)
-fixes the first cause and adds the guards below; it does not close the ticket
-by itself.
+is out of scope for this PR and addressed separately. (That 15-entry count
+itself carries a caveat: `sessions-it` and `temporal-it` gate their cache steps
+behind path filters, so it holds only on a push that touches both `ci.yml` and
+`integration.yml` — most `main` pushes see 13. See "Actions cache budget"
+below.) This PR (SMA-618, PR 1) fixes the first cause and adds the guards
+below; it does not close the ticket by itself.
 
 **PR jobs restore but no longer save.** All twelve `Swatinem/rust-cache` sites
 across the seven workflows that use it (`ci.yml`, `msrv.yml`, `bench.yml`,
@@ -116,7 +119,12 @@ step in `ci.yml`'s `fmt` job, with a self-test at
 parsing contract. Fixing this guard's own prerequisite surfaced real
 pre-existing drift: `msrv.yml` and `bench.yml` had no workflow-level `env:`
 block at all, so they now carry `CARGO_TERM_COLOR: always` like every other
-cache-bearing workflow.
+cache-bearing workflow. That addition is itself cache-key-invalidating —
+`CARGO_TERM_COLOR` is one of the hashed prefixes, so adding it where it was
+previously absent changes the key exactly as removing a cached path does (see
+`cache-targets: false` below) — so `msrv.yml`'s `verify` and `bench.yml`'s
+`bench` entries are each orphaned once and run cold once under this PR, the
+same cost as `audit` and `deny`.
 
 **`cache-budget.yml` is the daily monitor.** It runs on a `schedule` (06:43
 UTC daily) plus `workflow_dispatch`, never on `push` or `pull_request`, and it
@@ -151,7 +159,10 @@ GiB across 7 entries** — still over the 10 GB limit, because the stale
 PR-scoped entries from before this fix had not yet aged out and `main`'s own
 15-entry footprint (Cause 2, above) is untouched by this PR.
 
-**Purging every cache entry** requires `actions: write`:
+**Purging every cache entry** requires `actions: write`. No workflow in this
+repository performs the purge — it is a developer-machine operation, run with
+a personal access token carrying that scope; the workflow `GITHUB_TOKEN` is
+never involved:
 
 ```bash
 gh api --paginate repos/SMK1085/paigasus-helikon/actions/caches \

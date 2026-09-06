@@ -946,7 +946,9 @@ merge, **in this order** — the ordering is load-bearing.
        repos/SMK1085/paigasus-helikon/actions/caches/{}
    ```
 
-   Requires `actions: write`. **Not one-time:** every PR still based on
+   Requires `actions: write`. No workflow performs this purge — it runs from a
+   developer machine with a PAT carrying that scope; the workflow
+   `GITHUB_TOKEN` is not involved. **Not one-time:** every PR still based on
    pre-merge `main` runs the *old* workflow definitions on its next push and
    keeps writing `refs/pull/N/merge` entries until rebased. Re-purge, or wait for
    #240 and #241 to rebase or merge.
@@ -962,7 +964,12 @@ merge, **in this order** — the ordering is load-bearing.
    ```
 
 4. **Assert:** no entry exists under any `refs/pull/*` ref created after the
-   merge, and `main` holds 15 entries.
+   merge, and `main` holds 15 entries. Caveat: `sessions-it` (`ci.yml`) and
+   `temporal-it` (`integration.yml`) gate their cache steps behind path
+   filters, and this merge push touches both `ci.yml` and `integration.yml`, so
+   both filters fire and this specific run genuinely sees 15 — every later
+   `main` push that does not touch those paths shows 13. Do not read 13 on a
+   later measurement as a regression.
 
 5. **Record every individual size in the spec**, replacing the `†`-marked
    inferred figures in its budget table. This measured baseline is what PR 2's

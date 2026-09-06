@@ -426,12 +426,25 @@ any workflow. Correct the runbook.
 ### G. Budget monitor — *PR 1*
 
 The repository sat at 37% over for months with nothing red. After this change the
-same silence returns, and there are now *more* ways to drift over. Add a step to
-`audit.yml`'s existing daily `main` cron that reads `actions/caches` and emits
-`::warning::` above 8.5 GB.
+same silence returns, and there are now *more* ways to drift over. Add a new,
+separate workflow, `cache-budget.yml`, on its own daily `schedule` plus
+`workflow_dispatch`, that reads `actions/caches` and emits `::warning::` above
+8.5 GB.
 
 This is what makes the 10 GB budget an enforceable standing constraint in
-`CLAUDE.md` rather than an aspiration. It needs the `actions: read` permission.
+`CLAUDE.md` rather than an aspiration. It needs the `actions: read` permission,
+scoped to this new workflow only.
+
+**Deviation from an earlier draft of this section, corrected during
+implementation:** a prior revision proposed adding this as a step inside
+`audit.yml`'s existing daily `main` cron rather than a separate workflow. That
+was rejected: `CLAUDE.md` instructs readers to take `audit.yml`'s *run*
+conclusion as the supply-chain verdict, so a budget-monitor step failing (or
+even just executing) inside that same run would redden or otherwise
+contaminate exactly the signal that instruction depends on, for a reason that
+has nothing to do with supply-chain risk. `audit.yml` therefore gains no
+`actions: read` and no new step; `cache-budget.yml` carries its own minimal
+`permissions:` block instead.
 
 ### `prefix-key: v1`
 
@@ -503,9 +516,26 @@ invariant and the whole budget are first exercised post-merge on `main`, and
 `ci.yml` has no `workflow_dispatch` for a controlled dry run.
 
 **PR 1 — `save-if` + waste + guard + monitor.** Changes A, D, F (assertions 1–2),
-G, plus the purge. No cache-key invalidation. Independently recovers the 9.54 GB
-of PR-scoped entries that constitute the entire current overage. Effect is
-cleanly attributable.
+G, plus the purge. Independently recovers the 9.54 GB of PR-scoped entries that
+constitute the entire current overage. Effect is cleanly attributable.
+
+**Not key-invalidation-free, despite touching no `shared-key`/`prefix-key`
+input.** Two independent sources orphan four existing `main` entries, each
+paying one cold run before its replacement entry is written:
+
+- Change D's own `cache-targets: "false"` on `audit` and `deny` — fact 4 above
+  ("`@actions/cache` folds the cached path list into the cache version") means
+  narrowing the cached paths changes the version exactly as a key-input change
+  would. `audit` and `deny`'s existing `target`-carrying entries become
+  unreachable.
+- Fixing guard assertion 1's own prerequisite surfaced that `msrv.yml` and
+  `bench.yml` had no workflow-level `env:` block at all. Assertion 1 cannot
+  pass without giving them one, so both now carry `CARGO_TERM_COLOR: always`
+  — a variable inside rust-cache's env-hash. Their existing `verify` (msrv) and
+  `bench` entries are orphaned the same way.
+
+So PR 1 orphans four entries total (`audit`, `deny`, `verify`, `bench`), not
+zero.
 
 **PR 2 — size reduction + consolidation.** Changes B, C, E, F (assertion 3),
 `prefix-key: v1`. Key-invalidating; informed by PR 1's measurement. SMA-618
@@ -517,9 +547,14 @@ cache-plumbing changes and deserves its own review attention.
 
 ### Rollback
 
-- **PR 1** reverts cleanly. Reverting A restores PR-scoped saving; nothing is
-  invalidated. Reverting D's `cache-targets: false` orphans the registry-only
-  `audit`/`deny` entries once more — one cold run each, no correctness impact.
+- **PR 1** reverts cleanly, but is not free of cache-key invalidation on the
+  way in or the way back out. Reverting A restores PR-scoped saving; that part
+  invalidates nothing. Reverting D's `cache-targets: false` orphans the
+  `target`-carrying `audit`/`deny` entries a second time — one cold run each,
+  no correctness impact. Reverting the `env:` additions on `msrv.yml` and
+  `bench.yml` (needed for guard assertion 1, see the Rollout section above)
+  orphans `verify` and `bench` a second time too. Four cold runs total either
+  way, never a correctness impact.
 - **PR 2 costs a second cold cycle in either direction.** Reverting B changes the
   env-hash back, invalidating every entry a second time. Budget for one fully
   cold `main` run on revert; do not revert PR 2 as a reflex to a single slow run.
@@ -554,16 +589,25 @@ gh api repos/SMK1085/paigasus-helikon/actions/caches --paginate \
        repos/SMK1085/paigasus-helikon/actions/caches/{}
    ```
 
-   Needs `actions: write`. **This is not one-time:** every PR still based on
-   pre-merge `main` runs the *old* workflow definitions on its next push and
-   keeps writing `refs/pull/N/merge` entries until rebased. Re-purge, or wait for
-   all open PRs to rebase.
+   Needs `actions: write`. No workflow performs this purge — it is a
+   developer-machine operation, run with a PAT carrying that scope; the
+   workflow `GITHUB_TOKEN` is never involved. **This is not one-time:** every
+   PR still based on pre-merge `main` runs the *old* workflow definitions on
+   its next push and keeps writing `refs/pull/N/merge` entries until rebased.
+   Re-purge, or wait for all open PRs to rebase.
 3. Let one push-to-`main` run complete across `ci.yml`, `msrv.yml`, `audit.yml`,
    `deny.yml`, `integration.yml`.
 4. Assert: **no entry exists under any `refs/pull/*` ref** created after the
    merge, and `main` holds 15 entries. Record the total and every individual
    size — this is the measured baseline PR 2's budget is re-derived from, and it
    replaces every `†` in the table above.
+
+   **Caveat on the 15:** `sessions-it` (`ci.yml`) and `temporal-it`
+   (`integration.yml`) gate their cache steps behind path filters. The SMA-618
+   merge push touches both `ci.yml` and `integration.yml`, so both filters fire
+   and this specific acceptance run genuinely sees 15 — but every later `main`
+   push that does not touch those paths shows 13. Do not read 13 on a later
+   measurement as a regression.
 
 ### PR 2
 
@@ -633,12 +677,14 @@ are exceptions because they guard a known, deliberate trade.
 
 | File | Change |
 | -- | -- |
-| `.github/workflows/ci.yml` | `save-if` at 6 sites; `check-cargo-profile-env-sync.sh` step in `fmt` |
-| `.github/workflows/msrv.yml` | `save-if` |
-| `.github/workflows/audit.yml` | `save-if`; `cache-targets: false`; budget-monitor step on the cron; `actions: read` |
+| `.github/workflows/ci.yml` | `save-if` at 6 sites; `check-cargo-profile-env-sync.sh` step plus its self-test step in `fmt` |
+| `.github/workflows/msrv.yml` | `save-if`; new workflow-level `env: CARGO_TERM_COLOR: always` (had none — required for guard assertion 1 to pass, see I-3) |
+| `.github/workflows/audit.yml` | `save-if`; `cache-targets: false` (no budget-monitor step, no `actions: read` — see change G's deviation note) |
 | `.github/workflows/deny.yml` | `save-if`; `cache-targets: false` |
 | `.github/workflows/integration.yml` | `save-if` |
-| `.github/workflows/bench.yml`, `sbom.yml` | `save-if` |
+| `.github/workflows/bench.yml` | `save-if`; new workflow-level `env: CARGO_TERM_COLOR: always` (had none — same reason as `msrv.yml`) |
+| `.github/workflows/sbom.yml` | `save-if` |
+| `.github/workflows/cache-budget.yml` | new workflow — daily `schedule` + `workflow_dispatch`; `permissions: contents: read, actions: read` |
 | `scripts/check-cargo-profile-env-sync.sh` | new — assertions 1–2 |
 | `CLAUDE.md`, `CONTRIBUTING.md`, `docs/runbooks/ci-architecture.md` | as above |
 
