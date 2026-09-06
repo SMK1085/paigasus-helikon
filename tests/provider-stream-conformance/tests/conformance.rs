@@ -569,6 +569,26 @@ mod bedrock {
 /// no `[DONE]`. Assertion 7 (exactly one name-bearing delta per `call_id`) is
 /// fully exercised by that prefix alone; nothing here shortens what the
 /// scenario tests, only when its script stops.
+///
+/// # SMA-566's alias regression coverage lives in the crate's own unit tests
+///
+/// Every tool-call delta this module scripts carries an explicit `"index":0`,
+/// and no delta ever introduces a second `id` — the continuation frames
+/// (`tool_call_name_fragment`, `tool_call_args`) omit the key entirely. Only
+/// one index value is ever in play, so the two-index-one-id shape that
+/// `ChatTranslator::canonicalize` exists to merge never arises from these
+/// bytes, and assertion 7 passes here without exercising it. Under
+/// this suite's fixture-provenance rule the shape has no capture anywhere in
+/// the repo and must not be invented, so it is not registered as a scenario —
+/// exactly as `litellm` records for its own `canonicalize`.
+///
+/// Read this subject's `conforms` test as confirming the translator behaves
+/// correctly on the wire shapes OpenAI is actually observed to send, **not**
+/// as a standing regression guard for the alias fix. That guard is
+/// `two_indexes_with_one_id_merge_into_a_single_call` and its eleven siblings
+/// in `crates/paigasus-helikon-providers-openai/src/backend/chat.rs`. If a
+/// future capture ever shows a backend reusing one `id` across two indexes,
+/// that would be the fixture to add here; none currently committed does.
 mod openai_chat {
     use super::*;
     use paigasus_helikon_providers_openai::OpenAiModel;
