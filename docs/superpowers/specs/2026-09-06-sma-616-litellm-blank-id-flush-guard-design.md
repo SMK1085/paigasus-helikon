@@ -60,7 +60,7 @@ fragment is present — confirmed independently by the existing passing test
 mid-stream events are empty.
 
 With arguments, both calls satisfy `!args_frag.is_empty()` and emit their name from
-`handle_tool_call_delta`, never reaching `flush_buffered_names`.
+`handle_tool_call`, never reaching `flush_buffered_names`.
 `blank_ids_do_not_collapse_distinct_calls` drives `"arguments": "{}"` and therefore
 exercises only that path. The end-of-stream net is uncovered.
 

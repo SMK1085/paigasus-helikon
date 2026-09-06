@@ -325,7 +325,9 @@ to:
         // handle an absent id: positional keying, or the loud skip when
         // another entry in this array carries an explicit index. Registration
         // into `tool_calls` below still reads `tc.id` directly, so a blank id
-        // is still recorded and still resolves to `""` (SMA-616).
+        // that reaches it is still recorded and still resolves to `""`. An
+        // entry taking the ambiguity skip returns before that point, so it is
+        // neither registered nor canonicalized (SMA-616).
         let key = match (tc.index, tc.id.as_deref().filter(|id| !id.is_empty())) {
 ```
 
