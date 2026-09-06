@@ -39,6 +39,10 @@ jobs:
           toolchain: stable
           components: rustfmt
       - run: cargo fmt --all -- --check
+      # SMA-618: runs here because `fmt` is the cheapest job and the only one
+      # with no rust-cache step of its own to perturb.
+      - name: Check cargo-visible workflow env is in sync
+        run: bash scripts/check-cargo-profile-env-sync.sh
 
   clippy:
     runs-on: ubuntu-latest

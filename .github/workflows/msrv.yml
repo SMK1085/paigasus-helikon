@@ -12,6 +12,14 @@ concurrency:
 permissions:
   contents: read
 
+# SMA-618: this block is not cosmetic. rust-cache hashes every CARGO*/RUST*
+# variable into its cache key, so a workflow that omits one computes a
+# different key and silently stops sharing a cache entry with the jobs it is
+# meant to share with. Keep byte-identical with the other cache-bearing
+# workflows; scripts/check-cargo-profile-env-sync.sh enforces it.
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   verify:
     runs-on: ubuntu-latest
