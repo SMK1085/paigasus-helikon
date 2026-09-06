@@ -39,6 +39,16 @@ jobs:
           toolchain: stable
           components: rustfmt
       - run: cargo fmt --all -- --check
+      # SMA-618: runs here because `fmt` is the cheapest job and the only one
+      # with no rust-cache step of its own to perturb.
+      - name: Check cargo-visible workflow env is in sync
+        run: bash scripts/check-cargo-profile-env-sync.sh
+      # The guard above is a line-oriented parser, not a YAML parser: a
+      # workflow reformat can break it across the board and have it report
+      # vacuous agreement (SMA-618 I-1). This self-test is what proves the
+      # parser still parses; it is hermetic mktemp work and runs in ~0.5s.
+      - name: Self-test the cargo-visible env parser
+        run: bash scripts/check-cargo-profile-env-sync-selftest.sh
 
   clippy:
     runs-on: ubuntu-latest
@@ -58,7 +68,13 @@ jobs:
       # version and its digests live in the action (SMA-458).
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: PR jobs restore but never save. save-if gates only the post
+      # (save) step, so a PR run still reads main's entries — it just stops
+      # writing its own refs/pull/N/merge copies, which is what was evicting
+      # main's and pushing the repo 37% over the fixed 10 GB limit.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
   test:
@@ -93,7 +109,10 @@ jobs:
       # branches of the action, so it carries all three pinned digests.
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test ${{ matrix.test_args }}
 
   build-no-default-features:
@@ -113,7 +132,10 @@ jobs:
       # version and its digests live in the action (SMA-458).
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build -p paigasus-helikon-runtime-axum --no-default-features
       - run: cargo build -p paigasus-helikon-runtime-actix --no-default-features
       # SMA-461: every agentcore protocol mode (mcp/a2a/ag-ui/ws) is default-on and
@@ -148,7 +170,10 @@ jobs:
       # version and its digests live in the action (SMA-458).
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
@@ -172,7 +197,10 @@ jobs:
       # version and its digests live in the action (SMA-458).
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bash scripts/check-doc-coverage.sh
         env:
           NIGHTLY_CHANNEL: ${{ env.NIGHTLY_TOOLCHAIN }}
@@ -228,8 +256,11 @@ jobs:
       - if: steps.filter.outputs.sessions == 'true'
         uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: save only from the default branch — see the note on `clippy`.
       - if: steps.filter.outputs.sessions == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.filter.outputs.sessions == 'true'
         name: Start Postgres + Redis
         run: |

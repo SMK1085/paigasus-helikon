@@ -237,10 +237,16 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
 npm ci                                               # once, or after package-lock.json changes
 npx markdownlint-cli2                                # reads .markdownlint-cli2.jsonc
 bash scripts/check-markdownlint-config.sh            # asserts that config is in force
+bash scripts/check-cargo-profile-env-sync.sh         # cargo-visible workflow env is uniform
+bash scripts/check-cargo-profile-env-sync-selftest.sh # …and its parser still parses (fmt runs both)
 ```
 
 The Markdown gate needs Node (>= 22); everything else in that list needs only the
-Rust toolchain. `markdownlint-cli2` is pinned exactly in `package-lock.json` and is
+Rust toolchain — except `check-doc-coverage.sh` and `check-cargo-profile-env-sync.sh`,
+which both use `mapfile` and so need bash >= 4.0. macOS ships bash 3.2, on which
+they fail with `mapfile: command not found`; `brew install bash` alongside the
+Rust toolchain is the fix.
+`markdownlint-cli2` is pinned exactly in `package-lock.json` and is
 **not** tracked by Dependabot — bumping it is a deliberate act, like `PROTOC_VERSION`
 and `NIGHTLY_TOOLCHAIN`. `npx markdownlint-cli2 --fix` resolves most findings
 mechanically; review the diff before committing, since a few fixes edit content
@@ -276,7 +282,7 @@ Three workflows complement CI and gate PRs alongside the build matrix:
   `scripts/check-advisory-ignore-sync.sh`, which fails if the
   `[advisories].ignore` lists in `deny.toml` and `.cargo/audit.toml` have
   diverged — keep the two in sync, as the note below requires.
-- `sbom` — on every `v*` tag push, generates a CycloneDX SBOM via
+- `sbom` — on every `paigasus-helikon-v*` tag push, generates a CycloneDX SBOM via
   `cargo-cyclonedx` and uploads it as a release asset.
 
 Local repro:

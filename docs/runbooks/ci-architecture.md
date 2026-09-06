@@ -1,7 +1,7 @@
 # CI Architecture Reference
 
 > **Scope:** why the CI, integration and supply-chain workflows are shaped the way
-> they are, and the incidents that shaped them (SMA-306/330/335/452/457/458/479/486/487/581).
+> they are, and the incidents that shaped them (SMA-306/330/335/452/457/458/479/486/487/581/618).
 > This runbook is **not** linked from the public mdBook — it lives standalone under
 > `docs/runbooks/` to avoid linkcheck coupling. It holds the *rationale and incident
 > history*; the operative rules stay in `CLAUDE.md`.
@@ -28,7 +28,7 @@ Both use **step-level `if:` guards**, not a job-level one, for the same reason `
 
 **`protoc` comes from `.github/actions/setup-protoc`, a repo-local composite action, not from a third-party one** (SMA-458). It installs **protoc 35.1**, pinned exactly and verified against a per-platform SHA-256 **before** extraction, at all nine sites that compile the workspace (`ci.yml` ×6, `msrv.yml`, `release-plz.yml`, `integration.yml`). It replaced `arduino/setup-protoc`, whose `version` input **defaults to `23.x`, not to latest** — the action's README claims otherwise and is wrong, and CI had therefore been running **23.4** since SMA-332. SMA-458 was consequently a deliberate 12-major upgrade as well as a pin, not the no-op its one-line ticket framing implied. `install.sh` does download → verify → extract → export; that order is load-bearing, so an unverified archive never reaches an executable location. It exports `PROTOC` and `PROTOC_INCLUDE` via `$GITHUB_ENV` as well as prepending to `$GITHUB_PATH`, because `prost-build` resolves `PROTOC` **before** falling back to a `PATH` lookup — that makes the install authoritative regardless of `PATH` ordering, and moots the well-known-type `include/` tree having to sit beside the binary. **`verify.sh` must stay its own step**: `$GITHUB_PATH`/`$GITHUB_ENV` writes do not affect the step that makes them, so an assertion folded back into `install.sh` would validate a local `export PATH=` rather than the mechanism cargo sees, and would be structurally blind to the propagation failure it exists to catch. Only `Linux-X64`, `macOS-ARM64` and `Windows-X64` are supported; anything else exits non-zero naming the file to edit. `linux-aarch_64` is deliberately absent even though `agentcore-image` runs on `ubuntu-24.04-arm` (it has no protoc step) — an unexercised digest is an unexercised code path, and a wrong one reads as tampering rather than as a typo.
 
-**Nothing tracks the protoc pin — bumping it is a human act with no prompt.** Dependabot follows action SHAs, and after SMA-458 there is no third-party action here for it to follow at all. It sits alongside the repo's other hand-bumped pins: `TEMPORAL_CLI_VERSION`/`TEMPORAL_CLI_SHA256` in `integration.yml` and `NIGHTLY_TOOLCHAIN` in `ci.yml`. **Bump runbook:** edit `PROTOC_VERSION` and all three digests in `.github/actions/setup-protoc/install.sh` and `EXPECTED_VERSION` in `verify.sh`, then run `bash .github/actions/setup-protoc/selftest.sh` — it re-downloads every published asset and fails if any pinned digest disagrees, and also exercises the tampered-digest and unsupported-platform paths. `actionlint` lints `.github/workflows/*.yml` and **not** `action.yml`, so `shellcheck` on the three scripts is the only lint coverage the install logic has. **A checksum mismatch is not a signal to update the digest** — the causes are, in order, a truncated download, an upstream re-tag, and tampering; verify upstream independently first. The accepted cost of pinning is that it does not self-heal: if protobuf removes or replaces the v35.1 assets, every required job and `release-plz` go red until someone bumps the pin.
+**Nothing tracks the protoc pin — bumping it is a human act with no prompt.** Dependabot follows action SHAs, and after SMA-458 there is no third-party action here for it to follow at all. It sits alongside the repo's other hand-bumped pins: `TEMPORAL_CLI_VERSION`/`TEMPORAL_CLI_SHA256` in `integration.yml` and `NIGHTLY_TOOLCHAIN` in `ci.yml`. **Bump runbook:** edit `PROTOC_VERSION` and all three digests in `.github/actions/setup-protoc/install.sh` and `EXPECTED_VERSION` in `verify.sh`, then run `bash .github/actions/setup-protoc/selftest.sh` — it re-downloads every published asset and fails if any pinned digest disagrees, and also exercises the tampered-digest and unsupported-platform paths. Neither `actionlint` nor `shellcheck` runs in CI (SMA-618 checked: the only match in the tree is a `# shellcheck` directive comment inside `selftest.sh`), so `selftest.sh` is the **only** coverage the install logic has — which is why it re-downloads every published asset rather than merely asserting the digests are well-formed. **A checksum mismatch is not a signal to update the digest** — the causes are, in order, a truncated download, an upstream re-tag, and tampering; verify upstream independently first. The accepted cost of pinning is that it does not self-heal: if protobuf removes or replaces the v35.1 assets, every required job and `release-plz` go red until someone bumps the pin.
 
 ## pr-title.yml
 
@@ -55,3 +55,124 @@ The SBOM workflow invokes `cargo cyclonedx --manifest-path crates/paigasus-helik
 `deny.toml` declares `version = 2` under both `[advisories]` and `[licenses]` — v1 fields (`vulnerability`, `unmaintained`, `unsound`, `copyleft`, etc.) are removed in modern cargo-deny and adding them will fail with a schema error. The license allowlist includes `Unicode-3.0` in addition to the ticket-prescribed `Unicode-DFS-2016` because `unicode-ident ≥ 1.0.13` (pulled transitively by `serde_derive`) relicensed in 2024. cargo-deny's advisory DB lives at `~/.cargo/advisory-dbs` (plural) per `deny.toml`'s `db-path`; cargo-audit's DB is at `~/.cargo/advisory-db` (singular) — each tool caches its own, and the CI cache directories are scoped per-workflow.
 
 Dependabot is configured for `cargo` + `github-actions` ecosystems, weekly Monday 06:00 UTC (aligned with the daily audit cron), with patch + minor updates grouped into one PR per ecosystem.
+
+## Actions cache budget
+
+GitHub's Actions cache limit is **10 GB per repository and is not raisable**.
+Going over it is not an error anywhere in the UI or API — it is silent LRU
+eviction, one entry at a time, with no warning and no red gate. SMA-618 found
+this repository sitting **37% over the limit**, which meant a different CI leg
+started cold on essentially every run; SMA-618 records a cold `test
+(windows-latest, stable)` run costing 42m40s — the true cost of a cold run of
+that leg, against an earlier, incomplete cold measurement of 34m09s from a run
+that aborted early at a failing test before it ever reached the later
+binaries. Full derivation, the two-cause breakdown, and the size-reduction
+work reserved for the follow-up PR live in
+`docs/superpowers/specs/2026-09-06-sma-618-actions-cache-budget-design.md`.
+
+Two independent causes fed the overage. First, every `Swatinem/rust-cache` site
+used the default `save-if: true`, so every PR job saved its own entry scoped to
+`refs/pull/N/merge` — read a handful of times, then dead, but evicting `main`'s
+entries while it lived. Second, `main`'s own footprint — 15 entries across five
+workflows — exceeds 10 GB by itself, independent of any PR activity; that half
+is out of scope for this PR and addressed separately. (That 15-entry count
+itself carries a caveat: `sessions-it` and `temporal-it` gate their cache steps
+behind path filters, so it holds only on a push that touches both `ci.yml` and
+`integration.yml` — most `main` pushes see 13. See "Actions cache budget"
+below.) This PR (SMA-618, PR 1) fixes the first cause and adds the guards
+below; it does not close the ticket by itself.
+
+**PR jobs restore but no longer save.** All twelve `Swatinem/rust-cache` sites
+across the seven workflows that use it (`ci.yml`, `msrv.yml`, `bench.yml`,
+`audit.yml`, `deny.yml`, `integration.yml`, `sbom.yml`) now carry `save-if: ${{
+github.ref == 'refs/heads/main' }}`. `save-if` gates only the action's save
+(post) step — the restore step is unconditional, and a `refs/pull/N/merge` run
+can still read an entry that `main` wrote, so a PR is no colder than before.
+What it no longer does is write a competing `refs/pull/N/merge` entry that
+evicts `main`'s. `sbom.yml` is triggered only on `paigasus-helikon-v*` tag pushes, so its
+`save-if` expression is never true and the step is permanently restore-only —
+intended, and commented in the file, because `main` never runs the `sbom` job
+and there is no `sbom`-keyed entry for a tag build to restore either.
+
+**`audit` and `deny` cache no target directory.** Neither job compiles the
+workspace — `audit` runs `cargo audit` and `deny` runs `cargo deny check`
+against the dependency graph and lockfile — so caching `target/` for either was
+pure waste against a fixed budget. Both gained `cache-targets: "false"` on
+their `Swatinem/rust-cache` step and keep only their `cache-directories`
+advisory-DB entry: `~/.cargo/advisory-db` (singular) for `audit`,
+`~/.cargo/advisory-dbs` (plural) for `deny` — genuinely different paths, one
+per tool, as already noted above under "Supply chain: audit, deny, sbom".
+
+**The cargo-visible environment must stay identical across every cache-bearing
+workflow.** `rust-cache` hashes every environment variable whose name begins
+`CARGO`, `CC`, `CFLAGS`, `CXX`, `CMAKE`, or `RUST` into its cache key (verified
+in `Swatinem/rust-cache`'s `src/config.ts` at the pinned SHA). Two jobs meant to
+share one entry only do so while every such variable agrees byte-for-byte;
+drift silently splits a shared entry into two and pushes the repository back
+over the 10 GB limit with nothing going red. `scripts/check-cargo-profile-env-sync.sh`
+is the guard: it asserts that every workflow containing a `Swatinem/rust-cache`
+step declares an identical set of workflow-level `env:` entries matching those
+prefixes, rejects job-level env with those prefixes in a cache-bearing
+workflow, and rejects env declared on a `rust-cache` step itself. It runs as a
+step in `ci.yml`'s `fmt` job, with a self-test at
+`scripts/check-cargo-profile-env-sync-selftest.sh` pinning its line-oriented
+parsing contract. Fixing this guard's own prerequisite surfaced real
+pre-existing drift: `msrv.yml` and `bench.yml` had no workflow-level `env:`
+block at all, so they now carry `CARGO_TERM_COLOR: always` like every other
+cache-bearing workflow. That addition is itself cache-key-invalidating —
+`CARGO_TERM_COLOR` is one of the hashed prefixes, so adding it where it was
+previously absent changes the key exactly as removing a cached path does (see
+`cache-targets: false` below) — so `msrv.yml`'s `verify` and `bench.yml`'s
+`bench` entries are each orphaned once and run cold once under this PR, the
+same cost as `audit` and `deny`.
+
+**`cache-budget.yml` is the daily monitor.** It runs on a `schedule` (06:43
+UTC daily) plus `workflow_dispatch`, never on `push` or `pull_request`, and it
+warns, it never fails — a budget drifting toward the limit is something to fix
+deliberately, not something to block a merge on. It reads the Actions cache
+**list** endpoint — `gh api repos/SMK1085/paigasus-helikon/actions/caches` —
+and never the `actions/cache/usage` summary endpoint: SMA-618 measured the
+latter reporting `active_caches_count: 4` against a **list** response that
+returned six rows, with the byte totals agreeing between the two, so the count
+field is unreliable and the list is the only source of truth. The step prints a
+full inventory to the job summary and emits a GitHub `::warning::` once the
+total crosses 8.5 GiB, chosen to leave headroom before eviction actually
+starts. The `gh api` call is guarded rather than a bare assignment under
+`set -e`, so a transient failure (rate limit, a denied `actions: read`, a
+network blip) degrades to a warning instead of reddening the run. This
+workflow is deliberately **not** a job inside `audit.yml`, even though
+`audit.yml` already runs a daily cron against `main` — CLAUDE.md instructs
+readers to take the `audit` workflow's *run* conclusion as the supply-chain
+verdict, and an unrelated job failing inside that workflow would turn a green
+audit run red for a reason with nothing to do with supply chain, corrupting
+exactly the signal that document tells people to trust.
+
+**Measurement procedure**, for anyone re-checking the budget by hand:
+
+```bash
+gh api repos/SMK1085/paigasus-helikon/actions/caches --paginate \
+  --jq '.actions_caches[] | "\(.size_in_bytes) \(.ref) \(.key)"'
+```
+
+Live on 2026-09-06, mid-way through this work, the repository measured **10.08
+GiB across 7 entries** — still over the 10 GB limit, because the stale
+PR-scoped entries from before this fix had not yet aged out and `main`'s own
+15-entry footprint (Cause 2, above) is untouched by this PR.
+
+**Purging every cache entry** requires `actions: write`. No workflow in this
+repository performs the purge — it is a developer-machine operation, run with
+a personal access token carrying that scope; the workflow `GITHUB_TOKEN` is
+never involved:
+
+```bash
+gh api --paginate repos/SMK1085/paigasus-helikon/actions/caches \
+  --jq '.actions_caches[].id' \
+| xargs -I{} gh api --method DELETE \
+    repos/SMK1085/paigasus-helikon/actions/caches/{}
+```
+
+This is **not a one-time operation**. Any PR still based on pre-merge `main`
+runs the *old* workflow definitions — the ones without `save-if` — on its next
+push, and keeps writing `refs/pull/N/merge` entries until it is rebased onto a
+`main` that carries this fix. Re-purge as needed, or wait for the outstanding
+PRs to rebase or merge, before trusting a fresh measurement.

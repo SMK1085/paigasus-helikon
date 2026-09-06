@@ -127,10 +127,12 @@ jobs:
         uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2 — cache-on-failure because this job is expected
       # to go red sometimes, and a red run must still warm the cache for the next.
+      # SMA-618: save only from the default branch.
       - if: steps.decide.outputs.run == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           cache-on-failure: "true"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.decide.outputs.run == 'true'
         name: Install the Temporal CLI
         run: |

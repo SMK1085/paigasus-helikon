@@ -1,0 +1,93 @@
+name: cache-budget
+
+# SMA-618. GitHub's Actions cache limit is 10 GB per repository and is not
+# raisable. This repository sat 37% over it for months with nothing red: every
+# push evicted somebody's entry, and a different CI leg paid a cold build each
+# run — once measured at 42m40s for `test (windows-latest, stable)`. Nothing in
+# CI reported it, because going over the limit is not an error, it is just
+# eviction.
+#
+# This workflow is what makes that budget an enforceable standing constraint
+# rather than an aspiration.
+#
+# Deliberately NOT a job inside audit.yml, even though audit.yml already has a
+# daily cron on main. CLAUDE.md instructs readers to take the audit *run*
+# conclusion as the supply-chain verdict, so an unrelated job in that workflow
+# could turn a green audit into a red run — corrupting the signal that document
+# tells people to trust. Keep this separate.
+#
+# Warns, never fails. A budget drifting toward the limit is something to fix
+# deliberately, not something to block a merge on.
+
+on:
+  schedule:
+    - cron: "43 6 * * *"   # daily — offset from audit.yml (06:00) and deny.yml (06:17)
+  workflow_dispatch:
+
+concurrency:
+  group: cache-budget-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # required to list the repository's Actions caches
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report Actions cache usage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 8.5 GiB. Warns with headroom, so the first notice arrives before
+          # eviction starts rather than after it has already gone silent.
+          WARN_BYTES: "9126805504"
+        run: |
+          set -euo pipefail
+
+          # The LIST endpoint, never actions/cache/usage. SMA-618 measured the
+          # latter reporting active_caches_count: 4 while the list returned six
+          # rows; the byte totals agreed, so the count field is unreliable and
+          # the list is the source of truth.
+          #
+          # Guarded rather than a bare assignment: under `set -e`, an
+          # unguarded `rows="$(gh api ...)"` would abort the script on any
+          # `gh api` failure (rate limit, transient 5xx, denied `actions:
+          # read`, network blip) and redden this run — defeating the
+          # warns-never-fails contract this workflow exists to keep.
+          if ! rows="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/caches" \
+            --jq '.actions_caches[] | [.size_in_bytes, .ref, .key] | @tsv')"; then
+            echo "::warning::Could not query Actions cache usage via gh api; skipping this run's report."
+            exit 0
+          fi
+
+          total=0
+          count=0
+          {
+            echo "### Actions cache inventory"
+            echo
+            echo "| Size | Ref | Key |"
+            echo "| -- | -- | -- |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          while IFS=$'\t' read -r size ref key; do
+            [ -n "${size}" ] || continue
+            total=$((total + size))
+            count=$((count + 1))
+            human="$(numfmt --to=iec-i --suffix=B "${size}")"
+            printf '%10s  %-24s %s\n' "${human}" "${ref}" "${key}"
+            printf '| %s | `%s` | `%s` |\n' "${human}" "${ref}" "${key}" \
+              >> "${GITHUB_STEP_SUMMARY}"
+          done <<< "${rows}"
+
+          human_total="$(numfmt --to=iec-i --suffix=B "${total}")"
+          echo
+          echo "total: ${human_total} across ${count} entries"
+          {
+            echo
+            echo "**Total: ${human_total} across ${count} entries** (limit: 10 GB)"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${total}" -gt "${WARN_BYTES}" ]; then
+            echo "::warning::Actions cache usage is ${human_total}, above the $(numfmt --to=iec-i --suffix=B "${WARN_BYTES}") warning line. GitHub's hard limit is 10 GB and eviction is silent. See docs/runbooks/ci-architecture.md -> Actions cache budget."
+          fi

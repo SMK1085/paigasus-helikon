@@ -44,9 +44,18 @@ jobs:
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
+      # SMA-618: cargo-audit never compiles the workspace — it reads Cargo.lock
+      # and the advisory DB — so a target cache here is pure waste against a
+      # fixed 10 GB budget. cache-targets: false keeps ~/.cargo (registry) and
+      # the cache-directories entry below, and drops only target/.
+      # One-time cost: @actions/cache folds the cached path list into the cache
+      # *version*, so the existing entry becomes unreachable and this job runs
+      # cold once.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           cache-directories: "~/.cargo/advisory-db"
+          cache-targets: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # taiki-e/install-action v2.85.11
       - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf
         with:
