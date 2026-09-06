@@ -197,6 +197,18 @@ unchanged.
 Every existing blank-id test carries an explicit `index` (`stream.rs:1827`, `1919`,
 `1920`), so all take the first arm and are untouched (§7.3).
 
+**One narrow behaviour trade, accepted.** In a *mixed* array — one entry carrying an
+explicit `index`, plus a blank-id entry carrying none — the blank entry previously
+took `(None, Some("")) => Key::Id("")`, which does *not* collide with `Key::Index(n)`
+(a different enum variant), so it was delivered under `""`. It now reaches the
+`any_explicit_index` skip arm and is dropped with a `warn!` instead. The trade is
+accepted: the shape is doubly non-conforming (the module doc already calls a mixed
+array non-conforming for OpenAI-compatible streaming, and the id cannot identify), no
+backend is known to emit it, the drop is loud rather than silent, and what was
+"delivered" was an entry `ModelTurnAccumulator` would merge into any other blank-id
+call regardless (§1.2). It is recorded here so the consequence is a decision rather
+than a side effect; no test pins it, and the skip arm has no test either way.
+
 ### 3.4 Scope the invariant in the doc comments — four sites
 
 `openai/chat` already says "exactly one name-carrying `ToolCallDelta` per **non-blank**
