@@ -174,6 +174,34 @@ expect 0 "step-level env on a later step is allowed" "${d}"
 # --- case 10: the real workflows pass -------------------------------------
 expect 0 "the repository's own workflows agree" "${repo_root}/.github/workflows"
 
+# --- case 11: an empty baseline fails instead of vacuously agreeing -------
+# Reproduces the demonstrated failure mode: renaming the column-0 `env:` key
+# breaks the workflow_env parser across the board, every workflow's computed
+# env block goes empty, and an empty set trivially equals every other empty
+# set. Without the guard added for SMA-618 I-1, this would report agreement
+# and exit 0 having verified nothing.
+d="${tmp}/empty-baseline"
+mkdir -p "${d}"
+for name in alpha beta; do
+  cat > "${d}/${name}.yml" <<YAML
+name: ${name}
+on:
+  push:
+    branches: [main]
+NOTenv:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: cargo build
+YAML
+done
+expect 1 "an empty computed baseline fails rather than vacuously agreeing" "${d}"
+
 echo
 if [[ "${failures}" == "0" ]]; then
   echo "check-cargo-profile-env-sync selftest: all cases passed"

@@ -241,7 +241,10 @@ bash scripts/check-cargo-profile-env-sync.sh         # cargo-visible workflow en
 ```
 
 The Markdown gate needs Node (>= 22); everything else in that list needs only the
-Rust toolchain. `markdownlint-cli2` is pinned exactly in `package-lock.json` and is
+Rust toolchain — except `check-cargo-profile-env-sync.sh`, which needs bash >= 4.0
+(`mapfile`) and so, on macOS, `brew install bash` alongside the Rust toolchain;
+macOS ships bash 3.2, on which it fails with `mapfile: command not found`.
+`markdownlint-cli2` is pinned exactly in `package-lock.json` and is
 **not** tracked by Dependabot — bumping it is a deliberate act, like `PROTOC_VERSION`
 and `NIGHTLY_TOOLCHAIN`. `npx markdownlint-cli2 --fix` resolves most findings
 mechanically; review the diff before committing, since a few fixes edit content

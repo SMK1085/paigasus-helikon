@@ -43,6 +43,12 @@ jobs:
       # with no rust-cache step of its own to perturb.
       - name: Check cargo-visible workflow env is in sync
         run: bash scripts/check-cargo-profile-env-sync.sh
+      # The guard above is a line-oriented parser, not a YAML parser: a
+      # workflow reformat can break it across the board and have it report
+      # vacuous agreement (SMA-618 I-1). This self-test is what proves the
+      # parser still parses; it is hermetic mktemp work and runs in ~0.5s.
+      - name: Self-test the cargo-visible env parser
+        run: bash scripts/check-cargo-profile-env-sync-selftest.sh
 
   clippy:
     runs-on: ubuntu-latest

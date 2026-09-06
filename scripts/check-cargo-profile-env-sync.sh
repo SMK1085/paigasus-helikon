@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Requires bash >= 4.0 (mapfile). On macOS: `brew install bash`.
 # check-cargo-profile-env-sync.sh — assert the cargo-visible environment is
 # uniform across every workflow that uses Swatinem/rust-cache.
 #
@@ -100,7 +101,7 @@ cache_step_env() {
   ' "$1" || true
 }
 
-mapfile -t all_workflows < <(find "${workflow_dir}" -maxdepth 1 -name '*.yml' | sort)
+mapfile -t all_workflows < <(find "${workflow_dir}" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) | sort)
 if [[ "${#all_workflows[@]}" == "0" ]]; then
   echo "error: no workflow files in ${workflow_dir}" >&2
   exit 2
@@ -136,6 +137,23 @@ for f in "${cached[@]}"; do
     problems+=("  ${name}: $(printf '%s' "${env_block}" | tr '\n' ' ')")
   fi
 done
+
+if [[ -z "${baseline}" ]]; then
+  {
+    echo "error: the computed cargo-visible workflow-level env set is empty"
+    echo "across all ${#cached[@]} cache-bearing workflow(s)"
+    echo
+    echo "That is not a state this repository can legitimately reach — every"
+    echo "cache-bearing workflow declares at least CARGO_TERM_COLOR at"
+    echo "workflow level. An empty set almost always means the line-oriented"
+    echo "parser above has stopped matching the real files — most likely a"
+    echo "workflow reformat, or the workflow directory having moved — rather"
+    echo "than the env having actually gone empty. Run"
+    echo "scripts/check-cargo-profile-env-sync-selftest.sh to confirm the"
+    echo "parser still parses."
+  } >&2
+  exit 1
+fi
 
 # --- assertion 2: no job-level, and none on the cache step ----------------
 for f in "${cached[@]}"; do
