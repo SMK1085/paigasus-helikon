@@ -4,7 +4,8 @@
 **Date:** 2026-09-06
 **Related:** SMA-566 (added the guarded net to `openai/chat` and deferred this),
 SMA-550 (introduced the net and the blank-id carve-out in `canonicalize`),
-SMA-533 (the conformance suite), SMA-617 (`responses.rs`, the third implementation)
+SMA-533 (the conformance suite), SMA-617 (`responses.rs`, the third implementation),
+SMA-619 (the residual `blank_emitted` asymmetry this change leaves behind)
 
 ## 0. Acceptance criteria
 
@@ -300,7 +301,7 @@ the stuck blank". litellm's `a_real_id_replaces_a_blank_one_on_the_same_wire_key
 (`stream.rs:1821`) covers only the safe case where nothing has emitted yet.
 
 So line 666 is **retargeted** to name `blank_emitted` as the remaining asymmetry,
-citing the follow-up ticket (§8).
+citing **SMA-619** (§8).
 
 This makes `providers-openai`'s half of the PR comment-only.
 
@@ -360,8 +361,9 @@ Every existing test in both crates, and the conformance suite. Verification that
 - **Porting `blank_emitted` to litellm** (§6) — a distinct defect on a distinct shape
   (blank→real upgrade *after* emission) needing its own test matrix. SMA-566 set the
   precedent by splitting the `responses.rs` equivalent out as SMA-617 rather than
-  absorbing it. **A follow-up ticket is filed and cited from `chat.rs:666`**; this
-  spec does not land the fix.
+  absorbing it. Filed as
+  [SMA-619](https://linear.app/smaschek/issue/SMA-619/litellm-upgrades-a-blank-call-id-after-emission-splitting-one-call)
+  and cited from `chat.rs:666`; this spec does not land the fix.
 - **Scoping `check.rs`'s assertion 7** to non-blank `call_id`s — §4.1 adds the doc
   note only.
 - **The litellm `README.md` `Limitations` section** (`README.md:119-132`) documents
