@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.24...paigasus-helikon-v0.6.0) - 2026-09-07
+
+### Changed
+
+- **[breaking]** *(deps)* SMA-622 the `runtime-temporal` feature now re-exports
+  `paigasus-helikon-runtime-temporal` 0.5.0, which moved the `temporalio-*` family from
+  0.7 to 1.0.0 / `temporalio-sdk-core` 0.9.0. Because that crate exposes
+  `temporalio_client::Client` in its public API, the break propagates through this
+  facade's re-export (`pub use paigasus_helikon_runtime_temporal as runtime_temporal`):
+  users of the `runtime-temporal` feature must move to `temporalio-client` 1.x.
+  Users who do not enable `runtime-temporal` are unaffected.
+
 ## [0.5.24](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.5.23...paigasus-helikon-v0.5.24) - 2026-09-07
 
 ### Other

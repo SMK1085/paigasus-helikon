@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.4.6...paigasus-helikon-runtime-temporal-v0.5.0) - 2026-09-07
+
+### Changed
+
+- **[breaking]** *(deps)* SMA-622 moved the whole `temporalio-*` family from 0.7 to
+  1.0.0 (`temporalio-sdk`, `-client`, `-common`, `-macros`, `-workflow`) plus
+  `temporalio-sdk-core` 0.9.0. The split is not a choice: `temporalio-sdk` 1.0.0
+  declares an **exact** pin `temporalio-sdk-core = "=0.9.0"`, so 0.9.0 is what 1.0.0
+  asks for rather than a crate left behind.
+- **[breaking]** **Consumers must move to `temporalio-client` 1.x.** This crate takes a
+  connected `temporalio_client::Client` in its public API
+  (`TemporalAgentWorkerBuilder::client`, `TemporalRunner::new`), so a downstream still on
+  `temporalio-client = "0.7"` will fail to compile with an opaque type mismatch. This is
+  why the release is a minor bump rather than the patch a plain `chore(deps)` would have
+  produced — a patch is *compatible* within `0.4.x` and would have been picked up
+  silently by `cargo update`.
+- Migrated off the deprecated `Runtime::new_assume_tokio` to `Runtime::from_current_tokio`.
+  Beyond the rename, 1.0 turns a documented panic on "no active Tokio runtime" into a
+  typed `RuntimeError::NoCurrentTokioRuntime`; `WorkerBuildError::Runtime`'s message text
+  changes accordingly. No caller-visible control-flow change — `build()` already returned
+  a `Result`.
+
+### Upgrade notes
+
+- **Activity input encoding is still not a replay hazard.** Re-verified against
+  `temporalio-sdk-core-0.9.0`: `on_activity_task_scheduled` is byte-identical to the 0.7.0
+  body and still compares only an activity's `id` and `type`, never its payloads.
+  Activity and workflow *type name* derivations are unchanged too, so registered names are
+  stable across this bump. (Supersedes the "Verified against `temporalio-* = 0.5.0`" note
+  under 0.3.0; the standing obligation is recorded in the crate docs.)
+- **A mixed 0.7/1.0 worker fleet is not proven safe.** Nothing in CI replays a
+  0.7-written history on a 1.0 worker — the integration suite starts a fresh server, so it
+  only ever replays its own 1.0 histories. Prefer draining in-flight runs across this
+  upgrade, or use a blue-green task queue.
+- No payload wire-format change affects this crate. 1.0 added a `WellKnownType` encoding
+  that sends top-level `Vec<u8>` as `binary/plain` rather than JSON; every type this crate
+  puts on the wire resolves to `None` under it. The one `Vec<u8>` is an empty
+  `record_heartbeat` payload that is never read back.
+- No MSRV change: `temporalio-sdk` 1.0.0 declares a `1.92.0` floor, below the workspace's
+  `1.94`.
+
 ## [0.4.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.4.5...paigasus-helikon-runtime-temporal-v0.4.6) - 2026-09-06
 
 ### Other
