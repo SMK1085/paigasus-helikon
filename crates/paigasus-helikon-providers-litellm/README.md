@@ -130,6 +130,16 @@ recorded test fixtures or request logs.
   recoverable: a backend that emits a further name fragment *after* arguments
   have already begun. That fragment is dropped and logged at `warn`, because the
   name-carrying event has already been yielded downstream.
+- **A blank tool-call `id` becomes the call's identity once anything is
+  emitted under it.** LiteLLM backends may send `"id": ""` on a call's first
+  delta and a real id later. If nothing has been emitted yet, the real id
+  replaces the blank one and the call arrives under it. If the first delta
+  also carried `arguments`, a `ToolCallDelta` has already gone out under
+  `""` — the real id is then discarded and logged at `warn`, and the whole
+  call is delivered under `call_id: ""`. Upgrading after the fact would split
+  one call across two ids and leave the real one with no name, which is worse:
+  an agent loop can see that `""` is unusable, but cannot see that two ids are
+  really one call.
 
 ## Links
 
