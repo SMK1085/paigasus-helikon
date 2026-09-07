@@ -134,6 +134,25 @@ pub(crate) struct ChatTranslator {
     /// backend that sends `"id": ""` on every delta warns once per call
     /// rather than once per chunk.
     warned_blank_id: HashSet<Key>,
+    /// Wire keys that have already emitted a `ToolCallDelta` while their
+    /// `call_id` was still blank.
+    ///
+    /// Gates the blank-id replacement rule in [`Self::handle_tool_call`].
+    /// Once a delta has gone out under `""`, upgrading the key to a real id
+    /// would split one call across two `call_id`s and leave the real one with
+    /// zero name-carrying deltas — an "exactly once" violation on a
+    /// *non-blank* id, which is worse than the stuck blank that rule exists
+    /// to fix (SMA-619). `providers-openai`'s chat translator carries the
+    /// same gate (SMA-566).
+    ///
+    /// Structurally `Key::Index`-only: a `Key::Id` is minted only from a
+    /// non-blank id, so no `Key::Id` ever resolves to a blank `call_id`.
+    /// `Key` is used anyway for type-fit with the maps beside it.
+    blank_emitted: HashSet<Key>,
+    /// Keys for which the withheld-upgrade warning has already fired, so a
+    /// backend that repeats the real id on every delta warns once per call
+    /// rather than once per chunk.
+    warned_withheld_upgrade: HashSet<Key>,
     /// The most recent `finish_reason` observed, buffered until [`Self::finish`].
     finish_reason: Option<String>,
     /// Whether the multi-choice warning has already fired for this stream.
@@ -150,6 +169,8 @@ impl ChatTranslator {
             pending: HashMap::new(),
             next_seq: 0,
             warned_blank_id: HashSet::new(),
+            blank_emitted: HashSet::new(),
+            warned_withheld_upgrade: HashSet::new(),
             finish_reason: None,
             warned_multi_choice: false,
         }
@@ -429,6 +450,10 @@ impl ChatTranslator {
             .and_then(|f| f.arguments.as_deref())
             .unwrap_or("");
 
+        // Captured before the match so the guard below reads a plain `bool`
+        // rather than borrowing `self` while `tool_calls` is borrowed mutably.
+        let blank_already_emitted = self.blank_emitted.contains(&key);
+
         if let Some(id) = tc.id.as_deref() {
             match self.tool_calls.get_mut(&key) {
                 // First id wins, so a backend that changes a call's id
@@ -439,8 +464,39 @@ impl ChatTranslator {
                 // replace it — otherwise the blank sticks and the call reaches
                 // the consumer under an empty `call_id` even though the backend
                 // eventually supplied a real one.
-                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                //
+                // The upgrade is withheld once this key has already emitted a
+                // delta under the blank id. Replacing then would split one call
+                // across two `call_id`s: the name would have gone out under
+                // `""` and every later delta under the real id, leaving the
+                // real id with zero name-carrying deltas. That is an "exactly
+                // once" violation on a *non-blank* `call_id` — worse than the
+                // stuck blank, and one the pre-SMA-619 translator did not have.
+                // Keeping the blank keeps the call whole (SMA-619).
+                Some(existing)
+                    if existing.is_empty() && !id.is_empty() && !blank_already_emitted =>
+                {
                     *existing = id.to_owned();
+                }
+                // Reached only when `blank_already_emitted` blocked the arm
+                // above. Warned rather than absorbed into the no-op arm below:
+                // this discards a real `call_id` the backend supplied, and the
+                // decision to keep the blank is only defensible if it is
+                // visible. `canonicalize`'s blank-id warning does not cover it
+                // — that one fires on the first delta, before this id was ever
+                // seen, and never names it.
+                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                    if self.warned_withheld_upgrade.insert(key.clone()) {
+                        tracing::warn!(
+                            target: "paigasus::litellm::stream",
+                            ?key,
+                            discarded_id = %id,
+                            "a real tool-call id arrived after this key already emitted \
+                             under a blank id; withholding the upgrade so the call is \
+                             not split across two call_ids. The call reaches the \
+                             consumer under an empty call_id"
+                        );
+                    }
                 }
                 Some(_) => {}
                 None => {
@@ -539,6 +595,22 @@ impl ChatTranslator {
 
         if emit_name.is_none() && args.is_empty() {
             return;
+        }
+
+        // Record that this key has emitted under a blank id, so the
+        // replacement rule above cannot later split the call in two.
+        //
+        // Placement after the early return is load-bearing: a delta that
+        // emits nothing has published the blank id to nobody, so it must not
+        // close the upgrade window. Pinned by
+        // `a_real_id_replaces_a_blank_one_on_the_same_wire_key`, whose first
+        // delta emits nothing and whose upgrade must still be allowed.
+        if call_id.is_empty() {
+            debug_assert!(
+                matches!(key, Key::Index(_)),
+                "a blank call_id is only reachable under an Index key"
+            );
+            self.blank_emitted.insert(key);
         }
 
         out.push(ModelEvent::ToolCallDelta {
