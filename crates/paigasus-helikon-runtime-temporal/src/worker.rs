@@ -292,10 +292,15 @@ impl TemporalAgentWorker {
 
     /// Serve the task queue until shutdown.
     ///
-    /// Polls **both** workflow and activity tasks (`build()` registers the
-    /// durable agent-loop workflow and sets `WorkerTaskTypes::all()`): it
-    /// drives durable runs started by [`crate::runner::TemporalRunner`] and
-    /// executes their activities.
+    /// Polls **both** workflow and activity tasks: `build()` registers the durable
+    /// agent-loop workflow plus the activities, and the SDK derives the task types
+    /// from what is registered (workflows + local + remote activities, with
+    /// `enable_nexus: false`). It drives durable runs started by
+    /// [`crate::runner::TemporalRunner`] and executes their activities.
+    ///
+    /// This deliberately no longer says `WorkerTaskTypes::all()` — that builder method
+    /// was removed upstream and `all()` additionally set `enable_nexus`, which this
+    /// worker never used. See the derivation note in `build()`.
     pub async fn run(self) -> Result<(), WorkerRunError> {
         let mut worker = self;
         worker

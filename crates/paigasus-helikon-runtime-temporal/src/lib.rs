@@ -331,12 +331,26 @@
 //!
 //! **Activity input encoding is not a replay hazard.** Temporal's replay check compares an
 //! activity's **id** and **type** only — never its input payloads
-//! (`temporalio-sdk-core-0.7.0`, `activity_state_machine.rs`, the
+//! (`temporalio-sdk-core-0.9.0`, `activity_state_machine.rs`, the
 //! `IdAndTypeDeterminismChecks` gate). Changing how an activity's arguments are encoded
 //! therefore cannot trip the non-determinism checker; *renaming* an activity would. This
-//! statement is pinned to `temporalio-* = 0.7.0` and must be re-verified on any SDK bump.
-//! (Re-verified for 0.7 in SMA-549: `on_activity_task_scheduled` still compares only
-//! `act_id`/`activity_id` and `act_type`/`activity_type`, never payloads.)
+//! statement is pinned to `temporalio-* = 1.0.0` / `temporalio-sdk-core = 0.9.0` and must
+//! be re-verified on any SDK bump.
+//! (Re-verified for 1.0 in SMA-622: `on_activity_task_scheduled` in
+//! `temporalio-sdk-core-0.9.0` is byte-identical to the 0.7.0 body and still compares only
+//! `act_id`/`activity_id` and `act_type`/`activity_type`, never payloads. Activity and
+//! workflow *type names* are derived unchanged as well
+//! (`temporalio-macros-1.0.0/src/activities_definitions.rs:548`,
+//! `workflow_definitions.rs:644-647`), so registered names are stable across the bump —
+//! which is what makes this guarantee useful rather than merely true.
+//! Previously re-verified for 0.7 in SMA-549.)
+//!
+//! **A mixed 0.7/1.0 worker fleet is not proven safe.** The two properties above are
+//! established: input encoding is not a replay hazard, and activity/workflow type names
+//! do not move. Beyond them, nothing in CI exercises a 1.0 worker replaying a history
+//! written by a 0.7 worker — `temporal-it` starts a fresh server, so it only ever replays
+//! its own 1.0 histories. Prefer draining in-flight runs across this upgrade, or use a
+//! blue-green task queue, exactly as for the 0.5.0 envelope change below.
 //!
 //! **SMA-484 wire change (activity inputs are envelope-only as of 0.3.0).** Each of
 //! `render_instructions` / `call_model` / `invoke_tool` takes one self-describing JSON-object
