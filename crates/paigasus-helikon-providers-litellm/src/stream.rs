@@ -2266,4 +2266,84 @@ mod tests {
             "keeping the call whole is what makes the arguments parse at all"
         );
     }
+
+    /// Two parallel blank-id calls whose real ids arrive after both emitted
+    /// stay merged at the accumulator. Accepted, not overlooked.
+    ///
+    /// The tie-break in SMA-619 is argued for one call: keeping the blank
+    /// keeps the call whole. For two it cuts the other way — both upgrades
+    /// are withheld, so all four deltas carry `""` and `ModelTurnAccumulator`
+    /// folds them into a single item, where ungated they would have separated
+    /// into `c1` and `c2`.
+    ///
+    /// This is accepted for three reasons. The translator's obligation is at
+    /// the event layer and is still met: two name-carrying deltas go out,
+    /// `alpha` and `beta`, exactly as SMA-616 requires and as
+    /// `blank_ids_do_not_collapse_distinct_calls` asserts. The merge happens
+    /// in `ModelTurnAccumulator`, which core documents as deliberately
+    /// merging blank-id calls first-name-wins — behaviour this ticket does
+    /// not change, only reaches more often. And `openai/chat` has carried the
+    /// identical trade since SMA-566, so declining it here would reopen the
+    /// asymmetry SMA-619 exists to close.
+    ///
+    /// The withheld-upgrade `warn!` fires twice here, once per key, which is
+    /// what makes the merge diagnosable at all.
+    ///
+    /// The fixture is three chunks so that the trade is isolated rather than
+    /// conflated. The two calls must emit *before* their real ids arrive, or
+    /// the gate never engages — but if they emit arguments, those arguments
+    /// merge under `""` and fail the turn on their own, pre-fix and post-fix
+    /// alike, which would prove nothing about this gate. So chunk 1 buffers
+    /// two names, chunk 2 is a bare completion signal that flushes both under
+    /// `""` with no arguments at all, and only chunk 3 carries arguments.
+    /// Pre-fix that yields three parsing items — `("", "alpha", {})` plus a
+    /// nameless `c1` and `c2`; post-fix the gate keeps everything under `""`,
+    /// the two argument objects concatenate into `{"p":1}{"q":2}`, and the
+    /// turn fails.
+    ///
+    /// That regression is accepted on the same grounds as
+    /// `a_real_id_does_not_replace_a_blank_one_after_the_key_emitted`: the
+    /// pre-fix `Ok` is three junk items, two of them nameless and one under
+    /// an unsubmittable `""`, and a loud failure beats dispatching those.
+    #[test]
+    fn withheld_upgrades_keep_parallel_blank_calls_merged() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                // Buffers two names; emits nothing (no completion signal yet).
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"name": "alpha"}},
+                    {"index": 1, "id": "", "function": {"name": "beta"}}
+                ])),
+                // No name fragment = the name is complete. Flushes both under
+                // "" with empty args, which is what arms the gate.
+                tc_chunk(serde_json::json!([{"index": 0}, {"index": 1}])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"arguments": "{\"p\":1}"}},
+                    {"index": 1, "id": "c2", "function": {"arguments": "{\"q\":2}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "the event-layer rule holds: two blank-id calls, two names"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "the withheld upgrade keeps every delta off the real id"
+        );
+        assert_eq!(args_of(&evs, "c2"), "", "and off the second real id");
+        assert!(
+            accumulated(&evs).is_err(),
+            "the accumulator merges blank call_ids, so two parallel calls' \
+             arguments concatenate into invalid JSON and the turn fails — the \
+             accepted cost of the gate for N>1 (SMA-619 §2.2)"
+        );
+    }
 }
