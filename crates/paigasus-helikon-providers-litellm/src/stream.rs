@@ -715,7 +715,9 @@ impl ChatTranslator {
             // mid-stream emit site: `finish` is terminal, so no replacement
             // arm can run after this point. Inert even under the double
             // `finish()` that `finish_is_idempotent_after_draining` drives,
-            // because the first call drains `pending`.
+            // because the first call records the key in `name_emitted`, which
+            // the guard at the top of this loop short-circuits on — `pending`
+            // itself is not drained, only `slot.name` is taken.
             out.push(ModelEvent::ToolCallDelta {
                 call_id,
                 name: Some(name),
@@ -2220,9 +2222,22 @@ mod tests {
     /// delta closes the upgrade window.
     ///
     /// This is the shape real backends actually send — arguments fragment as
-    /// a partial JSON string — and it is the one where the fix improves the
-    /// end-to-end outcome, taking `ModelTurnAccumulator::finish()` from `Err`
-    /// to `Ok`.
+    /// a partial JSON string — and *where they genuinely fragment*, as they
+    /// do here (`{"a":` then `1}`), it is the shape on which the fix
+    /// improves the end-to-end outcome, taking
+    /// `ModelTurnAccumulator::finish()` from `Err` to `Ok`.
+    ///
+    /// That qualification is load-bearing, not hedging. The `Err` → `Ok`
+    /// direction follows from the arguments being two halves of one document,
+    /// not from the delta ordering: on the identical ordering with a
+    /// *complete* JSON document on each delta the fix runs the other way,
+    /// `Ok` → `Err`. That is reachable — `core/src/model.rs:527-531` records
+    /// that OpenAI streaming legitimately emits an empty `arguments` delta for
+    /// a zero-parameter tool call, and some backends repeat the complete
+    /// value on every delta, the arguments analogue of the repeat-the-whole-
+    /// name quirk the `slot.name != name_frag` guard already defends against.
+    /// Pinned by `complete_args_on_both_deltas_fail_the_turn_when_withheld`
+    /// (SMA-619 §1.4, §3.7).
     ///
     /// Confirmed to FAIL against the translator as it stood on `main` before
     /// SMA-619, on all three event assertions: it emits
@@ -2264,6 +2279,73 @@ mod tests {
                 serde_json::json!({"a": 1})
             )]),
             "keeping the call whole is what makes the arguments parse at all"
+        );
+    }
+
+    /// The same delta ordering as `the_gate_fires_on_an_args_only_emission`,
+    /// but with a *complete* JSON document on each delta rather than two
+    /// halves of one — and here the gate takes the turn from `Ok` to `Err`.
+    ///
+    /// Pre-fix this shape produced `Ok`, and unlike SMA-619 §1.4's marker
+    /// shape it produced a properly named tool call under a real,
+    /// submittable `call_id`: the translator emitted `("", None, "{}")` then
+    /// `("c1", Some("alpha"), "{}")`, so the accumulator yielded
+    /// `("c1", "alpha", {})`. Post-fix the upgrade is withheld, both deltas
+    /// land under `""`, the joined arguments are `"{}{}"`, and the whole turn
+    /// fails — assistant text included.
+    ///
+    /// It is reachable rather than synthetic. `core/src/model.rs:527-531`
+    /// notes that OpenAI streaming legitimately emits an empty `arguments`
+    /// delta for a zero-parameter tool call, and a backend that repeats the
+    /// complete arguments on every delta — the arguments analogue of the
+    /// repeat-the-whole-name quirk `handle_tool_call` already defends against
+    /// — produces exactly this.
+    ///
+    /// Accepted anyway. The pre-fix `Ok` was never one clean call: alongside
+    /// `("c1", "alpha", {})` it also carried a junk item under `""` with an
+    /// empty `name`, which `build_items` constructs unconditionally
+    /// (`core/src/model.rs:545-549`) and `loop_state.rs:325-335` dispatches as
+    /// a tool named `""` with no validation at all. So the pre-fix outcome is
+    /// one good call plus one unvalidated dispatch of a nameless tool, and the
+    /// post-fix outcome is a loud failure. Narrowing the gate to
+    /// name-carrying emissions would rescue this shape and is rejected for the
+    /// reason recorded in SMA-619 §3.6: it would trade this arguments-loss
+    /// corruption straight back for the name-loss one, since the args-only
+    /// ordering tears the arguments across two `call_id`s in exactly the same
+    /// way. One rule covers both — any published delta closes the window.
+    #[test]
+    fn complete_args_on_both_deltas_fail_the_turn_when_withheld() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"arguments": "{}"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "alpha", "arguments": "{}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![(String::new(), "alpha".to_owned())],
+            "the name arrives under the blank id the call was published with"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "no delta may arrive under the real id"
+        );
+        assert_eq!(
+            args_of(&evs, ""),
+            "{}{}",
+            "both complete documents stay under the one call_id"
+        );
+        assert!(
+            accumulated(&evs).is_err(),
+            "two complete JSON documents cannot be joined; the turn fails where \
+             pre-fix it succeeded into a named `c1` call plus a nameless `\"\"` one"
         );
     }
 
@@ -2345,5 +2427,116 @@ mod tests {
              arguments concatenate into invalid JSON and the turn fails — the \
              accepted cost of the gate for N>1 (SMA-619 §2.2)"
         );
+    }
+
+    /// Pins the withheld-upgrade `warn!` itself.
+    ///
+    /// SMA-619 acceptance criterion 7 makes the warn a requirement rather
+    /// than a nicety, and §2.1 explains why: the whole loud-versus-silent
+    /// tie-break — keep the call whole under `""` rather than split it across
+    /// two ids — rests on the discarded real id being visible somewhere.
+    /// Nothing downstream supplies that visibility. `build_items` constructs
+    /// `Item::ToolCall { call_id: "", .. }` unconditionally
+    /// (`core/src/model.rs:545-549`) and `loop_state.rs:325-335` dispatches it
+    /// without checking, and `canonicalize`'s own blank-id warning fires on
+    /// the first delta, before the real id was ever seen, and never names it.
+    /// So this warn is the only place the trade becomes diagnosable.
+    ///
+    /// Without a test here, both warn arms collapse back into
+    /// `Some(_) => {}` with every other test in this module still green.
+    mod withheld_upgrade_warn {
+        use std::sync::{Arc, Mutex};
+
+        use tracing::field::{Field, Visit};
+        use tracing::subscriber::with_default;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::LookupSpan;
+
+        use super::{drive, named, tc_chunk, ChatTranslator};
+
+        /// Renders every field of one event as `name=value;`.
+        struct FieldSink(String);
+
+        impl Visit for FieldSink {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write as _;
+                let _ = write!(self.0, "{}={:?};", field.name(), value);
+            }
+        }
+
+        /// Records `(target, rendered fields)` for every WARN-or-above event.
+        ///
+        /// Filtering in `enabled` rather than in `on_event` keeps unrelated
+        /// `debug!`/`trace!` calls on this code path out of the capture
+        /// entirely, so an unrelated log addition cannot make this test fail.
+        #[derive(Clone, Default)]
+        struct WarnCapture(Arc<Mutex<Vec<(String, String)>>>);
+
+        impl<S: tracing::Subscriber + for<'l> LookupSpan<'l>> Layer<S> for WarnCapture {
+            fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: Context<'_, S>) -> bool {
+                *metadata.level() <= tracing::Level::WARN
+            }
+
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                let mut sink = FieldSink(String::new());
+                event.record(&mut sink);
+                self.0
+                    .lock()
+                    .expect("capture mutex")
+                    .push((event.metadata().target().to_owned(), sink.0));
+            }
+        }
+
+        #[test]
+        fn a_withheld_upgrade_warns_once_naming_the_discarded_id() {
+            let capture = WarnCapture::default();
+            let subscriber = tracing_subscriber::registry().with(capture.clone());
+
+            with_default(subscriber, || {
+                let mut t = ChatTranslator::new();
+                let evs = drive(
+                    &mut t,
+                    vec![
+                        tc_chunk(serde_json::json!([
+                            {"index": 0, "id": "", "function": {"name": "alpha", "arguments": "{}"}}
+                        ])),
+                        tc_chunk(serde_json::json!([
+                            {"index": 0, "id": "c1", "function": {"arguments": "[]"}}
+                        ])),
+                        // The same real id again: a backend that repeats it on
+                        // every delta must not warn once per chunk.
+                        tc_chunk(serde_json::json!([
+                            {"index": 0, "id": "c1", "function": {"arguments": "[]"}}
+                        ])),
+                    ],
+                );
+                assert_eq!(
+                    named(&evs),
+                    vec![(String::new(), "alpha".to_owned())],
+                    "guard: the fixture must actually withhold the upgrade"
+                );
+            });
+
+            let events = capture.0.lock().expect("capture mutex").clone();
+            let withheld: Vec<&(String, String)> = events
+                .iter()
+                .filter(|(_, fields)| fields.contains("discarded_id="))
+                .collect();
+            assert_eq!(
+                withheld.len(),
+                1,
+                "the withheld upgrade must warn exactly once per key, even \
+                 though the real id arrived on two deltas; captured: {events:?}"
+            );
+            assert_eq!(
+                withheld[0].0, "paigasus::litellm::stream",
+                "the warn must land on this module's declared target"
+            );
+            assert!(
+                withheld[0].1.contains("discarded_id=c1"),
+                "the warn must name the real call_id it discarded; got {:?}",
+                withheld[0].1
+            );
+        }
     }
 }
