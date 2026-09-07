@@ -285,6 +285,10 @@ pub(crate) struct ChatTranslator {
     /// deltas — an "exactly once" violation on a *non-blank* id, which is
     /// worse than the stuck blank this rule exists to fix (SMA-566).
     blank_emitted: HashSet<u32>,
+    /// Wire indices for which the withheld-upgrade warning has already fired,
+    /// so a backend that repeats the real id on every delta warns once per
+    /// call rather than once per chunk.
+    warned_withheld_upgrade: HashSet<u32>,
     /// index → buffered name/args.
     ///
     /// `args` is drain-once: taken on the first delta after the call_id is
@@ -308,6 +312,7 @@ impl ChatTranslator {
             warned_late_name: HashSet::new(),
             warned_blank_id: HashSet::new(),
             blank_emitted: HashSet::new(),
+            warned_withheld_upgrade: HashSet::new(),
             pending: HashMap::new(),
             next_seq: 0,
             finish_reason: None,
@@ -660,12 +665,20 @@ impl ChatTranslator {
     /// key is what lets `flush_buffered_names` go on sorting by the model's
     /// declared call position rather than by a synthetic creation counter.
     ///
-    /// The one remaining asymmetry is deliberate and ticketed: this crate
-    /// gates the blank→real `call_id` upgrade on `blank_emitted`, so a call
-    /// that has already emitted under `""` keeps the blank rather than
-    /// splitting across two ids; litellm upgrades unconditionally (SMA-619).
-    /// The end-of-stream dedup net is no longer asymmetric — both crates
-    /// exempt blank `call_id`s from it (SMA-616).
+    /// Both chat translators gate the blank→real `call_id` upgrade on
+    /// `blank_emitted`, so a call that has already emitted under `""` keeps
+    /// the blank rather than splitting across two ids (SMA-566 here, SMA-619
+    /// in litellm), and both warn once when an upgrade is withheld. The
+    /// end-of-stream dedup net is likewise symmetric — both exempt blank
+    /// `call_id`s from it (SMA-616). No *gating* asymmetry remains.
+    ///
+    /// Two divergences survive and are deliberate. litellm's `index` is
+    /// optional, so its two key spaces admit a cross-key-space split — a
+    /// blank-id delta keyed by index followed by an index-less delta keyed by
+    /// id — that this crate cannot express at all, `index` being a required
+    /// `u32`; unticketed and left as-is. And this crate's sibling `responses`
+    /// translator has no blank-id handling whatsoever; its own name-dedup
+    /// defect is open as SMA-617.
     fn handle_tool_call_chunk(
         &mut self,
         tc: &ChatCompletionMessageToolCallChunk,
@@ -713,6 +726,26 @@ impl ChatTranslator {
                     if existing.is_empty() && !id.is_empty() && !blank_already_emitted =>
                 {
                     *existing = id.to_owned();
+                }
+                // Reached only when `blank_already_emitted` blocked the arm
+                // above. Warned rather than absorbed into the no-op arm below:
+                // this discards a real `call_id` the backend supplied, and the
+                // decision to keep the blank is only defensible if it is
+                // visible. `canonicalize`'s blank-id warning does not cover it
+                // — that one fires on the first delta, before this id was ever
+                // seen, and never names it (SMA-619).
+                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                    if self.warned_withheld_upgrade.insert(index) {
+                        tracing::warn!(
+                            target: "paigasus::openai::chat",
+                            index,
+                            discarded_id = %id,
+                            "a real tool-call id arrived after this index already emitted \
+                             under a blank id; withholding the upgrade so the call is \
+                             not split across two call_ids. The call reaches the \
+                             consumer under an empty call_id"
+                        );
+                    }
                 }
                 Some(_) => {}
                 None => {
