@@ -134,6 +134,25 @@ pub(crate) struct ChatTranslator {
     /// backend that sends `"id": ""` on every delta warns once per call
     /// rather than once per chunk.
     warned_blank_id: HashSet<Key>,
+    /// Wire keys that have already emitted a `ToolCallDelta` while their
+    /// `call_id` was still blank.
+    ///
+    /// Gates the blank-id replacement rule in [`Self::handle_tool_call`].
+    /// Once a delta has gone out under `""`, upgrading the key to a real id
+    /// would split one call across two `call_id`s and leave the real one with
+    /// zero name-carrying deltas — an "exactly once" violation on a
+    /// *non-blank* id, which is worse than the stuck blank that rule exists
+    /// to fix (SMA-619). `providers-openai`'s chat translator carries the
+    /// same gate (SMA-566).
+    ///
+    /// Structurally `Key::Index`-only: a `Key::Id` is minted only from a
+    /// non-blank id, so no `Key::Id` ever resolves to a blank `call_id`.
+    /// `Key` is used anyway for type-fit with the maps beside it.
+    blank_emitted: HashSet<Key>,
+    /// Keys for which the withheld-upgrade warning has already fired, so a
+    /// backend that repeats the real id on every delta warns once per call
+    /// rather than once per chunk.
+    warned_withheld_upgrade: HashSet<Key>,
     /// The most recent `finish_reason` observed, buffered until [`Self::finish`].
     finish_reason: Option<String>,
     /// Whether the multi-choice warning has already fired for this stream.
@@ -150,6 +169,8 @@ impl ChatTranslator {
             pending: HashMap::new(),
             next_seq: 0,
             warned_blank_id: HashSet::new(),
+            blank_emitted: HashSet::new(),
+            warned_withheld_upgrade: HashSet::new(),
             finish_reason: None,
             warned_multi_choice: false,
         }
@@ -429,6 +450,10 @@ impl ChatTranslator {
             .and_then(|f| f.arguments.as_deref())
             .unwrap_or("");
 
+        // Captured before the match so the guard below reads a plain `bool`
+        // rather than borrowing `self` while `tool_calls` is borrowed mutably.
+        let blank_already_emitted = self.blank_emitted.contains(&key);
+
         if let Some(id) = tc.id.as_deref() {
             match self.tool_calls.get_mut(&key) {
                 // First id wins, so a backend that changes a call's id
@@ -439,8 +464,39 @@ impl ChatTranslator {
                 // replace it — otherwise the blank sticks and the call reaches
                 // the consumer under an empty `call_id` even though the backend
                 // eventually supplied a real one.
-                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                //
+                // The upgrade is withheld once this key has already emitted a
+                // delta under the blank id. Replacing then would split one call
+                // across two `call_id`s: the name would have gone out under
+                // `""` and every later delta under the real id, leaving the
+                // real id with zero name-carrying deltas. That is an "exactly
+                // once" violation on a *non-blank* `call_id` — worse than the
+                // stuck blank, and one the pre-SMA-619 translator did not have.
+                // Keeping the blank keeps the call whole (SMA-619).
+                Some(existing)
+                    if existing.is_empty() && !id.is_empty() && !blank_already_emitted =>
+                {
                     *existing = id.to_owned();
+                }
+                // Reached only when `blank_already_emitted` blocked the arm
+                // above. Warned rather than absorbed into the no-op arm below:
+                // this discards a real `call_id` the backend supplied, and the
+                // decision to keep the blank is only defensible if it is
+                // visible. `canonicalize`'s blank-id warning does not cover it
+                // — that one fires on the first delta, before this id was ever
+                // seen, and never names it.
+                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                    if self.warned_withheld_upgrade.insert(key.clone()) {
+                        tracing::warn!(
+                            target: "paigasus::litellm::stream",
+                            ?key,
+                            discarded_id = %id,
+                            "a real tool-call id arrived after this key already emitted \
+                             under a blank id; withholding the upgrade so the call is \
+                             not split across two call_ids. The call reaches the \
+                             consumer under an empty call_id"
+                        );
+                    }
                 }
                 Some(_) => {}
                 None => {
@@ -541,6 +597,22 @@ impl ChatTranslator {
             return;
         }
 
+        // Record that this key has emitted under a blank id, so the
+        // replacement rule above cannot later split the call in two.
+        //
+        // Placement after the early return is load-bearing: a delta that
+        // emits nothing has published the blank id to nobody, so it must not
+        // close the upgrade window. Pinned by
+        // `a_real_id_replaces_a_blank_one_on_the_same_wire_key`, whose first
+        // delta emits nothing and whose upgrade must still be allowed.
+        if call_id.is_empty() {
+            debug_assert!(
+                matches!(key, Key::Index(_)),
+                "a blank call_id is only reachable under an Index key"
+            );
+            self.blank_emitted.insert(key);
+        }
+
         out.push(ModelEvent::ToolCallDelta {
             call_id,
             name: emit_name,
@@ -639,6 +711,13 @@ impl ChatTranslator {
             }
             let name = std::mem::take(&mut slot.name);
             self.name_emitted.insert(key, name.clone());
+            // Deliberately does not record into `blank_emitted`, unlike the
+            // mid-stream emit site: `finish` is terminal, so no replacement
+            // arm can run after this point. Inert even under the double
+            // `finish()` that `finish_is_idempotent_after_draining` drives,
+            // because the first call records the key in `name_emitted`, which
+            // the guard at the top of this loop short-circuits on — `pending`
+            // itself is not drained, only `slot.name` is taken.
             out.push(ModelEvent::ToolCallDelta {
                 call_id,
                 name: Some(name),
@@ -756,6 +835,37 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Reassemble the events through `ModelTurnAccumulator` and return each
+    /// resulting `Item::ToolCall` as `(call_id, name, args)`, or the error
+    /// string the turn failed with.
+    ///
+    /// Several assertions in this module decide a trade-off that is only
+    /// visible one layer up. The accumulator groups by `call_id` and parses
+    /// each group's joined `args_delta`s exactly once, so a translator that
+    /// merges two `call_id`s concatenates two argument strings that were
+    /// never adjacent — and a parse failure there discards the whole turn,
+    /// assistant text included. Asserting only on `named`/`args_of` hides
+    /// that entirely (SMA-619 §1.4).
+    fn accumulated(evs: &[ModelEvent]) -> Result<Vec<(String, String, serde_json::Value)>, String> {
+        let mut acc = paigasus_helikon_core::ModelTurnAccumulator::new("test-agent");
+        for e in evs {
+            acc.observe(e);
+        }
+        Ok(acc
+            .finish()?
+            .items
+            .into_iter()
+            .filter_map(|i| match i {
+                paigasus_helikon_core::Item::ToolCall {
+                    call_id,
+                    name,
+                    args,
+                } => Some((call_id, name, args)),
+                _ => None,
+            })
+            .collect())
     }
 
     fn texts(evs: &[ModelEvent]) -> Vec<String> {
@@ -2035,5 +2145,356 @@ mod tests {
             ],
             "a blank id is not an identity, so it must not become the wire key"
         );
+    }
+
+    /// A real `id` arriving after this wire key already emitted under a blank
+    /// one must NOT win — the call would be split across two `call_id`s.
+    ///
+    /// `canonicalize` treats a blank id as "no identity yet", so the
+    /// registration arm lets a real id replace it
+    /// (`a_real_id_replaces_a_blank_one_on_the_same_wire_key`). That rule is
+    /// right up until a delta has gone out under `""`, and wrong from that
+    /// moment on: the name has already been published under the blank id, so
+    /// upgrading leaves the real id carrying zero name-carrying deltas. That
+    /// is an "exactly once" violation on an id that *can* identify, which is
+    /// strictly worse than the stuck blank the rule exists to fix.
+    ///
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-619, which emits `("", Some("alpha"), "{}")` then
+    /// `("c1", None, "[]")` — so `named` passes while `args_of("c1") == "[]"`
+    /// and `args_of("") == "{}"` both fail.
+    ///
+    /// The accumulator assertion records a deliberate trade (SMA-619 §1.4).
+    /// `"{}"` followed by `"[]"` is not a fragmentation of anything — it is
+    /// two complete JSON documents, and no LiteLLM backend emits it; it is
+    /// the marker shape this ticket chose to make the split visible. Keeping
+    /// the call whole necessarily joins them into `"{}[]"`, which does not
+    /// parse, so the turn now fails loudly where it previously "succeeded"
+    /// into two junk items — one named `alpha` under an unsubmittable `""`,
+    /// one with an empty name under `c1`. On the shape backends actually send
+    /// the fix runs the other way; see `the_gate_fires_on_an_args_only_emission`.
+    #[test]
+    fn a_real_id_does_not_replace_a_blank_one_after_the_key_emitted() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"name": "alpha", "arguments": "{}"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"arguments": "[]"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![(String::new(), "alpha".to_owned())],
+            "the name stays under the blank id it was emitted with"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "no delta may arrive under the real id, or it would carry no name"
+        );
+        assert_eq!(
+            args_of(&evs, ""),
+            "{}[]",
+            "every delta for this call stays under the one call_id"
+        );
+        assert!(
+            accumulated(&evs).is_err(),
+            "joining two complete JSON documents cannot parse; the turn fails \
+             loudly rather than splitting into two junk items"
+        );
+    }
+
+    /// The gate fires on ANY emission under a blank id, not only a
+    /// name-carrying one.
+    ///
+    /// This looks like a simplification opportunity and is not. Here the
+    /// first delta carries only `arguments`, so nothing name-carrying has
+    /// been published when the real id arrives — yet an ungated upgrade still
+    /// tears the arguments JSON across two `call_id`s, leaving `"{\"a\":"`
+    /// under `""` and `"1}"` under `"c1"`, neither of which parses. Narrowing
+    /// the gate to name-carrying emissions would trade a name-loss corruption
+    /// for an arguments-loss corruption. One rule covers both: any published
+    /// delta closes the upgrade window.
+    ///
+    /// This is the shape real backends actually send — arguments fragment as
+    /// a partial JSON string — and *where they genuinely fragment*, as they
+    /// do here (`{"a":` then `1}`), it is the shape on which the fix
+    /// improves the end-to-end outcome, taking
+    /// `ModelTurnAccumulator::finish()` from `Err` to `Ok`.
+    ///
+    /// That qualification is load-bearing, not hedging. The `Err` → `Ok`
+    /// direction follows from the arguments being two halves of one document,
+    /// not from the delta ordering: on the identical ordering with a
+    /// *complete* JSON document on each delta the fix runs the other way,
+    /// `Ok` → `Err`. That is reachable — `core/src/model.rs:531-533` records
+    /// that OpenAI streaming legitimately emits an empty `arguments` delta for
+    /// a zero-parameter tool call, and some backends repeat the complete
+    /// value on every delta, the arguments analogue of the repeat-the-whole-
+    /// name quirk the `slot.name != name_frag` guard already defends against.
+    /// Pinned by `complete_args_on_both_deltas_fail_the_turn_when_withheld`
+    /// (SMA-619 §1.4, §3.7).
+    ///
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-619, on all three event assertions: it emits
+    /// `("", None, "{\"a\":")` then `("c1", Some("alpha"), "1}")`.
+    #[test]
+    fn the_gate_fires_on_an_args_only_emission() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"arguments": "{\"a\":"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "alpha", "arguments": "1}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![(String::new(), "alpha".to_owned())],
+            "the name arrives under the blank id the call was published with"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "no delta may arrive under the real id"
+        );
+        assert_eq!(
+            args_of(&evs, ""),
+            "{\"a\":1}",
+            "both argument fragments stay under the one call_id"
+        );
+        assert_eq!(
+            accumulated(&evs),
+            Ok(vec![(
+                String::new(),
+                "alpha".to_owned(),
+                serde_json::json!({"a": 1})
+            )]),
+            "keeping the call whole is what makes the arguments parse at all"
+        );
+    }
+
+    /// The same delta ordering as `the_gate_fires_on_an_args_only_emission`,
+    /// but with a *complete* JSON document on each delta rather than two
+    /// halves of one — and here the gate takes the turn from `Ok` to `Err`.
+    ///
+    /// Pre-fix this shape produced `Ok`, and unlike SMA-619 §1.4's marker
+    /// shape it produced a properly named tool call under a real,
+    /// submittable `call_id`: the translator emitted `("", None, "{}")` then
+    /// `("c1", Some("alpha"), "{}")`, so the accumulator yielded
+    /// `("c1", "alpha", {})`. Post-fix the upgrade is withheld, both deltas
+    /// land under `""`, the joined arguments are `"{}{}"`, and the whole turn
+    /// fails — assistant text included.
+    ///
+    /// It is reachable rather than synthetic. `core/src/model.rs:531-533`
+    /// notes that OpenAI streaming legitimately emits an empty `arguments`
+    /// delta for a zero-parameter tool call, and a backend that repeats the
+    /// complete arguments on every delta — the arguments analogue of the
+    /// repeat-the-whole-name quirk `handle_tool_call` already defends against
+    /// — produces exactly this.
+    ///
+    /// Accepted anyway. The pre-fix `Ok` was never one clean call: alongside
+    /// `("c1", "alpha", {})` it also carried a junk item under `""` with an
+    /// empty `name`, which `build_items` constructs unconditionally
+    /// (`core/src/model.rs:545-549`) and `loop_state.rs:325-335` dispatches as
+    /// a tool named `""` with no validation at all. So the pre-fix outcome is
+    /// one good call plus one unvalidated dispatch of a nameless tool, and the
+    /// post-fix outcome is a loud failure. Narrowing the gate to
+    /// name-carrying emissions would rescue this shape and is rejected for the
+    /// reason recorded in SMA-619 §3.6: it would trade this arguments-loss
+    /// corruption straight back for the name-loss one, since the args-only
+    /// ordering tears the arguments across two `call_id`s in exactly the same
+    /// way. One rule covers both — any published delta closes the window.
+    #[test]
+    fn complete_args_on_both_deltas_fail_the_turn_when_withheld() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"arguments": "{}"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "alpha", "arguments": "{}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![(String::new(), "alpha".to_owned())],
+            "the name arrives under the blank id the call was published with"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "no delta may arrive under the real id"
+        );
+        assert_eq!(
+            args_of(&evs, ""),
+            "{}{}",
+            "both complete documents stay under the one call_id"
+        );
+        assert!(
+            accumulated(&evs).is_err(),
+            "two complete JSON documents cannot be joined; the turn fails where \
+             pre-fix it succeeded into a named `c1` call plus a nameless `\"\"` one"
+        );
+    }
+
+    /// Two parallel blank-id calls whose real ids arrive after both emitted
+    /// stay merged at the accumulator. Accepted, not overlooked.
+    ///
+    /// The tie-break in SMA-619 is argued for one call: keeping the blank
+    /// keeps the call whole. For two it cuts the other way — both upgrades
+    /// are withheld, so all four deltas carry `""` and `ModelTurnAccumulator`
+    /// folds them into a single item, where ungated they would have separated
+    /// into `c1` and `c2`.
+    ///
+    /// This is accepted for three reasons. The translator's obligation is at
+    /// the event layer and is still met: two name-carrying deltas go out,
+    /// `alpha` and `beta`, exactly as SMA-616 requires and as
+    /// `blank_ids_do_not_collapse_distinct_calls` asserts. The merge happens
+    /// in `ModelTurnAccumulator`, which core documents as deliberately
+    /// merging blank-id calls first-name-wins — behaviour this ticket does
+    /// not change, only reaches more often. And `openai/chat` has carried the
+    /// identical trade since SMA-566, so declining it here would reopen the
+    /// asymmetry SMA-619 exists to close.
+    ///
+    /// The withheld-upgrade `warn!` fires twice here, once per key, which is
+    /// what makes the merge diagnosable at all.
+    ///
+    /// The fixture is three chunks so that the trade is isolated rather than
+    /// conflated. The two calls must emit *before* their real ids arrive, or
+    /// the gate never engages — but if they emit arguments, those arguments
+    /// merge under `""` and fail the turn on their own, pre-fix and post-fix
+    /// alike, which would prove nothing about this gate. So chunk 1 buffers
+    /// two names, chunk 2 is a bare completion signal that flushes both under
+    /// `""` with no arguments at all, and only chunk 3 carries arguments.
+    /// Pre-fix that yields three parsing items — `("", "alpha", {})` plus a
+    /// nameless `c1` and `c2`; post-fix the gate keeps everything under `""`,
+    /// the two argument objects concatenate into `{"p":1}{"q":2}`, and the
+    /// turn fails.
+    ///
+    /// That regression is accepted on the same grounds as
+    /// `a_real_id_does_not_replace_a_blank_one_after_the_key_emitted`: the
+    /// pre-fix `Ok` is three junk items, two of them nameless and one under
+    /// an unsubmittable `""`, and a loud failure beats dispatching those.
+    #[test]
+    fn withheld_upgrades_keep_parallel_blank_calls_merged() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                // Buffers two names; emits nothing (no completion signal yet).
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"name": "alpha"}},
+                    {"index": 1, "id": "", "function": {"name": "beta"}}
+                ])),
+                // No name fragment = the name is complete. Flushes both under
+                // "" with empty args, which is what arms the gate.
+                tc_chunk(serde_json::json!([{"index": 0}, {"index": 1}])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"arguments": "{\"p\":1}"}},
+                    {"index": 1, "id": "c2", "function": {"arguments": "{\"q\":2}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![
+                (String::new(), "alpha".to_owned()),
+                (String::new(), "beta".to_owned()),
+            ],
+            "the event-layer rule holds: two blank-id calls, two names"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "the withheld upgrade keeps every delta off the real id"
+        );
+        assert_eq!(args_of(&evs, "c2"), "", "and off the second real id");
+        assert!(
+            accumulated(&evs).is_err(),
+            "the accumulator merges blank call_ids, so two parallel calls' \
+             arguments concatenate into invalid JSON and the turn fails — the \
+             accepted cost of the gate for N>1 (SMA-619 §2.2)"
+        );
+    }
+
+    /// Pins the withheld-upgrade `warn!` itself.
+    ///
+    /// SMA-619 acceptance criterion 7 makes the warn a requirement rather
+    /// than a nicety, and §2.1 explains why: the whole loud-versus-silent
+    /// tie-break — keep the call whole under `""` rather than split it across
+    /// two ids — rests on the discarded real id being visible somewhere.
+    /// Nothing downstream supplies that visibility. `build_items` constructs
+    /// `Item::ToolCall { call_id: "", .. }` unconditionally
+    /// (`core/src/model.rs:545-549`) and `loop_state.rs:325-335` dispatches it
+    /// without checking, and `canonicalize`'s own blank-id warning fires on
+    /// the first delta, before the real id was ever seen, and never names it.
+    /// So this warn is the only place the trade becomes diagnosable.
+    ///
+    /// Without a test here, both warn arms collapse back into
+    /// `Some(_) => {}` with every other test in this module still green.
+    mod withheld_upgrade_warn {
+        use super::{drive, named, tc_chunk, ChatTranslator};
+        use crate::test_tracing;
+
+        #[test]
+        fn a_withheld_upgrade_warns_once_naming_the_discarded_id() {
+            test_tracing::start();
+
+            let mut t = ChatTranslator::new();
+            let evs = drive(
+                &mut t,
+                vec![
+                    tc_chunk(serde_json::json!([
+                        {"index": 0, "id": "", "function": {"name": "alpha", "arguments": "{}"}}
+                    ])),
+                    tc_chunk(serde_json::json!([
+                        {"index": 0, "id": "c1", "function": {"arguments": "[]"}}
+                    ])),
+                    // The same real id again: a backend that repeats it on
+                    // every delta must not warn once per chunk.
+                    tc_chunk(serde_json::json!([
+                        {"index": 0, "id": "c1", "function": {"arguments": "[]"}}
+                    ])),
+                ],
+            );
+            assert_eq!(
+                named(&evs),
+                vec![(String::new(), "alpha".to_owned())],
+                "guard: the fixture must actually withhold the upgrade"
+            );
+
+            let events = test_tracing::captured();
+            let withheld: Vec<&(String, String)> = events
+                .iter()
+                .filter(|(_, fields)| fields.contains("discarded_id="))
+                .collect();
+            assert_eq!(
+                withheld.len(),
+                1,
+                "the withheld upgrade must warn exactly once per key, even \
+                 though the real id arrived on two deltas; captured: {events:?}"
+            );
+            assert_eq!(
+                withheld[0].0, "paigasus::litellm::stream",
+                "the warn must land on this module's declared target"
+            );
+            assert!(
+                withheld[0].1.contains("discarded_id=c1"),
+                "the warn must name the real call_id it discarded; got {:?}",
+                withheld[0].1
+            );
+        }
     }
 }

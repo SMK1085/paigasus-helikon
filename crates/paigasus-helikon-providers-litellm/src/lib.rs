@@ -50,6 +50,8 @@ mod error;
 mod model;
 mod sse;
 mod stream;
+#[cfg(test)]
+mod test_tracing;
 mod translate;
 mod transport;
 

@@ -24,6 +24,8 @@ mod builder;
 mod capabilities;
 mod error;
 mod model;
+#[cfg(test)]
+mod test_tracing;
 mod translate;
 
 pub use builder::{BuildError, OpenAiModelBuilder};

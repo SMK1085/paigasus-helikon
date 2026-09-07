@@ -284,7 +284,13 @@ pub(crate) struct ChatTranslator {
     /// across two `call_id`s and leave the real one with zero name-carrying
     /// deltas — an "exactly once" violation on a *non-blank* id, which is
     /// worse than the stuck blank this rule exists to fix (SMA-566).
+    /// `providers-litellm`'s chat translator carries the same gate, keyed on
+    /// its wire-key enum rather than on `index` (SMA-619).
     blank_emitted: HashSet<u32>,
+    /// Wire indices for which the withheld-upgrade warning has already fired,
+    /// so a backend that repeats the real id on every delta warns once per
+    /// call rather than once per chunk.
+    warned_withheld_upgrade: HashSet<u32>,
     /// index → buffered name/args.
     ///
     /// `args` is drain-once: taken on the first delta after the call_id is
@@ -308,6 +314,7 @@ impl ChatTranslator {
             warned_late_name: HashSet::new(),
             warned_blank_id: HashSet::new(),
             blank_emitted: HashSet::new(),
+            warned_withheld_upgrade: HashSet::new(),
             pending: HashMap::new(),
             next_seq: 0,
             finish_reason: None,
@@ -485,6 +492,15 @@ impl ChatTranslator {
             }
             let name = std::mem::take(&mut entry.name);
             self.name_emitted.insert(index, name.clone());
+            // Deliberately does not record into `blank_emitted`, unlike the
+            // mid-stream emit site: `finish` is terminal, so no replacement
+            // arm can run after this point. Inert even under the double
+            // `finish()` that `finish_is_idempotent_after_draining` drives,
+            // because the first call records the index in `name_emitted`,
+            // which the guard at the top of this loop short-circuits on —
+            // `pending` itself is not drained, only `entry.name` is taken.
+            // `providers-litellm` states the same at its flush site
+            // (SMA-619).
             out.push(ModelEvent::ToolCallDelta {
                 call_id,
                 name: Some(name),
@@ -660,12 +676,20 @@ impl ChatTranslator {
     /// key is what lets `flush_buffered_names` go on sorting by the model's
     /// declared call position rather than by a synthetic creation counter.
     ///
-    /// The one remaining asymmetry is deliberate and ticketed: this crate
-    /// gates the blank→real `call_id` upgrade on `blank_emitted`, so a call
-    /// that has already emitted under `""` keeps the blank rather than
-    /// splitting across two ids; litellm upgrades unconditionally (SMA-619).
-    /// The end-of-stream dedup net is no longer asymmetric — both crates
-    /// exempt blank `call_id`s from it (SMA-616).
+    /// Both chat translators gate the blank→real `call_id` upgrade on
+    /// `blank_emitted`, so a call that has already emitted under `""` keeps
+    /// the blank rather than splitting across two ids (SMA-566 here, SMA-619
+    /// in litellm), and both warn once when an upgrade is withheld. The
+    /// end-of-stream dedup net is likewise symmetric — both exempt blank
+    /// `call_id`s from it (SMA-616). No *gating* asymmetry remains.
+    ///
+    /// Two divergences survive and are deliberate. litellm's `index` is
+    /// optional, so its two key spaces admit a cross-key-space split — a
+    /// blank-id delta keyed by index followed by an index-less delta keyed by
+    /// id — that this crate cannot express at all, `index` being a required
+    /// `u32`; unticketed and left as-is. And this crate's sibling `responses`
+    /// translator has no blank-id handling whatsoever; its own name-dedup
+    /// defect is open as SMA-617.
     fn handle_tool_call_chunk(
         &mut self,
         tc: &ChatCompletionMessageToolCallChunk,
@@ -713,6 +737,26 @@ impl ChatTranslator {
                     if existing.is_empty() && !id.is_empty() && !blank_already_emitted =>
                 {
                     *existing = id.to_owned();
+                }
+                // Reached only when `blank_already_emitted` blocked the arm
+                // above. Warned rather than absorbed into the no-op arm below:
+                // this discards a real `call_id` the backend supplied, and the
+                // decision to keep the blank is only defensible if it is
+                // visible. `canonicalize`'s blank-id warning does not cover it
+                // — that one fires on the first delta, before this id was ever
+                // seen, and never names it (SMA-619).
+                Some(existing) if existing.is_empty() && !id.is_empty() => {
+                    if self.warned_withheld_upgrade.insert(index) {
+                        tracing::warn!(
+                            target: "paigasus::openai::chat",
+                            index,
+                            discarded_id = %id,
+                            "a real tool-call id arrived after this index already emitted \
+                             under a blank id; withholding the upgrade so the call is \
+                             not split across two call_ids. The call reaches the \
+                             consumer under an empty call_id"
+                        );
+                    }
                 }
                 Some(_) => {}
                 None => {
@@ -1816,5 +1860,69 @@ mod tests {
             ],
             "wire order (index 0 then 1), not lexicographic by call_id"
         );
+    }
+
+    /// Pins the withheld-upgrade `warn!` itself.
+    ///
+    /// SMA-619 acceptance criterion 7 makes the warn a requirement rather
+    /// than a nicety, and its §2.1 explains why: the loud-versus-silent
+    /// tie-break — keep the call whole under `""` rather than split it across
+    /// two ids — rests on the discarded real id being visible somewhere.
+    /// Nothing downstream supplies that visibility. `build_items` constructs
+    /// `Item::ToolCall { call_id: "", .. }` unconditionally
+    /// (`core/src/model.rs:545-549`) and `loop_state.rs:325-335` dispatches it
+    /// without checking, and this translator's own blank-id warning fires on
+    /// the first delta, before the real id was ever seen, and never names it.
+    /// So this warn is the only place the trade becomes diagnosable.
+    ///
+    /// Without a test here, the warn arm collapses back into
+    /// `Some(_) => {}` with every other test in this module still green.
+    /// `providers-litellm` carries the same test against its own target.
+    mod withheld_upgrade_warn {
+        use super::{drive, make_chunk, named, ChatTranslator};
+        use crate::test_tracing;
+
+        #[test]
+        fn a_withheld_upgrade_warns_once_naming_the_discarded_id() {
+            test_tracing::start();
+
+            let mut t = ChatTranslator::new();
+            let evs = drive(
+                &mut t,
+                vec![
+                    make_chunk(0, Some(""), Some("alpha"), Some("{}")),
+                    make_chunk(0, Some("c1"), None, Some("[]")),
+                    // The same real id again: a backend that repeats it on
+                    // every delta must not warn once per chunk.
+                    make_chunk(0, Some("c1"), None, Some("[]")),
+                ],
+            );
+            assert_eq!(
+                named(&evs),
+                vec![(String::new(), "alpha".to_owned())],
+                "guard: the fixture must actually withhold the upgrade"
+            );
+
+            let events = test_tracing::captured();
+            let withheld: Vec<&(String, String)> = events
+                .iter()
+                .filter(|(_, fields)| fields.contains("discarded_id="))
+                .collect();
+            assert_eq!(
+                withheld.len(),
+                1,
+                "the withheld upgrade must warn exactly once per index, even \
+                 though the real id arrived on two deltas; captured: {events:?}"
+            );
+            assert_eq!(
+                withheld[0].0, "paigasus::openai::chat",
+                "the warn must land on this module's declared target"
+            );
+            assert!(
+                withheld[0].1.contains("discarded_id=c1"),
+                "the warn must name the real call_id it discarded; got {:?}",
+                withheld[0].1
+            );
+        }
     }
 }
