@@ -265,7 +265,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # taiki-e/install-action v2.85.11
+      # taiki-e/install-action v2.87.5
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8
         with:
           tool: convco@0.6.3
@@ -278,7 +278,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # dorny/paths-filter v4.0.2
+      # dorny/paths-filter v4.0.3
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:

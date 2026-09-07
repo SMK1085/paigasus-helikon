@@ -47,7 +47,7 @@ jobs:
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # taiki-e/install-action v2.85.11
+      # taiki-e/install-action v2.87.5
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8
         with:
           tool: cargo-cyclonedx
@@ -79,7 +79,7 @@ jobs:
           jq -e '.bomFormat == "CycloneDX" and .specVersion == "1.5"' \
             "paigasus-helikon-${REF_NAME}-cyclonedx.json"
 
-      # softprops/action-gh-release v3.0.2
+      # softprops/action-gh-release v3.0.3
       - name: Upload SBOM to release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:

@@ -63,7 +63,7 @@ jobs:
           cache-directories: "~/.cargo/advisory-db"
           cache-targets: "false"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # taiki-e/install-action v2.85.11
+      # taiki-e/install-action v2.87.5
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8
         with:
           tool: cargo-audit
