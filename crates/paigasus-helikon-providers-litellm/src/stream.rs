@@ -711,6 +711,11 @@ impl ChatTranslator {
             }
             let name = std::mem::take(&mut slot.name);
             self.name_emitted.insert(key, name.clone());
+            // Deliberately does not record into `blank_emitted`, unlike the
+            // mid-stream emit site: `finish` is terminal, so no replacement
+            // arm can run after this point. Inert even under the double
+            // `finish()` that `finish_is_idempotent_after_draining` drives,
+            // because the first call drains `pending`.
             out.push(ModelEvent::ToolCallDelta {
                 call_id,
                 name: Some(name),
