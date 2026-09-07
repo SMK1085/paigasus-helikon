@@ -230,6 +230,78 @@ jobs:
 YAML
 expect 1 "env: before uses: on a rust-cache step fails" "${d}"
 
+# --- case 13: two writers on one shared-key is rejected ---------------------
+# Exactly one site per shared-key may save. Two writers race, and rust-cache
+# does not overwrite an existing key — so the loser's thinner cache can win and
+# then never be replaced, degrading silently with no red gate.
+d="${tmp}/two-writers"
+mkdir -p "${d}"
+for name in alpha beta; do
+cat > "${d}/${name}.yml" <<YAML
+name: ${name}
+on:
+  push:
+    branches: [main]
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: metadata
+          save-if: \${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build
+YAML
+done
+expect 1 "two writers on one shared-key fails" "${d}"
+
+# --- case 14: one writer plus readers on a shared-key is allowed ------------
+d="${tmp}/one-writer"
+mkdir -p "${d}"
+cat > "${d}/alpha.yml" <<'YAML'
+name: alpha
+on:
+  push:
+    branches: [main]
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: metadata
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build
+YAML
+cat > "${d}/beta.yml" <<'YAML'
+name: beta
+on:
+  push:
+    branches: [main]
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Swatinem/rust-cache v2.9.2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: metadata
+          save-if: false
+      - run: cargo doc
+YAML
+expect 0 "one writer plus a reader on a shared-key passes" "${d}"
+
 echo
 if [[ "${failures}" == "0" ]]; then
   echo "check-cargo-profile-env-sync selftest: all cases passed"

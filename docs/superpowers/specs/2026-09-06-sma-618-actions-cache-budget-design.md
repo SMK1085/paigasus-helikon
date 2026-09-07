@@ -287,7 +287,7 @@ They must be separate keys, not the same key with different `cache-targets`,
 because the path list is in the cache version (fact 4 above) — an identical key
 with a differing path list is a guaranteed miss, silently.
 
-| Key (after `v1-rust-`) | Payload | Writer | Readers (`save-if: false`) |
+| Key (after `v1-`) | Payload | Writer | Readers (`save-if: false`) |
 | -- | -- | -- | -- |
 | `helikon-Linux-x64-<stable>` | target + registry | `test (ubuntu-latest, stable)` | `clippy`, `docs` |
 | `helikon-<other OS/toolchain>` | target + registry | the 5 other `test` legs | — |
@@ -473,7 +473,12 @@ has nothing to do with supply-chain risk. `audit.yml` therefore gains no
 
 ### `prefix-key: v1`
 
-Bump `prefix-key` from the default `v0-rust` to `v1-rust` in PR 2. Change B
+Bump `prefix-key` from the default `v0-rust` to `v1` in PR 2. **`prefix-key`
+replaces the whole default string, not just its `v0` half** — verified against
+the live cache after PR 2 merged, where keys read `v1-audit-Linux-x64-...`, not
+`v1-rust-audit-...`. An earlier draft of this document asserted the latter in
+three places and would have sent whoever ran the acceptance grepping for a
+prefix that does not exist. Change B
 invalidates every key anyway, so this is free, and it makes the transition
 legible: everything `v0-*` is provably stale, so the post-merge purge becomes
 `grep '^v0-'` rather than a blind delete-everything.
@@ -631,6 +636,66 @@ PR 2 is therefore change B plus a `prefix-key` bump, and nothing else.
 2. Stop caching the three non-required `1.94` legs (−2.98 GiB measured). They are
    signal-only; the cost is that they run cold.
 
+## Measured outcome of PR 2 (2026-09-07)
+
+PR 2 merged as `b771d31`; the nine `v0-` entries were purged and one full `main`
+run completed. **Acceptance failed.**
+
+| Entry | v0 | v1 | saving |
+| -- | -- | -- | -- |
+| `test` Windows stable | 2.76 | 1.97 | 29% |
+| `test` Linux stable | 2.61 | 2.07 | 21% |
+| `test` Darwin stable | 2.20 | 1.84 | 16% |
+| `test` Windows 1.94 | 1.07 | 0.81 | 24% |
+| `test` Linux 1.94 | 1.03 | 0.86 | 17% |
+| `test` Darwin 1.94 | 0.88 | 0.76 | 14% |
+| `doc-coverage` | 0.92 | 0.92 | **0%** |
+| `clippy` | 0.57 | 0.57 | **0%** |
+| `docs` | 0.55 | 0.55 | **0%** |
+| `temporal-it` | 0.48 | 0.44 | 8% |
+| `build-no-default-features` | 0.39 | 0.36 | 8% |
+| `sessions-it` | 0.37 | 0.33 | 11% |
+| `verify` | 0.20 | 0.18 | 10% |
+| `audit`, `deny` | 0.17, 0.13 | 0.17, 0.13 | **0%** |
+| **Peak total** | **14.33** | **11.96** | **16.5%** |
+
+Still 1.96 GiB over; four entries were evicted as `test (windows-latest, stable)`
+saved.
+
+### Why the estimate was wrong by a factor of four
+
+The prediction was 60-75%, from a local measurement of 79%. Three compounding
+errors, in descending order of impact:
+
+1. **The sample was the 40 largest `.rlib` files, extrapolated to the whole
+   cache.** Those are the most debug-dense artifacts in it. The cache also holds
+   registry sources, `.rmeta`, fingerprints and thousands of small files that do
+   not shrink at all.
+2. **`strip -S` also removes line tables; `line-tables-only` keeps them.** This
+   was flagged at the time as making 79% "an upper bound"; it is in fact the
+   dominant term, not a footnote.
+3. **Three jobs cannot benefit at all.** `clippy`, `docs` and `doc-coverage` are
+   metadata-mode builds emitting `.rmeta`, which carries no debug info —
+   measured at exactly 0%. They were never separated from the build jobs in the
+   projection.
+
+The general lesson, and it has now cost two revisions of this document: an
+aggregate saving cannot be extrapolated from its densest component. Change B is
+kept because 16.5% is real and free, not because it worked as designed.
+
+### Revised ladder, from measured numbers only
+
+| Action | Peak | Under 10 GB? |
+| -- | -- | -- |
+| After PR 2 | 11.96 | no, over by 1.96 |
+| + share `clippy`/`docs` (PR 3) | ~11.41 | no |
+| + rung 1, Windows `trybuild_ui` skip (−1.16) | ~10.25 | no |
+| + rung 2, stop caching the three `1.94` legs (−2.43) | **~7.82** | yes |
+
+Rung 1 alone is **no longer sufficient**, which the pre-measurement ladder
+assumed it would be. Reaching the limit needs rung 2, whose cost is that three
+non-required signal legs run cold on every push.
+
 ## Rollout
 
 Two PRs. The review made the decisive point: `save-if` means the PR run of this
@@ -766,14 +831,14 @@ gh api repos/SMK1085/paigasus-helikon/actions/caches --paginate \
    - total across all entries is **under 10 GB**, and nothing was evicted
      mid-run — compare the entry count against the 16 in the baseline;
    - all 15 push-triggered entries are present on `refs/heads/main`, every key
-     prefixed `v1-rust-`. The 16th entry in the baseline is `sbom`, which is
+     prefixed `v1-`. The 16th entry in the baseline is `sbom`, which is
      tag-scoped (`refs/tags/paigasus-helikon-v*`) and only reappears on the next
      release tag — do not read its absence as an eviction. **`bench` is not in
      either count**: `bench.yml` is `workflow_dispatch`-only, so a push to `main`
      never runs it and it contributes no entry unless someone dispatches it
      (`gh workflow run bench.yml --ref main`);
    - the second run's `test (ubuntu-latest, stable)` logs
-     `Restored from cache key "v1-rust-test-Linux-x64-..." full match: true`;
+     `Restored from cache key "v1-test-Linux-x64-..." full match: true`;
    - **record every per-entry size again** and compare against the 14.46 GiB
      baseline above, so the realised compressed debug saving is a measured number
      rather than the 60-75% estimate. That figure decides whether the fallback

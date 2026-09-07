@@ -78,9 +78,21 @@ jobs:
       # (save) step, so a PR run still reads main's entries — it just stops
       # writing its own refs/pull/N/merge copies, which is what was evicting
       # main's and pushing the repo 37% over the fixed 10 GB limit.
+      # SMA-618: `clippy` and `docs` share ONE cache entry. Both are
+      # metadata-mode builds of the same `--all-features` graph — `cargo clippy`
+      # is a `cargo check` variant and `cargo doc --no-deps` still builds
+      # dependency metadata — so neither emits the `.rlib` debug info that
+      # `CARGO_PROFILE_DEV_DEBUG` shrinks, and both measured a 0% saving from it.
+      # Sharing is the only lever that reaches them. `clippy` is the WRITER
+      # because `--all-targets` also builds dev-dependencies, making its graph a
+      # superset of `docs`'; `docs` is a reader with a literal `save-if: false`.
+      # That literal is load-bearing: two writers would race, and the loser's
+      # thinner cache could win the key and then never be replaced, because
+      # rust-cache does not overwrite an existing key.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           prefix-key: v1
+          shared-key: metadata
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
@@ -179,11 +191,14 @@ jobs:
       # version and its digests live in the action (SMA-458).
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
-      # SMA-618: save only from the default branch — see the note on `clippy`.
+      # SMA-618: reader of the `metadata` key that `clippy` writes — see the
+      # note there. `save-if: false` is a literal, NOT the default-branch
+      # expression: exactly one job may write a shared key.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           prefix-key: v1
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: metadata
+          save-if: false
       - run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"

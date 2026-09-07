@@ -56,7 +56,22 @@ another `CARGO_*`/`RUST*` variable, add it everywhere or expect a red `fmt`.
 `prefix-key: v1` was bumped in the same change. Its only job is to make the
 generation boundary greppable: every `v0-` key predates the debug-info change and
 is unreachable, so a post-merge purge can target `v0-` precisely instead of
-deleting the fresh entries alongside the stale ones.
+deleting the fresh entries alongside the stale ones. **It replaces the default
+`v0-rust` string in full**, so keys read `v1-<job>-<os>-<arch>-...` — not
+`v1-rust-...`. Grep for `v1-`.
+
+**Realised saving: 16.5% of total cache bytes**, not the 60-75% projected —
+14-29% on the `test` legs, 8-11% on the smaller build jobs, and exactly 0% on
+`clippy`, `docs` and `doc-coverage`, which are metadata-mode builds whose
+`.rmeta` output carries no debug info. Sharing is the only lever that reaches
+those three: `clippy` and `docs` now share one entry under
+`shared-key: metadata`. `clippy` is the writer (`--all-targets` makes its graph a
+superset) and `docs` carries a literal `save-if: false`. **Exactly one site may
+save a given `shared-key`** — rust-cache never overwrites an existing key, so a
+second writer that finishes first can install a thinner cache that is then never
+replaced. `scripts/check-cargo-profile-env-sync.sh` asserts this, and that the
+sites sharing a key declare the same `cache-targets`/`cache-directories`, since
+the cached path list is part of the cache version.
 
 ## protoc (`.github/actions/setup-protoc`)
 
