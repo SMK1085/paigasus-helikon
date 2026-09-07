@@ -8,6 +8,12 @@
 //!
 //! # Quick start
 //!
+//! **Requires `temporalio-client` 1.x.** This crate takes a connected
+//! `temporalio_client::Client` in its public API
+//! ([`worker::TemporalAgentWorkerBuilder::client`], [`runner::TemporalRunner::new`]), so
+//! your crate must depend on the same major: `cargo add temporalio-client@1`. A
+//! mismatched major surfaces as an opaque type mismatch, not a helpful error.
+//!
 //! Start a local dev server:
 //!
 //! ```bash
