@@ -720,6 +720,56 @@ Verified by simulating GitHub's `A && B || C` semantics across all six legs:
 windows-stable log for their absence — a matrix expression that silently drops
 tests looks identical to one that works.
 
+## Outcome of PR 3 and PR 4 (2026-09-07)
+
+**PR 3** (`31ce036`) shipped the `clippy`/`docs` shared key and the Windows
+`trybuild_ui` skip. Both landed on prediction:
+
+| Entry | before | after | note |
+| -- | -- | -- | -- |
+| `test` Windows stable | 1.97 | **0.82** | −1.15, against −1.16 predicted |
+| `clippy` + `docs` | 0.57 + 0.55 | **0.57** | one `v1-metadata-…` entry |
+
+Total **9.83 GiB across 13 entries, with no eviction** — 13 cache-writing jobs
+ran and 13 entries survived, the first clean run in this ticket's history.
+
+**But 9.83 was not durable.** Two entries were legitimately absent from that
+snapshot and return later: `temporal-it` (0.44, path-filtered — its filter did
+not match that push, so the job ran as a no-op) and `sbom` (0.13, tag-scoped).
+With both present the peak is **~10.40 GiB — over again.** A post-eviction
+snapshot is not a budget; the question is always what the peak is when everything
+that can be present is.
+
+**PR 4** buys the missing headroom from the two lowest-value entries:
+
+- `test (macos-latest, 1.94)` caches nothing (`if:` on the cache step). A
+  non-required signal leg; chosen over windows-1.94 (0.81 GiB but ~25 min cold
+  against macOS's ~15) and over any `stable` leg (all required). −0.76.
+- `temporal-it` drops its workspace target (`cache-targets: "false"`).
+  Signal-only, non-required and path-filtered, so its target cache is written on
+  few pushes and read on fewer. That input removes only the workspace `target`
+  dirs — the entry still carries `~/.cargo/registry`, `~/.cargo/git`,
+  `~/.cargo/bin`, `.crates.toml` and `.crates2.json`, since `cache-bin` defaults
+  to `true` (verified in `src/config.ts:265-276` at the pinned SHA). −0.31.
+
+Projected peak with everything present: **~9.33 GiB, 0.67 GiB of headroom.**
+
+**That projection rests on one estimate, not a measurement.** The −0.31 assumes
+`temporal-it`'s registry-only entry lands near 0.13 GiB, a figure borrowed from
+`deny`, the comparable registry-only entry — it has never been measured for this
+job. It is probably conservative, since `deny`'s includes a `cargo-deny` binary
+under `~/.cargo/bin` that `temporal-it` does not install. But this ticket has now
+been wrong twice by treating a borrowed or partial figure as a measured one (the
+79% debug extrapolation, and reading a 9.83 GiB snapshot as a ceiling), so the
+9.33 stands only until the post-merge inventory replaces it.
+
+### Ladder, closed out
+
+Rung 2 as originally written — stop caching *all three* `1.94` legs, −2.43 — was
+not needed. Only the macOS leg was taken, because the measured shortfall was
+0.40 GiB, not the ~2 GiB the pre-measurement ladder assumed. Windows-1.94 and
+ubuntu-1.94 keep their caches.
+
 ## Rollout
 
 Two PRs. The review made the decisive point: `save-if` means the PR run of this
