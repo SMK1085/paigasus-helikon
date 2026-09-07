@@ -53,6 +53,17 @@ place. `scripts/check-cargo-profile-env-sync.sh` runs in `fmt` and fails if the
 cargo-visible workflow env is not byte-identical across all of them. If you add
 another `CARGO_*`/`RUST*` variable, add it everywhere or expect a red `fmt`.
 
+Two entries are deliberately reduced to buy headroom (SMA-618 PR 4):
+`test (macos-latest, 1.94)` caches nothing at all — an `if:` gates its cache step
+off, because it is a non-required signal leg and macOS is cheaper to rebuild cold
+than Windows — and `temporal-it` keeps only its registry via
+`cache-targets: "false"`, since it is signal-only, non-required and
+path-filtered, so its target cache was written on few pushes and read on fewer.
+**When judging the budget, measure the peak with everything present, not a
+snapshot**: `temporal-it` and `sbom` are both legitimately absent from most
+inventories (path filter, tag scope), and a snapshot taken without them reads
+0.57 GiB lower than the real ceiling.
+
 `prefix-key: v1` was bumped in the same change. Its only job is to make the
 generation boundary greppable: every `v0-` key predates the debug-info change and
 is unreachable, so a post-merge purge can target `v0-` precisely instead of

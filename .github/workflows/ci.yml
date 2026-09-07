@@ -124,7 +124,16 @@ jobs:
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       # SMA-618: save only from the default branch — see the note on `clippy`.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      #
+      # The `if:` drops caching for macos-1.94 alone, to buy headroom under the
+      # fixed 10 GB budget. That leg is a non-required signal: `1.94` coverage is
+      # what the row exists for, and the three required `stable` legs plus
+      # ubuntu/windows-1.94 keep their caches. It was chosen over windows-1.94
+      # (0.81 GiB, but ~25 min cold against macOS's ~15) and over any `stable`
+      # leg (all required). Cost: this leg builds cold on every push, measured
+      # 0.76 GiB of budget returned.
+      - if: ${{ !(matrix.os == 'macos-latest' && matrix.toolchain == '1.94') }}
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}

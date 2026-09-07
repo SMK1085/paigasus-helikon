@@ -138,6 +138,13 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           prefix-key: v1
+          # SMA-618: registry only. This job is signal-only, non-required, and
+          # path-filtered, so it writes a 0.44 GiB target cache that most pushes
+          # never populate and few runs read — poor value against a fixed 10 GB
+          # budget. `cache-targets: false` keeps ~/.cargo (0.13 GiB), so the
+          # heaviest dependency tree in the workspace still skips the download,
+          # and gives back 0.31 GiB.
+          cache-targets: "false"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.decide.outputs.run == 'true'
