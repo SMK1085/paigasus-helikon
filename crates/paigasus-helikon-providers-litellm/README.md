@@ -133,13 +133,16 @@ recorded test fixtures or request logs.
 - **A blank tool-call `id` becomes the call's identity once anything is
   emitted under it.** LiteLLM backends may send `"id": ""` on a call's first
   delta and a real id later. If nothing has been emitted yet, the real id
-  replaces the blank one and the call arrives under it. If the first delta
-  also carried `arguments`, a `ToolCallDelta` has already gone out under
-  `""` — the real id is then discarded and logged at `warn`, and the whole
-  call is delivered under `call_id: ""`. Upgrading after the fact would split
-  one call across two ids and leave the real one with no name, which is worse:
-  an agent loop can see that `""` is unusable, but cannot see that two ids are
-  really one call.
+  replaces the blank one and the call arrives under it. Once *any*
+  `ToolCallDelta` has gone out under `""` — a name flushed by a bare
+  completion-signal delta counts, arguments are not required — the real id is
+  discarded and logged at `warn`, and the whole call is delivered under
+  `call_id: ""`. Upgrading after the fact would split one call across two
+  ids, tearing either the name or the arguments away from the id that carries
+  the rest, and a split is invisible to a consumer while the `warn` makes the
+  blank one diagnosable. The cost is real: a blank `call_id` is not
+  submittable, parallel blank-id calls merge, and if the merged arguments do
+  not parse the turn fails at the accumulator.
 
 ## Links
 
