@@ -1,6 +1,6 @@
 # SMA-618 — Actions cache budget: stop the thrash
 
-Design document. Revision 2 (post spec-challenge).
+Design document. Revision 3 (post PR 1, rescoped against measurement).
 Linear: [SMA-618](https://linear.app/smaschek/issue/SMA-618/actions-cache-thrashes-at-37percent-over-the-10-gb-limit-pr-scoped)
 
 Delivered as **two PRs** — see [Rollout](#rollout). SMA-618 closes on PR 2.
@@ -247,7 +247,7 @@ currently lack — a prerequisite for C.
 One-time cost: this variable is in the cache key, so the first `main` run after
 PR 2 invalidates every entry and runs cold. Expected, not a regression.
 
-### C. Two shared keys, one writer each — *PR 2*
+### C. Two shared keys, one writer each — *DROPPED; see [Measured baseline](#measured-baseline-2026-09-07)*
 
 The naive form of this change — one `shared-key` for all six ubuntu-stable
 jobs — is wrong, and the reason is worth stating because it is not obvious.
@@ -358,7 +358,7 @@ does exactly this for `temporal-it`.
   while freeing ~3 GB is strictly better than either keeping it or (as an earlier
   draft proposed) deleting its cache outright.
 
-### E. Skip `trybuild_ui` on Windows — *PR 2*
+### E. Skip `trybuild_ui` on Windows — *NOT SHIPPED; fallback rung 1*
 
 Replace the matrix `test_args` with an expression, per the Linear issue:
 
@@ -392,7 +392,7 @@ deleting that directory from the cache pays ~13 minutes of Windows wall-clock on
 every run — the opposite of this ticket's goal. Recorded here so it is not
 re-proposed.
 
-### F. Drift guard — *PR 1 (env), extended in PR 2 (keys)*
+### F. Drift guard — *PR 1 (assertions 1-2); assertion 3 dropped with C*
 
 `scripts/check-cargo-profile-env-sync.sh`, modeled on
 `scripts/check-advisory-ignore-sync.sh` — same "header comment explains why this
@@ -480,6 +480,13 @@ legible: everything `v0-*` is provably stale, so the post-merge purge becomes
 
 ## Budget
 
+> **Revision 3 (2026-09-07), after PR 1 merged.** The projections below were
+> written before anything was measured. They are superseded by
+> [Measured baseline](#measured-baseline-2026-09-07) — which invalidates two of
+> this section's inferred figures badly enough to change PR 2's design. The
+> original text is kept so the reasoning that led to the wrong estimates stays
+> auditable.
+
 Baseline figures are compressed bytes — the unit GitHub's `size_in_bytes` and the
 10 GB limit use. Rows marked † are inferred, not observed.
 
@@ -533,6 +540,97 @@ and Windows is both the largest entry and the one where B is the only lever left
 after E. The measurement is a floor on confidence, not a guarantee — which is
 precisely why the rollout is staged.
 
+## Measured baseline (2026-09-07)
+
+PR 1 merged as `0ee9af7`. Its `main` run wrote a complete inventory, and the
+`deny` entry — which carries `cache-targets: false`, so it is registry and
+advisory DB only — gives the registry floor directly.
+
+`main`'s peak inventory, all sixteen entries, every one `refs/heads/main`:
+
+| GiB | Entry | | GiB | Entry |
+| -- | -- | -- | -- | -- |
+| 2.76 | `test` Windows stable | | 0.55 | `docs` |
+| 2.61 | `test` Linux stable | | 0.48 | `temporal-it` |
+| 2.20 | `test` Darwin stable | | 0.39 | `build-no-default-features` |
+| 1.07 | `test` Windows 1.94 | | 0.37 | `sessions-it` |
+| 1.03 | `test` Linux 1.94 | | 0.20 | `verify` |
+| 0.92 | `doc-coverage` | | 0.17 | `audit` |
+| 0.88 | `test` Darwin 1.94 | | 0.13 | `sbom` |
+| 0.57 | `clippy` | | 0.13 | `deny` |
+
+**Total 14.46 GiB.** Change A worked — no `refs/pull/*` entry exists — but
+`main`'s own footprint is 45% over the limit on its own, so eviction continued
+and eight entries were dropped during that very run. Cause 2, confirmed.
+
+### Three estimates this corrects
+
+**1. The registry floor was 4× too high.** `deny` is registry + advisory DB and
+measures **0.13 GiB**, not the ~0.5 GB assumed above. Every per-entry projection
+in the previous section is inflated by ~0.37 GiB as a result.
+
+**2. Four inferred entries were 3–7× too high.**
+
+| Entry | Estimated | Measured |
+| -- | -- | -- |
+| `clippy` | ~2.6 | **0.57** |
+| `sessions-it` | ~2.6 | **0.37** |
+| `temporal-it` | ~3 | **0.48** |
+| `build-no-default-features` | ~1.5 | **0.39** |
+
+**3. The compressed debug saving is larger, not smaller, than the uncompressed
+one.** Measured on the 40 largest `.rlib` files in a real workspace target dir
+(2.40 GiB uncompressed), comparing as-built against `strip -S`, packed with
+`zstd -3`:
+
+| | Uncompressed | zstd -3 |
+| -- | -- | -- |
+| As built | 2.40 GiB | 0.374 GiB |
+| Stripped | 0.79 GiB | 0.078 GiB |
+| **Saving** | 67% | **79.1%** |
+
+The section above predicted the compressed saving would be *lower* than the
+uncompressed figure because DWARF compresses well. The opposite holds on real
+artifacts. Two caveats keep this a bound rather than a promise: `strip -S`
+removes all debug info (≈ `debug = 0`) while `line-tables-only` retains line
+tables, so 79% is an upper bound and 60–75% is the realistic range; and the
+measurement is arm64 macOS, where debug info sits in the archive members, while
+Windows MSVC keeps it in separate PDBs and may save less.
+
+### What this does to PR 2
+
+| Scenario | Projected total |
+| -- | -- |
+| Change B alone, 50% saving | **~8.3 GiB** |
+| Change B alone, 40% | ~9.5 GiB |
+| Change B alone, 30% | ~10.7 GiB — over |
+| Change B + E, 30% | ~9.6 GiB |
+
+**Changes C and E are dropped from PR 2. Change B ships alone.**
+
+- **C (two shared keys) is not worth its cost at the real numbers.** It was
+  justified by collapsing six ubuntu-stable entries assumed to sum to ~10 GiB.
+  They sum to **4.5 GiB**, of which consolidation reclaims only ~2.08 GiB — and
+  it would cost `build-no-default-features` and `sessions-it`, both *required*
+  gates, their exact-match caches under resolver-v2 feature unification, in
+  exchange for a registry that is now known to be 0.13 GiB rather than 0.5.
+  The trade inverted once the inputs were measured.
+- **E (Windows `trybuild_ui` skip) is held in reserve.** With C dropped, B alone
+  projects to ~8.3 GiB at the realistic saving. E costs real coverage, so it is
+  not spent on a budget that already fits. It stays the first fallback: one line,
+  −1.69 GiB measured (2.76 → 1.07 on the two Windows entries at the same commit),
+  and no other lever is cheaper.
+- **F assertion 3 is dropped with C.** It asserts one writer per `shared-key`;
+  with no `shared-key` in the tree there is nothing for it to assert.
+
+PR 2 is therefore change B plus a `prefix-key` bump, and nothing else.
+
+### Fallback ladder, in order
+
+1. **E — skip `trybuild_ui` on Windows.** −1.69 GiB, one line, redundant coverage.
+2. Stop caching the three non-required `1.94` legs (−2.98 GiB measured). They are
+   signal-only; the cost is that they run cold.
+
 ## Rollout
 
 Two PRs. The review made the decisive point: `save-if` means the PR run of this
@@ -559,16 +657,26 @@ paying one cold run before its replacement entry is written:
   — a variable inside rust-cache's env-hash. Their existing `verify` (msrv) and
   `bench` entries are orphaned the same way.
 
-So PR 1 orphans four entries total (`audit`, `deny`, `verify`, `bench`), not
-zero.
+So PR 1 orphans up to four entries (`audit`, `deny`, `verify`, and `bench`
+only if it had ever been dispatched on `main` — it had not, so in practice
+three), not zero.
 
-**PR 2 — size reduction + consolidation.** Changes B, C, E, F (assertion 3),
-`prefix-key: v1`. Key-invalidating; informed by PR 1's measurement. SMA-618
-closes here.
+**PR 2 — the debug-info cut, alone.** Change B plus `prefix-key: v1`.
+Key-invalidating; scoped by PR 1's measurement.
 
-E is in PR 2 rather than PR 1 despite not touching any key: it changes what a
-required gate executes, which is a different risk class from PR 1's
-cache-plumbing changes and deserves its own review attention.
+**SMA-618 closes on the measurement, not on this merge.** PR 2 is allowed to
+merge while the repository is still over budget — change B is strictly
+beneficial even when insufficient, so reverting it would be worse than keeping
+it. But the ticket is about the thrashing, not about the diff, so it closes only
+once [Acceptance](#pr-2) has actually passed, or once fallback rung 1 has landed
+and passed. The PR therefore does not carry a `Closes` keyword.
+
+Changes C, E and F assertion 3 were originally scheduled here and are **dropped**
+— see [Measured baseline](#measured-baseline-2026-09-07). In short: C's benefit
+was computed from four entry sizes that turned out 3-7x too high, and it would
+have cost two required gates their exact-match caches; E costs real coverage and
+the budget fits without it; assertion 3 has nothing to assert once C is gone.
+E remains the first fallback rung if the measurement lands short.
 
 ### Rollback
 
@@ -636,28 +744,43 @@ gh api repos/SMK1085/paigasus-helikon/actions/caches --paginate \
 
 ### PR 2
 
-1. Merge; purge again (change B invalidates everything, so all `v0-*` entries are
-   provably stale: `grep '^v0-'`).
-2. Let a **first** `main` run complete — expected fully cold.
+1. Merge. **Purge the `v0-*` entries**, which `prefix-key: v1` makes trivially
+   identifiable — every remaining `v0-` key is provably stale, so the purge is a
+   targeted `grep '^v0-'` rather than PR 1's blind delete-everything:
+
+   ```bash
+   gh api --paginate repos/SMK1085/paigasus-helikon/actions/caches \
+     --jq '.actions_caches[] | select(.key | startswith("v0-")) | .id' \
+   | xargs -I{} gh api --method DELETE \
+       repos/SMK1085/paigasus-helikon/actions/caches/{}
+   ```
+
+   Needs a token with `actions: write`; no workflow performs it. Ordering is
+   load-bearing for the same reason as PR 1: stale entries left alongside fresh
+   ones evict the fresh ones and the measurement reports a thrashing system.
+2. Let a **first** `main` run complete — expected fully cold, since change B
+   changes every env-hash.
 3. Let a **second** `main` run complete. This is the one that demonstrates
    restore.
 4. Assert:
-   - total across all entries is **under 10 GB**;
-   - `main` holds **one entry per distinct key**: 6 `helikon` entries (one per
-     OS × toolchain), `helikon-registry`, `doc-coverage`, `audit`, `deny` — 10
-     entries. Note `temporal-it` no longer has an entry of its own, and
-     `agentcore-image` never did;
-   - `test (ubuntu-latest, stable)` logs
-     `Restored from cache key "v1-rust-helikon-Linux-x64-…"`, and `clippy` and
-     `docs` log a restore from that **same** key;
-   - `sessions-it`, `verify`, `bench` and `temporal-it` log a restore from
-     `v1-rust-helikon-registry-Linux-x64-…`;
-   - **wall-clock sanity check** on `build-no-default-features` and `sessions-it`
-     — both are required gates that trade an exact-match cache for a
-     registry-only one, so their runtimes must be recorded and compared against
-     the PR 1 baseline. Restoring is not the same as benefiting; without this
-     check the design is constructed so that a regression on these two cannot be
-     observed.
+   - total across all entries is **under 10 GB**, and nothing was evicted
+     mid-run — compare the entry count against the 16 in the baseline;
+   - all 15 push-triggered entries are present on `refs/heads/main`, every key
+     prefixed `v1-rust-`. The 16th entry in the baseline is `sbom`, which is
+     tag-scoped (`refs/tags/paigasus-helikon-v*`) and only reappears on the next
+     release tag — do not read its absence as an eviction. **`bench` is not in
+     either count**: `bench.yml` is `workflow_dispatch`-only, so a push to `main`
+     never runs it and it contributes no entry unless someone dispatches it
+     (`gh workflow run bench.yml --ref main`);
+   - the second run's `test (ubuntu-latest, stable)` logs
+     `Restored from cache key "v1-rust-test-Linux-x64-..." full match: true`;
+   - **record every per-entry size again** and compare against the 14.46 GiB
+     baseline above, so the realised compressed debug saving is a measured number
+     rather than the 60-75% estimate. That figure decides whether the fallback
+     ladder is ever needed.
+
+If the total lands over 10 GB, apply fallback rung 1 (change E) in a follow-up
+rather than reverting: B is strictly beneficial even when insufficient.
 
 Non-goal: a wall-clock target for any *other* leg. The issue's own history shows
 single-run timings are a noisy sample of a thrashing system. The two checks above
@@ -717,10 +840,11 @@ are exceptions because they guard a known, deliberate trade.
 
 | File | Change |
 | -- | -- |
-| `.github/workflows/ci.yml` | `CARGO_PROFILE_DEV_DEBUG` env; `prefix-key: v1`; `shared-key: helikon` on `test`, `clippy`, `docs`; `shared-key: helikon-registry` + `cache-targets: false` on `build-no-default-features`, `sessions-it`; literal `save-if: false` on `clippy`, `docs`, `sessions-it`; `cache-on-failure` on `test` and `doc-coverage`; `cargo fetch --locked` in `build-no-default-features`; matrix `test_args` → expression (change E) |
-| `.github/workflows/msrv.yml`, `bench.yml` | new `env:` block; `shared-key: helikon-registry`; `cache-targets: false`; `save-if: false` |
-| `.github/workflows/sbom.yml` | `env:` addition; `shared-key: helikon-registry`; `cache-targets: false`; `save-if: false` |
-| `.github/workflows/integration.yml` | `env:` addition; `shared-key: helikon-registry`; `cache-targets: false`; `save-if: false` on `temporal-it` |
-| `.github/workflows/audit.yml`, `deny.yml` | `env:` addition; `prefix-key: v1` |
-| `scripts/check-cargo-profile-env-sync.sh` | assertion 3 |
-| `CLAUDE.md`, `docs/runbooks/ci-architecture.md` | as above |
+| `ci.yml`, `msrv.yml`, `audit.yml`, `deny.yml`, `sbom.yml`, `bench.yml`, `integration.yml` | `CARGO_PROFILE_DEV_DEBUG: line-tables-only` in each workflow-level `env:` block; `prefix-key: v1` at all 12 `rust-cache` sites |
+| this design document | the measured baseline, and the rescope dropping C, E and assertion 3 |
+| `CLAUDE.md`, `docs/runbooks/ci-architecture.md` | the debug-info rule, and that it sits inside the cache key |
+
+Note what is **not** here: no `shared-key`, no `cache-targets` change, no
+`save-if` change, no matrix or `test_args` edit, no guard change. The guard PR 1
+added enforces the one invariant this PR could break — it fails if
+`CARGO_PROFILE_DEV_DEBUG` reaches some cache-bearing workflows and not others.

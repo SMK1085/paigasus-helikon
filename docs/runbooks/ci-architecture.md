@@ -24,6 +24,40 @@ Both use **step-level `if:` guards**, not a job-level one, for the same reason `
 
 `agentcore-image` runs on **`ubuntu-24.04-arm`** (free for public repos) because the Dockerfile hardcodes `--platform linux/arm64` — AgentCore's runtime targets are arm64 microVMs, and qemu-emulating a musl build of aws-lc-rs would take an hour-plus per image. It runs `scripts/agentcore-image-check.sh` with `AGENTCORE_COLD_START_LIMIT_MS=250`, because the 50 ms AC was measured on a quiet developer machine and a shared runner is a different measuring instrument; the script prints a loud `NOTE: … this is NOT the AC value` whenever the effective gate differs from the default. **The 30 MB size gate is deliberately not overridable** — it carries the STOP RULE, and an env knob on it would be precisely the quiet relaxation that rule exists to prevent. The Dockerfile's builder `RUN` uses BuildKit cache mounts so the second image reuses the first's compiled dependencies (~40–50% off the second build; no help to the first, and no persistence across runs — every job gets a fresh runner). **The `cp` out of `target/` must stay inside that same `RUN`**: a cache mount is not part of the image filesystem, so splitting it would silently produce an image with no binary in it.
 
+### Debug info, and why it is a cache-key input
+
+Every cache-bearing workflow sets `CARGO_PROFILE_DEV_DEBUG: line-tables-only` at
+the workflow level (SMA-618 PR 2). The `test` profile inherits `dev`, so this
+covers `cargo test` as well as `build`, `clippy` and `doc`.
+
+It is not a micro-optimisation. Measured on the 40 largest `.rlib` files of a
+real workspace target dir — 2.40 GiB uncompressed — comparing as-built against
+`strip -S` and packing with `zstd -3`, the compression GitHub's cache uses:
+
+| | Uncompressed | zstd -3 |
+| -- | -- | -- |
+| As built | 2.40 GiB | 0.374 GiB |
+| Stripped | 0.79 GiB | 0.078 GiB |
+
+**79% of the compressed bytes were debug info.** `line-tables-only` keeps file
+and line numbers in panic backtraces — so a Windows-only or macOS-only failure is
+still localizable from the log — while dropping the variable and type information
+nothing in CI reads. `strip -S` removes line tables too, so 79% is an upper bound
+on what this setting recovers, not a promise.
+
+**The trap:** this variable name begins with `CARGO`, so rust-cache hashes it
+into the cache key. Setting it in some cache-bearing workflows and not others
+does not produce a warning or a failure — it silently gives those workflows a
+different key, which is how the repository ended up 37% over budget in the first
+place. `scripts/check-cargo-profile-env-sync.sh` runs in `fmt` and fails if the
+cargo-visible workflow env is not byte-identical across all of them. If you add
+another `CARGO_*`/`RUST*` variable, add it everywhere or expect a red `fmt`.
+
+`prefix-key: v1` was bumped in the same change. Its only job is to make the
+generation boundary greppable: every `v0-` key predates the debug-info change and
+is unreachable, so a post-merge purge can target `v0-` precisely instead of
+deleting the fresh entries alongside the stale ones.
+
 ## protoc (`.github/actions/setup-protoc`)
 
 **`protoc` comes from `.github/actions/setup-protoc`, a repo-local composite action, not from a third-party one** (SMA-458). It installs **protoc 35.1**, pinned exactly and verified against a per-platform SHA-256 **before** extraction, at all nine sites that compile the workspace (`ci.yml` ×6, `msrv.yml`, `release-plz.yml`, `integration.yml`). It replaced `arduino/setup-protoc`, whose `version` input **defaults to `23.x`, not to latest** — the action's README claims otherwise and is wrong, and CI had therefore been running **23.4** since SMA-332. SMA-458 was consequently a deliberate 12-major upgrade as well as a pin, not the no-op its one-line ticket framing implied. `install.sh` does download → verify → extract → export; that order is load-bearing, so an unverified archive never reaches an executable location. It exports `PROTOC` and `PROTOC_INCLUDE` via `$GITHUB_ENV` as well as prepending to `$GITHUB_PATH`, because `prost-build` resolves `PROTOC` **before** falling back to a `PATH` lookup — that makes the install authoritative regardless of `PATH` ordering, and moots the well-known-type `include/` tree having to sit beside the binary. **`verify.sh` must stay its own step**: `$GITHUB_PATH`/`$GITHUB_ENV` writes do not affect the step that makes them, so an assertion folded back into `install.sh` would validate a local `export PATH=` rather than the mechanism cargo sees, and would be structurally blind to the propagation failure it exists to catch. Only `Linux-X64`, `macOS-ARM64` and `Windows-X64` are supported; anything else exits non-zero naming the file to edit. `linux-aarch_64` is deliberately absent even though `agentcore-image` runs on `ubuntu-24.04-arm` (it has no protoc step) — an unexercised digest is an unexercised code path, and a wrong one reads as tampering rather than as a typo.
