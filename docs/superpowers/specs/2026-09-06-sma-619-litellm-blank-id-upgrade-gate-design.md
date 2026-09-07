@@ -120,9 +120,13 @@ were never meant to be adjacent.
 |---|---|---|
 | §1 / §5.1: `"{}"` then `"[]"` | `Ok` — `""`→`{}`, `c1`→`[]`, both parse | **`Err`** — `""`→`"{}[]"`, does not parse |
 | §3.5 / §5.2: `"{\"a\":"` then `"1}"` | **`Err`** — `""`→`"{\"a\":"`, does not parse | `Ok` — `""`→`"{\"a\":1}"`, parses |
+| §3.7: args-only `"{}"`, then named `"{}"` | `Ok` — `""`→`{}` nameless, `c1`→`alpha`/`{}`, both parse | **`Err`** — `""`→`"{}{}"`, does not parse |
 
-The two realistic-looking outcomes point in opposite directions, and this is the
-axis on which the decision has to be made honestly.
+The rows point in opposite directions, and this is the axis on which the
+decision has to be made honestly. What separates them is not the delta ordering
+— rows 2 and 3 share one — but whether the arguments genuinely fragment. Where
+they do, the fix rescues the turn; where each delta carries a complete document,
+joining them is what breaks it.
 
 **The decision: accept the §1 `Err`.** Real backends fragment arguments as a
 partial JSON string, which is §3.5's shape — `"{}"` followed by `"[]"` is not a
@@ -140,6 +144,10 @@ argument stream, which is what it is for.
 On the shape that actually occurs, the fix moves `Err` → `Ok`. That is the
 result that matters. Both are asserted (§5.1, §5.2) so neither can drift
 unnoticed.
+
+Row 3 is not synthetic in the same way — it is reachable from a real backend —
+and is therefore accepted on its own grounds rather than on "no backend emits
+it". Those grounds, and its own assertion, are in §3.7.
 
 ## 2. Decision
 
@@ -413,6 +421,29 @@ reviewer diffing behaviour is not surprised:
   **Accepted, and correct:** two names for one call is the violation this whole
   series exists to prevent, and the loss is already logged by the existing warn.
 - **N parallel blank-id calls stay merged at the accumulator** — §2.2, tested.
+- **Complete arguments on both deltas now fail the turn.**
+  `[{index:0,id:"",args:"{}"}]` then `[{index:0,id:"c1",name:"alpha",args:"{}"}]`
+  — §3.6's ordering, but with a complete JSON document on each delta rather than
+  two halves of one. Pre-fix the upgrade ran, the accumulator saw `("", "", {})`
+  and `("c1", "alpha", {})`, and `finish()` returned `Ok` **with a properly named
+  call under a real, submittable `call_id`** — the only shape traced here that
+  did. Post-fix both deltas land under `""`, the joined arguments are `"{}{}"`,
+  and the turn is discarded. Unlike §1's marker shape this is reachable:
+  `core/src/model.rs:527-531` records that OpenAI streaming legitimately emits an
+  empty `arguments` delta for a zero-parameter tool call, and a backend that
+  repeats the complete arguments on every delta is the arguments analogue of the
+  repeat-the-whole-name quirk `stream.rs` already defends against at its
+  `slot.name != name_frag` guard. **Accepted.** The pre-fix `Ok` was never one
+  clean call: alongside `("c1", "alpha", {})` it carried a nameless item under
+  `""` that `build_items` constructs unconditionally
+  (`core/src/model.rs:545-549`) and `loop_state.rs:325-335` dispatches as a tool
+  named `""` with no validation. So the choice is one good call plus one
+  unvalidated dispatch versus one loud failure. Narrowing the gate to
+  name-carrying emissions would rescue this shape and is rejected for the reason
+  already recorded in §3.6 — it would trade this arguments-loss corruption
+  straight back for the name-loss one. Pinned by
+  `complete_args_on_both_deltas_fail_the_turn_when_withheld`, whose doc comment
+  carries this reasoning, and by §1.4's third row.
 
 ### 3.8 `flush_buffered_names` does not record into `blank_emitted`
 
@@ -420,7 +451,9 @@ Neither crate records there (`stream.rs:642-646`, `chat.rs:488-492`), and the
 omission is deliberate: `finish()` is terminal, so no replacement arm runs after
 it. It is inert even under the double-`finish()` that
 `finish_is_idempotent_after_draining` (`stream.rs:1286`) exercises, because the
-first call drains `pending`. A one-line comment records this so the asymmetry
+first call records the key in `name_emitted` and the guard at the top of the
+loop short-circuits on it — `pending` itself is not drained, only `slot.name`
+is taken. A one-line comment records this so the asymmetry
 with the mid-stream emit site does not read as an oversight.
 
 ## 4. The change (`providers-openai`)
