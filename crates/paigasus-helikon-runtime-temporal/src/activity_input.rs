@@ -4,7 +4,9 @@
 //! wrapper defined here. That single-parameter shape is load-bearing:
 //! `#[activities]` derives `ActivityDefinition::Input` from the method's
 //! parameter list via `multi_args_input_type`
-//! (`temporalio-macros-0.7.0/src/activities_definitions.rs:265-278`), which maps
+//! (`temporalio-macros-1.0.0/src/activities_definitions.rs`, `fn
+//! multi_args_input_type` — cited by symbol, not line, because these citations
+//! have silently rotted across two SDK bumps), which maps
 //! `0 => ()`, `1 => the parameter's own type`, and `n => MultiArgs{n}`. There is
 //! no `MultiArgs1`, so a one-parameter activity's `Input` *is* our wrapper —
 //! which lets us supply a hand-written codec.
@@ -27,25 +29,38 @@
 //! # Why the hand-written impls are reached at all
 //!
 //! `PayloadConverter::default()` is `Composite([UseWrappers, serde_json()])`
-//! (`temporalio-common-wasm-0.7.0/src/data_converters.rs:200-206`). The
-//! `Composite` arm tries each sub-converter in order, and `UseWrappers`
-//! dispatches to the **overridable** trait methods `T::to_payloads` (`:541`) and
-//! `T::from_payloads` (`:576`) *before* the `serde_json` arm applies its hard
-//! `payloads.len() != 1` check (`:570-572`). This is the same mechanism
+//! (`temporalio-common-wasm-1.0.0/src/data_converters.rs`, `impl Default for
+//! PayloadConverter`). The `Composite` arm tries each sub-converter in order, and
+//! `UseWrappers` dispatches to the **overridable** trait methods `T::to_payloads`
+//! (`:604`) and `T::from_payloads` (`:637`) *before* the `serde_json` arm applies
+//! its hard `payloads.len() != 1` check (`:631`). This is the same mechanism
 //! `MultiArgs{N}` itself relies on.
 //!
 //! The re-entrant call inside [`TemporalSerializable::to_payloads`] terminates
-//! rather than recursing: the inner serde-derived struct's `to_payload` goes
-//! `UseWrappers` -> the struct's *default* `to_payloads` -> default
-//! `to_payload` -> `WrongEncoding` -> falls through to `serde_json`. The blanket
-//! impls (`:603-627`) override only `as_serde`/`from_serde`, never
-//! `to_payloads`/`from_payloads`.
+//! rather than recursing — but **the reason changed in 1.0**, so do not restore
+//! the older wording. In 0.7, `PayloadConverter::to_payload` delegated to
+//! `to_payloads` (and `from_payload` to `from_payloads`), so the argument ran
+//! through the plural forms. In 1.0 both singular methods are *primary*
+//! implementations that dispatch `T::to_payload` / `T::from_payload` directly.
+//! The inner serde-derived struct's `to_payload` therefore goes `UseWrappers` ->
+//! `T::to_payload` -> the trait's *default* body -> `WrongEncoding` -> falls
+//! through to `serde_json`. The outcome is identical only because those trait
+//! defaults are themselves unchanged from 0.7 (`1.0.0:329-345` vs
+//! `0.7.0:279-295`). The blanket impls (`impl<T> TemporalSerializable for T` and
+//! `impl<T> TemporalDeserializable for T`) still override only
+//! `as_serde`/`from_serde`, never `to_payloads`/`from_payloads`.
+//!
+//! The SMA-484 arity rejection below depends on the SDK decoding activity inputs
+//! through the **plural** `from_payloads`, which it still does
+//! (`temporalio-sdk-1.0.0/src/activities.rs:583`, `pc.from_payloads(&ctx,
+//! payloads)`). Verified, not inferred from "it compiles" — an encoding or
+//! dispatch change here would be invisible to every test in this file.
 //!
 //! # Why the wrappers derive no serde
 //!
 //! `temporalio-common-wasm` carries blanket impls
-//! `impl<T: Serialize> TemporalSerializable for T` (`:603-610`) and
-//! `impl<T: DeserializeOwned> TemporalDeserializable for T` (`:611-627`). A type
+//! `impl<T: Serialize> TemporalSerializable for T` (`1.0.0:653`) and
+//! `impl<T: DeserializeOwned> TemporalDeserializable for T` (`1.0.0:661`). A type
 //! deriving serde therefore *cannot* also hand-implement the Temporal traits —
 //! coherence conflict. Hence the split: a serde-derived `*Args` struct holding
 //! the data, and a serde-free newtype wrapper carrying the codec.
@@ -80,7 +95,8 @@ use temporalio_common::protos::temporal::api::common::v1::Payload;
 ///
 /// Fully qualified to match the `ActivityType` Temporal actually registers:
 /// `#[activities]` with no name override derives it as
-/// `"{ImplType}::{method}"` (`temporalio-macros-0.7.0/src/activities_definitions.rs:548`),
+/// `"{ImplType}::{method}"` (`temporalio-macros-1.0.0/src/activities_definitions.rs:548`,
+/// verified unchanged across the 0.7 -> 1.0 bump, so registered activity names are stable),
 /// i.e. `AgentActivities::render_instructions` here — not the bare method name
 /// — so this string is what an operator would actually grep for in the
 /// Temporal Web UI or an `ActivityTaskFailed` history event.
