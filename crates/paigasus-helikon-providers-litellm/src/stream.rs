@@ -758,6 +758,37 @@ mod tests {
             .collect()
     }
 
+    /// Reassemble the events through `ModelTurnAccumulator` and return each
+    /// resulting `Item::ToolCall` as `(call_id, name, args)`, or the error
+    /// string the turn failed with.
+    ///
+    /// Several assertions in this module decide a trade-off that is only
+    /// visible one layer up. The accumulator groups by `call_id` and parses
+    /// each group's joined `args_delta`s exactly once, so a translator that
+    /// merges two `call_id`s concatenates two argument strings that were
+    /// never adjacent — and a parse failure there discards the whole turn,
+    /// assistant text included. Asserting only on `named`/`args_of` hides
+    /// that entirely (SMA-619 §1.4).
+    fn accumulated(evs: &[ModelEvent]) -> Result<Vec<(String, String, serde_json::Value)>, String> {
+        let mut acc = paigasus_helikon_core::ModelTurnAccumulator::new("test-agent");
+        for e in evs {
+            acc.observe(e);
+        }
+        Ok(acc
+            .finish()?
+            .items
+            .into_iter()
+            .filter_map(|i| match i {
+                paigasus_helikon_core::Item::ToolCall {
+                    call_id,
+                    name,
+                    args,
+                } => Some((call_id, name, args)),
+                _ => None,
+            })
+            .collect())
+    }
+
     fn texts(evs: &[ModelEvent]) -> Vec<String> {
         evs.iter()
             .filter_map(|e| match e {
@@ -2034,6 +2065,128 @@ mod tests {
                 (String::new(), "beta".to_owned()),
             ],
             "a blank id is not an identity, so it must not become the wire key"
+        );
+    }
+
+    /// A real `id` arriving after this wire key already emitted under a blank
+    /// one must NOT win — the call would be split across two `call_id`s.
+    ///
+    /// `canonicalize` treats a blank id as "no identity yet", so the
+    /// registration arm lets a real id replace it
+    /// (`a_real_id_replaces_a_blank_one_on_the_same_wire_key`). That rule is
+    /// right up until a delta has gone out under `""`, and wrong from that
+    /// moment on: the name has already been published under the blank id, so
+    /// upgrading leaves the real id carrying zero name-carrying deltas. That
+    /// is an "exactly once" violation on an id that *can* identify, which is
+    /// strictly worse than the stuck blank the rule exists to fix.
+    ///
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-619, which emits `("", Some("alpha"), "{}")` then
+    /// `("c1", None, "[]")` — so `named` passes while `args_of("c1") == "[]"`
+    /// and `args_of("") == "{}"` both fail.
+    ///
+    /// The accumulator assertion records a deliberate trade (SMA-619 §1.4).
+    /// `"{}"` followed by `"[]"` is not a fragmentation of anything — it is
+    /// two complete JSON documents, and no LiteLLM backend emits it; it is
+    /// the marker shape this ticket chose to make the split visible. Keeping
+    /// the call whole necessarily joins them into `"{}[]"`, which does not
+    /// parse, so the turn now fails loudly where it previously "succeeded"
+    /// into two junk items — one named `alpha` under an unsubmittable `""`,
+    /// one with an empty name under `c1`. On the shape backends actually send
+    /// the fix runs the other way; see `the_gate_fires_on_an_args_only_emission`.
+    #[test]
+    fn a_real_id_does_not_replace_a_blank_one_after_the_key_emitted() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"name": "alpha", "arguments": "{}"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"arguments": "[]"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![(String::new(), "alpha".to_owned())],
+            "the name stays under the blank id it was emitted with"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "no delta may arrive under the real id, or it would carry no name"
+        );
+        assert_eq!(
+            args_of(&evs, ""),
+            "{}[]",
+            "every delta for this call stays under the one call_id"
+        );
+        assert!(
+            accumulated(&evs).is_err(),
+            "joining two complete JSON documents cannot parse; the turn fails \
+             loudly rather than splitting into two junk items"
+        );
+    }
+
+    /// The gate fires on ANY emission under a blank id, not only a
+    /// name-carrying one.
+    ///
+    /// This looks like a simplification opportunity and is not. Here the
+    /// first delta carries only `arguments`, so nothing name-carrying has
+    /// been published when the real id arrives — yet an ungated upgrade still
+    /// tears the arguments JSON across two `call_id`s, leaving `"{\"a\":"`
+    /// under `""` and `"1}"` under `"c1"`, neither of which parses. Narrowing
+    /// the gate to name-carrying emissions would trade a name-loss corruption
+    /// for an arguments-loss corruption. One rule covers both: any published
+    /// delta closes the upgrade window.
+    ///
+    /// This is the shape real backends actually send — arguments fragment as
+    /// a partial JSON string — and it is the one where the fix improves the
+    /// end-to-end outcome, taking `ModelTurnAccumulator::finish()` from `Err`
+    /// to `Ok`.
+    ///
+    /// Confirmed to FAIL against the translator as it stood on `main` before
+    /// SMA-619, on all three event assertions: it emits
+    /// `("", None, "{\"a\":")` then `("c1", Some("alpha"), "1}")`.
+    #[test]
+    fn the_gate_fires_on_an_args_only_emission() {
+        let mut t = ChatTranslator::new();
+        let evs = drive(
+            &mut t,
+            vec![
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "", "function": {"arguments": "{\"a\":"}}
+                ])),
+                tc_chunk(serde_json::json!([
+                    {"index": 0, "id": "c1", "function": {"name": "alpha", "arguments": "1}"}}
+                ])),
+            ],
+        );
+        assert_eq!(
+            named(&evs),
+            vec![(String::new(), "alpha".to_owned())],
+            "the name arrives under the blank id the call was published with"
+        );
+        assert_eq!(
+            args_of(&evs, "c1"),
+            "",
+            "no delta may arrive under the real id"
+        );
+        assert_eq!(
+            args_of(&evs, ""),
+            "{\"a\":1}",
+            "both argument fragments stay under the one call_id"
+        );
+        assert_eq!(
+            accumulated(&evs),
+            Ok(vec![(
+                String::new(),
+                "alpha".to_owned(),
+                serde_json::json!({"a": 1})
+            )]),
+            "keeping the call whole is what makes the arguments parse at all"
         );
     }
 }
