@@ -132,8 +132,13 @@ Dependabot is configured for `cargo` + `github-actions` ecosystems, weekly Monda
 
 ## Actions cache budget
 
-GitHub's Actions cache limit is **10 GB per repository and is not raisable** —
-and the unit matters, because every figure here is in GiB. GitHub documents "10
+GitHub's Actions cache limit is **10 GB per repository by default**. It is a
+default, not a hard ceiling: enterprise owners, organization owners and
+repository administrators can raise it — user-owned repositories up to 10 TB —
+at additional storage cost beyond 10 GB. SMA-618 chose to fit inside the default
+rather than pay for headroom; that was a decision, and it can be revisited.
+
+The unit matters, because every figure here is in GiB. GitHub documents "10
 GB", but the **enforced threshold is 10 GiB** (10,737,418,240 bytes), not 10
 decimal GB (which would be 9.31 GiB). Measured, not assumed: during SMA-618 an
 inventory of **9.97 GiB persisted stably** once eviction had settled. That is

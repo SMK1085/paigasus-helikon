@@ -16,6 +16,17 @@ GitHub's Actions cache limit is 10 GB per repository and is not raisable. This
 repository runs chronically over it, so GitHub evicts LRU continuously and some
 CI leg starts cold on essentially every run.
 
+**The limit is a default, not a ceiling.** Raised in review on #252, and the
+reviewer was right where this document had been wrong throughout: GitHub's docs
+state the 10 GB limit "can be increased by enterprise owners, organization
+owners, or repository administrators", with user-owned repositories configurable
+up to 10 TB and additional storage cost beyond 10 GB. Earlier revisions of this
+document asserted it was "not raisable", which is false, and that error hid an
+option that was never put to the maintainer: **paying for headroom instead of
+engineering for it.** The work below is still worth having — smaller caches
+restore faster and cost nothing — but fitting inside the default was a choice,
+not a constraint.
+
 **Units.** Every size in this document is GiB, and the limit is **10 GiB**
 (10,737,418,240 bytes) despite GitHub documenting it as "10 GB". This was
 measured rather than assumed: an inventory of 9.97 GiB — 10.70 *decimal* GB —
