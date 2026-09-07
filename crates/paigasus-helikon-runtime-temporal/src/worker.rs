@@ -537,14 +537,14 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         ));
 
         let telemetry_options = temporalio_common::telemetry::TelemetryOptions::builder().build();
-        // 0.7: `Worker::new` takes the SDK's `Runtime` (a newtype over
+        // 1.0: `Worker::new` takes the SDK's `Runtime` (a newtype over
         // `CoreRuntime`), so build the SDK's `RuntimeOptions` rather than
         // core's — `RuntimeOptions: Into<CoreRuntimeOptions>` handles the rest.
         let runtime_options = temporalio_sdk::runtime::RuntimeOptions::builder()
             .telemetry_options(telemetry_options)
             .build()
             .map_err(WorkerBuildError::Runtime)?;
-        let runtime = temporalio_sdk::Runtime::new_assume_tokio(runtime_options)
+        let runtime = temporalio_sdk::Runtime::from_current_tokio(runtime_options)
             .map_err(|e| WorkerBuildError::Runtime(e.to_string()))?;
 
         // Serve both workflow and activity tasks: this worker now drives the

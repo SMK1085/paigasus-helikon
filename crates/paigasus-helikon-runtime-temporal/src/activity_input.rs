@@ -376,7 +376,8 @@ mod tests {
     use super::*;
     use paigasus_helikon_core::{ModelRequest, ToolCallRequest};
     use temporalio_common::data_converters::{
-        MultiArgs2, MultiArgs3, PayloadConverter, SerializationContextData,
+        ActivitySerializationContext, MultiArgs2, MultiArgs3, PayloadConverter,
+        SerializationContextData,
     };
 
     /// Run `f` with a [`SerializationContext`] over the **default** converter.
@@ -393,11 +394,11 @@ mod tests {
     /// legacy `MultiArgs{N}` shapes this design builds on.
     fn with_ctx<R>(f: impl FnOnce(&SerializationContext<'_>) -> R) -> R {
         let converter = PayloadConverter::default();
-        let data = SerializationContextData::Activity;
-        let ctx = SerializationContext {
-            data: &data,
-            converter: &converter,
-        };
+        // 1.0 made both `SerializationContextData::Activity` a tuple variant and
+        // `SerializationContext` `#[non_exhaustive]`, so this must go through the
+        // constructors rather than a struct expression.
+        let data = SerializationContextData::Activity(ActivitySerializationContext::new());
+        let ctx = SerializationContext::new(&data, &converter);
         f(&ctx)
     }
 
