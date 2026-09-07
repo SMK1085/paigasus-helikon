@@ -191,6 +191,17 @@ Post-fix both upgrades are withheld, so all four deltas carry `call_id: ""` and
 `ModelTurnAccumulator` folds them into **one** item named `alpha` with
 `args_str == "{}{}xy"`. Pre-fix, `x` and `y` reach distinct `c1` and `c2`.
 
+Per AC6, the `finish()` outcome: **the merge fails the turn.** Two parallel
+calls' argument objects concatenate into a string that cannot parse, so
+post-fix `finish()` returns `Err` on any N>1 shape where both calls carry
+arguments. On the isolating fixture used in §5.4 — where the two calls emit
+under `""` with no arguments, and only the post-upgrade deltas carry any —
+pre-fix yields three parsing items (`("", "alpha", {})` plus a nameless `c1`
+and `c2`) and post-fix yields `Err`. This is the same trade §1.4 already
+accepted and is accepted on the same grounds: the pre-fix `Ok` is junk that
+parses — two nameless calls and one under an unsubmittable `""` — and a loud
+failure beats dispatching it.
+
 This extends a merge that `canonicalize`'s comment (`stream.rs:184-192`),
 `blank_ids_do_not_collapse_distinct_calls` (`stream.rs:1956`) and core's
 contract — "a provider MUST NOT merge two parallel blank-id calls"
@@ -525,11 +536,19 @@ module driving `"id": ""` (`stream.rs:1869`, `1961-1962`, `1993-1994`,
 
 §2.2's shape. Asserts what the translator guarantees and what it does not: two
 name-carrying deltas go out, `named(&evs) == [("", "alpha"), ("", "beta")]`,
-satisfying SMA-616's event-layer rule; and `ModelTurnAccumulator` folds them
-into a single item, which the test asserts explicitly. Its doc comment records
-that this is the accepted cost of the gate, that `openai/chat` has carried the
-same trade since SMA-566, and that the two `warn!`s from §3.4 are what make it
-diagnosable.
+satisfying SMA-616's event-layer rule; no delta reaches either real id; and
+`finish()` returns `Err`, because the merged blank bucket concatenates two
+argument objects. Its doc comment records that this is the accepted cost of the
+gate, that `openai/chat` has carried the same trade since SMA-566, and that the
+two `warn!`s from §3.4 are what make it diagnosable.
+
+The fixture is deliberately three chunks, not two. The calls must emit before
+their real ids arrive or the gate never engages — but if that emission carries
+arguments, those arguments merge under `""` and fail the turn pre-fix and
+post-fix alike, proving nothing about this gate. So chunk 1 buffers two names,
+chunk 2 is a bare `[{"index": 0}, {"index": 1}]` completion signal that flushes
+both under `""` with no arguments, and only chunk 3 carries arguments. That
+isolates the gate's effect: `Ok` with three items pre-fix, `Err` post-fix.
 
 ## 6. Documentation
 
