@@ -657,11 +657,19 @@ paying one cold run before its replacement entry is written:
   — a variable inside rust-cache's env-hash. Their existing `verify` (msrv) and
   `bench` entries are orphaned the same way.
 
-So PR 1 orphans four entries total (`audit`, `deny`, `verify`, `bench`), not
-zero.
+So PR 1 orphans up to four entries (`audit`, `deny`, `verify`, and `bench`
+only if it had ever been dispatched on `main` — it had not, so in practice
+three), not zero.
 
 **PR 2 — the debug-info cut, alone.** Change B plus `prefix-key: v1`.
-Key-invalidating; scoped by PR 1's measurement. SMA-618 closes here.
+Key-invalidating; scoped by PR 1's measurement.
+
+**SMA-618 closes on the measurement, not on this merge.** PR 2 is allowed to
+merge while the repository is still over budget — change B is strictly
+beneficial even when insufficient, so reverting it would be worse than keeping
+it. But the ticket is about the thrashing, not about the diff, so it closes only
+once [Acceptance](#pr-2) has actually passed, or once fallback rung 1 has landed
+and passed. The PR therefore does not carry a `Closes` keyword.
 
 Changes C, E and F assertion 3 were originally scheduled here and are **dropped**
 — see [Measured baseline](#measured-baseline-2026-09-07). In short: C's benefit
@@ -755,9 +763,15 @@ gh api repos/SMK1085/paigasus-helikon/actions/caches --paginate \
 3. Let a **second** `main` run complete. This is the one that demonstrates
    restore.
 4. Assert:
-   - total across all entries is **under 10 GB**, with no entry evicted mid-run
-     (compare the entry count against the 16 `main` writes);
-   - `main` holds all 16 entries, every key prefixed `v1-rust-`;
+   - total across all entries is **under 10 GB**, and nothing was evicted
+     mid-run — compare the entry count against the 16 in the baseline;
+   - all 15 push-triggered entries are present on `refs/heads/main`, every key
+     prefixed `v1-rust-`. The 16th entry in the baseline is `sbom`, which is
+     tag-scoped (`refs/tags/paigasus-helikon-v*`) and only reappears on the next
+     release tag — do not read its absence as an eviction. **`bench` is not in
+     either count**: `bench.yml` is `workflow_dispatch`-only, so a push to `main`
+     never runs it and it contributes no entry unless someone dispatches it
+     (`gh workflow run bench.yml --ref main`);
    - the second run's `test (ubuntu-latest, stable)` logs
      `Restored from cache key "v1-rust-test-Linux-x64-..." full match: true`;
    - **record every per-entry size again** and compare against the 14.46 GiB
