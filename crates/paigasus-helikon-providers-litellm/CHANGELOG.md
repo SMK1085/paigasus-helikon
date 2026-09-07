@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-litellm-v0.1.7...paigasus-helikon-providers-litellm-v0.1.8) - 2026-09-07
+
+### Fixed
+
+- *(providers)* SMA-619 stop litellm splitting a call across two call_ids ([#249](https://github.com/SMK1085/paigasus-helikon/pull/249))
+
 ## [0.1.7](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-litellm-v0.1.6...paigasus-helikon-providers-litellm-v0.1.7) - 2026-09-06
 
 ### Fixed
