@@ -128,6 +128,30 @@ cache_step_env() {
   ' "$1" || true
 }
 
+# Emit one TSV row per rust-cache step: shared-key, save-if, cache-targets,
+# cache-directories. Empty fields become "-". Same whole-block buffering as
+# cache_step_env, and for the same reason: YAML mapping keys are unordered.
+cache_step_inputs() {
+  awk -v OFS='\t' '
+    function indent(s,   n) { n = 0; while (substr(s, n + 1, 1) == " ") n++; return n }
+    function val(line,   v) { sub(/^[^:]*:[[:space:]]*/, "", line); gsub(/^["\x27]|["\x27]$/, "", line); return line }
+    function flush() {
+      if (has_cache) {
+        print (sk == "" ? "-" : sk), (si == "" ? "-" : si), (ct == "" ? "-" : ct), (cd == "" ? "-" : cd), FILENAME
+      }
+      has_cache = 0; sk = ""; si = ""; ct = ""; cd = ""
+    }
+    /^      - / { flush(); instep = 1 }
+    instep && $0 !~ /^[[:space:]]*$/ && indent($0) < 6 && $0 !~ /^      - / { flush(); instep = 0 }
+    instep && /Swatinem\/rust-cache@/ { has_cache = 1 }
+    instep && /^ *shared-key:/        { sk = val($0) }
+    instep && /^ *save-if:/           { si = val($0) }
+    instep && /^ *cache-targets:/     { ct = val($0) }
+    instep && /^ *cache-directories:/ { cd = val($0) }
+    END { flush() }
+  ' "$1" || true
+}
+
 mapfile -t all_workflows < <(find "${workflow_dir}" -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) | sort)
 if [[ "${#all_workflows[@]}" == "0" ]]; then
   echo "error: no workflow files in ${workflow_dir}" >&2
@@ -194,6 +218,43 @@ for f in "${cached[@]}"; do
     problems+=("${name}: a Swatinem/rust-cache step declares its own env:; it is hashed into that job's key alone")
   done < <(cache_step_env "${f}")
 done
+
+# --- assertion 3: one writer, and one path list, per shared-key -----------
+# rust-cache never overwrites an existing key, so a second writer that finishes
+# first can install a thinner cache that is then never replaced. And
+# @actions/cache folds the cached path list into the cache *version*, so two
+# sites sharing a key with different cache-targets/cache-directories silently
+# miss each other rather than sharing.
+declare -a sk_rows=()
+for f in "${cached[@]}"; do
+  while IFS=$'\t' read -r sk si ct cd _; do
+    [[ -n "${sk:-}" && "${sk}" != "-" ]] || continue
+    sk_rows+=("${sk}"$'\t'"${si}"$'\t'"${ct}"$'\t'"${cd}"$'\t'"$(basename "${f}")")
+  done < <(cache_step_inputs "${f}")
+done
+
+if [[ "${#sk_rows[@]}" -gt 0 ]]; then
+  while IFS= read -r key; do
+    [[ -n "${key}" ]] || continue
+    writers=0; writer_names=""; paths=""; paths_first=""; mismatch=""
+    for row in "${sk_rows[@]}"; do
+      IFS=$'\t' read -r sk si ct cd wf <<< "${row}"
+      [[ "${sk}" == "${key}" ]] || continue
+      if [[ "${si}" != "false" ]]; then
+        writers=$((writers + 1)); writer_names+=" ${wf}"
+      fi
+      paths="${ct}|${cd}"
+      if [[ -z "${paths_first}" ]]; then paths_first="${paths}"
+      elif [[ "${paths}" != "${paths_first}" ]]; then mismatch="${wf}"; fi
+    done
+    if [[ "${writers}" -gt 1 ]]; then
+      problems+=("shared-key '${key}': ${writers} sites may save (${writer_names# }) — exactly one may; the rest need a literal 'save-if: false'")
+    fi
+    if [[ -n "${mismatch}" ]]; then
+      problems+=("shared-key '${key}': ${mismatch} declares different cache-targets/cache-directories than its peers; the cached path list is part of the cache version, so they would not share")
+    fi
+  done < <(printf '%s\n' "${sk_rows[@]}" | cut -f1 | sort -u)
+fi
 
 if [[ "${#problems[@]}" == "0" ]]; then
   echo "cargo-visible workflow env agrees across ${#cached[@]} cache-bearing workflow(s)"

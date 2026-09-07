@@ -78,9 +78,21 @@ jobs:
       # (save) step, so a PR run still reads main's entries — it just stops
       # writing its own refs/pull/N/merge copies, which is what was evicting
       # main's and pushing the repo 37% over the fixed 10 GB limit.
+      # SMA-618: `clippy` and `docs` share ONE cache entry. Both are
+      # metadata-mode builds of the same `--all-features` graph — `cargo clippy`
+      # is a `cargo check` variant and `cargo doc --no-deps` still builds
+      # dependency metadata — so neither emits the `.rlib` debug info that
+      # `CARGO_PROFILE_DEV_DEBUG` shrinks, and both measured a 0% saving from it.
+      # Sharing is the only lever that reaches them. `clippy` is the WRITER
+      # because `--all-targets` also builds dev-dependencies, making its graph a
+      # superset of `docs`'; `docs` is a reader with a literal `save-if: false`.
+      # That literal is load-bearing: two writers would race, and the loser's
+      # thinner cache could win the key and then never be replaced, because
+      # rust-cache does not overwrite an existing key.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           prefix-key: v1
+          shared-key: metadata
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
@@ -90,11 +102,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         toolchain: [stable, "1.94"]
-        include:
-          - toolchain: stable
-            test_args: --workspace --all-features
-          - toolchain: "1.94"
-            test_args: --workspace --all-features -- --skip trybuild_ui
     runs-on: ${{ matrix.os }}
     env:
       # Turn a silently-unenforcing sandbox into a hard failure (never green-by-skip).
@@ -121,7 +128,28 @@ jobs:
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test ${{ matrix.test_args }}
+      # SMA-618: `trybuild_ui` runs on ubuntu-stable and macOS-stable only.
+      #
+      # It is skipped on every `1.94` leg for a reason that predates this ticket
+      # and must stay: the `.stderr` snapshots pin rustc diagnostic text
+      # byte-for-byte, and that text drifts across releases.
+      #
+      # It is additionally skipped on windows-stable for cache budget. rust-cache
+      # deliberately preserves `target/tests/trybuild` (see its `cleanup.ts`), and
+      # that nested dependency graph measured as the difference between the two
+      # Windows entries at one commit: 2.76 GiB with it, 1.07 without. The
+      # snapshots pass byte-identically on all three OSes, so Windows contributes
+      # no distinct signal, and ubuntu + macOS still run all 21 cases.
+      #
+      # CAREFUL with the expression form. The obvious shape,
+      #   ${{ cond && '' || '-- --skip trybuild_ui' }}
+      # is WRONG: the empty string is falsy in GitHub expressions, so `X && '' || Y`
+      # always falls through to Y and would skip the UI tests on every leg,
+      # silently deleting the coverage this comment claims to preserve. Keep the
+      # non-empty value in the true branch, as below.
+      - run: >-
+          cargo test --workspace --all-features
+          ${{ (matrix.toolchain != 'stable' || matrix.os == 'windows-latest') && '-- --skip trybuild_ui' || '' }}
 
   build-no-default-features:
     runs-on: ubuntu-latest
@@ -179,11 +207,14 @@ jobs:
       # version and its digests live in the action (SMA-458).
       - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
-      # SMA-618: save only from the default branch — see the note on `clippy`.
+      # SMA-618: reader of the `metadata` key that `clippy` writes — see the
+      # note there. `save-if: false` is a literal, NOT the default-branch
+      # expression: exactly one job may write a shared key.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           prefix-key: v1
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: metadata
+          save-if: false
       - run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
