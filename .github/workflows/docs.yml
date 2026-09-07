@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # taiki-e/install-action v2.85.11
+      # taiki-e/install-action v2.87.5
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }}
@@ -52,6 +52,6 @@ jobs:
       group: pages
       cancel-in-progress: false
     steps:
-      # actions/deploy-pages v5.0.0
+      # actions/deploy-pages v5.0.1
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346
