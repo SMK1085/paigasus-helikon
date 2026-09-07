@@ -219,8 +219,11 @@ Append immediately after the test from Step 2:
 
 - [ ] **Step 4: Run both tests and verify they FAIL**
 
+`cargo test` accepts only ONE positional filter, so run them separately:
+
 ```bash
-cargo test -p paigasus-helikon-providers-litellm --lib blank_one_after_the_key_emitted args_only_emission
+cargo test -p paigasus-helikon-providers-litellm --lib after_the_key_emitted
+cargo test -p paigasus-helikon-providers-litellm --lib args_only_emission
 ```
 
 Expected: both FAIL. Read the assertion output and confirm it matches the doc comments — `a_real_id_does_not_replace_a_blank_one_after_the_key_emitted` fails on `args_of(&evs, "c1")` with `left: "[]"`, and `the_gate_fires_on_an_args_only_emission` fails on `named` with `left: [("c1", "alpha")]`.
@@ -232,7 +235,7 @@ Expected: both FAIL. Read the assertion output and confirm it matches the doc co
 ```bash
 git add crates/paigasus-helikon-providers-litellm/src/stream.rs
 git commit -F - <<'MSG'
-test(providers-litellm): SMA-619 pin the blank-id upgrade split
+test(providers): SMA-619 pin the blank-id upgrade split
 
 Both tests fail against the current translator: a blank->real call_id
 upgrade after emission splits one call across two ids, leaving the real
@@ -379,7 +382,8 @@ In `handle_tool_call`, between the "suppress a wholly empty event" early return 
 - [ ] **Step 5: Run the two new tests and verify they PASS**
 
 ```bash
-cargo test -p paigasus-helikon-providers-litellm --lib blank_one_after_the_key_emitted args_only_emission
+cargo test -p paigasus-helikon-providers-litellm --lib after_the_key_emitted
+cargo test -p paigasus-helikon-providers-litellm --lib args_only_emission
 ```
 
 Expected: both PASS.
@@ -399,7 +403,7 @@ Pay particular attention to `a_real_id_replaces_a_blank_one_on_the_same_wire_key
 ```bash
 git add crates/paigasus-helikon-providers-litellm/src/stream.rs
 git commit -F - <<'MSG'
-fix(providers-litellm): SMA-619 gate the blank call_id upgrade on emission
+fix(providers): SMA-619 gate the blank call_id upgrade on emission
 
 Once a wire key has published a ToolCallDelta under "", the blank->real
 upgrade is withheld and warned about once per key, so the call reaches
@@ -448,7 +452,7 @@ Expected: 159 pass.
 ```bash
 git add crates/paigasus-helikon-providers-litellm/src/stream.rs
 git commit -F - <<'MSG'
-docs(providers-litellm): SMA-619 note why the flush site records no emission
+docs(providers): SMA-619 note why the flush site records no emission
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01LYH3d66YxK8k7wLjRZ8oCY
@@ -572,7 +576,7 @@ If `named` comes back empty, chunk 2 did not flush — check that its entries ca
 ```bash
 git add crates/paigasus-helikon-providers-litellm/src/stream.rs
 git commit -F - <<'MSG'
-test(providers-litellm): SMA-619 pin the parallel blank-call merge
+test(providers): SMA-619 pin the parallel blank-call merge
 
 The gate withholds both upgrades, so two parallel blank-id calls stay
 merged at the accumulator. Accepted per the spec; asserted so the trade
@@ -749,7 +753,7 @@ Re-read spec §0 and confirm each of the seven, citing the test or line that sat
 ```bash
 git add crates/paigasus-helikon-providers-litellm/README.md
 git commit -F - <<'MSG'
-docs(providers-litellm): SMA-619 document the blank call_id limitation
+docs(providers): SMA-619 document the blank call_id limitation
 
 Records the user-visible consequence of the upgrade gate on the crate's
 crates.io page, closing the handoff SMA-616's spec made to this ticket.
