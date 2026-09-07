@@ -14,6 +14,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # SMA-618: CI keeps line tables (file/line in panic backtraces) and drops
+  # variable and type debug info, which measured 79% of the compressed bytes in
+  # a cached target dir. This variable is INSIDE rust-cache's key, so it must be
+  # byte-identical across every cache-bearing workflow —
+  # scripts/check-cargo-profile-env-sync.sh fails the `fmt` gate if it drifts.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   sbom:
@@ -39,6 +45,7 @@ jobs:
       # on tags — that would spend budget on the release path this ticket frees.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
+          prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # taiki-e/install-action v2.85.11
       - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf

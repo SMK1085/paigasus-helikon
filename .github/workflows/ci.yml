@@ -22,6 +22,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # SMA-618: CI keeps line tables (file/line in panic backtraces) and drops
+  # variable and type debug info, which measured 79% of the compressed bytes in
+  # a cached target dir. This variable is INSIDE rust-cache's key, so it must be
+  # byte-identical across every cache-bearing workflow —
+  # scripts/check-cargo-profile-env-sync.sh fails the `fmt` gate if it drifts.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
   NIGHTLY_TOOLCHAIN: nightly-2026-05-01
 
 jobs:
@@ -74,6 +80,7 @@ jobs:
       # main's and pushing the repo 37% over the fixed 10 GB limit.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
+          prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
@@ -112,6 +119,7 @@ jobs:
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
+          prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test ${{ matrix.test_args }}
 
@@ -135,6 +143,7 @@ jobs:
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
+          prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build -p paigasus-helikon-runtime-axum --no-default-features
       - run: cargo build -p paigasus-helikon-runtime-actix --no-default-features
@@ -173,6 +182,7 @@ jobs:
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
+          prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --workspace --all-features --no-deps
         env:
@@ -200,6 +210,7 @@ jobs:
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
+          prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bash scripts/check-doc-coverage.sh
         env:
@@ -260,6 +271,7 @@ jobs:
       - if: steps.filter.outputs.sessions == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
+          prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.filter.outputs.sessions == 'true'
         name: Start Postgres + Redis
