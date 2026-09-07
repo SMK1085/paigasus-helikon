@@ -50,7 +50,7 @@ globset               = "0.4"
 # unmaintained `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`.
 # Relax once jiff drops that transitive dep.
 jiff                  = { version = "=0.2.28", features = ["serde"] }
-jsonschema            = { version = "0.52", default-features = false }
+jsonschema            = { version = "0.53", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"
 notify                = "8"
@@ -133,7 +133,7 @@ temporalio-common   = { version = "0.7", default-features = false }
 # imports them from `temporalio_macros` directly) — a direct dependency is
 # required to invoke them, even though temporalio-macros was already pulled in
 # transitively as a proc-macro dep of temporalio-sdk/temporalio-workflow.
-temporalio-macros   = { version = "0.7", default-features = false }
+temporalio-macros   = { version = "0.8", default-features = false }
 # temporalio-workflow: the `#[workflow]`/`#[workflow_methods]` macro-generated
 # code references `::temporalio_workflow::…` (verified in
 # temporalio-macros-0.7.0/src/workflow_definitions.rs), and it exports the
