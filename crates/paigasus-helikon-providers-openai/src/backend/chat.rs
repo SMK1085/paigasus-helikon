@@ -1879,14 +1879,20 @@ mod tests {
     /// `Some(_) => {}` with every other test in this module still green.
     /// `providers-litellm` carries the same test against its own target.
     mod withheld_upgrade_warn {
-        use std::sync::{Arc, Mutex};
+        use std::cell::RefCell;
+        use std::sync::Once;
 
         use tracing::field::{Field, Visit};
-        use tracing::subscriber::with_default;
         use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
         use tracing_subscriber::registry::LookupSpan;
 
         use super::{drive, make_chunk, named, ChatTranslator};
+
+        thread_local! {
+            /// WARN-or-above events seen on *this* test's thread.
+            static CAPTURED: RefCell<Vec<(String, String)>> =
+                const { RefCell::new(Vec::new()) };
+        }
 
         /// Renders every field of one event as `name=value;`.
         struct FieldSink(String);
@@ -1898,13 +1904,13 @@ mod tests {
             }
         }
 
-        /// Records `(target, rendered fields)` for every WARN-or-above event.
+        /// Records `(target, rendered fields)` for every WARN-or-above event
+        /// into the emitting thread's own buffer.
         ///
         /// Filtering in `enabled` rather than in `on_event` keeps unrelated
         /// `debug!`/`trace!` calls on this code path out of the capture
         /// entirely, so an unrelated log addition cannot make this test fail.
-        #[derive(Clone, Default)]
-        struct WarnCapture(Arc<Mutex<Vec<(String, String)>>>);
+        struct WarnCapture;
 
         impl<S: tracing::Subscriber + for<'l> LookupSpan<'l>> Layer<S> for WarnCapture {
             fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: Context<'_, S>) -> bool {
@@ -1914,38 +1920,69 @@ mod tests {
             fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
                 let mut sink = FieldSink(String::new());
                 event.record(&mut sink);
-                self.0
-                    .lock()
-                    .expect("capture mutex")
-                    .push((event.metadata().target().to_owned(), sink.0));
+                let target = event.metadata().target().to_owned();
+                CAPTURED.with(|c| c.borrow_mut().push((target, sink.0)));
             }
+        }
+
+        static INSTALL: Once = Once::new();
+
+        /// Install the capture layer as the process-wide default, once.
+        ///
+        /// **Global rather than `with_default`, deliberately, and the
+        /// difference is not stylistic.** `tracing` caches one `Interest` per
+        /// callsite for the whole process, and a callsite first reached while
+        /// no subscriber is in scope caches as `Interest::never()` — after
+        /// which the macro short-circuits and no later thread-local
+        /// subscriber can ever see it. Other tests in this module drive the
+        /// withheld-upgrade arm with no subscriber installed, so a
+        /// `with_default` version of this test is decided by thread
+        /// scheduling. litellm's twin was measured at **52 failures in 200
+        /// runs** of its lib suite in exactly that form, and it is what turned
+        /// `test (macos-latest, stable)` red on the first CI run that
+        /// exercised it (SMA-619).
+        ///
+        /// A global default is set before any assertion runs and is never torn
+        /// down, so every callsite resolves against a subscriber that enables
+        /// WARN and the cache stays correct for the life of the process.
+        /// Per-test isolation comes from `CAPTURED` being thread-local:
+        /// libtest gives each test its own thread, so a parallel test's warns
+        /// land in its own buffer, not this one's.
+        ///
+        /// `set_global_default` is allowed to fail: if some future test
+        /// installs its own global first, this returns `Err` and the
+        /// assertions below fail loudly rather than passing vacuously.
+        fn install_capture() {
+            INSTALL.call_once(|| {
+                let _ = tracing::subscriber::set_global_default(
+                    tracing_subscriber::registry().with(WarnCapture),
+                );
+            });
         }
 
         #[test]
         fn a_withheld_upgrade_warns_once_naming_the_discarded_id() {
-            let capture = WarnCapture::default();
-            let subscriber = tracing_subscriber::registry().with(capture.clone());
+            install_capture();
+            CAPTURED.with(|c| c.borrow_mut().clear());
 
-            with_default(subscriber, || {
-                let mut t = ChatTranslator::new();
-                let evs = drive(
-                    &mut t,
-                    vec![
-                        make_chunk(0, Some(""), Some("alpha"), Some("{}")),
-                        make_chunk(0, Some("c1"), None, Some("[]")),
-                        // The same real id again: a backend that repeats it on
-                        // every delta must not warn once per chunk.
-                        make_chunk(0, Some("c1"), None, Some("[]")),
-                    ],
-                );
-                assert_eq!(
-                    named(&evs),
-                    vec![(String::new(), "alpha".to_owned())],
-                    "guard: the fixture must actually withhold the upgrade"
-                );
-            });
+            let mut t = ChatTranslator::new();
+            let evs = drive(
+                &mut t,
+                vec![
+                    make_chunk(0, Some(""), Some("alpha"), Some("{}")),
+                    make_chunk(0, Some("c1"), None, Some("[]")),
+                    // The same real id again: a backend that repeats it on
+                    // every delta must not warn once per chunk.
+                    make_chunk(0, Some("c1"), None, Some("[]")),
+                ],
+            );
+            assert_eq!(
+                named(&evs),
+                vec![(String::new(), "alpha".to_owned())],
+                "guard: the fixture must actually withhold the upgrade"
+            );
 
-            let events = capture.0.lock().expect("capture mutex").clone();
+            let events = CAPTURED.with(|c| c.borrow().clone());
             let withheld: Vec<&(String, String)> = events
                 .iter()
                 .filter(|(_, fields)| fields.contains("discarded_id="))
