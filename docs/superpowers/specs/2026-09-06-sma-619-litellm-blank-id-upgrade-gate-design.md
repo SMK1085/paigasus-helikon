@@ -429,7 +429,7 @@ reviewer diffing behaviour is not surprised:
   call under a real, submittable `call_id`** — the only shape traced here that
   did. Post-fix both deltas land under `""`, the joined arguments are `"{}{}"`,
   and the turn is discarded. Unlike §1's marker shape this is reachable:
-  `core/src/model.rs:527-531` records that OpenAI streaming legitimately emits an
+  `core/src/model.rs:531-533` records that OpenAI streaming legitimately emits an
   empty `arguments` delta for a zero-parameter tool call, and a backend that
   repeats the complete arguments on every delta is the arguments analogue of the
   repeat-the-whole-name quirk `stream.rs` already defends against at its
@@ -583,6 +583,45 @@ chunk 2 is a bare `[{"index": 0}, {"index": 1}]` completion signal that flushes
 both under `""` with no arguments, and only chunk 3 carries arguments. That
 isolates the gate's effect: `Ok` with three items pre-fix, `Err` post-fix.
 
+### 5.5 New: `complete_args_on_both_deltas_fail_the_turn_when_withheld`
+
+§3.7's third `Ok → Err` class, surfaced by a differential run over 24,192 stream
+shapes rather than by reading. Same delta ordering as §5.2 but with a **complete**
+JSON document on each delta rather than a fragmentation, which is what flips the
+direction. Asserts the events via `named`/`args_of` and that `accumulated(&evs)`
+is `Err`; its doc comment records the verbatim pre-fix output
+(`Ok([("", "", {}), ("c1", "alpha", {})])`) and why the regression is accepted —
+the pre-fix `Ok` also produced a nameless item under `""` that `loop_state.rs`
+dispatches as a tool named `""` without validation.
+
+### 5.6 New: `withheld_upgrade_warn::a_withheld_upgrade_warns_once_naming_the_discarded_id`
+
+One per crate, pinning AC7. Without it, both crates' warn arms collapse back into
+`Some(_) => {}` with every other test still green — which is not acceptable for a
+criterion §2.1 rests the whole loud-versus-silent tie-break on. Drives a withheld
+upgrade with the real id repeated on a later delta, and asserts the warn fired
+exactly once, on the crate's declared target, naming `discarded_id=c1`.
+
+Both go through `crate::test_tracing`, a shared process-global WARN capture with
+a thread-local buffer, rather than a per-test `with_default`. That is not
+stylistic: `tracing` caches one `Interest` per callsite process-wide, and a
+callsite first reached with no subscriber in scope caches as `Interest::never()`,
+after which no thread-local subscriber can observe it. Four sibling tests reach
+this exact `warn!` unsubscribed, so the `with_default` form was decided by thread
+scheduling — measured at **52 failures in 200 runs** of the litellm lib suite,
+and it turned `test (macos-latest, stable)` red. `Interest::sometimes()` plus
+`rebuild_interest_cache()` only narrowed it to 35 in 200. The shared global is
+0 in 250 for both crates, and both tests still fail under mutation.
+
+### 5.7 Migrated: `tracing_target_tests` in both crates
+
+`translate/request.rs`'s pre-existing target test carried the same latent
+`with_default` hazard as §5.6 — it had not bitten only because fewer sibling
+tests reach its callsite unsubscribed. Moved onto the same shared capture. A
+process gets exactly one global default, so the capture is shared rather than
+per-module: two modules each calling `set_global_default` would leave whichever
+lost the race silently uninstalled, asserting against an empty buffer.
+
 ## 6. Documentation
 
 ### 6.1 `crates/paigasus-helikon-providers-litellm/README.md` — changed
@@ -596,10 +635,13 @@ that ticket, so declining silently is not available.
 The section already documents an unrecoverable wire shape in exactly this
 register (`README.md:126-132`, on a name fragment arriving after arguments
 begin). A sibling bullet is added: a backend that sends `"id": ""` before a real
-id, and whose first delta carries arguments, has its whole call delivered under
-`call_id: ""` — the real id is discarded and logged at `warn`, because upgrading
-after the fact would split the call in two. This is user-visible and permanent;
-it belongs on the crate's crates.io page.
+id has its whole call delivered under `call_id: ""` once **anything** has been
+emitted under the blank id — the real id is discarded and logged at `warn`,
+because upgrading after the fact would split the call in two. The trigger is any
+emission, not specifically a first delta carrying arguments: a name flushed by a
+bare completion-signal delta arms the gate just as well, which is what §5.4's
+fixture relies on. This is user-visible and permanent; it belongs on the crate's
+crates.io page.
 
 No change to the facade or root README: no crate-roster or feature-map change.
 
