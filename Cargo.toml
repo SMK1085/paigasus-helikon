@@ -31,7 +31,7 @@ futures-core          = "0.3"
 futures-util          = { version = "0.3", default-features = false, features = ["std"] }
 # temporalio-macros' `#[activities]`-generated code references `::futures::FutureExt`/
 # `::futures::future::BoxFuture` by absolute path (verified by reading
-# temporalio-macros-0.7.0/src/activities_definitions.rs) — the umbrella `futures` crate
+# temporalio-macros-1.0.0/src/activities_definitions.rs) — the umbrella `futures` crate
 # must be a direct dependency of any crate using that macro, distinct from the
 # `futures-core`/`futures-util` sub-crates pinned above.
 futures               = { version = "0.3", default-features = false, features = ["std"] }
@@ -113,30 +113,44 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 # Temporal Rust SDK (Public Preview; crates.io since 2026-02-19). TLS risk (requires
-# verification on every temporalio-* bump): temporalio-common → opentelemetry-otlp
-# unconditionally pulls a second reqwest (0.12 via hyper-rustls) into the graph. This is
-# safe ONLY because all consumers unify on the single shared rustls 0.23 instance, which
-# resolves to aws-lc-rs for every consumer — verify with
-# `cargo tree -i ring --all-features -e normal`, which must print "nothing to print".
+# verification on every temporalio-* bump): temporalio-common CAN pull a second
+# reqwest + TLS stack via opentelemetry-otlp, but only behind its `otel` feature —
+# both `opentelemetry-otlp` and `reqwest` are `optional = true` there, and
+# `tls-aws-lc` names opentelemetry-otlp only *weakly* (`opentelemetry-otlp?/…`), so
+# it does not activate it. Nothing in this workspace enables `otel`, and the lock
+# carries exactly one reqwest. The standing risk this comment guards is therefore a
+# FUTURE feature flip enabling `otel`, not a present-day second stack. (Corrected in
+# SMA-622: the previous wording claimed an *unconditional* pull of reqwest 0.12 via
+# hyper-rustls. That was never true — not at 0.7.0 either — and re-verifying against
+# a fiction is worse than having no comment.)
+# Safety still rests on all consumers unifying on the single shared rustls 0.23
+# instance, which resolves to aws-lc-rs for every consumer — verify with
+# `cargo tree -i ring --all-features -e normal --target all`, which must print
+# "nothing to print". Use `--target all`: cargo otherwise resolves for the host only,
+# and temporalio-client 1.0.0 carries a non-optional tokio-rustls plus an optional
+# rustls-native-certs — exactly the deps most likely to be platform-gated.
 # The `-e normal` is load-bearing: plain `cargo tree -i ring` DOES report a hit via
 # `rcgen`, a dev-dependency of paigasus-helikon-tools that has nothing to do with the
 # TLS stack. Only a *normal* dependency on ring would mean a second CryptoProvider.
 # The `ephemeral-server` feature (temporalio-sdk-core) additionally pulls its own
 # reqwest+TLS stack and must stay unenabled; runtime-temporal's integration tests use
 # the external-server env gate instead.
+# temporalio-sdk-core is a direct dep that NO source file names (`rg
+# temporalio_sdk_core crates/` is empty); it exists solely to force `tls-aws-lc`
+# through feature unification. Do not "clean it up".
 temporalio-sdk      = { version = "1.0", default-features = false }
 temporalio-client   = { version = "1.0", default-features = false, features = ["tls-aws-lc"] }
 temporalio-sdk-core = { version = "0.9", default-features = false, features = ["tls-aws-lc"] }
 temporalio-common   = { version = "1.0", default-features = false }
 # temporalio-sdk does NOT re-export the `#[activities]`/`#[activity]` attribute
-# macros (verified by reading temporalio-sdk-0.7.0/src/lib.rs: its own doctest
+# macros (verified by reading temporalio-sdk-1.0.0/src/lib.rs: its own doctest
 # imports them from `temporalio_macros` directly) — a direct dependency is
 # required to invoke them, even though temporalio-macros was already pulled in
 # transitively as a proc-macro dep of temporalio-sdk/temporalio-workflow.
 temporalio-macros   = { version = "1.0", default-features = false }
 # temporalio-workflow: the `#[workflow]`/`#[workflow_methods]` macro-generated
 # code references `::temporalio_workflow::…` (verified in
-# temporalio-macros-0.7.0/src/workflow_definitions.rs), and it exports the
+# temporalio-macros-1.0.0/src/workflow_definitions.rs), and it exports the
 # workflow-authoring types (`WorkflowContext`, `ActivityOptions`, `join_all`,
 # `select!`, …) that `temporalio-sdk` re-exports. A direct dependency is
 # required to invoke the workflow macros, mirroring the temporalio-macros note
