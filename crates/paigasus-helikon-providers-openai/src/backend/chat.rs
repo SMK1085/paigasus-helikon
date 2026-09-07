@@ -284,6 +284,8 @@ pub(crate) struct ChatTranslator {
     /// across two `call_id`s and leave the real one with zero name-carrying
     /// deltas — an "exactly once" violation on a *non-blank* id, which is
     /// worse than the stuck blank this rule exists to fix (SMA-566).
+    /// `providers-litellm`'s chat translator carries the same gate, keyed on
+    /// its wire-key enum rather than on `index` (SMA-619).
     blank_emitted: HashSet<u32>,
     /// Wire indices for which the withheld-upgrade warning has already fired,
     /// so a backend that repeats the real id on every delta warns once per
@@ -490,6 +492,15 @@ impl ChatTranslator {
             }
             let name = std::mem::take(&mut entry.name);
             self.name_emitted.insert(index, name.clone());
+            // Deliberately does not record into `blank_emitted`, unlike the
+            // mid-stream emit site: `finish` is terminal, so no replacement
+            // arm can run after this point. Inert even under the double
+            // `finish()` that `finish_is_idempotent_after_draining` drives,
+            // because the first call records the index in `name_emitted`,
+            // which the guard at the top of this loop short-circuits on —
+            // `pending` itself is not drained, only `entry.name` is taken.
+            // `providers-litellm` states the same at its flush site
+            // (SMA-619).
             out.push(ModelEvent::ToolCallDelta {
                 call_id,
                 name: Some(name),
@@ -1849,5 +1860,111 @@ mod tests {
             ],
             "wire order (index 0 then 1), not lexicographic by call_id"
         );
+    }
+
+    /// Pins the withheld-upgrade `warn!` itself.
+    ///
+    /// SMA-619 acceptance criterion 7 makes the warn a requirement rather
+    /// than a nicety, and its §2.1 explains why: the loud-versus-silent
+    /// tie-break — keep the call whole under `""` rather than split it across
+    /// two ids — rests on the discarded real id being visible somewhere.
+    /// Nothing downstream supplies that visibility. `build_items` constructs
+    /// `Item::ToolCall { call_id: "", .. }` unconditionally
+    /// (`core/src/model.rs:545-549`) and `loop_state.rs:325-335` dispatches it
+    /// without checking, and this translator's own blank-id warning fires on
+    /// the first delta, before the real id was ever seen, and never names it.
+    /// So this warn is the only place the trade becomes diagnosable.
+    ///
+    /// Without a test here, the warn arm collapses back into
+    /// `Some(_) => {}` with every other test in this module still green.
+    /// `providers-litellm` carries the same test against its own target.
+    mod withheld_upgrade_warn {
+        use std::sync::{Arc, Mutex};
+
+        use tracing::field::{Field, Visit};
+        use tracing::subscriber::with_default;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::LookupSpan;
+
+        use super::{drive, make_chunk, named, ChatTranslator};
+
+        /// Renders every field of one event as `name=value;`.
+        struct FieldSink(String);
+
+        impl Visit for FieldSink {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write as _;
+                let _ = write!(self.0, "{}={:?};", field.name(), value);
+            }
+        }
+
+        /// Records `(target, rendered fields)` for every WARN-or-above event.
+        ///
+        /// Filtering in `enabled` rather than in `on_event` keeps unrelated
+        /// `debug!`/`trace!` calls on this code path out of the capture
+        /// entirely, so an unrelated log addition cannot make this test fail.
+        #[derive(Clone, Default)]
+        struct WarnCapture(Arc<Mutex<Vec<(String, String)>>>);
+
+        impl<S: tracing::Subscriber + for<'l> LookupSpan<'l>> Layer<S> for WarnCapture {
+            fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: Context<'_, S>) -> bool {
+                *metadata.level() <= tracing::Level::WARN
+            }
+
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                let mut sink = FieldSink(String::new());
+                event.record(&mut sink);
+                self.0
+                    .lock()
+                    .expect("capture mutex")
+                    .push((event.metadata().target().to_owned(), sink.0));
+            }
+        }
+
+        #[test]
+        fn a_withheld_upgrade_warns_once_naming_the_discarded_id() {
+            let capture = WarnCapture::default();
+            let subscriber = tracing_subscriber::registry().with(capture.clone());
+
+            with_default(subscriber, || {
+                let mut t = ChatTranslator::new();
+                let evs = drive(
+                    &mut t,
+                    vec![
+                        make_chunk(0, Some(""), Some("alpha"), Some("{}")),
+                        make_chunk(0, Some("c1"), None, Some("[]")),
+                        // The same real id again: a backend that repeats it on
+                        // every delta must not warn once per chunk.
+                        make_chunk(0, Some("c1"), None, Some("[]")),
+                    ],
+                );
+                assert_eq!(
+                    named(&evs),
+                    vec![(String::new(), "alpha".to_owned())],
+                    "guard: the fixture must actually withhold the upgrade"
+                );
+            });
+
+            let events = capture.0.lock().expect("capture mutex").clone();
+            let withheld: Vec<&(String, String)> = events
+                .iter()
+                .filter(|(_, fields)| fields.contains("discarded_id="))
+                .collect();
+            assert_eq!(
+                withheld.len(),
+                1,
+                "the withheld upgrade must warn exactly once per index, even \
+                 though the real id arrived on two deltas; captured: {events:?}"
+            );
+            assert_eq!(
+                withheld[0].0, "paigasus::openai::chat",
+                "the warn must land on this module's declared target"
+            );
+            assert!(
+                withheld[0].1.contains("discarded_id=c1"),
+                "the warn must name the real call_id it discarded; got {:?}",
+                withheld[0].1
+            );
+        }
     }
 }
