@@ -56,9 +56,13 @@ another `CARGO_*`/`RUST*` variable, add it everywhere or expect a red `fmt`.
 Two entries are deliberately reduced to buy headroom (SMA-618 PR 4):
 `test (macos-latest, 1.94)` caches nothing at all — an `if:` gates its cache step
 off, because it is a non-required signal leg and macOS is cheaper to rebuild cold
-than Windows — and `temporal-it` keeps only its registry via
+than Windows — and `temporal-it` drops its workspace target via
 `cache-targets: "false"`, since it is signal-only, non-required and
 path-filtered, so its target cache was written on few pushes and read on fewer.
+Note what that input does **not** do: it removes only the workspace `target`
+dirs, and the entry still carries `~/.cargo/registry`, `~/.cargo/git`,
+`~/.cargo/bin`, `.crates.toml` and `.crates2.json` (`cache-bin` defaults to
+`true`).
 **When judging the budget, measure the peak with everything present, not a
 snapshot**: `temporal-it` and `sbom` are both legitimately absent from most
 inventories (path filter, tag scope), and a snapshot taken without them reads

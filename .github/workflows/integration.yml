@@ -138,12 +138,23 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           prefix-key: v1
-          # SMA-618: registry only. This job is signal-only, non-required, and
-          # path-filtered, so it writes a 0.44 GiB target cache that most pushes
-          # never populate and few runs read — poor value against a fixed 10 GB
-          # budget. `cache-targets: false` keeps ~/.cargo (0.13 GiB), so the
-          # heaviest dependency tree in the workspace still skips the download,
-          # and gives back 0.31 GiB.
+          # SMA-618: drop the workspace target from this job's cache. It is
+          # signal-only, non-required and path-filtered, so it wrote a 0.44 GiB
+          # target cache that most pushes never populate and few runs read —
+          # poor value against a fixed 10 GB budget.
+          #
+          # `cache-targets: false` removes ONLY the workspace target dirs. At the
+          # pinned SHA (src/config.ts:265-276) the entry still carries
+          # ~/.cargo/registry and ~/.cargo/git, plus ~/.cargo/bin,
+          # .crates.toml and .crates2.json because `cache-bin` defaults to true.
+          # So the heaviest dependency tree in the workspace still skips its
+          # download.
+          #
+          # Expected residual ~0.13 GiB — an ESTIMATE taken from `deny`, the
+          # comparable registry-only entry, not a measurement of this job. If
+          # anything it is conservative: `deny`'s figure includes a cargo-deny
+          # binary under ~/.cargo/bin that this job does not install. The
+          # post-merge measurement settles it.
           cache-targets: "false"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' }}

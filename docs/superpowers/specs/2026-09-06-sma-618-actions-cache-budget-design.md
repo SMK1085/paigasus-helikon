@@ -745,11 +745,23 @@ that can be present is.
 - `test (macos-latest, 1.94)` caches nothing (`if:` on the cache step). A
   non-required signal leg; chosen over windows-1.94 (0.81 GiB but ~25 min cold
   against macOS's ~15) and over any `stable` leg (all required). −0.76.
-- `temporal-it` keeps only its registry (`cache-targets: "false"`). Signal-only,
-  non-required and path-filtered, so its target cache is written on few pushes
-  and read on fewer. −0.31.
+- `temporal-it` drops its workspace target (`cache-targets: "false"`).
+  Signal-only, non-required and path-filtered, so its target cache is written on
+  few pushes and read on fewer. That input removes only the workspace `target`
+  dirs — the entry still carries `~/.cargo/registry`, `~/.cargo/git`,
+  `~/.cargo/bin`, `.crates.toml` and `.crates2.json`, since `cache-bin` defaults
+  to `true` (verified in `src/config.ts:265-276` at the pinned SHA). −0.31.
 
 Projected peak with everything present: **~9.33 GiB, 0.67 GiB of headroom.**
+
+**That projection rests on one estimate, not a measurement.** The −0.31 assumes
+`temporal-it`'s registry-only entry lands near 0.13 GiB, a figure borrowed from
+`deny`, the comparable registry-only entry — it has never been measured for this
+job. It is probably conservative, since `deny`'s includes a `cargo-deny` binary
+under `~/.cargo/bin` that `temporal-it` does not install. But this ticket has now
+been wrong twice by treating a borrowed or partial figure as a measured one (the
+79% debug extrapolation, and reading a 9.83 GiB snapshot as a ceiling), so the
+9.33 stands only until the post-merge inventory replaces it.
 
 ### Ladder, closed out
 
