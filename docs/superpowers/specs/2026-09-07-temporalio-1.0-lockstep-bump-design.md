@@ -87,8 +87,9 @@ Test-only — no production code constructs a `SerializationContext`.
 - `Runtime` also lost `impl Deref<Target = CoreRuntime>` (0.7 `runtime.rs:119`).
 
 `worker.rs:547-548` maps the error via `e.to_string()`, so `WorkerBuildError::Runtime`'s
-message text changes and a former panic is now a returned error. No caller-visible
-control-flow regression, because `build()` already returns `Result`. The old name still
+message text changes and a former panic is now a returned error. That **is**
+caller-visible: building with no active Tokio runtime previously panicked and now takes
+the `Err` path. `build()`'s signature is unchanged, since it already returned `Result`. The old name still
 compiles (it delegates) but is deprecated, and `clippy -D warnings` is a required gate —
 so the change is forced, not cosmetic.
 

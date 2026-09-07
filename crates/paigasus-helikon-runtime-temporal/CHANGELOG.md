@@ -26,8 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migrated off the deprecated `Runtime::new_assume_tokio` to `Runtime::from_current_tokio`.
   Beyond the rename, 1.0 turns a documented panic on "no active Tokio runtime" into a
   typed `RuntimeError::NoCurrentTokioRuntime`; `WorkerBuildError::Runtime`'s message text
-  changes accordingly. No caller-visible control-flow change — `build()` already returned
-  a `Result`.
+  changes accordingly. **This is caller-visible:** building a worker with no active Tokio
+  runtime previously panicked, and now returns
+  `Err(WorkerBuildError::Runtime)` instead. `TemporalAgentWorkerBuilder::build()` keeps
+  its `Result` return type, so the signature is unchanged — but a caller relying on the
+  panic (or on `catch_unwind`) will now take the error path.
 
 ### Upgrade notes
 
@@ -41,10 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.7-written history on a 1.0 worker — the integration suite starts a fresh server, so it
   only ever replays its own 1.0 histories. Prefer draining in-flight runs across this
   upgrade, or use a blue-green task queue.
-- No payload wire-format change affects this crate. 1.0 added a `WellKnownType` encoding
-  that sends top-level `Vec<u8>` as `binary/plain` rather than JSON; every type this crate
-  puts on the wire resolves to `None` under it. The one `Vec<u8>` is an empty
-  `record_heartbeat` payload that is never read back.
+- No payload wire-format change affects this crate's activity or workflow payloads. 1.0
+  added a `WellKnownType` encoding that sends top-level `Vec<u8>` as `binary/plain` rather
+  than JSON. Every **activity and workflow** payload type here resolves to `None` under it
+  and is therefore untouched. The one exception is `ActivityContext::record_heartbeat`,
+  which sends a top-level `Vec::<u8>::new()` and so does change encoding — from an empty
+  JSON body to an empty `binary/plain` one. That payload is liveness signalling only and
+  is never read back, so the change is inert.
 - No MSRV change: `temporalio-sdk` 1.0.0 declares a `1.92.0` floor, below the workspace's
   `1.94`.
 
