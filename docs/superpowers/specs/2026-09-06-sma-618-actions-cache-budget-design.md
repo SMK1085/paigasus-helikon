@@ -8,11 +8,14 @@ this ticket cost was estimates that turned out wrong — see
 [Estimates that were wrong](#estimates-that-were-wrong).
 Linear: [SMA-618](https://linear.app/smaschek/issue/SMA-618/actions-cache-thrashes-at-37percent-over-the-10-gb-limit-pr-scoped)
 
-Delivered as **two PRs** — see [Rollout](#rollout). SMA-618 closes on PR 2.
+Delivered as **five PRs** — #244, #248, #250, #251, #252 — see
+[Rollout](#rollout). The two-PR plan below is what was intended; the measurements
+in each round changed it. SMA-618 closes on the final measurement, not on any
+single merge.
 
 ## Problem
 
-GitHub's Actions cache limit is 10 GB per repository and is not raisable. This
+GitHub's Actions cache limit is 10 GB per repository **by default**. This
 repository runs chronically over it, so GitHub evicts LRU continuously and some
 CI leg starts cold on essentially every run.
 
