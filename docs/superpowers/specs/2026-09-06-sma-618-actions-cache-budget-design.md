@@ -1,6 +1,11 @@
 # SMA-618 — Actions cache budget: stop the thrash
 
-Design document. Revision 3 (post PR 1, rescoped against measurement).
+Design document. Revision 4 — **RESOLVED**. Delivered in four PRs (#244, #248,
+#250, #251); final state measured at **9.20 GiB, peak 9.33, no eviction**, against
+a 10 GB limit that the repository had been 37% over. The narrative below is kept
+in the order it happened, superseded sections marked as such, because most of what
+this ticket cost was estimates that turned out wrong — see
+[Estimates that were wrong](#estimates-that-were-wrong).
 Linear: [SMA-618](https://linear.app/smaschek/issue/SMA-618/actions-cache-thrashes-at-37percent-over-the-10-gb-limit-pr-scoped)
 
 Delivered as **two PRs** — see [Rollout](#rollout). SMA-618 closes on PR 2.
@@ -752,16 +757,15 @@ that can be present is.
   `~/.cargo/bin`, `.crates.toml` and `.crates2.json`, since `cache-bin` defaults
   to `true` (verified in `src/config.ts:265-276` at the pinned SHA). −0.31.
 
-Projected peak with everything present: **~9.33 GiB, 0.67 GiB of headroom.**
+**Confirmed: peak 9.33 GiB, 0.67 GiB of headroom.** PR 4 merged as `36a8d67`;
+the post-merge `main` run completed green and the inventory settled at
+**9.20 GiB across 13 entries with no eviction** — every cache-writing job that ran
+has its entry. Adding `sbom` (0.13 GiB, tag-scoped, returns on the next release
+tag) gives the 9.33 peak.
 
-**That projection rests on one estimate, not a measurement.** The −0.31 assumes
-`temporal-it`'s registry-only entry lands near 0.13 GiB, a figure borrowed from
-`deny`, the comparable registry-only entry — it has never been measured for this
-job. It is probably conservative, since `deny`'s includes a `cargo-deny` binary
-under `~/.cargo/bin` that `temporal-it` does not install. But this ticket has now
-been wrong twice by treating a borrowed or partial figure as a measured one (the
-79% debug extrapolation, and reading a 9.83 GiB snapshot as a ceiling), so the
-9.33 stands only until the post-merge inventory replaces it.
+`temporal-it` measured **0.13 GiB**, exactly the figure borrowed from `deny`. That
+borrowed estimate was flagged during review as unproven, correctly — it happened
+to be right, but it was asserted before it was known. It is now measured.
 
 ### Ladder, closed out
 
@@ -987,3 +991,32 @@ Note what is **not** here: no `shared-key`, no `cache-targets` change, no
 `save-if` change, no matrix or `test_args` edit, no guard change. The guard PR 1
 added enforces the one invariant this PR could break — it fails if
 `CARGO_PROFILE_DEV_DEBUG` reaches some cache-bearing workflows and not others.
+
+## Estimates that were wrong
+
+Three, all the same shape: a partial or borrowed figure treated as a measured one.
+Each survived until it was measured, and each changed the design when it was.
+
+1. **Debug-info saving: predicted 60-75%, realised 16.5%.** Extrapolated from the
+   40 largest `.rlib` files — the cache's densest artifacts — to the whole cache,
+   which also holds registry sources, `.rmeta`, fingerprints and thousands of
+   small files that do not shrink. `strip -S`, used for the sample, also removes
+   the line tables `line-tables-only` keeps. And `clippy`, `docs` and
+   `doc-coverage` are metadata-mode builds that saved exactly 0%, having no debug
+   info to remove; they were never separated from the build jobs in the estimate.
+2. **Four inferred entry sizes, 3-7x too high** — `clippy` ~2.6 against 0.57,
+   `sessions-it` ~2.6 against 0.37, `temporal-it` ~3 against 0.48,
+   `build-no-default-features` ~1.5 against 0.39. These were the entire
+   justification for the two-shared-key consolidation of change C, which would
+   have cost `build-no-default-features` and `sessions-it` — both required gates —
+   their exact-match caches for a fraction of the assumed gain. C was dropped.
+3. **A 9.83 GiB snapshot read as a ceiling.** `temporal-it` was absent from it
+   only because its path filter had not matched that push, and `sbom` because it
+   is tag-scoped. The real peak was 10.40 GiB, still over. **Measure the peak with
+   everything that can be present, not a snapshot** — a post-eviction or
+   partially-populated inventory always reads low.
+
+The corollary for anyone extending this: the guards exist because these failures
+are all silent. Going over the limit is not an error, cache-key drift is not an
+error, and a second writer on a shared key is not an error. Nothing goes red;
+things just get slower.
