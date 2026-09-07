@@ -16,6 +16,14 @@ GitHub's Actions cache limit is 10 GB per repository and is not raisable. This
 repository runs chronically over it, so GitHub evicts LRU continuously and some
 CI leg starts cold on essentially every run.
 
+**Units.** Every size in this document is GiB, and the limit is **10 GiB**
+(10,737,418,240 bytes) despite GitHub documenting it as "10 GB". This was
+measured rather than assumed: an inventory of 9.97 GiB — 10.70 *decimal* GB —
+persisted stably once eviction had settled, which a decimal 10 GB limit
+(9.31 GiB) would have evicted down to 9.31. Raised in review on #252, where the
+concern was that a 9.33 GiB peak would exceed a decimal limit; it does not,
+but the ambiguity was real and the labels are now explicit.
+
 Measured on 2026-09-06 via `gh api repos/SMK1085/paigasus-helikon/actions/caches`:
 
 | Size | Ref | Key |
