@@ -60,6 +60,16 @@ deleting the fresh entries alongside the stale ones. **It replaces the default
 `v0-rust` string in full**, so keys read `v1-<job>-<os>-<arch>-...` — not
 `v1-rust-...`. Grep for `v1-`.
 
+`trybuild_ui` runs on **ubuntu-stable and macOS-stable only** (SMA-618). The
+three `1.94` legs skip it because the `.stderr` snapshots pin rustc diagnostic
+text byte-for-byte and that drifts across releases; windows-stable additionally
+skips it for cache budget — rust-cache preserves `target/tests/trybuild`, worth
+1.69 GiB on that entry, and the snapshots pass byte-identically on all three OSes
+so Windows adds no distinct signal. The selector is a matrix expression, and the
+obvious form of it is a trap: `${{ cond && '' || '--skip …' }}` always yields the
+skip, because the empty string is falsy in GitHub expressions. Keep the non-empty
+value in the true branch.
+
 **Realised saving: 16.5% of total cache bytes**, not the 60-75% projected —
 14-29% on the `test` legs, 8-11% on the smaller build jobs, and exactly 0% on
 `clippy`, `docs` and `doc-coverage`, which are metadata-mode builds whose

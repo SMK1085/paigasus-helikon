@@ -358,7 +358,7 @@ does exactly this for `temporal-it`.
   while freeing ~3 GB is strictly better than either keeping it or (as an earlier
   draft proposed) deleting its cache outright.
 
-### E. Skip `trybuild_ui` on Windows — *NOT SHIPPED; fallback rung 1*
+### E. Skip `trybuild_ui` on Windows — *SHIPPED in PR 3*
 
 Replace the matrix `test_args` with an expression, per the Linear issue:
 
@@ -689,12 +689,36 @@ kept because 16.5% is real and free, not because it worked as designed.
 | -- | -- | -- |
 | After PR 2 | 11.96 | no, over by 1.96 |
 | + share `clippy`/`docs` (PR 3) | ~11.41 | no |
-| + rung 1, Windows `trybuild_ui` skip (−1.16) | ~10.25 | no |
-| + rung 2, stop caching the three `1.94` legs (−2.43) | **~7.82** | yes |
+| + skip `trybuild_ui` on Windows (PR 3, −1.16) | **~10.25** | marginal |
+| + rung 2, stop caching the three `1.94` legs (−2.43) | ~7.82 | yes |
 
-Rung 1 alone is **no longer sufficient**, which the pre-measurement ladder
-assumed it would be. Reaching the limit needs rung 2, whose cost is that three
-non-required signal legs run cold on every push.
+PR 3 ships both of the first two. It lands at roughly **10.25 GiB — still just
+over**, so rung 2 may still be required; the point of shipping these two first is
+that neither costs anything real, and the post-merge measurement then decides
+rung 2 on measured numbers rather than another projection.
+
+**The expression form for E is a trap.** The Linear issue's suggested snippet is
+
+```yaml
+${{ (matrix.toolchain == 'stable' && matrix.os != 'windows-latest') && '' || '-- --skip trybuild_ui' }}
+```
+
+and it is wrong. The empty string is **falsy** in GitHub expressions, so
+`X && '' || Y` always falls through to `Y` — that snippet skips `trybuild_ui` on
+*every* leg, silently deleting the ubuntu and macOS coverage it is written to
+preserve, with every job still green. The shipped form keeps the non-empty value
+in the true branch:
+
+```yaml
+${{ (matrix.toolchain != 'stable' || matrix.os == 'windows-latest') && '-- --skip trybuild_ui' || '' }}
+```
+
+Verified by simulating GitHub's `A && B || C` semantics across all six legs:
+`trybuild_ui` runs on ubuntu-stable and macOS-stable, and is skipped on the three
+`1.94` legs and windows-stable. Post-merge, confirm it for real by grepping the
+`test (ubuntu-latest, stable)` job log for `trybuild_ui` test names and the
+windows-stable log for their absence — a matrix expression that silently drops
+tests looks identical to one that works.
 
 ## Rollout
 

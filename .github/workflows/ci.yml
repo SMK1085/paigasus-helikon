@@ -102,11 +102,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         toolchain: [stable, "1.94"]
-        include:
-          - toolchain: stable
-            test_args: --workspace --all-features
-          - toolchain: "1.94"
-            test_args: --workspace --all-features -- --skip trybuild_ui
     runs-on: ${{ matrix.os }}
     env:
       # Turn a silently-unenforcing sandbox into a hard failure (never green-by-skip).
@@ -133,7 +128,28 @@ jobs:
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test ${{ matrix.test_args }}
+      # SMA-618: `trybuild_ui` runs on ubuntu-stable and macOS-stable only.
+      #
+      # It is skipped on every `1.94` leg for a reason that predates this ticket
+      # and must stay: the `.stderr` snapshots pin rustc diagnostic text
+      # byte-for-byte, and that text drifts across releases.
+      #
+      # It is additionally skipped on windows-stable for cache budget. rust-cache
+      # deliberately preserves `target/tests/trybuild` (see its `cleanup.ts`), and
+      # that nested dependency graph measured as the difference between the two
+      # Windows entries at one commit: 2.76 GiB with it, 1.07 without. The
+      # snapshots pass byte-identically on all three OSes, so Windows contributes
+      # no distinct signal, and ubuntu + macOS still run all 21 cases.
+      #
+      # CAREFUL with the expression form. The obvious shape,
+      #   ${{ cond && '' || '-- --skip trybuild_ui' }}
+      # is WRONG: the empty string is falsy in GitHub expressions, so `X && '' || Y`
+      # always falls through to Y and would skip the UI tests on every leg,
+      # silently deleting the coverage this comment claims to preserve. Keep the
+      # non-empty value in the true branch, as below.
+      - run: >-
+          cargo test --workspace --all-features
+          ${{ (matrix.toolchain != 'stable' || matrix.os == 'windows-latest') && '-- --skip trybuild_ui' || '' }}
 
   build-no-default-features:
     runs-on: ubuntu-latest
