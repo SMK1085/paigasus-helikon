@@ -141,7 +141,7 @@ jobs:
           # SMA-618: drop the workspace target from this job's cache. It is
           # signal-only, non-required and path-filtered, so it wrote a 0.44 GiB
           # target cache that most pushes never populate and few runs read —
-          # poor value against a fixed 10 GB budget.
+          # poor value against a 10 GiB budget.
           #
           # `cache-targets: false` removes ONLY the workspace target dirs. At the
           # pinned SHA (src/config.ts:265-276) the entry still carries

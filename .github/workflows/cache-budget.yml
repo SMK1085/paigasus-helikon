@@ -1,7 +1,11 @@
 name: cache-budget
 
-# SMA-618. GitHub's Actions cache limit is 10 GB per repository and is not
-# raisable. This repository sat 37% over it for months with nothing red: every
+# SMA-618. This repository's Actions cache budget is GitHub's DEFAULT: documented
+# as 10 GB, enforced at 10 GiB (10,737,418,240 bytes) — see the runbook. It is a
+# default, not a ceiling: a repository admin, org owner or enterprise owner can
+# raise it (user-owned repos up to 10 TB) at additional storage cost. SMA-618
+# chose to fit inside it rather than pay, so this monitor guards a decision, not
+# a law. This repository sat 37% over it for months with nothing red: every
 # push evicted somebody's entry, and a different CI leg paid a cold build each
 # run — once measured at 42m40s for `test (windows-latest, stable)`. Nothing in
 # CI reported it, because going over the limit is not an error, it is just
@@ -85,9 +89,9 @@ jobs:
           echo "total: ${human_total} across ${count} entries"
           {
             echo
-            echo "**Total: ${human_total} across ${count} entries** (limit: 10 GB)"
+            echo "**Total: ${human_total} across ${count} entries** (limit: 10 GiB)"
           } >> "${GITHUB_STEP_SUMMARY}"
 
           if [ "${total}" -gt "${WARN_BYTES}" ]; then
-            echo "::warning::Actions cache usage is ${human_total}, above the $(numfmt --to=iec-i --suffix=B "${WARN_BYTES}") warning line. GitHub's hard limit is 10 GB and eviction is silent. See docs/runbooks/ci-architecture.md -> Actions cache budget."
+            echo "::warning::Actions cache usage is ${human_total}, above the $(numfmt --to=iec-i --suffix=B "${WARN_BYTES}") warning line. GitHub's hard limit is 10 GiB and eviction is silent. See docs/runbooks/ci-architecture.md -> Actions cache budget."
           fi

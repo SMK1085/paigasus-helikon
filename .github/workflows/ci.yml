@@ -77,7 +77,7 @@ jobs:
       # SMA-618: PR jobs restore but never save. save-if gates only the post
       # (save) step, so a PR run still reads main's entries — it just stops
       # writing its own refs/pull/N/merge copies, which is what was evicting
-      # main's and pushing the repo 37% over the fixed 10 GB limit.
+      # main's and pushing the repo 37% over the 10 GiB budget.
       # SMA-618: `clippy` and `docs` share ONE cache entry. Both are
       # metadata-mode builds of the same `--all-features` graph — `cargo clippy`
       # is a `cargo check` variant and `cargo doc --no-deps` still builds
@@ -126,7 +126,7 @@ jobs:
       # SMA-618: save only from the default branch — see the note on `clippy`.
       #
       # The `if:` drops caching for macos-1.94 alone, to buy headroom under the
-      # fixed 10 GB budget. That leg is a non-required signal: `1.94` coverage is
+      # 10 GiB budget. That leg is a non-required signal: `1.94` coverage is
       # what the row exists for, and the three required `stable` legs plus
       # ubuntu/windows-1.94 keep their caches. It was chosen over windows-1.94
       # (0.81 GiB, but ~25 min cold against macOS's ~15) and over any `stable`
