@@ -12,7 +12,7 @@
 //! `temporalio_macros::activities` copies the annotated impl block's `Self`
 //! type verbatim into fresh, non-generic `ActivityDefinition`/
 //! `ActivityImplementer` impls — confirmed by reading
-//! `temporalio-macros-0.7.0/src/activities_definitions.rs`: its codegen never
+//! `temporalio-macros-1.0.0/src/activities_definitions.rs`: its codegen never
 //! threads `self.impl_block.generics` into the generated code. A literal
 //! `impl<Ctx> AgentActivities<Ctx> { #[activities] ... }` therefore does not
 //! compile (`Ctx` is unbound in the generated impls). [`DurableAgentRuntime`]
@@ -343,7 +343,7 @@ async fn race_with_activity_cancellation<T>(
         activity_ctx.cancelled(),
         || cancel.cancel(),
         heartbeat,
-        // 0.7: `record_heartbeat` is async and fallible (payload conversion).
+        // 1.0: `record_heartbeat` is async and fallible (payload conversion).
         // A heartbeat is best-effort liveness signalling — a conversion failure
         // on an empty payload is not actionable and must not abort the work.
         || async {

@@ -20,6 +20,19 @@ updates:
       - dependency-name: "jiff"
         versions: ["0.2.29"]
     groups:
+      # The temporalio-* crates are version-locked to each other: temporalio-sdk
+      # declares an EXACT pin on temporalio-sdk-core (1.0.0 requires =0.9.0) and
+      # tilde pins on client/common/macros/workflow, and the macro-generated code
+      # references the runtime crates by absolute path. A lone bump therefore puts
+      # two versions of a family crate in Cargo.lock and compiles macro output
+      # against the wrong runtime. Grouping keeps them in one PR.
+      # This has now failed twice: SMA-549 (0.5 -> 0.7) and SMA-622 (0.7 -> 1.0),
+      # the latter from Dependabot PR #247 proposing temporalio-macros alone.
+      # MUST stay ABOVE rust-major/rust-minor-patch: those use patterns ["*"] and
+      # Dependabot assigns a dependency to the FIRST matching group.
+      temporalio:
+        patterns:
+          - "temporalio*"
       tokio-stack:
         patterns:
           - "tokio*"

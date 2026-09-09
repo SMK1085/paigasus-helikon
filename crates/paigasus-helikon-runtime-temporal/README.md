@@ -22,6 +22,11 @@ Start a local Temporal dev server:
 temporal server start-dev
 ```
 
+> **Requires `temporalio-client` 1.x.** This crate takes a connected
+> `temporalio_client::Client` in its public API, so your crate must depend on the
+> same major: `cargo add temporalio-client@1`. A mismatched major surfaces as an
+> opaque type mismatch on `TemporalAgentWorker::client` / `TemporalRunner::new`.
+
 **Worker side** — register your agent(s) and serve activities (`my_model` is any `Model` impl, e.g. an OpenAI/Anthropic provider crate's model; compile-checked versions of both snippets live in the [crate docs](https://docs.rs/paigasus-helikon-runtime-temporal)):
 
 ```rust,ignore

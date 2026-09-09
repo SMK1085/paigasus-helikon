@@ -292,10 +292,15 @@ impl TemporalAgentWorker {
 
     /// Serve the task queue until shutdown.
     ///
-    /// Polls **both** workflow and activity tasks (`build()` registers the
-    /// durable agent-loop workflow and sets `WorkerTaskTypes::all()`): it
-    /// drives durable runs started by [`crate::runner::TemporalRunner`] and
-    /// executes their activities.
+    /// Polls **both** workflow and activity tasks: `build()` registers the durable
+    /// agent-loop workflow plus the activities, and the SDK derives the task types
+    /// from what is registered (workflows + local + remote activities, with
+    /// `enable_nexus: false`). It drives durable runs started by
+    /// [`crate::runner::TemporalRunner`] and executes their activities.
+    ///
+    /// This deliberately no longer says `WorkerTaskTypes::all()` — that builder method
+    /// was removed upstream and `all()` additionally set `enable_nexus`, which this
+    /// worker never used. See the derivation note in `build()`.
     pub async fn run(self) -> Result<(), WorkerRunError> {
         let mut worker = self;
         worker
@@ -537,14 +542,14 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         ));
 
         let telemetry_options = temporalio_common::telemetry::TelemetryOptions::builder().build();
-        // 0.7: `Worker::new` takes the SDK's `Runtime` (a newtype over
+        // 1.0: `Worker::new` takes the SDK's `Runtime` (a newtype over
         // `CoreRuntime`), so build the SDK's `RuntimeOptions` rather than
         // core's — `RuntimeOptions: Into<CoreRuntimeOptions>` handles the rest.
         let runtime_options = temporalio_sdk::runtime::RuntimeOptions::builder()
             .telemetry_options(telemetry_options)
             .build()
             .map_err(WorkerBuildError::Runtime)?;
-        let runtime = temporalio_sdk::Runtime::new_assume_tokio(runtime_options)
+        let runtime = temporalio_sdk::Runtime::from_current_tokio(runtime_options)
             .map_err(|e| WorkerBuildError::Runtime(e.to_string()))?;
 
         // Serve both workflow and activity tasks: this worker now drives the
