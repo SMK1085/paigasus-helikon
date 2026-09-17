@@ -118,6 +118,24 @@ fn build_request(
                     parameters: Some(to_strict_schema(&td.schema)),
                     strict: Some(true),
                     defer_loading: None,
+                    // Opt-in capabilities added by async-openai 0.42 that this
+                    // SDK does not expose. All three are
+                    // `skip_serializing_if = "Option::is_none"`, so `None`
+                    // keeps the wire payload identical to the one we sent
+                    // before the bump and lets the server apply its defaults.
+                    //
+                    // `async`: server-side deferred tool execution. Our tool
+                    // loop is synchronous — the runner executes the tool and
+                    // returns the output in the next request — so we never
+                    // want the model to treat a tool as asynchronous.
+                    r#async: None,
+                    // `output_schema`: declares a JSON schema for the tool's
+                    // return value. `ToolDef` carries only an input schema, so
+                    // we have nothing to declare.
+                    output_schema: None,
+                    // `allowed_callers`: restricts a tool to `direct` and/or
+                    // `programmatic` callers. `None` means no restriction.
+                    allowed_callers: None,
                 })
             })
             .collect();
@@ -192,15 +210,15 @@ fn build_request(
 /// [`ToolChoiceParam`].
 fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
     match tc {
-        ToolChoice::Auto => ToolChoiceParam::Mode(ToolChoiceOptions::Auto),
-        ToolChoice::Required => ToolChoiceParam::Mode(ToolChoiceOptions::Required),
-        ToolChoice::None => ToolChoiceParam::Mode(ToolChoiceOptions::None),
+        ToolChoice::Auto => ToolChoiceParam::Option(ToolChoiceOptions::Auto),
+        ToolChoice::Required => ToolChoiceParam::Option(ToolChoiceOptions::Required),
+        ToolChoice::None => ToolChoiceParam::Option(ToolChoiceOptions::None),
         ToolChoice::Tool { name } => {
             use async_openai::types::responses::ToolChoiceFunction;
             ToolChoiceParam::Function(ToolChoiceFunction { name: name.clone() })
         }
         // ToolChoice is #[non_exhaustive]; new variants default to Auto.
-        _ => ToolChoiceParam::Mode(ToolChoiceOptions::Auto),
+        _ => ToolChoiceParam::Option(ToolChoiceOptions::Auto),
     }
 }
 
@@ -732,6 +750,8 @@ mod tests {
                 name: name.to_owned(),
                 id: Some(item_id.to_owned()),
                 status: None,
+                caller: None,
+                r#async: None,
             }),
         })
     }
@@ -744,6 +764,8 @@ mod tests {
             name: name.to_owned(),
             id: Some(item_id.to_owned()),
             status: Some(OutputStatus::Completed),
+            caller: None,
+            r#async: None,
         })
     }
 
@@ -879,6 +901,7 @@ mod tests {
             input_tokens: 51,
             input_tokens_details: async_openai::types::responses::InputTokenDetails {
                 cached_tokens: 0,
+                cache_write_tokens: None,
             },
             output_tokens: 15,
             output_tokens_details: async_openai::types::responses::OutputTokenDetails {
@@ -1082,6 +1105,8 @@ mod tests {
                         name: "get_weather".to_owned(),
                         id: Some("fc_trunc".to_owned()),
                         status: Some(OutputStatus::Incomplete),
+                        caller: None,
+                        r#async: None,
                     }),
                 },
             ))

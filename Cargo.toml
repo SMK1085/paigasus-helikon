@@ -18,7 +18,7 @@ actix-web             = { version = "4", default-features = false, features = ["
 actix-ws              = "0.4"
 anyhow                = "1"
 arrow                 = { version = "59", default-features = false }
-async-openai          = "0.41"
+async-openai          = "0.42"
 cap-std               = "4"
 axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64                = "0.23"
@@ -50,7 +50,7 @@ globset               = "0.4"
 # unmaintained `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`.
 # Relax once jiff drops that transitive dep.
 jiff                  = { version = "=0.2.28", features = ["serde"] }
-jsonschema            = { version = "0.53", default-features = false }
+jsonschema            = { version = "0.56", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"
 notify                = "8"
