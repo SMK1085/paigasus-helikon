@@ -9,7 +9,7 @@ use paigasus_helikon_core::{
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
+    JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
     Tool as McpToolDef,
 };
 use rmcp::service::{RequestContext, RoleServer};
@@ -268,8 +268,8 @@ impl<Ctx> Clone for AgentMcpHandler<Ctx> {
 }
 
 impl<Ctx: Send + Sync + 'static> ServerHandler for AgentMcpHandler<Ctx> {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(self.name.clone(), self.version.clone()));
         if let Some(instructions) = &self.instructions {
             info = info.with_instructions(instructions.clone());
