@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "d06723bb1d1a",
+  "strategy": "manual-commit",
+  "branch": "feature/deps-rustls-0.23.45",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d0/6723bb1d1a/0/metadata.json",
+      "transcript": "/d0/6723bb1d1a/0/full.jsonl",
+      "compact_transcript": "/d0/6723bb1d1a/0/transcript.jsonl",
+      "content_hash": "/d0/6723bb1d1a/0/content_hash.txt",
+      "prompt": "/d0/6723bb1d1a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 19211,
+    "cache_read_tokens": 2137665,
+    "output_tokens": 5361,
+    "api_call_count": 15
+  }
+}
