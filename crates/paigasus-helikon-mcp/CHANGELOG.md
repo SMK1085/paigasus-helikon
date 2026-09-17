@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.23](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.22...paigasus-helikon-mcp-v0.1.23) - 2026-09-17
+
+### Other
+
+- *(deps)* bump rmcp to 3.4.0, migrate to ServerConfig ([#265](https://github.com/SMK1085/paigasus-helikon/pull/265))
+
 ## [0.1.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-mcp-v0.1.21...paigasus-helikon-mcp-v0.1.22) - 2026-09-06
 
 ### Other

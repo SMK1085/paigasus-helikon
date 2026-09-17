@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.30](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.29...paigasus-helikon-providers-openai-v0.2.30) - 2026-09-17
+
+### Other
+
+- *(deps)* bump async-openai and jsonschema, adapt to the 0.42 API ([#262](https://github.com/SMK1085/paigasus-helikon/pull/262))
+
 ## [0.2.29](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.28...paigasus-helikon-providers-openai-v0.2.29) - 2026-09-07
 
 ### Fixed
