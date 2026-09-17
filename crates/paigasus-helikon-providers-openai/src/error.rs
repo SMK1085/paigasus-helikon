@@ -87,6 +87,7 @@ mod tests {
                 r#type: ty.map(str::to_owned),
                 param: None,
                 code: code.map(str::to_owned),
+                misalignment: None,
             },
         })
     }
