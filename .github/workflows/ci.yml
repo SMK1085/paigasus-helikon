@@ -266,7 +266,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # taiki-e/install-action v2.87.5
-      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8
+      - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af
         with:
           tool: convco@0.6.3
       - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD
