@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
           components: rustfmt
@@ -65,7 +65,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
           components: clippy
@@ -113,7 +113,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: ${{ matrix.toolchain }}
       # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
@@ -169,7 +169,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
       # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
@@ -208,7 +208,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
       # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
@@ -239,7 +239,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
       # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
@@ -266,7 +266,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # taiki-e/install-action v2.87.5
-      - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af
+      - uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908
         with:
           tool: convco@0.6.3
       - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD
@@ -298,7 +298,7 @@ jobs:
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
       - if: steps.filter.outputs.sessions == 'true'
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
       # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
