@@ -17,7 +17,7 @@ categories    = ["api-bindings", "asynchronous"]
 actix-web             = { version = "4", default-features = false, features = ["macros"] }
 actix-ws              = "0.4"
 anyhow                = "1"
-arrow                 = { version = "59", default-features = false }
+arrow                 = { version = "60", default-features = false }
 async-openai          = "0.42"
 cap-std               = "4"
 axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
@@ -56,7 +56,7 @@ libc                  = "0.2"
 notify                = "8"
 notify-debouncer-mini = "0.7"
 opentelemetry         = "0.32"
-parquet               = { version = "59", default-features = false, features = ["arrow", "snap"] }
+parquet               = { version = "60", default-features = false, features = ["arrow", "snap"] }
 proc-macro-crate      = "3"
 proc-macro2           = "1"
 quote                 = "1"
