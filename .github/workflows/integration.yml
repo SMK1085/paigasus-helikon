@@ -121,7 +121,7 @@ jobs:
       - if: steps.decide.outputs.run == 'true'
         # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
         # below is mandatory, not stylistic -- see CLAUDE.md.
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
       # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
