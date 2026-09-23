@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "8f331e130f35",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 28,
+  "files_touched": [
+    ".worktrees/deps-async-openai/crates/paigasus-helikon-providers-openai/src/backend/responses.rs",
+    ".worktrees/deps-async-openai/crates/paigasus-helikon-providers-openai/src/error.rs",
+    ".worktrees/rmcp-3.4/crates/paigasus-helikon-mcp/src/server.rs",
+    ".worktrees/rmcp-3.4/crates/paigasus-helikon-mcp/tests/support/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8f/331e130f35/0/metadata.json",
+      "transcript": "/8f/331e130f35/0/full.jsonl",
+      "compact_transcript": "/8f/331e130f35/0/transcript.jsonl",
+      "content_hash": "/8f/331e130f35/0/content_hash.txt",
+      "prompt": "/8f/331e130f35/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 356,
+    "cache_creation_tokens": 480821,
+    "cache_read_tokens": 28700286,
+    "output_tokens": 53495,
+    "api_call_count": 178,
+    "subagent_tokens": {
+      "input_tokens": 134,
+      "cache_creation_tokens": 209238,
+      "cache_read_tokens": 5466276,
+      "output_tokens": 37902,
+      "api_call_count": 67
+    }
+  }
+}

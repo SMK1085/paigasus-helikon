@@ -1,0 +1,92 @@
+Check the two open dependabot PRs, merge them if they are green, if they are red, fix them first then merge
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>audit: fail
+book-build: pass
+book-deploy: skipping
+deny: fail
+fmt: pass
+markdown-lint: pass
+pr-title: pass
+scheduled-audit: skipping</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>commits: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>build-no-default-features: pass
+verify: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>sessions-it: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>docs: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>clippy: pass
+CodeRabbit: pass
+temporal-it: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>agentcore-image: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>doc-coverage: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7cn4ts0z</task-id>
+<summary>Monitor event: "PR 262 CI checks until all complete"</summary>
+<event>test (ubuntu-latest, 1.94): pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>

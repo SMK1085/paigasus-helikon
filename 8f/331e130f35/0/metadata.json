@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "8f331e130f35",
+  "session_id": "3f4390b1-39d1-44c5-8ffa-aba97d47f258",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-23T19:05:29.755899Z",
+  "branch": "main",
+  "checkpoints_count": 28,
+  "save_step_count": 1,
+  "files_touched": [
+    ".worktrees/deps-async-openai/crates/paigasus-helikon-providers-openai/src/backend/responses.rs",
+    ".worktrees/deps-async-openai/crates/paigasus-helikon-providers-openai/src/error.rs",
+    ".worktrees/rmcp-3.4/crates/paigasus-helikon-mcp/src/server.rs",
+    ".worktrees/rmcp-3.4/crates/paigasus-helikon-mcp/tests/support/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "5b820cfbd0b1",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 356,
+    "cache_creation_tokens": 480821,
+    "cache_read_tokens": 28700286,
+    "output_tokens": 53495,
+    "api_call_count": 178,
+    "subagent_tokens": {
+      "input_tokens": 134,
+      "cache_creation_tokens": 209238,
+      "cache_read_tokens": 5466276,
+      "output_tokens": 37902,
+      "api_call_count": 67
+    }
+  },
+  "session_metrics": {
+    "turn_count": 28
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-23T19:05:29.709848Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 316,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 316,
+    "total_lines_changed": 570,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
