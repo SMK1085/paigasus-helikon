@@ -176,7 +176,7 @@ release-plz stops or continues when a semver check fails
   from the 8 sites that do not publish. Keep `setup-protoc` in
   `release-plz.yml` and keep `.github/actions/setup-protoc/`. Do **not** edit
   `release-plz.yml` at all.
-- **Phase 2 (a follow-up Linear ticket, filed after Gate 1):** after
+- **Phase 2 ([SMA-687](https://linear.app/smaschek/issue/SMA-687), filed at Gate 1):** after
   release-plz has published a `runtime-temporal` version and a facade version
   that include `vendored-protox`, remove the `setup-protoc` step from
   `release-plz.yml`, delete `.github/actions/setup-protoc/`, and remove the
@@ -289,7 +289,7 @@ workflow-level `env:` of `ci.yml`, add:
 | `docs/runbooks/ci-architecture.md` "protoc" section (lines 101-105) | Rewrite it for phase 1: the workspace uses `protox`; `setup-protoc` stays only in `release-plz.yml` for the semver-check baseline, until phase 2; the two guards; the recovery in section 7. Keep the pin bump runbook, because the pin still exists until phase 2. |
 | `docs/runbooks/ci-architecture.md:4` (scope line) | Add SMA-623. |
 | `docs/runbooks/ci-architecture.md:113` (markdownlint section names `PROTOC_VERSION`) | Check the sentence and correct it if phase 1 makes it wrong. |
-| `CLAUDE.md` (CI section) | Keep "Four pins" (the pin still exists), but say that `PROTOC_VERSION` and its digests serve only `release-plz.yml` now, and that phase 2 removes them. |
+| `CLAUDE.md` (CI section) | Keep "Four pins" (the pin still exists), but say that `PROTOC_VERSION` and its digests serve only `release-plz.yml` now, and that SMA-687 (phase 2) removes them. |
 | `crates/paigasus-helikon-runtime-temporal/README.md` | Add one sentence: the crate needs no system `protoc`. It compiles the Temporal protos with `protox`. |
 | `docs/book/src/` | No change. The book does not mention `protoc`. This is a conscious decision. |
 | Earlier specs and plans (`docs/superpowers/**`) | No change. They are historical records. |
@@ -369,16 +369,16 @@ After the merge:
     `cache-budget.yml` mixes generations. Instead, compare the `size_in_bytes`
     of each job's new key with the same job's previous key (Actions cache API).
     Record the result as a comment on SMA-623.
-16. File the phase 2 ticket in Linear (project `Paigasus Helikon`) before the
-    PR opens, and link it from the PR body. Its trigger is: `runtime-temporal`
+16. The phase 2 ticket is SMA-687 (filed at Gate 1). Link it from the PR body
+    by its URL, not by its bare identifier. Its trigger is: `runtime-temporal`
     and the facade are published with `vendored-protox`.
 
 ## 9. Acceptance (from the ticket)
 
 - `CONTRIBUTING.md:150` is accurate: section 6.4.
 - A recorded decision on `vendored-protox`: adopted (sections 3 and 4). The
-  setup action and the four pins leave in phase 2 (section 5). The phase 2
-  ticket tracks them, so they are no longer untracked by accident.
+  setup action and the four pins leave in phase 2 (section 5). SMA-687 tracks
+  them, so they are no longer untracked by accident.
 - `cargo tree -i ring --all-features -e normal --target all` prints "nothing
   to print": M15 and verification step 5.
 
