@@ -58,7 +58,7 @@ Expected: no matching line, `grep exit: 1`.
 Then run:
 
 ```bash
-PROTOC=/nonexistent/protoc cargo build -p paigasus-helikon-runtime-temporal 2>&1 | tail -20
+set -o pipefail; PROTOC=/nonexistent/protoc cargo build -p paigasus-helikon-runtime-temporal 2>&1 | tail -20
 ```
 
 Expected: FAIL with `Could not find \`protoc\`` from `prost-wkt-types` and/or `temporalio-protos`. (If the build units are already cached from an earlier build and the build passes, run `cargo clean -p temporalio-protos -p prost-wkt-types` and repeat.)
@@ -94,7 +94,7 @@ temporalio-client   = { version = "1.0", default-features = false, features = ["
 Run (NOT `--locked`, NOT `cargo update`):
 
 ```bash
-PROTOC=/nonexistent/protoc cargo build -p paigasus-helikon-runtime-temporal 2>&1 | tail -5
+set -o pipefail; PROTOC=/nonexistent/protoc cargo build -p paigasus-helikon-runtime-temporal 2>&1 | tail -5
 ```
 
 Expected: `Finished` with exit 0.
@@ -112,7 +112,7 @@ Expected: at least one line that contains `feature "vendored-protox"`. **Copy th
 - [ ] **Step 5: Run the crate tests without protoc**
 
 ```bash
-PROTOC=/nonexistent/protoc cargo test -p paigasus-helikon-runtime-temporal 2>&1 | grep -E '^test result|FAILED|panicked' 
+set -o pipefail; PROTOC=/nonexistent/protoc cargo test -p paigasus-helikon-runtime-temporal 2>&1 | grep -E '^test result|FAILED|panicked' 
 ```
 
 Expected: every `test result:` line shows `0 failed`. (The spec measured 86 unit, 6 `temporal_live`, 2 doc tests passing.)
@@ -597,7 +597,7 @@ Expected: the commit contains exactly the three files.
 Run every command from the worktree root with `PROTOC=/nonexistent/protoc` where shown.
 
 - [ ] **Step 1:** `PROTOC=/nonexistent/protoc cargo build --workspace --all-features` → exit 0.
-- [ ] **Step 2:** `PROTOC=/nonexistent/protoc cargo test --workspace --all-features 2>&1 | grep -E '^test result|FAILED|panicked'` → every `test result` has `0 failed`. If about 48 `providers-bedrock` tests fail with `NATIVE_ROOTS` errors, that is a known macOS host artifact that depends on the checkout path. Then repeat the run in a detached worktree under the scratchpad (`git worktree add --detach <scratchpad>/verify HEAD`, run there, then `git worktree remove --force <scratchpad>/verify`) and report both results.
+- [ ] **Step 2:** `set -o pipefail; PROTOC=/nonexistent/protoc cargo test --workspace --all-features 2>&1 | grep -E '^test result|FAILED|panicked'` → every `test result` has `0 failed`. If about 48 `providers-bedrock` tests fail with `NATIVE_ROOTS` errors, that is a known macOS host artifact that depends on the checkout path. Then repeat the run in a detached worktree under the scratchpad (`git worktree add --detach <scratchpad>/verify HEAD`, run there, then `git worktree remove --force <scratchpad>/verify`) and report both results.
 - [ ] **Step 3:** `cargo fmt --all -- --check` → exit 0; `PROTOC=/nonexistent/protoc cargo clippy --workspace --all-features --all-targets -- -D warnings` → exit 0.
 - [ ] **Step 4:** `PROTOC=/nonexistent/protoc RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` → exit 0.
 - [ ] **Step 5:** `cargo tree -i ring --all-features -e normal --target all` → `warning: nothing to print.`
