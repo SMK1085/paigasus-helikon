@@ -198,7 +198,7 @@ jobs:
       # workflow env fires only when a build script runs; this one always runs.
       - name: Assert vendored-protox is active for the Temporal protos
         run: |
-          if ! cargo tree -p paigasus-helikon-runtime-temporal -e features -i prost-wkt-types | grep -q 'feature "vendored-protox"'; then
+          if ! cargo tree -p paigasus-helikon-runtime-temporal -e features -i prost-wkt-types | grep -qE '(^|[^[:alnum:]_-])prost-wkt-types feature "vendored-protox"'; then
             echo "::error::vendored-protox is not active on prost-wkt-types, so the Temporal protos need a system protoc (SMA-623). Keep \"vendored-protox\" in temporalio-client's features in the root Cargo.toml."
             exit 1
           fi
