@@ -29,6 +29,13 @@ env:
   # scripts/check-cargo-profile-env-sync.sh fails the `fmt` gate if it drifts.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   NIGHTLY_TOOLCHAIN: nightly-2026-05-01
+  # SMA-623: the workspace compiles the Temporal protos with protox
+  # (temporalio-client's `vendored-protox` feature) and needs no system protoc.
+  # This path does not exist. prost-build reads PROTOC before PATH, so a build
+  # script that calls protoc fails with "Could not find `protoc`" instead of
+  # silently using a protoc that a runner image happens to ship. The name has no
+  # CARGO_/RUST prefix, so it is not part of the rust-cache key.
+  PROTOC: /nonexistent/protoc-see-SMA-623
 
 jobs:
   fmt:
@@ -69,10 +76,6 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332). The
-      # version and its digests live in the action (SMA-458).
-      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       # SMA-618: PR jobs restore but never save. save-if gates only the post
       # (save) step, so a PR run still reads main's entries — it just stops
@@ -116,12 +119,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: ${{ matrix.toolchain }}
-      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332). The
-      # version and its digests live in the action (SMA-458).
-      # Cross-platform: this is the only site exercising the macOS and Windows
-      # branches of the action, so it carries all three pinned digests.
-      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       # SMA-618: save only from the default branch — see the note on `clippy`.
       #
@@ -172,10 +169,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
-      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332). The
-      # version and its digests live in the action (SMA-458).
-      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
@@ -198,6 +191,18 @@ jobs:
             exit 1
           fi
           echo "no axum under runtime-actix"
+      # SMA-623: the workspace compiles the Temporal protos with protox. This
+      # assertion fails if `vendored-protox` leaves temporalio-client's features
+      # in the root Cargo.toml. It only resolves the graph (no build), so it does
+      # not depend on the cache or on the runner image. The PROTOC guard in the
+      # workflow env fires only when a build script runs; this one always runs.
+      - name: Assert vendored-protox is active for the Temporal protos
+        run: |
+          if ! cargo tree -p paigasus-helikon-runtime-temporal -e features -i prost-wkt-types | grep -qE '(^|[^[:alnum:]_-])prost-wkt-types feature "vendored-protox"'; then
+            echo "::error::vendored-protox is not active on prost-wkt-types, so the Temporal protos need a system protoc (SMA-623). Keep \"vendored-protox\" in temporalio-client's features in the root Cargo.toml."
+            exit 1
+          fi
+          echo "vendored-protox is active"
 
   docs:
     runs-on: ubuntu-latest
@@ -211,10 +216,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
-      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332). The
-      # version and its digests live in the action (SMA-458).
-      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       # SMA-618: reader of the `metadata` key that `clippy` writes — see the
       # note there. `save-if: false` is a literal, NOT the default-branch
@@ -242,10 +243,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
-      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332). The
-      # version and its digests live in the action (SMA-458).
-      - uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
@@ -288,9 +285,9 @@ jobs:
               - 'crates/paigasus-helikon-sessions-**'
               - 'crates/paigasus-helikon-core/src/session.rs'
               - '.github/workflows/ci.yml'
-              # The protoc install lives here since SMA-458. Without this entry a
-              # protoc bump would skip this REQUIRED job, reporting green having
-              # run nothing.
+              # Local composite actions. A change to an action that this job
+              # uses must run this REQUIRED job; without this entry the job
+              # would report green having run nothing.
               - '.github/actions/**'
               - 'Cargo.lock'
       - if: steps.filter.outputs.sessions == 'false'
@@ -301,11 +298,6 @@ jobs:
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: stable
-      # Pinned, checksum-verified protoc — temporalio-protos compiles .proto at
-      # build time (prost-build); a system protoc is required (SMA-332). The
-      # version and its digests live in the action (SMA-458).
-      - if: steps.filter.outputs.sessions == 'true'
-        uses: ./.github/actions/setup-protoc
       # Swatinem/rust-cache v2.9.2
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - if: steps.filter.outputs.sessions == 'true'

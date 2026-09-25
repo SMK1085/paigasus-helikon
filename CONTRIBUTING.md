@@ -147,17 +147,11 @@ bot — not after.
 
 ## Build prerequisites
 
-Besides the Rust toolchain (rustup; see [MSRV](#msrv) below), building the workspace requires a system **`protoc`** (Protocol Buffers compiler): the `temporalio-protos` crate (pulled in by `paigasus-helikon-runtime-temporal`'s `temporalio-*` dependencies) compiles its `.proto` definitions at build time via `prost-build`, which has no vendored `protoc` fallback.
+To build the workspace, you need only the Rust toolchain (rustup; see [MSRV](#msrv) below). You do not need a system `protoc` (Protocol Buffers compiler).
 
-```bash
-brew install protobuf                 # macOS
-sudo apt-get install protobuf-compiler  # Debian/Ubuntu
-choco install protoc                  # Windows
-```
+`paigasus-helikon-runtime-temporal` depends on `temporalio-protos`, which compiles `.proto` files at build time. The root `Cargo.toml` enables the `vendored-protox` feature on `temporalio-client`. With this feature, `temporalio-protos` and `prost-wkt-types` (the only two crates in the graph that compile `.proto` files) use `protox`, a protobuf compiler in pure Rust, instead of a system `protoc` (SMA-623).
 
-If `protoc` is installed somewhere non-standard, point the `PROTOC` environment variable at the binary.
-
-CI installs **protoc 35.1** in every job that compiles the workspace, via the repo-local `.github/actions/setup-protoc` action, which verifies the download against a pinned SHA-256 before extracting it. Distribution packages often lag several majors behind — `apt-get install protobuf-compiler` on Ubuntu 24.04 is one example — so to match CI exactly, take the archive for your platform from the [protobuf v35.1 release](https://github.com/protocolbuffers/protobuf/releases/tag/v35.1) rather than relying on the package manager. Matching exactly is rarely necessary; it is worth doing when you are chasing a protoc-related failure that reproduces in CI but not locally.
+CI sets `PROTOC` to a path that does not exist, so a build script that calls `protoc` fails the required gates. If a local build fails with "Could not find `protoc`", a dependency has started to call `protoc`. Do not install `protoc` to make the error go away. Read the "protoc and protox" section of `docs/runbooks/ci-architecture.md` first.
 
 ## MSRV
 
@@ -247,8 +241,8 @@ which both use `mapfile` and so need bash >= 4.0. macOS ships bash 3.2, on which
 they fail with `mapfile: command not found`; `brew install bash` alongside the
 Rust toolchain is the fix.
 `markdownlint-cli2` is pinned exactly in `package-lock.json` and is
-**not** tracked by Dependabot — bumping it is a deliberate act, like `PROTOC_VERSION`
-and `NIGHTLY_TOOLCHAIN`. `npx markdownlint-cli2 --fix` resolves most findings
+**not** tracked by Dependabot — bumping it is a deliberate act, like
+`NIGHTLY_TOOLCHAIN`. `npx markdownlint-cli2 --fix` resolves most findings
 mechanically; review the diff before committing, since a few fixes edit content
 rather than whitespace.
 

@@ -138,8 +138,16 @@ windows-sys = { version = "0.61", features = [
 # temporalio-sdk-core is a direct dep that NO source file names (`rg
 # temporalio_sdk_core crates/` is empty); it exists solely to force `tls-aws-lc`
 # through feature unification. Do not "clean it up".
+# `vendored-protox` (SMA-623): temporalio-protos and prost-wkt-types compile their
+# .proto files with `protox` (pure Rust) instead of a system `protoc`, so neither
+# this workspace nor its downstream users need protoc. The feature must stay on
+# temporalio-client (or temporalio-common): temporalio-sdk and temporalio-sdk-core
+# do not forward it. protox and its dependencies are BUILD dependencies, so the
+# `-e normal` ring check above does not see them. Two ci.yml guards fail the
+# required gates if the feature disappears: a `cargo tree` assertion in
+# `build-no-default-features`, and `PROTOC` set to a path that does not exist.
 temporalio-sdk      = { version = "1.0", default-features = false }
-temporalio-client   = { version = "1.0", default-features = false, features = ["tls-aws-lc"] }
+temporalio-client   = { version = "1.0", default-features = false, features = ["tls-aws-lc", "vendored-protox"] }
 temporalio-sdk-core = { version = "0.9", default-features = false, features = ["tls-aws-lc"] }
 temporalio-common   = { version = "1.0", default-features = false }
 # temporalio-sdk does NOT re-export the `#[activities]`/`#[activity]` attribute
