@@ -14,6 +14,8 @@ Most users enable the `runtime-temporal` feature on the [`paigasus-helikon`](htt
 cargo add paigasus-helikon --features runtime-temporal
 ```
 
+The crate does not need a system `protoc`. It compiles the Temporal protobuf definitions with [`protox`](https://crates.io/crates/protox), a protobuf compiler in pure Rust, through the `vendored-protox` feature of `temporalio-client`.
+
 ## Quick start
 
 Start a local Temporal dev server:
