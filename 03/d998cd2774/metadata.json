@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "03d998cd2774",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-623-evaluate-temporalio-protos-vendored-protox-to-retire-the",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/03/d998cd2774/0/metadata.json",
+      "transcript": "/03/d998cd2774/0/full.jsonl",
+      "compact_transcript": "/03/d998cd2774/0/transcript.jsonl",
+      "content_hash": "/03/d998cd2774/0/content_hash.txt",
+      "prompt": "/03/d998cd2774/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 20181,
+    "cache_read_tokens": 1743284,
+    "output_tokens": 3946,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 2,
+      "cache_creation_tokens": 37423,
+      "cache_read_tokens": 22407,
+      "output_tokens": 137,
+      "api_call_count": 1
+    }
+  }
+}
