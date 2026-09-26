@@ -251,7 +251,9 @@ where
     /// matching `TokioRunner`. Cancellation, timeout and infrastructure
     /// failures leave the slot empty, so `collect` returns [`RunError::Other`]
     /// carrying the terminal frame's text, as `TokioRunner` does for an
-    /// interrupt.
+    /// interrupt. This applies only when the stream ends in a failed state; if
+    /// the durable log already ended in a successful terminal state, that
+    /// outcome is returned as `Ok` instead.
     async fn run_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),

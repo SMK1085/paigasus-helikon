@@ -899,6 +899,11 @@ async fn streamed_model_failure_collects_the_typed_agent_error() {
                 message.contains("connection lost"),
                 "the model error message must survive into the typed error: {message:?}"
             );
+            assert!(
+                !message.contains("\"Model\""),
+                "the ErrorKindPayload JSON must be parsed, not leaked as a raw string \
+                 (a mis-targeted activity_failure_message would leak it): {message:?}"
+            );
         }
         Err(other) => panic!("expected the typed RunError::Agent, got {other:?}"),
         Ok(_) => panic!("a failed run must never collect as Ok"),
