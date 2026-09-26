@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "d462feed8411",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-516-runtime-temporal-cover-run_streameds-terminal-synthesis-with",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d4/62feed8411/0/metadata.json",
+      "transcript": "/d4/62feed8411/0/full.jsonl",
+      "compact_transcript": "/d4/62feed8411/0/transcript.jsonl",
+      "content_hash": "/d4/62feed8411/0/content_hash.txt",
+      "prompt": "/d4/62feed8411/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 26143,
+    "cache_read_tokens": 994668,
+    "output_tokens": 18040,
+    "api_call_count": 7
+  }
+}
