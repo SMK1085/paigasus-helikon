@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "2ee2da69ee99",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-687-retire-setup-protoc-from-release-plzyml-and-delete-the",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/actions/setup-protoc/action.yml",
+    ".github/actions/setup-protoc/install.sh",
+    ".github/actions/setup-protoc/selftest.sh",
+    ".github/actions/setup-protoc/verify.sh",
+    ".github/workflows/release-plz.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2e/e2da69ee99/0/metadata.json",
+      "transcript": "/2e/e2da69ee99/0/full.jsonl",
+      "compact_transcript": "/2e/e2da69ee99/0/transcript.jsonl",
+      "content_hash": "/2e/e2da69ee99/0/content_hash.txt",
+      "prompt": "/2e/e2da69ee99/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 396,
+    "cache_creation_tokens": 801064,
+    "cache_read_tokens": 52326419,
+    "output_tokens": 158586,
+    "api_call_count": 178,
+    "subagent_tokens": {
+      "input_tokens": 1952,
+      "cache_creation_tokens": 2320187,
+      "cache_read_tokens": 58016714,
+      "output_tokens": 167632,
+      "api_call_count": 652
+    }
+  }
+}
