@@ -147,9 +147,18 @@ pub struct ExecOutput {
     /// Whether the command was killed because it exceeded the timeout.
     ///
     /// On unix and Windows a timeout kills the whole spawned subtree, not just
-    /// the direct child: a process group `SIGKILL` on unix, a Job Object
-    /// termination on Windows. On any other target no subtree mechanism is
-    /// available and only the direct child is killed.
+    /// the direct child. On unix the process group gets `SIGSTOP`, then
+    /// `SIGKILL`, so that the death of one member cannot wake another member into
+    /// user code before that member is also killed. On Windows the Job Object is
+    /// terminated. On any other target no subtree mechanism is available and only
+    /// the direct child is killed.
+    ///
+    /// Accepted gaps on unix: a `ptrace` tracer or a waiter that uses
+    /// `WUNTRACED` sees the stop and can act on it; on macOS, a process that a
+    /// member forks between the two signals is not stopped and can run until the
+    /// `SIGKILL` reaches it; a process that leaves the group (`setpgid`,
+    /// `setsid`) survives; and if the `SIGKILL` fails, the survivors stay stopped
+    /// and a warning is emitted on the `paigasus::tools::exec` target.
     ///
     /// One accepted gap on Windows: a process spawned in the brief window
     /// between the shell starting and its assignment to the job object is not a
@@ -357,9 +366,7 @@ pub(crate) async fn spawn_capped(
             #[cfg(unix)]
             {
                 if let Some(pid) = pgid {
-                    // SAFETY: pid < 4_194_304 on supported platforms, so the cast
-                    // and negation are valid; ESRCH (group already gone) is benign.
-                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                    kill_process_group(pid);
                 }
             }
             #[cfg(windows)]
@@ -400,8 +407,8 @@ pub(crate) async fn spawn_capped(
             // process has no meaningful exit code. On Windows, `TerminateJobObject`
             // and its `start_kill()`/`TerminateProcess` fallback both assign a real
             // exit code; on unix the child can still win the race to exit normally
-            // before our SIGKILL lands. All of those would otherwise contradict the
-            // `ExecOutput::exit_code` contract.
+            // before the group `SIGSTOP`/`SIGKILL` lands. All of those would
+            // otherwise contradict the `ExecOutput::exit_code` contract.
             let _ = tokio::time::timeout(GRACE, child.wait()).await;
             None
         }
@@ -449,6 +456,42 @@ fn build_command(prefix: &[OsString], command: &str) -> tokio::process::Command 
         let mut c = tokio::process::Command::new("cmd");
         c.arg("/C").arg(command);
         c
+    }
+}
+
+/// Kill every process in the process group `pgid` on a timeout (SMA-710).
+///
+/// Stops the group first, then kills it, so that the death of one member cannot
+/// wake another member into user code before that member is also killed. A
+/// single group `SIGKILL` is not enough on macOS: the kernel signals members
+/// one at a time, and a parent woken from `wait4` by a dead child could run its
+/// next command before its own `SIGKILL` took effect.
+///
+/// The two `kill` calls must stay back-to-back and synchronous: never put an
+/// `.await`, a lock, or other work between them. No `SIGCONT` is sent: `SIGKILL`
+/// terminates a stopped process.
+#[cfg(unix)]
+fn kill_process_group(pgid: u32) {
+    // pid < 4_194_304 on supported platforms, so the cast and negation are valid.
+    let target = -(pgid as i32);
+    // The result is deliberately ignored: `SIGKILL` below is sent whatever
+    // happens here, so the kill is never weaker than a bare `SIGKILL`.
+    // SAFETY: `kill` has no memory-safety preconditions.
+    let _ = unsafe { libc::kill(target, libc::SIGSTOP) };
+    // SAFETY: as above.
+    if unsafe { libc::kill(target, libc::SIGKILL) } != 0 {
+        let err = std::io::Error::last_os_error();
+        // ESRCH: the group is already gone. EPERM on macOS: only zombies remain
+        // in the group. Neither leaves a live survivor.
+        if !matches!(err.raw_os_error(), Some(libc::ESRCH) | Some(libc::EPERM)) {
+            tracing::warn!(
+                target: "paigasus::tools::exec",
+                error = %err,
+                pgid,
+                "process group SIGKILL failed after SIGSTOP; processes of the timed-out \
+                 command may remain stopped"
+            );
+        }
     }
 }
 
