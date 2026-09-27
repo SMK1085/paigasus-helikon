@@ -4,6 +4,7 @@
 //! automatically). The SSE stream is translated by [`ResponsesTranslator`]
 //! into `ModelEvent`s.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use async_openai::traits::EventType as _;
@@ -233,18 +234,24 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 /// - `response.output_item.added` (when item is a function call) →
 ///   registers `item.id` → `(item.call_id, item.name)` for subsequent argument deltas;
 ///   also flushes any argument deltas that arrived before this event (out-of-order case).
+///   Its `ToolCallDelta` carries `name: None` when another item already named the same
+///   non-blank `call_id` (SMA-617).
 /// - `response.function_call_arguments.delta` → `ToolCallDelta` with
-///   name-emission gating (name emitted once per call_id, then `None`). If
-///   `output_item.added` has not yet registered the item_id, the delta is buffered
-///   in `pending_args` and flushed when the registration eventually arrives.
+///   name-emission gating: the name is emitted once per non-blank `call_id`
+///   (`named_calls`, SMA-617), and once per item for a blank `call_id`, then
+///   `None`. If `output_item.added` has not yet registered the item_id, the
+///   delta is buffered in `pending_args` and flushed when the registration
+///   eventually arrives.
 /// - `response.output_item.done` (when the item is a complete function call) →
 ///   `ToolCallDelta` carrying the item's complete `arguments`, **if no delta has
 ///   already been emitted for it**. This is what makes a stream that carries no
 ///   argument deltas at all — a resumed background response — report its tool
 ///   calls (SMA-562).
+///   Its `ToolCallDelta` carries `name: None` when another item already named the same
+///   non-blank `call_id` (SMA-617).
 /// - `response.completed` → any function call in `response.output` that has not
 ///   yet been emitted, then `Usage` + `Finish { Stop }`, or `Finish { ToolCalls }`
-///   when `name_emitted` is non-empty (evaluated *after* that reconciliation
+///   when `emitted_items` is non-empty (evaluated *after* that reconciliation
 ///   sweep, not before). Reconciling against `response.output` before the
 ///   terminal pair is what makes `Finish { ToolCalls }` and the emitted
 ///   `ToolCallDelta`s agree by construction rather than by coincidence
@@ -272,13 +279,33 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 /// `item_to_call` maps the internal `item_id` → `(call_id, name)` so that
 /// `ToolCallDelta.call_id` always carries the stable call_id.
 pub(crate) struct ResponsesTranslator {
-    /// Tracks item_ids (internal correlator) for which a name has already been
-    /// emitted (name-emission gating: name is `Some` on the first `ToolCallDelta`
-    /// for a given item_id, then `None` on subsequent deltas).
+    /// Item ids (the internal correlator) whose arguments were delivered in
+    /// at least one `ToolCallDelta`.
     ///
-    /// Also set by the two SMA-562 reconciliation sites (`output_item.done`
-    /// and the `response.completed` sweep), which use it as their dedup key.
-    name_emitted: HashSet<String>,
+    /// This is the reconciliation dedup key of the two SMA-562 sites
+    /// (`output_item.done` and the `response.completed` sweep): "did this
+    /// item's arguments already reach the consumer?" is a per-item question.
+    /// It is also what `response.completed`'s `has_tool_calls` reads. Every
+    /// insertion is paired, in the same branch, with the `ToolCallDelta` for
+    /// that item, and every emitted `ToolCallDelta` inserts its item, so
+    /// `!emitted_items.is_empty()` is exactly "a `ToolCallDelta` was
+    /// emitted".
+    ///
+    /// Every emission site checks this set before it asks
+    /// [`Self::claim_name`] for a name — the `output_item.added` flush by
+    /// construction (see its comment) rather than by an explicit check — so
+    /// the name decision runs at most once per item (SMA-617 spec §3.1).
+    emitted_items: HashSet<String>,
+    /// Non-blank `call_id` → `(item_id, name)` of the item that emitted the
+    /// call's name.
+    ///
+    /// The name gate. The core contract allows exactly one name-carrying
+    /// `ToolCallDelta` per non-blank `call_id`, and two items with different
+    /// `item.id`s can carry one `call_id` (SMA-617). Keying the gate on the
+    /// item would emit a name per item. A blank `call_id` is never recorded
+    /// here: it is not an identity, and the core contract forbids merging
+    /// two parallel blank-id calls.
+    named_calls: HashMap<String, (String, String)>,
     /// Maps internal `item_id` → `(stable call_id, function name)`.
     ///
     /// Populated unconditionally by `response.output_item.added` when the item
@@ -292,7 +319,7 @@ pub(crate) struct ResponsesTranslator {
     /// (i.e. `InProgress` or `Incomplete`), which the helper checks and
     /// returns `None` for *before* registering. So this map is not guaranteed to
     /// hold every function call in `response.output`, and `response.completed`'s
-    /// `has_tool_calls` reads `name_emitted` instead, evaluated after that sweep;
+    /// `has_tool_calls` reads `emitted_items` instead, evaluated after that sweep;
     /// the `response.incomplete` arm still reads this map, unchanged by SMA-562.
     item_to_call: HashMap<String, (String, String)>,
     /// Buffered argument deltas that arrived (via `function_call_arguments.delta`)
@@ -312,9 +339,52 @@ impl ResponsesTranslator {
     /// Create a fresh translator for a new streaming response.
     pub(crate) fn new() -> Self {
         Self {
-            name_emitted: HashSet::new(),
+            emitted_items: HashSet::new(),
+            named_calls: HashMap::new(),
             item_to_call: HashMap::new(),
             pending_args: HashMap::new(),
+        }
+    }
+
+    /// Decide the `name` field of an item's first `ToolCallDelta`.
+    ///
+    /// Returns `Some(name)` when this delta is the first to name the call,
+    /// and `None` when another item already named the same non-blank
+    /// `call_id`. A blank `call_id` always returns `Some(name)` and records
+    /// nothing (see `named_calls`).
+    ///
+    /// `call_id` and `name` MUST be exactly the values the emitted
+    /// `ToolCallDelta` carries: gating on a different `call_id` could
+    /// suppress the only name a `call_id` would ever get.
+    ///
+    /// Touches only `named_calls`. The caller checks and inserts into
+    /// `emitted_items`, so this runs at most once per item.
+    fn claim_name(&mut self, item_id: &str, call_id: &str, name: &str) -> Option<String> {
+        if call_id.is_empty() {
+            return Some(name.to_owned());
+        }
+        match self.named_calls.entry(call_id.to_owned()) {
+            Entry::Vacant(slot) => {
+                slot.insert((item_id.to_owned(), name.to_owned()));
+                Some(name.to_owned())
+            }
+            Entry::Occupied(owner) => {
+                // Runs at most once per item (the caller gates on
+                // `emitted_items`), so this warns once per alias item, and
+                // never for the owner, which reached `Vacant`.
+                let (owner_item, owner_name) = owner.get();
+                tracing::warn!(
+                    target: "paigasus::openai::responses",
+                    %call_id,
+                    owner_item_id = %owner_item,
+                    owner_name = %owner_name,
+                    item_id = %item_id,
+                    name = %name,
+                    "two function_call items share one call_id; the name is emitted \
+                     once, and the arguments of both items go to the one call"
+                );
+                None
+            }
         }
     }
 
@@ -324,7 +394,7 @@ impl ResponsesTranslator {
     /// This is the single place the reconciliation rule lives; both
     /// `response.output_item.done` and `response.completed` call it, so they
     /// compose idempotently — whichever arrives first emits, the other sees
-    /// `name_emitted` and returns `None`.
+    /// `emitted_items` and returns `None`.
     ///
     /// Returns `None` for anything that is not a complete, emittable function
     /// call:
@@ -346,9 +416,9 @@ impl ResponsesTranslator {
     ///   an item already registered there before it is later seen as
     ///   non-complete here is untouched by this guard. The
     ///   `response.completed` arm's `has_tool_calls` accordingly reads
-    ///   `name_emitted`, not `item_to_call`, to stay correct against that
+    ///   `emitted_items`, not `item_to_call`, to stay correct against that
     ///   writer;
-    /// - a call already emitted, per `name_emitted`.
+    /// - a call already emitted, per `emitted_items`.
     ///
     /// Emits no `Usage`, so SMA-522's ordering invariant is untouched.
     fn emit_call_if_unseen(&mut self, item: &OutputItem) -> Option<ModelEvent> {
@@ -378,7 +448,7 @@ impl ResponsesTranslator {
             .entry(item_id.clone())
             .or_insert_with(|| (fc.call_id.clone(), fc.name.clone()));
 
-        if self.name_emitted.contains(&item_id) {
+        if self.emitted_items.contains(&item_id) {
             return None;
         }
 
@@ -393,10 +463,12 @@ impl ResponsesTranslator {
             fc.arguments.clone()
         };
 
-        self.name_emitted.insert(item_id);
+        // Gate on exactly the call_id and name this delta carries.
+        let name = self.claim_name(&item_id, &fc.call_id, &fc.name);
+        self.emitted_items.insert(item_id);
         Some(ModelEvent::ToolCallDelta {
             call_id: fc.call_id.clone(),
-            name: Some(fc.name.clone()),
+            name,
             args_delta,
         })
     }
@@ -470,13 +542,16 @@ impl ResponsesTranslator {
                         // Flush buffered args that arrived before this event.
                         if let Some(buffered) = self.pending_args.remove(&item_id) {
                             if !buffered.is_empty() {
-                                // First (and only) ToolCallDelta for these buffered args:
-                                // emit name here since this is the first time we know the
-                                // call_id; mark name_emitted so it won't repeat.
-                                self.name_emitted.insert(item_id.clone());
+                                // First ToolCallDelta for this item. The item cannot be
+                                // in `emitted_items` yet: `pending_args` only grows while
+                                // the item is absent from `item_to_call`, and every
+                                // emitted item is in `item_to_call`. The name is `None`
+                                // when another item already named this call_id (SMA-617).
+                                let name = self.claim_name(&item_id, &call_id, &name);
+                                self.emitted_items.insert(item_id.clone());
                                 return Ok(vec![ModelEvent::ToolCallDelta {
                                     call_id,
-                                    name: Some(name),
+                                    name,
                                     args_delta: buffered,
                                 }]);
                             }
@@ -510,16 +585,17 @@ impl ResponsesTranslator {
             // `e.item_id` is the internal correlator; look up the stable
             // `call_id` and `name` from the map built by `OutputItemAdded`.
             ResponseStreamEvent::ResponseFunctionCallArgumentsDelta(e) => {
-                let already_emitted = self.name_emitted.contains(&e.item_id);
                 if let Some((call_id, fn_name)) = self.item_to_call.get(&e.item_id) {
-                    let name = if already_emitted {
-                        None
+                    // Cloned out so `claim_name` can borrow `self` mutably.
+                    let (call_id, fn_name) = (call_id.clone(), fn_name.clone());
+                    // Only an item's first delta asks for a name (spec §3.1).
+                    let name = if self.emitted_items.insert(e.item_id.clone()) {
+                        self.claim_name(&e.item_id, &call_id, &fn_name)
                     } else {
-                        self.name_emitted.insert(e.item_id.clone());
-                        Some(fn_name.clone())
+                        None
                     };
                     Ok(vec![ModelEvent::ToolCallDelta {
-                        call_id: call_id.clone(),
+                        call_id,
                         name,
                         args_delta: e.delta,
                     }])
@@ -561,20 +637,20 @@ impl ResponsesTranslator {
             // `terminal_events` stays the sole constructor of `Usage` and
             // still appends `Finish` last (SMA-522).
             //
-            // `has_tool_calls` is `!name_emitted.is_empty()` — deliberately
+            // `has_tool_calls` is `!emitted_items.is_empty()` — deliberately
             // NOT `!item_to_call.is_empty()` — evaluated AFTER the sweep
             // above. `item_to_call` has a second, unconditional writer
             // (`ResponseOutputItemAdded`, which must register every item with
             // an `id` so the delta path has a correlator to look up), so it
             // can be non-empty for an item that was never, and will never be,
             // emitted (skipped as `Incomplete`, or simply absent from
-            // `response.output`). `name_emitted` has no such writer: every
-            // insertion into it is paired, in the same branch, with the
-            // `ToolCallDelta` that names the call. Reading it after the sweep
+            // `response.output`). `emitted_items` has no such writer: every
+            // insertion into it is paired, in the same branch, with a
+            // `ToolCallDelta` for that item. Reading it after the sweep
             // is not the alternative spec §4.5 rejects (gating on
-            // `name_emitted` INSTEAD OF reconciling, which would silently
+            // `emitted_items` INSTEAD OF reconciling, which would silently
             // drop a call the API described) — by this point reconciliation
-            // has already run to completion, so `name_emitted` reflects
+            // has already run to completion, so `emitted_items` reflects
             // everything emittable.
             ResponseStreamEvent::ResponseCompleted(e) => {
                 let mut out: Vec<ModelEvent> = e
@@ -595,7 +671,7 @@ impl ResponsesTranslator {
                     e.response.usage,
                     e.response.status,
                     None,
-                    !self.name_emitted.is_empty(),
+                    !self.emitted_items.is_empty(),
                 ));
                 Ok(out)
             }
@@ -666,11 +742,11 @@ impl ResponsesTranslator {
 /// so `status` alone cannot tell a tool-call turn from an ordinary text
 /// completion. The `ResponseIncomplete` caller passes `!item_to_call.is_empty()`
 /// to resolve that; the `ResponseCompleted` caller passes
-/// `!name_emitted.is_empty()` instead, evaluated after reconciling against
+/// `!emitted_items.is_empty()` instead, evaluated after reconciling against
 /// `response.output` — the two differ because that reconciliation step can
 /// register a call into `item_to_call` (via `output_item.added`) that it never
 /// actually emits (e.g. an item later found to be `Incomplete`), so only
-/// `name_emitted` is guaranteed to track what was emitted (SMA-562).
+/// `emitted_items` is guaranteed to track what was emitted (SMA-562).
 /// Every other status arm ignores it, matching every other subject in the
 /// stream conformance suite, which distinguish `ToolCalls` from `Stop` only
 /// on the natural-completion path.
@@ -919,7 +995,7 @@ mod tests {
     /// see `tests/fixtures/responses_tool_call.txt` — so `Status::Completed`
     /// alone cannot distinguish an ordinary text stop from a tool-call turn;
     /// `has_tool_calls` is what the caller threads in — from `item_to_call` for
-    /// the `response.incomplete` arm, or from `name_emitted` (evaluated after
+    /// the `response.incomplete` arm, or from `emitted_items` (evaluated after
     /// reconciling against `response.output`) for `response.completed` (SMA-562).
     #[test]
     fn terminal_events_completed_with_tool_calls_maps_to_tool_calls() {
@@ -1029,7 +1105,7 @@ mod tests {
 
         // The capture's second and final event. Driving it here is what makes
         // this test the whole §2.2 shape rather than just its first half: the
-        // terminal sweep must find the call already in `name_emitted` and add
+        // terminal sweep must find the call already in `emitted_items` and add
         // nothing, and the turn must still report `ToolCalls` — which before
         // the fix it did not, because `item_to_call` was empty.
         let evs = t
@@ -1242,7 +1318,7 @@ mod tests {
     }
 
     /// The ordinary path must be unchanged: deltas carried the arguments, so
-    /// reconciliation at `completed` finds `name_emitted` set and adds nothing.
+    /// reconciliation at `completed` finds `emitted_items` set and adds nothing.
     #[test]
     fn completed_after_deltas_emits_only_terminal_pair() {
         let mut t = ResponsesTranslator::new();
@@ -1361,10 +1437,10 @@ mod tests {
     /// `has_tool_calls` check reading `item_to_call` would see a non-empty
     /// map and wrongly report `ToolCalls` even though nothing was ever
     /// emitted. Asserting only "no delta" would pass even under that defect
-    /// — the same mutation-blind gap Task 1's review caught. `name_emitted`,
+    /// — the same mutation-blind gap Task 1's review caught. `emitted_items`,
     /// not `item_to_call`, is what must stay empty: it is only ever
-    /// populated in the same step as the `ToolCallDelta` that names a call,
-    /// so it correctly reflects that nothing was emitted.
+    /// populated in the same step as the `ToolCallDelta` that delivers a
+    /// call's arguments, so it correctly reflects that nothing was emitted.
     #[test]
     fn completed_skips_incomplete_output_item() {
         let mut t = ResponsesTranslator::new();
@@ -1397,7 +1473,7 @@ mod tests {
              `added` event already registered the item into item_to_call; got {evs:?}"
         );
         assert!(
-            t.name_emitted.is_empty(),
+            t.emitted_items.is_empty() && t.named_calls.is_empty(),
             "an incomplete item must never be marked as emitted"
         );
     }
@@ -1443,13 +1519,13 @@ mod tests {
             "an in-progress-only turn must report Stop, not ToolCalls; got {evs:?}"
         );
         assert!(
-            t.name_emitted.is_empty(),
+            t.emitted_items.is_empty() && t.named_calls.is_empty(),
             "an in-progress item must never be marked as emitted"
         );
     }
 
     /// Regression for controller finding 1 (Task 2 review): `has_tool_calls`
-    /// must read `name_emitted`, not `item_to_call`, evaluated after the
+    /// must read `emitted_items`, not `item_to_call`, evaluated after the
     /// reconciliation sweep. `output_item.added` registers `fc_1` into
     /// `item_to_call` unconditionally, but the call never appears in
     /// `response.output` (a truncated/empty `output` array) and is therefore
@@ -1483,6 +1559,269 @@ mod tests {
             ),
             "a call registered by `added` but omitted from response.output must report Stop, \
              not ToolCalls; got {evs:?}"
+        );
+    }
+
+    /// Every `name` carried by a `ToolCallDelta` for `call_id`, in emission order.
+    fn names_for<'a>(evs: &'a [ModelEvent], call_id: &str) -> Vec<&'a str> {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id: c,
+                    name: Some(n),
+                    ..
+                } if c == call_id => Some(n.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every `args_delta` for `call_id`, concatenated in emission order.
+    fn args_for(evs: &[ModelEvent], call_id: &str) -> String {
+        evs.iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id: c,
+                    args_delta,
+                    ..
+                } if c == call_id => Some(args_delta.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// SMA-617 acceptance test. Two `output_item.added` events carry
+    /// different `item.id`s but one `call_id`. The core contract allows
+    /// exactly one name-carrying `ToolCallDelta` per non-blank `call_id`.
+    /// The arguments of both items still reach the call, in wire order
+    /// (merge, spec §4.2).
+    ///
+    /// SYNTHETIC: the shape is malformed and has no capture (SMA-533
+    /// provenance rule), so it is a unit test, not a conformance fixture.
+    #[test]
+    fn two_items_one_call_id_emit_one_name() {
+        let mut t = ResponsesTranslator::new();
+        let mut all = Vec::new();
+        all.extend(
+            t.consume(added_event("fc_1", "call_A", "get_weather"))
+                .unwrap(),
+        );
+        all.extend(
+            t.consume(added_event("fc_2", "call_A", "get_weather"))
+                .unwrap(),
+        );
+        all.extend(t.consume(delta_event("fc_1", "{\"a\":")).unwrap());
+        all.extend(t.consume(delta_event("fc_2", "1}")).unwrap());
+
+        assert_eq!(
+            names_for(&all, "call_A"),
+            vec!["get_weather"],
+            "exactly one name-carrying delta per call_id; got {all:?}"
+        );
+        assert_eq!(args_for(&all, "call_A"), "{\"a\":1}");
+    }
+
+    /// SMA-617 §4.1: `output_item.done` for a second item of an already
+    /// named call carries that item's arguments, with no name.
+    #[test]
+    fn alias_item_reconciled_on_done_carries_no_name() {
+        let mut t = ResponsesTranslator::new();
+        let mut all = Vec::new();
+        all.extend(
+            t.consume(added_event("fc_1", "call_A", "get_weather"))
+                .unwrap(),
+        );
+        all.extend(t.consume(delta_event("fc_1", "{\"a\":1}")).unwrap());
+
+        let done = t
+            .consume(done_event("fc_2", "call_A", "get_weather", "{\"b\":2}"))
+            .unwrap();
+        assert_eq!(done.len(), 1, "got {done:?}");
+        match &done[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "call_A");
+                assert!(name.is_none(), "the call is already named; got {name:?}");
+                assert_eq!(args_delta, "{\"b\":2}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+        all.extend(done);
+        assert_eq!(names_for(&all, "call_A"), vec!["get_weather"]);
+    }
+
+    /// SMA-617 §4.1: the `response.completed` sweep names a call shared by
+    /// two items once, and delivers both items' arguments in output order.
+    #[test]
+    fn completed_sweep_names_a_shared_call_once() {
+        let mut t = ResponsesTranslator::new();
+        let evs = t
+            .consume(completed_event(
+                r#"[{"id":"fc_1","type":"function_call","status":"completed",
+                     "arguments":"{\"a\":1}","call_id":"call_A","name":"get_weather"},
+                    {"id":"fc_2","type":"function_call","status":"completed",
+                     "arguments":"{\"b\":2}","call_id":"call_A","name":"get_weather"}]"#,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            names_for(&evs, "call_A"),
+            vec!["get_weather"],
+            "got {evs:?}"
+        );
+        assert_eq!(args_for(&evs, "call_A"), "{\"a\":1}{\"b\":2}");
+        assert!(
+            matches!(
+                evs.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::ToolCalls
+                })
+            ),
+            "expected Finish(ToolCalls) last, got {evs:?}"
+        );
+    }
+
+    /// SMA-617: arguments buffered for a second item before its
+    /// `output_item.added` are flushed with no name when the call is
+    /// already named.
+    #[test]
+    fn buffered_alias_flush_carries_no_name() {
+        let mut t = ResponsesTranslator::new();
+        let mut all = Vec::new();
+        all.extend(
+            t.consume(added_event("fc_1", "call_A", "get_weather"))
+                .unwrap(),
+        );
+        all.extend(t.consume(delta_event("fc_1", "{}")).unwrap());
+        assert!(t
+            .consume(delta_event("fc_2", "{\"b\":2}"))
+            .unwrap()
+            .is_empty());
+
+        let flush = t
+            .consume(added_event("fc_2", "call_A", "get_weather"))
+            .unwrap();
+        assert_eq!(flush.len(), 1, "got {flush:?}");
+        match &flush[0] {
+            ModelEvent::ToolCallDelta {
+                call_id,
+                name,
+                args_delta,
+            } => {
+                assert_eq!(call_id, "call_A");
+                assert!(name.is_none(), "the call is already named; got {name:?}");
+                assert_eq!(args_delta, "{\"b\":2}");
+            }
+            other => panic!("expected ToolCallDelta, got {other:?}"),
+        }
+        all.extend(flush);
+        assert_eq!(names_for(&all, "call_A"), vec!["get_weather"]);
+    }
+
+    /// SMA-617 §3.3: a blank `call_id` is not an identity. The core
+    /// contract forbids merging two parallel blank-id calls, so each item
+    /// keeps its own name. Passes before and after the fix (regression
+    /// guard).
+    #[test]
+    fn blank_call_ids_are_not_merged() {
+        let mut t = ResponsesTranslator::new();
+        let mut all = Vec::new();
+        all.extend(t.consume(added_event("fc_1", "", "get_weather")).unwrap());
+        all.extend(t.consume(added_event("fc_2", "", "get_time")).unwrap());
+        all.extend(t.consume(delta_event("fc_1", "{}")).unwrap());
+        all.extend(t.consume(delta_event("fc_2", "{}")).unwrap());
+
+        let mut names = names_for(&all, "");
+        names.sort_unstable();
+        assert_eq!(names, vec!["get_time", "get_weather"], "got {all:?}");
+    }
+
+    /// SMA-617 §4.1: reconciliation dedup stays per item. An alias item
+    /// that already streamed its deltas must not be re-emitted by its
+    /// `done` or by the `completed` sweep. Kills the mutant "dedup keyed
+    /// on name ownership", which passes every other test here.
+    #[test]
+    fn streamed_alias_is_not_re_emitted_by_reconciliation() {
+        let mut t = ResponsesTranslator::new();
+        let mut all = Vec::new();
+        all.extend(
+            t.consume(added_event("fc_1", "call_A", "get_weather"))
+                .unwrap(),
+        );
+        all.extend(
+            t.consume(added_event("fc_2", "call_A", "get_weather"))
+                .unwrap(),
+        );
+        all.extend(t.consume(delta_event("fc_1", "{\"a\":1}")).unwrap());
+        all.extend(t.consume(delta_event("fc_2", "{\"b\":2}")).unwrap());
+
+        let mut tail = Vec::new();
+        tail.extend(
+            t.consume(done_event("fc_2", "call_A", "get_weather", "{\"b\":2}"))
+                .unwrap(),
+        );
+        tail.extend(
+            t.consume(completed_event(
+                r#"[{"id":"fc_1","type":"function_call","status":"completed",
+                     "arguments":"{\"a\":1}","call_id":"call_A","name":"get_weather"},
+                    {"id":"fc_2","type":"function_call","status":"completed",
+                     "arguments":"{\"b\":2}","call_id":"call_A","name":"get_weather"}]"#,
+            ))
+            .unwrap(),
+        );
+
+        assert!(
+            !tail
+                .iter()
+                .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })),
+            "items whose deltas already streamed must not be re-emitted; got {tail:?}"
+        );
+        assert!(
+            matches!(
+                tail.last(),
+                Some(ModelEvent::Finish {
+                    reason: FinishReason::ToolCalls
+                })
+            ),
+            "expected Finish(ToolCalls) last, got {tail:?}"
+        );
+        all.extend(tail);
+        assert_eq!(names_for(&all, "call_A"), vec!["get_weather"]);
+    }
+
+    /// SMA-617 §3.2: the alias shape is malformed, so it is logged. Exactly
+    /// one WARN per alias item (not per delta, and never for the owner),
+    /// naming both items. Uses the crate-wide capture: see
+    /// `crate::test_tracing` for why a per-test subscriber is not allowed.
+    #[test]
+    fn alias_item_warns_once() {
+        use crate::test_tracing;
+
+        test_tracing::start();
+        let mut t = ResponsesTranslator::new();
+        t.consume(added_event("fc_1", "call_A", "get_weather"))
+            .unwrap();
+        t.consume(added_event("fc_2", "call_A", "get_weather"))
+            .unwrap();
+        t.consume(delta_event("fc_1", "{\"a\":")).unwrap();
+        t.consume(delta_event("fc_2", "1")).unwrap();
+        t.consume(delta_event("fc_2", "}")).unwrap();
+
+        let alias_warns: Vec<_> = test_tracing::captured()
+            .into_iter()
+            .filter(|(target, fields)| {
+                target == "paigasus::openai::responses"
+                    && fields.contains("fc_1")
+                    && fields.contains("fc_2")
+            })
+            .collect();
+        assert_eq!(
+            alias_warns.len(),
+            1,
+            "expected exactly one alias warning naming both items; got {alias_warns:?}"
         );
     }
 }

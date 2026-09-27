@@ -2786,6 +2786,21 @@ mod gemini {
 /// The exact strings below are copied by hand from `src/declines.rs` — see
 /// this file's top-level module doc for why that duplication is load-bearing.
 ///
+/// # SMA-617's alias regression coverage lives in the crate's own unit tests
+///
+/// Every function call this module scripts has its own `call_id`, and no two
+/// items share one. The two-items-one-`call_id` shape that
+/// `ResponsesTranslator` gates on the call (SMA-617) therefore never arises
+/// from these bytes, and assertion 7 passes here without exercising it. Under
+/// this suite's fixture-provenance rule the shape has no capture anywhere in
+/// the repo and must not be invented, so it is not registered as a scenario.
+///
+/// Read this subject's `conforms` test as confirming the translator behaves
+/// correctly on the wire shapes OpenAI is actually observed to send, **not**
+/// as a standing regression guard for the SMA-617 fix. That guard is
+/// `two_items_one_call_id_emit_one_name` and its siblings in
+/// `crates/paigasus-helikon-providers-openai/src/backend/responses.rs`.
+///
 /// # Fixture provenance
 ///
 /// Every non-tool-call shape below (`response.output_text.delta`,

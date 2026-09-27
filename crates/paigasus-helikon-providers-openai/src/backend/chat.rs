@@ -687,9 +687,9 @@ impl ChatTranslator {
     /// optional, so its two key spaces admit a cross-key-space split — a
     /// blank-id delta keyed by index followed by an index-less delta keyed by
     /// id — that this crate cannot express at all, `index` being a required
-    /// `u32`; unticketed and left as-is. And this crate's sibling `responses`
-    /// translator has no blank-id handling whatsoever; its own name-dedup
-    /// defect is open as SMA-617.
+    /// `u32`; unticketed and left as-is. This crate's sibling `responses`
+    /// translator gates names on the non-blank `call_id` too, and does not
+    /// merge blank-id calls either (SMA-617).
     fn handle_tool_call_chunk(
         &mut self,
         tc: &ChatCompletionMessageToolCallChunk,
