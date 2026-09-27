@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "ee325e351a7e",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-710-exec-timeout-on-macos-a-grandchild-can-run-one-more-command",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "crates/paigasus-helikon-tools/src/exec/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ee/325e351a7e/0/metadata.json",
+      "transcript": "/ee/325e351a7e/0/full.jsonl",
+      "compact_transcript": "/ee/325e351a7e/0/transcript.jsonl",
+      "content_hash": "/ee/325e351a7e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 69926,
+    "cache_read_tokens": 7752410,
+    "output_tokens": 23309,
+    "api_call_count": 36
+  }
+}
