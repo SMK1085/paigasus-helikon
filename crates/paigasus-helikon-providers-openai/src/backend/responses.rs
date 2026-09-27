@@ -624,8 +624,8 @@ impl ResponsesTranslator {
             // can be non-empty for an item that was never, and will never be,
             // emitted (skipped as `Incomplete`, or simply absent from
             // `response.output`). `emitted_items` has no such writer: every
-            // insertion into it is paired, in the same branch, with the
-            // `ToolCallDelta` that names the call. Reading it after the sweep
+            // insertion into it is paired, in the same branch, with a
+            // `ToolCallDelta` for that item. Reading it after the sweep
             // is not the alternative spec §4.5 rejects (gating on
             // `emitted_items` INSTEAD OF reconciling, which would silently
             // drop a call the API described) — by this point reconciliation
@@ -1418,8 +1418,8 @@ mod tests {
     /// emitted. Asserting only "no delta" would pass even under that defect
     /// — the same mutation-blind gap Task 1's review caught. `emitted_items`,
     /// not `item_to_call`, is what must stay empty: it is only ever
-    /// populated in the same step as the `ToolCallDelta` that names a call,
-    /// so it correctly reflects that nothing was emitted.
+    /// populated in the same step as the `ToolCallDelta` that delivers a
+    /// call's arguments, so it correctly reflects that nothing was emitted.
     #[test]
     fn completed_skips_incomplete_output_item() {
         let mut t = ResponsesTranslator::new();
