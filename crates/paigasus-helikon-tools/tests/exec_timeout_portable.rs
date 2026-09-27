@@ -65,12 +65,28 @@ const GRANDCHILD_SCRIPT_NAME: &str = "grandchild.sh";
 #[cfg(windows)]
 const GRANDCHILD_SCRIPT_NAME: &str = "grandchild.cmd";
 
+/// Printed to stdout by the unix grandchild next to `started`. A process of the
+/// subtree that survives the timeout — stopped or running — keeps the inherited
+/// stdout pipe open, so the reader never sees EOF, `join_reader` gives up after
+/// `GRACE`, and the captured stdout is empty. So "the marker is in stdout"
+/// proves that every process of the subtree is gone (SMA-710).
+#[cfg(unix)]
+const GRANDCHILD_MARKER: &str = "grandchild-started";
+
 /// Builds the script body that writes `started` immediately, then `alive` only
 /// after a delay that outlives the backend timeout. Two sentinels, not one: a
 /// test that asserted only "`alive` is absent" would pass for free every time
 /// the grandchild failed to launch at all (wrong cwd, script not written,
 /// `.cmd` misparsed) — a false green on a Windows-only path whose sole
 /// behavioural gate is one CI job.
+///
+/// On unix the script also starts with `trap '' HUP` and prints
+/// `GRANDCHILD_MARKER` to stdout. The trap matters: when the timeout kill
+/// reaches the group leader before a stopped member, the group becomes orphaned
+/// with a stopped member, and the kernel sends it `SIGHUP` then `SIGCONT`. With
+/// the default `SIGHUP` action that kills the grandchild, which would hide a
+/// regression that kills only the direct child. `sleep` inherits the ignored
+/// `SIGHUP` (SMA-710).
 ///
 /// `started` and `alive` are taken as ABSOLUTE paths and baked into the script
 /// with `format!`, rather than written as bare relative filenames the script
@@ -87,7 +103,7 @@ const GRANDCHILD_SCRIPT_NAME: &str = "grandchild.cmd";
 #[cfg(unix)]
 fn grandchild_script(started: &Path, alive: &Path) -> String {
     format!(
-        "echo started > \"{}\"\nsleep 4\necho alive > \"{}\"\n",
+        "trap '' HUP\necho {GRANDCHILD_MARKER}\necho started > \"{}\"\nsleep 4\necho alive > \"{}\"\n",
         started.display(),
         alive.display()
     )
@@ -165,10 +181,12 @@ fn spawns_grandchild(script: &Path) -> String {
 
 /// A timed-out run kills the whole spawned subtree, not just the direct child.
 ///
-/// Regression guard for SMA-613. On unix this guards the long-standing
-/// `process_group(0)` + `SIGKILL` path, which had no test of its own. On Windows
-/// it guards the Job Object kill that replaced a bare `TerminateProcess` against
-/// `cmd.exe`, which left every grandchild running to completion.
+/// Regression guard for SMA-613. On unix this guards the `process_group(0)` +
+/// group `SIGSTOP`, then `SIGKILL`, path (SMA-710): the `alive` sentinel catches
+/// a survivor that runs, and the stdout marker catches one that stays stopped.
+/// On Windows it guards the Job Object kill that replaced a bare
+/// `TerminateProcess` against `cmd.exe`, which left every grandchild running to
+/// completion.
 #[tokio::test]
 async fn timeout_kills_the_whole_subtree() {
     let tmp = tempfile::tempdir().unwrap();
@@ -234,6 +252,19 @@ async fn timeout_kills_the_whole_subtree() {
     assert!(
         !alive_path.exists(),
         "the grandchild outlived the timeout: the subtree was not killed; \
+         stdout={:?} stderr={:?}",
+        out.stdout,
+        out.stderr
+    );
+
+    // SMA-710: a survivor that stays stopped never writes `alive`, so the
+    // assertion above cannot see it. It does keep the stdout pipe open, which
+    // empties the captured stdout (see `GRANDCHILD_MARKER`).
+    #[cfg(unix)]
+    assert!(
+        out.stdout.contains(GRANDCHILD_MARKER),
+        "the grandchild marker is missing from stdout: a process of the subtree \
+         survived the timeout and held the pipe open (stopped or running); \
          stdout={:?} stderr={:?}",
         out.stdout,
         out.stderr

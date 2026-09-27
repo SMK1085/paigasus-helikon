@@ -381,10 +381,21 @@ environment to a configurable allowlist, but spawned commands have the same OS
 access as the parent process.
 
 When a command exceeds its timeout the **whole spawned subtree** is killed on unix
-and Windows, not just the shell: a process-group `SIGKILL` on unix, a Job Object
-termination on Windows. On any other target there is no subtree mechanism and only
-the direct child is killed. `ExecOutput::timed_out` is `true` and `exit_code` is
-`None` on every platform — a killed process has no meaningful exit code.
+and Windows, not just the shell. On unix the process group gets `SIGSTOP`, then
+`SIGKILL`, so that the death of one member cannot wake another member into user
+code before that member is also killed. On Windows the Job Object is terminated.
+On any other target there is no subtree mechanism and only the direct child is
+killed. `ExecOutput::timed_out` is `true` and `exit_code` is `None` on every
+platform — a killed process has no meaningful exit code.
+
+Accepted gaps on unix: a `ptrace` tracer, a waiter that uses `WUNTRACED`, or a
+parent's `SIGCHLD` handler (without `SA_NOCLDSTOP`) sees the stop and can act on
+it before the `SIGKILL` arrives; on macOS, a process that a member forks between
+the two signals is not stopped and can run until the `SIGKILL` reaches it; a
+process that leaves the group (`setpgid`, `setsid`) survives; and if either
+signal fails for a reason other than the group being gone, a warning is
+emitted on the `paigasus::tools::exec` target (after a failed `SIGKILL`,
+survivors may stay stopped or keep running).
 
 One accepted gap on Windows: a process spawned in the brief window between the
 shell starting and its assignment to the job object is not a member of it, and

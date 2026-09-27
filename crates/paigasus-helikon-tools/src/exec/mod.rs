@@ -147,9 +147,21 @@ pub struct ExecOutput {
     /// Whether the command was killed because it exceeded the timeout.
     ///
     /// On unix and Windows a timeout kills the whole spawned subtree, not just
-    /// the direct child: a process group `SIGKILL` on unix, a Job Object
-    /// termination on Windows. On any other target no subtree mechanism is
-    /// available and only the direct child is killed.
+    /// the direct child. On unix the process group gets `SIGSTOP`, then
+    /// `SIGKILL`, so that the death of one member cannot wake another member into
+    /// user code before that member is also killed. On Windows the Job Object is
+    /// terminated. On any other target no subtree mechanism is available and only
+    /// the direct child is killed.
+    ///
+    /// Accepted gaps on unix: a `ptrace` tracer, a waiter that uses
+    /// `WUNTRACED`, or a parent's `SIGCHLD` handler (without `SA_NOCLDSTOP`)
+    /// sees the stop and can act on it before the `SIGKILL` arrives; on macOS, a
+    /// process that a member forks between the two signals is not stopped and can
+    /// run until the `SIGKILL` reaches it; a process that leaves the group
+    /// (`setpgid`, `setsid`) survives; and if either signal fails for a reason
+    /// other than the group being gone, a warning is emitted on the
+    /// `paigasus::tools::exec` target (after a failed `SIGKILL`, survivors may
+    /// stay stopped or keep running).
     ///
     /// One accepted gap on Windows: a process spawned in the brief window
     /// between the shell starting and its assignment to the job object is not a
@@ -357,9 +369,7 @@ pub(crate) async fn spawn_capped(
             #[cfg(unix)]
             {
                 if let Some(pid) = pgid {
-                    // SAFETY: pid < 4_194_304 on supported platforms, so the cast
-                    // and negation are valid; ESRCH (group already gone) is benign.
-                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                    kill_process_group(pid);
                 }
             }
             #[cfg(windows)]
@@ -400,8 +410,8 @@ pub(crate) async fn spawn_capped(
             // process has no meaningful exit code. On Windows, `TerminateJobObject`
             // and its `start_kill()`/`TerminateProcess` fallback both assign a real
             // exit code; on unix the child can still win the race to exit normally
-            // before our SIGKILL lands. All of those would otherwise contradict the
-            // `ExecOutput::exit_code` contract.
+            // before the group `SIGSTOP`/`SIGKILL` lands. All of those would
+            // otherwise contradict the `ExecOutput::exit_code` contract.
             let _ = tokio::time::timeout(GRACE, child.wait()).await;
             None
         }
@@ -452,12 +462,78 @@ fn build_command(prefix: &[OsString], command: &str) -> tokio::process::Command 
     }
 }
 
+/// Kill every process in the process group `pgid` on a timeout (SMA-710).
+///
+/// Stops the group first, then kills it, so that the death of one member cannot
+/// wake another member into user code before that member is also killed. A
+/// single group `SIGKILL` is not enough on macOS: the kernel signals members
+/// one at a time, and a parent woken from `wait4` by a dead child could run its
+/// next command before its own `SIGKILL` took effect.
+///
+/// The two `kill` calls must stay back-to-back and synchronous: never put an
+/// `.await`, a lock, or other work between them. No `SIGCONT` is sent: `SIGKILL`
+/// terminates a stopped process. A failure of either signal, other than
+/// `ESRCH` (the group is gone), is logged as a warning.
+#[cfg(unix)]
+fn kill_process_group(pgid: u32) {
+    // pid < 4_194_304 on supported platforms, so the cast and negation are valid.
+    let target = -(pgid as i32);
+    // SAFETY: `kill` has no memory-safety preconditions.
+    let stop_err =
+        (unsafe { libc::kill(target, libc::SIGSTOP) } != 0).then(std::io::Error::last_os_error);
+    // SAFETY: as above.
+    let kill_err =
+        (unsafe { libc::kill(target, libc::SIGKILL) } != 0).then(std::io::Error::last_os_error);
+
+    // ESRCH on the SIGKILL means the group is already gone, so there is nothing
+    // to warn about. Any other errno, including EPERM, is not treated as
+    // benign: on Linux, EPERM means no member accepted the signal (for example
+    // a member changed credentials), so a member can survive; on macOS, EPERM
+    // can mean either that only zombies remain or that permission was denied,
+    // and the two cannot be told apart here, so a rare harmless warning (a
+    // leader that exited but is not yet reaped) is accepted over a silent
+    // containment failure. A failed SIGSTOP with a successful SIGKILL means
+    // the stop barrier was not established (for example an SELinux policy with
+    // separate sigstop/sigkill permissions).
+    match kill_err.as_ref() {
+        Some(e) if e.raw_os_error() == Some(libc::ESRCH) => {}
+        Some(e) => {
+            tracing::warn!(
+                target: "paigasus::tools::exec",
+                error = %e,
+                stop_error = ?stop_err.as_ref().map(ToString::to_string),
+                pgid,
+                "process group SIGKILL failed on timeout; processes of the timed-out \
+                 command may have survived, stopped or still running"
+            );
+        }
+        None => {
+            if let Some(e) = stop_err.as_ref() {
+                if e.raw_os_error() != Some(libc::ESRCH) {
+                    tracing::warn!(
+                        target: "paigasus::tools::exec",
+                        error = %e,
+                        pgid,
+                        "process group SIGSTOP failed on timeout; a member may have run \
+                         user code before the SIGKILL took effect"
+                    );
+                }
+            }
+        }
+    }
+}
+
 async fn join_reader(handle: tokio::task::JoinHandle<(String, bool)>) -> (String, bool) {
     let abort = handle.abort_handle();
     match tokio::time::timeout(GRACE, handle).await {
         Ok(Ok(captured)) => captured,
         _ => {
             abort.abort();
+            // Discard partial output on timeout, deliberately. The test
+            // `timeout_kills_the_whole_subtree` relies on this: a subtree survivor
+            // holds the pipe open, so the empty result is how it detects one
+            // (SMA-710). Returning partial output here would silently disable
+            // that check.
             (String::new(), false)
         }
     }
