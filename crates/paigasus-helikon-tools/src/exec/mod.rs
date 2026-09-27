@@ -474,17 +474,22 @@ fn build_command(prefix: &[OsString], command: &str) -> tokio::process::Command 
 fn kill_process_group(pgid: u32) {
     // pid < 4_194_304 on supported platforms, so the cast and negation are valid.
     let target = -(pgid as i32);
-    // The result is deliberately ignored: `SIGKILL` below is sent whatever
-    // happens here, so the kill is never weaker than a bare `SIGKILL`.
+    // The result is kept only to classify a later `SIGKILL` failure: `SIGKILL`
+    // below is sent whatever happens here, so the kill is never weaker than a
+    // bare `SIGKILL`.
     // SAFETY: `kill` has no memory-safety preconditions.
-    let _ = unsafe { libc::kill(target, libc::SIGSTOP) };
+    let stopped = unsafe { libc::kill(target, libc::SIGSTOP) } == 0;
     // SAFETY: as above.
     if unsafe { libc::kill(target, libc::SIGKILL) } != 0 {
         let err = std::io::Error::last_os_error();
-        // ESRCH: the group is already gone. EPERM on macOS: only zombies remain
-        // in the group. EPERM on Linux: no member accepted the signal; SIGSTOP
-        // passes the same permission check, so nothing was stopped either.
-        if !matches!(err.raw_os_error(), Some(libc::ESRCH) | Some(libc::EPERM)) {
+        // ESRCH: the group is already gone. EPERM is benign only when the
+        // SIGSTOP above also failed: then, on macOS, only zombies remain in
+        // the group, and on Linux, no member accepted either signal. If
+        // SIGSTOP succeeded, EPERM here means a member is stopped but could
+        // not be killed, so it must warn.
+        let errno = err.raw_os_error();
+        let benign = errno == Some(libc::ESRCH) || (errno == Some(libc::EPERM) && !stopped);
+        if !benign {
             tracing::warn!(
                 target: "paigasus::tools::exec",
                 error = %err,
