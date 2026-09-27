@@ -1,0 +1,167 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "1b93bb237ebf",
+  "session_id": "e13b3709-ba94-429b-8789-f581c5370901",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-27T19:32:35.467747Z",
+  "branch": "feature/sma-617-openairesponses-can-emit-two-name-carrying-deltas-for-one",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/plans/2026-09-27-sma-617-responses-call-id-name-gating.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "cc94d8be9acc",
+  "checkpoint_transcript_start": 306,
+  "transcript_lines_at_start": 306,
+  "compact_transcript_start": 41,
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 1222,
+    "cache_read_tokens": 179653,
+    "output_tokens": 377,
+    "api_call_count": 1
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-feature-pipeline-2026-09-27T19:17:04.775502Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "feature-pipeline"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "a397fdcfadb6",
+      "timestamp": "2026-09-27T19:17:04.775502Z",
+      "native": {
+        "command": "/feature-pipeline"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/feature-pipeline",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LiwWByfiyZmew3dGuqaa5f",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:using-git-worktrees"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd0488232801",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 69,
+        "end": 70,
+        "entry_ids": [
+          "30e50d44-3dfb-43a4-9f30-5999ab75b03d"
+        ],
+        "tool_use_id": "toolu_01LiwWByfiyZmew3dGuqaa5f"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LiwWByfiyZmew3dGuqaa5f"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:using-git-worktrees",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01NhoQXV1pDdoWx76HNtULo6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd0488232801",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 131,
+        "end": 132,
+        "entry_ids": [
+          "c632d54d-caf5-4d6e-9d5a-654f89355d64"
+        ],
+        "tool_use_id": "toolu_01NhoQXV1pDdoWx76HNtULo6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01NhoQXV1pDdoWx76HNtULo6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PxjetUZsKo6Sds87jDQwjw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "cc94d8be9acc",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 246,
+        "end": 247,
+        "entry_ids": [
+          "89abc691-c9fc-41c9-a9cb-7ccbce06ceb8"
+        ],
+        "tool_use_id": "toolu_01PxjetUZsKo6Sds87jDQwjw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PxjetUZsKo6Sds87jDQwjw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-27T19:32:35.434178Z",
+    "agent_lines": 719,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 719,
+    "total_lines_changed": 719,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
