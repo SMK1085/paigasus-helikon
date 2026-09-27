@@ -482,7 +482,8 @@ fn kill_process_group(pgid: u32) {
     if unsafe { libc::kill(target, libc::SIGKILL) } != 0 {
         let err = std::io::Error::last_os_error();
         // ESRCH: the group is already gone. EPERM on macOS: only zombies remain
-        // in the group. Neither leaves a live survivor.
+        // in the group. EPERM on Linux: no member accepted the signal; SIGSTOP
+        // passes the same permission check, so nothing was stopped either.
         if !matches!(err.raw_os_error(), Some(libc::ESRCH) | Some(libc::EPERM)) {
             tracing::warn!(
                 target: "paigasus::tools::exec",
@@ -501,6 +502,11 @@ async fn join_reader(handle: tokio::task::JoinHandle<(String, bool)>) -> (String
         Ok(Ok(captured)) => captured,
         _ => {
             abort.abort();
+            // Discard partial output on timeout, deliberately. The test
+            // `timeout_kills_the_whole_subtree` relies on this: a subtree survivor
+            // holds the pipe open, so the empty result is how it detects one
+            // (SMA-710). Returning partial output here would silently disable
+            // that check.
             (String::new(), false)
         }
     }
