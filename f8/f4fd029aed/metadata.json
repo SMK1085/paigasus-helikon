@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "f8f4fd029aed",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 11,
+  "files_touched": [
+    ".superpowers/sdd/2026-09-26-sma-687-retire-setup-protoc/task-1-report.md",
+    ".superpowers/sdd/2026-09-26-sma-687-retire-setup-protoc/task-2-report.md",
+    ".superpowers/sdd/2026-09-26-sma-687-retire-setup-protoc/task-3-report.md",
+    ".worktrees/sma-623/.github/workflows/ci.yml",
+    ".worktrees/sma-623/.github/workflows/integration.yml",
+    ".worktrees/sma-623/.github/workflows/msrv.yml",
+    ".worktrees/sma-623/.superpowers/sdd/2026-09-25-sma-623-vendored-protox/final-fix-report.md",
+    ".worktrees/sma-623/.superpowers/sdd/2026-09-25-sma-623-vendored-protox/task-1-report.md",
+    ".worktrees/sma-623/.superpowers/sdd/2026-09-25-sma-623-vendored-protox/task-2-report.md",
+    ".worktrees/sma-623/.superpowers/sdd/2026-09-25-sma-623-vendored-protox/task-3-report.md",
+    ".worktrees/sma-623/.superpowers/sdd/2026-09-25-sma-623-vendored-protox/task-4-report.md",
+    ".worktrees/sma-623/CLAUDE.md",
+    ".worktrees/sma-623/CONTRIBUTING.md",
+    ".worktrees/sma-623/Cargo.toml",
+    ".worktrees/sma-623/crates/paigasus-helikon-runtime-temporal/README.md",
+    ".worktrees/sma-623/docs/runbooks/ci-architecture.md",
+    ".worktrees/sma-687/.github/workflows/release-plz.yml",
+    ".worktrees/sma-687/.superpowers/sdd/2026-09-26-sma-687-retire-setup-protoc/task-1-report.md",
+    ".worktrees/sma-687/.superpowers/sdd/2026-09-26-sma-687-retire-setup-protoc/task-2-report.md",
+    ".worktrees/sma-687/.superpowers/sdd/2026-09-26-sma-687-retire-setup-protoc/task-3-report.md",
+    ".worktrees/sma-687/CLAUDE.md",
+    ".worktrees/sma-687/docs/runbooks/ci-architecture.md",
+    ".worktrees/sma-687/docs/superpowers/plans/2026-09-26-sma-687-retire-setup-protoc.md",
+    ".worktrees/sma-687/docs/superpowers/specs/2026-09-26-sma-687-retire-setup-protoc-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f8/f4fd029aed/0/metadata.json",
+      "transcript": "/f8/f4fd029aed/0/full.jsonl",
+      "compact_transcript": "/f8/f4fd029aed/0/transcript.jsonl",
+      "content_hash": "/f8/f4fd029aed/0/content_hash.txt",
+      "prompt": "/f8/f4fd029aed/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 991546,
+    "cache_read_tokens": 19877145,
+    "output_tokens": 23147,
+    "api_call_count": 43,
+    "subagent_tokens": {
+      "input_tokens": 208,
+      "cache_creation_tokens": 487511,
+      "cache_read_tokens": 4585390,
+      "output_tokens": 15510,
+      "api_call_count": 63
+    }
+  }
+}
