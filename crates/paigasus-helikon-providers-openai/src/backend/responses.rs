@@ -234,6 +234,8 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 /// - `response.output_item.added` (when item is a function call) →
 ///   registers `item.id` → `(item.call_id, item.name)` for subsequent argument deltas;
 ///   also flushes any argument deltas that arrived before this event (out-of-order case).
+///   Its `ToolCallDelta` carries `name: None` when another item already named the same
+///   non-blank `call_id` (SMA-617).
 /// - `response.function_call_arguments.delta` → `ToolCallDelta` with
 ///   name-emission gating: the name is emitted once per non-blank `call_id`
 ///   (`named_calls`, SMA-617), and once per item for a blank `call_id`, then
@@ -245,6 +247,8 @@ fn translate_tool_choice(tc: &ToolChoice) -> ToolChoiceParam {
 ///   already been emitted for it**. This is what makes a stream that carries no
 ///   argument deltas at all — a resumed background response — report its tool
 ///   calls (SMA-562).
+///   Its `ToolCallDelta` carries `name: None` when another item already named the same
+///   non-blank `call_id` (SMA-617).
 /// - `response.completed` → any function call in `response.output` that has not
 ///   yet been emitted, then `Usage` + `Finish { Stop }`, or `Finish { ToolCalls }`
 ///   when `emitted_items` is non-empty (evaluated *after* that reconciliation
@@ -288,8 +292,9 @@ pub(crate) struct ResponsesTranslator {
     /// emitted".
     ///
     /// Every emission site checks this set before it asks
-    /// [`Self::claim_name`] for a name, so the name decision runs at most
-    /// once per item (SMA-617 spec §3.1).
+    /// [`Self::claim_name`] for a name — the `output_item.added` flush by
+    /// construction (see its comment) rather than by an explicit check — so
+    /// the name decision runs at most once per item (SMA-617 spec §3.1).
     emitted_items: HashSet<String>,
     /// Non-blank `call_id` → `(item_id, name)` of the item that emitted the
     /// call's name.
