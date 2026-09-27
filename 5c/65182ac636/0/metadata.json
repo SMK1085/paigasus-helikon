@@ -1,0 +1,127 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "5c65182ac636",
+  "session_id": "e13b3709-ba94-429b-8789-f581c5370901",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-27T19:27:44.248477Z",
+  "branch": "feature/sma-617-openairesponses-can-emit-two-name-carrying-deltas-for-one",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "bd0488232801",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 120263,
+    "cache_read_tokens": 2430303,
+    "output_tokens": 23781,
+    "api_call_count": 23,
+    "subagent_tokens": {
+      "input_tokens": 34,
+      "cache_creation_tokens": 133611,
+      "cache_read_tokens": 1362018,
+      "output_tokens": 27589,
+      "api_call_count": 17
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-feature-pipeline-2026-09-27T19:17:04.775502Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "feature-pipeline"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "a397fdcfadb6",
+      "timestamp": "2026-09-27T19:17:04.775502Z",
+      "native": {
+        "command": "/feature-pipeline"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/feature-pipeline",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LiwWByfiyZmew3dGuqaa5f",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:using-git-worktrees"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd0488232801",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 69,
+        "end": 70,
+        "entry_ids": [
+          "30e50d44-3dfb-43a4-9f30-5999ab75b03d"
+        ],
+        "tool_use_id": "toolu_01LiwWByfiyZmew3dGuqaa5f"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LiwWByfiyZmew3dGuqaa5f"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:using-git-worktrees",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01NhoQXV1pDdoWx76HNtULo6",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd0488232801",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 131,
+        "end": 132,
+        "entry_ids": [
+          "c632d54d-caf5-4d6e-9d5a-654f89355d64"
+        ],
+        "tool_use_id": "toolu_01NhoQXV1pDdoWx76HNtULo6"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01NhoQXV1pDdoWx76HNtULo6"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
