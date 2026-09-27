@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "6bee0e266f07",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-617-openairesponses-can-emit-two-name-carrying-deltas-for-one",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/6b/ee0e266f07/0/metadata.json",
+      "transcript": "/6b/ee0e266f07/0/full.jsonl",
+      "compact_transcript": "/6b/ee0e266f07/0/transcript.jsonl",
+      "content_hash": "/6b/ee0e266f07/0/content_hash.txt",
+      "prompt": "/6b/ee0e266f07/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 29635,
+    "cache_read_tokens": 784510,
+    "output_tokens": 16999,
+    "api_call_count": 5
+  }
+}
