@@ -244,10 +244,16 @@ where
     /// the trait's warning), dropping the stream early loses nothing. Live
     /// token streaming across the workflow boundary is future work.
     ///
-    /// On a failed run the terminal error is wired into the returned handle's
-    /// [`FailureSlot`] and a terminal `RunFailed` event is guaranteed present,
-    /// so [`RunResultStreaming::collect`] surfaces the typed
-    /// [`RunError::Agent`] — matching `TokioRunner`.
+    /// On a failed run a terminal `RunFailed` event is present whenever the
+    /// durable log did not already end in a terminal. An agent failure is also
+    /// wired into the returned handle's [`FailureSlot`], so
+    /// [`RunResultStreaming::collect`] surfaces the typed [`RunError::Agent`] —
+    /// matching `TokioRunner`. Cancellation, timeout and infrastructure
+    /// failures leave the slot empty, so `collect` returns [`RunError::Other`]
+    /// carrying the terminal frame's text, as `TokioRunner` does for an
+    /// interrupt. This applies only when the stream ends in a failed state; if
+    /// the durable log already ended in a successful terminal state, that
+    /// outcome is returned as `Ok` instead.
     async fn run_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -255,28 +261,8 @@ where
         input: AgentInput,
         config: RunConfig,
     ) -> Result<RunResultStreaming, RunError> {
-        let (mut events, result) = self.run_inner(agent, ctx, input, config).await?;
-
-        let failure = FailureSlot::new();
-        let terminal = synthetic_terminal_event(&result);
-        // Move the structured error into the slot only for an agent failure;
-        // the event itself was already rendered above.
-        if let Err(RunError::Agent(err)) = result {
-            failure.set(err);
-        }
-
-        // `collect()` only reads the failure slot once it observes a terminal
-        // `RunFailed` in the stream. The durable event log already carries one
-        // for `AgentFailed` runs; synthesize one for the terminal states that do
-        // not (cancellation/timeout/infra), so a failed run never collects as
-        // `Ok`. `append_synthetic_terminal` owns the guard that stops this from
-        // appending a *second* terminal (SMA-422).
-        append_synthetic_terminal(&mut events, terminal);
-
-        Ok(RunResultStreaming::with_failure(
-            stream::iter(events).boxed(),
-            failure,
-        ))
+        let (events, result) = self.run_inner(agent, ctx, input, config).await?;
+        Ok(into_streaming(events, result))
     }
 }
 
@@ -322,6 +308,32 @@ fn append_synthetic_terminal(events: &mut Vec<AgentEvent>, event: Option<AgentEv
     }
 }
 
+/// Assemble the durable run's `(events, result)` into the handle
+/// [`Runner::run_streamed`] returns. Pure, so the whole assembly is unit-tested
+/// without a Temporal server (SMA-516).
+fn into_streaming(
+    mut events: Vec<AgentEvent>,
+    result: Result<RunResult, RunError>,
+) -> RunResultStreaming {
+    let failure = FailureSlot::new();
+    let terminal = synthetic_terminal_event(&result);
+    // Move the structured error into the slot only for an agent failure;
+    // the event itself was already rendered above.
+    if let Err(RunError::Agent(err)) = result {
+        failure.set(err);
+    }
+
+    // `collect()` only reads the failure slot once it observes a terminal
+    // `RunFailed` in the stream. The durable event log already carries one
+    // for `AgentFailed` runs; synthesize one for the terminal states that do
+    // not (cancellation/timeout/infra), so a failed run never collects as
+    // `Ok`. `append_synthetic_terminal` owns the guard that stops this from
+    // appending a *second* terminal (SMA-422).
+    append_synthetic_terminal(&mut events, terminal);
+
+    RunResultStreaming::with_failure(stream::iter(events).boxed(), failure)
+}
+
 /// Snapshot the session into the merged input and seed a recorder with the
 /// run's new-turn messages. A read failure is a hard error: the run cannot
 /// faithfully resume from an unreadable session. (Mirrors
@@ -364,7 +376,7 @@ async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecord
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paigasus_helikon_core::{AgentError, TokenUsage};
+    use paigasus_helikon_core::{AgentError, ContentPart, Item, TokenUsage};
 
     /// Unwrap a synthesized terminal to its message, asserting the variant on
     /// the way through — something the old `-> Option<String>` signature made
@@ -483,5 +495,238 @@ mod tests {
         let mut empty: Vec<AgentEvent> = Vec::new();
         append_synthetic_terminal(&mut empty, None);
         assert!(empty.is_empty(), "None must be a no-op on an empty log");
+    }
+
+    // ---- SMA-516: the assembled `RunResultStreaming` ----------------------
+    //
+    // `collect()` consumes the handle and drops its events on `Err`, and
+    // `RunError` is not `Clone`. So every `Err` case builds its input twice:
+    // one handle is drained for the frames, a fresh one is collected. Draining
+    // and then collecting the SAME handle would see an empty stream and return
+    // `Ok` for any input — a test that can never fail.
+
+    type Input = (Vec<AgentEvent>, Result<RunResult, RunError>);
+
+    /// Drain a handle's raw frames.
+    async fn frames(streaming: RunResultStreaming) -> Vec<AgentEvent> {
+        futures_util::StreamExt::collect::<Vec<_>>(streaming.events).await
+    }
+
+    /// Exactly one terminal, and it is the last frame.
+    fn assert_one_terminal_last(frames: &[AgentEvent]) {
+        assert_eq!(
+            frames.iter().filter(|e| e.is_terminal()).count(),
+            1,
+            "exactly one terminal frame: {frames:?}"
+        );
+        assert!(
+            frames.last().is_some_and(AgentEvent::is_terminal),
+            "the terminal must be the last frame: {frames:?}"
+        );
+    }
+
+    const UNKNOWN_AGENT: &str = "no agent named 'x' is registered on this worker";
+    const INFRA: &str = "temporal workflow failed: boom";
+
+    /// T1: the realistic agent failure — the driver already wrote `RunFailed`.
+    fn agent_failure_with_terminal() -> Input {
+        (
+            vec![
+                AgentEvent::TurnStarted { turn: 0 },
+                AgentEvent::RunFailed {
+                    error: AgentError::MaxTurnsExceeded(3).to_string(),
+                },
+            ],
+            Err(RunError::Agent(AgentError::MaxTurnsExceeded(3))),
+        )
+    }
+
+    /// T2: reachable today — `workflow.rs`'s `unknown_agent_outcome` returns
+    /// `AgentFailed` with NO events (so do the driver's `Handoff` and
+    /// unknown-`NextAction` arms). Both the synthetic frame and the slot are
+    /// load-bearing here.
+    fn agent_failure_without_terminal() -> Input {
+        (
+            Vec::new(),
+            Err(RunError::Agent(AgentError::Other(anyhow::anyhow!(
+                UNKNOWN_AGENT
+            )))),
+        )
+    }
+
+    fn interrupted(err: RunError) -> Input {
+        (vec![AgentEvent::TurnStarted { turn: 0 }], Err(err))
+    }
+
+    /// T5: an infrastructure failure — `run_inner` returns no events.
+    fn infra_failure() -> Input {
+        (Vec::new(), Err(RunError::Other(anyhow::anyhow!(INFRA))))
+    }
+
+    /// T1. Fails if the slot is not set, if `new` replaces `with_failure`, if
+    /// the guard is bypassed, or if the guard tests only `RunCompleted` or reads
+    /// `events.first()` — the last two survive every SMA-515 guard test.
+    #[tokio::test]
+    async fn agent_failure_with_its_own_terminal_collects_the_typed_error() {
+        let (events, result) = agent_failure_with_terminal();
+        let frames = frames(into_streaming(events, result)).await;
+        assert_eq!(
+            frames.len(),
+            2,
+            "the log must pass through unchanged: {frames:?}"
+        );
+        assert!(matches!(frames[0], AgentEvent::TurnStarted { turn: 0 }));
+        assert_one_terminal_last(&frames);
+
+        let (events, result) = agent_failure_with_terminal();
+        match into_streaming(events, result).collect().await {
+            Err(RunError::Agent(AgentError::MaxTurnsExceeded(3))) => {}
+            Err(other) => {
+                panic!("expected the typed RunError::Agent(MaxTurnsExceeded(3)), got {other:?}")
+            }
+            Ok(_) => panic!("a failed run must never collect as Ok"),
+        }
+    }
+
+    /// T2.
+    #[tokio::test]
+    async fn agent_failure_without_a_terminal_gets_one_and_the_typed_error() {
+        let (events, result) = agent_failure_without_terminal();
+        let frames = frames(into_streaming(events, result)).await;
+        assert_eq!(frames.len(), 1, "one synthetic frame: {frames:?}");
+        assert_one_terminal_last(&frames);
+        match &frames[0] {
+            AgentEvent::RunFailed { error } => assert_eq!(error, UNKNOWN_AGENT),
+            other => panic!("the synthetic terminal must be RunFailed, got {other:?}"),
+        }
+
+        let (events, result) = agent_failure_without_terminal();
+        match into_streaming(events, result).collect().await {
+            Err(RunError::Agent(AgentError::Other(e))) => assert_eq!(e.to_string(), UNKNOWN_AGENT),
+            Err(other) => panic!("expected the typed RunError::Agent(Other(..)), got {other:?}"),
+            Ok(_) => panic!("a failed run must never collect as Ok"),
+        }
+    }
+
+    /// Shared body for T3–T5: the slot must stay EMPTY, so `collect()` returns
+    /// `RunError::Other` carrying the frame text — the same as `TokioRunner`
+    /// for an interrupt. The variant is pinned on purpose: a change to it must
+    /// update these tests in the same PR.
+    async fn assert_untyped_failure(input: fn() -> Input, prefix_len: usize, text: &str) {
+        let (events, result) = input();
+        let frames = frames(into_streaming(events, result)).await;
+        assert_eq!(
+            frames.len(),
+            prefix_len + 1,
+            "prefix plus one synthetic frame: {frames:?}"
+        );
+        if prefix_len == 1 {
+            assert!(
+                matches!(frames[0], AgentEvent::TurnStarted { turn: 0 }),
+                "the input prefix must stay in place: {frames:?}"
+            );
+        }
+        assert_one_terminal_last(&frames);
+        match frames.last() {
+            Some(AgentEvent::RunFailed { error }) => assert_eq!(error, text),
+            other => panic!("the synthetic terminal must be RunFailed, got {other:?}"),
+        }
+
+        let (events, result) = input();
+        match into_streaming(events, result).collect().await {
+            Err(RunError::Other(e)) => assert_eq!(e.to_string(), text),
+            Err(other) => {
+                panic!("the slot must stay empty, so expected RunError::Other, got {other:?}")
+            }
+            Ok(_) => panic!("a failed run must never collect as Ok"),
+        }
+    }
+
+    /// T3.
+    #[tokio::test]
+    async fn cancelled_run_collects_as_err_with_the_canonical_text() {
+        assert_untyped_failure(|| interrupted(RunError::Cancelled), 1, "run cancelled").await;
+    }
+
+    /// T4.
+    #[tokio::test]
+    async fn timed_out_run_collects_as_err_with_the_canonical_text() {
+        assert_untyped_failure(
+            || interrupted(RunError::Timeout),
+            1,
+            RunInterrupt::TimedOut.terminal_message(),
+        )
+        .await;
+    }
+
+    /// T5.
+    #[tokio::test]
+    async fn infra_failure_collects_as_err_with_its_own_text() {
+        assert_untyped_failure(infra_failure, 0, INFRA).await;
+    }
+
+    /// T6.
+    #[tokio::test]
+    async fn successful_run_gains_no_frame_and_collects_ok() {
+        let events = vec![
+            AgentEvent::MessageOutput {
+                item: Item::AssistantMessage {
+                    content: vec![ContentPart::Text {
+                        text: "hi".to_owned(),
+                    }],
+                    agent: None,
+                },
+            },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ];
+        let collected = into_streaming(events, Ok(RunResult::default()))
+            .collect()
+            .await
+            .unwrap_or_else(|e| panic!("a completed run must collect as Ok, got {e:?}"));
+        assert_eq!(collected.final_output, "hi");
+        assert_eq!(
+            collected.events.len(),
+            2,
+            "no frame appended: {:?}",
+            collected.events
+        );
+        assert_one_terminal_last(&collected.events);
+        assert!(matches!(
+            collected.events[1],
+            AgentEvent::RunCompleted { .. }
+        ));
+    }
+
+    /// T7 — decided 2026-09-26: the event log wins. A log ending in
+    /// `RunCompleted` gets no second terminal even when the result is `Err`, so
+    /// `collect()` returns `Ok` while `run()` would return `Err`. `run()` and
+    /// `collect()` differ in `Ok` versus `Err` only in this state. It is
+    /// unreachable today: `DurableDriver::interrupt` returns a `Done` outcome
+    /// unchanged, pinned by `driver.rs`'s `terminal_wins_over_late_interrupt`.
+    #[tokio::test]
+    async fn log_ending_in_run_completed_wins_over_an_err_result() {
+        let events = vec![
+            AgentEvent::TurnStarted { turn: 0 },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ];
+        let collected = into_streaming(events, Err(RunError::Cancelled))
+            .collect()
+            .await
+            .unwrap_or_else(|e| panic!("the log's RunCompleted must win, got {e:?}"));
+        assert_eq!(
+            collected.events.len(),
+            2,
+            "no second terminal: {:?}",
+            collected.events
+        );
+        assert_one_terminal_last(&collected.events);
+        assert!(matches!(
+            collected.events[1],
+            AgentEvent::RunCompleted { .. }
+        ));
     }
 }

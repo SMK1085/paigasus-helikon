@@ -842,6 +842,74 @@ async fn model_failure_maps_to_typed_agent_error() {
     );
 }
 
+/// Streamed twin of `model_failure_maps_to_typed_agent_error` (SMA-516). The
+/// unit tests in `src/runner.rs` pin `into_streaming` in isolation; this is the
+/// only test of the join between `run_inner` and `into_streaming`, i.e. of
+/// `run_streamed` itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn streamed_model_failure_collects_the_typed_agent_error() {
+    let Some(addr) = gate() else {
+        return;
+    };
+    let queue = format!("helikon-streamfail-{}", uuid::Uuid::new_v4());
+
+    let agent = Arc::new(
+        LlmAgent::builder::<()>()
+            .name("failer")
+            .model(FailingModel)
+            .build(),
+    );
+
+    let worker = start_worker(
+        addr.clone(),
+        queue.clone(),
+        Arc::clone(&agent),
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+        5,
+    );
+
+    let session: Arc<dyn Session> = Arc::new(MemorySession::new());
+    let runner = TemporalRunner::new(
+        connect(&addr).await,
+        TemporalRunnerConfig::new(queue.clone()),
+    );
+    let collected = tokio::time::timeout(Duration::from_secs(60), async {
+        runner
+            .run_streamed(
+                agent.as_ref(),
+                RunContext::ephemeral(()).with_session(Arc::clone(&session)),
+                AgentInput::from_user_text("go"),
+                RunConfig::default(),
+            )
+            .await
+            .expect("only a session read failure is an outer Err")
+            .collect()
+            .await
+    })
+    .await
+    .expect("streamed model-failure run resolves within 60s");
+
+    worker.stop().await;
+
+    match collected {
+        Err(RunError::Agent(agent_err)) => {
+            let message = agent_err.to_string();
+            assert!(
+                message.contains("connection lost"),
+                "the model error message must survive into the typed error: {message:?}"
+            );
+            assert!(
+                !message.contains("\"Model\""),
+                "the ErrorKindPayload JSON must be parsed, not leaked as a raw string \
+                 (a mis-targeted activity_failure_message would leak it): {message:?}"
+            );
+        }
+        Err(other) => panic!("expected the typed RunError::Agent, got {other:?}"),
+        Ok(_) => panic!("a failed run must never collect as Ok"),
+    }
+}
+
 /// Checklist item 4: a tool-activity INFRA failure (a tool that blocks forever,
 /// so every attempt times out and retries exhaust) folds into the run rather
 /// than hanging it or losing the session write. The failed tool result is fed
