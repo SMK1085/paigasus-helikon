@@ -153,12 +153,15 @@ pub struct ExecOutput {
     /// terminated. On any other target no subtree mechanism is available and only
     /// the direct child is killed.
     ///
-    /// Accepted gaps on unix: a `ptrace` tracer or a waiter that uses
-    /// `WUNTRACED` sees the stop and can act on it; on macOS, a process that a
-    /// member forks between the two signals is not stopped and can run until the
-    /// `SIGKILL` reaches it; a process that leaves the group (`setpgid`,
-    /// `setsid`) survives; and if the `SIGKILL` fails, the survivors stay stopped
-    /// and a warning is emitted on the `paigasus::tools::exec` target.
+    /// Accepted gaps on unix: a `ptrace` tracer, a waiter that uses
+    /// `WUNTRACED`, or a parent's `SIGCHLD` handler (without `SA_NOCLDSTOP`)
+    /// sees the stop and can act on it before the `SIGKILL` arrives; on macOS, a
+    /// process that a member forks between the two signals is not stopped and can
+    /// run until the `SIGKILL` reaches it; a process that leaves the group
+    /// (`setpgid`, `setsid`) survives; and if either signal fails for a reason
+    /// other than the group being gone, a warning is emitted on the
+    /// `paigasus::tools::exec` target (after a failed `SIGKILL`, survivors may
+    /// stay stopped or keep running).
     ///
     /// One accepted gap on Windows: a process spawned in the brief window
     /// between the shell starting and its assignment to the job object is not a
@@ -469,34 +472,53 @@ fn build_command(prefix: &[OsString], command: &str) -> tokio::process::Command 
 ///
 /// The two `kill` calls must stay back-to-back and synchronous: never put an
 /// `.await`, a lock, or other work between them. No `SIGCONT` is sent: `SIGKILL`
-/// terminates a stopped process.
+/// terminates a stopped process. A failure of either signal, other than
+/// `ESRCH` (the group is gone), is logged as a warning.
 #[cfg(unix)]
 fn kill_process_group(pgid: u32) {
     // pid < 4_194_304 on supported platforms, so the cast and negation are valid.
     let target = -(pgid as i32);
-    // The result is kept only to classify a later `SIGKILL` failure: `SIGKILL`
-    // below is sent whatever happens here, so the kill is never weaker than a
-    // bare `SIGKILL`.
     // SAFETY: `kill` has no memory-safety preconditions.
-    let stopped = unsafe { libc::kill(target, libc::SIGSTOP) } == 0;
+    let stop_err =
+        (unsafe { libc::kill(target, libc::SIGSTOP) } != 0).then(std::io::Error::last_os_error);
     // SAFETY: as above.
-    if unsafe { libc::kill(target, libc::SIGKILL) } != 0 {
-        let err = std::io::Error::last_os_error();
-        // ESRCH: the group is already gone. EPERM is benign only when the
-        // SIGSTOP above also failed: then, on macOS, only zombies remain in
-        // the group, and on Linux, no member accepted either signal. If
-        // SIGSTOP succeeded, EPERM here means a member is stopped but could
-        // not be killed, so it must warn.
-        let errno = err.raw_os_error();
-        let benign = errno == Some(libc::ESRCH) || (errno == Some(libc::EPERM) && !stopped);
-        if !benign {
+    let kill_err =
+        (unsafe { libc::kill(target, libc::SIGKILL) } != 0).then(std::io::Error::last_os_error);
+
+    // ESRCH on the SIGKILL means the group is already gone, so there is nothing
+    // to warn about. Any other errno, including EPERM, is not treated as
+    // benign: on Linux, EPERM means no member accepted the signal (for example
+    // a member changed credentials), so a member can survive; on macOS, EPERM
+    // can mean either that only zombies remain or that permission was denied,
+    // and the two cannot be told apart here, so a rare harmless warning (a
+    // leader that exited but is not yet reaped) is accepted over a silent
+    // containment failure. A failed SIGSTOP with a successful SIGKILL means
+    // the stop barrier was not established (for example an SELinux policy with
+    // separate sigstop/sigkill permissions).
+    match kill_err.as_ref() {
+        Some(e) if e.raw_os_error() == Some(libc::ESRCH) => {}
+        Some(e) => {
             tracing::warn!(
                 target: "paigasus::tools::exec",
-                error = %err,
+                error = %e,
+                stop_error = ?stop_err.as_ref().map(ToString::to_string),
                 pgid,
-                "process group SIGKILL failed after SIGSTOP; processes of the timed-out \
-                 command may remain stopped"
+                "process group SIGKILL failed on timeout; processes of the timed-out \
+                 command may have survived, stopped or still running"
             );
+        }
+        None => {
+            if let Some(e) = stop_err.as_ref() {
+                if e.raw_os_error() != Some(libc::ESRCH) {
+                    tracing::warn!(
+                        target: "paigasus::tools::exec",
+                        error = %e,
+                        pgid,
+                        "process group SIGSTOP failed on timeout; a member may have run \
+                         user code before the SIGKILL took effect"
+                    );
+                }
+            }
         }
     }
 }

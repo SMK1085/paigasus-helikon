@@ -214,27 +214,70 @@ private, unix-only function replaces the single `libc::kill` call in the
 timeout arm:
 
 ```rust
-/// Kill every process in the group `pgid` (SMA-710).
+/// Kill every process in the process group `pgid` on a timeout (SMA-710).
 ///
-/// Stops the group first, so that the death of one member cannot wake another
-/// member into user code before that member is also killed. The two `kill`
-/// calls must stay back-to-back and synchronous: never put an `.await`, a lock,
-/// or other work between them.
+/// Stops the group first, then kills it, so that the death of one member cannot
+/// wake another member into user code before that member is also killed. A
+/// single group `SIGKILL` is not enough on macOS: the kernel signals members
+/// one at a time, and a parent woken from `wait4` by a dead child could run its
+/// next command before its own `SIGKILL` took effect.
+///
+/// The two `kill` calls must stay back-to-back and synchronous: never put an
+/// `.await`, a lock, or other work between them. No `SIGCONT` is sent: `SIGKILL`
+/// terminates a stopped process. A failure of either signal, other than
+/// `ESRCH` (the group is gone), is logged as a warning.
 #[cfg(unix)]
 fn kill_process_group(pgid: u32) {
+    // pid < 4_194_304 on supported platforms, so the cast and negation are valid.
     let target = -(pgid as i32);
-    // SAFETY: …
-    let _ = unsafe { libc::kill(target, libc::SIGSTOP) };
-    // SAFETY: …
-    if unsafe { libc::kill(target, libc::SIGKILL) } != 0 {
-        let err = std::io::Error::last_os_error();
-        // ESRCH: the group is gone. EPERM on macOS: only zombies remain.
-        if !matches!(err.raw_os_error(), Some(libc::ESRCH) | Some(libc::EPERM)) {
-            tracing::warn!(/* target, error, message: the subtree may stay stopped */);
+    // SAFETY: `kill` has no memory-safety preconditions.
+    let stop_err =
+        (unsafe { libc::kill(target, libc::SIGSTOP) } != 0).then(std::io::Error::last_os_error);
+    // SAFETY: as above.
+    let kill_err =
+        (unsafe { libc::kill(target, libc::SIGKILL) } != 0).then(std::io::Error::last_os_error);
+
+    // ESRCH on the SIGKILL means the group is already gone, so there is nothing
+    // to warn about. Any other errno, including EPERM, is not treated as
+    // benign: on Linux, EPERM means no member accepted the signal (for example
+    // a member changed credentials), so a member can survive; on macOS, EPERM
+    // can mean either that only zombies remain or that permission was denied,
+    // and the two cannot be told apart here, so a rare harmless warning (a
+    // leader that exited but is not yet reaped) is accepted over a silent
+    // containment failure. A failed SIGSTOP with a successful SIGKILL means
+    // the stop barrier was not established (for example an SELinux policy with
+    // separate sigstop/sigkill permissions).
+    match kill_err.as_ref() {
+        Some(e) if e.raw_os_error() == Some(libc::ESRCH) => {}
+        Some(e) => {
+            tracing::warn!(
+                target: "paigasus::tools::exec",
+                error = %e,
+                stop_error = ?stop_err.as_ref().map(ToString::to_string),
+                pgid,
+                "process group SIGKILL failed on timeout; processes of the timed-out \
+                 command may have survived, stopped or still running"
+            );
+        }
+        None => {
+            if let Some(e) = stop_err.as_ref() {
+                if e.raw_os_error() != Some(libc::ESRCH) {
+                    tracing::warn!(
+                        target: "paigasus::tools::exec",
+                        error = %e,
+                        pgid,
+                        "process group SIGSTOP failed on timeout; a member may have run \
+                         user code before the SIGKILL took effect"
+                    );
+                }
+            }
         }
     }
 }
 ```
+
+Changed during PR review (CodeRabbit round 1): the approved draft treated EPERM
+as benign.
 
 Rules:
 
@@ -242,14 +285,20 @@ Rules:
   the leader is not reaped yet, so the pgid cannot be reused, and an early
   return prevents nothing.
 - Do not send `SIGCONT`.
-- If `SIGKILL` fails with an error other than `ESRCH` or `EPERM`, emit
-  `tracing::warn!` on the `paigasus::tools::exec` target. In that case the
-  survivors stay stopped (they hold pipes, locks, and memory), which is a new
-  failure mode. The Windows path already warns when it degrades.
-  *(EPERM: on macOS, `killpg1` returns `EPERM` for a group that has only
-  zombies. EPERM from a real permission denial is not expected, because
-  `SIGSTOP` and `SIGKILL` pass the same permission check, except under an
-  unusual SELinux policy.)*
+- If `SIGKILL` fails with `ESRCH`, the group is already gone: no log.
+- If `SIGKILL` fails with any other errno, including `EPERM`, emit
+  `tracing::warn!` on the `paigasus::tools::exec` target. `EPERM` is not
+  treated as benign: on Linux it means no member accepted the signal (for
+  example a member changed credentials), so a member can survive; on macOS it
+  can mean either that only zombies remain or that permission was denied, and
+  the two cannot be told apart here, so a rare harmless warning (a leader that
+  exited but is not yet reaped) is accepted over a silent containment
+  failure.
+- If `SIGKILL` succeeds but `SIGSTOP` failed with an error other than `ESRCH`,
+  emit `tracing::warn!` on the same target: the stop barrier was not
+  established (for example an SELinux policy with separate sigstop/sigkill
+  permissions), so a member could have run user code before the `SIGKILL`
+  took effect.
 
 These do not change: `process_group(0)`, the reap with `GRACE`, the reader
 drain, the Windows path, and the `ExecOutput::exit_code` contract (a timed-out
@@ -291,8 +340,10 @@ Add the unix accepted gaps below to both places.
   not exist there.
 - **A member that leaves the group.** A member that calls `setpgid` or `setsid`
   escapes both passes. This gap exists today.
-- **A failed `SIGKILL`.** The survivors stay stopped, and a warning is
-  emitted.
+- **A failed signal.** If either signal fails for a reason other than the
+  group being gone, a warning is emitted on the `paigasus::tools::exec`
+  target. After a failed `SIGKILL`, survivors may stay stopped or keep
+  running.
 
 ## Testing
 

@@ -388,12 +388,14 @@ On any other target there is no subtree mechanism and only the direct child is
 killed. `ExecOutput::timed_out` is `true` and `exit_code` is `None` on every
 platform — a killed process has no meaningful exit code.
 
-Accepted gaps on unix: a `ptrace` tracer or a waiter that uses `WUNTRACED` sees
-the stop and can act on it; on macOS, a process that a member forks between the
-two signals is not stopped and can run until the `SIGKILL` reaches it; a process
-that leaves the group (`setpgid`, `setsid`) survives; and if the `SIGKILL` fails,
-the survivors stay stopped and a warning is emitted on the
-`paigasus::tools::exec` target.
+Accepted gaps on unix: a `ptrace` tracer, a waiter that uses `WUNTRACED`, or a
+parent's `SIGCHLD` handler (without `SA_NOCLDSTOP`) sees the stop and can act on
+it before the `SIGKILL` arrives; on macOS, a process that a member forks between
+the two signals is not stopped and can run until the `SIGKILL` reaches it; a
+process that leaves the group (`setpgid`, `setsid`) survives; and if either
+signal fails for a reason other than the group being gone, a warning is
+emitted on the `paigasus::tools::exec` target (after a failed `SIGKILL`,
+survivors may stay stopped or keep running).
 
 One accepted gap on Windows: a process spawned in the brief window between the
 shell starting and its assignment to the job object is not a member of it, and
