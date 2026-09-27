@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.5.1...paigasus-helikon-runtime-temporal-v0.5.2) - 2026-09-27
+
+### Other
+
+- *(runtime-temporal)* SMA-516 cover run_streamed's terminal synthesis with runner-level tests ([#273](https://github.com/SMK1085/paigasus-helikon/pull/273))
+
 ## [0.5.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.5.0...paigasus-helikon-runtime-temporal-v0.5.1) - 2026-09-25
 
 ### Added
