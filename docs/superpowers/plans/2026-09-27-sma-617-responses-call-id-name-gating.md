@@ -708,7 +708,7 @@ Before you save, confirm the first sentence is true: read the `openai_responses`
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-features --all-targets -- -D warnings
-cargo test -p provider-stream-conformance --all-features 2>&1 | grep -E "FAILED|test result"
+cargo test -p paigasus-helikon-provider-stream-conformance --all-features 2>&1 | grep -E "FAILED|test result"
 RUSTDOCFLAGS="-D warnings" cargo doc -p paigasus-helikon-providers-openai --all-features --no-deps
 git add crates/paigasus-helikon-providers-openai/src/backend/chat.rs tests/provider-stream-conformance/src/check.rs tests/provider-stream-conformance/tests/conformance.rs
 git commit -m "docs(providers): SMA-617 record responses call-id name gating in sibling docs
@@ -716,4 +716,4 @@ git commit -m "docs(providers): SMA-617 record responses call-id name gating in 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-If `-p provider-stream-conformance` is not the package name, read `tests/provider-stream-conformance/Cargo.toml` for the `name` and use that. Expected: clippy clean, `0 failed`, docs build clean.
+Expected: clippy clean, `0 failed`, docs build clean.
