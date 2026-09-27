@@ -363,7 +363,23 @@ impl ResponsesTranslator {
                 slot.insert((item_id.to_owned(), name.to_owned()));
                 Some(name.to_owned())
             }
-            Entry::Occupied(_) => None,
+            Entry::Occupied(owner) => {
+                // Runs at most once per item (the caller gates on
+                // `emitted_items`), so this warns once per alias item, and
+                // never for the owner, which reached `Vacant`.
+                let (owner_item, owner_name) = owner.get();
+                tracing::warn!(
+                    target: "paigasus::openai::responses",
+                    %call_id,
+                    owner_item_id = %owner_item,
+                    owner_name = %owner_name,
+                    item_id = %item_id,
+                    name = %name,
+                    "two function_call items share one call_id; the name is emitted \
+                     once, and the arguments of both items go to the one call"
+                );
+                None
+            }
         }
     }
 
@@ -1769,5 +1785,38 @@ mod tests {
         );
         all.extend(tail);
         assert_eq!(names_for(&all, "call_A"), vec!["get_weather"]);
+    }
+
+    /// SMA-617 §3.2: the alias shape is malformed, so it is logged. Exactly
+    /// one WARN per alias item (not per delta, and never for the owner),
+    /// naming both items. Uses the crate-wide capture: see
+    /// `crate::test_tracing` for why a per-test subscriber is not allowed.
+    #[test]
+    fn alias_item_warns_once() {
+        use crate::test_tracing;
+
+        test_tracing::start();
+        let mut t = ResponsesTranslator::new();
+        t.consume(added_event("fc_1", "call_A", "get_weather"))
+            .unwrap();
+        t.consume(added_event("fc_2", "call_A", "get_weather"))
+            .unwrap();
+        t.consume(delta_event("fc_1", "{\"a\":")).unwrap();
+        t.consume(delta_event("fc_2", "1")).unwrap();
+        t.consume(delta_event("fc_2", "}")).unwrap();
+
+        let alias_warns: Vec<_> = test_tracing::captured()
+            .into_iter()
+            .filter(|(target, fields)| {
+                target == "paigasus::openai::responses"
+                    && fields.contains("fc_1")
+                    && fields.contains("fc_2")
+            })
+            .collect();
+        assert_eq!(
+            alias_warns.len(),
+            1,
+            "expected exactly one alias warning naming both items; got {alias_warns:?}"
+        );
     }
 }
