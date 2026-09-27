@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.11.2",
+  "checkpoint_id": "518c2788eafb",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-710-exec-timeout-on-macos-a-grandchild-can-run-one-more-command",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/plans/2026-09-27-sma-710-exec-timeout-stop-then-kill.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/51/8c2788eafb/0/metadata.json",
+      "transcript": "/51/8c2788eafb/0/full.jsonl",
+      "compact_transcript": "/51/8c2788eafb/0/transcript.jsonl",
+      "content_hash": "/51/8c2788eafb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 16870,
+    "cache_read_tokens": 802855,
+    "output_tokens": 11512,
+    "api_call_count": 5
+  }
+}
