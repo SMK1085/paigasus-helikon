@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.11...paigasus-helikon-runtime-agentcore-v0.2.12) - 2026-10-01
+
+### Other
+
+- *(deps)* replace yanked yoke-derive, fix a rust 1.99 rustdoc lint ([#284](https://github.com/SMK1085/paigasus-helikon/pull/284))
+
 ## [0.2.11](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.10...paigasus-helikon-runtime-agentcore-v0.2.11) - 2026-09-17
 
 ### Other
