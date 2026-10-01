@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "66af6af5f452",
+  "strategy": "manual-commit",
+  "branch": "feature/deps-yoke-derive-yank",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-agentcore/src/lib.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/af6af5f452/0/metadata.json",
+      "transcript": "/66/af6af5f452/0/full.jsonl",
+      "compact_transcript": "/66/af6af5f452/0/transcript.jsonl",
+      "content_hash": "/66/af6af5f452/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 11634,
+    "cache_read_tokens": 1981087,
+    "output_tokens": 5212,
+    "api_call_count": 17
+  }
+}

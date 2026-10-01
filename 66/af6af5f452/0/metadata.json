@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "66af6af5f452",
+  "session_id": "7d89062d-de66-4584-b3e9-30c6bb2ee11f",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-01T18:18:44.385588Z",
+  "branch": "feature/deps-yoke-derive-yank",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-agentcore/src/lib.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "d41d1c925535",
+  "checkpoint_transcript_start": 224,
+  "transcript_lines_at_start": 224,
+  "compact_transcript_start": 32,
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 11634,
+    "cache_read_tokens": 1981087,
+    "output_tokens": 5212,
+    "api_call_count": 17
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-01T18:18:44.368227Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 1,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
