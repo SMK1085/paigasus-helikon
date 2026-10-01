@@ -60,7 +60,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-EXPECTED_VERSION="0.23.2"
+EXPECTED_VERSION="0.23.3"
 
 # The MD060 style this repo's .markdownlint-cli2.jsonc is expected to set.
 # Asserted by name below so a change to another VALID value cannot pass.
