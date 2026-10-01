@@ -161,7 +161,7 @@ mod a2a;
 pub use a2a::store::{InMemoryTaskStore, TaskStore, MAX_EVENTS_PER_TASK};
 /// A2A wire types: the task lifecycle, its artifacts, and the agent card served for
 /// discovery. Public because they appear in the
-/// [`TaskStore`](crate::TaskStore) trait's signature and in
+/// [`TaskStore`] trait's signature and in
 /// [`AgentCoreServerBuilder::agent_card`].
 #[cfg(feature = "a2a")]
 pub use a2a::types::{
