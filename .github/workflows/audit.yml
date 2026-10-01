@@ -64,7 +64,7 @@ jobs:
           cache-targets: "false"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # taiki-e/install-action v2.87.5
-      - uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29
         with:
           tool: cargo-audit
       # cargo-audit fetches the advisory DB on every run unless -n/--no-fetch,
