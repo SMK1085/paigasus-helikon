@@ -50,7 +50,7 @@ globset               = "0.4"
 # unmaintained `proc-macro-error2` (RUSTSEC-2026-0173), failing `cargo audit`.
 # Relax once jiff drops that transitive dep.
 jiff                  = { version = "=0.2.28", features = ["serde"] }
-jsonschema            = { version = "0.56", default-features = false }
+jsonschema            = { version = "0.58", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"
 notify                = "8"
@@ -92,7 +92,7 @@ opentelemetry_sdk     = { version = "0.33", features = ["rt-tokio", "testing"] }
 opentelemetry-otlp    = { version = "0.33", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 trybuild              = "1"
 url                   = "2"
-utoipa                = { version = "5.5.0", default-features = false, features = ["macros", "axum_extras"] }
+utoipa                = { version = "6.0.0", default-features = false, features = ["macros", "axum_extras"] }
 uuid                  = { version = "1.23.4", default-features = false, features = ["v4"] }
 dom_smoothie          = "0.18"
 htmd                  = "0.5"
