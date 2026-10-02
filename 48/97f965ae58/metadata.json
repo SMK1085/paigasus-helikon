@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "4897f965ae58",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-727-ci-correct-the-stale-version-comments-on-the-install-action",
+  "checkpoints_count": 19,
+  "files_touched": [
+    ".github/workflows/audit.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deny.yml",
+    ".github/workflows/docs.yml",
+    ".github/workflows/msrv.yml",
+    ".github/workflows/release-plz.yml",
+    ".github/workflows/sbom.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/48/97f965ae58/0/metadata.json",
+      "transcript": "/48/97f965ae58/0/full.jsonl",
+      "compact_transcript": "/48/97f965ae58/0/transcript.jsonl",
+      "content_hash": "/48/97f965ae58/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 126,
+    "cache_creation_tokens": 163380,
+    "cache_read_tokens": 6520974,
+    "output_tokens": 16128,
+    "api_call_count": 47
+  }
+}
