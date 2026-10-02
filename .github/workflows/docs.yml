@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # taiki-e/install-action v2.87.5
+      # taiki-e/install-action v2.87.21
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }}
