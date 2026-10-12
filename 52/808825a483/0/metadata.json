@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "52808825a483",
+  "session_id": "a1fd0bc4-36d6-4163-8804-2c42b6691b7c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-12T20:49:23.196459Z",
+  "branch": "feature/gh-actions-bump-version-comments",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/audit.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deny.yml",
+    ".github/workflows/docs.yml",
+    ".github/workflows/msrv.yml",
+    ".github/workflows/release-plz.yml",
+    ".github/workflows/sbom.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "c5ecc33158a0",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 131003,
+    "cache_read_tokens": 1478456,
+    "output_tokens": 9596,
+    "api_call_count": 19
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-12T20:49:23.185365Z",
+    "agent_lines": 30,
+    "agent_removed": 30,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 30,
+    "total_lines_changed": 60,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
