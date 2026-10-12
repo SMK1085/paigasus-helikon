@@ -1,0 +1,15 @@
+check all dependabot PRs, merge the green ones, fix the red ones before you merge them as well
+
+---
+
+<task-notification>
+<task-id>brym3wz44</task-id>
+<tool-use-id>toolu_01SbUFKVRaKq7qaxkmHjBD8N</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/a1fd0bc4-36d6-4163-8804-2c42b6691b7c/tasks/brym3wz44.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the macOS test job on PR 292 to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+correct them now, no linear ticket needed
