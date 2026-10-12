@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: stable
           components: rustfmt
@@ -72,7 +72,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: stable
           components: clippy
@@ -116,7 +116,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: ${{ matrix.toolchain }}
       # Swatinem/rust-cache v2.9.2
@@ -166,7 +166,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
@@ -213,7 +213,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
@@ -240,7 +240,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
       # Swatinem/rust-cache v2.9.2
@@ -262,8 +262,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # taiki-e/install-action v2.87.21
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0
+      # taiki-e/install-action v2.87.27
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
         with:
           tool: convco@0.6.3
       - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD
@@ -295,7 +295,7 @@ jobs:
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
       - if: steps.filter.outputs.sessions == 'true'
-        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
@@ -339,8 +339,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # actions/setup-node v7.0.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      # actions/setup-node v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
           cache: npm
