@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "893733219a44",
+  "strategy": "manual-commit",
+  "branch": "feature/npm-overrides-smol-toml-katex",
+  "checkpoints_count": 6,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/89/3733219a44/0/metadata.json",
+      "transcript": "/89/3733219a44/0/full.jsonl",
+      "compact_transcript": "/89/3733219a44/0/transcript.jsonl",
+      "content_hash": "/89/3733219a44/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 118057,
+    "cache_read_tokens": 2038483,
+    "output_tokens": 11541,
+    "api_call_count": 20,
+    "subagent_tokens": {
+      "input_tokens": 20,
+      "cache_creation_tokens": 68409,
+      "cache_read_tokens": 585122,
+      "output_tokens": 168,
+      "api_call_count": 10
+    }
+  }
+}

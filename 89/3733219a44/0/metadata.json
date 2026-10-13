@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "893733219a44",
+  "session_id": "a1fd0bc4-36d6-4163-8804-2c42b6691b7c",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-13T05:38:58.300514Z",
+  "branch": "feature/npm-overrides-smol-toml-katex",
+  "checkpoints_count": 6,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "900165a1c860",
+  "checkpoint_transcript_start": 189,
+  "transcript_lines_at_start": 189,
+  "compact_transcript_start": 25,
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 118057,
+    "cache_read_tokens": 2038483,
+    "output_tokens": 11541,
+    "api_call_count": 20,
+    "subagent_tokens": {
+      "input_tokens": 20,
+      "cache_creation_tokens": 68409,
+      "cache_read_tokens": 585122,
+      "output_tokens": 168,
+      "api_call_count": 10
+    }
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
