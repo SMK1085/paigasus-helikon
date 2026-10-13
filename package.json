@@ -5,5 +5,9 @@
   "description": "Markdown lint tooling for the paigasus-helikon workspace. Not published; not part of the Rust build.",
   "devDependencies": {
     "markdownlint-cli2": "0.23.3"
+  },
+  "overrides": {
+    "smol-toml": "^1.9.0",
+    "katex": "^0.18.2"
   }
 }
