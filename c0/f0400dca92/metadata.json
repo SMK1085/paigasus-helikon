@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "c0f0400dca92",
+  "strategy": "manual-commit",
+  "branch": "feature/bump-rustls-0-23-46",
+  "checkpoints_count": 9,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c0/f0400dca92/0/metadata.json",
+      "transcript": "/c0/f0400dca92/0/full.jsonl",
+      "compact_transcript": "/c0/f0400dca92/0/transcript.jsonl",
+      "content_hash": "/c0/f0400dca92/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 70,
+    "cache_creation_tokens": 253651,
+    "cache_read_tokens": 4054684,
+    "output_tokens": 17698,
+    "api_call_count": 31,
+    "subagent_tokens": {
+      "input_tokens": 44,
+      "cache_creation_tokens": 80942,
+      "cache_read_tokens": 1499280,
+      "output_tokens": 783,
+      "api_call_count": 22
+    }
+  }
+}
