@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.11.4",
+  "checkpoint_id": "d5001dec04a2",
+  "session_id": "38359663-22f5-4910-82cf-95d5bfbdc4f0",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-19T07:10:05.436073Z",
+  "branch": "feature/dependabot-302-gh-actions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/audit.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deny.yml",
+    ".github/workflows/docs.yml",
+    ".github/workflows/msrv.yml",
+    ".github/workflows/release-plz.yml",
+    ".github/workflows/sbom.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "5790b9015ecd",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 66779,
+    "cache_read_tokens": 652329,
+    "output_tokens": 4917,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-19T07:10:05.423431Z",
+    "agent_lines": 30,
+    "agent_removed": 30,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 30,
+    "total_lines_changed": 60,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
