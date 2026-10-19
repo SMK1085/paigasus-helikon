@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
       # Swatinem/rust-cache v2.9.2
@@ -63,8 +63,8 @@ jobs:
           cache-directories: "~/.cargo/advisory-db"
           cache-targets: "false"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # taiki-e/install-action v2.87.27
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+      # taiki-e/install-action v2.87.29
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
         with:
           tool: cargo-audit
       # cargo-audit fetches the advisory DB on every run unless -n/--no-fetch,
