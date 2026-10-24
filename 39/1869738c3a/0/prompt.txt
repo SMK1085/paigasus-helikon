@@ -1,0 +1,33 @@
+check all dependabot PRs, merge the green ones, fix the red ones before you merge them as well
+
+---
+
+<task-notification>
+<task-id>bfp20pmpb</task-id>
+<tool-use-id>toolu_01WcmUyb872wUhXXfJTmbrrB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bfp20pmpb.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll required checks on PR 303 until done" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+done
+
+---
+
+<task-notification>
+<task-id>bmzwhqvxp</task-id>
+<tool-use-id>toolu_01XZbqR7VynBrEy4zhDF1zyb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bmzwhqvxp.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for main workflow runs, then check PR 302 and release PR" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+close 302 if dependabot doesn't and run the cleanup
+
+---
+
+check all dependabot PRs, merge the green ones, fix the red ones before you merge them as well, also check any failing audit actions
