@@ -128,7 +128,7 @@ jobs:
       # to go red sometimes, and a red run must still warm the cache for the next.
       # SMA-618: save only from the default branch.
       - if: steps.decide.outputs.run == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           prefix-key: v1
           # SMA-618: drop the workspace target from this job's cache. It is

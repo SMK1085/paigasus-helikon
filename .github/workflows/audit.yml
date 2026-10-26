@@ -57,14 +57,14 @@ jobs:
       # One-time cost: @actions/cache folds the cached path list into the cache
       # *version*, so the existing entry becomes unreachable and this job runs
       # cold once.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           prefix-key: v1
           cache-directories: "~/.cargo/advisory-db"
           cache-targets: "false"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # taiki-e/install-action v2.87.29
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91
         with:
           tool: cargo-audit
       # cargo-audit fetches the advisory DB on every run unless -n/--no-fetch,
