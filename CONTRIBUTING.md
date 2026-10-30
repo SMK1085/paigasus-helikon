@@ -296,8 +296,13 @@ permissively compatible) or carve a per-crate exception under
 `[advisories].ignore` without recording a rationale in the same commit.
 
 Dependabot watches `cargo` and `github-actions` weekly (Monday 06:00 UTC),
-grouping patch + minor updates per ecosystem. Major bumps remain ungrouped
-so breaking changes are reviewed in isolation.
+and groups the updates. For `cargo`, some dependency families (for example
+`temporalio*` and `tokio*`) have their own group, which takes every update
+type. For all other crates, major bumps go into the `rust-major` group, so
+breaking changes are reviewed apart from patch and minor bumps
+(`rust-minor-patch`). For `github-actions`, the `gh-actions`
+group takes every update type, so a major action bump arrives in the same PR
+as the patch and minor bumps.
 
 ## Reporting security issues
 

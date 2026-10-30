@@ -132,7 +132,7 @@ The SBOM workflow invokes `cargo cyclonedx --manifest-path crates/paigasus-helik
 
 `deny.toml` declares `version = 2` under both `[advisories]` and `[licenses]` — v1 fields (`vulnerability`, `unmaintained`, `unsound`, `copyleft`, etc.) are removed in modern cargo-deny and adding them will fail with a schema error. The license allowlist includes `Unicode-3.0` in addition to the ticket-prescribed `Unicode-DFS-2016` because `unicode-ident ≥ 1.0.13` (pulled transitively by `serde_derive`) relicensed in 2024. cargo-deny's advisory DB lives at `~/.cargo/advisory-dbs` (plural) per `deny.toml`'s `db-path`; cargo-audit's DB is at `~/.cargo/advisory-db` (singular) — each tool caches its own, and the CI cache directories are scoped per-workflow.
 
-Dependabot is configured for `cargo` + `github-actions` ecosystems, weekly Monday 06:00 UTC (aligned with the daily audit cron), with patch + minor updates grouped into one PR per ecosystem.
+Dependabot is configured for `cargo` + `github-actions` ecosystems, weekly Monday 06:00 UTC (aligned with the daily audit cron), with grouped updates. For `cargo`, the dependency families `temporalio`, `tokio-stack`, `tracing-otel` and `serde-stack` each have their own group, which takes every update type. For all other crates, major bumps go into `rust-major` and patch + minor bumps into `rust-minor-patch`. For `github-actions`, one `gh-actions` group takes every update type, majors included.
 
 ## Actions cache budget
 

@@ -17,7 +17,7 @@ gh api repos/<owner>/<repo>/git/ref/tags/<tag> | jq -r '.object.sha'
 # gh api repos/<owner>/<repo>/git/tags/<sha> | jq -r '.object.sha'
 ```
 
-Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `github-actions` group track patch/minor updates from there. The human-readable version stays as a trailing `# vX.Y.Z` comment on the `uses:` line so the SHA is auditable (see "Version comments" below). Note the corollary: because that group is configured for **patch + minor only**, a major bump never arrives on its own and must be swept by hand — which is how `actions/checkout` sat on v6.0.2 until SMA-486.
+Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `gh-actions` group track updates from there. The human-readable version stays as a trailing `# vX.Y.Z` comment on the `uses:` line so the SHA is auditable (see "Version comments" below). The `gh-actions` group in `.github/dependabot.yml` sets `patterns: ["*"]` and no `update-types`, so its configuration permits major bumps too. It has had this form since SMA-308 (2026-05-17); the earlier `actions-minor-and-patch` group was patch + minor only. Do not depend on the configuration alone: `actions/checkout` sat on v6.0.2 until SMA-486 bumped it by hand, and the cause is not recorded here. Thus check for a new major by hand.
 
 ## Version comments
 
