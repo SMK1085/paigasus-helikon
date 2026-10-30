@@ -40,8 +40,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
@@ -49,7 +48,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.3
       # SMA-618: cargo-audit never compiles the workspace — it reads Cargo.lock
       # and the advisory DB — so a target cache here is pure waste against a
       # 10 GiB budget. cache-targets: false keeps ~/.cargo (registry) and
@@ -57,14 +55,13 @@ jobs:
       # One-time cost: @actions/cache folds the cached path list into the cache
       # *version*, so the existing entry becomes unreachable and this job runs
       # cold once.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           cache-directories: "~/.cargo/advisory-db"
           cache-targets: "false"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # taiki-e/install-action v2.87.32
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-audit
       # cargo-audit fetches the advisory DB on every run unless -n/--no-fetch,
@@ -86,11 +83,9 @@ jobs:
       contents: read
       issues: write
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # rustsec/audit-check v2.0.0
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

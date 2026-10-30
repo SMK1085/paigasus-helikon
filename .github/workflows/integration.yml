@@ -80,15 +80,14 @@ jobs:
       TEMPORAL_CLI_VERSION: "1.8.2"
       TEMPORAL_CLI_SHA256: "d8421bda989e6514b4bdb4d63a9012a8a05a806892e881a5aad8510496349a94"
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # dorny/paths-filter v4.0.3 — needs a base to diff against, which schedule
+      # dorny/paths-filter: needs a base to diff against, which schedule
       # and workflow_dispatch do not provide; hence the event guard here and the
       # `decide` step below.
       - if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -124,11 +123,11 @@ jobs:
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.3 — cache-on-failure because this job is expected
+      # Swatinem/rust-cache: cache-on-failure because this job is expected
       # to go red sometimes, and a red run must still warm the cache for the next.
       # SMA-618: save only from the default branch.
       - if: steps.decide.outputs.run == 'true'
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           # SMA-618: drop the workspace target from this job's cache. It is
@@ -251,13 +250,11 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # dorny/paths-filter v4.0.3
       - if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           # Deliberately narrow. core/runtime-axum/runtime-tokio/mcp/

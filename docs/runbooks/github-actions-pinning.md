@@ -17,7 +17,36 @@ gh api repos/<owner>/<repo>/git/ref/tags/<tag> | jq -r '.object.sha'
 # gh api repos/<owner>/<repo>/git/tags/<sha> | jq -r '.object.sha'
 ```
 
-Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `github-actions` group track patch/minor updates from there. The above-the-fold human-readable version stays as a `# action vX.Y.Z` comment so the SHA is auditable. Note the corollary: because that group is configured for **patch + minor only**, a major bump never arrives on its own and must be swept by hand — which is how `actions/checkout` sat on v6.0.2 until SMA-486.
+Do not use a plan-time version pin if a newer major has shipped between plan-writing and implementation — bump immediately, then let Dependabot's `github-actions` group track patch/minor updates from there. The human-readable version stays as a trailing `# vX.Y.Z` comment on the `uses:` line so the SHA is auditable (see "Version comments" below). Note the corollary: because that group is configured for **patch + minor only**, a major bump never arrives on its own and must be swept by hand — which is how `actions/checkout` sat on v6.0.2 until SMA-486.
+
+## Version comments
+
+Put the version on the `uses:` line, as a trailing comment that **ends with** the version:
+
+```yaml
+      # Notes about the step stay on their own lines above it.
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+```
+
+Do not put the version on a separate comment line above the step, and do not write more text after the version. Dependabot then cannot update the comment (SMA-744).
+
+The reason is how dependabot-core changes a comment. `WorkflowUpdater` gives `VersionCommenter#updated_comment` only the comment that is on the same line as the `uses:` declaration. `VersionCommenter` changes that comment only if it ends with a version tag of the old SHA, and then replaces that version with the most specific tag of the new SHA. Any other comment stays unchanged.
+
+Before SMA-744, every workflow had the version on a separate line above the step (`# taiki-e/install-action v2.87.29`). Each Dependabot gh-actions group PR changed the SHAs and left every comment stale. The `branch-names` ruleset blocks pushes to `dependabot/**`, so each PR needed a `feature/**` takeover PR that corrected the comments: #302 → #303, #313 → #315 and #316 → #318.
+
+To check that each comment agrees with its SHA, compare the pin with the tag. `git ls-remote` also shows annotated tags (`^{}`) and is not limited to the first 100 tags:
+
+```bash
+grep -hoE "uses: [^ ]+@[0-9a-f]{40} # v[0-9.]+" .github/workflows/*.yml \
+  | sed -E 's/uses: //; s/ # / /' | sort -u \
+  | while read -r ref ver; do
+      repo=${ref%@*}; sha=${ref#*@}
+      got=$(git ls-remote --tags "https://github.com/$repo.git" "refs/tags/$ver" "refs/tags/$ver^{}" | awk '{print $1}' | tail -1)
+      [ "$got" = "$sha" ] && echo "OK $repo $ver" || echo "MISMATCH $repo $ver"
+    done
+```
+
+`dtolnay/rust-toolchain` has no version comment, because its pin is a `master` commit, not a tag (see the next section).
 
 ## dtolnay/rust-toolchain — check the direction
 
