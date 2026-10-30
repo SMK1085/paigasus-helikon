@@ -24,8 +24,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      # taiki-e/install-action v2.87.29
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283
+      # taiki-e/install-action v2.87.31
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }}
       - name: Build mdBook (HTML + linkcheck)
