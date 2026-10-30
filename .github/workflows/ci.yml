@@ -41,8 +41,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
@@ -66,8 +65,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
@@ -76,7 +74,6 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      # Swatinem/rust-cache v2.9.3
       # SMA-618: PR jobs restore but never save. save-if gates only the post
       # (save) step, so a PR run still reads main's entries — it just stops
       # writing its own refs/pull/N/merge copies, which is what was evicting
@@ -92,7 +89,7 @@ jobs:
       # That literal is load-bearing: two writers would race, and the loser's
       # thinner cache could win the key and then never be replaced, because
       # rust-cache does not overwrite an existing key.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           shared-key: metadata
@@ -110,8 +107,7 @@ jobs:
       # Turn a silently-unenforcing sandbox into a hard failure (never green-by-skip).
       HELIKON_REQUIRE_SANDBOX: 1
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
@@ -119,7 +115,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ matrix.toolchain }}
-      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
       #
       # The `if:` drops caching for macos-1.94 alone, to buy headroom under the
@@ -130,7 +125,7 @@ jobs:
       # leg (all required). Cost: this leg builds cold on every push, measured
       # 0.76 GiB of budget returned.
       - if: ${{ !(matrix.os == 'macos-latest' && matrix.toolchain == '1.94') }}
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -160,8 +155,7 @@ jobs:
   build-no-default-features:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
@@ -169,9 +163,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -207,8 +200,7 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
@@ -216,11 +208,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.3
       # SMA-618: reader of the `metadata` key that `clippy` writes — see the
       # note there. `save-if: false` is a literal, NOT the default-branch
       # expression: exactly one job may write a shared key.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           shared-key: metadata
@@ -234,8 +225,7 @@ jobs:
     env:
       DOC_COVERAGE_THRESHOLD: "80"
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
@@ -243,9 +233,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
-      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -257,13 +246,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      # taiki-e/install-action v2.87.32
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: convco@0.6.3
       - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD
@@ -271,12 +258,10 @@ jobs:
   sessions-it:
     runs-on: ubuntu-latest
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # dorny/paths-filter v4.0.3
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -298,10 +283,9 @@ jobs:
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - if: steps.filter.outputs.sessions == 'true'
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -335,12 +319,10 @@ jobs:
     # than one that fails.
     timeout-minutes: 10
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # actions/setup-node v7.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           cache: npm
