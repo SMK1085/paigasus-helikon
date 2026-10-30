@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.12.1",
+  "checkpoint_id": "15cb646b075a",
+  "strategy": "manual-commit",
+  "branch": "feature/dependabot-316-gh-actions",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/workflows/audit.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deny.yml",
+    ".github/workflows/docs.yml",
+    ".github/workflows/msrv.yml",
+    ".github/workflows/release-plz.yml",
+    ".github/workflows/sbom.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/15/cb646b075a/0/metadata.json",
+      "transcript": "/15/cb646b075a/0/full.jsonl",
+      "compact_transcript": "/15/cb646b075a/0/transcript.jsonl",
+      "content_hash": "/15/cb646b075a/0/content_hash.txt",
+      "prompt": "/15/cb646b075a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 11887,
+    "cache_read_tokens": 3377739,
+    "output_tokens": 7375,
+    "api_call_count": 20
+  },
+  "redaction": {
+    "replacements": 16,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 18,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
