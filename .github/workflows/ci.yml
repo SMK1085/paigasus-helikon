@@ -76,7 +76,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      # Swatinem/rust-cache v2.9.2
+      # Swatinem/rust-cache v2.9.3
       # SMA-618: PR jobs restore but never save. save-if gates only the post
       # (save) step, so a PR run still reads main's entries — it just stops
       # writing its own refs/pull/N/merge copies, which is what was evicting
@@ -119,7 +119,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ matrix.toolchain }}
-      # Swatinem/rust-cache v2.9.2
+      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
       #
       # The `if:` drops caching for macos-1.94 alone, to buy headroom under the
@@ -169,7 +169,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.2
+      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
@@ -216,7 +216,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.2
+      # Swatinem/rust-cache v2.9.3
       # SMA-618: reader of the `metadata` key that `clippy` writes — see the
       # note there. `save-if: false` is a literal, NOT the default-branch
       # expression: exactly one job may write a shared key.
@@ -243,7 +243,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
-      # Swatinem/rust-cache v2.9.2
+      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
@@ -262,7 +262,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # taiki-e/install-action v2.87.29
+      # taiki-e/install-action v2.87.31
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91
         with:
           tool: convco@0.6.3
@@ -298,7 +298,7 @@ jobs:
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.2
+      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
       - if: steps.filter.outputs.sessions == 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0

@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
-      # Swatinem/rust-cache v2.9.2
+      # Swatinem/rust-cache v2.9.3
       # SMA-618: save only from the default branch — see the note on `clippy`.
       # sbom.yml is tag-triggered only, so this expression never holds
       # and the step becomes restore-only. That is intended: main never runs
@@ -47,7 +47,7 @@ jobs:
         with:
           prefix-key: v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # taiki-e/install-action v2.87.29
+      # taiki-e/install-action v2.87.31
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91
         with:
           tool: cargo-cyclonedx
