@@ -1,0 +1,185 @@
+check all dependabot PRs, merge the green ones, fix the red ones before you merge them as well
+
+---
+
+<task-notification>
+<task-id>bfp20pmpb</task-id>
+<tool-use-id>toolu_01WcmUyb872wUhXXfJTmbrrB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bfp20pmpb.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll required checks on PR 303 until done" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+done
+
+---
+
+<task-notification>
+<task-id>bmzwhqvxp</task-id>
+<tool-use-id>toolu_01XZbqR7VynBrEy4zhDF1zyb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bmzwhqvxp.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for main workflow runs, then check PR 302 and release PR" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+close 302 if dependabot doesn't and run the cleanup
+
+---
+
+check all dependabot PRs, merge the green ones, fix the red ones before you merge them as well, also check any failing audit actions
+
+---
+
+<task-notification>
+<task-id>bmw07qwhf</task-id>
+<tool-use-id>toolu_01SvVSEiDBErsdgHnaXn7P2s</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bmw07qwhf.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll required checks on PR 309 until done" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br7n79hnw</task-id>
+<tool-use-id>toolu_01XwEyxVVYQS2yrUfA5DJgPS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/br7n79hnw.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll required checks on PR 308 until done" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+merged
+
+---
+
+<task-notification>
+<task-id>bdz4h1wnv</task-id>
+<tool-use-id>toolu_01VYcYRU6SNReHNnAKKcmeQr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bdz4h1wnv.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll required checks on rebased PR 309" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+309 is merged
+
+---
+
+310 is also merged
+
+---
+
+310 should be merged now
+
+---
+
+<task-notification>
+<task-id>btj71xq5d</task-id>
+<tool-use-id>toolu_01S6w9kcCWegpf6SAAfUbmuQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/btj71xq5d.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for release-plz run, then check crates.io and git tag" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbn3qvkef</task-id>
+<tool-use-id>toolu_01DWKwUjzuQd1FmaSVM5gESg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bbn3qvkef.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for workflow runs on the 309 merge commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2acrpu8s</task-id>
+<tool-use-id>toolu_01Lzf3LYByobsiQtAdc3mywr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/b2acrpu8s.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for ci run on 309 merge, then list 310 merge runs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>btqfebdo8</task-id>
+<tool-use-id>toolu_01VWghJhdPQbp6BWqrziBozs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/btqfebdo8.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for ci run on 310 merge commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+check all dependabot PRs, merge the green ones, fix the red ones before you merge them as well, also check any failing audit actions
+
+---
+
+unlocked
+
+---
+
+<task-notification>
+<task-id>bznbkjsyr</task-id>
+<tool-use-id>toolu_01LvfzjakdVPvAGLJcpg7Txg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bznbkjsyr.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll required checks on PR 315 until done" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+both merged
+
+---
+
+<task-notification>
+<task-id>bmkkyucfz</task-id>
+<tool-use-id>toolu_01FWLf51cQuQwsRnPVCfotUx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bmkkyucfz.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for main runs, then check 313 and release PRs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvm424uum</task-id>
+<tool-use-id>toolu_01RQfWwgoeBmywqJBBP5PwBg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bvm424uum.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll required checks on the 316 takeover PR" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bc9nxvr0u</task-id>
+<tool-use-id>toolu_01FPmHgHaSSF76hamAaRkxjx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bc9nxvr0u.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for ci run to finish, rerun failed job, verify new attempt" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bz2hdr0dq</task-id>
+<tool-use-id>toolu_01NMWtSkzfEEG8S1j4UenCdM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/38359663-22f5-4910-82cf-95d5bfbdc4f0/tasks/bz2hdr0dq.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for rerun attempt and list non-green latest checks" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yes and turn it around

@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.12.1",
+  "checkpoint_id": "21bc0291ce25",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-744-ci-move-action-version-comments-onto-the-uses-line-so",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".github/workflows/audit.yml",
+    ".github/workflows/bench.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deny.yml",
+    ".github/workflows/docs.yml",
+    ".github/workflows/integration.yml",
+    ".github/workflows/msrv.yml",
+    ".github/workflows/pr-title.yml",
+    ".github/workflows/release-plz.yml",
+    ".github/workflows/sbom.yml",
+    "CLAUDE.md",
+    "docs/runbooks/github-actions-pinning.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/21/bc0291ce25/0/metadata.json",
+      "transcript": "/21/bc0291ce25/0/full.jsonl",
+      "compact_transcript": "/21/bc0291ce25/0/transcript.jsonl",
+      "content_hash": "/21/bc0291ce25/0/content_hash.txt",
+      "prompt": "/21/bc0291ce25/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 212435,
+    "cache_read_tokens": 7998873,
+    "output_tokens": 23592,
+    "api_call_count": 41
+  },
+  "redaction": {
+    "replacements": 16,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 18,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
