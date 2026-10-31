@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SvRWmstLRntRhcutF4tpva",
+  "agent_id": "aefbc4ac7ecc9bcd8",
+  "subagent_type": "general-purpose",
+  "task_description": "CodeRabbit round 1 fixes PR 320",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 99550,
+    "cache_read_tokens": 1053146,
+    "output_tokens": 182,
+    "api_call_count": 13
+  },
+  "started_at": "2026-10-31T11:53:20.296116+01:00",
+  "completed_at": "2026-10-31T11:55:32.796795+01:00"
+}
