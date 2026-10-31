@@ -438,6 +438,30 @@ check "gap with a job summary" "summary has no workflow command" \
 check "gap with a job summary" "stdout has exactly one ::error:: line" \
   one_error_line "${FAKE_DIR}/stdout.txt"
 
+# Static guards on the real release-plz.yml. No PR runs that workflow, so
+# these guards are the only check of its shape before a merge (SMA-745).
+release_workflow="${repo_root}/.github/workflows/release-plz.yml"
+
+# Check that the release workflow contains a fixed string.
+#   guard <fixed-string>
+guard() {
+  if grep -qF -- "$1" "${release_workflow}"; then
+    echo "ok    — release-plz.yml contains '$1'"
+  else
+    echo "FAIL  — release-plz.yml contains '$1': string not found" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+guard 'permission-workflows: write'
+guard 'environment: release'
+guard 'id: release'
+guard 'scripts/check-release-gaps.sh'
+guard 'RELEASE_GAPS_METADATA'
+# The literal ${{ }} is the GitHub expression, not a shell expansion.
+# shellcheck disable=SC2016
+guard 'GH_TOKEN: ${{ github.token }}'
+
 echo
 if [[ "${failures}" == "0" ]]; then
   echo "check-release-gaps selftest: all cases passed"
