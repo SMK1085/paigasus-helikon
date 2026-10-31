@@ -128,7 +128,7 @@ crate_fixture() {
 #   crate_published <name> <version>
 crate_published() {
   crate_fixture "$1" 200 \
-    "{\"crate\":{\"name\":\"$1\"},\"versions\":[{\"num\":\"$2\",\"yanked\":false},{\"num\":\"0.0.1\",\"yanked\":false}]}"
+    "{\"crate\":{\"name\":\"$1\",\"num_versions\":2},\"versions\":[{\"num\":\"$2\",\"yanked\":false},{\"num\":\"0.0.1\",\"yanked\":false}]}"
 }
 
 # Make gh answer for an API path. Lines end with CRLF, as HTTP headers do.
@@ -196,8 +196,9 @@ TOML
   unset RELEASE_STEP_OUTCOME GITHUB_STEP_SUMMARY
 }
 
-# Run the script and check its exit status and its output.
-#   expect <expected-status> <case-name> [<fixed-string-pattern>...]
+# Run the script and check its exit status and its output. A pattern that
+# starts with "!" must NOT be in the output.
+#   expect <expected-status> <case-name> [[!]<fixed-string-pattern>...]
 expect() {
   local want="$1" name="$2" got=0 bad=""
   shift 2
@@ -208,7 +209,11 @@ expect() {
     bad="expected exit ${want}, got ${got}"
   fi
   for pattern in "$@"; do
-    if ! grep -qF -- "${pattern}" "${FAKE_DIR}/all.txt"; then
+    if [[ "${pattern}" == '!'* ]]; then
+      if grep -qF -- "${pattern#!}" "${FAKE_DIR}/all.txt"; then
+        bad="${bad:+${bad}; }output contains '${pattern#!}'"
+      fi
+    elif ! grep -qF -- "${pattern}" "${FAKE_DIR}/all.txt"; then
       bad="${bad:+${bad}; }output does not contain '${pattern}'"
     fi
   done
@@ -270,11 +275,20 @@ expect 0 "all versions tagged and released" "no gaps"
 
 new_case tag-missing
 gh_fixture repos/o/r/git/ref/tags/alpha-v1.0.0 'HTTP/1.1 404 Not Found' '{"message":"Not Found"}'
-expect 1 "published, no tag" "alpha" "1.0.0" "tag"
+# The backticks are literal text in the report.
+# shellcheck disable=SC2016
+expect 1 "published, no tag" "alpha" "1.0.0" \
+  'tag `alpha-v1.0.0` is missing' "object=deadbeef" \
+  '!GitHub release `alpha-v1.0.0` is missing' "!gh release create"
 
 new_case release-missing
 gh_fixture repos/o/r/releases/tags/alpha-v1.0.0 'HTTP/2 404' '{"message":"Not Found"}'
-expect 1 "published, tag present, no release" "alpha" "release"
+# The backticks are literal text in the report.
+# shellcheck disable=SC2016
+expect 1 "published, tag present, no release" "alpha" \
+  'GitHub release `alpha-v1.0.0` is missing' "gh release create alpha-v1.0.0" \
+  "gh release edit alpha-v1.0.0 --draft=false" \
+  '!tag `alpha-v1.0.0` is missing' "!git/tags"
 
 new_case release-draft
 gh_fixture repos/o/r/releases/tags/alpha-v1.0.0 'HTTP/2 200' '{"tag_name":"alpha-v1.0.0","draft":true}'
@@ -290,7 +304,7 @@ check "version not in the crates.io list" "no tag or release call for alpha" \
 
 new_case yanked
 crate_fixture alpha 200 \
-  '{"crate":{"name":"alpha"},"versions":[{"num":"1.0.0","yanked":true},{"num":"0.9.0","yanked":false}]}'
+  '{"crate":{"name":"alpha","num_versions":2},"versions":[{"num":"1.0.0","yanked":true},{"num":"0.9.0","yanked":false}]}'
 gh_fixture repos/o/r/git/ref/tags/alpha-v1.0.0 'HTTP/1.1 404 Not Found' '{"message":"Not Found"}'
 expect 1 "a yanked version counts as published" "alpha"
 
@@ -317,6 +331,23 @@ expect 2 "crates.io returns 200 with a body that is not JSON" "could not check"
 new_case crates-no-versions
 crate_fixture alpha 200 '{"crate":{"name":"alpha"}}'
 expect 2 "crates.io returns 200 without a versions list" "could not check"
+
+new_case crates-truncated
+# The list has two versions, but crates.io says the crate has three. The
+# missing one can be the version under check.
+crate_fixture alpha 200 \
+  '{"crate":{"name":"alpha","num_versions":3},"versions":[{"num":"1.0.0","yanked":false},{"num":"0.9.0","yanked":false}]}'
+expect 2 "crates.io versions list shorter than num_versions" "could not check" "num_versions is 3"
+
+new_case crates-no-count
+crate_fixture alpha 200 \
+  '{"crate":{"name":"alpha"},"versions":[{"num":"1.0.0","yanked":false}]}'
+expect 2 "crates.io gives no num_versions" "could not check" "num_versions is missing"
+
+new_case summary-unwritable
+export GITHUB_STEP_SUMMARY="${FAKE_DIR}/no-such-dir/summary.md"
+expect 0 "an unwritable job summary does not change the result" \
+  "no gaps" "::warning::cannot write job summary"
 
 new_case tag-500
 gh_fixture repos/o/r/git/ref/tags/alpha-v1.0.0 'HTTP/2.0 500 Internal Server Error' '{}'

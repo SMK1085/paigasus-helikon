@@ -97,8 +97,11 @@ finish() {
   } > "${report}"
 
   cat "${report}"
+  # A failed write must not change the exit code: exit 1 means "gap".
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-    cat "${report}" >> "${GITHUB_STEP_SUMMARY}"
+    if ! cat "${report}" >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null; then
+      echo "::warning::cannot write job summary"
+    fi
   fi
 
   if [[ "${gap_count}" != 0 ]]; then
@@ -218,6 +221,16 @@ while IFS=$'\t' read -r name version dir <&3; do
     could_not_check "\`${name}\` ${version}: crates.io returned HTTP 200, but the body has no readable versions list."
     continue
   fi
+  # A truncated list can omit the version and make a published version look
+  # unpublished. The list length must equal crate.num_versions.
+  counts="$(jq -r '"\(.versions | length) \(.crate.num_versions | if type == "number" then . else "missing" end)"' \
+    "${body}" 2>/dev/null || echo "unknown unknown")"
+  listed_count="${counts%% *}"
+  total_count="${counts##* }"
+  if [[ "${listed_count}" != "${total_count}" ]]; then
+    could_not_check "\`${name}\` ${version}: crates.io lists ${listed_count} version(s), but crate.num_versions is ${total_count}. The versions list can be incomplete."
+    continue
+  fi
   if [[ "${listed}" != "true" ]]; then
     # Not published, so a missing tag or release is not a gap.
     continue
@@ -293,7 +306,10 @@ while IFS=$'\t' read -r name version dir <&3; do
     case " ${missing} " in
       *" release "*|*" draft-release "*)
         echo "Make the release. Use the ${version} section of \`${dir}/CHANGELOG.md\` as"
-        echo "the notes file. The tag must exist first."
+        echo "the notes file. The tag must exist first. GitHub returns 404 for a draft"
+        echo "release, so first look for a draft with this tag in \`gh release list\`."
+        echo "If there is one, publish it with \`gh release edit ${tag} --draft=false\`."
+        echo "Do not make a second release."
         echo
         echo '```bash'
         echo "gh release create ${tag} --verify-tag --latest=false --title ${tag} --notes-file <file with the ${version} section of ${dir}/CHANGELOG.md>"
