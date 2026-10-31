@@ -329,8 +329,12 @@ required reviewers. The `release-plz` job uses it. The three secrets
 `RELEASE_PLZ_APP_CLIENT_ID`, `RELEASE_PLZ_APP_PRIVATE_KEY` and
 `CARGO_REGISTRY_TOKEN` are **environment** secrets of `release`. Set them by
 hand, because GitHub does not return secret values and the script cannot copy
-them. After the rollout, no repository-level copy of these secrets may exist.
-A repository-level copy is readable from any branch. See
+them. Run the script before the merge of the workflow change. If the
+environment does not exist when the workflow first runs, GitHub creates it
+without a branch policy. After the rollout, no repository-level copy of these
+secrets may exist. A repository-level copy is readable from any branch. Before
+you delete the repository-level secrets, run `gh secret list --env release`.
+Make sure that it shows all three secrets. See
 `docs/runbooks/release-ascend.md`.
 
 There is no drift-check CI job — divergence is detected by the next maintainer

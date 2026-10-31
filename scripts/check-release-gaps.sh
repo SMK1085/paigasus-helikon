@@ -222,11 +222,17 @@ while IFS=$'\t' read -r name version dir <&3; do
     continue
   fi
   # A truncated list can omit the version and make a published version look
-  # unpublished. The list length must equal crate.num_versions.
+  # unpublished. The list length must equal crate.num_versions. If jq fails,
+  # the two sentinels are different, so the check fails and the crate goes to
+  # "could not check".
   counts="$(jq -r '"\(.versions | length) \(.crate.num_versions | if type == "number" then . else "missing" end)"' \
-    "${body}" 2>/dev/null || echo "unknown unknown")"
+    "${body}" 2>/dev/null || echo "unreadable-list unreadable-count")"
   listed_count="${counts%% *}"
   total_count="${counts##* }"
+  if [[ "${listed_count}" == "unreadable-list" ]]; then
+    could_not_check "\`${name}\` ${version}: crates.io returned HTTP 200, but the version count or crate.num_versions is not readable."
+    continue
+  fi
   if [[ "${listed_count}" != "${total_count}" ]]; then
     could_not_check "\`${name}\` ${version}: crates.io lists ${listed_count} version(s), but crate.num_versions is ${total_count}. The versions list can be incomplete."
     continue
@@ -284,10 +290,17 @@ while IFS=$'\t' read -r name version dir <&3; do
     case " ${missing} " in
       *" tag "*)
         echo "Make the tag. release-plz makes the tag object before the ref, so first"
-        echo "look for the tag object SHA in the log of the failed run. If you find it,"
-        echo "skip the first command. Else make a new annotated tag object. \`${sha}\` is"
-        echo "the commit of this run: make sure that it is the commit that published"
-        echo "${name} ${version}."
+        echo "look for the tag object SHA in the log of the failed run. If you find one,"
+        echo "check it. The tag name and the object SHA must match the release commit."
+        echo
+        echo '```bash'
+        echo "gh api repos/${repo}/git/tags/<tag-object-sha> --jq '{tag, sha: .object.sha}'"
+        echo '```'
+        echo
+        echo "If the tag object exists, skip the first command below. Else make a new"
+        echo "annotated tag object. \`${sha}\` is the commit of this run. It is correct"
+        echo "only if this run published ${name} ${version}. The gap can come from an"
+        echo "earlier run. In that case, use the commit that bumped the version."
         echo
         echo '```bash'
         echo "gh api -X POST repos/${repo}/git/tags -f tag=${tag} -f message=${tag} -f object=${sha} -f type=commit --jq .sha"
@@ -308,7 +321,7 @@ while IFS=$'\t' read -r name version dir <&3; do
         echo "Make the release. Use the ${version} section of \`${dir}/CHANGELOG.md\` as"
         echo "the notes file. The tag must exist first. GitHub returns 404 for a draft"
         echo "release, so first look for a draft with this tag in \`gh release list\`."
-        echo "If there is one, publish it with \`gh release edit ${tag} --draft=false\`."
+        echo "If there is one, publish it with \`gh release edit ${tag} --draft=false --latest=false\`."
         echo "Do not make a second release."
         echo
         echo '```bash'

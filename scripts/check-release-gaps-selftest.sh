@@ -279,6 +279,7 @@ gh_fixture repos/o/r/git/ref/tags/alpha-v1.0.0 'HTTP/1.1 404 Not Found' '{"messa
 # shellcheck disable=SC2016
 expect 1 "published, no tag" "alpha" "1.0.0" \
   'tag `alpha-v1.0.0` is missing' "object=deadbeef" \
+  "repos/o/r/git/tags/<tag-object-sha> --jq" "use the commit that bumped the version" \
   '!GitHub release `alpha-v1.0.0` is missing' "!gh release create"
 
 new_case release-missing
@@ -287,7 +288,7 @@ gh_fixture repos/o/r/releases/tags/alpha-v1.0.0 'HTTP/2 404' '{"message":"Not Fo
 # shellcheck disable=SC2016
 expect 1 "published, tag present, no release" "alpha" \
   'GitHub release `alpha-v1.0.0` is missing' "gh release create alpha-v1.0.0" \
-  "gh release edit alpha-v1.0.0 --draft=false" \
+  "gh release edit alpha-v1.0.0 --draft=false --latest=false" \
   '!tag `alpha-v1.0.0` is missing' "!git/tags"
 
 new_case release-draft
@@ -343,6 +344,14 @@ new_case crates-no-count
 crate_fixture alpha 200 \
   '{"crate":{"name":"alpha"},"versions":[{"num":"1.0.0","yanked":false}]}'
 expect 2 "crates.io gives no num_versions" "could not check" "num_versions is missing"
+
+new_case crates-crate-not-object
+# "crate" is a string, so the count query fails (jq exit 5). The crate must
+# not pass the count check as "checked".
+crate_fixture alpha 200 \
+  '{"crate":"x","versions":[{"num":"1.0.0","yanked":false}]}'
+expect 2 "crates.io gives a crate field that is not an object" "could not check" \
+  "not readable"
 
 new_case summary-unwritable
 export GITHUB_STEP_SUMMARY="${FAKE_DIR}/no-such-dir/summary.md"

@@ -62,15 +62,15 @@ If the tag already exists and only the release is missing, skip steps 2 to 4.
 1. Give your `gh` token the `workflow` scope: `gh auth refresh -s workflow`.
 2. Look in the failed run log for the annotated tag object that release-plz made. Check it: `gh api repos/<owner>/<repo>/git/tags/<tag-sha> --jq '{tag, sha: .object.sha}'`. The tag name and the object SHA must match the release commit.
 3. Create the ref: `gh api -X POST repos/<owner>/<repo>/git/refs -f ref=refs/tags/<tag> -f sha=<tag-sha>`.
-4. If the call fails because the tag object does not exist, make a new annotated tag object at the release commit with `POST /git/tags`. Then repeat step 3 with its SHA.
-5. GitHub returns 404 for a draft release. Look for a draft with this tag in `gh release list`. If one exists, publish it with `gh release edit <tag> --draft=false`. Do not make a second release.
+4. If the call fails because the tag object does not exist, make a new annotated tag object at the release commit with `POST /git/tags`. Then repeat step 3 with its SHA. The release commit is the commit that bumped the version. The gap can come from an earlier run, so the commit of the current run can be wrong.
+5. GitHub returns 404 for a draft release. Look for a draft with this tag in `gh release list`. If one exists, publish it with `gh release edit <tag> --draft=false --latest=false`. Without `--latest=false`, GitHub marks the published release as "Latest". Do not make a second release.
 6. Else create the release: `gh release create <tag> --verify-tag --latest=false --title <tag> --notes-file <file>`. Put the CHANGELOG section of that version in the file.
 7. Remove the extra scope: `gh auth refresh -r workflow`.
 8. Run the gap report again. It must say "no gaps".
 
 **Rule.** A red `release-plz` run can still have published crates. Do not assume that nothing shipped. Read the gap report first. Then check crates.io, the tags and the releases.
 
-**Rollout order for the SMA-745 change.** Run `sh scripts/apply-repo-config.sh` and set the three environment secrets before the merge. Merge only when no `release-plz` run is queued or in progress. After the first run on `main`, delete the three repository-level secrets. For a rollback, revert the workflow change. Restore the repository-level secrets before you do this.
+**Rollout order for the SMA-745 change.** Run `sh scripts/apply-repo-config.sh` and set the three environment secrets before the merge. If the `release` environment does not exist when the workflow first runs, GitHub creates it without a branch policy. Thus the script must run before the merge. Merge only when no `release-plz` run is queued or in progress. After the first run on `main`, run `gh secret list --env release`. Make sure that it shows `RELEASE_PLZ_APP_CLIENT_ID`, `RELEASE_PLZ_APP_PRIVATE_KEY` and `CARGO_REGISTRY_TOKEN`. Then delete the three repository-level secrets. For a rollback, revert the workflow change. Restore the repository-level secrets before you do this.
 
 ## Implementation status snapshot
 
