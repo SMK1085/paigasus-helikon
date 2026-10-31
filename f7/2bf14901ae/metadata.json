@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.12.1",
+  "checkpoint_id": "f72bf14901ae",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-745-release-plz-post-gitrefs-returns-403-when-a-workflow",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CONTRIBUTING.md",
+    "docs/runbooks/release-ascend.md",
+    "scripts/check-release-gaps-selftest.sh",
+    "scripts/check-release-gaps.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f7/2bf14901ae/0/metadata.json",
+      "transcript": "/f7/2bf14901ae/0/full.jsonl",
+      "compact_transcript": "/f7/2bf14901ae/0/transcript.jsonl",
+      "content_hash": "/f7/2bf14901ae/0/content_hash.txt",
+      "prompt": "/f7/2bf14901ae/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 31490,
+    "cache_read_tokens": 3059732,
+    "output_tokens": 12736,
+    "api_call_count": 13,
+    "subagent_tokens": {
+      "input_tokens": 70,
+      "cache_creation_tokens": 414614,
+      "cache_read_tokens": 2846955,
+      "output_tokens": 3150,
+      "api_call_count": 34
+    }
+  },
+  "redaction": {
+    "replacements": 23,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 23,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
