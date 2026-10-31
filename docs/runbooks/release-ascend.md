@@ -32,14 +32,14 @@
 
 **Symptom.** A `release-plz.yml` run fails with `403 Forbidden` and an empty body on `POST /repos/<owner>/<repo>/git/refs`. The failed call can create a release branch or a tag. On 2026-10-30, two runs failed this way. One run published `paigasus-helikon-evals` 0.1.17 to crates.io and then failed to create the tag. The crate had no tag and no GitHub release.
 
-**Cause.** GitHub refuses to create a ref at a commit that is behind workflow-file changes on `main`. The token needs the `workflow` permission for this. In both runs, a PR that changes `.github/workflows/*` merged while the run was in progress. We tested this on 2026-10-31 with a token that had no `workflow` scope. The same call, ref name and token gave different results:
+**Cause.** GitHub refuses to create a ref at a commit that is behind workflow-file changes on `main`. The token needs the `workflow` permission for this. In both runs, a PR that changes `.github/workflows/*` merged while the run was in progress. We measured this on 2026-10-31 with an OAuth token that had no `workflow` scope. We did not use the App token. The same call, ref name and token gave different results:
 
 | Target commit | Position | Result |
 | -- | -- | -- |
 | A commit behind a workflow change on `main` | behind `main` | `404 Not Found`, no ref |
 | The tip of `main` | tip of `main` | ref created |
 
-We measured only the 404 with the OAuth token. The App token got 403 in the incident runs. We think that both are refusals of the same check. We did **not** test that an App token with `workflows: write` succeeds, because the App private key exists only in Actions secrets. The first `release-plz` run that overlaps a workflow merge is the first real evidence. The gap report (below) catches a failure if the fix is not enough.
+We measured only the 404 with the OAuth token. The App token got 403 in the incident runs. We think that both are refusals of the same check. The fix below uses the App token with `workflows: write`. That token is **not tested yet**, because the App private key exists only in Actions secrets. The first `release-plz` run after the merge that overlaps a workflow merge is the first real evidence. The gap report (below) catches a failure if the fix is not enough.
 
 **Fix.** The `actions/create-github-app-token` step in `release-plz.yml` requests `permission-workflows: write`. The paigasusbot App (ID 3742291) has `Workflows: Read and write`. If the installation loses this permission, the token step fails. Then restore the permission in the App settings and accept it on the installation.
 
@@ -63,7 +63,7 @@ If the tag already exists and only the release is missing, skip steps 2 to 4.
 2. Look in the failed run log for the annotated tag object that release-plz made. Check it: `gh api repos/<owner>/<repo>/git/tags/<tag-sha> --jq '{tag, sha: .object.sha}'`. The tag name and the object SHA must match the release commit.
 3. Create the ref: `gh api -X POST repos/<owner>/<repo>/git/refs -f ref=refs/tags/<tag> -f sha=<tag-sha>`.
 4. If the call fails because the tag object does not exist, make a new annotated tag object at the release commit with `POST /git/tags`. Then repeat step 3 with its SHA. The release commit is the commit that bumped the version. The gap can come from an earlier run, so the commit of the current run can be wrong.
-5. GitHub returns 404 for a draft release. Look for a draft with this tag in `gh release list`. If one exists, publish it with `gh release edit <tag> --draft=false --latest=false`. Without `--latest=false`, GitHub marks the published release as "Latest". Do not make a second release.
+5. GitHub returns 404 for a draft release. Look for a draft with this tag. `gh release list` shows only 30 releases, so use the API with pagination: `gh api --paginate "repos/<repo>/releases?per_page=100" --jq '.[] | select(.tag_name == "<tag>" and .draft == true) | .id'`. If one exists, publish it with `gh release edit <tag> --draft=false --latest=false`. Without `--latest=false`, GitHub marks the published release as "Latest". Do not make a second release.
 6. Else create the release: `gh release create <tag> --verify-tag --latest=false --title <tag> --notes-file <file>`. Put the CHANGELOG section of that version in the file.
 7. Remove the extra scope: `gh auth refresh -r workflow`.
 8. Run the gap report again. It must say "no gaps".

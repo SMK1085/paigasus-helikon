@@ -193,7 +193,7 @@ TOML
   export GITHUB_SHA=deadbeef
   # CI runs this self-test in a job that sets these. Clear them, so that a
   # case never writes to the real job summary.
-  unset RELEASE_STEP_OUTCOME GITHUB_STEP_SUMMARY
+  unset RELEASE_STEP_OUTCOME GITHUB_STEP_SUMMARY RELEASE_GAPS_DEADLINE
 }
 
 # Run the script and check its exit status and its output. A pattern that
@@ -289,6 +289,8 @@ gh_fixture repos/o/r/releases/tags/alpha-v1.0.0 'HTTP/2 404' '{"message":"Not Fo
 expect 1 "published, tag present, no release" "alpha" \
   'GitHub release `alpha-v1.0.0` is missing' "gh release create alpha-v1.0.0" \
   "gh release edit alpha-v1.0.0 --draft=false --latest=false" \
+  'gh api --paginate "repos/o/r/releases?per_page=100"' \
+  'select(.tag_name == "alpha-v1.0.0" and .draft == true)' \
   '!tag `alpha-v1.0.0` is missing' "!git/tags"
 
 new_case release-draft
@@ -352,6 +354,26 @@ crate_fixture alpha 200 \
   '{"crate":"x","versions":[{"num":"1.0.0","yanked":false}]}'
 expect 2 "crates.io gives a crate field that is not an object" "could not check" \
   "not readable"
+
+new_case crates-num-null
+# The count matches, but one entry has no string "num". That entry can be the
+# version under check, so "not published" is not safe.
+crate_fixture alpha 200 '{"crate":{"num_versions":1},"versions":[{"num":null}]}'
+expect 2 "crates.io versions list has an entry without a string num" \
+  "could not check" "malformed" "!Result: no gaps"
+
+new_case deadline-zero
+export RELEASE_GAPS_DEADLINE=0
+expect 2 "deadline 0 gives could-not-check for every crate" "could not check" \
+  "alpha" "beta" "deadline reached" "!Result: no gaps"
+check "deadline 0 gives could-not-check for every crate" "no crates.io or gh call" \
+  no_call_for "."
+unset RELEASE_GAPS_DEADLINE
+
+new_case deadline-bad
+export RELEASE_GAPS_DEADLINE=abc
+expect 2 "deadline that is not a number" "could not check" "RELEASE_GAPS_DEADLINE"
+unset RELEASE_GAPS_DEADLINE
 
 new_case summary-unwritable
 export GITHUB_STEP_SUMMARY="${FAKE_DIR}/no-such-dir/summary.md"

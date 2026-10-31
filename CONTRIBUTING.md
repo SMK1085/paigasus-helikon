@@ -373,10 +373,11 @@ Releases are automated by [release-plz](https://release-plz.dev). The contract:
 
 ### Authentication
 
-release-plz authenticates as the [release-plz GitHub App](https://github.com/apps/release-plz)
+release-plz authenticates as the private paigasusbot GitHub App (ID 3742291)
 installation on this repo. The workflow mints a per-job installation token
-via `actions/create-github-app-token@v1` from two repo secrets
-(`RELEASE_PLZ_APP_ID`, `RELEASE_PLZ_APP_PRIVATE_KEY`). The App identity is
+via `actions/create-github-app-token` from two environment secrets of the
+`release` environment (`RELEASE_PLZ_APP_CLIENT_ID`,
+`RELEASE_PLZ_APP_PRIVATE_KEY`). The App identity is
 listed as a bypass actor in SMA-309's branch-name ruleset, so release-plz's
 `release-plz-<timestamp>` branch prefix is permitted.
 

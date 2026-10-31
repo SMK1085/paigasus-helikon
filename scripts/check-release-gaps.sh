@@ -28,6 +28,11 @@
 #                          output. If unset, the script runs that command.
 #   RELEASE_GAPS_CONFIG    path to release-plz.toml. Default: <repo>/release-plz.toml.
 #   RELEASE_GAPS_SLEEP     seconds between crates.io requests. Default: 1.
+#   RELEASE_GAPS_DEADLINE  time limit for all checks, in seconds from the script
+#                          start. Default: 210. When the limit is reached, the
+#                          script stops the checks, puts each crate that it did
+#                          not check under "could not check" and writes the
+#                          report. The step `timeout-minutes` is only a backstop.
 #   RELEASE_STEP_OUTCOME   success, failure or cancelled. Unset means failure.
 #   GITHUB_SHA             commit for the recovery text. Default: HEAD.
 #   GITHUB_STEP_SUMMARY    if set, the report is also appended to this file.
@@ -40,6 +45,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="${GITHUB_REPOSITORY:-SMK1085/paigasus-helikon}"
 config="${RELEASE_GAPS_CONFIG:-${repo_root}/release-plz.toml}"
 pause="${RELEASE_GAPS_SLEEP:-1}"
+deadline="${RELEASE_GAPS_DEADLINE:-210}"
 outcome="${RELEASE_STEP_OUTCOME:-failure}"
 if [[ -n "${GITHUB_SHA:-}" ]]; then
   sha="${GITHUB_SHA}"
@@ -140,6 +146,11 @@ gh_get() {
   awk 'body { print } !body && $0 == "" { body = 1 }' "${out}.lf" > "${tmp}/gh-body"
 }
 
+if ! [[ "${deadline}" =~ ^[0-9]+$ ]]; then
+  could_not_check "RELEASE_GAPS_DEADLINE is \`${deadline}\`, not a whole number of seconds."
+  finish
+fi
+
 # --- tag format guard ----------------------------------------------------------
 # The script assumes the default tag format <package>-v<version>. It must not
 # guess another format, so a setting that changes tags or releases stops it.
@@ -192,8 +203,20 @@ fi
 
 # --- per package -----------------------------------------------------------------
 first_request=1
+deadline_reached=0
 while IFS=$'\t' read -r name version dir <&3; do
   tag="${name}-v${version}"
+
+  # Overall time limit. In an API outage, one crate can take about 81 s, so the
+  # step time limit can stop the script before it writes a report. SECONDS is
+  # the time since the script started (bash 3.2 has it too).
+  if [[ "${deadline_reached}" == 0 && "${SECONDS}" -ge "${deadline}" ]]; then
+    deadline_reached=1
+  fi
+  if [[ "${deadline_reached}" == 1 ]]; then
+    could_not_check "\`${name}\` ${version}: deadline reached (RELEASE_GAPS_DEADLINE=${deadline} s), so the script did not check this crate."
+    continue
+  fi
 
   # crates.io. Wait between requests (crawler policy: 1 request per second).
   if [[ "${first_request}" == 0 ]]; then
@@ -214,11 +237,17 @@ while IFS=$'\t' read -r name version dir <&3; do
     continue
   fi
   if ! listed="$(jq -r --arg v "${version}" '
-      if (.versions | type) == "array"
-      then ([.versions[].num] | index($v) != null)
-      else error("no versions list")
+      if (.versions | type) != "array" then error("no versions list")
+      elif any(.versions[]; (type != "object") or ((.num | type) != "string")) then "malformed"
+      else ([.versions[].num] | index($v) != null)
       end' "${body}" 2>/dev/null)"; then
     could_not_check "\`${name}\` ${version}: crates.io returned HTTP 200, but the body has no readable versions list."
+    continue
+  fi
+  # An entry without a string `num` can be the version under check. Then the
+  # version looks unpublished, and that gives a false "no gaps".
+  if [[ "${listed}" == "malformed" ]]; then
+    could_not_check "\`${name}\` ${version}: crates.io returned HTTP 200, but the versions list is malformed (an entry has no string \`num\`)."
     continue
   fi
   # A truncated list can omit the version and make a published version look
@@ -320,7 +349,13 @@ while IFS=$'\t' read -r name version dir <&3; do
       *" release "*|*" draft-release "*)
         echo "Make the release. Use the ${version} section of \`${dir}/CHANGELOG.md\` as"
         echo "the notes file. The tag must exist first. GitHub returns 404 for a draft"
-        echo "release, so first look for a draft with this tag in \`gh release list\`."
+        echo "release, so first look for a draft with this tag. \`gh release list\` shows"
+        echo "only 30 releases, so use the API with pagination:"
+        echo
+        echo '```bash'
+        echo "gh api --paginate \"repos/${repo}/releases?per_page=100\" --jq '.[] | select(.tag_name == \"${tag}\" and .draft == true) | .id'"
+        echo '```'
+        echo
         echo "If there is one, publish it with \`gh release edit ${tag} --draft=false --latest=false\`."
         echo "Do not make a second release."
         echo
