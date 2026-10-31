@@ -233,6 +233,7 @@ npx markdownlint-cli2                                # reads .markdownlint-cli2.
 bash scripts/check-markdownlint-config.sh            # asserts that config is in force
 bash scripts/check-cargo-profile-env-sync.sh         # cargo-visible workflow env is uniform
 bash scripts/check-cargo-profile-env-sync-selftest.sh # …and its parser still parses (fmt runs both)
+bash scripts/check-release-gaps-selftest.sh            # release gap report + release-plz.yml guards (fmt runs it)
 ```
 
 The Markdown gate needs Node (>= 22); everything else in that list needs only the
@@ -321,6 +322,16 @@ To re-apply (or replay on a fork) after `gh auth login`:
 ```bash
 bash scripts/apply-repo-config.sh
 ```
+
+The script also creates the `release` GitHub environment (SMA-745). The
+environment allows deployments from the `main` branch only, and has no
+required reviewers. The `release-plz` job uses it. The three secrets
+`RELEASE_PLZ_APP_CLIENT_ID`, `RELEASE_PLZ_APP_PRIVATE_KEY` and
+`CARGO_REGISTRY_TOKEN` are **environment** secrets of `release`. Set them by
+hand, because GitHub does not return secret values and the script cannot copy
+them. After the rollout, no repository-level copy of these secrets may exist.
+A repository-level copy is readable from any branch. See
+`docs/runbooks/release-ascend.md`.
 
 There is no drift-check CI job — divergence is detected by the next maintainer
 running the script, which is acceptable for the current cadence. A
