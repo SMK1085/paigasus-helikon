@@ -39,7 +39,7 @@
 | A commit behind a workflow change on `main` | behind `main` | `404 Not Found`, no ref |
 | The tip of `main` | tip of `main` | ref created |
 
-An OAuth token gets 404 and an App token gets 403. Both are refusals of the same check. We did **not** test that an App token with `workflows: write` succeeds, because the App private key exists only in Actions secrets. The first `release-plz` run that overlaps a workflow merge is the first real evidence. The gap report (below) catches a failure if the fix is not enough.
+We measured only the 404 with the OAuth token. The App token got 403 in the incident runs. We think that both are refusals of the same check. We did **not** test that an App token with `workflows: write` succeeds, because the App private key exists only in Actions secrets. The first `release-plz` run that overlaps a workflow merge is the first real evidence. The gap report (below) catches a failure if the fix is not enough.
 
 **Fix.** The `actions/create-github-app-token` step in `release-plz.yml` requests `permission-workflows: write`. The paigasusbot App (ID 3742291) has `Workflows: Read and write`. If the installation loses this permission, the token step fails. Then restore the permission in the App settings and accept it on the installation.
 
@@ -57,13 +57,16 @@ An OAuth token gets 404 and an App token gets 403. Both are refusals of the same
 
 **Recovery.** The step summary shows the commands for each gap. In general form, with `<tag>` as `<package>-v<version>`:
 
+If the tag already exists and only the release is missing, skip steps 2 to 4.
+
 1. Give your `gh` token the `workflow` scope: `gh auth refresh -s workflow`.
 2. Look in the failed run log for the annotated tag object that release-plz made. Check it: `gh api repos/<owner>/<repo>/git/tags/<tag-sha> --jq '{tag, sha: .object.sha}'`. The tag name and the object SHA must match the release commit.
 3. Create the ref: `gh api -X POST repos/<owner>/<repo>/git/refs -f ref=refs/tags/<tag> -f sha=<tag-sha>`.
-4. If the call returns 422, GitHub removed the unreferenced tag object. Make a new annotated tag object at the release commit with `POST /git/tags`. Then repeat step 3 with its SHA.
-5. Create the release: `gh release create <tag> --verify-tag --latest=false --title <tag> --notes-file <file>`. Put the CHANGELOG section of that version in the file.
-6. Remove the extra scope: `gh auth refresh -r workflow`.
-7. Run the gap report again. It must say "no gaps".
+4. If the call fails because the tag object does not exist, make a new annotated tag object at the release commit with `POST /git/tags`. Then repeat step 3 with its SHA.
+5. GitHub returns 404 for a draft release. Look for a draft with this tag in `gh release list`. If one exists, publish it with `gh release edit <tag> --draft=false`. Do not make a second release.
+6. Else create the release: `gh release create <tag> --verify-tag --latest=false --title <tag> --notes-file <file>`. Put the CHANGELOG section of that version in the file.
+7. Remove the extra scope: `gh auth refresh -r workflow`.
+8. Run the gap report again. It must say "no gaps".
 
 **Rule.** A red `release-plz` run can still have published crates. Do not assume that nothing shipped. Read the gap report first. Then check crates.io, the tags and the releases.
 

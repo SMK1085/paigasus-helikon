@@ -207,7 +207,7 @@ prefixes, rejects job-level env with those prefixes in a cache-bearing
 workflow, and rejects env declared on a `rust-cache` step itself. It runs as a
 step in `ci.yml`'s `fmt` job, with a self-test at
 `scripts/check-cargo-profile-env-sync-selftest.sh` pinning its line-oriented
-parsing contract. A second `fmt` step runs `scripts/check-release-gaps-selftest.sh` (SMA-745). It tests `scripts/check-release-gaps.sh` with fake `curl` and `gh` commands. It also checks that `release-plz.yml` keeps `permission-workflows: write`, `environment: release`, `id: release` and the gap report step. No PR runs `release-plz.yml`, so these checks are the only protection before the merge. Fixing this guard's own prerequisite surfaced real
+parsing contract. Fixing this guard's own prerequisite surfaced real
 pre-existing drift: `msrv.yml` and `bench.yml` had no workflow-level `env:`
 block at all, so they now carry `CARGO_TERM_COLOR: always` like every other
 cache-bearing workflow. That addition is itself cache-key-invalidating —
@@ -216,6 +216,8 @@ previously absent changes the key exactly as removing a cached path does (see
 `cache-targets: false` below) — so `msrv.yml`'s `verify` and `bench.yml`'s
 `bench` entries are each orphaned once and run cold once under this PR, the
 same cost as `audit` and `deny`.
+
+**A second `fmt` step runs `scripts/check-release-gaps-selftest.sh` (SMA-745).** The self-test runs `scripts/check-release-gaps.sh` with fake `curl` and `gh` commands. It also checks that `release-plz.yml` keeps `permission-workflows: write`, `environment: release`, `id: release` and the gap report step. No PR runs `release-plz.yml`. These checks are the only protection before the merge.
 
 **`cache-budget.yml` is the daily monitor.** It runs on a `schedule` (06:43
 UTC daily) plus `workflow_dispatch`, never on `push` or `pull_request`, and it

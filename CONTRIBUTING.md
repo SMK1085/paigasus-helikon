@@ -320,7 +320,7 @@ settings are checked in as JSON + a POSIX `sh` apply script:
 To re-apply (or replay on a fork) after `gh auth login`:
 
 ```bash
-bash scripts/apply-repo-config.sh
+sh scripts/apply-repo-config.sh
 ```
 
 The script also creates the `release` GitHub environment (SMA-745). The
