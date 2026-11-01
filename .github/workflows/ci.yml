@@ -62,6 +62,10 @@ jobs:
       # parser still parses; it is hermetic mktemp work and runs in ~0.5s.
       - name: Self-test the cargo-visible env parser
         run: bash scripts/check-cargo-profile-env-sync-selftest.sh
+      # No PR runs release-plz.yml, so this self-test and its static guards
+      # are the only pre-merge check of the gap report (SMA-745).
+      - name: Self-test the release gap report
+        run: bash scripts/check-release-gaps-selftest.sh
 
   clippy:
     runs-on: ubuntu-latest

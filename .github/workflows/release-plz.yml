@@ -19,6 +19,9 @@ jobs:
   release-plz:
     name: release-plz
     runs-on: ubuntu-latest
+    # The release secrets are environment secrets of `release`. That
+    # environment allows only the `main` branch (SMA-745).
+    environment: release
     # NB: this workflow runs only on push to main. A PR never runs it, so a
     # change here is not tested by the PR that makes it.
     steps:
@@ -32,6 +35,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
+      # Record the versions before release-plz runs. Then `release-pr` cannot
+      # change what the gap report reads (SMA-745).
+      - name: record workspace versions for the gap report
+        run: cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/release-gaps-metadata.json"
       # actions/create-github-app-token v3.3.0
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         id: app-token
@@ -40,8 +47,12 @@ jobs:
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+          # A ref at a commit behind a workflow change needs this
+          # permission. Without it, POST /git/refs returns 403 (SMA-745).
+          permission-workflows: write
       # release-plz/action v0.5.147
       - uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c
+        id: release
         with:
           command: release
         env:
@@ -53,3 +64,16 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+      # Find crates that are on crates.io but have no tag or no GitHub
+      # release. It uses `github.token`, because the App token can be the
+      # cause of the failure or can be expired (SMA-745). The script stops
+      # its checks at RELEASE_GAPS_DEADLINE (default 210 s) and still writes
+      # the report. timeout-minutes is only the backstop.
+      - name: report release gaps
+        if: ${{ always() && (steps.release.outcome == 'success' || steps.release.outcome == 'failure' || steps.release.outcome == 'cancelled') }}
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_STEP_OUTCOME: ${{ steps.release.outcome }}
+          RELEASE_GAPS_METADATA: ${{ runner.temp }}/release-gaps-metadata.json
+        run: bash scripts/check-release-gaps.sh
