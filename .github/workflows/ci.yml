@@ -61,6 +61,10 @@ jobs:
       # parser still parses; it is hermetic mktemp work and runs in ~0.5s.
       - name: Self-test the cargo-visible env parser
         run: bash scripts/check-cargo-profile-env-sync-selftest.sh
+      # No PR runs release-plz.yml, so this self-test and its static guards
+      # are the only pre-merge check of the gap report (SMA-745).
+      - name: Self-test the release gap report
+        run: bash scripts/check-release-gaps-selftest.sh
 
   clippy:
     runs-on: ubuntu-latest
@@ -250,7 +254,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: convco@0.6.3
       - run: convco check ${{ github.event.pull_request.base.sha }}..HEAD

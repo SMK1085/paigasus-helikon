@@ -14,6 +14,8 @@
 
 `ci.yml` declares `contents: read` plus `pull-requests: read` — the latter for `sessions-it`'s `dorny/paths-filter`, which calls `pulls.listFiles` on PR events (SMA-487); the workflow comment carries the rationale and the reason it must not be minimised away.
 
+`release-plz.yml` makes its own token with `actions/create-github-app-token`. This App token requests `contents`, `pull-requests` and `workflows` write (SMA-745). The `workflows` permission is necessary because GitHub refuses to create a ref at a commit that is behind workflow-file changes on `main`, unless the token has it. The job also sets `environment: release`, and the release secrets are environment secrets that only `main` can read. The "report release gaps" step uses `github.token`, not the App token, because the App token can be the cause of the failure. See `docs/runbooks/release-ascend.md`.
+
 ## integration.yml — the signal-only tier
 
 `.github/workflows/integration.yml` (SMA-457) runs two **signal-only** jobs — `temporal-it` and `agentcore-image` — on PR, push to `main`, a nightly cron at 05:00 UTC, and `workflow_dispatch`. Deliberately **not** in `ci.yml`: `temporal-it` is *expected* to flake while it earns promotion (its crash-resume test aborts a real worker against wall-clock activity timeouts), and a failing job makes its whole workflow run conclude `failure` whether or not it is required — so keeping these out of `ci.yml` is what stops "ci is red on `main`" from becoming meaningless. Neither job appears in `main-protection-checks.json`; **"signal-only" means *not listed as required*, never `continue-on-error`** — that would report green unconditionally and remove the signal rather than weaken it.
@@ -214,6 +216,8 @@ previously absent changes the key exactly as removing a cached path does (see
 `cache-targets: false` below) — so `msrv.yml`'s `verify` and `bench.yml`'s
 `bench` entries are each orphaned once and run cold once under this PR, the
 same cost as `audit` and `deny`.
+
+**A second `fmt` step runs `scripts/check-release-gaps-selftest.sh` (SMA-745).** The self-test runs `scripts/check-release-gaps.sh` with fake `curl` and `gh` commands. It also checks that `release-plz.yml` keeps `permission-workflows: write`, `environment: release`, `id: release` and the gap report step. No PR runs `release-plz.yml`. These checks are the only protection before the merge.
 
 **`cache-budget.yml` is the daily monitor.** It runs on a `schedule` (06:43
 UTC daily) plus `workflow_dispatch`, never on `push` or `pull_request`, and it

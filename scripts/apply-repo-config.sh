@@ -1,5 +1,6 @@
 #!/bin/sh
-# Apply repo-level configuration (rulesets + merge settings) idempotently.
+# Apply repo-level configuration (rulesets, merge settings and the release
+# environment) idempotently.
 #
 # Usage:
 #   gh auth login              # one-time; needs `repo` scope minimum
@@ -19,6 +20,11 @@
 #      `gh api -X PATCH /repos/{owner}/{repo}` call. (Not `gh repo edit`:
 #      its `--enable-X=false` toggles are silently dropped, and it doesn't
 #      expose `--squash-merge-commit-title` at all.)
+#   5. Create or update the `release` environment. Only the `main` branch
+#      can deploy to it (one custom branch policy). It has no required
+#      reviewers and no wait timer, so the release stays automatic. The
+#      environment secrets are not set here: set them by hand (see
+#      docs/runbooks/release-ascend.md).
 #
 # Idempotent: re-running converges to the same state.
 
@@ -102,4 +108,59 @@ gh api -X PATCH "repos/$REPO" \
     -f squash_merge_commit_title=PR_TITLE \
     -f squash_merge_commit_message=BLANK >/dev/null
 
-echo "Applied $RULESET_COUNT rulesets, repo settings updated."
+# ---------- 5. Apply the release environment ----------
+#
+# The release-plz job uses `environment: release`. The environment holds the
+# release secrets, and its deployment branch policy allows only `main`. Thus a
+# workflow on a different branch cannot read the secrets.
+#
+# This section does not set the secrets. GitHub does not return secret values,
+# so this script cannot compare them. Set the secrets on the environment by
+# hand. See docs/runbooks/release-ascend.md.
+#
+# The PUT does not set `reviewers` or `wait_timer`. The release must stay
+# automatic.
+
+ENV_NAME="release"
+
+printf '%s\n' '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' > "$tmp_file"
+gh api -X PUT "repos/$REPO/environments/$ENV_NAME" --input "$tmp_file" >/dev/null
+
+# `--paginate` prints one JSON object per page. `jq -s` joins the pages, and
+# the filter makes one flat array of the branch policies.
+POLICIES_URL="repos/$REPO/environments/$ENV_NAME/deployment-branch-policies"
+POLICIES_FLAT='[.[].branch_policies[]]'
+
+POLICIES_JSON="$(gh api --paginate "$POLICIES_URL" | jq -s "$POLICIES_FLAT")"
+
+# Delete each branch policy that is not the `main` branch policy, so that a
+# re-run converges to exactly one policy.
+printf '%s' "$POLICIES_JSON" \
+    | jq -r '.[] | select(.name != "main" or (.type // "branch") != "branch") | .id' \
+    | while read -r policy_id; do
+        [ -n "$policy_id" ] || continue
+        gh api -X DELETE "$POLICIES_URL/$policy_id" >/dev/null
+        printf '  %-30s deleted branch policy %s\n' "$ENV_NAME" "$policy_id"
+    done
+
+main_policy_count="$(printf '%s' "$POLICIES_JSON" \
+    | jq '[.[] | select(.name == "main" and (.type // "branch") == "branch")] | length')"
+
+if [ "$main_policy_count" -eq 0 ]; then
+    gh api -X POST "$POLICIES_URL" -f name=main -f type=branch >/dev/null
+    printf '  %-30s added branch policy main\n' "$ENV_NAME"
+else
+    printf '  %-30s branch policy main is present\n' "$ENV_NAME"
+fi
+
+# Read all pages again. The final set must be exactly one `main` branch policy.
+FINAL_JSON="$(gh api --paginate "$POLICIES_URL" | jq -s "$POLICIES_FLAT")"
+final_ok="$(printf '%s' "$FINAL_JSON" \
+    | jq 'length == 1 and .[0].name == "main" and (.[0].type // "branch") == "branch"')"
+
+if [ "$final_ok" != "true" ]; then
+    echo "ERROR: environment '$ENV_NAME' must have exactly one branch policy: main (branch)." >&2
+    exit 1
+fi
+
+echo "Applied $RULESET_COUNT rulesets, repo settings updated, environment '$ENV_NAME' updated."
