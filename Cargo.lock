@@ -4104,7 +4104,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-cli"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "async-trait",
