@@ -25,8 +25,7 @@ jobs:
     # NB: this workflow runs only on push to main. A PR never runs it, so a
     # change here is not tested by the PR that makes it.
     steps:
-      # actions/checkout v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0          # release-plz needs full history
           persist-credentials: false
@@ -39,8 +38,7 @@ jobs:
       # change what the gap report reads (SMA-745).
       - name: record workspace versions for the gap report
         run: cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/release-gaps-metadata.json"
-      # actions/create-github-app-token v3.3.0
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app-token
         with:
           client-id: ${{ secrets.RELEASE_PLZ_APP_CLIENT_ID }}
@@ -50,16 +48,14 @@ jobs:
           # A ref at a commit behind a workflow change needs this
           # permission. Without it, POST /git/refs returns 403 (SMA-745).
           permission-workflows: write
-      # release-plz/action v0.5.147
-      - uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c
+      - uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
         id: release
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      # release-plz/action v0.5.147
-      - uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c
+      - uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
         with:
           command: release-pr
         env:
