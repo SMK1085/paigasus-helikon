@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.2.5...paigasus-helikon-macros-v0.2.6) - 2026-11-12
+
+### Other
+
+- *(deps)* SMA-763 ignore rustsec-2026-0459 until sqlx allows libsqlite3-sys 0.39 ([#334](https://github.com/SMK1085/paigasus-helikon/pull/334))
+
 ## [0.2.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-macros-v0.2.4...paigasus-helikon-macros-v0.2.5) - 2026-09-05
 
 ### Other

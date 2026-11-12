@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.8...paigasus-helikon-providers-bedrock-v0.1.9) - 2026-11-12
+
+### Fixed
+
+- *(providers)* SMA-766 move bedrock to aws-config behaviorversion v2026_11_10 ([#335](https://github.com/SMK1085/paigasus-helikon/pull/335))
+
 ## [0.1.8](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.7...paigasus-helikon-providers-bedrock-v0.1.8) - 2026-09-06
 
 ### Other
