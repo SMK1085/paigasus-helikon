@@ -18,7 +18,7 @@ actix-web             = { version = "4", default-features = false, features = ["
 actix-ws              = "0.4"
 anyhow                = "1"
 arrow                 = { version = "60", default-features = false }
-async-openai          = "0.42"
+async-openai          = "0.43"
 cap-std               = "4"
 axum                  = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 base64                = "0.23"
