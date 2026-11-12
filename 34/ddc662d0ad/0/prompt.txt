@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b57ak0ajn</task-id>
+<tool-use-id>toolu_01L9bQKrUDJpboMrarbdVP4J</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/f7af0e2c-c687-462c-bd35-ee6fe61e4702/tasks/b57ak0ajn.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until all checks on e23db681 complete" completed (exit code 0)</summary>
+</task-notification>
