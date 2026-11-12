@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "52631144e5f7",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-763-ignore-rustsec-2026-0459-libsqlite3-sys-037",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/tests/ui/builder_missing_model.stderr",
+    "crates/paigasus-helikon-core/tests/ui/builder_missing_name.stderr",
+    "crates/paigasus-helikon-core/tests/ui/builder_model_twice.stderr",
+    "crates/paigasus-helikon-core/tests/ui/builder_name_twice.stderr",
+    "crates/paigasus-helikon-core/tests/ui/builder_source_blocks_build.stderr"
+  ],
+  "sessions": [
+    {
+      "metadata": "/52/631144e5f7/0/metadata.json",
+      "transcript": "/52/631144e5f7/0/full.jsonl",
+      "compact_transcript": "/52/631144e5f7/0/transcript.jsonl",
+      "content_hash": "/52/631144e5f7/0/content_hash.txt",
+      "prompt": "/52/631144e5f7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 22457,
+    "cache_read_tokens": 2430557,
+    "output_tokens": 11219,
+    "api_call_count": 19
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
