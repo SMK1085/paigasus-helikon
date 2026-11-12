@@ -43,7 +43,7 @@ use aws_config::BehaviorVersion;
 use paigasus_helikon_providers_bedrock::BedrockModel;
 
 async fn build_model() -> Result<BedrockModel, paigasus_helikon_providers_bedrock::BuildError> {
-    let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_01_12())
+    let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_11_10())
         .region(aws_config::Region::new("us-east-1"))
         .load()
         .await;

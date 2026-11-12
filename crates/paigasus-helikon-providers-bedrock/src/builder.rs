@@ -217,7 +217,7 @@ impl crate::BedrockModel {
     /// use paigasus_helikon_providers_bedrock::BedrockModel;
     /// # async fn f() -> Result<(), Box<dyn std::error::Error>> {
     /// let model = BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
-    ///     .sdk_config(&aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+    ///     .sdk_config(&aws_config::defaults(aws_config::BehaviorVersion::v2026_11_10())
     ///         .load().await)
     ///     .build()?;
     /// # Ok(()) }
@@ -238,8 +238,9 @@ impl crate::BedrockModel {
     ///
     /// ## BehaviorVersion
     ///
-    /// Uses the pinned `BehaviorVersion::v2026_01_12()` so that a Dependabot
-    /// `aws-config` bump cannot silently shift SDK behavior.
+    /// Uses the pinned `BehaviorVersion::v2026_11_10()` so that a Dependabot
+    /// `aws-config` bump cannot silently shift SDK behavior. This version
+    /// applies the AWS SDK retry behavior from the Retry Behavior 2.1 spec.
     ///
     /// ## Region
     ///
@@ -255,7 +256,7 @@ impl crate::BedrockModel {
         model_id: impl Into<String>,
         region: Option<impl Into<Region>>,
     ) -> Result<Self, BuildError> {
-        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12());
+        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_10());
         if let Some(r) = region {
             loader = loader.region(r.into());
         }
@@ -284,7 +285,7 @@ mod tests {
             .build()
             .expect("tokio runtime");
         rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_01_12())
+            let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_11_10())
                 .region(Region::new("us-east-1"))
                 .test_credentials()
                 .load()
@@ -330,7 +331,7 @@ mod tests {
             .build()
             .expect("tokio runtime");
         rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_10())
                 .region(Region::new("eu-west-1"))
                 .test_credentials()
                 .load()
@@ -415,7 +416,7 @@ mod tests {
             .build()
             .expect("tokio runtime");
         rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_10())
                 .region(Region::new("eu-west-1"))
                 .test_credentials()
                 .load()
