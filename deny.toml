@@ -51,6 +51,12 @@ ignore = [
   # every rhai bump, or if the CLI drops rhai. Noticed on SMA-461 when the
   # advisory landed mid-PR and reddened main too. Mirrored in /.cargo/audit.toml.
   "RUSTSEC-2026-0249",
+  # libsqlite3-sys 0.37.0 bundles C SQLite with CVE-2026-119375 (medium).
+  # The fix is libsqlite3-sys >= 0.39, but sqlx-sqlite 0.9.0 (latest sqlx)
+  # caps it at <0.38.0, so no compatible fixed version exists. Accepted by
+  # Sven on 2026-11-12 to unblock main. Remove when sqlx allows >= 0.39
+  # (SMA-763). Mirrored in /.cargo/audit.toml.
+  "RUSTSEC-2026-0459",
 ]
 
 # ---------------------------------------------------------------------------
