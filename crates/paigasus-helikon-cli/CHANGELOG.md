@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.39](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-cli-v0.1.38...paigasus-helikon-cli-v0.1.39) - 2026-11-12
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.1.38](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-cli-v0.1.37...paigasus-helikon-cli-v0.1.38) - 2026-11-07
 
 ### Other

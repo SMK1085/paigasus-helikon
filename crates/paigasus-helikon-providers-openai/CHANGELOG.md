@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.32](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.31...paigasus-helikon-providers-openai-v0.2.32) - 2026-11-12
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.2.31](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.2.30...paigasus-helikon-providers-openai-v0.2.31) - 2026-09-27
 
 ### Fixed
