@@ -102,7 +102,7 @@ fn build_bedrock_model_against(base_url: &str) -> paigasus_helikon_providers_bed
         // Pinned, matching `BedrockModel::from_env`, so a Dependabot
         // `aws-config` bump cannot silently shift SDK behaviour under the
         // suite.
-        .behavior_version(aws_config::BehaviorVersion::v2026_01_12())
+        .behavior_version(aws_config::BehaviorVersion::v2026_11_10())
         .region(aws_config::Region::new("us-east-1"))
         .endpoint_url(base_url)
         .credentials_provider(SharedCredentialsProvider::new(Credentials::new(
