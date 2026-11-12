@@ -455,7 +455,7 @@ mod tests {
             .build()
             .expect("tokio rt");
         let client = rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_10())
                 .region(aws_config::Region::new("us-east-1"))
                 .test_credentials()
                 .load()
@@ -896,7 +896,7 @@ mod tests {
             .build()
             .expect("tokio rt");
         let client = rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_10())
                 .region(aws_config::Region::new("us-east-1"))
                 .test_credentials()
                 .load()
@@ -1038,7 +1038,7 @@ mod tests {
             .build()
             .expect("tokio rt");
         let client = rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
+            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_10())
                 .region(aws_config::Region::new("us-east-1"))
                 .test_credentials()
                 .load()
