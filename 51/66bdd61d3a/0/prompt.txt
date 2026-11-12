@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bd670a6x6</task-id>
+<tool-use-id>toolu_017rtJ5Wsec8jFRjA4h5HjNm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-smaschek-dev-paigasus-paigasus-helikon/f7af0e2c-c687-462c-bd35-ee6fe61e4702/tasks/bd670a6x6.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait until all checks on new head complete" completed (exit code 0)</summary>
+</task-notification>
