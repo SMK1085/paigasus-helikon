@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "29942cf516f5",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-779-ignore-rustsec-2026-0543-chrono-unmaintained",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".cargo/audit.toml",
+    "deny.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/29/942cf516f5/0/metadata.json",
+      "transcript": "/29/942cf516f5/0/full.jsonl",
+      "compact_transcript": "/29/942cf516f5/0/transcript.jsonl",
+      "content_hash": "/29/942cf516f5/0/content_hash.txt",
+      "prompt": "/29/942cf516f5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 98,
+    "cache_creation_tokens": 233361,
+    "cache_read_tokens": 4122344,
+    "output_tokens": 20723,
+    "api_call_count": 43,
+    "subagent_tokens": {
+      "input_tokens": 22,
+      "cache_creation_tokens": 86259,
+      "cache_read_tokens": 774809,
+      "output_tokens": 7841,
+      "api_call_count": 11
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

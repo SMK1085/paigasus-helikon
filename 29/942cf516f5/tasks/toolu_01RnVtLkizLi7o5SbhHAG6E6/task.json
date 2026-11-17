@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01RnVtLkizLi7o5SbhHAG6E6",
+  "agent_id": "ad3bfb2e96104a37e",
+  "subagent_type": "general-purpose",
+  "task_description": "Search upstream chrono-replacement issues",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 86259,
+    "cache_read_tokens": 774809,
+    "output_tokens": 7841,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-17T18:51:47.825244+01:00",
+  "completed_at": "2026-11-17T18:54:15.017254+01:00"
+}
