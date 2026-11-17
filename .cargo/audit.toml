@@ -38,4 +38,12 @@ ignore = [
     # Sven on 2026-11-12 to unblock main. Remove when sqlx allows >= 0.39
     # (SMA-763). Mirrored in /deny.toml.
     "RUSTSEC-2026-0459",
+    # chrono is unmaintained (no vulnerability; all versions affected, no fixed
+    # version). The workspace does not depend on chrono directly. It comes in via
+    # rmcp (which also enables schemars/chrono04), arrow/parquet, gcp_auth,
+    # prost-wkt and temporalio-common-wasm, all non-optionally. Upstream tracking:
+    # modelcontextprotocol/rust-sdk#1469, apache/arrow-rs#9183. Remove when
+    # `cargo tree --all-features -i chrono` is empty; revisit on every bump of
+    # those crates (SMA-779). Mirrored in /deny.toml.
+    "RUSTSEC-2026-0543",
 ]
