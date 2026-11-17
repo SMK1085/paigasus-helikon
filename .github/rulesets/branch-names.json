@@ -10,7 +10,7 @@
         "refs/heads/feature/**",
         "refs/heads/hotfix/**",
         "refs/heads/release-plz-**",
-        "refs/heads/entire/**/*"
+        "refs/heads/entire/checkpoints/**/*"
       ]
     }
   },
