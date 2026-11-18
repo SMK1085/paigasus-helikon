@@ -1,6 +1,54 @@
-//! Shared `Session` conformance suite (spec §5). Each backend supplies a
-//! factory that yields a fresh, empty session; these functions exercise the
-//! append/read/projection/concurrency contract every backend must uphold.
+//! Session conformance suite for Paigasus Helikon backends, including your own.
+//!
+//! Each function takes a factory that returns a session. The suite runs four
+//! tests against that session:
+//!
+//! - `run_append_read`: events that you append come back in order, with the same content.
+//! - `run_watermark_exclusive`: a read with a watermark returns only the events after it.
+//! - `run_projection`: `snapshot()` equals `project(events())`.
+//! - `run_concurrent_writers`: tasks append at the same time and every event survives once.
+//!
+//! `run_all` runs all four tests.
+//!
+//! # Factory contract
+//!
+//! Each call to the factory must return a fresh, empty session. If you return
+//! the same session for two calls, the second test sees the events of the first
+//! test and fails.
+//!
+//! # Tokio runtime
+//!
+//! `run_concurrent_writers` calls `tokio::spawn`. `run_all` panics if it runs
+//! outside a Tokio runtime. Use the `multi_thread` flavor with
+//! `worker_threads = 4`.
+//!
+//! # Example
+//!
+//! ```
+//! use std::sync::Arc;
+//! use paigasus_helikon_core::{MemorySession, Session};
+//! use paigasus_helikon_sessions_testkit::run_all;
+//!
+//! #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+//! async fn main() {
+//!     run_all(|| async { Arc::new(MemorySession::new()) as Arc<dyn Session> }).await;
+//! }
+//! ```
+//!
+//! # Same core version
+//!
+//! The session type in your factory must come from the same
+//! `paigasus-helikon-core` version as this crate. If two versions exist in your
+//! dependency graph, the types do not match. Check with
+//! `cargo tree -d -i paigasus-helikon-core`. The command can list other duplicate
+//! crates. If `paigasus-helikon-core` does not appear at the start of a line,
+//! you have one version.
+//!
+//! # Stability
+//!
+//! On 0.x versions, new sub-tests arrive in patch releases. A new sub-test can
+//! fail a backend that passed before. To control the upgrade, pin the version
+//! with `=0.1.x`.
 
 use std::future::Future;
 use std::sync::Arc;
