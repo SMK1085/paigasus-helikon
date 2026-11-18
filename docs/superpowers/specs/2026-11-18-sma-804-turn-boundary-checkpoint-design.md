@@ -3,7 +3,7 @@
 - Linear: [SMA-804](https://linear.app/smaschek/issue/SMA-804)
 - ADR: Helikon ADR-15 "Deferred tool calls and a turn-boundary checkpoint", which implements ADR-0028 decision (h) in `paigasus-core`.
 - Sibling: SMA-803 (deferred tool calls), spec `docs/superpowers/specs/2026-11-18-sma-803-deferred-tool-calls-design.md` on its own branch. SMA-803 owns `StopReason`, `RunDeferred`, `AgentError::Incomplete` and the `collect()` change.
-- Status: revised after the adversarial challenge, ready for spec approval (GATE 1).
+- Status: approved by Sven at GATE 1 on 2026-11-18, with Q1 decided as proposed (N6).
 
 ## 1. Intent
 
@@ -35,7 +35,7 @@ The host needs a safe point between turns. At that point it can do one of three 
 - N3. `AgentAsTool` sub-runs. The callback never fires there.
 - N4. A checkpoint inside a tool call, or before the first model call of a run.
 - N5. A host-side `fold` or `interrupt` policy. The host builds these on top of this callback.
-- N6. The HTTP runtimes (axum, actix, agentcore). Their run status knows only `RunCompleted` and `RunFailed`. They clear the checkpoint on the context that they get from `ContextProvider`, and they log a `tracing::warn!` if one was set (see 6.2 and question Q1 in section 10). This follows SMA-803 §4.2, where the same runtimes never opt in to deferral.
+- N6. The HTTP runtimes (axum, actix, agentcore). Their run status knows only `RunCompleted` and `RunFailed`. They clear the checkpoint on the context that they get from `ContextProvider`, and they log a `tracing::warn!` if one was set (see 6.2; decided at GATE 1, Q1 in section 10). This follows SMA-803 §4.2, where the same runtimes never opt in to deferral.
 - N7. An audit marker that shows that a stored user message came from the checkpoint. The message is a plain `SessionEvent::UserMessage`. A marker would need a new `SessionEvent` field or variant, and it can be a later issue.
 
 **Anti-goals** (the result is a failure even if it compiles)
@@ -243,7 +243,7 @@ Other rules:
 
   SMA-804 follows whatever SMA-803 decides at its spec gate.
 - **Handoff child.** A `Stop` in a handoff child ends the child loop with `RunStopped`. The parent's re-yield loop (`agent.rs:1126-1137`) today adds `parent_usage` only to `RunCompleted`. It needs an explicit `RunStopped` arm that adds `parent_usage` and records the span usage, the same as the `RunDeferred` arm in SMA-803 §4.7. Then the whole run ends with `Stopped`, and `usage` covers the parent turns and the child turns.
-- The tool calls of turn `n-1` all have results before the checkpoint runs, so a `Stop` cannot leave a regular tool call half done. In a run **without a handoff**, `SessionRecorder::drain` therefore has no orphan `ToolCalled` to fix. A run with a handoff already has an orphan today: the transfer `ToolCallItem` (`loop_state.rs:298-302`) never gets a `ToolOutputItem`, so `drain` adds a synthetic `ToolReturned` at the end of the log. That behaviour existed before this change. It is out of scope, and I file a separate Linear issue for it.
+- The tool calls of turn `n-1` all have results before the checkpoint runs, so a `Stop` cannot leave a regular tool call half done. In a run **without a handoff**, `SessionRecorder::drain` therefore has no orphan `ToolCalled` to fix. A run with a handoff already has an orphan today: the transfer `ToolCallItem` (`loop_state.rs:298-302`) never gets a `ToolOutputItem`, so `drain` adds a synthetic `ToolReturned` at the end of the log. That behaviour existed before this change. It is out of scope. It is filed as SMA-810.
 - **Observability.** The checkpoint call has its own span, `agent.turn_checkpoint`, with an attribute for the decision kind (`continue`, `inject`, `stop`). On `Stop`, `run_span` records the stop reason. A `Stop` is a success, so `otel.status_code` is not `ERROR`, also for a guardrail stop. The exact attribute names are the builder's call, and the `workspace-lints` tracing-target check must pass.
 
 ### 5.6 Cancellation
@@ -271,7 +271,7 @@ The loop does not poll the `CancellationToken`. `TokioRunner::controlled()` drop
 ### 6.2 Other crates
 
 - **`runtime-tokio`.** `run_streamed` finalizes the session only when `is_terminal()` is true (`runtime-tokio/src/lib.rs:219-231`). With `RunStopped` in `is_terminal()`, this needs no code change. A test locks it (7, test 13).
-- **HTTP runtimes (N6).** `runtime-axum` (`server.rs:161`), `runtime-actix` and `runtime-agentcore` (`server.rs:173`) build the `RunContext` through `ContextProvider`. Each calls `without_turn_checkpoint()` on that context, and logs a `tracing::warn!` if a checkpoint was set. The doc of each `ContextProvider` says that the checkpoint is not supported. A test in each crate shows that a checkpoint from the provider never fires. This needs a decision from Sven (Q1 in section 10).
+- **HTTP runtimes (N6).** `runtime-axum` (`server.rs:161`), `runtime-actix` and `runtime-agentcore` (`server.rs:173`) build the `RunContext` through `ContextProvider`. Each calls `without_turn_checkpoint()` on that context, and logs a `tracing::warn!` if a checkpoint was set. The doc of each `ContextProvider` says that the checkpoint is not supported. A test in each crate shows that a checkpoint from the provider never fires. Sven decided this at GATE 1 (Q1).
 - **Exhaustive or semi-exhaustive matches outside core.** The builder checks each one and adds an explicit arm where the event has a meaning:
   - `runtime-agentcore`: `agui/map.rs` (today an unknown variant becomes a `helikon.unknown` CUSTOM frame at `map.rs:304-306`. The two new variants get explicit arms), `a2a/rpc.rs`, `invoke.rs`, `ws.rs`, `agui/sse.rs`, `agui/ws.rs`,
   - `runtime-axum`: `dto.rs`, `event_log.rs`, `registry.rs`,
@@ -336,7 +336,7 @@ All core tests are in `paigasus-helikon-core/tests/` and use `common::MockModel`
 19. **Event order lock** in `tests/transition_unit.rs`: the `ExecutingTools + ToolResults` batch is all `ToolOutputItem` events, then `TurnStarted` last.
 20. **Object safety:** `TurnCheckpoint<()>` in `tests/object_safety.rs`.
 21. `AgentEvent` serde round trip and the snapshots for both new variants, and the updated `terminal_tests` (`UserMessageInjected` is not terminal, `RunStopped` is terminal).
-22. **HTTP runtimes:** a checkpoint from `ContextProvider` never fires (one test per runtime crate, if Q1 is answered as proposed).
+22. **HTTP runtimes:** a checkpoint from `ContextProvider` never fires (one test per runtime crate).
 
 The CI gates in `CLAUDE.md` must pass: fmt, clippy `-D warnings`, `cargo test --workspace --all-features`, docs `-D warnings`, doc coverage, `build-no-default-features`, and `mdbook build docs/book`.
 
@@ -356,8 +356,9 @@ The CI gates in `CLAUDE.md` must pass: fmt, clippy `-D warnings`, `cargo test --
 6. `OnRunComplete` fires on `Stop`, once per loop, after `RunStopped` (5.5).
 7. The two new events get explicit arms in the AG-UI mapper and in the other runtimes (6.2).
 8. The mechanism is in the driver only. `transition()` does not change (5.2).
-9. The handoff-transfer orphan is a separate issue (5.5).
+9. The handoff-transfer orphan is a separate issue, SMA-810 (5.5).
 
-## 10. Questions for Sven
+## 10. Questions for Sven (answered)
 
 - **Q1. The HTTP runtimes (axum, actix, agentcore).** A host can install a checkpoint through `ContextProvider`. Today a `Stop` there would show as `Failed` (axum/actix), as no run end (AG-UI) and as `Completed` (A2A). My proposal is N6: the runtimes clear the checkpoint and log a warning, as SMA-803 does for deferral. The other option is to map `RunStopped` in each runtime. But axum's `RunStatus` is not `#[non_exhaustive]`, so a new status there is a breaking change for those crates.
+  **Decision (GATE 1):** use the proposal. The runtimes clear the checkpoint and log a warning.
