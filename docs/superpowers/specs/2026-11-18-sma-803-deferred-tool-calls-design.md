@@ -158,6 +158,12 @@ A `RunContext` has a flag "deferred tool calls enabled". The default is `false`.
   `TemporalRunner`, and the axum, actix and agentcore handlers (on the context
   that `ContextProvider::build` returns). MCP and evals build their contexts
   with `RunContext::new`, so the flag is `false` there. One test per runtime.
+  The seven build sites (from the SMA-804 session; verify them):
+  axum `handlers/runs.rs:220`, actix `handlers/runs.rs:257`, and agentcore
+  `invoke.rs:165`, `ws.rs:203`, `agui/sse.rs:147`, `agui/ws.rs:267` and
+  `a2a/rpc.rs:519`. Each crate gets one private helper
+  `restrict_unsupported_run_features(ctx)`, called directly after each
+  `build(..)`. SMA-804 adds its checkpoint clear inside the same helper.
 
 When the flag is `false`, every point that would produce `Defer` produces
 `Deny { reason: "approval deferred, but this run cannot defer: {prompt}" }`
