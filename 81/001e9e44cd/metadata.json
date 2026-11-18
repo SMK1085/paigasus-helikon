@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "81001e9e44cd",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-804-turn-boundary-checkpoint-a-runcontext",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-18-sma-804-turn-boundary-checkpoint-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/81/001e9e44cd/0/metadata.json",
+      "transcript": "/81/001e9e44cd/0/full.jsonl",
+      "compact_transcript": "/81/001e9e44cd/0/transcript.jsonl",
+      "content_hash": "/81/001e9e44cd/0/content_hash.txt",
+      "prompt": "/81/001e9e44cd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 2212,
+    "cache_read_tokens": 476009,
+    "output_tokens": 1349,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

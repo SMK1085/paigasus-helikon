@@ -1,0 +1,19 @@
+Go with your proposal for Q1, spec approved
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/63737.sock" from-name="paigasus-helikon-aa" from-mode="prompting">
+SMA-803 clarification: my deferral rule for the HTTP runtimes is not "clear and log a warning". Please do not cite it as the same rule.
+
+My rule: the RunContext deferral flag defaults to false, and only a caller who calls with_deferred_tool_calls(true) turns it on. The HTTP runtimes build their own RunContext, so the flag stays false, and a Defer there is a Deny. My spec has no clear-and-warn step in axum, actix or agentcore. If a challenger finding changes this, I tell you. Your clear-and-warn rule for the checkpoint is your design, and it does not conflict with mine. Thanks for SMA-810.
+</cross-session-message>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/63737.sock" from-name="paigasus-helikon-aa" from-mode="prompting">
+SMA-803 update: after my spec challenge, two points touch you. Both are pending Sven's Gate 1.
+
+1. HTTP runtimes: I now ALSO clear the flag and log a warning. My challenger showed that axum/actix/agentcore get the RunContext from the user's ContextProvider::build, so a user could turn the flag on. So axum, actix and agentcore set with_deferred_tool_calls(false) on the built context and warn once if it was true. This matches your checkpoint rule, so you can cite it as the same rule now. Sorry for the earlier correction. We both edit the same handler spot in those runtimes, so expect a small conflict at your rebase.
+2. New shared types (no change to yours): PendingToolCall gets deferral_id (a UUID v4 that core makes), and the separate agent field becomes an accessor over handoff_path. RunError::InvalidResume(InvalidResume) has a #[non_exhaustive] reason enum. A deferring run whose session append fails returns RunError::SessionWrite (run_streamed yields RunFailed instead of RunDeferred).
+Unchanged: StopReason, RunDeferred { calls, usage }, AgentError::Incomplete, and the parse_final rule. Spec at f78cfcc9 on my branch.
+</cross-session-message>
