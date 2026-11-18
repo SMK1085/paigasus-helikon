@@ -18,7 +18,16 @@
    - Remove the crate's `[[package]] … release = false` block from `release-plz.toml`.
    - Land as one `chore(release): SMA-### lift stage-1 gates for <crate>` commit on the feature branch alongside the implementation. release-plz handles the first crates.io publish on CI.
 
+   The first publish of a never-claimed name needs a `CARGO_REGISTRY_TOKEN` with the `publish-new` scope and a matching crate scope. The crate publishes on the merge of its own PR, not through the release PR.
+
    The 4-step recipe applies to **stubs ascending from `0.0.0`**. The ten already-released crates (`-core`, facade, `-macros`, `-providers-openai`, `-providers-anthropic`, `-providers-bedrock`, `-sessions-sqlite`, `-runtime-tokio`, `-mcp`, `-tools`) ship through release-plz's normal flow — no manual ritual needed for their future bumps. The historical chain of `chore(release): … escape release-plz 0.0.0 trap …` commits in the git log (SMA-317/347/350/372/382) is pre-Stage-1 archaeology and won't recur.
+
+### If a first publish fails
+
+1. Read the run log, not only the conclusion. A red run can still have published crates.
+2. Fix the cause (for example, rotate the token).
+3. Re-run the failed run. Confirm that a new attempt really started, because `gh run rerun` can exit 0 and start nothing. `release-plz.yml` has no `workflow_dispatch`.
+4. If the cause cannot be fixed quickly, land a `chore(release)` PR that puts back `publish = false` and the `release = false` block. That unblocks the `release-pr` step and the SMA-803 release.
 
 ## Caveat 1 — same-PR core API needs a core bump (SMA-321)
 
@@ -74,4 +83,4 @@ If the tag already exists and only the release is missing, skip steps 2 to 4.
 
 ## Implementation status snapshot
 
-**Implementation status** (as of 2026-07-06): every crate in the workspace carries a real implementation and publishes to crates.io — the original ten (`paigasus-helikon-core`, `paigasus-helikon`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, `paigasus-helikon-providers-anthropic`, `paigasus-helikon-providers-bedrock` (SMA-329), `paigasus-helikon-sessions-sqlite`, `paigasus-helikon-runtime-tokio` (ascended from stub in SMA-346), `paigasus-helikon-mcp` (SMA-327), and `paigasus-helikon-tools` (SMA-328)) plus `paigasus-helikon-providers-gemini` (SMA-449), `paigasus-helikon-sessions-postgres`/`-sessions-redis` (SMA-330), `paigasus-helikon-runtime-axum` (SMA-331), and the last four ascends — `paigasus-helikon-runtime-temporal`, `paigasus-helikon-runtime-agentcore` (both SMA-332), `paigasus-helikon-evals`, and `paigasus-helikon-cli` (both SMA-333). The workspace was first published to crates.io in SMA-385; zero name-claim stubs remain. `paigasus-helikon-cli` publishes as a **binary** crate (`0.1.0`) — its lib target is internal (`missing_docs` opted out) and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves. `paigasus-helikon-sessions-testkit` is the sole non-published crate: an internal `Session` conformance test harness kept at `0.0.0` with `publish = false` by design, not a stub awaiting an ascend.
+**Implementation status** (as of 2026-07-06): every crate in the workspace carries a real implementation and publishes to crates.io — the original ten (`paigasus-helikon-core`, `paigasus-helikon`, `paigasus-helikon-macros`, `paigasus-helikon-providers-openai`, `paigasus-helikon-providers-anthropic`, `paigasus-helikon-providers-bedrock` (SMA-329), `paigasus-helikon-sessions-sqlite`, `paigasus-helikon-runtime-tokio` (ascended from stub in SMA-346), `paigasus-helikon-mcp` (SMA-327), and `paigasus-helikon-tools` (SMA-328)) plus `paigasus-helikon-providers-gemini` (SMA-449), `paigasus-helikon-sessions-postgres`/`-sessions-redis` (SMA-330), `paigasus-helikon-runtime-axum` (SMA-331), and the last four ascends — `paigasus-helikon-runtime-temporal`, `paigasus-helikon-runtime-agentcore` (both SMA-332), `paigasus-helikon-evals`, and `paigasus-helikon-cli` (both SMA-333). The workspace was first published to crates.io in SMA-385; zero name-claim stubs remain. `paigasus-helikon-cli` publishes as a **binary** crate (`0.1.0`) — its lib target is internal (`missing_docs` opted out) and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves. `paigasus-helikon-sessions-testkit` published in SMA-805 as `0.1.0`, a normal library crate; the three session backends keep a path-only dev-dependency on it.

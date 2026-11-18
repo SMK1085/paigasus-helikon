@@ -30,7 +30,7 @@ Turn on the features you need — `openai`, `anthropic`, `bedrock`, `gemini`, `l
 
 ## Workspace at a glance
 
-Twenty-one crates under `crates/`. Twenty are published to crates.io; one is an internal test harness (`publish = false`); one of the published crates (the CLI) is binary-only, publishing a lib target with no stability guarantees purely so `cargo install` resolves.
+Twenty-one crates under `crates/`. All twenty-one are published to crates.io; one of them (the CLI) is binary-only, publishing a lib target with no stability guarantees purely so `cargo install` resolves.
 
 - **`paigasus-helikon`** — facade re-exporting `core` plus opt-in sibling crates by feature flag.
 - **`paigasus-helikon-core`** — type system, traits, the agent loop, runtime-agnostic primitives.
@@ -39,6 +39,7 @@ Twenty-one crates under `crates/`. Twenty are published to crates.io; one is an 
 - **`paigasus-helikon-sessions-sqlite`** — SQLite-backed session persistence.
 - **`paigasus-helikon-sessions-postgres`** — PostgreSQL-backed session persistence (JSONB event log, advisory-lock concurrency, aws-lc-rs TLS).
 - **`paigasus-helikon-sessions-redis`** — Redis Streams-backed session persistence (atomic Lua append, BYO-`ConnectionManager` for TLS).
+- **`paigasus-helikon-sessions-testkit`** — the shared `Session` conformance suite; add it as a dev-dependency to test your own backend.
 - **`paigasus-helikon-runtime-tokio`** — the default ephemeral Tokio runner.
 - **`paigasus-helikon-runtime-axum`** — self-hosted HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints: one-shot JSON, SSE streaming, async detached, WebSocket event replay, agent list, OpenAPI schema; replayable runs with TTL+count retention).
 - **`paigasus-helikon-runtime-actix`** — API-identical actix-web port of `runtime-axum`, for embedding into an existing actix-web service; same routes and wire format. The differences are the mount seam (`configure()` vs `router()`), listener type, entrypoint attribute, one-shot client-disconnect semantics, and the request type its extension traits take (`AuthLayer`/`ContextProvider` receive an `actix_web::HttpRequest` rather than axum request parts).

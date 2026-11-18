@@ -60,6 +60,7 @@ Twenty crates carry real implementations and are published on crates.io / docs.r
 - `paigasus-helikon-sessions-sqlite`
 - `paigasus-helikon-sessions-postgres`
 - `paigasus-helikon-sessions-redis`
+- `paigasus-helikon-sessions-testkit` — shared `Session` conformance suite; run it against your own backend (see [Sessions](../concepts/sessions.md))
 - `paigasus-helikon-runtime-tokio`
 - `paigasus-helikon-runtime-axum` — self-hosted HTTP/SSE/WebSocket agent server (see [Axum Server Runtime](../concepts/axum-server.md))
 - `paigasus-helikon-runtime-actix` — self-hosted actix-web HTTP/SSE/WebSocket agent server (same public surface as `runtime-axum`)
@@ -70,9 +71,7 @@ Twenty crates carry real implementations and are published on crates.io / docs.r
 - `paigasus-helikon-evals` — evaluation harness: datasets, evaluators, `MockModel`, SQLite/Parquet trace sinks
 - `paigasus-helikon-cli` — published binary crate (`helikon` / `paigasus-helikon` binaries); its lib target is internal and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves
 
-Zero name-claim stubs remain in the workspace. The one crate that rounds out the
-workspace's 21 without publishing is `paigasus-helikon-sessions-testkit`, an internal
-`Session` conformance test harness (`publish = false` by design).
+Zero name-claim stubs remain in the workspace. All 21 crates under `crates/` publish to crates.io.
 
 ## Picking your surface
 
