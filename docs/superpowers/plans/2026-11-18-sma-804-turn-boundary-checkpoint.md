@@ -190,14 +190,14 @@ Then, if `ctx.turn_checkpoint()` is `Some`, the driver runs the following steps 
 ### Task 7: Other runtimes: clear and warn, explicit arms, Temporal note
 
 **Files:**
-- Modify, to clear and warn (one private helper per crate, `pub(crate) fn without_unsupported_turn_checkpoint<Ctx>(ctx: RunContext<Ctx>) -> RunContext<Ctx>`, called directly after each `state.context.build(..)`):
+- Modify, to clear and warn (one private helper per crate, `fn restrict_unsupported_run_features<Ctx>(ctx: RunContext<Ctx>) -> RunContext<Ctx>`, called directly after each `state.context.build(..)`). SMA-803 creates a helper with this exact name and signature for its deferral flag. If SMA-803 is already on `main`, add the checkpoint clear inside the existing helper, and do not add a second call. If it is not, create the helper with only the checkpoint clear. At the Task 9 rebase, merge the two bodies into one helper with one call per site:
   - `crates/paigasus-helikon-runtime-axum/src/handlers/runs.rs:220` (helper in `src/context.rs`, doc on `ContextProvider` at `:71`)
   - `crates/paigasus-helikon-runtime-actix/src/handlers/runs.rs:257` (helper in `src/context.rs`, doc on `ContextProvider` at `:86`)
   - `crates/paigasus-helikon-runtime-agentcore/src/invoke.rs:165`, `ws.rs:203`, `agui/sse.rs:147`, `agui/ws.rs:267`, `a2a/rpc.rs:519` (one helper in the crate, for example in `src/error.rs` or a new `src/checkpoint.rs`)
 - Modify, for explicit event arms where the event has a meaning: `runtime-agentcore/src/agui/map.rs` (`helikon.user_message_injected`, `helikon.run_stopped` CUSTOM frames), `cli/src/repl.rs` (print both events), `evals/src/evaluators/trajectory.rs`, `paigasus-helikon-mcp/src/server.rs`, and the axum/actix `dto.rs`, `event_log.rs`, `registry.rs`. In each file, decide whether the existing wildcard is correct. Add an arm only where the event changes the output. Write the result for each file in the commit body.
 - Modify: `crates/paigasus-helikon-runtime-temporal/src/runner.rs:~184`. Add `tracing::warn!` when `ctx.turn_checkpoint().is_some()`, and a doc note on `TemporalRunner`.
 
-The helper logs `tracing::warn!(target: "paigasus::runtime::<crate>", "turn checkpoint is not supported by this runtime; ignored")` and returns `ctx.without_turn_checkpoint()`. It logs only when a checkpoint was set. Match each crate's existing tracing-target style.
+For the checkpoint, the helper logs `tracing::warn!(target: "paigasus::runtime::<crate>", "turn checkpoint is not supported by this runtime; ignored")` and returns `ctx.without_turn_checkpoint()`. It logs only when a checkpoint was set. Match each crate's existing tracing-target style.
 
 - [ ] **Step 1: Write the failing tests.** In each of axum, actix and agentcore, write `context_provider_checkpoint_never_fires`. A test `ContextProvider` sets a counting checkpoint, and the agent makes one tool turn over the crate's run endpoint. Use the crate's existing handler-test harness. The counter is 0, and the run status is `Completed`.
 - [ ] **Step 2: Run the tests and confirm they fail.** Command: `cargo test -p paigasus-helikon-runtime-axum -p paigasus-helikon-runtime-actix -p paigasus-helikon-runtime-agentcore context_provider_checkpoint_never_fires`. Expected: FAIL (the counter is 1).
@@ -230,6 +230,7 @@ The helper logs `tracing::warn!(target: "paigasus::runtime::<crate>", "turn chec
   - `AgentError::Incomplete { stop_reason: StopReason }`.
 
   Use the exact names that SMA-803 uses. Ask the SMA-803 session (`paigasus-helikon-aa`) before you start, and tell it when you finish.
+- **Both paths:** after the rebase, each runtime crate has exactly one `restrict_unsupported_run_features` helper, and each of the seven sites has exactly one call (`git grep -c restrict_unsupported_run_features`).
 
 **Files:**
 - Modify: `crates/paigasus-helikon-core/src/runner.rs` (`collect` `:~312`, `collect_typed` `:~365`, `parse_final` `:248`, the `RunResult::final_output` doc)

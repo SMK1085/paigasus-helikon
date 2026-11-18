@@ -210,6 +210,7 @@ Steps, in this order:
 
 Other rules:
 
+- **Known limit (persistence).** `TokioRunner` stores the session at finalize, on a best-effort basis, as it does for every other event today. If that append fails, the injected content is lost even though `UserMessageInjected` was in the stream. A `Stop` stays best effort too (SMA-803 makes a failed append an error only for `RunDeferred`, because a lost deferral can run an approved tool two times). A host that needs a guarantee checks the stored session. The trait doc states this limit.
 - One `Inject` makes exactly one user message (one `Item::UserMessage`, one event, one `SessionEvent::UserMessage`). If several inbox items wait, the host merges them into one `Vec<ContentPart>`.
 - `SessionRecorder::observe` gets one new arm: `UserMessageInjected { content }` maps to `SessionEvent::user_message(content)`. Then `project()` returns it as `Item::UserMessage` on the next run, with no new `SessionEvent` variant. So no session backend changes.
 - Pending `OnTurnStart` hook injections (`pending_injections`, request-only `Item::System`) keep their current behaviour. They are added to the request after the injected user message, because the request is built first and the hook fires at `TurnStarted`.
@@ -271,7 +272,7 @@ The loop does not poll the `CancellationToken`. `TokioRunner::controlled()` drop
 ### 6.2 Other crates
 
 - **`runtime-tokio`.** `run_streamed` finalizes the session only when `is_terminal()` is true (`runtime-tokio/src/lib.rs:219-231`). With `RunStopped` in `is_terminal()`, this needs no code change. A test locks it (7, test 13).
-- **HTTP runtimes (N6).** `runtime-axum` (`server.rs:161`), `runtime-actix` and `runtime-agentcore` (`server.rs:173`) build the `RunContext` through `ContextProvider`. Each calls `without_turn_checkpoint()` on that context, and logs a `tracing::warn!` if a checkpoint was set. The doc of each `ContextProvider` says that the checkpoint is not supported. A test in each crate shows that a checkpoint from the provider never fires. Sven decided this at GATE 1 (Q1).
+- **HTTP runtimes (N6).** `runtime-axum` (`server.rs:161`), `runtime-actix` and `runtime-agentcore` (`server.rs:173`) build the `RunContext` through `ContextProvider`. Each calls `without_turn_checkpoint()` on that context inside the shared private helper `restrict_unsupported_run_features` (one per crate, the same helper that SMA-803 uses for its deferral flag), and logs a `tracing::warn!` if a checkpoint was set. The doc of each `ContextProvider` says that the checkpoint is not supported. A test in each crate shows that a checkpoint from the provider never fires. Sven decided this at GATE 1 (Q1).
 - **Exhaustive or semi-exhaustive matches outside core.** The builder checks each one and adds an explicit arm where the event has a meaning:
   - `runtime-agentcore`: `agui/map.rs` (today an unknown variant becomes a `helikon.unknown` CUSTOM frame at `map.rs:304-306`. The two new variants get explicit arms), `a2a/rpc.rs`, `invoke.rs`, `ws.rs`, `agui/sse.rs`, `agui/ws.rs`,
   - `runtime-axum`: `dto.rs`, `event_log.rs`, `registry.rs`,
