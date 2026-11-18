@@ -22,8 +22,9 @@
 //! # Tokio runtime
 //!
 //! `run_concurrent_writers` calls `tokio::spawn`. `run_all` panics if it runs
-//! outside a Tokio runtime. Use the `multi_thread` flavor with
-//! `worker_threads = 4`.
+//! outside a Tokio runtime. We recommend the `multi_thread` flavor with
+//! `worker_threads = 4`. The default current-thread runtime works, but it does
+//! not run the writers in parallel.
 //!
 //! # Example
 //!

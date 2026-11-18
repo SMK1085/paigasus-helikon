@@ -14,8 +14,12 @@ write.
 
 ```sh
 cargo add --dev paigasus-helikon-sessions-testkit
+cargo add --dev paigasus-helikon-core
 cargo add --dev tokio --features macros,rt-multi-thread
 ```
+
+Use the same `paigasus-helikon-core` version as your backend. If your backend
+already depends on core, you do not need the dev-dependency.
 
 ## Run the suite against your backend
 

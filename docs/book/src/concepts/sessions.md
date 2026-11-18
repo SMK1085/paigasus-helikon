@@ -352,7 +352,7 @@ The testkit is a normal library crate. Add it as a dev-dependency and call
 `run_all` with a factory that returns a fresh, empty session for each call.
 `run_all` needs a Tokio runtime, and a `multi_thread` runtime with
 `worker_threads = 4` is recommended. See the
-[testkit README](https://docs.rs/paigasus-helikon-sessions-testkit) for the full steps.
+[testkit README](https://crates.io/crates/paigasus-helikon-sessions-testkit) for the full steps.
 
 ## Plugging a session into a run
 
