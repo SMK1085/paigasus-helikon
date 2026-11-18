@@ -1,7 +1,7 @@
 # SMA-805: publish `paigasus-helikon-sessions-testkit` to crates.io
 
-Status: draft for approval (revised after the spec challenge). Linear:
-SMA-805. Blocks SMA-790.
+Status: approved by Sven on 2026-11-18 (revised after the spec challenge).
+Linear: SMA-805. Blocks SMA-790.
 
 ## Intent
 
@@ -111,6 +111,8 @@ crates.io/settings/tokens:
 
 If a check fails, rotate the `release` environment secret
 (`CARGO_REGISTRY_TOKEN`) first. The agent cannot see token scopes.
+
+Result: Sven confirmed the token scope on 2026-11-18.
 
 Also: merge PR 1 only when no `release-plz` run is queued or in progress, and
 when no PR that changes `.github/workflows/*` is about to merge (SMA-745
@@ -263,10 +265,10 @@ Do not expect the testkit in the release PR.
   step on every core minor release. This spec documents the skew and the
   `cargo tree` check instead. Sven can decide on the rule at the gate.
 
-## Open questions for Sven (gate)
+## Open questions
 
-1. The token scope (see "Preflight").
-2. Can `PgRunSession::append` run outside the host's run-commit transaction,
+1. The token scope: answered (see "Preflight").
+2. Still open, for SMA-790 (Sven was not sure on 2026-11-18). Can `PgRunSession::append` run outside the host's run-commit transaction,
    with 16 callers at the same time? The suite calls `Session::append`
    directly. If it cannot, the host needs a test-only setup to run the suite.
    This does not change the testkit, but it decides whether Goal 1 is met for
