@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HuFsjqkDk1TLiDHNwdD7PG",
+  "agent_id": "abd8ede90708847e6",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave SMA-805",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 70652,
+    "cache_read_tokens": 198649,
+    "output_tokens": 1899,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-18T21:51:06.472742+01:00",
+  "completed_at": "2026-11-18T21:51:26.180076+01:00"
+}

@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "39691ef30201",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-805-publish-paigasus-helikon-sessions-testkit-to",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-sessions-testkit/README.md",
+    "crates/paigasus-helikon-sessions-testkit/src/lib.rs",
+    "docs/superpowers/specs/2026-11-18-sma-805-sessions-testkit-publish-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/39/691ef30201/0/metadata.json",
+      "transcript": "/39/691ef30201/0/full.jsonl",
+      "compact_transcript": "/39/691ef30201/0/transcript.jsonl",
+      "content_hash": "/39/691ef30201/0/content_hash.txt",
+      "prompt": "/39/691ef30201/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 15805,
+    "cache_read_tokens": 4518408,
+    "output_tokens": 6929,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 1666,
+      "cache_read_tokens": 139116,
+      "output_tokens": 720,
+      "api_call_count": 2
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
