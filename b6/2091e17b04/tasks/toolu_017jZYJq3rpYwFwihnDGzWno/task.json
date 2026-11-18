@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017jZYJq3rpYwFwihnDGzWno",
+  "agent_id": "ada445f93694636a2",
+  "subagent_type": "Explore",
+  "task_description": "Map run loop for checkpoint",
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 139580,
+    "cache_read_tokens": 1882131,
+    "output_tokens": 20295,
+    "api_call_count": 23
+  },
+  "started_at": "2026-11-18T20:45:13.339835+01:00",
+  "completed_at": "2026-11-18T20:47:41.449987+01:00"
+}
