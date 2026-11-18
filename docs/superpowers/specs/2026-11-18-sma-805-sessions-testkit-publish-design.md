@@ -225,9 +225,12 @@ Do not expect the testkit in the release PR.
 1. Read the run log, not only the conclusion. A red run can still have
    published crates.
 2. Fix the cause (for example, rotate the token).
-3. Re-run the failed run. Confirm that a new attempt really started, because
-   `gh run rerun` can exit 0 and start nothing. `release-plz.yml` has no
-   `workflow_dispatch`.
+3. Start a new attempt that includes the fix. If the fix does not change the
+   commit (for example, a token rotation), re-run the failed run, and confirm
+   that a new attempt really started, because `gh run rerun` can exit 0 and
+   start nothing. `release-plz.yml` has no `workflow_dispatch`. If the fix
+   changes the manifest or the source, merge it to `main`: a re-run uses the
+   original commit, so only the new push's `release-plz` run includes the fix.
 4. If the cause cannot be fixed quickly, land a `chore(release)` PR that puts
    back `publish = false` and the `release = false` block. That unblocks the
    `release-pr` step and the SMA-803 release.
