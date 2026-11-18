@@ -51,8 +51,9 @@
 //! # Stability
 //!
 //! On 0.x versions, new sub-tests arrive in patch releases. A new sub-test can
-//! fail a backend that passed before. To control the upgrade, pin the version
-//! with `=0.1.x`.
+//! fail a backend that passed before. To control the upgrade, pin an exact
+//! version, for example `=0.1.0`. A requirement such as `=0.1` or `0.1` still
+//! accepts every `0.1` patch release.
 
 use std::future::Future;
 use std::sync::Arc;

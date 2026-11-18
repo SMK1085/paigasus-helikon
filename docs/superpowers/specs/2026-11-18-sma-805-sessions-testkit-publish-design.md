@@ -161,7 +161,8 @@ rule).
      grows (for example `ToolDeferred` in a later `0.1.x`). On 0.x,
      release-plz releases such an addition as a patch. A `cargo update` can
      thus make a passing backend fail. That is the purpose of the suite. To
-     control the upgrade, pin the version (`=0.1.x`).
+     control the upgrade, pin an exact version (for example `=0.1.0`;
+     `=0.1` still accepts every `0.1` patch).
    - The crate-level rustdoc carries one runnable example: a
      `#[tokio::main(flavor = "multi_thread")] async fn main()` that calls
      `run_all` with `MemorySession` (a public core export). It compiles and
