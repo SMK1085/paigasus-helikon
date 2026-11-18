@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LJxtevZZx5uXZYDe5bELjw",
+  "agent_id": "a8469230f6984cfd9",
+  "subagent_type": "Explore",
+  "task_description": "Map permission/loop/session code",
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 195676,
+    "cache_read_tokens": 4363732,
+    "output_tokens": 28864,
+    "api_call_count": 37
+  },
+  "started_at": "2026-11-18T20:44:37.762007+01:00",
+  "completed_at": "2026-11-18T20:48:18.893334+01:00"
+}

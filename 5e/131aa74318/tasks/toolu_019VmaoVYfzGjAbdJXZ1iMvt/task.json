@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019VmaoVYfzGjAbdJXZ1iMvt",
+  "agent_id": "aa1589e9ca106420f",
+  "subagent_type": "general-purpose",
+  "task_description": "Builder check on SMA-803 spec",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 60060,
+    "cache_read_tokens": 155004,
+    "output_tokens": 1947,
+    "api_call_count": 3
+  },
+  "started_at": "2026-11-18T21:35:26.089265+01:00",
+  "completed_at": "2026-11-18T21:35:44.252734+01:00"
+}
