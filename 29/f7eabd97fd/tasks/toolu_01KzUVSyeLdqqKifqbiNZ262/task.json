@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KzUVSyeLdqqKifqbiNZ262",
+  "agent_id": "a6bf1ecda49e842a3",
+  "subagent_type": "Explore",
+  "task_description": "Gather testkit publish facts",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 49386,
+    "cache_read_tokens": 174516,
+    "output_tokens": 5886,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-18T20:46:41.047331+01:00",
+  "completed_at": "2026-11-18T20:47:21.980246+01:00"
+}
