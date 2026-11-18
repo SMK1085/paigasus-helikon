@@ -47,7 +47,7 @@ macro invocation `tools![...]` versus a path `tools::SomeTool`. Be explicit abou
 
 ## Published vs stub crates
 
-Twenty crates carry real implementations and are published on crates.io / docs.rs:
+Twenty-one crates carry real implementations and are published on crates.io / docs.rs:
 
 - `paigasus-helikon-core` — the dependency root (traits, agent loop, carrier types)
 - `paigasus-helikon` — the facade
