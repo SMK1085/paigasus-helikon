@@ -35,7 +35,7 @@ The host needs a safe point between turns. At that point it can do one of three 
 - N3. `AgentAsTool` sub-runs. The callback never fires there.
 - N4. A checkpoint inside a tool call, or before the first model call of a run.
 - N5. A host-side `fold` or `interrupt` policy. The host builds these on top of this callback.
-- N6. The HTTP runtimes (axum, actix, agentcore). Their run status knows only `RunCompleted` and `RunFailed`. They clear the checkpoint on the context that they get from `ContextProvider`, and they log a `tracing::warn!` if one was set (see 6.2; decided at GATE 1, Q1 in section 10). This follows SMA-803 §4.2, where the same runtimes never opt in to deferral.
+- N6. The HTTP runtimes (axum, actix, agentcore). Their run status knows only `RunCompleted` and `RunFailed`. They clear the checkpoint on the context that they get from `ContextProvider`, and they log a `tracing::warn!` if one was set (see 6.2; decided at GATE 1, Q1 in section 10). The effect is similar to SMA-803 §4.2, where deferral is off by default and the HTTP runtimes never turn it on. The mechanism is different: this spec clears and warns.
 - N7. An audit marker that shows that a stored user message came from the checkpoint. The message is a plain `SessionEvent::UserMessage`. A marker would need a new `SessionEvent` field or variant, and it can be a later issue.
 
 **Anti-goals** (the result is a failure even if it compiles)
@@ -360,5 +360,5 @@ The CI gates in `CLAUDE.md` must pass: fmt, clippy `-D warnings`, `cargo test --
 
 ## 10. Questions for Sven (answered)
 
-- **Q1. The HTTP runtimes (axum, actix, agentcore).** A host can install a checkpoint through `ContextProvider`. Today a `Stop` there would show as `Failed` (axum/actix), as no run end (AG-UI) and as `Completed` (A2A). My proposal is N6: the runtimes clear the checkpoint and log a warning, as SMA-803 does for deferral. The other option is to map `RunStopped` in each runtime. But axum's `RunStatus` is not `#[non_exhaustive]`, so a new status there is a breaking change for those crates.
+- **Q1. The HTTP runtimes (axum, actix, agentcore).** A host can install a checkpoint through `ContextProvider`. Today a `Stop` there would show as `Failed` (axum/actix), as no run end (AG-UI) and as `Completed` (A2A). My proposal is N6: the runtimes clear the checkpoint and log a warning. (SMA-803 gets a similar effect for deferral with a default-off flag.) The other option is to map `RunStopped` in each runtime. But axum's `RunStatus` is not `#[non_exhaustive]`, so a new status there is a breaking change for those crates.
   **Decision (GATE 1):** use the proposal. The runtimes clear the checkpoint and log a warning.
