@@ -3,10 +3,13 @@
 //! Each function takes a factory that returns a session. The suite runs four
 //! tests against that session:
 //!
-//! - `run_append_read`: events that you append come back in order, with the same content.
-//! - `run_watermark_exclusive`: a read with a watermark returns only the events after it.
+//! - `run_append_read`: events that you append come back in order, with the
+//!   same content.
+//! - `run_watermark_exclusive`: a read with a watermark returns only the
+//!   events after it.
 //! - `run_projection`: `snapshot()` equals `project(events())`.
-//! - `run_concurrent_writers`: tasks append at the same time and every event survives once.
+//! - `run_concurrent_writers`: tasks append at the same time and every event
+//!   survives once.
 //!
 //! `run_all` runs all four tests.
 //!
@@ -38,11 +41,11 @@
 //! # Same core version
 //!
 //! The session type in your factory must come from the same
-//! `paigasus-helikon-core` version as this crate. If two versions exist in your
-//! dependency graph, the types do not match. Check with
-//! `cargo tree -d -i paigasus-helikon-core`. The command can list other duplicate
-//! crates. If `paigasus-helikon-core` does not appear at the start of a line,
-//! you have one version.
+//! `paigasus-helikon-core` version as this crate. Run
+//! `cargo tree -i paigasus-helikon-core`. If it fails with
+//! "specification ... is ambiguous", your crate and the testkit resolve two
+//! core versions. Align your `paigasus-helikon-core` requirement with the
+//! requirement of the testkit.
 //!
 //! # Stability
 //!

@@ -63,13 +63,12 @@ Your session type and this crate must use the same `paigasus-helikon-core`
 version. Run this command in your crate:
 
 ```sh
-cargo tree -d -i paigasus-helikon-core
+cargo tree -i paigasus-helikon-core
 ```
 
-The command can list other duplicate crates, for example `syn`. Look for
-`paigasus-helikon-core` at the start of a line. If it does not appear, your
-graph has one version. If it appears two times, align your `paigasus-helikon-core` requirement with the requirement
-of this crate.
+If it fails with "specification ... is ambiguous", your crate and the testkit
+resolve two core versions. Align your `paigasus-helikon-core` requirement with
+the requirement of the testkit.
 
 ## Stability
 

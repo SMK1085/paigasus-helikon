@@ -154,7 +154,9 @@ rule).
      subset.
    - **Same core version.** Your crate and the testkit must resolve the same
      `paigasus-helikon-core`. Check with
-     `cargo tree -d -i paigasus-helikon-core` (no output means one version).
+     `cargo tree -i paigasus-helikon-core`. If it fails with
+     "specification ... is ambiguous", the crate and the testkit resolve two
+     core versions.
    - **Stability.** `run_all` gets new sub-tests when the `Session` contract
      grows (for example `ToolDeferred` in a later `0.1.x`). On 0.x,
      release-plz releases such an addition as a patch. A `cargo update` can
