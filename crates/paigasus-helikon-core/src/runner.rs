@@ -266,6 +266,11 @@ pub struct RunResult<T = String> {
     /// Aggregated token usage across every turn of the run.
     pub usage: TokenUsage,
     /// Why the run stopped. A deferred run carries the pending tool calls.
+    ///
+    /// When output redaction is on, the args of these calls are the redacted
+    /// copy. Do not use them to run or to hash a call. The stored
+    /// `SessionEvent::ToolDeferred` events hold the raw effective args. They
+    /// are the source of truth for the resume.
     pub stop_reason: crate::StopReason,
 }
 
