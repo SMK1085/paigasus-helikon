@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use crate::DeferralSlot;
 use crate::{
     ActionsHandle, AllowRule, ApprovalHandler, ApprovalOutcome, DenyRule, FailureSlot, Hook,
     PermissionDecision, PermissionMode, PermissionPolicy, RunConfig, Session, SessionState,
@@ -97,6 +98,15 @@ where
     redact_output: bool,
     /// Extra secret values to redact, beyond the auto-sourced env set.
     extra_secrets: Vec<String>,
+    /// Whether a `Defer` decision may end the run with `RunDeferred`.
+    /// Opt-in; a handoff child inherits it, a sub-agent child clears it.
+    deferred_tool_calls: bool,
+    /// Agent names from the root agent to the current agent. Extended on
+    /// each handoff; empty for a sub-agent child.
+    handoff_path: Vec<String>,
+    /// Where a run records the tool calls it deferred. Shared with handoff
+    /// children, fresh for sub-agent children.
+    deferrals: DeferralSlot,
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -131,6 +141,9 @@ where
             default_guards: true,
             redact_output: true,
             extra_secrets: Vec::new(),
+            deferred_tool_calls: false,
+            handoff_path: Vec::new(),
+            deferrals: DeferralSlot::new(),
         }
     }
 
@@ -260,6 +273,43 @@ where
         self.failure.clone()
     }
 
+    /// Allow or forbid ending the run with `RunDeferred` when a tool call
+    /// gets a `Defer` decision (consuming builder). The default is `false`.
+    ///
+    /// - A direct `agent.run(ctx, input)` with the flag on can end with
+    ///   `RunDeferred`. Only a runner that supports deferral can resume it.
+    /// - A `PreToolUse` hook that adds a secret to the arguments of a call
+    ///   that can defer makes the secret persist in the session store.
+    /// - A runtime without deferral support clears the flag.
+    pub fn with_deferred_tool_calls(mut self, enabled: bool) -> Self {
+        self.deferred_tool_calls = enabled;
+        self
+    }
+
+    /// Whether a `Defer` decision may end the run with `RunDeferred`.
+    pub fn deferred_tool_calls_enabled(&self) -> bool {
+        self.deferred_tool_calls
+    }
+
+    /// Agent names from the root agent to the current agent.
+    pub fn handoff_path(&self) -> &[String] {
+        &self.handoff_path
+    }
+
+    /// Add an agent name to the end of the handoff path.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 4"))]
+    pub(crate) fn push_handoff_path(&mut self, agent: impl Into<String>) {
+        self.handoff_path.push(agent.into());
+    }
+
+    /// Clone the handle to the slot where this run records deferred tool calls.
+    ///
+    /// This is runner plumbing. It gives the session recorder the raw
+    /// effective arguments of each deferred call.
+    pub fn deferral_handle(&self) -> DeferralSlot {
+        self.deferrals.clone()
+    }
+
     /// Nesting depth that produced this context (0 at top level).
     pub fn agent_depth(&self) -> u32 {
         self.agent_depth
@@ -309,6 +359,9 @@ where
             default_guards: self.default_guards,
             redact_output: self.redact_output,
             extra_secrets: self.extra_secrets.clone(),
+            deferred_tool_calls: self.deferred_tool_calls,
+            handoff_path: self.handoff_path.clone(),
+            deferrals: self.deferrals.clone(),
         }
     }
 
@@ -338,6 +391,9 @@ where
             default_guards: self.default_guards,
             redact_output: self.redact_output,
             extra_secrets: self.extra_secrets.clone(),
+            deferred_tool_calls: false,
+            handoff_path: Vec::new(),
+            deferrals: DeferralSlot::new(),
         }
     }
 
@@ -622,6 +678,41 @@ mod runcontext_tests {
     use super::*;
     use crate::{MemorySession, RunConfig};
     use std::sync::Arc;
+
+    fn pending() -> crate::PendingToolCall {
+        crate::PendingToolCall::new("d", "c", "t", serde_json::json!({}), "p", vec![])
+    }
+
+    #[test]
+    fn deferred_tool_calls_default_off_and_round_trips() {
+        let c: RunContext<()> = RunContext::ephemeral(());
+        assert!(!c.deferred_tool_calls_enabled());
+        assert!(c
+            .with_deferred_tool_calls(true)
+            .deferred_tool_calls_enabled());
+    }
+
+    #[test]
+    fn handoff_child_keeps_flag_and_path_and_shares_deferral_slot() {
+        let mut p: RunContext<()> = RunContext::ephemeral(()).with_deferred_tool_calls(true);
+        p.push_handoff_path("root");
+        let c = p.handoff_child();
+        assert!(c.deferred_tool_calls_enabled());
+        assert_eq!(c.handoff_path(), &["root".to_owned()]);
+        c.deferral_handle().record(vec![pending()]);
+        assert_eq!(p.deferral_handle().calls().len(), 1);
+    }
+
+    #[test]
+    fn subagent_child_clears_flag_path_and_slot() {
+        let mut p: RunContext<()> = RunContext::ephemeral(()).with_deferred_tool_calls(true);
+        p.push_handoff_path("root");
+        let c = p.subagent_child();
+        assert!(!c.deferred_tool_calls_enabled());
+        assert!(c.handoff_path().is_empty());
+        c.deferral_handle().record(vec![pending()]);
+        assert!(p.deferral_handle().calls().is_empty());
+    }
 
     #[test]
     fn failure_handle_shares_the_context_slot() {
