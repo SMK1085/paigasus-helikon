@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "8651576bb25a",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-804-turn-boundary-checkpoint-a-runcontext",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-gemini/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-openai/src/translate/request.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/86/51576bb25a/0/metadata.json",
+      "transcript": "/86/51576bb25a/0/full.jsonl",
+      "compact_transcript": "/86/51576bb25a/0/transcript.jsonl",
+      "content_hash": "/86/51576bb25a/0/content_hash.txt",
+      "prompt": "/86/51576bb25a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 13255,
+    "cache_read_tokens": 1859662,
+    "output_tokens": 6688,
+    "api_call_count": 9,
+    "subagent_tokens": {
+      "input_tokens": 20,
+      "cache_creation_tokens": 156658,
+      "cache_read_tokens": 764538,
+      "output_tokens": 7249,
+      "api_call_count": 10
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
