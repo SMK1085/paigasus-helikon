@@ -1,0 +1,13 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: roundtrip(&ev)
+---
+{
+  "type": "user_message_injected",
+  "content": [
+    {
+      "type": "text",
+      "text": "also check the budget"
+    }
+  ]
+}

@@ -384,7 +384,7 @@ impl LlmAgent<(), (), String> {
 
 /// The unified event stream emitted by an [`Agent`].
 ///
-/// Eighteen variants spanning lifecycle, raw streaming deltas,
+/// Twenty variants spanning lifecycle, raw streaming deltas,
 /// post-aggregation semantic items, agent transitions, control signals,
 /// and terminal outcomes. The semantic-item variants
 /// (`MessageOutput`, `ToolCallItem`, `ToolOutputItem`) carry a full
@@ -512,6 +512,19 @@ pub enum AgentEvent {
         final_text: String,
     },
 
+    /// The host injected a user message at a turn boundary through the
+    /// turn checkpoint (see [`crate::TurnCheckpoint`]).
+    ///
+    /// Commit rule: the run owns the injected content if and only if this
+    /// event is in the event stream. Before this event, the host owns the
+    /// content. The session recorder stores the content as a user message,
+    /// so a later run of the same session sees it. This event is not
+    /// terminal.
+    UserMessageInjected {
+        /// The injected user content parts.
+        content: Vec<crate::ContentPart>,
+    },
+
     // --- Terminal ---
     /// The run finished normally.
     RunCompleted {
@@ -536,11 +549,20 @@ pub enum AgentEvent {
         /// Aggregated usage across the run.
         usage: TokenUsage,
     },
+    /// The host stopped the run at a turn boundary through the turn
+    /// checkpoint. This is a controlled end, not a failure.
+    RunStopped {
+        /// The reason the host gave for the stop.
+        reason: String,
+        /// Aggregated usage across every turn that ran.
+        usage: TokenUsage,
+    },
 }
 
 impl AgentEvent {
-    /// `true` for the three events that end a run: [`AgentEvent::RunCompleted`],
-    /// [`AgentEvent::RunFailed`] and [`AgentEvent::RunDeferred`].
+    /// `true` for the four events that end a run: [`AgentEvent::RunCompleted`],
+    /// [`AgentEvent::RunFailed`], [`AgentEvent::RunDeferred`] and
+    /// [`AgentEvent::RunStopped`].
     ///
     /// This is the single definition of "terminal" every runner shares. A
     /// runner's cancel/timeout boundary loses to a terminal that already
@@ -550,7 +572,10 @@ impl AgentEvent {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::RunCompleted { .. } | Self::RunFailed { .. } | Self::RunDeferred { .. }
+            Self::RunCompleted { .. }
+                | Self::RunFailed { .. }
+                | Self::RunDeferred { .. }
+                | Self::RunStopped { .. }
         )
     }
 }
@@ -1886,7 +1911,8 @@ mod terminal_tests {
         match ev {
             AgentEvent::RunCompleted { .. }
             | AgentEvent::RunFailed { .. }
-            | AgentEvent::RunDeferred { .. } => true,
+            | AgentEvent::RunDeferred { .. }
+            | AgentEvent::RunStopped { .. } => true,
             AgentEvent::RunStarted { .. }
             | AgentEvent::TurnStarted { .. }
             | AgentEvent::TokenDelta { .. }
@@ -1901,6 +1927,7 @@ mod terminal_tests {
             | AgentEvent::ApprovalRequested { .. }
             | AgentEvent::PermissionDenied { .. }
             | AgentEvent::RepairStarted { .. }
+            | AgentEvent::UserMessageInjected { .. }
             | AgentEvent::StructuredOutputFailed { .. } => false,
         }
     }
@@ -1967,6 +1994,11 @@ mod terminal_tests {
                 schema_errors: vec!["e".to_owned()],
                 final_text: "x".to_owned(),
             },
+            AgentEvent::UserMessageInjected {
+                content: vec![crate::ContentPart::Text {
+                    text: "hi".to_owned(),
+                }],
+            },
             AgentEvent::RunCompleted {
                 usage: TokenUsage::default(),
             },
@@ -1977,19 +2009,23 @@ mod terminal_tests {
                 calls: vec![],
                 usage: TokenUsage::default(),
             },
+            AgentEvent::RunStopped {
+                reason: "stop".to_owned(),
+                usage: TokenUsage::default(),
+            },
         ]
     }
 
     #[test]
     fn every_variant_covers_the_whole_enum() {
         // Assert on *distinct* discriminants, not length: a plain count would
-        // also pass for 17 copies of one variant, letting a newly added variant
+        // also pass for 20 copies of one variant, letting a newly added variant
         // slip past `is_terminal_agrees_with_the_exhaustive_classification`.
         let discriminants: std::collections::HashSet<_> =
             every_variant().iter().map(std::mem::discriminant).collect();
         assert_eq!(
             discriminants.len(),
-            18,
+            20,
             "every_variant() must construct one instance of each distinct AgentEvent variant"
         );
     }
@@ -2020,15 +2056,15 @@ mod terminal_tests {
     }
 
     #[test]
-    fn exactly_three_variants_are_terminal() {
+    fn exactly_four_variants_are_terminal() {
         let terminal: Vec<_> = every_variant()
             .into_iter()
             .filter(AgentEvent::is_terminal)
             .collect();
         assert_eq!(
             terminal.len(),
-            3,
-            "expected exactly RunCompleted + RunFailed + RunDeferred: {terminal:?}"
+            4,
+            "expected exactly RunCompleted + RunFailed + RunDeferred + RunStopped: {terminal:?}"
         );
     }
 }

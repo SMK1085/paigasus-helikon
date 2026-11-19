@@ -1,0 +1,15 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: roundtrip(&ev)
+---
+{
+  "type": "run_stopped",
+  "reason": "host requested stop",
+  "usage": {
+    "input_tokens": 100,
+    "output_tokens": 50,
+    "cached_input_tokens": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 150
+  }
+}

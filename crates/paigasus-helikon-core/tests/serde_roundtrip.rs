@@ -322,6 +322,29 @@ fn agent_event_run_failed_roundtrip() {
     insta::assert_snapshot!(roundtrip(&ev));
 }
 
+#[test]
+fn agent_event_user_message_injected() {
+    let ev = AgentEvent::UserMessageInjected {
+        content: vec![ContentPart::Text {
+            text: "also check the budget".into(),
+        }],
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
+#[test]
+fn agent_event_run_stopped() {
+    let mut usage = TokenUsage::default();
+    usage.input_tokens = 100;
+    usage.output_tokens = 50;
+    usage.total_tokens = 150;
+    let ev = AgentEvent::RunStopped {
+        reason: "host requested stop".into(),
+        usage,
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}
+
 // --- SessionEvent ---
 
 #[test]
