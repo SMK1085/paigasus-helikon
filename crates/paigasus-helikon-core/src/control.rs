@@ -8,10 +8,9 @@
 use std::sync::Arc;
 
 use crate::context::{AskPoints, Authorization};
-use crate::{
-    Guardrail, Hook, HookDecision, HookEvent, HookRegistry, PermissionDecision, RunContext,
-    ToolEffect,
-};
+#[cfg(test)]
+use crate::PermissionDecision;
+use crate::{Guardrail, Hook, HookDecision, HookEvent, HookRegistry, RunContext, ToolEffect};
 
 /// Borrows everything the control seams need for one run.
 pub(crate) struct Interceptors<'a, Ctx>
@@ -114,6 +113,9 @@ where
     /// (never `AskUser` — that is resolved here via the approval handler, default
     /// Deny). Delegates to `RunContext::authorize_tool` — the primitive a
     /// durable runner calls directly without needing this loop-private borrow.
+    ///
+    /// Only the unit tests use it. The loop calls `authorize_detailed`.
+    #[cfg(test)]
     pub(crate) async fn authorize(
         &self,
         tool: &str,
@@ -126,7 +128,6 @@ where
     /// Authorize one tool call with the detailed result (the deferred args
     /// included). `asks` selects normal authorization or the re-check of an
     /// approved deferred call. Delegates to `RunContext::authorize_tool_detailed`.
-    #[expect(dead_code, reason = "used from Task 5")]
     pub(crate) async fn authorize_detailed(
         &self,
         tool: &str,

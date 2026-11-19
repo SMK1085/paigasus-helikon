@@ -55,8 +55,9 @@ pub enum LoopState {
     },
     /// Compacting session history. **Not driveable in SMA-314.**
     Compacting,
-    /// Awaiting approval for a sensitive tool call.
-    /// **Not driveable in SMA-314.**
+    /// Terminal: the run stopped on deferred tool calls that need a later
+    /// decision. The full data of each call travels in
+    /// [`AgentEvent::RunDeferred`]. Any input on this state fails.
     NeedsApproval {
         /// The tool calls awaiting approval.
         pending: Vec<ToolCallRequest>,
@@ -155,6 +156,14 @@ pub enum TransitionInput {
         /// Per-call outcomes.
         outcomes: Vec<ToolCallOutcome>,
     },
+    /// The tool calls of one turn have completed, and one or more calls were
+    /// deferred. The run stops at this turn boundary.
+    ToolResultsWithDeferrals {
+        /// Per-call outcomes of the calls that ran (or failed), in call order.
+        outcomes: Vec<ToolCallOutcome>,
+        /// The deferred calls. `deferred` are the event copies, already redacted.
+        deferred: Vec<crate::PendingToolCall>,
+    },
 }
 
 /// Side effect the async driver must run before the next transition.
@@ -166,7 +175,8 @@ pub enum NextAction {
         /// The request to send.
         request: ModelRequest,
     },
-    /// Execute these tool calls concurrently; produce a `ToolResults`.
+    /// Execute these tool calls concurrently; produce a `ToolResults`, or a
+    /// `ToolResultsWithDeferrals` when one or more calls were deferred.
     ExecuteTools {
         /// The calls to fan out.
         calls: Vec<ToolCallRequest>,
@@ -403,6 +413,49 @@ pub fn transition(
                 }
             }
         }
+        // Tool results with deferred calls → stop at this turn boundary. This
+        // arm comes before any max-turns check: the deferral wins over
+        // `MaxTurnsExceeded`, and a resume gets a new turn budget.
+        (
+            LoopState::ExecutingTools {
+                calls,
+                usage: prior,
+                ..
+            },
+            TransitionInput::ToolResultsWithDeferrals { outcomes, deferred },
+        ) => {
+            let mut events: Vec<AgentEvent> = outcomes
+                .into_iter()
+                .map(|o| AgentEvent::ToolOutputItem {
+                    item: Item::ToolResult {
+                        call_id: o.call_id,
+                        content: o
+                            .result
+                            .unwrap_or_else(|e| vec![ContentPart::Text { text: e }]),
+                    },
+                })
+                .collect();
+            events.extend(deferred.iter().map(|p| AgentEvent::ApprovalRequested {
+                call_id: p.call_id().to_owned(),
+                tool: p.tool().to_owned(),
+                args: p.args().clone(),
+            }));
+            let pending: Vec<ToolCallRequest> = calls
+                .iter()
+                .filter(|c| deferred.iter().any(|p| p.call_id() == c.call_id))
+                .cloned()
+                .collect();
+            events.push(AgentEvent::RunDeferred {
+                calls: deferred,
+                usage: *prior,
+            });
+            TransitionOutcome {
+                next_state: LoopState::NeedsApproval { pending },
+                events,
+                next_action: NextAction::Terminate,
+                conversation_appends: Vec::new(),
+            }
+        }
         // Tool results complete → bump turn and ask the model again.
         (
             LoopState::ExecutingTools {
@@ -586,9 +639,9 @@ pub fn transition(
                 }
             }
         }
-        // Unreachable-in-SMA-314 variants surface NotImplemented and Terminate.
+        // The unreachable `Compacting` variant surfaces NotImplemented and Terminates.
+        // Any input on the terminal `NeedsApproval` falls to the catch-all below.
         (LoopState::Compacting, _) => not_implemented("compaction"),
-        (LoopState::NeedsApproval { .. }, _) => not_implemented("approval"),
         // Other cases land in subsequent tasks.
         (s, i) => TransitionOutcome {
             next_state: LoopState::Failed(AgentError::Other(anyhow::anyhow!(

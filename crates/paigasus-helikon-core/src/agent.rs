@@ -548,6 +548,17 @@ fn user_text_of(conversation: &[crate::Item]) -> String {
     s
 }
 
+/// The outcome of one tool call of a turn.
+#[derive(Debug)]
+enum ConcurrentOutcome {
+    /// The call ran, failed, or was denied. Its result goes into the conversation.
+    Done(crate::ToolCallOutcome),
+    /// The call was deferred and did not run. Holds the raw effective args.
+    Deferred(crate::PendingToolCall),
+}
+
+/// Run the tool calls of one turn. Returns one outcome per call, in call
+/// order, and the `PermissionDenied` events of the turn.
 async fn run_tools_concurrent<Ctx>(
     tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
     calls: &[crate::ToolCallRequest],
@@ -555,13 +566,14 @@ async fn run_tools_concurrent<Ctx>(
     tool_ctx: &crate::ToolContext<Ctx>,
     limit: Option<std::num::NonZeroUsize>,
     parent: &tracing::Span,
-) -> (Vec<crate::ToolCallOutcome>, Vec<crate::AgentEvent>)
+) -> (Vec<ConcurrentOutcome>, Vec<crate::AgentEvent>)
 where
     Ctx: Send + Sync + 'static,
 {
     let denied_events: std::sync::Mutex<Vec<crate::AgentEvent>> = std::sync::Mutex::new(Vec::new());
     let redact_output = interceptors.ctx.redact_output();
     let secrets = crate::redaction::SecretSet::from_env_and_extra(interceptors.ctx.extra_secrets());
+    let handoff_path = interceptors.ctx.handoff_path();
 
     let futures = calls.iter().map(|call| {
         let tool = tools.iter().find(|t| t.name() == call.name).cloned();
@@ -594,31 +606,25 @@ where
                 })
                 .await;
             if let Some(reason) = pre.denied {
-                return crate::ToolCallOutcome {
+                return ConcurrentOutcome::Done(crate::ToolCallOutcome {
                     call_id,
                     result: Err(format!("blocked by PreToolUse hook: {reason}")),
-                };
+                });
             }
             let mut args = pre.replacement.unwrap_or(orig_args);
 
-            // Permission authorize on the effective args. `Interceptors::authorize`
-            // delegates to `RunContext::authorize_tool` — the same primitive a
-            // durable runner calls directly via `execute_tool_call`.
-            let decision = match interceptors.authorize(&name, effect, &args).await {
-                crate::PermissionDecision::Defer { prompt } => crate::PermissionDecision::Deny {
-                    reason: format!("approval deferred, but this run cannot defer: {prompt}"),
-                },
-                other => other,
-            };
+            // Permission authorize on the effective args. This is the pipeline
+            // of `RunContext::authorize_tool`, with the detailed result. It
+            // gives `Defer` only when deferred tool calls are on for this run.
+            let decision = interceptors
+                .authorize_detailed(&name, effect, &args, crate::context::AskPoints::Ask)
+                .await;
             match decision {
-                crate::PermissionDecision::Allow => {}
-                crate::PermissionDecision::Replace { args: sanitized } => {
+                crate::context::Authorization::Allow => {}
+                crate::context::Authorization::Replace { args: sanitized } => {
                     args = sanitized;
                 }
-                crate::PermissionDecision::Deny { reason }
-                | crate::PermissionDecision::AskUser { prompt: reason }
-                // `Defer` became `Deny` above; this arm only keeps the match exhaustive.
-                | crate::PermissionDecision::Defer { prompt: reason } => {
+                crate::context::Authorization::Deny { reason } => {
                     denied_events
                         .lock()
                         .unwrap()
@@ -626,10 +632,32 @@ where
                             tool: name.clone(),
                             reason: reason.clone(),
                         });
-                    return crate::ToolCallOutcome {
+                    return ConcurrentOutcome::Done(crate::ToolCallOutcome {
                         call_id,
                         result: Err(format!("permission denied: {reason}")),
-                    };
+                    });
+                }
+                crate::context::Authorization::Defer {
+                    prompt,
+                    args: effective,
+                } => {
+                    // A call to a tool that the agent does not have is not
+                    // deferred: an approval for it would be wasted.
+                    if tool.is_none() {
+                        tracing::Span::current().record("otel.status_code", "ERROR");
+                        return ConcurrentOutcome::Done(crate::ToolCallOutcome {
+                            call_id,
+                            result: Err(format!("unknown tool: {name}")),
+                        });
+                    }
+                    return ConcurrentOutcome::Deferred(crate::PendingToolCall::new(
+                        crate::deferral::new_deferral_id(),
+                        call_id,
+                        name,
+                        effective,
+                        prompt,
+                        handoff_path.to_vec(),
+                    ));
                 }
             }
 
@@ -677,10 +705,10 @@ where
                 Err(e) => Err(e),
             };
 
-            crate::ToolCallOutcome {
+            ConcurrentOutcome::Done(crate::ToolCallOutcome {
                 call_id,
                 result: outcome,
-            }
+            })
         }
         .instrument(span)
     });
@@ -722,6 +750,10 @@ where
         input: AgentInput,
     ) -> Result<futures_core::stream::BoxStream<'static, crate::AgentEvent>, AgentError> {
         use futures_util::stream::StreamExt as _;
+
+        // This agent is the last name in the handoff path of its deferred calls.
+        let mut ctx = ctx;
+        ctx.push_handoff_path(self.name.clone());
 
         // Snapshot everything the stream needs — it outlives `&self`.
         let model = std::sync::Arc::clone(&self.model);
@@ -782,6 +814,7 @@ where
                 langfuse.trace.tags = tracing::field::Empty,
                 gen_ai.usage.input_tokens = tracing::field::Empty,
                 gen_ai.usage.output_tokens = tracing::field::Empty,
+                paigasus.deferred_calls = tracing::field::Empty,
                 otel.status_code = tracing::field::Empty,
             );
             run_span.record("otel.name", format!("invoke_agent {agent_name}").as_str());
@@ -937,6 +970,11 @@ where
                             run_span.record("gen_ai.usage.input_tokens", usage.input_tokens as i64);
                             run_span.record("gen_ai.usage.output_tokens", usage.output_tokens as i64);
                         }
+                        crate::AgentEvent::RunDeferred { calls, usage } => {
+                            run_span.record("gen_ai.usage.input_tokens", usage.input_tokens as i64);
+                            run_span.record("gen_ai.usage.output_tokens", usage.output_tokens as i64);
+                            run_span.record("paigasus.deferred_calls", calls.len() as i64);
+                        }
                         crate::AgentEvent::RunFailed { .. } => {
                             run_span.record("otel.status_code", "ERROR");
                         }
@@ -1048,7 +1086,7 @@ where
                     crate::NextAction::ExecuteTools { calls } => {
                         let tool_ctx = ctx.to_tool_context();
                         let tool_parent = turn_span.as_ref().unwrap_or(&run_span);
-                        let (outcomes, denied) = run_tools_concurrent(
+                        let (results, denied) = run_tools_concurrent(
                             &tools,
                             &calls,
                             &interceptors,
@@ -1060,15 +1098,45 @@ where
                         for ev in denied {
                             yield ev;
                         }
-                        for o in &outcomes {
-                            conversation.push(crate::Item::ToolResult {
-                                call_id: o.call_id.clone(),
-                                content: o.result.clone().unwrap_or_else(|e| {
-                                    vec![crate::ContentPart::Text { text: e }]
-                                }),
-                            });
+                        let mut outcomes = Vec::with_capacity(results.len());
+                        let mut raw_pendings = Vec::new();
+                        for r in results {
+                            match r {
+                                ConcurrentOutcome::Done(o) => {
+                                    conversation.push(crate::Item::ToolResult {
+                                        call_id: o.call_id.clone(),
+                                        content: o.result.clone().unwrap_or_else(|e| {
+                                            vec![crate::ContentPart::Text { text: e }]
+                                        }),
+                                    });
+                                    outcomes.push(o);
+                                }
+                                ConcurrentOutcome::Deferred(p) => raw_pendings.push(p),
+                            }
                         }
-                        tx_input = crate::TransitionInput::ToolResults { outcomes };
+                        tx_input = if raw_pendings.is_empty() {
+                            crate::TransitionInput::ToolResults { outcomes }
+                        } else {
+                            // The events reach clients, so they carry redacted
+                            // args. The slot keeps the raw effective args for
+                            // the session recorder and the resume.
+                            let event_copies: Vec<crate::PendingToolCall> = if ctx.redact_output() {
+                                let secrets = crate::redaction::SecretSet::from_env_and_extra(
+                                    ctx.extra_secrets(),
+                                );
+                                raw_pendings
+                                    .iter()
+                                    .map(|p| p.with_args(crate::redaction::redact(p.args(), &secrets)))
+                                    .collect()
+                            } else {
+                                raw_pendings.clone()
+                            };
+                            ctx.deferral_handle().record(raw_pendings);
+                            crate::TransitionInput::ToolResultsWithDeferrals {
+                                outcomes,
+                                deferred: event_copies,
+                            }
+                        };
                     }
                     crate::NextAction::Terminate => {
                         let _ = interceptors.fire(&crate::HookEvent::OnRunComplete).await;
@@ -1170,6 +1238,14 @@ where
                                     run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
                                     run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
                                     yield crate::AgentEvent::RunCompleted { usage: total };
+                                }
+                                crate::AgentEvent::RunDeferred { calls, usage } => {
+                                    let mut total = parent_usage;
+                                    total.add(usage);
+                                    run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
+                                    run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
+                                    run_span.record("paigasus.deferred_calls", calls.len() as i64);
+                                    yield crate::AgentEvent::RunDeferred { calls, usage: total };
                                 }
                                 other => yield other,
                             }
@@ -1479,7 +1555,10 @@ mod redaction_e2e_tests {
             run_tools_concurrent(&tools, &calls, &interceptors, &tool_ctx, None, &span).await;
 
         assert_eq!(outcomes.len(), 1);
-        let parts = outcomes[0].result.as_ref().expect("tool ran ok");
+        let ConcurrentOutcome::Done(outcome) = &outcomes[0] else {
+            panic!("expected a Done outcome, got {:?}", outcomes[0]);
+        };
+        let parts = outcome.result.as_ref().expect("tool ran ok");
         // Collect all text across content parts and assert redaction.
         let rendered: String = parts
             .iter()

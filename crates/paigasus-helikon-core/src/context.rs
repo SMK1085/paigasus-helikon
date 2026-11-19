@@ -140,7 +140,6 @@ pub(crate) enum Authorization {
         /// The distinct prompts of the deferred ask points, joined with `"\n"`.
         prompt: String,
         /// The effective args of the call.
-        #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 5"))]
         args: serde_json::Value,
     },
 }
@@ -350,7 +349,6 @@ where
     }
 
     /// Add an agent name to the end of the handoff path.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 4"))]
     pub(crate) fn push_handoff_path(&mut self, agent: impl Into<String>) {
         self.handoff_path.push(agent.into());
     }

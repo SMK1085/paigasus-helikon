@@ -74,7 +74,6 @@ impl PendingToolCall {
     }
 
     /// A copy of this call with other arguments (the redacted event copy).
-    #[expect(dead_code, reason = "used from Task 4")]
     pub(crate) fn with_args(&self, args: serde_json::Value) -> Self {
         Self {
             args,
@@ -84,7 +83,6 @@ impl PendingToolCall {
 }
 
 /// Make a new deferral id.
-#[cfg_attr(not(test), expect(dead_code, reason = "used from Task 4"))]
 pub(crate) fn new_deferral_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -186,7 +184,6 @@ impl DeferralSlot {
     }
 
     /// Append calls to the slot.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 4"))]
     pub(crate) fn record(&self, calls: Vec<PendingToolCall>) {
         self.0.lock().unwrap().extend(calls);
     }
