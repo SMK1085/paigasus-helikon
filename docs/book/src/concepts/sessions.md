@@ -406,14 +406,20 @@ run:
 - **After the run**, it drains the recorder and calls `session.append(...)`.
   Persistence here is best-effort: an append error is logged via `tracing` and
   never propagated, so the run's outcome is unaffected. `drain` also synthesizes
-  a `ToolReturned` for any tool call interrupted mid-flight, so the log always
-  projects to a provider-valid conversation.
+  a `ToolReturned` for any tool call interrupted mid-flight, so the log
+  projects to a provider-valid conversation. A deferred call is the exception.
+  It gets no synthetic `ToolReturned`, because it waits for a host decision.
+  Until the host resolves it, the snapshot is not valid provider input (see
+  [Open deferrals](#open-deferrals)).
 
 **Strict write for deferred calls.** Two cases are not best-effort. A run that
 ends with `RunDeferred`, and a run that resumes deferred calls, must not lose
 the write. If the append fails, `TokioRunner` returns `RunError::SessionWrite`.
 For `run_streamed`, the stream ends with `RunFailed` and `collect` returns the
-same error. The host must keep one writer for each session. See
+same error. `SessionWrite` does not prove that the session stored nothing. For
+example, `CompactingSession` stores the events and then can fail on the
+compaction. Before it recovers, the host must read the session to see its state.
+The host must keep one writer for each session. See
 [Deferred tool calls](./permissions-guardrails-hooks.md#deferred-tool-calls).
 
 **Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back

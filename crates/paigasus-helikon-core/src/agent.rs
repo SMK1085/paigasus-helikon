@@ -527,10 +527,11 @@ pub enum AgentEvent {
     RunDeferred {
         /// The deferred tool calls.
         ///
-        /// When output redaction is on, the args of these calls are the
-        /// redacted copy. Do not use them to run or to hash a call. The stored
-        /// `SessionEvent::ToolDeferred` events hold the raw effective args.
-        /// They are the source of truth for the resume.
+        /// When output redaction is on, the args and the prompt of these
+        /// calls are the redacted copy. Do not use them to run or to hash a
+        /// call. The stored `SessionEvent::ToolDeferred` events hold the raw
+        /// effective args and the raw prompt. They are the source of truth
+        /// for the resume.
         calls: Vec<crate::PendingToolCall>,
         /// Aggregated usage across the run.
         usage: TokenUsage,
@@ -1421,15 +1422,15 @@ where
                             crate::TransitionInput::ToolResults { outcomes }
                         } else {
                             // The events reach clients, so they carry redacted
-                            // args. The slot keeps the raw effective args for
-                            // the session recorder and the resume.
+                            // args and prompts. The slot keeps the raw calls
+                            // for the session recorder and the resume.
                             let event_copies: Vec<crate::PendingToolCall> = if ctx.redact_output() {
                                 let secrets = crate::redaction::SecretSet::from_env_and_extra(
                                     ctx.extra_secrets(),
                                 );
                                 raw_pendings
                                     .iter()
-                                    .map(|p| p.with_args(crate::redaction::redact(p.args(), &secrets)))
+                                    .map(|p| p.redacted(&secrets))
                                     .collect()
                             } else {
                                 raw_pendings.clone()

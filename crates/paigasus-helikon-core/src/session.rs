@@ -460,7 +460,9 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
 /// gets no synthetic result: it waits for a host decision.
 ///
 /// On a resume ([`SessionRecorder::with_resume_plan`]), the results of the
-/// resumed calls go before the recorded input.
+/// resumed calls go before the recorded input. If the agent rejects the resume
+/// before it gives a result for a resumed call, the recorder records nothing,
+/// and the deferrals stay open.
 #[derive(Debug)]
 pub struct SessionRecorder {
     events: Vec<SessionEvent>,
@@ -472,6 +474,9 @@ pub struct SessionRecorder {
     resume_block: Vec<SessionEvent>,
     /// `true` until the first `TurnStarted` of a resumed run.
     in_resume_window: bool,
+    /// `true` when the agent rejected the resume: a `RunFailed` came in the
+    /// resume window before a result for a resumed call.
+    resume_rejected: bool,
 }
 
 impl SessionRecorder {
@@ -486,6 +491,7 @@ impl SessionRecorder {
             resume_call_ids: Vec::new(),
             resume_block: Vec::new(),
             in_resume_window: false,
+            resume_rejected: false,
         }
     }
 
@@ -497,6 +503,16 @@ impl SessionRecorder {
     /// first `TurnStarted` apart, and [`SessionRecorder::drain`] puts these
     /// results first. A resumed call with no result gets the synthetic
     /// cancel result in the same place, so the deferral is closed.
+    ///
+    /// The one exception is a rejected resume. An agent that cannot resume
+    /// (for example a workflow agent) emits `RunFailed` before it gives a
+    /// result for a resumed call. No resumed call started, so
+    /// [`SessionRecorder::drain`] then returns no events: the session keeps
+    /// its open deferrals, and a later resume can still resolve them. An
+    /// `LlmAgent` that ends before it runs the calls gives a "did not run"
+    /// result for each call before its `RunFailed`, so this exception does
+    /// not apply to it. A cancel or a timeout emits no `RunFailed`, so a
+    /// resumed call that started still gets the synthetic cancel result.
     #[must_use]
     pub fn with_resume_plan(mut self, plan: &crate::ResumePlan) -> Self {
         self.resume_call_ids = plan.call_ids();
@@ -568,6 +584,9 @@ impl SessionRecorder {
             AgentEvent::TurnStarted { .. } => {
                 self.in_resume_window = false;
             }
+            AgentEvent::RunFailed { .. } if self.in_resume_window && !self.has_resume_result() => {
+                self.resume_rejected = true;
+            }
             AgentEvent::MessageOutput {
                 item: Item::AssistantMessage { content, agent },
             } => {
@@ -636,13 +655,21 @@ impl SessionRecorder {
     ///
     /// On a resume, the log starts with the results of the resumed calls (and
     /// a synthesized result for each resumed call without one), then the
-    /// recorded input and run events.
+    /// recorded input and run events. A rejected resume returns no events.
     ///
     /// The match is by position, because a call id can repeat in one run: a
     /// `ToolCalled` event is closed only by a later `ToolReturned` (or
     /// `ToolDeferred`) event with the same call id, and each later event
     /// closes one call.
     pub fn drain(&mut self) -> Vec<SessionEvent> {
+        if std::mem::take(&mut self.resume_rejected) {
+            // A rejected resume: record nothing, so the deferrals stay open
+            // and no input follows them (see `with_resume_plan`).
+            self.resume_block.clear();
+            self.resume_call_ids.clear();
+            self.events.clear();
+            return Vec::new();
+        }
         let mut out = std::mem::take(&mut self.resume_block);
         let mut answered: Vec<String> = out
             .iter()
@@ -676,6 +703,16 @@ impl SessionRecorder {
         }
         out.extend(unanswered.into_iter().map(cancelled_result));
         out
+    }
+}
+
+impl SessionRecorder {
+    /// Whether the resume block holds a result for a resumed call.
+    fn has_resume_result(&self) -> bool {
+        self.resume_block.iter().any(|e| {
+            matches!(e, SessionEvent::ToolReturned { call_id, .. }
+                if self.resume_call_ids.contains(call_id))
+        })
     }
 }
 
@@ -918,6 +955,35 @@ mod recorder_tests {
         assert!(
             matches!(&out[0], SessionEvent::ToolReturned { call_id, content, .. } if call_id == "b" && content == &text(CANCEL))
         );
+    }
+
+    #[test]
+    fn drain_records_nothing_for_a_rejected_resume() {
+        let mut r = SessionRecorder::new("root").with_resume_plan(&plan_for("b"));
+        r.record_input(&[Item::UserMessage {
+            content: text("next"),
+        }]);
+        r.observe(&AgentEvent::RunStarted {
+            agent: "seq".into(),
+        });
+        r.observe(&AgentEvent::RunFailed {
+            error: "this agent cannot resume deferred calls".into(),
+        });
+        assert!(r.drain().is_empty());
+    }
+
+    #[test]
+    fn drain_keeps_did_not_run_results_before_a_run_failed() {
+        let mut r = SessionRecorder::new("root").with_resume_plan(&plan_for("b"));
+        r.record_input(&[Item::UserMessage {
+            content: text("next"),
+        }]);
+        r.observe(&tool_output_item("b", "did not run"));
+        r.observe(&AgentEvent::RunFailed {
+            error: "input guardrail tripwire".into(),
+        });
+        let kinds: Vec<_> = r.drain().iter().map(SessionEvent::kind).collect();
+        assert_eq!(kinds, ["tool_returned", "user_message"]);
     }
 
     #[test]

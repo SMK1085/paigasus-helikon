@@ -107,13 +107,15 @@ let result = TokioRunner.run(&agent, ctx, input, config).await?;
 - `DuplicateResolution`: two resolutions name the same call.
 - `SessionModified`: the session changed after the deferral.
 - `CallNotInHistory`: a compactor removed the `ToolCall` item from the history.
-- `ToolItemsInInput`: the resume input has tool call or tool result items.
+- `ToolItemsInInput`: the resume input has tool call or tool result items. This includes a `ContentPart::ToolUse` or `ContentPart::ToolResult` part in a message.
 - `PathTooDeep`: the handoff path is longer than `max_agent_depth` allows.
 - `ResumeUnsupported`: the runner cannot resume deferred calls.
 
+**Workflow agents cannot resume.** A workflow agent (for example `SequentialAgent`) rejects a resume with `RunFailed`. `TokioRunner` then records nothing, so the deferrals stay open. Resume them through an `LlmAgent`.
+
 **One writer for each session.** Only one run at a time must use a session. The host must make sure of this, for example with a lease. Two resumes of one session at the same time can both run an approved tool.
 
-**Secrets.** The session stores the raw effective arguments of a deferred call. The resume runs the tool with these arguments. Thus a secret in the arguments persists in the session store. A `PreToolUse` hook that adds a secret to the arguments of a call that can defer has the same effect. When output redaction is on, events carry redacted arguments. When output redaction is off, events carry the raw arguments.
+**Secrets.** The session stores the raw effective arguments of a deferred call. The resume runs the tool with these arguments. Thus a secret in the arguments persists in the session store. A `PreToolUse` hook that adds a secret to the arguments of a call that can defer has the same effect. When output redaction is on, events carry redacted arguments and redacted prompts, because a policy can make the prompt from the arguments. The session keeps the raw prompt. When output redaction is off, events carry the raw arguments and the raw prompt.
 
 **Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back below this version, because an older reader cannot parse the row. Enable deferral only after every reader of the session store runs this version.
 

@@ -615,6 +615,11 @@ pub enum RunError {
     InvalidResume(#[from] crate::InvalidResume),
 
     /// A session write failed.
+    ///
+    /// This error does not prove that the session stored nothing. A session
+    /// can store the events and then fail. For example, `CompactingSession`
+    /// appends the events and then returns the error of a failed compaction.
+    /// The host must read the session to see its state before it recovers.
     #[error("session write failed: {0}")]
     SessionWrite(#[source] crate::SessionError),
 

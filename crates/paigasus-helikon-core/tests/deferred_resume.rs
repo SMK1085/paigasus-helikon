@@ -573,45 +573,41 @@ const TRANSFER_NOTE: &str =
     "You are now handling a transferred conversation. Continue assisting the user.";
 
 /// Each `ToolCall` has a `ToolResult` with the same call id later, with no
-/// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` has an
-/// earlier `ToolCall` and is the only result for its call id.
+/// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` closes
+/// one earlier open `ToolCall` with its call id. A call id can repeat only
+/// after its earlier call has a result.
 fn assert_tool_calls_paired(messages: &[Item]) {
-    let mut calls: Vec<&str> = Vec::new();
-    let mut results: Vec<&str> = Vec::new();
+    // The calls that wait for a result, in call order.
+    let mut outstanding: Vec<&str> = Vec::new();
     for item in messages {
         match item {
-            Item::ToolCall { call_id, .. } => calls.push(call_id),
+            Item::ToolCall { call_id, .. } => {
+                assert!(
+                    !outstanding.contains(&call_id.as_str()),
+                    "call {call_id} repeats while it waits for a result: {messages:?}"
+                );
+                outstanding.push(call_id);
+            }
             Item::ToolResult { call_id, .. } => {
+                let Some(p) = outstanding.iter().position(|c| *c == call_id.as_str()) else {
+                    panic!("result {call_id} has no open earlier call: {messages:?}");
+                };
+                // Each result closes one call.
+                outstanding.remove(p);
+            }
+            Item::UserMessage { .. } | Item::AssistantMessage { .. } => {
                 assert!(
-                    calls.contains(&call_id.as_str()),
-                    "result {call_id} has no earlier call: {messages:?}"
+                    outstanding.is_empty(),
+                    "tool calls {outstanding:?} are not paired: {messages:?}"
                 );
-                assert!(
-                    !results.contains(&call_id.as_str()),
-                    "call {call_id} has two results: {messages:?}"
-                );
-                results.push(call_id);
             }
             _ => {}
         }
     }
-    for (i, item) in messages.iter().enumerate() {
-        let Item::ToolCall { call_id, .. } = item else {
-            continue;
-        };
-        let mut paired = false;
-        for later in &messages[i + 1..] {
-            match later {
-                Item::ToolResult { call_id: id, .. } if id == call_id => {
-                    paired = true;
-                    break;
-                }
-                Item::UserMessage { .. } | Item::AssistantMessage { .. } => break,
-                _ => {}
-            }
-        }
-        assert!(paired, "tool call {call_id} is not paired: {messages:?}");
-    }
+    assert!(
+        outstanding.is_empty(),
+        "tool calls {outstanding:?} are not paired: {messages:?}"
+    );
 }
 
 /// The call id of the transfer call from `path[i]` to `path[i + 1]`.
@@ -1169,15 +1165,24 @@ async fn route_over_the_depth_limit_closes_the_open_transfer_call() {
         .build();
     let ctx = session_ctx(&session)
         .with_run_config(paigasus_helikon_core::RunConfig::new().with_max_agent_depth(0));
+    let failure = ctx.failure_handle();
 
     let events = resume_handoff_with(&session, "triage", &triage, ctx).await;
 
     assert!(b.invocations().is_empty());
     assert!(child_model.requests().is_empty());
-    let error = match events.last() {
-        Some(AgentEvent::RunFailed { error }) => error.clone(),
-        other => panic!("expected RunFailed, got {other:?}"),
-    };
+    // The run fails on the depth limit, not on some other routing error.
+    let expected = paigasus_helikon_core::AgentError::MaxAgentDepthExceeded { depth: 1, max: 0 };
+    let error = expected.to_string();
+    match failure.take() {
+        Some(paigasus_helikon_core::AgentError::MaxAgentDepthExceeded { depth: 1, max: 0 }) => {}
+        other => panic!("expected MaxAgentDepthExceeded {{ depth: 1, max: 0 }}, got {other:?}"),
+    }
+    assert!(
+        matches!(events.last(), Some(AgentEvent::RunFailed { error: e }) if *e == error),
+        "{:?}",
+        events.last()
+    );
     assert_failed_route_closes_the_transfer(&events, &error, false);
     assert_eq!(stored_results(&session, "t1").await, 1);
 }

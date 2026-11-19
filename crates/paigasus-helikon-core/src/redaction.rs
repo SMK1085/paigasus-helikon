@@ -80,7 +80,7 @@ pub fn redact(value: &Value, secrets: &SecretSet) -> Value {
     }
 }
 
-fn redact_str(s: &str, secrets: &SecretSet) -> String {
+pub(crate) fn redact_str(s: &str, secrets: &SecretSet) -> String {
     let mut out = redact_key_values(s);
     for secret in &secrets.values {
         if out.contains(secret) {

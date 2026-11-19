@@ -73,10 +73,13 @@ impl PendingToolCall {
         self.handoff_path.last().map(String::as_str)
     }
 
-    /// A copy of this call with other arguments (the redacted event copy).
-    pub(crate) fn with_args(&self, args: serde_json::Value) -> Self {
+    /// The redacted event copy of this call. The redaction applies to the
+    /// arguments and to the prompt, because a policy can make the prompt from
+    /// the arguments.
+    pub(crate) fn redacted(&self, secrets: &crate::redaction::SecretSet) -> Self {
         Self {
-            args,
+            args: crate::redaction::redact(&self.args, secrets),
+            prompt: crate::redaction::redact_str(&self.prompt, secrets),
             ..self.clone()
         }
     }
@@ -153,7 +156,9 @@ pub enum InvalidResume {
         /// The call id that the history lacks.
         call_id: String,
     },
-    /// The resume input contains tool call or tool result items.
+    /// The resume input contains tool call or tool result items, at the top
+    /// level or nested in a message as `ContentPart::ToolUse` or
+    /// `ContentPart::ToolResult`.
     #[error("the resume input contains tool call or tool result items")]
     ToolItemsInInput,
     /// The handoff path is longer than the agent depth limit allows.
@@ -347,11 +352,22 @@ impl ResumePlan {
     ) -> Result<ResumePlan, InvalidResume> {
         use crate::{Item, SessionEvent};
 
-        if input
-            .messages
-            .iter()
-            .any(|i| matches!(i, Item::ToolCall { .. } | Item::ToolResult { .. }))
-        {
+        // A nested `ContentPart::ToolUse` or `ContentPart::ToolResult` is
+        // equal to a top-level tool item, so it is rejected too.
+        let has_tool_part = |content: &[crate::ContentPart]| {
+            content.iter().any(|p| {
+                matches!(
+                    p,
+                    crate::ContentPart::ToolUse { .. } | crate::ContentPart::ToolResult { .. }
+                )
+            })
+        };
+        if input.messages.iter().any(|i| match i {
+            Item::ToolCall { .. } | Item::ToolResult { .. } => true,
+            Item::UserMessage { content }
+            | Item::AssistantMessage { content, .. }
+            | Item::System { content } => has_tool_part(content),
+        }) {
             return Err(InvalidResume::ToolItemsInInput);
         }
 
@@ -422,7 +438,9 @@ impl ResumePlan {
             }
         }
 
-        if path.len() > max_agent_depth as usize + 1 {
+        // `path` is nonempty here (checked above). Compare the depth, not
+        // `len > max + 1`: the addition can overflow `usize` on a 32-bit target.
+        if path.len() - 1 > max_agent_depth as usize {
             return Err(InvalidResume::PathTooDeep {
                 len: path.len(),
                 max_agent_depth,

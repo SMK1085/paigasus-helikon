@@ -194,9 +194,16 @@ fn tool_deferred_produces_no_message_and_compaction_math_holds() {
         handoff_path: vec![],
         ts: epoch(),
     };
+    let before = project(&[user("hi"), tool_called("c1")]).messages;
     let mut evs = vec![user("hi"), tool_called("c1"), deferred];
-    // user + ToolCall; the deferral adds no message.
-    assert_eq!(project(&evs).messages.len(), 2);
+    // user + ToolCall; the deferral adds no message and changes none.
+    let after = project(&evs).messages;
+    assert_eq!(after.len(), 2);
+    assert!(matches!(&after[1], Item::ToolCall { call_id, .. } if call_id == "c1"));
+    assert_eq!(
+        serde_json::to_value(&after).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
     // Compacting the three events removes both messages and pushes one System.
     evs.push(compacted("sum", 3));
     let snap = project(&evs);
@@ -225,16 +232,28 @@ fn open_ids(evs: &[SessionEvent]) -> Vec<String> {
 
 #[test]
 fn open_deferrals_uses_the_position_rule() {
+    // The ToolDeferred args differ from the ToolCalled args, so the check
+    // below proves which event the args come from.
+    let raw_args = serde_json::json!({"x": 2, "token": "raw"});
+    let d2 = SessionEvent::ToolDeferred {
+        deferral_id: "d2".into(),
+        call_id: "fc_0".into(),
+        name: "calc".into(),
+        args: raw_args.clone(),
+        prompt: "ok?".into(),
+        handoff_path: vec![],
+        ts: epoch(),
+    };
     let evs = vec![
         tool_called("fc_0"),
         tool_deferred("d1", "fc_0"),
         tool_returned("fc_0"),
         tool_called("fc_0"),
-        tool_deferred("d2", "fc_0"),
+        d2,
     ];
     assert_eq!(open_ids(&evs), ["d2"]);
-    // Built from the event fields, raw args included.
-    assert_eq!(open_deferrals(&evs)[0].args(), &serde_json::json!({"x": 1}));
+    // Built from the ToolDeferred fields, raw args included.
+    assert_eq!(open_deferrals(&evs)[0].args(), &raw_args);
 }
 
 #[test]

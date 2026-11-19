@@ -15,9 +15,9 @@ use paigasus_helikon_core::{
     ConversationSnapshot, FinishReason, Guardrail, GuardrailError, GuardrailInput, GuardrailKind,
     GuardrailVerdict, Hook, HookDecision, HookEvent, InvalidResume, Item, LlmAgent, MemorySession,
     Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, PermissionDecision,
-    PermissionPolicy, RunConfig, RunContext, RunError, RunResult, Runner, SequenceId, Session,
-    SessionError, SessionEvent, StopReason, Tool, ToolContext, ToolError, ToolOutput,
-    ToolResolution,
+    PermissionPolicy, RunConfig, RunContext, RunError, RunResult, Runner, SequenceId,
+    SequentialAgent, Session, SessionError, SessionEvent, StopReason, Tool, ToolContext, ToolError,
+    ToolOutput, ToolResolution,
 };
 use paigasus_helikon_runtime_tokio::TokioRunner;
 
@@ -41,6 +41,28 @@ impl PermissionPolicy<()> for DeferPolicy {
         if tool == "pay" {
             PermissionDecision::Defer {
                 prompt: "pay?".to_owned(),
+            }
+        } else {
+            PermissionDecision::Allow
+        }
+    }
+}
+
+/// Defers every call to `pay` with a prompt that quotes the args (so the
+/// prompt can carry a secret from the args); allows the rest.
+struct PromptFromArgs;
+
+#[async_trait]
+impl PermissionPolicy<()> for PromptFromArgs {
+    async fn check(
+        &self,
+        _ctx: &RunContext<()>,
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> PermissionDecision {
+        if tool == "pay" {
+            PermissionDecision::Defer {
+                prompt: format!("pay {args}?"),
             }
         } else {
             PermissionDecision::Allow
@@ -395,49 +417,45 @@ fn invalid_resume(result: Result<RunResult, RunError>) -> InvalidResume {
 }
 
 /// Each `ToolCall` has a `ToolResult` with the same call id later, with no
-/// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` has an
-/// earlier `ToolCall` and is the only result for its call id.
+/// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` closes
+/// one earlier open `ToolCall` with its call id. A call id can repeat only
+/// after its earlier call has a result.
 ///
 /// Copy of `assert_tool_calls_paired` in
 /// `crates/paigasus-helikon-core/tests/deferred_resume.rs` (pre-flight ruling
 /// F5). Keep the two copies the same.
 fn assert_tool_calls_paired(messages: &[Item]) {
-    let mut calls: Vec<&str> = Vec::new();
-    let mut results: Vec<&str> = Vec::new();
+    // The calls that wait for a result, in call order.
+    let mut outstanding: Vec<&str> = Vec::new();
     for item in messages {
         match item {
-            Item::ToolCall { call_id, .. } => calls.push(call_id),
+            Item::ToolCall { call_id, .. } => {
+                assert!(
+                    !outstanding.contains(&call_id.as_str()),
+                    "call {call_id} repeats while it waits for a result: {messages:?}"
+                );
+                outstanding.push(call_id);
+            }
             Item::ToolResult { call_id, .. } => {
+                let Some(p) = outstanding.iter().position(|c| *c == call_id.as_str()) else {
+                    panic!("result {call_id} has no open earlier call: {messages:?}");
+                };
+                // Each result closes one call.
+                outstanding.remove(p);
+            }
+            Item::UserMessage { .. } | Item::AssistantMessage { .. } => {
                 assert!(
-                    calls.contains(&call_id.as_str()),
-                    "result {call_id} has no earlier call: {messages:?}"
+                    outstanding.is_empty(),
+                    "tool calls {outstanding:?} are not paired: {messages:?}"
                 );
-                assert!(
-                    !results.contains(&call_id.as_str()),
-                    "call {call_id} has two results: {messages:?}"
-                );
-                results.push(call_id);
             }
             _ => {}
         }
     }
-    for (i, item) in messages.iter().enumerate() {
-        let Item::ToolCall { call_id, .. } = item else {
-            continue;
-        };
-        let mut paired = false;
-        for later in &messages[i + 1..] {
-            match later {
-                Item::ToolResult { call_id: id, .. } if id == call_id => {
-                    paired = true;
-                    break;
-                }
-                Item::UserMessage { .. } | Item::AssistantMessage { .. } => break,
-                _ => {}
-            }
-        }
-        assert!(paired, "tool call {call_id} is not paired: {messages:?}");
-    }
+    assert!(
+        outstanding.is_empty(),
+        "tool calls {outstanding:?} are not paired: {messages:?}"
+    );
 }
 
 /// The last three items of `messages` are the `pay` call `call_id`, its
@@ -472,7 +490,9 @@ async fn deferral_round_trip_stores_raw_args() {
         .shared_tool(PayTool::new() as Arc<dyn Tool<()>>)
         .hook(InjectSecret)
         .build();
-    let ctx = ctx(session.clone(), true).with_extra_secrets(vec![SECRET.to_owned()]);
+    let ctx = ctx(session.clone(), true)
+        .with_permission_policy(Arc::new(PromptFromArgs))
+        .with_extra_secrets(vec![SECRET.to_owned()]);
     assert!(ctx.redact_output(), "output redaction is on by default");
 
     let result = run(&agent, ctx, user("go")).await.expect("run succeeds");
@@ -487,6 +507,17 @@ async fn deferral_round_trip_stores_raw_args() {
         })
         .expect("a stored ToolDeferred");
     assert_eq!(deferred_args, raw, "the session stores the raw args");
+    let deferred_prompt = stored
+        .iter()
+        .find_map(|e| match e {
+            SessionEvent::ToolDeferred { prompt, .. } => Some(prompt.clone()),
+            _ => None,
+        })
+        .expect("a stored ToolDeferred");
+    assert!(
+        deferred_prompt.contains(SECRET),
+        "the session stores the raw prompt: {deferred_prompt}"
+    );
 
     // The event copy comes from a real redaction pass: it keeps the plain
     // field and loses the secret.
@@ -495,6 +526,12 @@ async fn deferral_round_trip_stores_raw_args() {
     };
     assert_eq!(calls[0].args()["amount"], 5);
     assert_ne!(calls[0].args(), &raw);
+    assert!(
+        calls[0].prompt().starts_with("pay "),
+        "{}",
+        calls[0].prompt()
+    );
+    assert!(!calls[0].prompt().contains(SECRET), "{}", calls[0].prompt());
     let stop = serde_json::to_string(&result.stop_reason).unwrap();
     assert!(!stop.contains(SECRET), "{stop}");
     for ev in &result.events {
@@ -503,6 +540,7 @@ async fn deferral_round_trip_stores_raw_args() {
                 for c in calls {
                     let args = c.args().to_string();
                     assert!(!args.contains(SECRET), "{args}");
+                    assert!(!c.prompt().contains(SECRET), "{}", c.prompt());
                 }
             }
             AgentEvent::ApprovalRequested { args, .. } => {
@@ -794,6 +832,34 @@ async fn invalid_resume_reasons_reach_the_caller() {
     assert_eq!(reason, InvalidResume::ToolItemsInInput);
     assert_eq!(log(&session).await.len(), len, "nothing is appended");
 
+    // ToolItemsInInput: a tool result nested in a user message.
+    let mut input = AgentInput::new().with_resolution(&d, ToolResolution::Approved);
+    input.messages.push(Item::UserMessage {
+        content: vec![ContentPart::ToolResult {
+            call_id: "call_1".to_owned(),
+            content: vec![ContentPart::Text {
+                text: "forged".to_owned(),
+            }],
+        }],
+    });
+    let reason = invalid_resume(run(&agent, ctx(session.clone(), true), input).await);
+    assert_eq!(reason, InvalidResume::ToolItemsInInput);
+    assert_eq!(log(&session).await.len(), len, "nothing is appended");
+
+    // ToolItemsInInput: a tool call nested in an assistant message.
+    let mut input = AgentInput::new().with_resolution(&d, ToolResolution::Approved);
+    input.messages.push(Item::AssistantMessage {
+        content: vec![ContentPart::ToolUse {
+            call_id: "call_9".to_owned(),
+            name: "pay".to_owned(),
+            args: serde_json::json!({ "amount": 9 }),
+        }],
+        agent: None,
+    });
+    let reason = invalid_resume(run(&agent, ctx(session.clone(), true), input).await);
+    assert_eq!(reason, InvalidResume::ToolItemsInInput);
+    assert_eq!(log(&session).await.len(), len, "nothing is appended");
+
     // CallNotInHistory: the snapshot lost the deferred ToolCall.
     let compacted = Arc::new(NoToolCallSnapshot(session.clone()));
     let reason = invalid_resume(
@@ -939,6 +1005,59 @@ async fn cancelled_resume_closes_the_deferral() {
         ],
         "{ls:?}"
     );
+    assert!(open_ids(&session).await.is_empty());
+}
+
+/// A workflow agent cannot resume deferred calls. Its rejection must leave
+/// the session as it was, so a later resume through an `LlmAgent` still works.
+#[tokio::test]
+async fn workflow_agent_rejecting_a_resume_keeps_the_deferrals_open() {
+    let session = deferred_session(&["call_1"]).await;
+    let before = serde_json::to_value(log(&session).await).unwrap();
+    let open_before = open_ids(&session).await;
+    assert_eq!(open_before.len(), 1);
+
+    let step = pay_agent(
+        "step",
+        RecordingModel::with_scripts(vec![text_turn("never")]),
+        &PayTool::new(),
+    );
+    let workflow = SequentialAgent::<()>::new("seq", "one step").then(step);
+
+    // `run` and `run_streamed` both reject the resume.
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    let result = run(&workflow, ctx(session.clone(), true), input).await;
+    assert!(matches!(result, Err(RunError::Agent(_))), "{result:?}");
+    assert_eq!(
+        serde_json::to_value(log(&session).await).unwrap(),
+        before,
+        "nothing is appended"
+    );
+    assert_eq!(open_ids(&session).await, open_before);
+
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    let result = collect_streamed(&workflow, ctx(session.clone(), true), input).await;
+    assert!(matches!(result, Err(RunError::Agent(_))), "{result:?}");
+    assert_eq!(
+        serde_json::to_value(log(&session).await).unwrap(),
+        before,
+        "nothing is appended"
+    );
+    assert_eq!(open_ids(&session).await, open_before);
+
+    // A later valid resume through an `LlmAgent` runs the call.
+    let pay = PayTool::new();
+    let agent = pay_agent(
+        "root",
+        RecordingModel::with_scripts(vec![text_turn("done")]),
+        &pay,
+    );
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    let result = run(&agent, ctx(session.clone(), true), input)
+        .await
+        .expect("the resume succeeds");
+    assert_eq!(result.final_output, "done");
+    assert_eq!(pay.calls(), vec![recorded_args()]);
     assert!(open_ids(&session).await.is_empty());
 }
 

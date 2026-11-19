@@ -20,6 +20,13 @@
 //! call. The host resolves every open call with [`AgentInput::with_resolution`]
 //! and runs the agent again with a runner that supports resume.
 //!
+//! Only a runner that records the session saves a deferral, for example
+//! `TokioRunner` in `paigasus-helikon-runtime-tokio`. A direct `LlmAgent::run`
+//! keeps the raw call only in a run-local slot, and the session gets no
+//! `tool_deferred` event. A resume against that session then fails with
+//! `NoOpenDeferrals`. Thus the host must start the first run and the resume
+//! through the same session-recording runner, against the same session.
+//!
 //! Deferral is opt-in. Use [`RunContext::with_deferred_tool_calls`]. The default is
 //! off. With the flag off, a `Defer` is a deny.
 //!
