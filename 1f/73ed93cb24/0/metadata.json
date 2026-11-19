@@ -127,6 +127,37 @@
         "label": "Skill: superpowers:writing-plans",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01APfgG8HCG6kPTbKR4HTNtf",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d440522b7443",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 883,
+        "end": 884,
+        "entry_ids": [
+          "dc22e486-4945-4899-9c1d-ec4cee6e67a3"
+        ],
+        "tool_use_id": "toolu_01APfgG8HCG6kPTbKR4HTNtf"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01APfgG8HCG6kPTbKR4HTNtf"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
