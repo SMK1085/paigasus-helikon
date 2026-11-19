@@ -7,8 +7,12 @@ mod support;
 
 use std::sync::Arc;
 
-use paigasus_helikon_core::AgentEvent;
-use paigasus_helikon_runtime_actix::AgentServer;
+use futures_util::stream::{self, BoxStream, StreamExt as _};
+use paigasus_helikon_core::{
+    Agent, AgentError, AgentEvent, AgentInput, ContentPart, Item, RunContext, Session, TokenUsage,
+};
+use paigasus_helikon_runtime_actix::{AgentServer, ContextProvider, ServerError};
+use tokio_util::sync::CancellationToken;
 
 /// **AC1** — a one-shot `POST /agents/{name}/runs` returns the aggregated run
 /// result as JSON, with an `x-run-id` response header.
@@ -215,4 +219,78 @@ async fn sse_emits_synthetic_run_failed_after_terminalless_stream() {
         "expected generic RunFailed last, got {:?}",
         events[1]
     );
+}
+
+/// A [`ContextProvider`] that turns the deferral flag on, as a careless
+/// operator would.
+struct DeferringProvider;
+
+#[async_trait::async_trait(?Send)]
+impl ContextProvider<()> for DeferringProvider {
+    async fn build(
+        &self,
+        _req: &actix_web::HttpRequest,
+        session: Arc<dyn Session>,
+        cancel: CancellationToken,
+    ) -> Result<RunContext<()>, ServerError> {
+        Ok(RunContext::ephemeral(())
+            .with_session(session)
+            .with_cancel(cancel)
+            .with_deferred_tool_calls(true))
+    }
+}
+
+/// An agent that reports whether the deferral flag reached it.
+struct DeferralProbe;
+
+#[async_trait::async_trait]
+impl Agent<()> for DeferralProbe {
+    fn name(&self) -> &str {
+        "probe"
+    }
+
+    fn description(&self) -> &str {
+        "reports the deferral flag"
+    }
+
+    async fn run(
+        &self,
+        ctx: RunContext<()>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+        let events = vec![
+            AgentEvent::MessageOutput {
+                item: Item::AssistantMessage {
+                    content: vec![ContentPart::Text {
+                        text: format!("deferral={}", ctx.deferred_tool_calls_enabled()),
+                    }],
+                    agent: None,
+                },
+            },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ];
+        Ok(stream::iter(events).boxed())
+    }
+}
+
+/// A one-shot run clears the deferral flag the operator's provider set.
+#[tokio::test]
+async fn oneshot_run_clears_the_deferral_flag() {
+    let server = AgentServer::<()>::builder()
+        .context_provider(Arc::new(DeferringProvider))
+        .agent(Arc::new(DeferralProbe))
+        .build()
+        .expect("server builds");
+    let base = support::spawn_actix_server(server);
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/agents/probe/runs"))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"hello"}"#)
+        .send()
+        .await
+        .unwrap();
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["output"], "deferral=false");
 }

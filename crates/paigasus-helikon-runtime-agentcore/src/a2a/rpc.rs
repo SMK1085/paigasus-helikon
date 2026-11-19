@@ -519,6 +519,7 @@ async fn start_run<Ctx: Send + Sync + 'static>(
         .build(parts, session, cancel.clone())
         .await
         .map_err(|e| e.to_string())?;
+    let ctx = crate::invoke::restrict_unsupported_run_features(ctx);
 
     state.cancels.register(task_id.to_owned(), cancel);
 

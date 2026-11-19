@@ -154,6 +154,7 @@ pub(crate) async fn invocations<Ctx: Send + Sync + 'static>(
             );
         }
     };
+    let ctx = crate::invoke::restrict_unsupported_run_features(ctx);
 
     let agent_input = input.into_agent_input();
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);

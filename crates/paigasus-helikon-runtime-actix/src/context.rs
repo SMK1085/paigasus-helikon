@@ -152,6 +152,25 @@ where
     }
 }
 
+/// Clears run features this runtime does not support. SMA-804 adds its checkpoint clear here.
+///
+/// This runtime does not support deferred tool calls. The helper clears the flag,
+/// so a `Defer` decision becomes a `Deny`, and logs one warning when the flag
+/// was set.
+pub(crate) fn restrict_unsupported_run_features<Ctx>(ctx: RunContext<Ctx>) -> RunContext<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    if ctx.deferred_tool_calls_enabled() {
+        tracing::warn!(
+            target: "paigasus::runtime_actix::context",
+            "the actix runtime does not support deferred tool calls; the flag is cleared and a Defer becomes a Deny"
+        );
+        return ctx.with_deferred_tool_calls(false);
+    }
+    ctx
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -210,5 +229,18 @@ mod tests {
             .build(&req, session, cancel)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn restrict_clears_the_deferral_flag() {
+        let ctx = RunContext::ephemeral(()).with_deferred_tool_calls(true);
+        assert!(ctx.deferred_tool_calls_enabled());
+        assert!(!restrict_unsupported_run_features(ctx).deferred_tool_calls_enabled());
+    }
+
+    #[test]
+    fn restrict_keeps_a_context_without_the_flag() {
+        let ctx = restrict_unsupported_run_features(RunContext::ephemeral(()));
+        assert!(!ctx.deferred_tool_calls_enabled());
     }
 }

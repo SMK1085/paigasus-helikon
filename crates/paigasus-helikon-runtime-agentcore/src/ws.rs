@@ -214,6 +214,7 @@ async fn connection<Ctx: Send + Sync + 'static>(
                         continue;
                     }
                 };
+                let ctx = crate::invoke::restrict_unsupported_run_features(ctx);
 
                 let (tx, rx) = tokio::sync::mpsc::channel::<AgentEvent>(64);
                 let runner = Arc::clone(&state.runner);
