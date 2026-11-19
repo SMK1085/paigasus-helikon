@@ -13,7 +13,7 @@ use paigasus_helikon_core::{
     Agent, AgentError, AgentEvent, AgentInput, CancellationToken, CheckpointDecision, ContentPart,
     FinishReason, Guardrail, GuardrailError, GuardrailInput, GuardrailVerdict, Hook, HookDecision,
     HookEvent, Instructions, Item, LlmAgent, MediaSource, Model, ModelCapabilities, ModelError,
-    ModelEvent, ModelRequest, ModelSettings, RunConfig, RunContext, RunResultStreaming,
+    ModelEvent, ModelRequest, ModelSettings, RunConfig, RunContext, SessionEvent, SessionRecorder,
     TurnBoundary, TurnCheckpoint,
 };
 
@@ -406,5 +406,292 @@ async fn checkpoint_not_called_without_tool_calls() {
     assert!(cp.boundaries().is_empty());
 }
 
-#[allow(dead_code)]
-fn _use(_: RunResultStreaming) {}
+/// Insert a `Usage` snapshot before the `Finish` event of a script.
+fn with_usage(mut events: Vec<ModelEvent>, input: u32, output: u32) -> Vec<ModelEvent> {
+    let at = events.len() - 1;
+    events.insert(
+        at,
+        ModelEvent::Usage {
+            input_tokens: input,
+            output_tokens: output,
+            cached_input_tokens: None,
+            reasoning_tokens: None,
+        },
+    );
+    events
+}
+
+/// Counts `OnRunComplete` hook events.
+struct CountRunComplete(Arc<Mutex<u32>>);
+#[async_trait]
+impl Hook<()> for CountRunComplete {
+    async fn on_event(&self, _: &RunContext<()>, event: &HookEvent) -> HookDecision {
+        if matches!(event, HookEvent::OnRunComplete) {
+            *self.0.lock().unwrap() += 1;
+        }
+        HookDecision::Allow
+    }
+}
+
+/// Trips on user text containing "bad", or errors on it.
+struct BadTextGuardrail {
+    error: bool,
+}
+#[async_trait]
+impl Guardrail<()> for BadTextGuardrail {
+    async fn check(
+        &self,
+        _: &RunContext<()>,
+        input: GuardrailInput<'_>,
+    ) -> Result<GuardrailVerdict, GuardrailError> {
+        if let GuardrailInput::UserText(t) = input {
+            if t.contains("bad") {
+                if self.error {
+                    return Err(GuardrailError::Other(anyhow::anyhow!("boom")));
+                }
+                return Ok(GuardrailVerdict::Tripwire {
+                    kind: paigasus_helikon_core::GuardrailKind::InputPolicy,
+                    info: serde_json::json!({}),
+                });
+            }
+        }
+        Ok(GuardrailVerdict::Pass)
+    }
+}
+
+fn recorded(events: &[AgentEvent]) -> Vec<SessionEvent> {
+    let mut r = SessionRecorder::new("agent");
+    for e in events {
+        r.observe(e);
+    }
+    r.drain()
+}
+
+#[tokio::test]
+async fn stop_ends_cleanly_at_boundary() {
+    let runs = Arc::new(Mutex::new(0u32));
+    let build = || {
+        let (m, requests) = model(vec![with_usage(tool_turn(2), 10, 4), text_turn("never")]);
+        let a = agent(
+            m,
+            RunConfig::default(),
+            vec![],
+            vec![Arc::new(CountRunComplete(Arc::clone(&runs))) as Arc<dyn Hook<()>>],
+        );
+        (a, requests)
+    };
+    let (a, requests) = build();
+    let cp = ScriptedCheckpoint::new(vec![CheckpointDecision::Stop {
+        reason: "operator".into(),
+    }]);
+    let out = run_with(&a, Some(cp)).await;
+    match out.events.last().unwrap() {
+        AgentEvent::RunStopped { reason, usage } => {
+            assert_eq!(reason, "operator");
+            assert_eq!(usage.input_tokens, 10);
+            assert_eq!(usage.output_tokens, 4);
+        }
+        other => panic!("last event: {other:?}"),
+    }
+    let k = kinds(&out.events);
+    assert!(!k.contains(&"RunFailed".to_owned()), "{k:?}");
+    assert_eq!(
+        k.iter().filter(|x| *x == "TurnStarted").count(),
+        1,
+        "no TurnStarted for turn 1: {k:?}"
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1, "model called once");
+    assert!(out.failure.is_none());
+    assert_eq!(*runs.lock().unwrap(), 1, "OnRunComplete exactly once");
+    let rec = recorded(&out.events);
+    let called = rec
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::ToolCalled { .. }))
+        .count();
+    let returned = rec
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::ToolReturned { .. }))
+        .count();
+    assert_eq!(called, 2);
+    assert_eq!(called, returned);
+
+    // collect() over the same stream shape.
+    let (a2, _) = build();
+    let ctx = noop_run_context::<()>().with_turn_checkpoint(ScriptedCheckpoint::new(vec![
+        CheckpointDecision::Stop {
+            reason: "operator".into(),
+        },
+    ]));
+    let slot = ctx.failure_handle();
+    let stream = a2
+        .run(ctx, AgentInput::from_user_text("hi"))
+        .await
+        .expect("run starts");
+    let collected = paigasus_helikon_core::RunResultStreaming::with_failure(stream, slot.clone())
+        .collect()
+        .await;
+    // Today `collect()` reads usage only from `RunCompleted`, so it returns
+    // `Ok` with a default usage; SMA-803 connects `RunStopped` to `RunResult`.
+    let collected = collected.expect("a stopped run is not an error");
+    assert!(matches!(
+        collected.events.last(),
+        Some(AgentEvent::RunStopped { .. })
+    ));
+    assert!(slot.take().is_none());
+}
+
+async fn tripwire_case(error: bool) {
+    let (m, requests) = model(vec![tool_turn(1), text_turn("never")]);
+    let g = Arc::new(BadTextGuardrail { error }) as Arc<dyn Guardrail<()>>;
+    let cp = ScriptedCheckpoint::new(vec![CheckpointDecision::Inject(vec![text("bad")])]);
+    let out = run_with(&agent(m, RunConfig::default(), vec![g], vec![]), Some(cp)).await;
+    let k = kinds(&out.events);
+    let n = k.len();
+    assert_eq!(&k[n - 2..], ["GuardrailTriggered", "RunStopped"], "{k:?}");
+    assert!(matches!(
+        out.events.last().unwrap(),
+        AgentEvent::RunStopped { reason, .. } if reason == "input guardrail tripwire"
+    ));
+    assert!(!k.contains(&"UserMessageInjected".to_owned()));
+    assert!(!k.contains(&"RunFailed".to_owned()));
+    assert_eq!(requests.lock().unwrap().len(), 1, "model called once");
+    assert!(out.failure.is_none());
+    let rec = recorded(&out.events);
+    assert!(!rec.iter().any(|e| matches!(
+        e,
+        SessionEvent::UserMessage { content, .. } if format!("{content:?}").contains("bad")
+    )));
+}
+
+#[tokio::test]
+async fn guardrail_tripwire_on_injection_stops() {
+    tripwire_case(false).await;
+}
+
+#[tokio::test]
+async fn guardrail_error_on_injection_stops() {
+    tripwire_case(true).await;
+}
+
+fn handoff_parent(
+    child: LlmAgent<(), common::MockModel>,
+    parent_script: Vec<ModelEvent>,
+) -> impl Agent<()> {
+    LlmAgent::builder::<()>()
+        .name("parent")
+        .shared_model(common::MockModel::with_scripts(vec![parent_script]))
+        .handoff(child)
+        .build()
+}
+
+fn handoff_child(scripts: Vec<Vec<ModelEvent>>) -> LlmAgent<(), common::MockModel> {
+    LlmAgent::builder::<()>()
+        .name("child")
+        .description("child agent")
+        .shared_model(common::MockModel::with_scripts(scripts))
+        .shared_tool(MockTool::new("noop", serde_json::json!({"ok": true})) as _)
+        .build()
+}
+
+fn transfer(usage: (u32, u32)) -> Vec<ModelEvent> {
+    with_usage(
+        vec![
+            ModelEvent::ToolCallDelta {
+                call_id: "t1".into(),
+                name: Some("transfer_to_child".into()),
+                args_delta: "{}".into(),
+            },
+            ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ],
+        usage.0,
+        usage.1,
+    )
+}
+
+#[tokio::test]
+async fn handoff_child_stop_ends_whole_run() {
+    let child = handoff_child(vec![with_usage(tool_turn(1), 20, 7), text_turn("never")]);
+    let parent = handoff_parent(child, transfer((10, 5)));
+    let cp = ScriptedCheckpoint::new(vec![CheckpointDecision::Stop {
+        reason: "operator".into(),
+    }]);
+    let out = run_with(&parent, Some(cp.clone())).await;
+    assert_eq!(cp.boundaries(), vec![TurnBoundary::new(0, 1, "child", 1)]);
+    match out.events.last().unwrap() {
+        AgentEvent::RunStopped { reason, usage } => {
+            assert_eq!(reason, "operator");
+            assert_eq!(usage.input_tokens, 30);
+            assert_eq!(usage.output_tokens, 12);
+        }
+        other => panic!("last event: {other:?}"),
+    }
+    assert!(out.failure.is_none());
+}
+
+#[tokio::test]
+async fn inject_then_stop_across_two_boundaries() {
+    let (m, requests) = model(vec![
+        with_usage(tool_turn(1), 10, 1),
+        with_usage(tool_turn(1), 10, 1),
+        text_turn("never"),
+    ]);
+    let cp = ScriptedCheckpoint::new(vec![
+        CheckpointDecision::Inject(vec![text("a")]),
+        CheckpointDecision::Stop { reason: "b".into() },
+    ]);
+    let out = run_with(
+        &agent(m, RunConfig::default(), vec![], vec![]),
+        Some(cp.clone()),
+    )
+    .await;
+    let reqs = requests.lock().unwrap();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(
+        format!("{:?}", reqs[1].last().unwrap()),
+        format!(
+            "{:?}",
+            Item::UserMessage {
+                content: vec![text("a")]
+            }
+        )
+    );
+    assert_eq!(cp.boundaries()[1].completed_turn, 1);
+    match out.events.last().unwrap() {
+        AgentEvent::RunStopped { reason, usage } => {
+            assert_eq!(reason, "b");
+            assert_eq!(usage.input_tokens, 20);
+            assert_eq!(usage.output_tokens, 2);
+        }
+        other => panic!("last event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn handoff_child_inject_is_recorded_in_order() {
+    let child = handoff_child(vec![tool_turn(1), text_turn("done")]);
+    let parent = handoff_parent(child, transfer((1, 1)));
+    let cp = ScriptedCheckpoint::new(vec![CheckpointDecision::Inject(vec![text("x")])]);
+    let out = run_with(&parent, Some(cp)).await;
+    assert!(out.failure.is_none());
+    let rec = recorded(&out.events);
+    let i = rec
+        .iter()
+        .position(|e| matches!(e, SessionEvent::UserMessage { .. }))
+        .expect("injected user message recorded");
+    assert!(matches!(
+        rec[i - 1],
+        SessionEvent::ToolReturned { ref call_id, .. } if call_id == "c0"
+    ));
+    assert_eq!(
+        format!(
+            "{:?}",
+            match &rec[i] {
+                SessionEvent::UserMessage { content, .. } => content.clone(),
+                _ => unreachable!(),
+            }
+        ),
+        format!("{:?}", vec![text("x")])
+    );
+}

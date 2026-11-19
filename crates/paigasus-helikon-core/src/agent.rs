@@ -609,8 +609,8 @@ enum ConcurrentOutcome {
 
 /// Map one event of a handoff child run to the event that the parent
 /// stream yields. Drops the child `RunStarted`. Adds `parent_usage` to the
-/// usage of `RunCompleted` and `RunDeferred`, and records the total on
-/// `run_span`. Passes every other event through.
+/// usage of `RunCompleted`, `RunDeferred` and `RunStopped`, and records the
+/// total on `run_span`. Passes every other event through.
 fn reyield_child_event(
     ev: AgentEvent,
     parent_usage: TokenUsage,
@@ -635,6 +635,15 @@ fn reyield_child_event(
             run_span.record("paigasus.deferred_calls", calls.len() as i64);
             Some(AgentEvent::RunDeferred {
                 calls,
+                usage: total,
+            })
+        }
+        AgentEvent::RunStopped { reason, usage } => {
+            let mut total = parent_usage;
+            total.add(usage);
+            record_usage(&total);
+            Some(AgentEvent::RunStopped {
+                reason,
                 usage: total,
             })
         }
@@ -980,6 +989,7 @@ where
                 gen_ai.usage.input_tokens = tracing::field::Empty,
                 gen_ai.usage.output_tokens = tracing::field::Empty,
                 paigasus.deferred_calls = tracing::field::Empty,
+                paigasus.stop_reason = tracing::field::Empty,
                 otel.status_code = tracing::field::Empty,
             );
             run_span.record("otel.name", format!("invoke_agent {agent_name}").as_str());
@@ -1325,7 +1335,6 @@ where
                                         if let Some((kind, info)) =
                                             interceptors.run_input_guardrails(&text).await
                                         {
-                                            run_span.record("otel.status_code", "ERROR");
                                             yield crate::AgentEvent::GuardrailTriggered {
                                                 kind,
                                                 info,
@@ -1346,16 +1355,29 @@ where
                                         }
                                     }
                                 }
-                                if stop_reason.is_some() {
-                                    // Task 4 replaces this body with a clean stop.
-                                    let err = crate::AgentError::NotImplemented {
-                                        feature: "turn checkpoint stop",
+                                if let Some(reason) = stop_reason {
+                                    // A clean stop: not an error, so the failure
+                                    // slot stays empty and `OnRunComplete` fires
+                                    // through the `Terminate` arm.
+                                    let stop_usage = match &loop_state {
+                                        crate::LoopState::ExecutingTools { usage, .. } => *usage,
+                                        _ => TokenUsage::default(),
                                     };
-                                    let msg = err.to_string();
-                                    run_span.record("otel.status_code", "ERROR");
-                                    failure.set(err);
-                                    yield crate::AgentEvent::RunFailed { error: msg };
-                                    return;
+                                    run_span.record(
+                                        "gen_ai.usage.input_tokens",
+                                        stop_usage.input_tokens as i64,
+                                    );
+                                    run_span.record(
+                                        "gen_ai.usage.output_tokens",
+                                        stop_usage.output_tokens as i64,
+                                    );
+                                    run_span.record("paigasus.stop_reason", reason.as_str());
+                                    yield crate::AgentEvent::RunStopped {
+                                        reason,
+                                        usage: stop_usage,
+                                    };
+                                    next_action = crate::NextAction::Terminate;
+                                    break;
                                 }
                             }
                             let s = tracing::info_span!(
