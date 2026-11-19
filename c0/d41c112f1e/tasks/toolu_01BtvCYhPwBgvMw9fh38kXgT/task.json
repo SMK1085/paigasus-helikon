@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BtvCYhPwBgvMw9fh38kXgT",
+  "agent_id": "af1460c448416ee13",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave SMA-803",
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 147225,
+    "cache_read_tokens": 8083484,
+    "output_tokens": 33137,
+    "api_call_count": 62
+  },
+  "started_at": "2026-11-20T00:13:07.025936+01:00",
+  "completed_at": "2026-11-20T00:23:42.146285+01:00"
+}

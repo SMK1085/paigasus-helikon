@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01S4PZ9qKA4RrzM7Vgh2HU8Q",
+  "agent_id": "a25a04642ce49f141",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix CodeRabbit local findings SMA-803",
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 173329,
+    "cache_read_tokens": 7725194,
+    "output_tokens": 35751,
+    "api_call_count": 59
+  },
+  "started_at": "2026-11-20T00:39:47.342399+01:00",
+  "completed_at": "2026-11-20T00:49:29.866454+01:00"
+}

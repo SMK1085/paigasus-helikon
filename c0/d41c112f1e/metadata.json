@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "c0d41c112f1e",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-803-deferred-tool-calls-a-defer-decision-ends",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-core/src/deferral.rs",
+    "crates/paigasus-helikon-core/src/lib.rs",
+    "crates/paigasus-helikon-core/src/redaction.rs",
+    "crates/paigasus-helikon-core/src/runner.rs",
+    "crates/paigasus-helikon-core/src/session.rs",
+    "crates/paigasus-helikon-core/tests/deferred_resume.rs",
+    "crates/paigasus-helikon-core/tests/session_projection.rs",
+    "crates/paigasus-helikon-runtime-tokio/tests/deferred.rs",
+    "docs/book/src/concepts/permissions-guardrails-hooks.md",
+    "docs/book/src/concepts/sessions.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c0/d41c112f1e/0/metadata.json",
+      "transcript": "/c0/d41c112f1e/0/full.jsonl",
+      "compact_transcript": "/c0/d41c112f1e/0/transcript.jsonl",
+      "content_hash": "/c0/d41c112f1e/0/content_hash.txt",
+      "prompt": "/c0/d41c112f1e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 30161,
+    "cache_read_tokens": 6900840,
+    "output_tokens": 12088,
+    "api_call_count": 21,
+    "subagent_tokens": {
+      "input_tokens": 178,
+      "cache_creation_tokens": 287085,
+      "cache_read_tokens": 11311267,
+      "output_tokens": 53470,
+      "api_call_count": 87
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
