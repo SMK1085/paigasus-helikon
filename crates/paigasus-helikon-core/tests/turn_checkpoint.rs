@@ -703,3 +703,77 @@ async fn handoff_child_inject_is_recorded_in_order() {
         format!("{:?}", vec![text("x")])
     );
 }
+
+#[tokio::test]
+async fn agent_as_tool_sub_run_never_calls_checkpoint() {
+    use paigasus_helikon_core::AgentAsTool;
+
+    // Inner agent: one tool call, then an answer. Its loop has a boundary
+    // after the tool call, which must NOT reach the parent's checkpoint.
+    let inner = LlmAgent::builder::<()>()
+        .name("inner")
+        .description("inner agent")
+        .shared_model(common::MockModel::with_scripts(vec![
+            tool_turn(1),
+            text_turn("inner done"),
+        ]))
+        .shared_tool(MockTool::new("noop", serde_json::json!({"ok": true})) as _)
+        .build();
+    let wrapper = AgentAsTool::new(inner).with_name("inner");
+
+    // Parent: call the wrapper (turn 0), then answer (turn 1).
+    let call_inner = vec![
+        ModelEvent::ToolCallDelta {
+            call_id: "p1".into(),
+            name: Some("inner".into()),
+            args_delta: r#"{"input":"go"}"#.into(),
+        },
+        ModelEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        },
+    ];
+    let parent = LlmAgent::builder::<()>()
+        .name("parent")
+        .shared_model(common::MockModel::with_scripts(vec![
+            call_inner,
+            text_turn("parent done"),
+        ]))
+        .tool(wrapper)
+        .build();
+
+    let cp = ScriptedCheckpoint::new(vec![]);
+    let out = run_with(&parent, Some(cp.clone())).await;
+    assert!(out.failure.is_none(), "run failed: {:?}", out.failure);
+    let seen = cp.boundaries();
+    assert_eq!(
+        seen,
+        vec![TurnBoundary::new(0, 1, "parent", 0)],
+        "only the parent boundary may reach the checkpoint"
+    );
+    assert!(seen.iter().all(|b| b.depth == 0 && b.agent == "parent"));
+}
+
+#[tokio::test]
+async fn sequential_workflow_children_never_call_checkpoint() {
+    use paigasus_helikon_core::SequentialAgent;
+
+    let child = LlmAgent::builder::<()>()
+        .name("step")
+        .description("workflow child")
+        .shared_model(common::MockModel::with_scripts(vec![
+            tool_turn(1),
+            text_turn("step done"),
+        ]))
+        .shared_tool(MockTool::new("noop", serde_json::json!({"ok": true})) as _)
+        .build();
+    let workflow = SequentialAgent::<()>::new("seq", "one step").then(child);
+
+    let cp = ScriptedCheckpoint::new(vec![]);
+    let out = run_with(&workflow, Some(cp.clone())).await;
+    assert!(out.failure.is_none(), "run failed: {:?}", out.failure);
+    assert!(
+        cp.boundaries().is_empty(),
+        "workflow children must not call the checkpoint: {:?}",
+        cp.boundaries()
+    );
+}
