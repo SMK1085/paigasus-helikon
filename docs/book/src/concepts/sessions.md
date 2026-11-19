@@ -46,6 +46,7 @@ Each entry is a `SessionEvent` — a `#[non_exhaustive]`, serde-tagged enum
 | `ToolReturned` | `call_id`, `content: Vec<ContentPart>` |
 | `HandoffOccurred` | `from: String`, `to: String` |
 | `Compacted` | `summary: String`, `original_count: u64` |
+| `ToolDeferred` | `deferral_id`, `call_id`, `name`, `args: serde_json::Value`, `prompt`, `handoff_path: Vec<String>` |
 
 Constructor helpers stamp `ts = Timestamp::now()` for you:
 `SessionEvent::user_message(content)`,
@@ -53,13 +54,13 @@ Constructor helpers stamp `ts = Timestamp::now()` for you:
 `SessionEvent::tool_called(call_id, name, args)`,
 `SessionEvent::tool_returned(call_id, content)`,
 `SessionEvent::handoff_occurred(from, to)`, and
-`SessionEvent::compacted(summary, original_count)`.
+`SessionEvent::compacted(summary, original_count)`. The `tool_deferred` event comes from `SessionEvent::tool_deferred(&pending)`, which takes a `PendingToolCall`.
 
 ### Projection
 
 `project(events: &[SessionEvent]) -> ConversationSnapshot` folds the log into a
-message list. Most variants map one-to-one to an `Item`; `HandoffOccurred` is
-audit-only and yields no message; `Compacted` drops the `original_count`
+message list. Most variants map one-to-one to an `Item`; `HandoffOccurred` and
+`ToolDeferred` are audit-only and yield no message; `Compacted` drops the `original_count`
 preceding events' messages and emits the summary as an `Item::System`.
 
 **Provider caveat:** a `Compacted` summary renders as `Item::System`, and both
@@ -67,6 +68,21 @@ shipped provider translators reshape system messages — Anthropic hoists them t
 the top-level `system` field, OpenAI concatenates them at the top of the
 conversation. The summary text reaches the model, but as a top-level
 instruction, not a positional cutover.
+
+### Open deferrals
+
+A `ToolDeferred` event is open when no `ToolReturned` event with the same
+`call_id` follows it in the log. `open_deferrals(events)` returns the open calls
+in log order, with the raw arguments from the event. While a deferral is open,
+the log holds a `ToolCall` with no `ToolResult`, so `snapshot()` is not valid
+provider input. See [Deferred tool calls](./permissions-guardrails-hooks.md#deferred-tool-calls).
+
+The `args` field holds the raw effective arguments, not redacted. A secret in
+the arguments persists in the session store.
+
+**Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back
+below this version, because an older reader cannot parse the row. Enable deferral
+only after every reader of the session store runs this version.
 
 ## Shipped backends
 
@@ -282,7 +298,10 @@ On every `append`:
    `Compacted` marker is appended. Otherwise
    `SessionEvent::Compacted { summary, original_count }` is appended to the
    inner session.
-4. The user's events are always persisted first. Model/summary-generation
+4. While a deferred tool call is open, the wrapper skips compaction and logs a
+   `debug!` message. A summary would hide the `ToolCall` that the resume needs. The
+   compaction runs again after the host resolves the call.
+5. The user's events are always persisted first. Model/summary-generation
    failures are logged at `warn!` and swallowed, but inner-session read/write
    failures during compaction (reading the log, or appending the `Compacted`
    marker) still propagate out of `append`.
@@ -389,6 +408,17 @@ run:
   never propagated, so the run's outcome is unaffected. `drain` also synthesizes
   a `ToolReturned` for any tool call interrupted mid-flight, so the log always
   projects to a provider-valid conversation.
+
+**Strict write for deferred calls.** Two cases are not best-effort. A run that
+ends with `RunDeferred`, and a run that resumes deferred calls, must not lose
+the write. If the append fails, `TokioRunner` returns `RunError::SessionWrite`.
+For `run_streamed`, the stream ends with `RunFailed` and `collect` returns the
+same error. The host must keep one writer for each session. See
+[Deferred tool calls](./permissions-guardrails-hooks.md#deferred-tool-calls).
+
+**Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back
+below this version, because an older reader cannot parse the row. Enable deferral
+only after every reader of the session store runs this version.
 
 Running an `Agent` directly (without a runner) executes against the session in
 the `RunContext` but performs no automatic load-or-persist — that lifecycle

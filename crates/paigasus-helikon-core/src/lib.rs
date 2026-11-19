@@ -11,6 +11,26 @@
 //! crate's rustdoc is the canonical reference for the trait signatures and
 //! carrier types.
 //!
+//! # Deferred tool calls
+//!
+//! A tool call can wait for a host decision in a later run. A permission policy
+//! returns `Defer`, or an [`ApprovalHandler`] returns `ApprovalOutcome::Defer`
+//! at an ask point. The run then ends with `AgentEvent::RunDeferred` and
+//! [`StopReason::Deferred`]. The session records one `tool_deferred` event for each
+//! call. The host resolves every open call with [`AgentInput::with_resolution`]
+//! and runs the agent again with a runner that supports resume.
+//!
+//! Deferral is opt-in. Use [`RunContext::with_deferred_tool_calls`]. The default is
+//! off. With the flag off, a `Defer` is a deny.
+//!
+//! The session stores the raw effective arguments of a deferred call. A secret in
+//! these arguments persists in the session store. The host must keep one writer for
+//! each session.
+//!
+//! **Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back
+//! below this version, because an older reader cannot parse the row. Enable deferral
+//! only after every reader of the session store runs this version.
+//!
 //! [`paigasus-helikon`]: https://docs.rs/paigasus-helikon
 //! [project documentation site]: https://smk1085.github.io/paigasus-helikon/
 

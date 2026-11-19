@@ -65,6 +65,12 @@ AWS publishes a stable CDK L2 construct for deployment: `aws-cdk-lib/aws-bedrock
 
 **Termination is abrupt** — AgentCore documents no `SIGTERM` contract. In HTTP mode, durable conversation state belongs in a `Session` backend (SQLite/Postgres/Redis), never in container memory. In MCP and AG-UI modes this doesn't apply the same way: each call gets a fresh, unshared in-memory session by construction, so neither can use a persistent session backend in v0 at all — a known v0 limitation, not a deployment mistake to fix via configuration. In A2A mode it applies twice over: conversation state belongs in a `Session` backend *and* tasks belong in a durable `TaskStore`, or both vanish with the microVM.
 
+## Deferred tool calls
+
+Only `TokioRunner` supports deferred tool calls. It validates a resume request, records the deferral in the session and runs the approved calls. See [Deferred tool calls](./permissions-guardrails-hooks.md#deferred-tool-calls).
+
+`TemporalRunner`, `runtime-axum`, `runtime-actix` and `runtime-agentcore` do not support deferral. Each of them clears the deferral flag on the run context and logs a warning. A `Defer` in these runtimes is a deny. `TemporalRunner` also rejects a resume: a run with resolutions, or a session with an open deferral, returns `RunError::InvalidResume` with the reason `ResumeUnsupported`.
+
 ## Choosing between them
 
 - Need a network endpoint you host and operate yourself, with no crash-resume requirement? **`runtime-axum`** — or **`runtime-actix`** if you're embedding into an existing actix-web service; the two are API-identical apart from a handful of unavoidable framework deltas (see [Axum Server Runtime](./axum-server.md#actix-web-variant)).

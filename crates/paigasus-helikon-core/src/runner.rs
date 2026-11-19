@@ -130,11 +130,13 @@ where
     /// must be driven to its terminal for the run's events to be persisted:** a
     /// consumer that drops the stream early may skip the finalize step and leave
     /// a partial turn (or nothing) written. In the two strict cases of
-    /// [`Runner::run`] (a run that defers or resumes), an append failure
-    /// replaces the terminal event with `RunFailed` ("session write failed: ..."),
-    /// also when the run was cancelled or timed out. A runner that supports deferred
-    /// tool calls records the error in a [`SessionWriteSlot`], so [`RunResultStreaming::collect`] returns
-    /// [`RunError::SessionWrite`], as [`Runner::run`] does.
+    /// [`Runner::run`] (a run that defers or resumes), the `TokioRunner` replaces the
+    /// terminal event with `RunFailed` ("session write failed: ...") when an append
+    /// fails. It does this also when the run was cancelled or timed out. It records
+    /// the error in a [`SessionWriteSlot`], so [`RunResultStreaming::collect`] returns
+    /// [`RunError::SessionWrite`], as [`Runner::run`] does. The `TemporalRunner` and
+    /// the HTTP runtimes do not support deferred tool calls. They have no strict
+    /// case, so they do not make this replacement.
     ///
     /// The same cancellation precedence as [`Runner::run`] applies: once a real
     /// terminal event has been yielded, a late cancel/timeout does not append a

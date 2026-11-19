@@ -144,6 +144,14 @@ pub enum SessionEvent {
     /// A tool call was deferred and waits for a host decision.
     ///
     /// Audit and resume record. It produces no conversation message.
+    ///
+    /// While a deferral is open, the log holds a `ToolCall` with no `ToolResult`.
+    /// A `snapshot()` of that session is not valid provider input. Use
+    /// [`open_deferrals`](crate::open_deferrals) to find the open deferrals.
+    ///
+    /// **Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll
+    /// back below this version, because an older reader cannot parse the row. Enable
+    /// deferral only after every reader of the session store runs this version.
     ToolDeferred {
         /// The id the host uses to resolve the deferral.
         deferral_id: String,
