@@ -80,3 +80,30 @@ async fn collect_typed_maps_plain_run_failure_to_other() {
         other => panic!("expected Other, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn collect_typed_returns_incomplete_on_run_deferred() {
+    let call = paigasus_helikon_core::PendingToolCall::new(
+        "d1",
+        "c1",
+        "pay",
+        serde_json::json!({}),
+        "Pay?",
+        vec![],
+    );
+    let events = vec![AgentEvent::RunDeferred {
+        calls: vec![call],
+        usage: TokenUsage::default(),
+    }];
+    let stream = Box::pin(stream::iter(events));
+    let err = RunResultStreaming::new(stream)
+        .collect_typed::<Answer>()
+        .await
+        .expect_err("a deferred run has no final output");
+    assert!(matches!(
+        err,
+        AgentError::Incomplete {
+            stop_reason: paigasus_helikon_core::StopReason::Deferred { .. }
+        }
+    ));
+}

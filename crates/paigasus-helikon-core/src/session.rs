@@ -141,6 +141,25 @@ pub enum SessionEvent {
         /// Wall-clock instant the event was recorded. UTC, nanosecond precision.
         ts: Timestamp,
     },
+    /// A tool call was deferred and waits for a host decision.
+    ///
+    /// Audit and resume record. It produces no conversation message.
+    ToolDeferred {
+        /// The id the host uses to resolve the deferral.
+        deferral_id: String,
+        /// Provider-assigned call identifier.
+        call_id: String,
+        /// Tool name.
+        name: String,
+        /// JSON arguments (redacted when output redaction is on).
+        args: serde_json::Value,
+        /// The prompt for the approver.
+        prompt: String,
+        /// Agent names from the root agent to the deferring agent.
+        handoff_path: Vec<String>,
+        /// Wall-clock instant the event was recorded. UTC, nanosecond precision.
+        ts: Timestamp,
+    },
 }
 
 impl SessionEvent {
@@ -202,6 +221,20 @@ impl SessionEvent {
         }
     }
 
+    /// Construct a [`SessionEvent::ToolDeferred`] from a pending call, with
+    /// `ts = Timestamp::now()`.
+    pub fn tool_deferred(call: &crate::PendingToolCall) -> Self {
+        Self::ToolDeferred {
+            deferral_id: call.deferral_id().to_owned(),
+            call_id: call.call_id().to_owned(),
+            name: call.tool().to_owned(),
+            args: call.args().clone(),
+            prompt: call.prompt().to_owned(),
+            handoff_path: call.handoff_path().to_vec(),
+            ts: Timestamp::now(),
+        }
+    }
+
     /// The serde tag for this variant (`"user_message"`, `"compacted"`, …).
     /// Matches the `type` field written to the persisted log.
     pub fn kind(&self) -> &'static str {
@@ -214,6 +247,7 @@ impl SessionEvent {
             SessionEvent::ToolReturned { .. } => "tool_returned",
             SessionEvent::HandoffOccurred { .. } => "handoff_occurred",
             SessionEvent::Compacted { .. } => "compacted",
+            SessionEvent::ToolDeferred { .. } => "tool_deferred",
         }
     }
 
@@ -225,7 +259,8 @@ impl SessionEvent {
             | SessionEvent::ToolCalled { ts, .. }
             | SessionEvent::ToolReturned { ts, .. }
             | SessionEvent::HandoffOccurred { ts, .. }
-            | SessionEvent::Compacted { ts, .. } => *ts,
+            | SessionEvent::Compacted { ts, .. }
+            | SessionEvent::ToolDeferred { ts, .. } => *ts,
         }
     }
 
@@ -356,6 +391,10 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
             }
             SessionEvent::HandoffOccurred { .. } => {
                 // Audit-only event; no message produced.
+                contributions.push(0);
+            }
+            SessionEvent::ToolDeferred { .. } => {
+                // Audit and resume record; no message produced.
                 contributions.push(0);
             }
             SessionEvent::Compacted {
@@ -845,6 +884,18 @@ mod accessor_tests {
                     ts: epoch(),
                 },
                 "compacted",
+            ),
+            (
+                SessionEvent::ToolDeferred {
+                    deferral_id: "d".into(),
+                    call_id: "c".into(),
+                    name: "n".into(),
+                    args: serde_json::json!({}),
+                    prompt: "p".into(),
+                    handoff_path: vec![],
+                    ts: epoch(),
+                },
+                "tool_deferred",
             ),
         ];
         for (ev, tag) in cases {

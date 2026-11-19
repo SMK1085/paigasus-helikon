@@ -1,0 +1,28 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: "roundtrip(&AgentEvent::RunDeferred { calls: vec![call], usage })"
+---
+{
+  "type": "run_deferred",
+  "calls": [
+    {
+      "deferral_id": "6f1c1d3e-0000-4000-8000-000000000001",
+      "call_id": "call_1",
+      "tool": "pay",
+      "args": {
+        "amount": 10
+      },
+      "prompt": "Pay 10?",
+      "handoff_path": [
+        "triage"
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 7,
+    "output_tokens": 0,
+    "cached_input_tokens": 0,
+    "reasoning_tokens": 0,
+    "total_tokens": 0
+  }
+}

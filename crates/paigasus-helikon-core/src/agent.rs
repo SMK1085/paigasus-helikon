@@ -90,6 +90,7 @@ where
 pub struct AgentInput {
     /// The initial conversation. Typically one [`crate::Item::UserMessage`].
     pub messages: Vec<crate::Item>,
+    resolutions: Vec<(String, crate::ToolResolution)>,
 }
 
 impl AgentInput {
@@ -104,7 +105,26 @@ impl AgentInput {
             messages: vec![crate::Item::UserMessage {
                 content: vec![crate::ContentPart::Text { text: text.into() }],
             }],
+            ..Default::default()
         }
+    }
+
+    /// Add the host decision for one deferred tool call.
+    ///
+    /// Resolutions keep the order in which you add them.
+    #[must_use]
+    pub fn with_resolution(
+        mut self,
+        deferral_id: impl Into<String>,
+        resolution: crate::ToolResolution,
+    ) -> Self {
+        self.resolutions.push((deferral_id.into(), resolution));
+        self
+    }
+
+    /// The host decisions for deferred tool calls, in the order added.
+    pub fn resolutions(&self) -> &[(String, crate::ToolResolution)] {
+        &self.resolutions
     }
 }
 
@@ -345,7 +365,7 @@ impl LlmAgent<(), (), String> {
 
 /// The unified event stream emitted by an [`Agent`].
 ///
-/// Seventeen variants spanning lifecycle, raw streaming deltas,
+/// Eighteen variants spanning lifecycle, raw streaming deltas,
 /// post-aggregation semantic items, agent transitions, control signals,
 /// and terminal outcomes. The semantic-item variants
 /// (`MessageOutput`, `ToolCallItem`, `ToolOutputItem`) carry a full
@@ -445,7 +465,7 @@ pub enum AgentEvent {
         call_id: String,
         /// Tool name.
         tool: String,
-        /// JSON arguments the model proposed to call the tool with.
+        /// Effective JSON arguments (after `PreToolUse` and any policy `Replace`), redacted with the run's secret set when output redaction is on.
         args: serde_json::Value,
     },
     /// A tool call was denied by the permission layer. The model separately
@@ -484,11 +504,18 @@ pub enum AgentEvent {
         /// Human-readable error message.
         error: String,
     },
+    /// The run stopped on tool calls that need a later decision.
+    RunDeferred {
+        /// The deferred tool calls.
+        calls: Vec<crate::PendingToolCall>,
+        /// Aggregated usage across the run.
+        usage: TokenUsage,
+    },
 }
 
 impl AgentEvent {
-    /// `true` for the two events that end a run: [`AgentEvent::RunCompleted`]
-    /// and [`AgentEvent::RunFailed`].
+    /// `true` for the three events that end a run: [`AgentEvent::RunCompleted`],
+    /// [`AgentEvent::RunFailed`] and [`AgentEvent::RunDeferred`].
     ///
     /// This is the single definition of "terminal" every runner shares. A
     /// runner's cancel/timeout boundary loses to a terminal that already
@@ -496,7 +523,10 @@ impl AgentEvent {
     /// variant from silently defaulting to non-terminal here.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::RunCompleted { .. } | Self::RunFailed { .. })
+        matches!(
+            self,
+            Self::RunCompleted { .. } | Self::RunFailed { .. } | Self::RunDeferred { .. }
+        )
     }
 }
 
@@ -1120,7 +1150,7 @@ where
                             agent: target.clone(),
                         };
 
-                        let input = crate::AgentInput { messages: transcript };
+                        let input = crate::AgentInput { messages: transcript, ..Default::default() };
                         let mut sub = match target_agent.run(child, input).await {
                             Ok(s) => s,
                             Err(e) => {
@@ -1238,6 +1268,13 @@ pub enum AgentError {
     MaxHandoffsExceeded {
         /// The configured budget that was exceeded.
         limit: u32,
+    },
+
+    /// The run stopped without a final output (for example, a deferral).
+    #[error("run did not complete")]
+    Incomplete {
+        /// Why the run stopped.
+        stop_reason: crate::StopReason,
     },
 
     /// Escape hatch.
@@ -1480,7 +1517,9 @@ mod terminal_tests {
     /// inside `AgentEvent::is_terminal`'s `matches!`.
     fn classify(ev: &AgentEvent) -> bool {
         match ev {
-            AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. } => true,
+            AgentEvent::RunCompleted { .. }
+            | AgentEvent::RunFailed { .. }
+            | AgentEvent::RunDeferred { .. } => true,
             AgentEvent::RunStarted { .. }
             | AgentEvent::TurnStarted { .. }
             | AgentEvent::TokenDelta { .. }
@@ -1567,6 +1606,10 @@ mod terminal_tests {
             AgentEvent::RunFailed {
                 error: "boom".to_owned(),
             },
+            AgentEvent::RunDeferred {
+                calls: vec![],
+                usage: TokenUsage::default(),
+            },
         ]
     }
 
@@ -1579,7 +1622,7 @@ mod terminal_tests {
             every_variant().iter().map(std::mem::discriminant).collect();
         assert_eq!(
             discriminants.len(),
-            17,
+            18,
             "every_variant() must construct one instance of each distinct AgentEvent variant"
         );
     }
@@ -1596,15 +1639,29 @@ mod terminal_tests {
     }
 
     #[test]
-    fn exactly_two_variants_are_terminal() {
+    fn with_resolution_accumulates_in_order() {
+        let i = AgentInput::new()
+            .with_resolution("a", crate::ToolResolution::Approved)
+            .with_resolution(
+                "b",
+                crate::ToolResolution::Denied {
+                    reason: "no".into(),
+                },
+            );
+        assert_eq!(i.resolutions().len(), 2);
+        assert_eq!(i.resolutions()[0].0, "a");
+    }
+
+    #[test]
+    fn exactly_three_variants_are_terminal() {
         let terminal: Vec<_> = every_variant()
             .into_iter()
             .filter(AgentEvent::is_terminal)
             .collect();
         assert_eq!(
             terminal.len(),
-            2,
-            "expected exactly RunCompleted + RunFailed: {terminal:?}"
+            3,
+            "expected exactly RunCompleted + RunFailed + RunDeferred: {terminal:?}"
         );
     }
 }

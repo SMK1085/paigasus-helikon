@@ -182,3 +182,24 @@ fn two_consecutive_compactions_chain() {
         other => panic!("expected System, got {other:?}"),
     }
 }
+
+#[test]
+fn tool_deferred_produces_no_message_and_compaction_math_holds() {
+    let deferred = SessionEvent::ToolDeferred {
+        deferral_id: "d1".into(),
+        call_id: "c1".into(),
+        name: "calc".into(),
+        args: serde_json::json!({"x": 1}),
+        prompt: "ok?".into(),
+        handoff_path: vec![],
+        ts: epoch(),
+    };
+    let mut evs = vec![user("hi"), tool_called("c1"), deferred];
+    // user + ToolCall; the deferral adds no message.
+    assert_eq!(project(&evs).messages.len(), 2);
+    // Compacting the three events removes both messages and pushes one System.
+    evs.push(compacted("sum", 3));
+    let snap = project(&evs);
+    assert_eq!(snap.messages.len(), 1);
+    assert!(matches!(snap.messages[0], Item::System { .. }));
+}

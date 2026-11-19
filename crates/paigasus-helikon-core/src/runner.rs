@@ -236,6 +236,8 @@ pub struct RunResult<T = String> {
     pub events: Vec<AgentEvent>,
     /// Aggregated token usage across every turn of the run.
     pub usage: TokenUsage,
+    /// Why the run stopped. A deferred run carries the pending tool calls.
+    pub stop_reason: crate::StopReason,
 }
 
 impl RunResult<String> {
@@ -245,6 +247,8 @@ impl RunResult<String> {
     /// The `T: JsonSchema` bound is the marker that the caller has
     /// configured structured output upstream — without it,
     /// `parse_final` is just a JSON parse over unstructured text.
+    ///
+    /// Check `stop_reason` first: a deferred run has no final output to parse.
     pub fn parse_final<T>(self) -> Result<RunResult<T>, serde_json::Error>
     where
         T: serde::de::DeserializeOwned + schemars::JsonSchema,
@@ -254,6 +258,7 @@ impl RunResult<String> {
             final_output,
             events: self.events,
             usage: self.usage,
+            stop_reason: self.stop_reason,
         })
     }
 }
@@ -312,6 +317,7 @@ impl RunResultStreaming {
         let mut events = Vec::new();
         let mut final_output = String::new();
         let mut usage = crate::TokenUsage::default();
+        let mut stop_reason = crate::StopReason::Completed;
         // Capture the RunFailed string but keep draining: state-machine failures
         // record their structured error AFTER yielding RunFailed, so the slot is
         // only guaranteed populated once the stream ends.
@@ -330,6 +336,12 @@ impl RunResultStreaming {
                     }
                 }
                 crate::AgentEvent::RunCompleted { usage: u } => usage = *u,
+                crate::AgentEvent::RunDeferred { calls, usage: u } => {
+                    usage = *u;
+                    stop_reason = crate::StopReason::Deferred {
+                        calls: calls.clone(),
+                    };
+                }
                 crate::AgentEvent::RunFailed { error } => {
                     failed = Some(error.clone());
                 }
@@ -349,6 +361,7 @@ impl RunResultStreaming {
             final_output,
             events,
             usage,
+            stop_reason,
         })
     }
 
@@ -372,6 +385,7 @@ impl RunResultStreaming {
         let mut events = Vec::new();
         let mut final_text = String::new();
         let mut usage = crate::TokenUsage::default();
+        let mut stop_reason = crate::StopReason::Completed;
         let mut structured_err: Option<(Vec<String>, String)> = None;
         let mut failed: Option<String> = None;
 
@@ -388,6 +402,12 @@ impl RunResultStreaming {
                     }
                 }
                 AgentEvent::RunCompleted { usage: u } => usage = *u,
+                AgentEvent::RunDeferred { calls, usage: u } => {
+                    usage = *u;
+                    stop_reason = crate::StopReason::Deferred {
+                        calls: calls.clone(),
+                    };
+                }
                 AgentEvent::StructuredOutputFailed {
                     schema_errors,
                     final_text: ft,
@@ -418,6 +438,10 @@ impl RunResultStreaming {
             return Err(AgentError::Other(anyhow::anyhow!(err_msg)));
         }
 
+        if stop_reason != crate::StopReason::Completed {
+            return Err(AgentError::Incomplete { stop_reason });
+        }
+
         let final_output = serde_json::from_str::<T>(final_text.trim()).map_err(|e| {
             AgentError::Other(anyhow::anyhow!(
                 "collect_typed: failed to deserialize final output: {e}"
@@ -427,6 +451,7 @@ impl RunResultStreaming {
             final_output,
             events,
             usage,
+            stop_reason,
         })
     }
 }
@@ -486,6 +511,14 @@ pub enum RunError {
     /// The run exceeded its configured [`RunConfig::timeout`].
     #[error("run timed out")]
     Timeout,
+
+    /// The resume request is invalid.
+    #[error("invalid resume: {0}")]
+    InvalidResume(#[from] crate::InvalidResume),
+
+    /// A session write failed.
+    #[error("session write failed: {0}")]
+    SessionWrite(#[source] crate::SessionError),
 
     /// Escape hatch.
     #[error(transparent)]
@@ -877,5 +910,81 @@ mod interrupt_tests {
                 "{i:?}: From must agree with run_error"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod deferral_result_tests {
+    use super::*;
+    use crate::{InvalidResume, PendingToolCall, SessionError, StopReason};
+
+    fn call() -> PendingToolCall {
+        PendingToolCall::new("d1", "c1", "pay", serde_json::json!({}), "Pay?", vec![])
+    }
+
+    fn assistant(text: &str) -> AgentEvent {
+        AgentEvent::MessageOutput {
+            item: crate::Item::AssistantMessage {
+                content: vec![crate::ContentPart::Text { text: text.into() }],
+                agent: None,
+            },
+        }
+    }
+
+    fn streaming(events: Vec<AgentEvent>) -> RunResultStreaming {
+        RunResultStreaming::new(Box::pin(futures_util::stream::iter(events)))
+    }
+
+    #[tokio::test]
+    async fn collect_maps_run_deferred_to_ok_with_stop_reason() {
+        let c = call();
+        let usage = TokenUsage {
+            input_tokens: 5,
+            ..Default::default()
+        };
+        let r = streaming(vec![
+            assistant("asking"),
+            AgentEvent::RunDeferred {
+                calls: vec![c.clone()],
+                usage,
+            },
+        ])
+        .collect()
+        .await
+        .expect("a deferred run is Ok");
+        assert_eq!(r.final_output, "asking");
+        assert_eq!(r.usage.input_tokens, 5);
+        assert_eq!(r.stop_reason, StopReason::Deferred { calls: vec![c] });
+    }
+
+    #[tokio::test]
+    async fn collect_without_terminal_is_completed() {
+        let r = streaming(vec![assistant("hi")]).collect().await.unwrap();
+        assert_eq!(r.stop_reason, StopReason::Completed);
+    }
+
+    #[test]
+    fn parse_final_copies_stop_reason() {
+        let r = RunResult {
+            final_output: "1".to_owned(),
+            stop_reason: StopReason::Deferred {
+                calls: vec![call()],
+            },
+            ..Default::default()
+        };
+        let typed = r.parse_final::<u32>().unwrap();
+        assert_eq!(typed.final_output, 1);
+        assert!(matches!(typed.stop_reason, StopReason::Deferred { .. }));
+    }
+
+    #[test]
+    fn run_error_new_variants_render() {
+        assert_eq!(
+            RunError::from(InvalidResume::NoOpenDeferrals).to_string(),
+            "invalid resume: the session has no open deferred tool calls"
+        );
+        assert!(RunError::SessionWrite(SessionError::Unavailable)
+            .to_string()
+            .starts_with("session write failed: "));
     }
 }

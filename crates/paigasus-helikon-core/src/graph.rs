@@ -255,7 +255,10 @@ where
                             });
                         }
                     }
-                    let node_input = AgentInput { messages };
+                    // `resolutions` is private to `agent.rs`, so struct-update
+                    // syntax is unavailable here.
+                    let mut node_input = AgentInput::new();
+                    node_input.messages = messages;
 
                     match nodes[i].1.run(child, node_input).instrument(span.clone()).await {
                         Ok(s) => running.push(Box::pin(s.map(move |ev| (i, ev)))
