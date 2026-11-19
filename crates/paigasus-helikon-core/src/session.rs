@@ -151,7 +151,9 @@ pub enum SessionEvent {
         call_id: String,
         /// Tool name.
         name: String,
-        /// JSON arguments (redacted when output redaction is on).
+        /// The raw effective JSON arguments, not redacted. The resume runs the
+        /// tool with exactly these arguments. Any secret in the arguments
+        /// persists in the session store.
         args: serde_json::Value,
         /// The prompt for the approver.
         prompt: String,
