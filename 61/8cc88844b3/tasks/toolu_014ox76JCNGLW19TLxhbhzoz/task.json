@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014ox76JCNGLW19TLxhbhzoz",
+  "agent_id": "a11855870c100a74e",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 11: TemporalRunner rejects resume",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 74095,
+    "cache_read_tokens": 1254512,
+    "output_tokens": 8547,
+    "api_call_count": 16
+  },
+  "started_at": "2026-11-19T23:46:29.628658+01:00",
+  "completed_at": "2026-11-19T23:49:04.083635+01:00"
+}
