@@ -91,6 +91,7 @@ pub struct AgentInput {
     /// The initial conversation. Typically one [`crate::Item::UserMessage`].
     pub messages: Vec<crate::Item>,
     resolutions: Vec<(String, crate::ToolResolution)>,
+    resume_plan: Option<crate::ResumePlan>,
 }
 
 impl AgentInput {
@@ -112,6 +113,9 @@ impl AgentInput {
     /// Add the host decision for one deferred tool call.
     ///
     /// Resolutions keep the order in which you add them.
+    ///
+    /// One writer per session at a time: two resumes of one session at the
+    /// same time can both run an approved tool.
     #[must_use]
     pub fn with_resolution(
         mut self,
@@ -125,6 +129,21 @@ impl AgentInput {
     /// The host decisions for deferred tool calls, in the order added.
     pub fn resolutions(&self) -> &[(String, crate::ToolResolution)] {
         &self.resolutions
+    }
+
+    /// Attach a validated resume plan.
+    ///
+    /// A deferral-aware runner sets this. It makes the plan with
+    /// [`crate::ResumePlan::from_events`] from the session log and this input.
+    #[must_use]
+    pub fn with_resume_plan(mut self, plan: crate::ResumePlan) -> Self {
+        self.resume_plan = Some(plan);
+        self
+    }
+
+    /// The resume plan that a deferral-aware runner attached, if any.
+    pub fn resume_plan(&self) -> Option<&crate::ResumePlan> {
+        self.resume_plan.as_ref()
     }
 }
 

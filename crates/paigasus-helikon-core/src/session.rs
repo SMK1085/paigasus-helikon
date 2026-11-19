@@ -450,11 +450,20 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
 /// for any tool call left without a result (a run interrupted mid-tool) so the
 /// log always [`project`]s to a provider-valid conversation. A deferred call
 /// gets no synthetic result: it waits for a host decision.
+///
+/// On a resume ([`SessionRecorder::with_resume_plan`]), the results of the
+/// resumed calls go before the recorded input.
 #[derive(Debug)]
 pub struct SessionRecorder {
     events: Vec<SessionEvent>,
     current_agent: String,
     deferral_slot: Option<crate::DeferralSlot>,
+    /// The call ids of the resumed calls (empty when the run is no resume).
+    resume_call_ids: Vec<String>,
+    /// The tool results that the agent emits before its first turn.
+    resume_block: Vec<SessionEvent>,
+    /// `true` until the first `TurnStarted` of a resumed run.
+    in_resume_window: bool,
 }
 
 impl SessionRecorder {
@@ -466,7 +475,25 @@ impl SessionRecorder {
             events: Vec::new(),
             current_agent: root_agent.into(),
             deferral_slot: None,
+            resume_call_ids: Vec::new(),
+            resume_block: Vec::new(),
+            in_resume_window: false,
         }
+    }
+
+    /// Wire the resume plan of a resumed run.
+    ///
+    /// The runner records the new input before the stream starts, but the
+    /// results of the resumed calls must come before that input in the log.
+    /// So the recorder keeps every tool result that the agent emits before its
+    /// first `TurnStarted` apart, and [`SessionRecorder::drain`] puts these
+    /// results first. A resumed call with no result gets the synthetic
+    /// cancel result in the same place, so the deferral is closed.
+    #[must_use]
+    pub fn with_resume_plan(mut self, plan: &crate::ResumePlan) -> Self {
+        self.resume_call_ids = plan.call_ids();
+        self.in_resume_window = true;
+        self
     }
 
     /// Wire the run's deferral slot. The slot holds the raw arguments of the
@@ -530,6 +557,9 @@ impl SessionRecorder {
             AgentEvent::RunStarted { agent } | AgentEvent::AgentUpdated { agent } => {
                 self.current_agent = agent.clone();
             }
+            AgentEvent::TurnStarted { .. } => {
+                self.in_resume_window = false;
+            }
             AgentEvent::MessageOutput {
                 item: Item::AssistantMessage { content, agent },
             } => {
@@ -554,10 +584,12 @@ impl SessionRecorder {
             AgentEvent::ToolOutputItem {
                 item: Item::ToolResult { call_id, content },
             } => {
-                self.events.push(SessionEvent::tool_returned(
-                    call_id.clone(),
-                    content.clone(),
-                ));
+                let event = SessionEvent::tool_returned(call_id.clone(), content.clone());
+                if self.in_resume_window {
+                    self.resume_block.push(event);
+                } else {
+                    self.events.push(event);
+                }
             }
             AgentEvent::HandoffItem { from, to } => {
                 self.events
@@ -593,40 +625,60 @@ impl SessionRecorder {
     /// [`SessionEvent::ToolReturned`] for every [`SessionEvent::ToolCalled`]
     /// left without a matching result (a run cancelled/timed out mid-tool).
     /// The returned log always [`project`]s to a provider-valid conversation.
+    ///
+    /// On a resume, the log starts with the results of the resumed calls (and
+    /// a synthesized result for each resumed call without one), then the
+    /// recorded input and run events.
+    ///
+    /// The match is by position, because a call id can repeat in one run: a
+    /// `ToolCalled` event is closed only by a later `ToolReturned` (or
+    /// `ToolDeferred`) event with the same call id, and each later event
+    /// closes one call.
     pub fn drain(&mut self) -> Vec<SessionEvent> {
-        let returned: std::collections::HashSet<String> = self
-            .events
+        let mut out = std::mem::take(&mut self.resume_block);
+        let mut answered: Vec<String> = out
             .iter()
             .filter_map(|e| match e {
                 SessionEvent::ToolReturned { call_id, .. } => Some(call_id.clone()),
                 _ => None,
             })
             .collect();
-        let deferred: std::collections::HashSet<String> = self
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                SessionEvent::ToolDeferred { call_id, .. } => Some(call_id.clone()),
-                _ => None,
-            })
-            .collect();
-        let mut synthesized = Vec::new();
-        for e in &self.events {
-            if let SessionEvent::ToolCalled { call_id, .. } = e {
-                if !returned.contains(call_id) && !deferred.contains(call_id) {
-                    synthesized.push(SessionEvent::tool_returned(
-                        call_id.clone(),
-                        vec![ContentPart::Text {
-                            text: "tool call did not complete (run cancelled/timed out)".to_owned(),
-                        }],
-                    ));
+        for call_id in std::mem::take(&mut self.resume_call_ids) {
+            match answered.iter().position(|a| *a == call_id) {
+                Some(p) => {
+                    answered.remove(p);
                 }
+                None => out.push(cancelled_result(call_id)),
             }
         }
-        let mut out = std::mem::take(&mut self.events);
-        out.extend(synthesized);
+        out.append(&mut self.events);
+
+        let mut unanswered: Vec<String> = Vec::new();
+        for e in &out {
+            match e {
+                SessionEvent::ToolCalled { call_id, .. } => unanswered.push(call_id.clone()),
+                SessionEvent::ToolReturned { call_id, .. }
+                | SessionEvent::ToolDeferred { call_id, .. } => {
+                    if let Some(p) = unanswered.iter().position(|c| c == call_id) {
+                        unanswered.remove(p);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.extend(unanswered.into_iter().map(cancelled_result));
         out
     }
+}
+
+/// The synthetic result for a tool call that a run left without a result.
+fn cancelled_result(call_id: String) -> SessionEvent {
+    SessionEvent::tool_returned(
+        call_id,
+        vec![ContentPart::Text {
+            text: "tool call did not complete (run cancelled/timed out)".to_owned(),
+        }],
+    )
 }
 
 /// Monotonic position in a [`Session`]'s append-only log.
@@ -797,6 +849,93 @@ mod recorder_tests {
                 "tool_deferred"
             ]
         );
+    }
+
+    /// A resume plan whose one open deferral is the call `call_id`.
+    fn plan_for(call_id: &str) -> crate::ResumePlan {
+        let events = vec![
+            SessionEvent::user_message(text("hi")),
+            SessionEvent::tool_called(call_id, "pay", serde_json::json!({})),
+            SessionEvent::tool_deferred(&pending("d1", call_id, serde_json::json!({}))),
+        ];
+        let input = crate::AgentInput::new().with_resolution("d1", crate::ToolResolution::Approved);
+        crate::ResumePlan::from_events(&events, &project(&events), "root", &input, 8).unwrap()
+    }
+
+    fn tool_output_item(call_id: &str, s: &str) -> AgentEvent {
+        AgentEvent::ToolOutputItem {
+            item: Item::ToolResult {
+                call_id: call_id.into(),
+                content: text(s),
+            },
+        }
+    }
+
+    const CANCEL: &str = "tool call did not complete (run cancelled/timed out)";
+
+    #[test]
+    fn drain_puts_resume_results_before_the_input() {
+        let mut r = SessionRecorder::new("root").with_resume_plan(&plan_for("b"));
+        r.record_input(&[Item::UserMessage {
+            content: text("next"),
+        }]);
+        r.observe(&tool_output_item("b", "paid"));
+        r.observe(&AgentEvent::TurnStarted { turn: 0 });
+        r.observe(&AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: text("done"),
+                agent: None,
+            },
+        });
+        let out = r.drain();
+        let kinds: Vec<_> = out.iter().map(SessionEvent::kind).collect();
+        assert_eq!(
+            kinds,
+            ["tool_returned", "user_message", "assistant_message"]
+        );
+        assert!(
+            matches!(&out[0], SessionEvent::ToolReturned { call_id, content, .. } if call_id == "b" && content == &text("paid"))
+        );
+    }
+
+    #[test]
+    fn drain_closes_an_unanswered_planned_call_with_the_cancel_result() {
+        let mut r = SessionRecorder::new("root").with_resume_plan(&plan_for("b"));
+        r.record_input(&[Item::UserMessage {
+            content: text("next"),
+        }]);
+        let out = r.drain();
+        let kinds: Vec<_> = out.iter().map(SessionEvent::kind).collect();
+        assert_eq!(kinds, ["tool_returned", "user_message"]);
+        assert!(
+            matches!(&out[0], SessionEvent::ToolReturned { call_id, content, .. } if call_id == "b" && content == &text(CANCEL))
+        );
+    }
+
+    #[test]
+    fn drain_matches_results_by_position_not_by_id() {
+        let mut r = SessionRecorder::new("root").with_resume_plan(&plan_for("fc_0"));
+        r.observe(&tool_output_item("fc_0", "paid"));
+        r.observe(&AgentEvent::TurnStarted { turn: 0 });
+        r.observe(&tool_call_item("fc_0"));
+        let out = r.drain();
+        let kinds: Vec<_> = out.iter().map(SessionEvent::kind).collect();
+        assert_eq!(kinds, ["tool_returned", "tool_called", "tool_returned"]);
+        assert!(
+            matches!(out.last(), Some(SessionEvent::ToolReturned { call_id, content, .. }) if call_id == "fc_0" && content == &text(CANCEL))
+        );
+    }
+
+    #[test]
+    fn drain_without_a_plan_keeps_tool_results_in_place() {
+        let mut r = SessionRecorder::new("root");
+        r.record_input(&[Item::UserMessage {
+            content: text("next"),
+        }]);
+        r.observe(&tool_call_item("a"));
+        r.observe(&tool_output_item("a", "ok"));
+        let kinds: Vec<_> = r.drain().iter().map(SessionEvent::kind).collect();
+        assert_eq!(kinds, ["user_message", "tool_called", "tool_returned"]);
     }
 
     #[test]

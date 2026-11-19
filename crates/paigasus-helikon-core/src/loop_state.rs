@@ -767,7 +767,7 @@ fn turn_tools(ctx: &TransitionCtx<'_>) -> Vec<ToolDef> {
 /// `System` and **all** tool calls/results (they reference tools the target
 /// does not define), keep user + assistant-text items, and append a transfer
 /// note so the target has routing context and the transcript is never empty.
-fn thread_handoff_transcript(conversation: &[Item]) -> Vec<Item> {
+pub(crate) fn thread_handoff_transcript(conversation: &[Item]) -> Vec<Item> {
     let mut out: Vec<Item> = conversation
         .iter()
         .filter(|i| {
