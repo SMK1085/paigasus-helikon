@@ -12,8 +12,9 @@ use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use futures_util::stream::StreamExt as _;
 use paigasus_helikon_core::{
-    effective_interrupt, Agent, AgentEvent, AgentInput, CancellationToken, RunConfig, RunContext,
-    RunError, RunInterrupt, RunResult, RunResultStreaming, Runner, Session, SessionRecorder,
+    effective_interrupt, open_deferrals, Agent, AgentEvent, AgentInput, CancellationToken,
+    DeferralSlot, ResumePlan, RunConfig, RunContext, RunError, RunInterrupt, RunResult,
+    RunResultStreaming, Runner, Session, SessionError, SessionRecorder, StopReason,
 };
 
 pub mod retry;
@@ -74,43 +75,90 @@ fn controlled(
     (Box::pin(out), handle)
 }
 
-/// Snapshot the session into the merged input and seed a recorder with the
-/// run's new-turn messages. A read failure is a hard error: the run cannot
-/// faithfully resume from an unreadable session, so it fails before the agent
-/// starts. (The write side, by contrast, is best-effort — see `finalize`.)
+/// What [`load_and_record`] gives the run.
+struct Loaded {
+    /// The input for the agent.
+    input: AgentInput,
+    /// The recorder, seeded with the run's new input messages.
+    recorder: Arc<Mutex<SessionRecorder>>,
+    /// `true` when the run resumes deferred tool calls.
+    resuming: bool,
+}
+
+/// Read the session, make the agent input, and seed a recorder with the run's
+/// new input messages.
+///
+/// A read failure is a hard error: the run cannot faithfully resume from an
+/// unreadable session, so it fails before the agent starts.
+///
+/// The run resumes when the input has resolutions or the log has open
+/// deferrals. A resume gets a validated [`ResumePlan`]: the plan carries the
+/// history, and the agent input carries only the new messages. An invalid
+/// resume fails with `RunError::InvalidResume` before the agent starts, and
+/// nothing is recorded. Other runs get `history ++ input.messages`, as before.
+///
+/// The recorder always gets the run's deferral slot, so a stored
+/// `ToolDeferred` event holds the raw arguments, not the redacted event copy.
 async fn load_and_record(
     session: &Arc<dyn Session>,
     agent_name: &str,
     input: AgentInput,
-) -> Result<(AgentInput, Arc<Mutex<SessionRecorder>>), RunError> {
+    deferrals: DeferralSlot,
+    max_agent_depth: u32,
+) -> Result<Loaded, RunError> {
     let snapshot = session
         .snapshot()
         .await
         .map_err(|e| RunError::Other(anyhow::Error::new(e)))?;
-    let mut recorder = SessionRecorder::new(agent_name);
-    recorder.record_input(&input.messages);
+    let events = session
+        .events(None)
+        .await
+        .map_err(|e| RunError::Other(anyhow::Error::new(e)))?;
+    let resuming = !input.resolutions().is_empty() || !open_deferrals(&events).is_empty();
 
-    let mut merged = AgentInput::new();
-    merged.messages = snapshot.messages;
-    merged.messages.extend(input.messages);
-    Ok((merged, Arc::new(Mutex::new(recorder))))
+    let mut recorder = SessionRecorder::new(agent_name).with_deferral_slot(deferrals);
+    let mut agent_input = AgentInput::new();
+    if resuming {
+        let plan =
+            ResumePlan::from_events(&events, &snapshot, agent_name, &input, max_agent_depth)?;
+        recorder = recorder.with_resume_plan(&plan);
+        recorder.record_input(&input.messages);
+        agent_input.messages = input.messages;
+        agent_input = agent_input.with_resume_plan(plan);
+    } else {
+        recorder.record_input(&input.messages);
+        agent_input.messages = snapshot.messages;
+        agent_input.messages.extend(input.messages);
+    }
+    Ok(Loaded {
+        input: agent_input,
+        recorder: Arc::new(Mutex::new(recorder)),
+        resuming,
+    })
 }
 
 /// Post-run finalization: drain the recorder and append the run's events.
-/// Persistence is best-effort — an append error is logged, never propagated, so
-/// the run's outcome (Ok / Cancelled / Timeout / Agent error) is unchanged.
-async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecorder>>) {
+///
+/// An append error is logged and returned. The caller decides what it means:
+/// a run that defers or resumes fails with it (the session lost the deferral
+/// or the resumed results), and other runs ignore it (best-effort).
+async fn finalize(
+    session: &Arc<dyn Session>,
+    recorder: &Arc<Mutex<SessionRecorder>>,
+) -> Result<(), SessionError> {
     let events = recorder
         .lock()
         .expect("session recorder mutex poisoned")
         .drain();
-    if let Err(e) = session.append(&events).await {
+    let result = session.append(&events).await;
+    if let Err(e) = &result {
         tracing::warn!(
             target: "paigasus::runtime_tokio::runner",
             error = %e,
-            "session persistence failed during finalize; run outcome unaffected"
+            "session persistence failed during finalize"
         );
     }
+    result
 }
 
 /// The default ephemeral execution backend. Stateless.
@@ -130,15 +178,28 @@ where
         config: RunConfig,
     ) -> Result<RunResult, RunError> {
         let timeout = config.timeout;
+        let max_agent_depth = config.max_agent_depth;
         let ctx = ctx.with_run_config(config);
         let cancel = ctx.cancel().clone();
         let session = ctx.session().clone();
         let failure = ctx.failure_handle();
 
-        // Load persisted history and seed the recorder with the new turn.
-        let (merged, recorder) = load_and_record(&session, agent.name(), input).await?;
+        // Load persisted history (or the resume plan) and seed the recorder
+        // with the new turn.
+        let Loaded {
+            input,
+            recorder,
+            resuming,
+        } = load_and_record(
+            &session,
+            agent.name(),
+            input,
+            ctx.deferral_handle(),
+            max_agent_depth,
+        )
+        .await?;
 
-        let stream = agent.run(ctx, merged).await?;
+        let stream = agent.run(ctx, input).await?;
         let (controlled_stream, interrupt) = controlled(stream, cancel, timeout);
         let rec_inspect = Arc::clone(&recorder);
         let recorded = controlled_stream
@@ -154,7 +215,20 @@ where
         let collected = RunResultStreaming::with_failure(recorded, failure)
             .collect()
             .await;
-        finalize(&session, &recorder).await;
+        let written = finalize(&session, &recorder).await;
+
+        // A run that defers or resumes must not lose its write: the session
+        // would lose the deferral, or the results of calls that may have run.
+        // This error wins over the agent result and the interrupt.
+        let deferred = matches!(
+            &collected,
+            Ok(r) if matches!(r.stop_reason, StopReason::Deferred { .. })
+        );
+        if let Err(e) = written {
+            if resuming || deferred {
+                return Err(RunError::SessionWrite(e));
+            }
+        }
 
         // A genuine terminal event (RunCompleted/RunFailed) is the run's true
         // outcome; a cancel/timeout overrides ONLY when no terminal was
@@ -181,14 +255,26 @@ where
         config: RunConfig,
     ) -> Result<RunResultStreaming, RunError> {
         let timeout = config.timeout;
+        let max_agent_depth = config.max_agent_depth;
         let ctx = ctx.with_run_config(config);
         let cancel = ctx.cancel().clone();
         let session = ctx.session().clone();
         let failure = ctx.failure_handle();
 
-        let (merged, recorder) = load_and_record(&session, agent.name(), input).await?;
+        let Loaded {
+            input,
+            recorder,
+            resuming,
+        } = load_and_record(
+            &session,
+            agent.name(),
+            input,
+            ctx.deferral_handle(),
+            max_agent_depth,
+        )
+        .await?;
 
-        let stream = agent.run(ctx, merged).await?;
+        let stream = agent.run(ctx, input).await?;
         let (controlled_stream, interrupt) = controlled(stream, cancel, timeout);
         let rec_inspect = Arc::clone(&recorder);
         let mut recorded = controlled_stream
@@ -208,11 +294,20 @@ where
                 // polling (and drop the stream) the moment it sees the terminal,
                 // so anything after the `yield` could never run.
                 if AgentEvent::is_terminal(&ev) {
-                    if !finalized {
-                        finalize(&session, &recorder).await;
-                        finalized = true;
-                    }
                     saw_terminal = true;
+                    if !finalized {
+                        finalized = true;
+                        let written = finalize(&session, &recorder).await;
+                        // A run that defers or resumes must not lose its
+                        // write; it ends with RunFailed instead.
+                        let strict = resuming || matches!(ev, AgentEvent::RunDeferred { .. });
+                        if let (Err(e), true) = (written, strict) {
+                            yield AgentEvent::RunFailed {
+                                error: format!("session write failed: {e}"),
+                            };
+                            continue;
+                        }
+                    }
                 }
                 yield ev;
             }
@@ -226,7 +321,8 @@ where
             // no interrupt) deliberately does not finalize here — pre-existing
             // behaviour, preserved.
             if let Some(i) = effective_interrupt(interrupt.get(), saw_terminal) {
-                finalize(&session, &recorder).await;
+                // Best-effort: the run already failed with the interrupt.
+                let _ = finalize(&session, &recorder).await;
                 yield i.terminal_event();
             }
         };

@@ -89,11 +89,26 @@ where
     /// above. Note this is an ordering guarantee, not a durability one: persistence is
     /// best-effort, so an implementation may log rather than propagate an append
     /// failure, and a run that fails before the agent starts never reaches finalize at
-    /// all.
+    /// all. There are two strict cases. A run that ends with `RunDeferred` and a run
+    /// that resumes deferred tool calls must not lose the write. On an append failure
+    /// they return [`RunError::SessionWrite`]: the session lost the deferral, or the
+    /// results of calls that may have run.
+    ///
+    /// **Deferred tool calls.** A run whose input has resolutions, or whose session has
+    /// open deferrals ([`crate::open_deferrals`]), resumes the deferred calls. The
+    /// runner validates the request with [`crate::ResumePlan::from_events`] before the
+    /// agent starts. An invalid request returns [`RunError::InvalidResume`], and the
+    /// runner records nothing. A runner that does not support resume must reject a run
+    /// on a session with open deferrals (use [`crate::open_deferrals`]). Otherwise its
+    /// run puts a user message after a `ToolCall` that has no result.
+    ///
+    /// **One writer per session at a time.** The host must make sure of this (for
+    /// example with a lease). Two resumes of one session at the same time can both run
+    /// an approved tool.
     ///
     /// **Cancellation/timeout is best-effort and loses to a genuine terminal
     /// event that already occurred.** If the run reaches a terminal
-    /// (`RunCompleted`/`RunFailed`) before — or in the same poll as — a cancel or
+    /// (`RunCompleted`/`RunFailed`/`RunDeferred`) before — or in the same poll as — a cancel or
     /// timeout, the runner reports that real outcome (`Ok`, or the structured
     /// `Err(RunError::Agent(..))`), not `Err(RunError::Cancelled)` /
     /// `Err(RunError::Timeout)`. The cancel/timeout wins only when it aborted the
@@ -114,7 +129,9 @@ where
     /// Session loading/seeding matches [`Runner::run`]. **The returned stream
     /// must be driven to its terminal for the run's events to be persisted:** a
     /// consumer that drops the stream early may skip the finalize step and leave
-    /// a partial turn (or nothing) written.
+    /// a partial turn (or nothing) written. In the two strict cases of
+    /// [`Runner::run`] (a run that defers or resumes), an append failure
+    /// replaces the terminal event with `RunFailed` ("session write failed: ...").
     ///
     /// The same cancellation precedence as [`Runner::run`] applies: once a real
     /// terminal event has been yielded, a late cancel/timeout does not append a
@@ -136,6 +153,10 @@ where
     /// continue a multi-turn session, or to retry a failed run without
     /// re-appending the previous turn's user message. (With a `Session` present,
     /// [`Runner::run`]'s `input` is the *new turn*; the session owns history.)
+    ///
+    /// The empty input has no resolutions. So on a session with open deferred
+    /// tool calls, this returns [`RunError::InvalidResume`]. To resume deferred
+    /// calls, use [`Runner::run`] with an input that resolves each open call.
     async fn resume(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -148,6 +169,9 @@ where
     /// Streaming counterpart of [`Runner::resume`]: resumes from session
     /// history with no new input and returns a streaming result handle instead
     /// of an aggregated [`RunResult`].
+    ///
+    /// As with [`Runner::resume`], a session with open deferred tool calls
+    /// gives [`RunError::InvalidResume`].
     async fn resume_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
