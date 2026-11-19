@@ -112,6 +112,11 @@ where
     /// ids is not deferred. Extended on each handoff; empty for a sub-agent
     /// child.
     open_call_ids: Vec<String>,
+    /// Optional turn-boundary checkpoint, called by the agent loop between
+    /// the tool results of one turn and the next model call. Inherited by
+    /// `handoff_child`, cleared by `subagent_child`, and **not** projected
+    /// into [`ToolContext`].
+    turn_checkpoint: Option<Arc<dyn crate::TurnCheckpoint<Ctx>>>,
 }
 
 /// How the ask points of the authorization pipeline (each guard `Ask` and a
@@ -202,6 +207,7 @@ where
             handoff_path: Vec::new(),
             deferrals: DeferralSlot::new(),
             open_call_ids: Vec::new(),
+            turn_checkpoint: None,
         }
     }
 
@@ -438,6 +444,7 @@ where
             handoff_path: self.handoff_path.clone(),
             deferrals: self.deferrals.clone(),
             open_call_ids: self.open_call_ids.clone(),
+            turn_checkpoint: self.turn_checkpoint.clone(),
         }
     }
 
@@ -471,6 +478,7 @@ where
             handoff_path: Vec::new(),
             deferrals: DeferralSlot::new(),
             open_call_ids: Vec::new(),
+            turn_checkpoint: None,
         }
     }
 
@@ -520,6 +528,24 @@ where
     pub fn with_approval_handler(mut self, handler: Arc<dyn ApprovalHandler>) -> Self {
         self.approval_handler = Some(handler);
         self
+    }
+
+    /// Install the turn-boundary checkpoint (consuming builder). See
+    /// [`crate::TurnCheckpoint`].
+    pub fn with_turn_checkpoint(mut self, cp: Arc<dyn crate::TurnCheckpoint<Ctx>>) -> Self {
+        self.turn_checkpoint = Some(cp);
+        self
+    }
+
+    /// Remove the turn-boundary checkpoint (consuming builder).
+    pub fn without_turn_checkpoint(mut self) -> Self {
+        self.turn_checkpoint = None;
+        self
+    }
+
+    /// The installed turn-boundary checkpoint, if any.
+    pub fn turn_checkpoint(&self) -> Option<&Arc<dyn crate::TurnCheckpoint<Ctx>>> {
+        self.turn_checkpoint.as_ref()
     }
 
     /// The current permission mode.
@@ -914,6 +940,48 @@ mod runcontext_tests {
         assert_eq!(c.open_call_ids(), &["fc_0".to_owned(), "fc_1".to_owned()]);
         assert_eq!(p.open_call_ids(), &["fc_0".to_owned()]);
         assert!(c.subagent_child().open_call_ids().is_empty());
+    }
+
+    struct ContinueCheckpoint;
+
+    #[async_trait::async_trait]
+    impl crate::TurnCheckpoint<()> for ContinueCheckpoint {
+        async fn at_boundary(
+            &self,
+            _ctx: &RunContext<()>,
+            _boundary: &crate::TurnBoundary,
+        ) -> crate::CheckpointDecision {
+            crate::CheckpointDecision::Continue
+        }
+    }
+
+    #[test]
+    fn turn_checkpoint_defaults_to_none() {
+        assert!(RunContext::ephemeral(()).turn_checkpoint().is_none());
+    }
+
+    #[test]
+    fn with_and_without_turn_checkpoint() {
+        let cp: Arc<dyn crate::TurnCheckpoint<()>> = Arc::new(ContinueCheckpoint);
+        let ctx = RunContext::ephemeral(()).with_turn_checkpoint(Arc::clone(&cp));
+        assert!(Arc::ptr_eq(ctx.turn_checkpoint().unwrap(), &cp));
+        let ctx = ctx.without_turn_checkpoint();
+        assert!(ctx.turn_checkpoint().is_none());
+    }
+
+    #[test]
+    fn handoff_child_shares_turn_checkpoint() {
+        let cp: Arc<dyn crate::TurnCheckpoint<()>> = Arc::new(ContinueCheckpoint);
+        let ctx = RunContext::ephemeral(()).with_turn_checkpoint(Arc::clone(&cp));
+        let child = ctx.handoff_child();
+        assert!(Arc::ptr_eq(child.turn_checkpoint().unwrap(), &cp));
+    }
+
+    #[test]
+    fn subagent_child_drops_turn_checkpoint() {
+        let cp: Arc<dyn crate::TurnCheckpoint<()>> = Arc::new(ContinueCheckpoint);
+        let ctx = RunContext::ephemeral(()).with_turn_checkpoint(cp);
+        assert!(ctx.subagent_child().turn_checkpoint().is_none());
     }
 
     #[test]

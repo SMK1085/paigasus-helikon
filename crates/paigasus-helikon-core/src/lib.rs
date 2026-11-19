@@ -44,6 +44,7 @@
 pub mod agent;
 pub mod agent_as_tool;
 pub mod agent_builder;
+pub mod checkpoint;
 pub mod command_match;
 mod compacting_session;
 pub mod context;
@@ -76,6 +77,7 @@ pub mod __private;
 pub use agent::*;
 pub use agent_as_tool::*;
 pub use agent_builder::*;
+pub use checkpoint::*;
 pub use compacting_session::{CompactingSession, CompactingSessionBuilder, CompactingSessionError};
 pub use context::*;
 pub use deferral::*;
