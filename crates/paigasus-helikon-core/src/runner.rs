@@ -339,7 +339,7 @@ impl SessionWriteSlot {
     }
 
     /// Take the recorded error, if any.
-    pub fn take(&self) -> Option<crate::SessionError> {
+    pub(crate) fn take(&self) -> Option<crate::SessionError> {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 }
@@ -369,7 +369,7 @@ impl RunResultStreaming {
     /// After the stream is drained, a recorded error wins over every other
     /// result: [`RunResultStreaming::collect`] returns
     /// [`RunError::SessionWrite`], and [`RunResultStreaming::collect_typed`]
-    /// returns [`AgentError::Other`] with the session-write message.
+    /// returns [`AgentError::Session`] with the recorded error.
     #[must_use]
     pub fn with_session_write(mut self, slot: SessionWriteSlot) -> Self {
         self.session_write = Some(slot);
@@ -518,9 +518,7 @@ impl RunResultStreaming {
         }
 
         if let Some(e) = self.take_session_write() {
-            return Err(AgentError::Other(anyhow::anyhow!(
-                "session write failed: {e}"
-            )));
+            return Err(AgentError::Session(e));
         }
         if let Some(err_msg) = failed {
             // Primary: the structured side-channel (populated post-drain).
@@ -1120,10 +1118,8 @@ mod deferral_result_tests {
         .collect_typed::<String>()
         .await;
         match r {
-            Err(AgentError::Other(e)) => {
-                assert!(e.to_string().starts_with("session write failed: "), "{e}")
-            }
-            other => panic!("expected AgentError::Other, got {other:?}"),
+            Err(AgentError::Session(SessionError::Unavailable)) => {}
+            other => panic!("expected AgentError::Session(Unavailable), got {other:?}"),
         }
     }
 
