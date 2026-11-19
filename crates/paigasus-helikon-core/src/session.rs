@@ -448,11 +448,13 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
 /// it every [`crate::AgentEvent`] as the stream flows. [`SessionRecorder::drain`]
 /// returns the accumulated log, synthesizing a [`SessionEvent::ToolReturned`]
 /// for any tool call left without a result (a run interrupted mid-tool) so the
-/// log always [`project`]s to a provider-valid conversation.
+/// log always [`project`]s to a provider-valid conversation. A deferred call
+/// gets no synthetic result: it waits for a host decision.
 #[derive(Debug)]
 pub struct SessionRecorder {
     events: Vec<SessionEvent>,
     current_agent: String,
+    deferral_slot: Option<crate::DeferralSlot>,
 }
 
 impl SessionRecorder {
@@ -463,7 +465,19 @@ impl SessionRecorder {
         Self {
             events: Vec::new(),
             current_agent: root_agent.into(),
+            deferral_slot: None,
         }
+    }
+
+    /// Wire the run's deferral slot. The slot holds the raw arguments of the
+    /// deferred calls. The recorder persists these raw arguments in
+    /// [`SessionEvent::ToolDeferred`], because the resume runs the tool with
+    /// exactly these arguments. The arguments in [`AgentEvent::RunDeferred`]
+    /// can be redacted.
+    #[must_use]
+    pub fn with_deferral_slot(mut self, slot: crate::DeferralSlot) -> Self {
+        self.deferral_slot = Some(slot);
+        self
     }
 
     /// Record the run's input messages (the new turn). The agent never re-emits
@@ -549,6 +563,28 @@ impl SessionRecorder {
                 self.events
                     .push(SessionEvent::handoff_occurred(from.clone(), to.clone()));
             }
+            AgentEvent::RunDeferred { calls, .. } => {
+                let mut warned = false;
+                for call in calls {
+                    let raw = self
+                        .deferral_slot
+                        .as_ref()
+                        .and_then(|slot| slot.take(call.deferral_id()));
+                    match raw {
+                        Some(raw) => self.events.push(SessionEvent::tool_deferred(&raw)),
+                        None => {
+                            if !warned {
+                                warned = true;
+                                tracing::warn!(
+                                    target: "paigasus::core::session",
+                                    "RunDeferred call has no raw arguments in the deferral slot; recording the event copy, whose arguments can be redacted"
+                                );
+                            }
+                            self.events.push(SessionEvent::tool_deferred(call));
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -566,10 +602,18 @@ impl SessionRecorder {
                 _ => None,
             })
             .collect();
+        let deferred: std::collections::HashSet<String> = self
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                SessionEvent::ToolDeferred { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .collect();
         let mut synthesized = Vec::new();
         for e in &self.events {
             if let SessionEvent::ToolCalled { call_id, .. } = e {
-                if !returned.contains(call_id) {
+                if !returned.contains(call_id) && !deferred.contains(call_id) {
                     synthesized.push(SessionEvent::tool_returned(
                         call_id.clone(),
                         vec![ContentPart::Text {
@@ -640,6 +684,119 @@ mod recorder_tests {
 
     fn text(s: &str) -> Vec<ContentPart> {
         vec![ContentPart::Text { text: s.to_owned() }]
+    }
+
+    fn pending(
+        deferral_id: &str,
+        call_id: &str,
+        args: serde_json::Value,
+    ) -> crate::PendingToolCall {
+        crate::PendingToolCall::new(
+            deferral_id,
+            call_id,
+            "pay",
+            args,
+            "ok?",
+            vec!["root".into()],
+        )
+    }
+
+    fn tool_call_item(call_id: &str) -> AgentEvent {
+        AgentEvent::ToolCallItem {
+            item: Item::ToolCall {
+                call_id: call_id.into(),
+                name: "pay".into(),
+                args: serde_json::json!({}),
+            },
+        }
+    }
+
+    fn run_deferred(calls: Vec<crate::PendingToolCall>) -> AgentEvent {
+        AgentEvent::RunDeferred {
+            calls,
+            usage: Default::default(),
+        }
+    }
+
+    #[test]
+    fn observe_run_deferred_records_raw_args_from_the_slot() {
+        let slot = crate::DeferralSlot::new();
+        slot.record(vec![pending(
+            "d1",
+            "a",
+            serde_json::json!({"token": "sk-raw"}),
+        )]);
+        let mut r = SessionRecorder::new("root").with_deferral_slot(slot);
+        r.observe(&tool_call_item("a"));
+        r.observe(&run_deferred(vec![pending(
+            "d1",
+            "a",
+            serde_json::json!({"token": "***"}),
+        )]));
+        let out = r.drain();
+        let args = out
+            .iter()
+            .find_map(|e| match e {
+                SessionEvent::ToolDeferred { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("a ToolDeferred event");
+        assert_eq!(args, serde_json::json!({"token": "sk-raw"}));
+    }
+
+    #[test]
+    fn observe_run_deferred_without_a_slot_records_the_event_copy() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&tool_call_item("a"));
+        r.observe(&run_deferred(vec![pending(
+            "d1",
+            "a",
+            serde_json::json!({"token": "***"}),
+        )]));
+        let out = r.drain();
+        assert!(matches!(
+            out.last(),
+            Some(SessionEvent::ToolDeferred { args, .. }) if args == &serde_json::json!({"token": "***"})
+        ));
+    }
+
+    #[test]
+    fn observe_does_not_record_approval_requested() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&AgentEvent::ApprovalRequested {
+            call_id: "a".into(),
+            tool: "pay".into(),
+            args: serde_json::json!({}),
+        });
+        assert!(r.drain().is_empty());
+    }
+
+    #[test]
+    fn drain_does_not_synthesize_for_a_deferred_call() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&tool_call_item("a"));
+        r.observe(&tool_call_item("b"));
+        r.observe(&AgentEvent::ToolOutputItem {
+            item: Item::ToolResult {
+                call_id: "a".into(),
+                content: text("done"),
+            },
+        });
+        r.observe(&run_deferred(vec![pending(
+            "d1",
+            "b",
+            serde_json::json!({}),
+        )]));
+        let kinds: Vec<_> = r.drain().iter().map(SessionEvent::kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                "tool_called",
+                "tool_called",
+                "tool_returned",
+                "tool_deferred"
+            ]
+        );
     }
 
     #[test]

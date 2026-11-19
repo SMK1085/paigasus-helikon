@@ -183,6 +183,13 @@ impl DeferralSlot {
         self.0.lock().unwrap().clone()
     }
 
+    /// Remove and return the call with this deferral id.
+    pub(crate) fn take(&self, deferral_id: &str) -> Option<PendingToolCall> {
+        let mut calls = self.0.lock().unwrap();
+        let idx = calls.iter().position(|c| c.deferral_id() == deferral_id)?;
+        Some(calls.remove(idx))
+    }
+
     /// Append calls to the slot.
     pub(crate) fn record(&self, calls: Vec<PendingToolCall>) {
         self.0.lock().unwrap().extend(calls);
@@ -196,6 +203,49 @@ impl fmt::Debug for DeferralSlot {
             .field("calls", &self.0.lock().unwrap().len())
             .finish()
     }
+}
+
+/// Find the deferrals in a session log that no result has closed.
+///
+/// A [`SessionEvent::ToolDeferred`] at position `i` is open when no
+/// [`SessionEvent::ToolReturned`] with the same `call_id` follows at a position
+/// after `i`. The calls come in log order and carry the raw arguments from the
+/// event fields.
+///
+/// While a deferral is open, the log holds a `ToolCall` without a
+/// `ToolResult`. A `snapshot()` of that session is therefore not valid
+/// provider input.
+pub fn open_deferrals(events: &[crate::SessionEvent]) -> Vec<PendingToolCall> {
+    use crate::SessionEvent;
+    let mut open = Vec::new();
+    for (i, event) in events.iter().enumerate() {
+        let SessionEvent::ToolDeferred {
+            deferral_id,
+            call_id,
+            name,
+            args,
+            prompt,
+            handoff_path,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let closed = events[i + 1..]
+            .iter()
+            .any(|e| matches!(e, SessionEvent::ToolReturned { call_id: c, .. } if c == call_id));
+        if !closed {
+            open.push(PendingToolCall::new(
+                deferral_id.clone(),
+                call_id.clone(),
+                name.clone(),
+                args.clone(),
+                prompt.clone(),
+                handoff_path.clone(),
+            ));
+        }
+    }
+    open
 }
 
 #[cfg(test)]

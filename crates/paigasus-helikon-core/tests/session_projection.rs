@@ -1,7 +1,7 @@
 //! Unit tests for [`project`].
 
 use jiff::Timestamp;
-use paigasus_helikon_core::{project, ContentPart, Item, SessionEvent};
+use paigasus_helikon_core::{open_deferrals, project, ContentPart, Item, SessionEvent};
 
 fn epoch() -> Timestamp {
     Timestamp::from_second(0).expect("0 is a valid timestamp")
@@ -202,4 +202,47 @@ fn tool_deferred_produces_no_message_and_compaction_math_holds() {
     let snap = project(&evs);
     assert_eq!(snap.messages.len(), 1);
     assert!(matches!(snap.messages[0], Item::System { .. }));
+}
+
+fn tool_deferred(deferral_id: &str, call_id: &str) -> SessionEvent {
+    SessionEvent::ToolDeferred {
+        deferral_id: deferral_id.into(),
+        call_id: call_id.into(),
+        name: "calc".into(),
+        args: serde_json::json!({"x": 1}),
+        prompt: "ok?".into(),
+        handoff_path: vec![],
+        ts: epoch(),
+    }
+}
+
+fn open_ids(evs: &[SessionEvent]) -> Vec<String> {
+    open_deferrals(evs)
+        .iter()
+        .map(|c| c.deferral_id().to_owned())
+        .collect()
+}
+
+#[test]
+fn open_deferrals_uses_the_position_rule() {
+    let evs = vec![
+        tool_called("fc_0"),
+        tool_deferred("d1", "fc_0"),
+        tool_returned("fc_0"),
+        tool_called("fc_0"),
+        tool_deferred("d2", "fc_0"),
+    ];
+    assert_eq!(open_ids(&evs), ["d2"]);
+    // Built from the event fields, raw args included.
+    assert_eq!(open_deferrals(&evs)[0].args(), &serde_json::json!({"x": 1}));
+}
+
+#[test]
+fn open_deferrals_ignores_a_result_before_the_deferral() {
+    let evs = vec![
+        tool_returned("fc_0"),
+        tool_called("fc_0"),
+        tool_deferred("d1", "fc_0"),
+    ];
+    assert_eq!(open_ids(&evs), ["d1"]);
 }
