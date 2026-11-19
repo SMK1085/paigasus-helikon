@@ -14,7 +14,7 @@ For orientation — how to pick crates and add them to your `Cargo.toml` — see
 
 ## Crate table
 
-This table deliberately carries no version numbers. Each published crate's name links to its [docs.rs](https://docs.rs) page, which always shows the current published version; for the in-tree version, read that crate's `Cargo.toml`. The internal `paigasus-helikon-sessions-testkit` row is the one exception — it is `publish = false`, so it has no docs.rs page and no version to report. Versions move every release, so any number mirrored here would be wrong within days.
+This table deliberately carries no version numbers. Each published crate's name links to its [docs.rs](https://docs.rs) page, which always shows the current published version; for the in-tree version, read that crate's `Cargo.toml`. Versions move every release, so any number mirrored here would be wrong within days.
 
 | Crate | Concern | State |
 | --- | --- | --- |
@@ -38,9 +38,9 @@ This table deliberately carries no version numbers. Each published crate's name 
 | [`paigasus-helikon-tools`](https://docs.rs/paigasus-helikon-tools) | Sandboxed Read/Write/Edit/Bash tools (+ `WebFetch`/`WebSearch` behind `web`) | published |
 | [`paigasus-helikon-evals`](https://docs.rs/paigasus-helikon-evals) | Evaluation harness — datasets, evaluators, `MockModel`, SQLite/Parquet trace sinks | published |
 | [`paigasus-helikon-cli`](https://docs.rs/paigasus-helikon-cli) | `helikon` / `paigasus-helikon` CLI binaries; lib target is internal, no stability guarantee | published (binary crate) |
-| `paigasus-helikon-sessions-testkit` | Shared `Session` conformance test harness (internal — never published) | internal — `publish = false` |
+| [`paigasus-helikon-sessions-testkit`](https://docs.rs/paigasus-helikon-sessions-testkit) | Shared `Session` conformance suite — run it against your own backend | published |
 
-Every crate above the `-sessions-testkit` row publishes to crates.io — the last two stubs (`-evals`, `-cli`) ascended to real implementations in SMA-332/SMA-333, following the four-remaining-crates ascend before them (`-runtime-axum`, `-runtime-temporal`, `-runtime-agentcore`). `paigasus-helikon-sessions-testkit` is the sole `publish = false` crate under `crates/`, and it is an intentional internal test harness rather than a stub awaiting an ascend.
+Every crate under `crates/` publishes to crates.io — the last two stubs (`-evals`, `-cli`) ascended to real implementations in SMA-332/SMA-333, following the four-remaining-crates ascend before them (`-runtime-axum`, `-runtime-temporal`, `-runtime-agentcore`).
 
 The workspace has three further members outside `crates/`:
 
@@ -48,7 +48,7 @@ The workspace has three further members outside `crates/`:
 - `paigasus-helikon-workspace-lints` (under `tests/workspace-lints/`, `version = "0.0.0"`, `publish = false`) — an internal workspace-wide source-lint suite; its current lint asserts that no `tracing` macro passes `target`/`parent` with `=` instead of `:` (which would silently record a field and leave the event on its module-path target).
 - `paigasus-helikon-provider-stream-conformance` (under `tests/provider-stream-conformance/`, `version = "0.0.0"`, `publish = false`) — the cross-provider `Model::invoke` stream event-ordering conformance suite, driving every provider translator over a paced HTTP server.
 
-Like `-sessions-testkit`, all three are intentional non-published test harnesses, not stubs.
+All three are intentional non-published test harnesses, not stubs.
 
 ## Facade feature → re-export map
 

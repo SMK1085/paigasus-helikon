@@ -1,6 +1,59 @@
-//! Shared `Session` conformance suite (spec §5). Each backend supplies a
-//! factory that yields a fresh, empty session; these functions exercise the
-//! append/read/projection/concurrency contract every backend must uphold.
+//! Session conformance suite for Paigasus Helikon backends, including your own.
+//!
+//! Each function takes a factory that returns a session. The suite runs four
+//! tests against that session:
+//!
+//! - `run_append_read`: events that you append come back in order, with the
+//!   same content.
+//! - `run_watermark_exclusive`: a read with a watermark returns only the
+//!   events after it.
+//! - `run_projection`: `snapshot()` equals `project(events())`.
+//! - `run_concurrent_writers`: tasks append at the same time and every event
+//!   survives once.
+//!
+//! `run_all` runs all four tests.
+//!
+//! # Factory contract
+//!
+//! Each call to the factory must return a fresh, empty session. If you return
+//! the same session for two calls, the second test sees the events of the first
+//! test and fails.
+//!
+//! # Tokio runtime
+//!
+//! `run_concurrent_writers` calls `tokio::spawn`. `run_all` panics if it runs
+//! outside a Tokio runtime. We recommend the `multi_thread` flavor with
+//! `worker_threads = 4`. The default current-thread runtime works, but it does
+//! not run the writers in parallel.
+//!
+//! # Example
+//!
+//! ```
+//! use std::sync::Arc;
+//! use paigasus_helikon_core::{MemorySession, Session};
+//! use paigasus_helikon_sessions_testkit::run_all;
+//!
+//! #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+//! async fn main() {
+//!     run_all(|| async { Arc::new(MemorySession::new()) as Arc<dyn Session> }).await;
+//! }
+//! ```
+//!
+//! # Same core version
+//!
+//! The session type in your factory must come from the same
+//! `paigasus-helikon-core` version as this crate. Run
+//! `cargo tree -i paigasus-helikon-core`. If it fails with
+//! "specification ... is ambiguous", your crate and the testkit resolve two
+//! core versions. Align your `paigasus-helikon-core` requirement with the
+//! requirement of the testkit.
+//!
+//! # Stability
+//!
+//! On 0.x versions, new sub-tests arrive in patch releases. A new sub-test can
+//! fail a backend that passed before. To control the upgrade, pin an exact
+//! version, for example `=0.1.0`. A requirement such as `=0.1` or `0.1` still
+//! accepts every `0.1` patch release.
 
 use std::future::Future;
 use std::sync::Arc;

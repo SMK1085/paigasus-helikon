@@ -334,7 +334,7 @@ not a single wrapper instance.
 ## Backend conformance
 
 Every shipped `Session` backend passes the same conformance suite from the
-internal `paigasus-helikon-sessions-testkit` crate:
+`paigasus-helikon-sessions-testkit` crate:
 
 | Test | What it verifies |
 | --- | --- |
@@ -343,9 +343,16 @@ internal `paigasus-helikon-sessions-testkit` crate:
 | `run_projection` | `snapshot()` equals `project(&events(None))` |
 | `run_concurrent_writers` | 16 concurrent tasks × 10 appends each — every event present exactly once |
 
-`MemorySession`, `SqliteSession`, and the forthcoming Postgres and Redis
-backends all run `run_all`. Adding a new backend means passing this suite before
-it ships.
+`MemorySession`, `SqliteSession`, `PostgresSession`, and `RedisSession` all run
+`run_all`. Adding a new backend means passing this suite before it ships.
+
+### Run the suite against your own backend
+
+The testkit is a normal library crate. Add it as a dev-dependency and call
+`run_all` with a factory that returns a fresh, empty session for each call.
+`run_all` needs a Tokio runtime, and a `multi_thread` runtime with
+`worker_threads = 4` is recommended. See the
+[testkit README](https://crates.io/crates/paigasus-helikon-sessions-testkit) for the full steps.
 
 ## Plugging a session into a run
 

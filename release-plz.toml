@@ -26,25 +26,20 @@ pr_name = "chore: release"
 [changelog]
 sort_commits = "newest"
 
-# Stubs: pre-published at 0.0.0 as name-claim placeholders. publish=false
-# in each Cargo.toml keeps cargo from re-publishing them; release=false
-# here keeps release-plz from proposing bumps or CHANGELOG churn. The two
-# flags MUST move together — see CLAUDE.md for the 4-step ascend recipe.
-[[package]]
-name = "paigasus-helikon-sessions-testkit"
-publish = false
-release = false
+# Internal test harnesses: these three workspace members never publish.
+# publish = false in each Cargo.toml and release = false here MUST move
+# together.
 
 # Internal cross-runtime HTTP wire-format conformance suite: boots BOTH the axum
 # and actix runtimes and asserts byte/structural parity. Never published, so it
-# carries the same publish=false / release=false pair as the testkit above.
+# carries the publish=false / release=false pair.
 [[package]]
 name = "paigasus-helikon-runtime-http-conformance"
 publish = false
 release = false
 
 # Internal workspace-wide source lints (SMA-543). Never published, so it
-# carries the same publish=false / release=false pair as the members above.
+# carries the same publish=false / release=false pair as the member above.
 [[package]]
 name = "paigasus-helikon-workspace-lints"
 publish = false

@@ -15,6 +15,7 @@ Per-item Rust API documentation is published on [docs.rs](https://docs.rs). This
 - [`paigasus-helikon-sessions-sqlite`](https://docs.rs/paigasus-helikon-sessions-sqlite) — SQLite `Session` backend.
 - [`paigasus-helikon-sessions-postgres`](https://docs.rs/paigasus-helikon-sessions-postgres) — PostgreSQL `Session` backend (`PostgresSession`). See [Sessions](../concepts/sessions.md).
 - [`paigasus-helikon-sessions-redis`](https://docs.rs/paigasus-helikon-sessions-redis) — Redis Streams `Session` backend (`RedisSession`). See [Sessions](../concepts/sessions.md).
+- [`paigasus-helikon-sessions-testkit`](https://docs.rs/paigasus-helikon-sessions-testkit) — shared `Session` conformance suite for any backend, including your own. See [Sessions](../concepts/sessions.md).
 - [`paigasus-helikon-runtime-tokio`](https://docs.rs/paigasus-helikon-runtime-tokio) — ephemeral Tokio runner.
 - [`paigasus-helikon-runtime-axum`](https://docs.rs/paigasus-helikon-runtime-axum) — self-hosted HTTP/SSE/WebSocket agent server (`AgentServer` builder, 6 endpoints, replayable runs). See [Axum Server Runtime](../concepts/axum-server.md).
 - [`paigasus-helikon-runtime-actix`](https://docs.rs/paigasus-helikon-runtime-actix) — actix-web port of `runtime-axum` with the same routes and wire format, for embedding into an existing actix-web service. See [Runtimes](../concepts/runtimes.md).
@@ -29,7 +30,7 @@ Most users depend only on the `paigasus-helikon` facade and enable the features 
 
 ## Publish status
 
-All 20 non-internal crates now publish to crates.io — the last two stubs (`paigasus-helikon-evals`, `paigasus-helikon-cli`) ascended to real implementations in SMA-332/SMA-333, following `-runtime-axum`, `-runtime-temporal`, and `-runtime-agentcore` before them. The lone exception is `paigasus-helikon-sessions-testkit`, an internal `Session` conformance test harness that is `publish = false` by design, not a stub awaiting an ascend.
+All 21 crates under `crates/` publish to crates.io — the last two stubs (`paigasus-helikon-evals`, `paigasus-helikon-cli`) ascended to real implementations in SMA-332/SMA-333, following `-runtime-axum`, `-runtime-temporal`, and `-runtime-agentcore` before them.
 
 ## Building locally
 
