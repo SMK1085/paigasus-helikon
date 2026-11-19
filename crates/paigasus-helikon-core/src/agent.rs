@@ -1238,7 +1238,7 @@ where
                     } else {
                         Vec::new()
                     };
-                let (events, next_action, next_state) = if let Some((kind, info)) = output_trip {
+                let (events, mut next_action, next_state) = if let Some((kind, info)) = output_trip {
                     run_span.record("otel.status_code", "ERROR");
                     failure.set(crate::AgentError::Guardrail { kind: kind.clone() });
                     (
@@ -1257,6 +1257,107 @@ where
                 for ev in events {
                     match &ev {
                         crate::AgentEvent::TurnStarted { turn } => {
+                            // SMA-804: turn-boundary checkpoint. The batch that
+                            // closes a tool turn and opens the next model turn
+                            // is the boundary; the checkpoint runs before the
+                            // turn span and the `OnTurnStart` hook.
+                            let boundary_turn = match (&loop_state, &next_action) {
+                                (
+                                    crate::LoopState::ExecutingTools { turn: t, .. },
+                                    crate::NextAction::CallModel { .. },
+                                ) => Some(*t),
+                                _ => None,
+                            };
+                            if let (Some(t), Some(cp)) = (boundary_turn, ctx.turn_checkpoint()) {
+                                let boundary = crate::TurnBoundary::new(
+                                    t,
+                                    *turn,
+                                    agent_name.clone(),
+                                    ctx.agent_depth(),
+                                );
+                                let cp_span = tracing::info_span!(
+                                    target: "paigasus::core::agent",
+                                    parent: &run_span,
+                                    "agent.turn_checkpoint",
+                                    otel.kind = "internal",
+                                    decision = tracing::field::Empty,
+                                );
+                                let decision = cp
+                                    .at_boundary(&ctx, &boundary)
+                                    .instrument(cp_span.clone())
+                                    .await;
+                                // One private stop path, shared by `Stop` and the
+                                // guardrail tripwire. SMA-804 Task 4 fills it in.
+                                let mut stop_reason: Option<String> = None;
+                                match decision {
+                                    crate::CheckpointDecision::Continue => {
+                                        cp_span.record("decision", "continue");
+                                    }
+                                    crate::CheckpointDecision::Stop { reason } => {
+                                        cp_span.record("decision", "stop");
+                                        stop_reason = Some(reason);
+                                    }
+                                    crate::CheckpointDecision::Inject(parts) if parts.is_empty() => {
+                                        cp_span.record("decision", "inject");
+                                    }
+                                    crate::CheckpointDecision::Inject(parts) => {
+                                        cp_span.record("decision", "inject");
+                                        let bad = parts.iter().find_map(|p| match p {
+                                            crate::ContentPart::ToolUse { .. } => Some("ToolUse"),
+                                            crate::ContentPart::ToolResult { .. } => Some("ToolResult"),
+                                            crate::ContentPart::Reasoning { .. } => Some("Reasoning"),
+                                            _ => None,
+                                        });
+                                        if let Some(kind) = bad {
+                                            let err = crate::AgentError::InvalidInjection {
+                                                reason: format!(
+                                                    "injected content contains a {kind} part; only text, image and audio parts are allowed"
+                                                ),
+                                            };
+                                            let msg = err.to_string();
+                                            run_span.record("otel.status_code", "ERROR");
+                                            failure.set(err);
+                                            yield crate::AgentEvent::RunFailed { error: msg };
+                                            return;
+                                        }
+                                        let item = crate::Item::UserMessage { content: parts };
+                                        let text = user_text_of(std::slice::from_ref(&item));
+                                        if let Some((kind, info)) =
+                                            interceptors.run_input_guardrails(&text).await
+                                        {
+                                            run_span.record("otel.status_code", "ERROR");
+                                            yield crate::AgentEvent::GuardrailTriggered {
+                                                kind,
+                                                info,
+                                            };
+                                            stop_reason = Some("input guardrail tripwire".to_owned());
+                                        } else {
+                                            if let crate::Item::UserMessage { content } = &item {
+                                                yield crate::AgentEvent::UserMessageInjected {
+                                                    content: content.clone(),
+                                                };
+                                            }
+                                            conversation.push(item.clone());
+                                            if let crate::NextAction::CallModel { request } =
+                                                &mut next_action
+                                            {
+                                                request.messages.push(item);
+                                            }
+                                        }
+                                    }
+                                }
+                                if stop_reason.is_some() {
+                                    // Task 4 replaces this body with a clean stop.
+                                    let err = crate::AgentError::NotImplemented {
+                                        feature: "turn checkpoint stop",
+                                    };
+                                    let msg = err.to_string();
+                                    run_span.record("otel.status_code", "ERROR");
+                                    failure.set(err);
+                                    yield crate::AgentEvent::RunFailed { error: msg };
+                                    return;
+                                }
+                            }
                             let s = tracing::info_span!(
                                 target: "paigasus::core::agent",
                                 parent: &run_span,
@@ -1639,6 +1740,14 @@ pub enum AgentError {
     NotImplemented {
         /// The unimplemented loop feature.
         feature: &'static str,
+    },
+
+    /// New in SMA-804: a [`crate::TurnCheckpoint`] returned content that cannot
+    /// be injected as a user message (a tool-use, tool-result or reasoning part).
+    #[error("invalid injection: {reason}")]
+    InvalidInjection {
+        /// Why the injected content was rejected.
+        reason: String,
     },
 
     /// A handoff chain or `AgentAsTool` nesting exceeded
