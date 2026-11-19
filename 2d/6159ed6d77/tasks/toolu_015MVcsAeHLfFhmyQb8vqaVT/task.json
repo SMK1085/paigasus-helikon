@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_015MVcsAeHLfFhmyQb8vqaVT",
+  "agent_id": "a317ac55a5461fe5d",
+  "task_description": "Implement Task 4: Stop + handoffs",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 100568,
+    "cache_read_tokens": 2460190,
+    "output_tokens": 17278,
+    "api_call_count": 26
+  },
+  "started_at": "2026-11-19T21:27:39.693246+01:00",
+  "completed_at": "2026-11-19T21:29:54.084233+01:00"
+}
