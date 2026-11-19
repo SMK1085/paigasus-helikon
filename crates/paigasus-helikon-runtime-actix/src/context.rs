@@ -70,6 +70,12 @@ use crate::error::ServerError;
 /// [`ApprovalHandler`]: paigasus_helikon_core::ApprovalHandler
 /// [`HookRegistry`]: paigasus_helikon_core::HookRegistry
 ///
+/// # Turn checkpoint
+///
+/// This runtime cannot support a turn checkpoint yet. If the context that
+/// `build` returns carries one (set with `RunContext::with_turn_checkpoint`),
+/// the server clears it and logs a warning. The checkpoint never runs.
+///
 /// # `?Send` futures
 ///
 /// `actix_web::HttpRequest` wraps an `Rc` internally and is therefore `!Sync`
@@ -152,23 +158,36 @@ where
     }
 }
 
-/// Clears run features this runtime does not support. SMA-804 adds its checkpoint clear here.
+/// Clears the run features that this runtime does not support.
 ///
 /// This runtime does not support deferred tool calls. The helper clears the flag,
 /// so a `Defer` decision becomes a `Deny`, and logs one warning when the flag
+/// was set.
+///
+/// The turn checkpoint needs a host that can stay with the run between turns.
+/// This runtime cannot do that, so the helper clears a checkpoint that the
+/// context provider set, and logs a warning. It logs only when a checkpoint
 /// was set.
 pub(crate) fn restrict_unsupported_run_features<Ctx>(ctx: RunContext<Ctx>) -> RunContext<Ctx>
 where
     Ctx: Send + Sync + 'static,
 {
-    if ctx.deferred_tool_calls_enabled() {
+    let ctx = if ctx.deferred_tool_calls_enabled() {
         tracing::warn!(
             target: "paigasus::runtime_actix::context",
             "the actix runtime does not support deferred tool calls; the flag is cleared and a Defer becomes a Deny"
         );
-        return ctx.with_deferred_tool_calls(false);
+        ctx.with_deferred_tool_calls(false)
+    } else {
+        ctx
+    };
+    if ctx.turn_checkpoint().is_some() {
+        tracing::warn!(
+            target: "paigasus::runtime_actix::context",
+            "turn checkpoint is not supported by this runtime; ignored"
+        );
     }
-    ctx
+    ctx.without_turn_checkpoint()
 }
 
 // ---------------------------------------------------------------------------
