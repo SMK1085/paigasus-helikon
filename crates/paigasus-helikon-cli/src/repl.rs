@@ -219,6 +219,8 @@ async fn run_turn(registry: &AgentRegistry, current: &str, session: Arc<dyn Sess
                 std::io::stdout().flush().ok();
             }
             AgentEvent::MessageOutput { .. } => println!(),
+            AgentEvent::UserMessageInjected { .. } => println!("[user message injected]"),
+            AgentEvent::RunStopped { reason, .. } => println!("stopped: {reason}"),
             AgentEvent::RunFailed { error } => println!("error: {error}"),
             _ => {}
         }

@@ -127,6 +127,8 @@ impl RunResponse {
     ///   [`ContentPart::Text`] blocks are concatenated).
     /// - [`AgentEvent::RunCompleted`] sets `status = Completed` and captures
     ///   `usage`.
+    /// - [`AgentEvent::RunStopped`] also sets `status = Completed`: a host stop
+    ///   is a controlled end, not a failure.
     /// - [`AgentEvent::RunFailed`] sets `status = Failed` and captures
     ///   `error`.
     /// - If no terminal event is present, `status` defaults to `Failed`
@@ -153,6 +155,12 @@ impl RunResponse {
                     }
                 }
                 AgentEvent::RunCompleted { usage: u } => {
+                    status = RunStatus::Completed;
+                    run_usage = Some(*u);
+                }
+                // A host stop is a controlled end, not a failure. `RunStatus` has no
+                // stopped value, so it reports as completed with the run usage.
+                AgentEvent::RunStopped { usage: u, .. } => {
                     status = RunStatus::Completed;
                     run_usage = Some(*u);
                 }
@@ -267,6 +275,18 @@ mod tests {
         let r = RunResponse::from_events(Uuid::nil(), events);
         assert_eq!(r.status, RunStatus::Failed);
         assert_eq!(r.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn response_run_stopped_reports_completed_with_usage() {
+        let events = vec![AgentEvent::RunStopped {
+            reason: "enough".into(),
+            usage: TokenUsage::default(),
+        }];
+        let r = RunResponse::from_events(Uuid::nil(), events);
+        assert_eq!(r.status, RunStatus::Completed);
+        assert!(r.usage.is_some());
+        assert!(r.error.is_none());
     }
 
     #[test]
