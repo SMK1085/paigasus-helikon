@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "3aeeffaa8ad1",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-804-turn-boundary-checkpoint-a-runcontext",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-core/tests/turn_checkpoint.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3a/eeffaa8ad1/0/metadata.json",
+      "transcript": "/3a/eeffaa8ad1/0/full.jsonl",
+      "compact_transcript": "/3a/eeffaa8ad1/0/transcript.jsonl",
+      "content_hash": "/3a/eeffaa8ad1/0/content_hash.txt",
+      "prompt": "/3a/eeffaa8ad1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 11410,
+    "cache_read_tokens": 1103843,
+    "output_tokens": 5136,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 54,
+      "cache_creation_tokens": 191160,
+      "cache_read_tokens": 2276186,
+      "output_tokens": 21636,
+      "api_call_count": 27
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
