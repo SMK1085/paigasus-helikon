@@ -576,6 +576,99 @@ enum ConcurrentOutcome {
     Deferred(crate::PendingToolCall),
 }
 
+/// The `tool.execute` span of one tool call. `resumed` marks a resumed
+/// deferred call (`paigasus.tool.resumed = true`); a normal call leaves that
+/// field empty, so it is not exported.
+pub(crate) fn tool_execute_span(
+    parent: &tracing::Span,
+    name: &str,
+    resumed: bool,
+) -> tracing::Span {
+    let span = tracing::info_span!(
+        target: "paigasus::core::agent",
+        parent: parent,
+        "tool.execute",
+        otel.name = tracing::field::Empty,
+        otel.kind = "internal",
+        gen_ai.operation.name = "execute_tool",
+        gen_ai.tool.name = %name,
+        paigasus.tool.resumed = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+    );
+    span.record("otel.name", format!("execute_tool {name}").as_str());
+    if resumed {
+        span.record("paigasus.tool.resumed", true);
+    }
+    span
+}
+
+/// Invoke `tool` with `args`, fire `PostToolUse` on the raw JSON output, and
+/// finalize the output. Redaction is the final transform. Call it inside the
+/// call's `tool.execute` span: a tool error marks that span as `ERROR`.
+pub(crate) async fn invoke_and_finalize<Ctx>(
+    tool: &std::sync::Arc<dyn crate::Tool<Ctx>>,
+    tool_ctx: &crate::ToolContext<Ctx>,
+    args: serde_json::Value,
+    interceptors: &crate::control::Interceptors<'_, Ctx>,
+    redact_output: bool,
+    secrets: &crate::redaction::SecretSet,
+) -> Result<Vec<crate::ContentPart>, String>
+where
+    Ctx: Send + Sync + 'static,
+{
+    // Keep the tool's raw JSON output so the PostToolUse hook sees the
+    // structured value, not a stringified form.
+    let output_json = match tool.invoke(tool_ctx, args).await {
+        Ok(output) => output.content,
+        Err(e) => {
+            tracing::Span::current().record("otel.status_code", "ERROR");
+            return Err(e.to_string());
+        }
+    };
+    // PostToolUse hook (ReplaceOutput / Deny→denial). The hook receives the
+    // raw `serde_json::Value`; a `ReplaceOutput` value (or the original) is
+    // rendered to content parts only at the end.
+    let post = interceptors
+        .fire(&crate::HookEvent::PostToolUse {
+            tool: tool.name().to_owned(),
+            output: output_json.clone(),
+        })
+        .await;
+    if let Some(reason) = post.denied {
+        return Err(format!("blocked by PostToolUse hook: {reason}"));
+    }
+    let final_json = post.replacement.unwrap_or(output_json);
+    // Redaction is the FINAL transform — after user PostToolUse hooks — so a
+    // hook cannot reintroduce an unredacted secret. Shared with the
+    // durable-runner pipeline in `tool_exec.rs`.
+    Ok(crate::finalize_tool_output(
+        final_json,
+        redact_output,
+        secrets,
+    ))
+}
+
+/// Await `futures` in their order: all at once, or at most `limit` at a time.
+pub(crate) async fn run_with_limit<F>(
+    futures: impl Iterator<Item = F>,
+    limit: Option<std::num::NonZeroUsize>,
+) -> Vec<F::Output>
+where
+    F: std::future::Future,
+{
+    match limit {
+        None => futures_util::future::join_all(futures).await,
+        Some(n) => {
+            use futures_util::stream::StreamExt as _;
+            let collected: Vec<_> = futures.collect();
+            futures_util::stream::iter(collected)
+                .buffered(n.get())
+                .collect()
+                .await
+        }
+    }
+}
+
 /// Run the tool calls of one turn. Returns one outcome per call, in call
 /// order, and the `PermissionDenied` events of the turn.
 async fn run_tools_concurrent<Ctx>(
@@ -605,17 +698,7 @@ where
         let orig_args = call.args.clone();
         let denied_events = &denied_events;
         let secrets = &secrets;
-        let span = tracing::info_span!(
-            target: "paigasus::core::agent",
-            parent: parent,
-            "tool.execute",
-            otel.name = tracing::field::Empty,
-            otel.kind = "internal",
-            gen_ai.operation.name = "execute_tool",
-            gen_ai.tool.name = %name,
-            otel.status_code = tracing::field::Empty,
-        );
-        span.record("otel.name", format!("execute_tool {name}").as_str());
+        let span = tool_execute_span(parent, &name, false);
         async move {
             // PreToolUse hook.
             let pre = interceptors
@@ -680,48 +763,16 @@ where
                 }
             }
 
-            // Invoke. Keep the tool's raw JSON output so the PostToolUse hook
-            // sees the structured value, not a stringified form.
+            // Invoke, PostToolUse, then redaction (the final transform).
             let outcome = match tool {
-                Some(t) => match t.invoke(tool_ctx, args).await {
-                    Ok(output) => Ok(output.content),
-                    Err(e) => {
-                        tracing::Span::current().record("otel.status_code", "ERROR");
-                        Err(e.to_string())
-                    }
-                },
+                Some(t) => {
+                    invoke_and_finalize(&t, tool_ctx, args, interceptors, redact_output, secrets)
+                        .await
+                }
                 None => {
                     tracing::Span::current().record("otel.status_code", "ERROR");
                     Err(format!("unknown tool: {name}"))
                 }
-            };
-
-            // PostToolUse hook (ReplaceOutput / Deny→denial). The hook receives
-            // the raw `serde_json::Value`; a `ReplaceOutput` value (or the
-            // original) is rendered to content parts only at the end.
-            let outcome = match outcome {
-                Ok(output_json) => {
-                    let post = interceptors
-                        .fire(&crate::HookEvent::PostToolUse {
-                            tool: name.clone(),
-                            output: output_json.clone(),
-                        })
-                        .await;
-                    if let Some(reason) = post.denied {
-                        Err(format!("blocked by PostToolUse hook: {reason}"))
-                    } else {
-                        let final_json = post.replacement.unwrap_or(output_json);
-                        // Redaction is the FINAL transform — after user PostToolUse
-                        // hooks — so a hook cannot reintroduce an unredacted secret.
-                        // Shared with the durable-runner pipeline in `tool_exec.rs`.
-                        Ok(crate::finalize_tool_output(
-                            final_json,
-                            redact_output,
-                            secrets,
-                        ))
-                    }
-                }
-                Err(e) => Err(e),
             };
 
             ConcurrentOutcome::Done(crate::ToolCallOutcome {
@@ -732,17 +783,7 @@ where
         .instrument(span)
     });
 
-    let outcomes = match limit {
-        None => futures_util::future::join_all(futures).await,
-        Some(n) => {
-            use futures_util::stream::StreamExt as _;
-            let collected: Vec<_> = futures.collect();
-            futures_util::stream::iter(collected)
-                .buffered(n.get())
-                .collect()
-                .await
-        }
-    };
+    let outcomes = run_with_limit(futures, limit).await;
     (outcomes, denied_events.into_inner().unwrap())
 }
 

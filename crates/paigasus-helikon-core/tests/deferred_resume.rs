@@ -10,11 +10,11 @@ use common::{MockModel, MockTool};
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt as _;
 use paigasus_helikon_core::{
-    open_deferrals, Agent, AgentEvent, AgentInput, CancellationToken, ContentPart, FinishReason,
-    Guardrail, GuardrailError, GuardrailInput, GuardrailKind, GuardrailVerdict, Hook, HookDecision,
-    HookEvent, HookRegistry, Item, LlmAgent, MemorySession, Model, ModelCapabilities, ModelError,
-    ModelEvent, ModelRequest, PermissionDecision, PermissionPolicy, ResumePlan, RunContext,
-    Session, SessionEvent, SessionRecorder, Tool, ToolResolution, TracerHandle,
+    open_deferrals, Agent, AgentEvent, AgentInput, CancellationToken, ContentPart, DenyRule,
+    FinishReason, Guardrail, GuardrailError, GuardrailInput, GuardrailKind, GuardrailVerdict, Hook,
+    HookDecision, HookEvent, HookRegistry, Item, LlmAgent, MemorySession, Model, ModelCapabilities,
+    ModelError, ModelEvent, ModelRequest, PermissionDecision, PermissionPolicy, ResumePlan,
+    RunContext, Session, SessionEvent, SessionRecorder, Tool, ToolResolution, TracerHandle,
 };
 
 const SECRET: &str = "sk-test-SECRET-1234";
@@ -494,4 +494,75 @@ async fn approved_call_to_a_removed_tool_is_denied() {
         "{events:?}"
     );
     assert!(b.invocations().is_empty());
+}
+
+/// Replaces the args of every call with `{"amount": 500}`.
+struct RaiseAmount;
+
+#[async_trait]
+impl PermissionPolicy<()> for RaiseAmount {
+    async fn check(
+        &self,
+        _ctx: &RunContext<()>,
+        _tool: &str,
+        _args: &serde_json::Value,
+    ) -> PermissionDecision {
+        PermissionDecision::Replace {
+            args: serde_json::json!({ "amount": 500 }),
+        }
+    }
+}
+
+/// Resume an approved `b` call with the context `ctx_of(session)`.
+async fn resume_approved_with(
+    b: &Arc<MockTool>,
+    ctx_of: impl FnOnce(&Arc<MemorySession>) -> RunContext<()>,
+) -> Vec<AgentEvent> {
+    let session = deferred_session(Arc::clone(b)).await;
+    let (input, _) = resume_input(&session, "root", ToolResolution::Approved).await;
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let agent = resume_agent("root", model, Arc::clone(b)).build();
+    run_events(&agent, ctx_of(&session), input).await
+}
+
+#[tokio::test]
+async fn approved_call_that_a_deny_rule_now_denies_does_not_run() {
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let events = resume_approved_with(&b, |s| {
+        session_ctx(s).with_deny_rules(vec![DenyRule::tool("b")])
+    })
+    .await;
+
+    assert!(
+        b.invocations().is_empty(),
+        "the re-check must deny the call"
+    );
+    assert_eq!(
+        tool_output_text(&events, "call_b"),
+        "permission denied: denied by deny rule: b"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e,
+            AgentEvent::PermissionDenied { tool, reason }
+                if tool == "b" && reason == "denied by deny rule: b")),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn approved_call_whose_policy_now_changes_the_args_does_not_run() {
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let events = resume_approved_with(&b, |s| {
+        session_ctx(s).with_permission_policy(Arc::new(RaiseAmount))
+    })
+    .await;
+
+    assert!(
+        b.invocations().is_empty(),
+        "the re-check must deny the call"
+    );
+    assert_eq!(
+        tool_output_text(&events, "call_b"),
+        "permission denied: arguments changed on re-check"
+    );
 }

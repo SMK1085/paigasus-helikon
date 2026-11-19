@@ -493,8 +493,9 @@ impl ResumePlan {
     }
 
     /// The conversation that the receiving agent saw when the call was
-    /// deferred. Empty when the plan has no history for this level (a
-    /// renamed root agent).
+    /// deferred. At the root level this is the session snapshot, also for a
+    /// renamed root agent. Empty for a deeper level when the plan has no
+    /// history for it (the plan of a renamed root keeps only the snapshot).
     pub(crate) fn history(&self) -> &[crate::Item] {
         self.histories.get(self.level).map_or(&[], Vec::as_slice)
     }

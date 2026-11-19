@@ -13,8 +13,7 @@ use crate::context::{AskPoints, Authorization};
 use crate::control::Interceptors;
 use crate::deferral::PlannedCall;
 use crate::{
-    AgentEvent, ContentPart, HookEvent, Item, RunContext, Tool, ToolCallOutcome, ToolContext,
-    ToolResolution,
+    AgentEvent, ContentPart, Item, RunContext, Tool, ToolCallOutcome, ToolContext, ToolResolution,
 };
 
 /// The synthetic result of a resolved call that did not run, because the
@@ -68,18 +67,7 @@ pub(crate) async fn run_resolved_calls<Ctx: Send + Sync + 'static>(
         let tool = tools.iter().find(|t| t.name() == name).cloned();
         let denied_events = &denied_events;
         let secrets = &secrets;
-        let span = tracing::info_span!(
-            target: "paigasus::core::agent",
-            parent: parent,
-            "tool.execute",
-            otel.name = tracing::field::Empty,
-            otel.kind = "internal",
-            gen_ai.operation.name = "execute_tool",
-            gen_ai.tool.name = %name,
-            paigasus.tool.resumed = true,
-            otel.status_code = tracing::field::Empty,
-        );
-        span.record("otel.name", format!("execute_tool {name}").as_str());
+        let span = crate::agent::tool_execute_span(parent, &name, true);
         async move {
             let deny = |reason: String| {
                 denied_events
@@ -97,58 +85,33 @@ pub(crate) async fn run_resolved_calls<Ctx: Send + Sync + 'static>(
             let tool = match &call.resolution {
                 ToolResolution::Denied { reason } => return deny(reason.clone()),
                 ToolResolution::Approved => {
-                    match recheck_approved(ctx, tool.as_ref(), &name, &args).await {
-                        Err(reason) => return deny(reason),
-                        Ok(()) => match tool {
-                            Some(tool) => tool,
-                            None => return deny(format!("tool no longer available: {name}")),
-                        },
+                    if let Err(reason) = recheck_approved(ctx, tool.as_ref(), &name, &args).await {
+                        return deny(reason);
                     }
+                    // The re-check denies a missing tool, so `tool` is set
+                    // here. Fail closed all the same.
+                    let Some(tool) = tool else {
+                        return deny("the re-check passed without a tool".to_owned());
+                    };
+                    tool
                 }
             };
 
-            let result = match tool.invoke(tool_ctx, args).await {
-                Ok(output) => {
-                    let post = interceptors
-                        .fire(&HookEvent::PostToolUse {
-                            tool: name.clone(),
-                            output: output.content.clone(),
-                        })
-                        .await;
-                    match post.denied {
-                        Some(reason) => Err(format!("blocked by PostToolUse hook: {reason}")),
-                        None => {
-                            let final_json = post.replacement.unwrap_or(output.content);
-                            // Redaction is the final transform, after the hooks.
-                            Ok(crate::finalize_tool_output(
-                                final_json,
-                                redact_output,
-                                secrets,
-                            ))
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::Span::current().record("otel.status_code", "ERROR");
-                    Err(e.to_string())
-                }
-            };
+            let result = crate::agent::invoke_and_finalize(
+                &tool,
+                tool_ctx,
+                args,
+                interceptors,
+                redact_output,
+                secrets,
+            )
+            .await;
             ToolCallOutcome { call_id, result }
         }
         .instrument(span)
     });
 
-    let outcomes = match limit {
-        None => futures_util::future::join_all(futures).await,
-        Some(n) => {
-            use futures_util::stream::StreamExt as _;
-            let collected: Vec<_> = futures.collect();
-            futures_util::stream::iter(collected)
-                .buffered(n.get())
-                .collect()
-                .await
-        }
-    };
+    let outcomes = crate::agent::run_with_limit(futures, limit).await;
     (outcomes, denied_events.into_inner().unwrap())
 }
 
