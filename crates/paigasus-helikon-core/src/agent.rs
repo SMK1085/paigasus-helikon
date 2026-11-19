@@ -576,6 +576,41 @@ enum ConcurrentOutcome {
     Deferred(crate::PendingToolCall),
 }
 
+/// Map one event of a handoff child run to the event that the parent
+/// stream yields. Drops the child `RunStarted`. Adds `parent_usage` to the
+/// usage of `RunCompleted` and `RunDeferred`, and records the total on
+/// `run_span`. Passes every other event through.
+fn reyield_child_event(
+    ev: AgentEvent,
+    parent_usage: TokenUsage,
+    run_span: &tracing::Span,
+) -> Option<AgentEvent> {
+    let record_usage = |total: &TokenUsage| {
+        run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
+        run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
+    };
+    match ev {
+        AgentEvent::RunStarted { .. } => None,
+        AgentEvent::RunCompleted { usage } => {
+            let mut total = parent_usage;
+            total.add(usage);
+            record_usage(&total);
+            Some(AgentEvent::RunCompleted { usage: total })
+        }
+        AgentEvent::RunDeferred { calls, usage } => {
+            let mut total = parent_usage;
+            total.add(usage);
+            record_usage(&total);
+            run_span.record("paigasus.deferred_calls", calls.len() as i64);
+            Some(AgentEvent::RunDeferred {
+                calls,
+                usage: total,
+            })
+        }
+        other => Some(other),
+    }
+}
+
 /// The `tool.execute` span of one tool call. `resumed` marks a resumed
 /// deferred call (`paigasus.tool.resumed = true`); a normal call leaves that
 /// field empty, so it is not exported.
@@ -867,6 +902,12 @@ where
             }
             let results_at = conversation.len();
             conversation.extend(input.messages.iter().cloned());
+            // A resume that routes to a handoff target gives it the new input.
+            let resume_messages = if resume_plan.is_some() {
+                input.messages.clone()
+            } else {
+                Vec::new()
+            };
             // The synthetic results for a run that ends before the resume ran
             // its calls. Each failure exit before that point yields them first.
             let not_run = resume_plan
@@ -988,29 +1029,96 @@ where
             // so their results come before any `TurnStarted` (the session
             // recorder takes them by that position).
             if let Some(plan) = resume_plan {
-                // A path that continues to a handoff target is not resumed
-                // here yet; fail closed. A renamed root denies every call.
-                if plan.next_agent().is_some() {
-                    let err = crate::AgentError::NotImplemented {
-                        feature: "resume through a handoff path",
-                    };
-                    let msg = err.to_string();
-                    run_span.record("otel.status_code", "ERROR");
-                    failure.set(err);
-                    for ev in not_run {
-                        yield ev;
+                // The routing rules of spec §4.7. A renamed root (only
+                // possible at the root level) denies every call here.
+                let renamed = plan.expected_agent() != agent_name;
+                let next = if renamed {
+                    None
+                } else {
+                    plan.next_agent().map(str::to_owned)
+                };
+                let target_agent = next.as_deref().and_then(|next| {
+                    handoffs
+                        .iter()
+                        .find(|h| h.agent().name() == next)
+                        .map(|h| std::sync::Arc::clone(h.agent()))
+                });
+
+                // The path continues to a handoff target: the target runs the
+                // calls. The session already holds this handoff, so there is
+                // no `OnHandoff` and no `HandoffItem`, and this agent emits no
+                // `TurnStarted` (the recorder takes the resume results up to
+                // the first one).
+                if let (Some(next), Some(target_agent)) = (next.as_ref(), target_agent) {
+                    let child = ctx.handoff_child();
+                    if child.agent_depth() > max_agent_depth {
+                        let err = crate::AgentError::MaxAgentDepthExceeded {
+                            depth: child.agent_depth(),
+                            max: max_agent_depth,
+                        };
+                        let msg = err.to_string();
+                        run_span.record("otel.status_code", "ERROR");
+                        failure.set(err);
+                        for ev in not_run {
+                            yield ev;
+                        }
+                        yield crate::AgentEvent::RunFailed { error: msg };
+                        return;
                     }
-                    yield crate::AgentEvent::RunFailed { error: msg };
+                    yield crate::AgentEvent::AgentUpdated { agent: next.clone() };
+                    let child_input = crate::AgentInput {
+                        messages: resume_messages,
+                        resume_plan: Some(plan.descend()),
+                        ..Default::default()
+                    };
+                    let mut sub = match target_agent.run(child, child_input).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let msg = e.to_string();
+                            run_span.record("otel.status_code", "ERROR");
+                            failure.set(e);
+                            for ev in not_run {
+                                yield ev;
+                            }
+                            yield crate::AgentEvent::RunFailed { error: msg };
+                            return;
+                        }
+                    };
+                    while let Some(ev) = sub.next().await {
+                        if let Some(ev) =
+                            reyield_child_event(ev, crate::TokenUsage::default(), &run_span)
+                        {
+                            yield ev;
+                        }
+                    }
+                    let _ = interceptors
+                        .fire(&crate::HookEvent::OnSubagentStop { agent: next.clone() })
+                        .await;
                     return;
                 }
-                let plan = if plan.expected_agent() == agent_name {
-                    plan
-                } else {
+
+                // This agent runs the calls: the plan ends here, or the root
+                // was renamed, or the next agent is not a handoff target any
+                // more. In the last two cases every call is denied.
+                let plan = if renamed {
                     plan.with_all_denied(&format!(
                         "agent no longer available: {}",
                         plan.expected_agent()
                     ))
+                } else if let Some(next) = &next {
+                    plan.with_all_denied(&format!("agent no longer available: {next}"))
+                } else {
+                    plan
                 };
+                // Close the open transfer calls after this level, so that the
+                // next model request is valid. Their results come first in
+                // the resume block. They are in the history, before
+                // `results_at`.
+                let closed = crate::resume_exec::close_open_transfers(&plan, &mut conversation);
+                let results_at = results_at + closed.len();
+                for item in closed {
+                    yield crate::AgentEvent::ToolOutputItem { item };
+                }
                 let tool_ctx = ctx.to_tool_context();
                 let (outcomes, denied) = crate::resume_exec::run_resolved_calls(
                     &tools,
@@ -1378,24 +1486,8 @@ where
                             }
                         };
                         while let Some(ev) = sub.next().await {
-                            match ev {
-                                crate::AgentEvent::RunStarted { .. } => {}
-                                crate::AgentEvent::RunCompleted { usage } => {
-                                    let mut total = parent_usage;
-                                    total.add(usage);
-                                    run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
-                                    run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
-                                    yield crate::AgentEvent::RunCompleted { usage: total };
-                                }
-                                crate::AgentEvent::RunDeferred { calls, usage } => {
-                                    let mut total = parent_usage;
-                                    total.add(usage);
-                                    run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
-                                    run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
-                                    run_span.record("paigasus.deferred_calls", calls.len() as i64);
-                                    yield crate::AgentEvent::RunDeferred { calls, usage: total };
-                                }
-                                other => yield other,
+                            if let Some(ev) = reyield_child_event(ev, parent_usage, &run_span) {
+                                yield ev;
                             }
                         }
                         let _ = interceptors

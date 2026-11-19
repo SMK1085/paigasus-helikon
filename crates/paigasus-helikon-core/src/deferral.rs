@@ -487,7 +487,6 @@ impl ResumePlan {
     }
 
     /// The transfer call id from the receiving agent to [`Self::next_agent`].
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 8b"))]
     pub(crate) fn transfer_call_to_next(&self) -> Option<&str> {
         self.transfers.get(self.level)?.as_deref()
     }
@@ -501,7 +500,6 @@ impl ResumePlan {
     }
 
     /// The plan for the next agent on the handoff path.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 8b"))]
     pub(crate) fn descend(&self) -> ResumePlan {
         ResumePlan {
             level: self.level + 1,
@@ -554,12 +552,17 @@ fn handoff_indices(
 /// `view(0, end)` is the projection of `events[..end]`. A child view threads
 /// the parent view at its handoff (no tool items, plus a transfer note) and
 /// then adds the projection of the events after the handoff.
+///
+/// A child view drops each tool result whose call is not in the view. The
+/// session recorder closes the transfer calls of a run with a synthetic
+/// result after the handoff, and the child view has no transfer call.
 fn agent_view(
     events: &[crate::SessionEvent],
     handoffs: &[usize],
     level: usize,
     end: usize,
 ) -> Vec<crate::Item> {
+    use crate::Item;
     if level == 0 {
         return crate::project(&events[..end]).messages;
     }
@@ -567,6 +570,15 @@ fn agent_view(
     let mut view =
         crate::loop_state::thread_handoff_transcript(&agent_view(events, handoffs, level - 1, k));
     view.extend(crate::project(&events[k + 1..end]).messages);
+    let mut calls = std::collections::HashSet::new();
+    view.retain(|item| match item {
+        Item::ToolCall { call_id, .. } => {
+            calls.insert(call_id.clone());
+            true
+        }
+        Item::ToolResult { call_id, .. } => calls.contains(call_id),
+        _ => true,
+    });
     view
 }
 
@@ -911,6 +923,38 @@ mod tests {
         assert!(!history
             .iter()
             .any(|i| matches!(i, Item::ToolCall { call_id, .. } if call_id == "t1")));
+    }
+
+    #[test]
+    fn child_history_drops_the_recorder_result_of_a_transfer_call() {
+        // The session recorder closes each transfer call at the end of the
+        // run with a synthetic result.
+        let mut events = three_level();
+        for id in ["t1", "t2"] {
+            events.push(SessionEvent::tool_returned(id, text("cancelled")));
+        }
+        let input = AgentInput::new().with_resolution("d1", ToolResolution::Approved);
+        let p = plan(&events, &input).unwrap();
+        let mid = p.descend();
+        let leaf = mid.descend();
+        let result_ids = |h: &[Item]| -> Vec<String> {
+            h.iter()
+                .filter_map(|i| match i {
+                    Item::ToolResult { call_id, .. } => Some(call_id.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(result_ids(p.history()), ["t1", "t2"]);
+        assert_eq!(result_ids(mid.history()), ["t2"]);
+        assert!(
+            result_ids(leaf.history()).is_empty(),
+            "{:?}",
+            leaf.history()
+        );
+        assert!(
+            matches!(leaf.history().last(), Some(Item::ToolCall { call_id, .. }) if call_id == "c1")
+        );
     }
 
     #[test]

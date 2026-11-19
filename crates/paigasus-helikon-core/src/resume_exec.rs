@@ -130,6 +130,54 @@ pub(crate) fn not_run_results(calls: &[PlannedCall]) -> Vec<AgentEvent> {
         .collect()
 }
 
+/// Close the open handoff transfer calls of `plan` from its level to the end
+/// of the path (spec §4.7). The agent that denies the calls of a resume uses
+/// this, because the target of each such call does not run.
+///
+/// For each transfer call in `conversation` that has no later result, this
+/// puts the synthetic result `agent no longer available: {name}` directly
+/// after the call (`name` is the agent that the call led to). It returns the
+/// inserted results in path order, for the agent to emit before the denial
+/// results. A transfer call that already has a result is not changed.
+pub(crate) fn close_open_transfers(
+    plan: &crate::ResumePlan,
+    conversation: &mut Vec<Item>,
+) -> Vec<Item> {
+    let mut transfers: Vec<(String, String)> = Vec::new();
+    let mut level = plan.clone();
+    while let Some(next) = level.next_agent() {
+        if let Some(call_id) = level.transfer_call_to_next() {
+            transfers.push((call_id.to_owned(), next.to_owned()));
+        }
+        level = level.descend();
+    }
+
+    let mut closed = Vec::new();
+    for (call_id, name) in transfers {
+        let Some(at) = conversation
+            .iter()
+            .rposition(|i| matches!(i, Item::ToolCall { call_id: id, .. } if *id == call_id))
+        else {
+            continue;
+        };
+        let answered = conversation[at + 1..]
+            .iter()
+            .any(|i| matches!(i, Item::ToolResult { call_id: id, .. } if *id == call_id));
+        if answered {
+            continue;
+        }
+        let result = Item::ToolResult {
+            call_id,
+            content: vec![ContentPart::Text {
+                text: format!("agent no longer available: {name}"),
+            }],
+        };
+        conversation.insert(at + 1, result.clone());
+        closed.push(result);
+    }
+    closed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
