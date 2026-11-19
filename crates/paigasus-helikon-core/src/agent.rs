@@ -1059,6 +1059,11 @@ where
                         let msg = err.to_string();
                         run_span.record("otel.status_code", "ERROR");
                         failure.set(err);
+                        // The calls do not run, so their transfer calls stay
+                        // open unless this exit closes them.
+                        for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                            yield crate::AgentEvent::ToolOutputItem { item };
+                        }
                         for ev in not_run {
                             yield ev;
                         }
@@ -1077,6 +1082,9 @@ where
                             let msg = e.to_string();
                             run_span.record("otel.status_code", "ERROR");
                             failure.set(e);
+                            for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                                yield crate::AgentEvent::ToolOutputItem { item };
+                            }
                             for ev in not_run {
                                 yield ev;
                             }

@@ -132,13 +132,19 @@ pub(crate) fn not_run_results(calls: &[PlannedCall]) -> Vec<AgentEvent> {
 
 /// Close the open handoff transfer calls of `plan` from its level to the end
 /// of the path (spec §4.7). The agent that denies the calls of a resume uses
-/// this, because the target of each such call does not run.
+/// this, because the target of each such call does not run. A routing exit
+/// that fails before the target runs uses it too.
 ///
 /// For each transfer call in `conversation` that has no later result, this
 /// puts the synthetic result `agent no longer available: {name}` directly
 /// after the call (`name` is the agent that the call led to). It returns the
 /// inserted results in path order, for the agent to emit before the denial
-/// results. A transfer call that already has a result is not changed.
+/// results.
+///
+/// A transfer call that already has a later result (the session recorder
+/// closes transfer calls at the end of a run) keeps that result, but this
+/// moves it to directly after the call. The move changes only the model
+/// request, so it is not returned and the session gets no second result.
 pub(crate) fn close_open_transfers(
     plan: &crate::ResumePlan,
     conversation: &mut Vec<Item>,
@@ -162,8 +168,10 @@ pub(crate) fn close_open_transfers(
         };
         let answered = conversation[at + 1..]
             .iter()
-            .any(|i| matches!(i, Item::ToolResult { call_id: id, .. } if *id == call_id));
-        if answered {
+            .position(|i| matches!(i, Item::ToolResult { call_id: id, .. } if *id == call_id));
+        if let Some(offset) = answered {
+            let result = conversation.remove(at + 1 + offset);
+            conversation.insert(at + 1, result);
             continue;
         }
         let result = Item::ToolResult {

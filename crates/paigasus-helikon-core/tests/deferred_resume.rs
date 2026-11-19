@@ -635,11 +635,31 @@ fn transfer_turn(call_id: &str, target: &str) -> Vec<ModelEvent> {
 /// Run a handoff chain along `path` whose last agent defers its call to `b`,
 /// and store the run in a new session. Returns the session.
 async fn handoff_session(path: &[&str]) -> Arc<MemorySession> {
+    handoff_session_with(path, call_b_turn()).await
+}
+
+/// The leaf turn of [`text_then_call_b_session`]: text, then the call to `b`.
+fn text_then_call_b_turn() -> Vec<ModelEvent> {
+    let mut turn = vec![ModelEvent::TokenDelta {
+        text: "checking".to_owned(),
+    }];
+    turn.extend(call_b_turn());
+    turn
+}
+
+/// As [`handoff_session`], but the last agent writes text before its call,
+/// so a child `AssistantMessage` sits between each transfer call and the
+/// recorder's result for it.
+async fn text_then_call_b_session(path: &[&str]) -> Arc<MemorySession> {
+    handoff_session_with(path, text_then_call_b_turn()).await
+}
+
+async fn handoff_session_with(path: &[&str], leaf_turn: Vec<ModelEvent>) -> Arc<MemorySession> {
     let leaf = path.len() - 1;
     let mut agent: Arc<dyn Agent<()>> = Arc::new(
         LlmAgent::builder::<()>()
             .name(path[leaf])
-            .shared_model(MockModel::with_scripts(vec![call_b_turn()]))
+            .shared_model(MockModel::with_scripts(vec![leaf_turn]))
             .shared_tool(MockTool::new("b", serde_json::json!({})) as Arc<dyn Tool<()>>)
             .build(),
     );
@@ -746,6 +766,40 @@ fn assert_transfer_closed(messages: &[Item], call_id: &str, name: &str) {
     }
 }
 
+/// The result for `call_id` in `messages` is at the call index + 1.
+fn assert_result_adjacent(messages: &[Item], call_id: &str) {
+    let call = messages
+        .iter()
+        .position(|i| matches!(i, Item::ToolCall { call_id: id, .. } if id == call_id))
+        .unwrap_or_else(|| panic!("no ToolCall {call_id}: {messages:?}"));
+    let result = messages
+        .iter()
+        .position(|i| matches!(i, Item::ToolResult { call_id: id, .. } if id == call_id))
+        .unwrap_or_else(|| panic!("no ToolResult {call_id}: {messages:?}"));
+    assert_eq!(result, call + 1, "{call_id}: {messages:?}");
+}
+
+/// The number of stored `ToolReturned` events for `call_id`.
+async fn stored_results(session: &MemorySession, call_id: &str) -> usize {
+    session
+        .events(None)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::ToolReturned { call_id: id, .. } if id == call_id))
+        .count()
+}
+
+/// No `ToolOutputItem` in `events` is for `call_id`.
+fn assert_no_output(events: &[AgentEvent], call_id: &str) {
+    assert!(
+        !events.iter().any(|e| matches!(e,
+            AgentEvent::ToolOutputItem { item: Item::ToolResult { call_id: id, .. } }
+                if id == call_id)),
+        "{events:?}"
+    );
+}
+
 /// Resume `session` with an approved `b` and the root `root`, with `agent`.
 /// Returns the events and checks that the recorder closes the deferral.
 async fn resume_handoff(
@@ -753,10 +807,20 @@ async fn resume_handoff(
     root: &str,
     agent: &impl Agent<()>,
 ) -> Vec<AgentEvent> {
+    resume_handoff_with(session, root, agent, session_ctx(session)).await
+}
+
+/// As [`resume_handoff`], with the run context `ctx`.
+async fn resume_handoff_with(
+    session: &Arc<MemorySession>,
+    root: &str,
+    agent: &impl Agent<()>,
+    ctx: RunContext<()>,
+) -> Vec<AgentEvent> {
     let (input, plan) = resume_input(session, root, ToolResolution::Approved).await;
     let mut recorder = SessionRecorder::new(root).with_resume_plan(&plan);
     recorder.record_input(&input.messages);
-    let events = run_events(agent, session_ctx(session), input).await;
+    let events = run_events(agent, ctx, input).await;
     for ev in &events {
         recorder.observe(ev);
     }
@@ -1006,4 +1070,150 @@ async fn missing_deeper_target_denies_at_the_middle_agent() {
             .any(|i| matches!(i, Item::ToolCall { call_id, .. } if call_id == "t1")),
         "{m:?}"
     );
+}
+
+/// Check a denial resume on a live log where the child wrote text: the
+/// recorder's results for `t1` and `t2` sit directly after their calls in
+/// every request, and the session gets no second result for them.
+async fn assert_recorded_transfers_moved(
+    session: &MemorySession,
+    events: &[AgentEvent],
+    requests: &[ModelRequest],
+) {
+    assert_eq!(requests.len(), 1);
+    for r in requests {
+        assert_tool_calls_paired(&r.messages);
+        assert_result_adjacent(&r.messages, "t1");
+        assert_result_adjacent(&r.messages, "t2");
+    }
+    let m = &requests[0].messages;
+    assert!(
+        m.iter()
+            .any(|i| matches!(i, Item::AssistantMessage { content, .. }
+            if text_of(content) == "checking")),
+        "the child text must be in the request: {m:?}"
+    );
+    for id in ["t1", "t2"] {
+        assert_no_output(events, id);
+        assert_eq!(stored_results(session, id).await, 1, "{id}");
+    }
+}
+
+#[tokio::test]
+async fn renamed_root_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls() {
+    let session = text_then_call_b_session(&["triage", "budgeting", "savings"]).await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let other = resume_agent("other", Arc::clone(&model), Arc::clone(&b)).build();
+
+    let events = resume_handoff(&session, "other", &other).await;
+
+    assert_eq!(
+        tool_output_text(&events, "call_b"),
+        "permission denied: agent no longer available: triage"
+    );
+    assert_recorded_transfers_moved(&session, &events, &model.requests()).await;
+}
+
+#[tokio::test]
+async fn missing_middle_agent_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls() {
+    let session = text_then_call_b_session(&["triage", "budgeting", "savings"]).await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let triage = resume_agent("triage", Arc::clone(&model), Arc::clone(&b)).build();
+
+    let events = resume_handoff(&session, "triage", &triage).await;
+
+    assert_eq!(
+        tool_output_text(&events, "call_b"),
+        "permission denied: agent no longer available: budgeting"
+    );
+    assert_recorded_transfers_moved(&session, &events, &model.requests()).await;
+}
+
+/// The events of a routing exit that fails before the target runs: the
+/// open transfer call is closed, then the call gets the not-run result.
+/// `updated` is true when the exit comes after `AgentUpdated` ("other").
+fn assert_failed_route_closes_the_transfer(events: &[AgentEvent], error: &str, updated: bool) {
+    let mut expected = vec!["RunStarted".to_owned()];
+    if updated {
+        assert!(
+            matches!(&events[1], AgentEvent::AgentUpdated { agent } if agent == "budgeting"),
+            "{events:?}"
+        );
+        expected.push("other".to_owned());
+    }
+    expected.extend([
+        "ToolOutputItem(t1)".to_owned(),
+        "ToolOutputItem(call_b)".to_owned(),
+        format!("RunFailed({error})"),
+    ]);
+    assert_eq!(kinds(events), expected);
+    assert_eq!(
+        tool_output_text(events, "t1"),
+        "agent no longer available: budgeting"
+    );
+    assert_eq!(tool_output_text(events, "call_b"), NOT_RUN);
+}
+
+#[tokio::test]
+async fn route_over_the_depth_limit_closes_the_open_transfer_call() {
+    let session = open_transfer_session(&["triage", "budgeting"]).await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let child_model = RequestLog::with_scripts(vec![]);
+    let budgeting = resume_agent("budgeting", Arc::clone(&child_model), Arc::clone(&b)).build();
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RequestLog::with_scripts(vec![]))
+        .handoff(budgeting)
+        .build();
+    let ctx = session_ctx(&session)
+        .with_run_config(paigasus_helikon_core::RunConfig::new().with_max_agent_depth(0));
+
+    let events = resume_handoff_with(&session, "triage", &triage, ctx).await;
+
+    assert!(b.invocations().is_empty());
+    assert!(child_model.requests().is_empty());
+    let error = match events.last() {
+        Some(AgentEvent::RunFailed { error }) => error.clone(),
+        other => panic!("expected RunFailed, got {other:?}"),
+    };
+    assert_failed_route_closes_the_transfer(&events, &error, false);
+    assert_eq!(stored_results(&session, "t1").await, 1);
+}
+
+/// A handoff target named `budgeting` whose run fails to start.
+struct FailingBudgeting;
+
+#[async_trait]
+impl Agent<()> for FailingBudgeting {
+    fn name(&self) -> &str {
+        "budgeting"
+    }
+    fn description(&self) -> &str {
+        "fails"
+    }
+    async fn run(
+        &self,
+        _ctx: RunContext<()>,
+        _input: AgentInput,
+    ) -> Result<BoxStream<'static, AgentEvent>, paigasus_helikon_core::AgentError> {
+        Err(paigasus_helikon_core::AgentError::NotImplemented { feature: "boom" })
+    }
+}
+
+#[tokio::test]
+async fn route_whose_target_fails_to_start_closes_the_open_transfer_call() {
+    let session = open_transfer_session(&["triage", "budgeting"]).await;
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RequestLog::with_scripts(vec![]))
+        .handoff(FailingBudgeting)
+        .build();
+
+    let events = resume_handoff(&session, "triage", &triage).await;
+
+    let error = paigasus_helikon_core::AgentError::NotImplemented { feature: "boom" }.to_string();
+    assert_failed_route_closes_the_transfer(&events, &error, true);
+    assert_eq!(stored_results(&session, "t1").await, 1);
 }
