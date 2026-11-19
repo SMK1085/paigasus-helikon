@@ -530,6 +530,45 @@ mod chat_tests {
         );
     }
 
+    /// SMA-804: a checkpoint `Inject` leaves a tool result directly followed
+    /// by a user message. Chat sends a `tool` message then a `user` message.
+    #[test]
+    fn tool_result_then_user_message_request_shape() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("start")],
+            },
+            Item::AssistantMessage {
+                content: vec![text("calling")],
+                agent: None,
+            },
+            Item::ToolCall {
+                call_id: "c1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "c1".to_owned(),
+                content: vec![text("pong")],
+            },
+            Item::UserMessage {
+                content: vec![text("news")],
+            },
+        ];
+        let out = to_chat_messages(&items);
+        assert_eq!(
+            out,
+            json!([
+                {"role": "user", "content": "start"},
+                {"role": "assistant", "content": "calling", "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "ping", "arguments": "{}"}},
+                ]},
+                {"role": "tool", "tool_call_id": "c1", "content": "pong"},
+                {"role": "user", "content": "news"},
+            ])
+        );
+    }
+
     #[test]
     fn user_message_with_nested_tool_result_hoists_to_tool_role() {
         let items = vec![Item::UserMessage {
@@ -614,6 +653,45 @@ mod responses_tests {
         let args_str = out[0]["arguments"].as_str().unwrap();
         let args: Value = serde_json::from_str(args_str).unwrap();
         assert_eq!(args, serde_json::json!({"x": 1}));
+    }
+
+    /// SMA-804: a checkpoint `Inject` leaves a tool result directly followed
+    /// by a user message. Responses sends a `function_call_output` item then
+    /// a `user` message item.
+    #[test]
+    fn tool_result_then_user_message_request_shape() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("start")],
+            },
+            Item::AssistantMessage {
+                content: vec![text("calling")],
+                agent: None,
+            },
+            Item::ToolCall {
+                call_id: "c1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "c1".to_owned(),
+                content: vec![text("pong")],
+            },
+            Item::UserMessage {
+                content: vec![text("news")],
+            },
+        ];
+        let out = to_responses_input(&items);
+        assert_eq!(
+            out,
+            json!([
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "start"}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "calling"}]},
+                {"type": "function_call", "call_id": "c1", "name": "ping", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": "pong"},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "news"}]},
+            ])
+        );
     }
 
     #[test]

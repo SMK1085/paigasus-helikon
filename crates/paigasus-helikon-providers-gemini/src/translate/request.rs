@@ -268,6 +268,44 @@ mod tests {
         assert_eq!(fr["response"]["hits"], 3); // parsed JSON object
     }
 
+    /// SMA-804: a checkpoint `Inject` leaves a tool result directly followed
+    /// by a user message. Gemini receives two consecutive `user` contents.
+    #[test]
+    fn tool_result_then_user_message_request_shape() {
+        let items = vec![
+            user("start"),
+            Item::AssistantMessage {
+                content: vec![ContentPart::Text {
+                    text: "calling".into(),
+                }],
+                agent: None,
+            },
+            Item::ToolCall {
+                call_id: "fc_0".into(),
+                name: "search".into(),
+                args: json!({"q":"cats"}),
+            },
+            Item::ToolResult {
+                call_id: "fc_0".into(),
+                content: vec![ContentPart::Text {
+                    text: "{\"hits\":3}".into(),
+                }],
+            },
+            user("news"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "start"}]},
+                {"role": "model", "parts": [{"text": "calling"}]},
+                {"role": "model", "parts": [{"functionCall": {"id": "fc_0", "name": "search", "args": {"q": "cats"}}}]},
+                {"role": "user", "parts": [{"functionResponse": {"id": "fc_0", "name": "search", "response": {"hits": 3}}}]},
+                {"role": "user", "parts": [{"text": "news"}]},
+            ])
+        );
+    }
+
     #[test]
     fn non_object_tool_result_wrapped_in_result_key() {
         let items = vec![

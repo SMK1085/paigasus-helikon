@@ -485,6 +485,41 @@ mod tests {
         assert_eq!(content[1]["type"], "text");
     }
 
+    /// SMA-804: a checkpoint `Inject` leaves a tool result directly followed
+    /// by a user message. Bedrock merges both into one user turn.
+    #[test]
+    fn tool_result_then_user_message_request_shape() {
+        let items = vec![
+            user(vec![text("start")]),
+            assistant(vec![text("calling")]),
+            Item::ToolCall {
+                call_id: "tu_1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "tu_1".to_owned(),
+                content: vec![text("pong")],
+            },
+            user(vec![text("news")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "start"}]},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "calling"},
+                    {"type": "tool_use", "toolUseId": "tu_1", "name": "ping"},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "toolUseId": "tu_1", "content": "pong"},
+                    {"type": "text", "text": "news"},
+                ]},
+            ])
+        );
+    }
+
     #[test]
     fn multiple_system_items_all_go_to_system_slot() {
         let items = vec![system("rule 1"), system("rule 2"), user(vec![text("hi")])];
