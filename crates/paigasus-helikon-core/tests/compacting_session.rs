@@ -217,3 +217,51 @@ async fn lone_summary_over_threshold_is_not_recompacted() {
         "only the pre-seeded Compacted + the handoff; no new marker appended"
     );
 }
+
+#[tokio::test]
+async fn does_not_compact_while_a_deferral_is_open() {
+    let model = FakeModel::new("S");
+    let cs = CompactingSession::builder(MemorySession::new(), Arc::new(model.clone()))
+        .token_counter(Arc::new(CharCounter))
+        .threshold(100)
+        .build()
+        .unwrap();
+    // Open a deferral first, then push the log far over the threshold.
+    let call = paigasus_helikon_core::PendingToolCall::new(
+        "d1",
+        "c1",
+        "tool",
+        serde_json::json!({}),
+        "approve?",
+        Vec::new(),
+    );
+    cs.append(&[
+        SessionEvent::tool_called("c1", "tool", serde_json::json!({})),
+        SessionEvent::tool_deferred(&call),
+    ])
+    .await
+    .unwrap();
+    cs.append(&[user(&"x".repeat(500))]).await.unwrap();
+    let raw = cs.events(None).await.unwrap();
+    assert!(
+        !raw.iter()
+            .any(|e| matches!(e, SessionEvent::Compacted { .. })),
+        "no Compacted event while a deferral is open"
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "no model call");
+
+    // Close the deferral; the next append compacts again.
+    cs.append(&[
+        SessionEvent::tool_returned("c1", vec![ContentPart::Text { text: "ok".into() }]),
+        user(&"y".repeat(500)),
+    ])
+    .await
+    .unwrap();
+    let raw = cs.events(None).await.unwrap();
+    assert!(
+        raw.iter()
+            .any(|e| matches!(e, SessionEvent::Compacted { .. })),
+        "compaction resumes after the deferral closes"
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+}
