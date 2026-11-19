@@ -32,6 +32,7 @@ pub mod model;
 mod path_match;
 pub mod permission;
 pub mod redaction;
+mod resume_exec;
 pub mod runner;
 pub mod schema;
 pub mod session;

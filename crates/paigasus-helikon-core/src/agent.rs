@@ -800,6 +800,9 @@ where
         let output_guardrails = self.output_guardrails.clone();
         let agent_hooks = self.hooks.clone();
         let max_agent_depth = effective_config.max_agent_depth;
+        let mut input = input;
+        let has_resolutions = !input.resolutions.is_empty();
+        let resume_plan = input.resume_plan.take();
 
         let stream = async_stream::stream! {
             // SMA-346: structured failures are recorded here and read by the
@@ -809,14 +812,26 @@ where
             // arm (state-machine sites via LoopState::Failed).
             let failure = ctx.failure_handle();
 
-            // Seed conversation: optional system message + user input.
+            // Seed conversation: optional system message + the resume history
+            // (if any) + user input. The results of the resumed calls go
+            // between the history and the new input (at `results_at`).
             let mut conversation: Vec<crate::Item> = Vec::new();
             if !instructions_text.is_empty() {
                 conversation.push(crate::Item::System {
                     content: vec![crate::ContentPart::Text { text: instructions_text }],
                 });
             }
+            if let Some(plan) = &resume_plan {
+                conversation.extend(plan.history().iter().cloned());
+            }
+            let results_at = conversation.len();
             conversation.extend(input.messages.iter().cloned());
+            // The synthetic results for a run that ends before the resume ran
+            // its calls. Each failure exit before that point yields them first.
+            let not_run = resume_plan
+                .as_ref()
+                .map(|p| crate::resume_exec::not_run_results(p.calls()))
+                .unwrap_or_default();
 
             let mut loop_state = crate::LoopState::CallingModel { turn: 0, usage: crate::TokenUsage::default() };
             let mut tx_input = crate::TransitionInput::Start { messages: input.messages };
@@ -852,6 +867,16 @@ where
 
             yield crate::AgentEvent::RunStarted { agent: agent_name.clone() };
 
+            // Resolutions without a resume plan: only a deferral-aware runner
+            // can validate them against the session log.
+            if has_resolutions && resume_plan.is_none() {
+                let msg = "resolutions require a deferral-aware runner";
+                run_span.record("otel.status_code", "ERROR");
+                failure.set(crate::AgentError::Other(anyhow::anyhow!(msg)));
+                yield crate::AgentEvent::RunFailed { error: msg.to_owned() };
+                return;
+            }
+
             // SMA-324: synthetic transfer tools; fail fast on name collisions.
             let handoff_defs: Vec<crate::HandoffDef> =
                 handoffs.iter().map(|h| h.to_def()).collect();
@@ -868,6 +893,9 @@ where
                         ));
                         let msg = err.to_string();
                         failure.set(err);
+                        for ev in not_run {
+                            yield ev;
+                        }
                         yield crate::AgentEvent::RunFailed { error: msg };
                         return;
                     }
@@ -892,6 +920,9 @@ where
                 let msg = err.to_string();
                 run_span.record("otel.status_code", "ERROR");
                 failure.set(err);
+                for ev in not_run {
+                    yield ev;
+                }
                 yield crate::AgentEvent::RunFailed { error: msg };
                 return;
             }
@@ -901,12 +932,69 @@ where
             let seed_text = user_text_of(&conversation);
             if let Some((kind, info)) = interceptors.run_input_guardrails(&seed_text).await {
                 run_span.record("otel.status_code", "ERROR");
+                for ev in not_run {
+                    yield ev;
+                }
                 yield crate::AgentEvent::GuardrailTriggered { kind: kind.clone(), info };
                 failure.set(crate::AgentError::Guardrail { kind });
                 yield crate::AgentEvent::RunFailed {
                     error: "input guardrail tripwire".to_owned(),
                 };
                 return;
+            }
+
+            // Resume: run the resolved deferred calls before the first turn,
+            // so their results come before any `TurnStarted` (the session
+            // recorder takes them by that position).
+            if let Some(plan) = resume_plan {
+                // A path that continues to a handoff target is not resumed
+                // here yet; fail closed. A renamed root denies every call.
+                if plan.next_agent().is_some() {
+                    let err = crate::AgentError::NotImplemented {
+                        feature: "resume through a handoff path",
+                    };
+                    let msg = err.to_string();
+                    run_span.record("otel.status_code", "ERROR");
+                    failure.set(err);
+                    for ev in not_run {
+                        yield ev;
+                    }
+                    yield crate::AgentEvent::RunFailed { error: msg };
+                    return;
+                }
+                let plan = if plan.expected_agent() == agent_name {
+                    plan
+                } else {
+                    plan.with_all_denied(&format!(
+                        "agent no longer available: {}",
+                        plan.expected_agent()
+                    ))
+                };
+                let tool_ctx = ctx.to_tool_context();
+                let (outcomes, denied) = crate::resume_exec::run_resolved_calls(
+                    &tools,
+                    plan.calls(),
+                    &interceptors,
+                    &tool_ctx,
+                    parallel_tool_call_limit,
+                    &run_span,
+                )
+                .await;
+                for ev in denied {
+                    yield ev;
+                }
+                let mut results = Vec::with_capacity(outcomes.len());
+                for o in outcomes {
+                    let item = crate::Item::ToolResult {
+                        call_id: o.call_id,
+                        content: o.result.unwrap_or_else(|e| {
+                            vec![crate::ContentPart::Text { text: e }]
+                        }),
+                    };
+                    yield crate::AgentEvent::ToolOutputItem { item: item.clone() };
+                    results.push(item);
+                }
+                conversation.splice(results_at..results_at, results);
             }
 
             loop {

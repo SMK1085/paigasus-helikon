@@ -464,7 +464,6 @@ impl ResumePlan {
     }
 
     /// The open deferrals in log order, each with its resolution.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 8a"))]
     pub(crate) fn calls(&self) -> &[PlannedCall] {
         &self.calls
     }
@@ -478,13 +477,11 @@ impl ResumePlan {
     }
 
     /// The name of the agent that must receive this plan.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 8a"))]
     pub(crate) fn expected_agent(&self) -> &str {
         &self.path[self.level]
     }
 
     /// The name of the handoff target after the receiving agent, if any.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 8b"))]
     pub(crate) fn next_agent(&self) -> Option<&str> {
         self.path.get(self.level + 1).map(String::as_str)
     }
@@ -498,7 +495,6 @@ impl ResumePlan {
     /// The conversation that the receiving agent saw when the call was
     /// deferred. Empty when the plan has no history for this level (a
     /// renamed root agent).
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 8a"))]
     pub(crate) fn history(&self) -> &[crate::Item] {
         self.histories.get(self.level).map_or(&[], Vec::as_slice)
     }
@@ -513,7 +509,6 @@ impl ResumePlan {
     }
 
     /// A copy of this plan where every resolution is `Denied { reason }`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 8b"))]
     pub(crate) fn with_all_denied(&self, reason: &str) -> ResumePlan {
         let mut plan = self.clone();
         for call in &mut plan.calls {
