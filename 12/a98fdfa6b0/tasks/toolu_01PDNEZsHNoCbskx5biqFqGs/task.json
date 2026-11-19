@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01PDNEZsHNoCbskx5biqFqGs",
+  "agent_id": "ab5ab376b88015703",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 7: ResumePlan and drain order",
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 138128,
+    "cache_read_tokens": 4451071,
+    "output_tokens": 45891,
+    "api_call_count": 38
+  },
+  "started_at": "2026-11-19T22:27:13.762948+01:00",
+  "completed_at": "2026-11-19T22:35:04.481039+01:00"
+}
