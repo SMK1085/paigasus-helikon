@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FATykZhvZT7xHMzse8RECV",
+  "agent_id": "a95da664fd57a0adf",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 8b: handoff resume routing",
+  "token_usage": {
+    "input_tokens": 130,
+    "cache_creation_tokens": 181455,
+    "cache_read_tokens": 9435083,
+    "output_tokens": 69649,
+    "api_call_count": 64
+  },
+  "started_at": "2026-11-19T22:54:41.434294+01:00",
+  "completed_at": "2026-11-19T23:04:55.619672+01:00"
+}
