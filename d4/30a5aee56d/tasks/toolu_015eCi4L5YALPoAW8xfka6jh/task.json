@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015eCi4L5YALPoAW8xfka6jh",
+  "agent_id": "a2febae6845df6747",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 9: TokioRunner resume",
+  "token_usage": {
+    "input_tokens": 134,
+    "cache_creation_tokens": 212994,
+    "cache_read_tokens": 11034588,
+    "output_tokens": 67259,
+    "api_call_count": 66
+  },
+  "started_at": "2026-11-19T23:13:10.338206+01:00",
+  "completed_at": "2026-11-19T23:32:36.70848+01:00"
+}
