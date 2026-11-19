@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01VA8hNRwDv2YbzPMDE1r1a3",
+  "agent_id": "a97bcf50ea99d8e34",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 2: event and result surface",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 99766,
+    "cache_read_tokens": 2586249,
+    "output_tokens": 19422,
+    "api_call_count": 27
+  },
+  "started_at": "2026-11-19T21:54:22.684179+01:00",
+  "completed_at": "2026-11-19T21:57:00.770944+01:00"
+}
