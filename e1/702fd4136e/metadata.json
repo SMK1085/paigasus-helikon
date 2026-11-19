@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "e1702fd4136e",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-804-turn-boundary-checkpoint-a-runcontext",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-runtime-actix/src/context.rs",
+    "crates/paigasus-helikon-runtime-actix/src/handlers/runs.rs",
+    "crates/paigasus-helikon-runtime-actix/tests/runs.rs",
+    "crates/paigasus-helikon-runtime-agentcore/src/a2a/rpc.rs",
+    "crates/paigasus-helikon-runtime-agentcore/src/agui/sse.rs",
+    "crates/paigasus-helikon-runtime-agentcore/src/agui/ws.rs",
+    "crates/paigasus-helikon-runtime-agentcore/src/invoke.rs",
+    "crates/paigasus-helikon-runtime-agentcore/src/lib.rs",
+    "crates/paigasus-helikon-runtime-agentcore/src/ws.rs",
+    "crates/paigasus-helikon-runtime-axum/src/context.rs",
+    "crates/paigasus-helikon-runtime-axum/src/handlers/runs.rs",
+    "crates/paigasus-helikon-runtime-axum/tests/runs.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/runner.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/702fd4136e/0/metadata.json",
+      "transcript": "/e1/702fd4136e/0/full.jsonl",
+      "compact_transcript": "/e1/702fd4136e/0/transcript.jsonl",
+      "content_hash": "/e1/702fd4136e/0/content_hash.txt",
+      "prompt": "/e1/702fd4136e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 9305,
+    "cache_read_tokens": 1764908,
+    "output_tokens": 4786,
+    "api_call_count": 9,
+    "subagent_tokens": {
+      "input_tokens": 76,
+      "cache_creation_tokens": 180064,
+      "cache_read_tokens": 3240657,
+      "output_tokens": 25841,
+      "api_call_count": 38
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
