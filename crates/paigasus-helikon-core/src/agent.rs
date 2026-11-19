@@ -787,6 +787,24 @@ where
                             result: Err(format!("unknown tool: {name}")),
                         });
                     }
+                    // A transfer call above this agent with the same call
+                    // id has no result while the run goes on. The session
+                    // log cannot keep such a deferral open, so deny the call.
+                    if interceptors.ctx.open_call_ids().contains(&call_id) {
+                        let reason =
+                            format!("deferral not possible: call id {call_id} repeats in this run");
+                        denied_events
+                            .lock()
+                            .unwrap()
+                            .push(crate::AgentEvent::PermissionDenied {
+                                tool: name.clone(),
+                                reason: reason.clone(),
+                            });
+                        return ConcurrentOutcome::Done(crate::ToolCallOutcome {
+                            call_id,
+                            result: Err(format!("permission denied: {reason}")),
+                        });
+                    }
                     return ConcurrentOutcome::Deferred(crate::PendingToolCall::new(
                         crate::deferral::new_deferral_id(),
                         call_id,
@@ -1173,6 +1191,22 @@ where
                 } else {
                     None
                 };
+                // The transfer calls of a handoff get no result while the
+                // child runs. Keep their call ids for the child.
+                let transfer_call_ids: Vec<String> =
+                    if matches!(next_action, crate::NextAction::Handoff) {
+                        events
+                            .iter()
+                            .filter_map(|ev| match ev {
+                                crate::AgentEvent::ToolCallItem {
+                                    item: crate::Item::ToolCall { call_id, .. },
+                                } => Some(call_id.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                 let (events, next_action, next_state) = if let Some((kind, info)) = output_trip {
                     run_span.record("otel.status_code", "ERROR");
                     failure.set(crate::AgentError::Guardrail { kind: kind.clone() });
@@ -1425,7 +1459,7 @@ where
                             _ => return,
                         };
 
-                        let child = ctx.handoff_child();
+                        let child = ctx.handoff_child().with_open_call_ids(transfer_call_ids);
                         if child.agent_depth() > max_agent_depth {
                             let err = crate::AgentError::MaxAgentDepthExceeded {
                                 depth: child.agent_depth(),

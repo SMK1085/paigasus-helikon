@@ -1191,6 +1191,88 @@ async fn handoff_deferral_round_trip() {
     assert!(open_ids(&session).await.is_empty());
 }
 
+/// A handoff run `triage -> budgeting`: triage transfers with
+/// `transfer_id`, and budgeting calls `pay` with `pay_id`, then answers
+/// "done". Returns the result, the session, the `pay` tool and the
+/// budgeting model.
+async fn handoff_run_with_ids(
+    transfer_id: &str,
+    pay_id: &str,
+) -> (
+    RunResult,
+    Arc<MemorySession>,
+    Arc<PayTool>,
+    Arc<RecordingModel>,
+) {
+    let session = Arc::new(MemorySession::new());
+    let pay = PayTool::new();
+    let child_model = RecordingModel::with_scripts(vec![pay_turn(&[pay_id]), text_turn("done")]);
+    let budgeting = pay_agent("budgeting", Arc::clone(&child_model), &pay);
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RecordingModel::with_scripts(vec![transfer_turn(
+            transfer_id,
+            "budgeting",
+        )]))
+        .handoff(budgeting)
+        .build();
+    let result = run(&triage, ctx(session.clone(), true), user("hi"))
+        .await
+        .expect("the run succeeds");
+    (result, session, pay, child_model)
+}
+
+#[tokio::test]
+async fn deferral_with_the_call_id_of_an_open_transfer_call_is_denied() {
+    // Gemini makes `fc_{n}` ids per stream, so the transfer call and the
+    // child's first call can both be `fc_0`. Such a deferral cannot resume,
+    // so the call is denied.
+    let (result, session, pay, child_model) = handoff_run_with_ids("fc_0", "fc_0").await;
+
+    assert!(
+        matches!(result.stop_reason, StopReason::Completed),
+        "{:?}",
+        result.stop_reason
+    );
+    assert_eq!(result.final_output, "done");
+    assert!(pay.calls().is_empty(), "a denied call does not run");
+    assert!(open_ids(&session).await.is_empty(), "no open deferral");
+    let labels = labels(&session).await;
+    assert!(
+        !labels.iter().any(|l| l.starts_with("tool_deferred")),
+        "{labels:?}"
+    );
+    assert!(
+        labels.contains(
+            &"tool_returned(fc_0, permission denied: deferral not possible: call id fc_0 repeats in this run)"
+                .to_owned()
+        ),
+        "{labels:?}"
+    );
+    let requests = child_model.requests();
+    assert_eq!(requests.len(), 2);
+    for r in &requests {
+        assert_tool_calls_paired(&r.messages);
+    }
+}
+
+#[tokio::test]
+async fn deferral_with_a_unique_call_id_after_a_handoff_still_defers() {
+    let (result, session, pay, child_model) = handoff_run_with_ids("t1", "fc_0").await;
+
+    assert!(
+        matches!(&result.stop_reason, StopReason::Deferred { calls } if calls.len() == 1),
+        "{:?}",
+        result.stop_reason
+    );
+    assert!(pay.calls().is_empty());
+    assert_eq!(open_ids(&session).await.len(), 1);
+    assert!(labels(&session)
+        .await
+        .contains(&"tool_deferred(fc_0)".to_owned()));
+    assert_eq!(child_model.requests().len(), 1);
+}
+
 // ── Lost writes through run_streamed(..).collect() ──────────────────────────
 
 #[tokio::test]
