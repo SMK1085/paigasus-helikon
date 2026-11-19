@@ -14,7 +14,8 @@ use futures_util::stream::StreamExt as _;
 use paigasus_helikon_core::{
     effective_interrupt, open_deferrals, Agent, AgentEvent, AgentInput, CancellationToken,
     DeferralSlot, ResumePlan, RunConfig, RunContext, RunError, RunInterrupt, RunResult,
-    RunResultStreaming, Runner, Session, SessionError, SessionRecorder, StopReason,
+    RunResultStreaming, Runner, Session, SessionError, SessionRecorder, SessionWriteSlot,
+    StopReason,
 };
 
 pub mod retry;
@@ -161,6 +162,14 @@ async fn finalize(
     result
 }
 
+/// Record a lost strict session write and make the `RunFailed` event that
+/// replaces the run's terminal event.
+fn lost_write(slot: &SessionWriteSlot, e: SessionError) -> AgentEvent {
+    let error = format!("session write failed: {e}");
+    slot.set(e);
+    AgentEvent::RunFailed { error }
+}
+
 /// The default ephemeral execution backend. Stateless.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TokioRunner;
@@ -286,6 +295,8 @@ where
             })
             .boxed();
 
+        let slot = SessionWriteSlot::new();
+        let write_slot = slot.clone();
         let out = async_stream::stream! {
             let mut saw_terminal = false;
             let mut finalized = false;
@@ -299,12 +310,11 @@ where
                         finalized = true;
                         let written = finalize(&session, &recorder).await;
                         // A run that defers or resumes must not lose its
-                        // write; it ends with RunFailed instead.
+                        // write; it ends with RunFailed instead, and collect()
+                        // returns RunError::SessionWrite from the slot.
                         let strict = resuming || matches!(ev, AgentEvent::RunDeferred { .. });
                         if let (Err(e), true) = (written, strict) {
-                            yield AgentEvent::RunFailed {
-                                error: format!("session write failed: {e}"),
-                            };
+                            yield lost_write(&write_slot, e);
                             continue;
                         }
                     }
@@ -321,11 +331,14 @@ where
             // no interrupt) deliberately does not finalize here — pre-existing
             // behaviour, preserved.
             if let Some(i) = effective_interrupt(interrupt.get(), saw_terminal) {
-                // Best-effort: the run already failed with the interrupt.
-                let _ = finalize(&session, &recorder).await;
-                yield i.terminal_event();
+                // A resuming run is strict here too: the approved tool may
+                // have started. Other runs stay best-effort.
+                match finalize(&session, &recorder).await {
+                    Err(e) if resuming => yield lost_write(&write_slot, e),
+                    _ => yield i.terminal_event(),
+                }
             }
         };
-        Ok(RunResultStreaming::with_failure(Box::pin(out), failure))
+        Ok(RunResultStreaming::with_failure(Box::pin(out), failure).with_session_write(slot))
     }
 }

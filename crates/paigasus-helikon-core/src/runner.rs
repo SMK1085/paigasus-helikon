@@ -131,7 +131,10 @@ where
     /// consumer that drops the stream early may skip the finalize step and leave
     /// a partial turn (or nothing) written. In the two strict cases of
     /// [`Runner::run`] (a run that defers or resumes), an append failure
-    /// replaces the terminal event with `RunFailed` ("session write failed: ...").
+    /// replaces the terminal event with `RunFailed` ("session write failed: ..."),
+    /// also when the run was cancelled or timed out. The runner records the error
+    /// in a [`SessionWriteSlot`], so [`RunResultStreaming::collect`] returns
+    /// [`RunError::SessionWrite`], as [`Runner::run`] does.
     ///
     /// The same cancellation precedence as [`Runner::run`] applies: once a real
     /// terminal event has been yielded, a late cancel/timeout does not append a
@@ -302,6 +305,45 @@ pub struct RunResultStreaming {
     /// [`RunResultStreaming::new`], in which case `collect` falls back to the
     /// string error from [`AgentEvent::RunFailed`].
     failure: Option<FailureSlot>,
+    /// Side-channel carrying a lost session write, when a runner wired one in
+    /// via [`RunResultStreaming::with_session_write`].
+    session_write: Option<SessionWriteSlot>,
+}
+
+/// A shared slot where a runner records a session write that failed.
+///
+/// A run that defers or resumes deferred tool calls must not lose its write.
+/// When the append fails, the runner records the error here and ends the
+/// stream with `RunFailed`. Then [`RunResultStreaming::collect`] returns
+/// [`RunError::SessionWrite`] with the recorded error, before any other
+/// result.
+#[derive(Clone, Default)]
+pub struct SessionWriteSlot(std::sync::Arc<std::sync::Mutex<Option<crate::SessionError>>>);
+
+impl SessionWriteSlot {
+    /// Make an empty slot.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the error of a failed session write.
+    pub fn set(&self, err: crate::SessionError) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
+    }
+
+    /// Take the recorded error, if any.
+    pub fn take(&self) -> Option<crate::SessionError> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
+
+impl std::fmt::Debug for SessionWriteSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = self.0.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        f.debug_struct("SessionWriteSlot")
+            .field("error", &set)
+            .finish()
+    }
 }
 
 impl RunResultStreaming {
@@ -311,7 +353,25 @@ impl RunResultStreaming {
         Self {
             events,
             failure: None,
+            session_write: None,
         }
+    }
+
+    /// Attach the slot where the runner records a failed session write.
+    ///
+    /// After the stream is drained, a recorded error wins over every other
+    /// result: [`RunResultStreaming::collect`] returns
+    /// [`RunError::SessionWrite`], and [`RunResultStreaming::collect_typed`]
+    /// returns [`AgentError::Other`] with the session-write message.
+    #[must_use]
+    pub fn with_session_write(mut self, slot: SessionWriteSlot) -> Self {
+        self.session_write = Some(slot);
+        self
+    }
+
+    /// Take a recorded session-write error. Call only after the stream is drained.
+    fn take_session_write(&self) -> Option<crate::SessionError> {
+        self.session_write.as_ref().and_then(SessionWriteSlot::take)
     }
 
     /// Wrap an event stream together with the [`FailureSlot`] the agent records
@@ -325,6 +385,7 @@ impl RunResultStreaming {
         Self {
             events,
             failure: Some(failure),
+            session_write: None,
         }
     }
 
@@ -374,6 +435,9 @@ impl RunResultStreaming {
             events.push(ev);
         }
 
+        if let Some(e) = self.take_session_write() {
+            return Err(RunError::SessionWrite(e));
+        }
         if let Some(err_msg) = failed {
             if let Some(err) = self.failure.as_ref().and_then(FailureSlot::take) {
                 return Err(RunError::Agent(err));
@@ -446,6 +510,11 @@ impl RunResultStreaming {
             events.push(ev);
         }
 
+        if let Some(e) = self.take_session_write() {
+            return Err(AgentError::Other(anyhow::anyhow!(
+                "session write failed: {e}"
+            )));
+        }
         if let Some(err_msg) = failed {
             // Primary: the structured side-channel (populated post-drain).
             if let Some(err) = self.failure.as_ref().and_then(FailureSlot::take) {
@@ -1010,5 +1079,54 @@ mod deferral_result_tests {
         assert!(RunError::SessionWrite(SessionError::Unavailable)
             .to_string()
             .starts_with("session write failed: "));
+    }
+
+    #[tokio::test]
+    async fn collect_returns_a_recorded_session_write_before_the_agent_error() {
+        let failure = FailureSlot::new();
+        failure.set(AgentError::Other(anyhow::anyhow!("agent broke")));
+        let slot = SessionWriteSlot::new();
+        slot.set(SessionError::Unavailable);
+        let r = RunResultStreaming::with_failure(
+            Box::pin(futures_util::stream::iter(vec![AgentEvent::RunFailed {
+                error: "session write failed: session backend unavailable".to_owned(),
+            }])),
+            failure,
+        )
+        .with_session_write(slot)
+        .collect()
+        .await;
+        assert!(
+            matches!(r, Err(RunError::SessionWrite(SessionError::Unavailable))),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_typed_reports_a_recorded_session_write() {
+        let slot = SessionWriteSlot::new();
+        slot.set(SessionError::Unavailable);
+        let r = streaming(vec![AgentEvent::RunFailed {
+            error: "x".to_owned(),
+        }])
+        .with_session_write(slot)
+        .collect_typed::<String>()
+        .await;
+        match r {
+            Err(AgentError::Other(e)) => {
+                assert!(e.to_string().starts_with("session write failed: "), "{e}")
+            }
+            other => panic!("expected AgentError::Other, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_without_a_recorded_session_write_is_unchanged() {
+        let r = streaming(vec![assistant("hi")])
+            .with_session_write(SessionWriteSlot::new())
+            .collect()
+            .await
+            .expect("ok");
+        assert_eq!(r.final_output, "hi");
     }
 }

@@ -292,6 +292,29 @@ async fn run_streamed_events(
         .await
 }
 
+async fn collect_streamed(
+    agent: &(dyn Agent<()> + '_),
+    ctx: RunContext<()>,
+    input: AgentInput,
+) -> Result<RunResult, RunError> {
+    TokioRunner
+        .run_streamed(agent, ctx, input, RunConfig::default())
+        .await
+        .expect("stream starts")
+        .collect()
+        .await
+}
+
+fn assert_session_write(result: &Result<RunResult, RunError>) {
+    assert!(
+        matches!(
+            result,
+            Err(RunError::SessionWrite(SessionError::Unavailable))
+        ),
+        "{result:?}"
+    );
+}
+
 async fn log(session: &MemorySession) -> Vec<SessionEvent> {
     session.events(None).await.unwrap()
 }
@@ -1166,4 +1189,125 @@ async fn handoff_deferral_round_trip() {
     }
     assert_ends_with_result_then_next(&requests[0].messages, "call_1");
     assert!(open_ids(&session).await.is_empty());
+}
+
+// ── Lost writes through run_streamed(..).collect() ──────────────────────────
+
+#[tokio::test]
+async fn failed_append_on_failing_resume_is_session_write_in_every_path() {
+    // The agent fails (input guardrail tripwire) and fills its FailureSlot;
+    // the lost write must still win.
+    let session = deferred_session(&["call_1"]).await;
+    let failing: Arc<dyn Session> = Arc::new(FailingAppendSession(session.clone()));
+    let agent = LlmAgent::builder::<()>()
+        .name("root")
+        .shared_model(RecordingModel::with_scripts(vec![]))
+        .shared_tool(PayTool::new() as Arc<dyn Tool<()>>)
+        .input_guardrail(TripAlways)
+        .build();
+
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    assert_session_write(&collect_streamed(&agent, ctx(failing.clone(), true), input).await);
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    assert_session_write(&run(&agent, ctx(failing, true), input).await);
+    assert_eq!(open_ids(&session).await.len(), 1, "the deferral stays open");
+}
+
+#[tokio::test]
+async fn failed_append_on_resume_collects_as_session_write() {
+    let session = deferred_session(&["call_1"]).await;
+    let failing: Arc<dyn Session> = Arc::new(FailingAppendSession(session.clone()));
+    let pay = PayTool::new();
+    let agent = pay_agent(
+        "root",
+        RecordingModel::with_scripts(vec![text_turn("done")]),
+        &pay,
+    );
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+
+    assert_session_write(&collect_streamed(&agent, ctx(failing, true), input).await);
+    assert_eq!(pay.calls().len(), 1, "the approved tool ran");
+
+    // A deferring run collects as SessionWrite too.
+    let failing: Arc<dyn Session> = Arc::new(FailingAppendSession(Arc::new(MemorySession::new())));
+    let agent = pay_agent(
+        "root",
+        RecordingModel::with_scripts(vec![pay_turn(&["call_1"])]),
+        &PayTool::new(),
+    );
+    assert_session_write(&collect_streamed(&agent, ctx(failing, true), user("go")).await);
+}
+
+/// Resume `session` through `failing` with a tool that blocks, cancel the run
+/// when the tool starts, and return the result of `streamed` or `run`.
+async fn cancelled_resume(
+    session: &Arc<MemorySession>,
+    failing: Arc<dyn Session>,
+    streamed: bool,
+) -> Result<RunResult, RunError> {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let pay = PayTool::blocking(Arc::clone(&gate));
+    let agent = pay_agent(
+        "root",
+        RecordingModel::with_scripts(vec![text_turn("never")]),
+        &pay,
+    );
+    let input = resolve_all(session, ToolResolution::Approved).await;
+    let cancel = CancellationToken::new();
+    let ctx = ctx(failing, true).with_cancel(cancel.clone());
+    let cancel_on_start = async {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), gate.notified()).await;
+        cancel.cancel();
+    };
+    let (result, ()) = if streamed {
+        tokio::join!(collect_streamed(&agent, ctx, input), cancel_on_start)
+    } else {
+        tokio::join!(run(&agent, ctx, input), cancel_on_start)
+    };
+    assert_eq!(pay.calls().len(), 1, "the approved tool started");
+    result
+}
+
+#[tokio::test]
+async fn failed_append_on_cancelled_resume_is_session_write() {
+    let session = deferred_session(&["call_1"]).await;
+    let failing: Arc<dyn Session> = Arc::new(FailingAppendSession(session.clone()));
+
+    assert_session_write(&cancelled_resume(&session, failing.clone(), true).await);
+    assert_session_write(&cancelled_resume(&session, failing, false).await);
+    assert_eq!(open_ids(&session).await.len(), 1, "the deferral stays open");
+}
+
+#[tokio::test]
+async fn failed_append_on_plain_run_keeps_its_result() {
+    let failing =
+        || -> Arc<dyn Session> { Arc::new(FailingAppendSession(Arc::new(MemorySession::new()))) };
+
+    let agent = pay_agent(
+        "root",
+        RecordingModel::with_scripts(vec![text_turn("hi")]),
+        &PayTool::new(),
+    );
+    let result = collect_streamed(&agent, ctx(failing(), true), user("go")).await;
+    assert_eq!(result.expect("best-effort write").final_output, "hi");
+
+    // A plain cancelled run keeps its interrupt result.
+    let agent = common::text_agent(Arc::new(common::PendingModel), Vec::new());
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let ctx = || ctx(failing(), true).with_cancel(cancel.clone());
+    let result = run(&agent, ctx(), user("go")).await;
+    assert!(matches!(result, Err(RunError::Cancelled)), "{result:?}");
+    let events = run_streamed_events(&agent, ctx(), user("go")).await;
+    match events.last() {
+        Some(AgentEvent::RunFailed { error }) => {
+            assert!(!error.starts_with("session write failed"), "{error}");
+        }
+        other => panic!("expected the interrupt terminal, got {other:?}"),
+    }
+    let result = collect_streamed(&agent, ctx(), user("go")).await;
+    assert!(
+        !matches!(result, Err(RunError::SessionWrite(_))),
+        "{result:?}"
+    );
 }
