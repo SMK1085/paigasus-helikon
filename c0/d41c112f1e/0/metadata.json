@@ -201,6 +201,37 @@
         "label": "Skill: feature-factory:local-review",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_011fekynEJbhS7awPeToRGPu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:open-pr"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "45814f20dd3f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2423,
+        "end": 2424,
+        "entry_ids": [
+          "b68269da-da44-4ead-928a-80ca2b760120"
+        ],
+        "tool_use_id": "toolu_011fekynEJbhS7awPeToRGPu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011fekynEJbhS7awPeToRGPu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:open-pr",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
