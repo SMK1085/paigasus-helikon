@@ -109,6 +109,59 @@ where
     deferrals: DeferralSlot,
 }
 
+/// How the ask points of the authorization pipeline (each guard `Ask` and a
+/// policy `AskUser` or `Defer`) resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AskPoints {
+    /// Normal authorization: each ask point calls the approval handler.
+    Ask,
+    /// Re-check of an approved deferred call: every ask point counts as answered.
+    Answered,
+}
+
+/// The detailed result of the authorization pipeline.
+#[derive(Debug, Clone)]
+pub(crate) enum Authorization {
+    /// Run the call with its args.
+    Allow,
+    /// Run the call with these args.
+    Replace {
+        /// The replacement args from the policy.
+        args: serde_json::Value,
+    },
+    /// Do not run the call.
+    Deny {
+        /// The denial reason.
+        reason: String,
+    },
+    /// Only with `AskPoints::Ask` and the flag on. `args` are the effective args
+    /// (the policy's replaced args when a `Replace` met the deferred mark).
+    Defer {
+        /// The distinct prompts of the deferred ask points, joined with `"\n"`.
+        prompt: String,
+        /// The effective args of the call.
+        #[cfg_attr(not(test), expect(dead_code, reason = "used from Task 5"))]
+        args: serde_json::Value,
+    },
+}
+
+/// The deferred mark of one authorization, and the prompts that set it.
+#[derive(Debug, Default)]
+struct DeferMark {
+    mark: bool,
+    prompts: Vec<String>,
+}
+
+impl DeferMark {
+    /// Set the mark and record `prompt` (once; the pipeline order is kept).
+    fn defer(&mut self, prompt: &str) {
+        self.mark = true;
+        if !self.prompts.iter().any(|p| p == prompt) {
+            self.prompts.push(prompt.to_owned());
+        }
+    }
+}
+
 impl<Ctx> RunContext<Ctx>
 where
     Ctx: Send + Sync + 'static,
@@ -522,15 +575,113 @@ where
     /// with exactly the same pipeline the ephemeral agent loop applies
     /// inline, without needing a borrow of the loop's private control-layer
     /// type.
+    ///
+    /// Returns [`PermissionDecision::Defer`] only when an ask point deferred
+    /// and deferred tool calls are on for this run (see
+    /// [`RunContext::with_deferred_tool_calls`]). With the flag off, a
+    /// deferral is a `Deny`. The result is never `AskUser`.
     pub async fn authorize_tool(
         &self,
         tool: &str,
         effect: ToolEffect,
         args: &serde_json::Value,
     ) -> PermissionDecision {
+        match self
+            .authorize_tool_detailed(tool, effect, args, AskPoints::Ask)
+            .await
+        {
+            Authorization::Allow => PermissionDecision::Allow,
+            Authorization::Replace { args } => PermissionDecision::Replace { args },
+            Authorization::Deny { reason } => PermissionDecision::Deny { reason },
+            Authorization::Defer { prompt, .. } => PermissionDecision::Defer { prompt },
+        }
+    }
+
+    /// The authorization pipeline with the detailed result (spec §4.3, §4.8).
+    ///
+    /// With [`AskPoints::Ask`], each ask point calls the approval handler, also
+    /// after an earlier ask point deferred. A deferral sets the deferred mark;
+    /// any `Deny` still wins, and every exit that would allow the call returns
+    /// [`Authorization::Defer`] instead. With [`AskPoints::Answered`], every
+    /// ask point counts as answered, the handler is never called, and the
+    /// result is never `Defer`. A `Defer` becomes a `Deny` when deferred tool
+    /// calls are off for this run.
+    pub(crate) async fn authorize_tool_detailed(
+        &self,
+        tool: &str,
+        effect: ToolEffect,
+        args: &serde_json::Value,
+        asks: AskPoints,
+    ) -> Authorization {
+        let mut mark = DeferMark::default();
+        let decided = self
+            .authorize_stages(tool, effect, args, asks, &mut mark)
+            .await;
+        let decided = match decided {
+            deny @ Authorization::Deny { .. } => deny,
+            other if !mark.mark => other,
+            // The mark is set: an exit that would run the call defers it.
+            Authorization::Allow => Authorization::Defer {
+                prompt: mark.prompts.join("\n"),
+                args: args.clone(),
+            },
+            Authorization::Replace { args: replaced } => Authorization::Defer {
+                prompt: mark.prompts.join("\n"),
+                args: replaced,
+            },
+            defer @ Authorization::Defer { .. } => defer,
+        };
+        match decided {
+            Authorization::Defer { prompt, .. } if !self.deferred_tool_calls_enabled() => {
+                Authorization::Deny {
+                    reason: format!("approval deferred, but this run cannot defer: {prompt}"),
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Resolve one ask point. Returns `Err(reason)` when the call must be
+    /// denied, `Ok(())` when the ask point is cleared or deferred.
+    async fn resolve_ask_point(
+        &self,
+        tool: &str,
+        prompt: &str,
+        args: &serde_json::Value,
+        asks: AskPoints,
+        mark: &mut DeferMark,
+        no_handler_reason: impl FnOnce() -> String,
+    ) -> Result<(), String> {
+        if asks == AskPoints::Answered {
+            // The host approved the deferred call: this ask point is answered.
+            return Ok(());
+        }
+        let Some(handler) = self.approval_handler() else {
+            return Err(no_handler_reason());
+        };
+        match handler.decide(tool, prompt, args).await {
+            ApprovalOutcome::Allow => Ok(()),
+            ApprovalOutcome::Deny { reason } => Err(reason),
+            ApprovalOutcome::Defer => {
+                mark.defer(prompt);
+                Ok(())
+            }
+        }
+    }
+
+    /// The pipeline stages. Returns `Allow`, `Replace` or `Deny`, never
+    /// `Defer`; deferrals go into `mark`, and the caller applies it.
+    async fn authorize_stages(
+        &self,
+        tool: &str,
+        effect: ToolEffect,
+        args: &serde_json::Value,
+        asks: AskPoints,
+        mark: &mut DeferMark,
+    ) -> Authorization {
         // 1. Deny rules — absolute, override even Bypass.
         if self.deny_rules().iter().any(|r| r.matches(tool, args)) {
-            return PermissionDecision::Deny {
+            return Authorization::Deny {
                 reason: format!("denied by deny rule: {tool}"),
             };
         }
@@ -545,33 +696,23 @@ where
             if guard.matches(tool, args) {
                 match guard.action() {
                     crate::GuardAction::Deny { reason } => {
-                        return PermissionDecision::Deny {
+                        return Authorization::Deny {
                             reason: reason.clone(),
                         };
                     }
                     crate::GuardAction::Ask { prompt } => {
-                        let Some(handler) = self.approval_handler() else {
-                            return PermissionDecision::Deny {
-                                reason: format!("destructive command requires approval: {prompt}"),
-                            };
-                        };
-                        // Approval clears THIS guard only — continue the pipeline
-                        // so later guards and the allow/mode/policy steps still
-                        // apply. A matching allow rule may still short-circuit
-                        // before mode/policy; approval itself is not a blanket
-                        // authorization.
-                        match handler.decide(tool, prompt, args).await {
-                            ApprovalOutcome::Allow => continue,
-                            ApprovalOutcome::Deny { reason } => {
-                                return PermissionDecision::Deny { reason };
-                            }
-                            ApprovalOutcome::Defer => {
-                                return PermissionDecision::Deny {
-                                    reason: format!(
-                                        "approval deferred, but this run cannot defer: {prompt}"
-                                    ),
-                                };
-                            }
+                        // Approval (or a deferral) clears THIS guard only —
+                        // continue the pipeline so later guards and the
+                        // allow/mode/policy steps still apply. A matching allow
+                        // rule may still short-circuit before mode/policy;
+                        // approval itself is not a blanket authorization.
+                        if let Err(reason) = self
+                            .resolve_ask_point(tool, prompt, args, asks, mark, || {
+                                format!("destructive command requires approval: {prompt}")
+                            })
+                            .await
+                        {
+                            return Authorization::Deny { reason };
                         }
                     }
                 }
@@ -582,22 +723,25 @@ where
         // the policy AND any mode restriction (including Plan's read-only gate).
         // Deny and guard already ran, so this cannot resurrect a denied/guarded
         // call.
+        // A deferred mark from step 2 turns this short-circuit into a deferral
+        // (in the caller).
         if self.allow_rules().iter().any(|r| r.matches(tool, args)) {
-            return PermissionDecision::Allow;
+            return Authorization::Allow;
         }
-        // 4. Mode.
+        // 4. Mode. With the mark set, `Bypass` and `AcceptEdits` defer (in the
+        // caller): guards exist to beat `Bypass`.
         match self.permission_mode() {
-            PermissionMode::Bypass => return PermissionDecision::Allow,
+            PermissionMode::Bypass => return Authorization::Allow,
             PermissionMode::Plan if effect != ToolEffect::ReadOnly => {
-                return PermissionDecision::Deny {
+                return Authorization::Deny {
                     reason: format!("Plan mode forbids the side-effecting tool `{tool}`"),
                 };
             }
             PermissionMode::AcceptEdits if effect == ToolEffect::Write => {
-                return PermissionDecision::Allow;
+                return Authorization::Allow;
             }
             PermissionMode::DontAsk => {
-                return PermissionDecision::Deny {
+                return Authorization::Deny {
                     reason: format!("DontAsk mode: no allow rule matched `{tool}`"),
                 };
             }
@@ -605,24 +749,33 @@ where
         }
         // 5. Policy (canUseTool). None ⇒ permissive.
         let decision = match self.permission_policy() {
-            None => return PermissionDecision::Allow,
+            None => return Authorization::Allow,
             Some(policy) => policy.check(self, tool, args).await,
         };
-        // 6. AskUser ⇒ approval handler; None ⇒ Deny.
+        // 6. AskUser ⇒ approval handler (None ⇒ Deny); Defer ⇒ the mark.
         match decision {
-            PermissionDecision::AskUser { prompt } => match self.approval_handler() {
-                None => PermissionDecision::Deny {
-                    reason: "no approval handler installed".to_owned(),
-                },
-                Some(handler) => match handler.decide(tool, &prompt, args).await {
-                    ApprovalOutcome::Allow => PermissionDecision::Allow,
-                    ApprovalOutcome::Deny { reason } => PermissionDecision::Deny { reason },
-                    ApprovalOutcome::Defer => PermissionDecision::Deny {
-                        reason: format!("approval deferred, but this run cannot defer: {prompt}"),
-                    },
-                },
-            },
-            other => other,
+            PermissionDecision::Allow => Authorization::Allow,
+            PermissionDecision::Replace { args } => Authorization::Replace { args },
+            PermissionDecision::Deny { reason } => Authorization::Deny { reason },
+            PermissionDecision::AskUser { prompt } => {
+                match self
+                    .resolve_ask_point(tool, &prompt, args, asks, mark, || {
+                        "no approval handler installed".to_owned()
+                    })
+                    .await
+                {
+                    Ok(()) => Authorization::Allow,
+                    Err(reason) => Authorization::Deny { reason },
+                }
+            }
+            PermissionDecision::Defer { prompt } => {
+                // A policy deferral needs no handler. On re-check it counts as
+                // answered.
+                if asks == AskPoints::Ask {
+                    mark.defer(&prompt);
+                }
+                Authorization::Allow
+            }
         }
     }
 

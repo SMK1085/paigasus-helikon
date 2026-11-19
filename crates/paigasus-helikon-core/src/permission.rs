@@ -48,6 +48,9 @@ pub enum PermissionDecision {
         prompt: String,
     },
     /// Replace the call's arguments before execution (sanitize).
+    ///
+    /// Must be idempotent: a deferred call is re-checked on resume, and a
+    /// `Replace` with different args then denies it.
     Replace {
         /// Replacement JSON arguments.
         args: serde_json::Value,
@@ -266,6 +269,11 @@ impl AllowRule {
 pub trait ApprovalHandler: Send + Sync {
     /// Decide an `AskUser` prompt. Returns a narrowed [`ApprovalOutcome`]
     /// (cannot recursively ask).
+    ///
+    /// One tool call can produce more than one `decide` call (one per ask
+    /// point). A handler that returns [`ApprovalOutcome::Defer`] gives a deny
+    /// in every context where deferred tool calls are off; the handler cannot
+    /// see that flag.
     async fn decide(&self, tool: &str, prompt: &str, args: &serde_json::Value) -> ApprovalOutcome;
 }
 
@@ -357,6 +365,15 @@ impl GuardRule {
             }
             GuardMatcher::ProtectedPathWrite => protected_path_write(tool, args),
             GuardMatcher::ProtectedDotPathWrite => protected_dotpath_write(tool, args),
+        }
+    }
+
+    /// A guard on protected VCS/secret path writes with a custom action.
+    #[cfg(test)]
+    pub(crate) fn dotpath_with_action(action: GuardAction) -> GuardRule {
+        GuardRule {
+            matcher: GuardMatcher::ProtectedDotPathWrite,
+            action,
         }
     }
 
