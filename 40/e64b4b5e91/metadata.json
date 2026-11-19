@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "40e64b4b5e91",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-803-deferred-tool-calls-a-defer-decision-ends",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/40/e64b4b5e91/0/metadata.json",
+      "transcript": "/40/e64b4b5e91/0/full.jsonl",
+      "compact_transcript": "/40/e64b4b5e91/0/transcript.jsonl",
+      "content_hash": "/40/e64b4b5e91/0/content_hash.txt",
+      "prompt": "/40/e64b4b5e91/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 9885,
+    "cache_read_tokens": 2058960,
+    "output_tokens": 4222,
+    "api_call_count": 11,
+    "subagent_tokens": {
+      "input_tokens": 42,
+      "cache_creation_tokens": 100099,
+      "cache_read_tokens": 1458161,
+      "output_tokens": 12352,
+      "api_call_count": 19
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
