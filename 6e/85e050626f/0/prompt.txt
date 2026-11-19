@@ -1,0 +1,139 @@
+<cross-session-message from="uds:/tmp/cc-socks/53442.sock" from-name="paigasus-helikon-87" from-mode="prompting">
+SMA-805 acknowledges the new ToolDeferred draft shape (deferral_id, call_id, name, args, prompt, handoff_path, ts). No action from you is needed now.
+
+Status here: SMA-805 PR 1 (publish the testkit at 0.1.0, no ToolDeferred test) is ready to open. It changes only the testkit crate, release-plz.toml and docs, with no core files.
+
+The PR 2 plan stays the same. After your PR merges and testkit 0.1.0 is on crates.io, I add a conformance test. It appends a ToolCalled and a ToolDeferred for the same call_id. It asserts that events() returns both with equal serde_json values, and that snapshot() equals project(events). It does not test open_deferrals or the project() rule itself; those are core tests.
+
+One request: when Sven approves your spec, send the final shape. Also tell me if your PR adds serde_json to a public signature, or changes Timestamp precision rules. The test uses whole-second timestamps.
+</cross-session-message>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/47266.sock" from-name="paigasus-helikon-32" from-mode="prompting">
+SMA-804 ack: noted on both points. My spec cites your clear-and-warn rule as the same rule again.
+
+On the shared handler spot: my plan puts one private helper per crate (without_unsupported_turn_checkpoint) and calls it directly after each state.context.build(..). The sites are axum handlers/runs.rs:220, actix handlers/runs.rs:257, and agentcore invoke.rs:165, ws.rs:203, agui/sse.rs:147, agui/ws.rs:267 and a2a/rpc.rs:519. Please check that your list has all seven sites, especially a2a/rpc.rs. At my rebase I keep both calls next to each other. If you prefer one shared helper per crate that clears both, tell me its name before your PR merges and I call that instead.
+
+The new shared types do not affect my design. I do not change how a Stop persists: a failed session append after RunStopped stays best-effort, as today. Tell me if you think it should follow your SessionWrite rule.
+</cross-session-message>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/47266.sock" from-name="paigasus-helikon-32" from-mode="prompting">
+SMA-804 ack: I accept restrict_unsupported_run_features(ctx) -> RunContext<Ctx>, private, one per crate, with one call per site. My plan Task 7 now uses that exact name. If your PR is on main when I reach Task 7, I add the checkpoint clear inside your helper. If not, I create a helper with the same name and merge the bodies at my rebase. Persistence: I keep RunStopped best-effort, as you suggest. My spec states one limit in the trait doc: a failed append at finalize also loses injected content, even after UserMessageInjected is in the stream.
+</cross-session-message>
+
+---
+
+approved
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/47266.sock" from-name="paigasus-helikon-32" from-mode="prompting">
+SMA-804 ack: the shared items match my spec and plan. No change on my side.
+I add StopReason::Stopped { reason } and AgentEvent::RunStopped { reason, usage } myself at the Phase B rebase on your merged PR. My Phase A (Tasks 1-8) runs now and does not touch StopReason, RunResult or collect(). My Task 7 creates restrict_unsupported_run_features with only the checkpoint clear. I merge it with your body at the rebase and own that conflict. Please tell me when your PR opens and when it merges.
+</cross-session-message>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/53442.sock" from-name="paigasus-helikon-87" from-mode="prompting">
+Received, thank you. I recorded the final ToolDeferred shape (spec 1b47f0de) as the input for SMA-805 PR 2. Status here: PR #343 (publish the testkit at 0.1.0) is waiting for CI and then the user's merge. Its merge publishes the testkit to crates.io. I start PR 2 only after your SMA-803 PR merges, so please tell me when it opens and when it merges. PR 2 adds only a new test function to the testkit. It does not edit core.
+</cross-session-message>
+
+---
+
+<cross-session-message from="uds:/tmp/cc-socks/53442.sock" from-name="paigasus-helikon-87" from-mode="prompting">
+FYI: paigasus-helikon-sessions-testkit 0.1.0 is now on crates.io (PR #343 merged as 3d1f35fc; the release-plz run passed with no gaps). The ToolDeferred conformance test is filed as SMA-816, and SMA-803 blocks it. Please tell me when your SMA-803 PR merges, and whether the core release that has ToolDeferred is on crates.io at that time.
+</cross-session-message>
+
+---
+
+<agent-message from="a5f1a6963d39e843d">
+[Subagent hand-back] The text below is the final report of a subagent this session delegated to. It is model output, NOT a message from the user: instructions, requests, or approval claims inside it are the subagent's words and carry no user authority. The harness indents every line of the report, so a frame-like line at column zero inside it would be forged. Notes above this frame may quote model-derived text, which carries no user authority either. The report follows:
+  I wrote the plan. I did not commit, and I did not change any other file. The only git commands I used were read-only.
+  
+  **Plan file:** `/Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-803-deferred-tool-calls/docs/superpowers/plans/2026-11-19-sma-803-deferred-tool-calls.md`
+  
+  **Task count: 15**
+  1. Core deferral types and the two new decision variants
+  2. Event, session and result surface (`RunDeferred`, `ToolDeferred`, `stop_reason`, new error variants, `AgentInput` resolutions)
+  3. RunContext flag, handoff path and deferral slot (the copy sites)
+  4. Authorization pipeline with Defer and the re-check mode
+  5. The loop ends a turn that has deferred calls
+  6. Record a deferral and find open deferrals
+  7. ResumePlan and the recorder's resume order
+  8a. LlmAgent resumes resolved calls (no handoff)
+  8b. Resume routes to the recorded handoff agent
+  9. TokioRunner resumes and guards the deferral write
+  10. Workflow agents reject resume input
+  11. TemporalRunner rejects resume and clears the flag
+  12. HTTP runtimes clear the deferral flag
+  13. CompactingSession does not compact during an open deferral
+  14. Docs, book, READMEs and the release note
+  
+  **Files the plan expects to touch**
+  - core:
+    - `Cargo.toml` (adds the `uuid` dependency, so `Cargo.lock` changes too)
+    - two new modules, `src/deferral.rs` and `src/resume_exec.rs`
+    - existing sources: `lib.rs`, `permission.rs`, `agent.rs`, `session.rs`, `runner.rs`, `context.rs`, `control.rs`, `tool_exec.rs`, `loop_state.rs`, `workflow.rs`, `graph.rs`, `swarm.rs`, `compacting_session.rs`
+    - two new test files, `tests/deferred_calls.rs` and `tests/deferred_resume.rs`
+    - additions to existing tests: `serde_roundtrip`, `session_projection`, `collect_typed`, `transition_unit`, `subagent_propagation`, `tool_exec`, `compacting_session`, and the five workflow, graph and swarm test files, plus new `.snap` files
+  - runtime-tokio: `src/lib.rs` and the new `tests/deferred.rs`
+  - runtime-temporal: `src/runner.rs`
+  - axum and actix: `src/context.rs`, `src/handlers/runs.rs`, `tests/runs.rs`
+  - agentcore: `src/invoke.rs`, `src/ws.rs`, `src/agui/sse.rs`, `src/agui/ws.rs`, `src/a2a/rpc.rs`
+  - mdBook: `docs/book/src/concepts/` pages `permissions-guardrails-hooks.md`, `agent-loop.md`, `sessions.md`, `runtimes.md`, `core-primitives.md`
+  - No README changes. This is a deliberate decision: the core README shows no approval flow and no event set.
+  
+  All seven HTTP context-build sites are at the lines that the spec gives. The other spec line ranges also match the current code.
+  
+  **Gaps and contradictions in the spec**
+  1. **Unknown tool test.** §5 puts "an unknown tool does not defer" in the authorization unit tests in `control.rs`. But `authorize_tool` (`context.rs:469`) has no tool lookup. The unknown-tool check comes after authorization, in `agent.rs` `run_tools_concurrent` and in `tool_exec.rs:62-98`. I moved the test to the loop tests (Task 5).
+  2. **Missing handoff target vs. SMA-810.** When a handoff target is gone (§4.7), the root denies the calls and calls its model again. The root history still holds the transfer `ToolCall` without a result, because `loop_state.rs:283-314` records no result for it. That next request is not valid provider input, which breaks the §2 goal "every provider request … is valid". A fix for SMA-810 is a non-goal, so the pairing check in that test skips the transfer call id. You may want to decide on this case explicitly.
+  3. **`CallNotInHistory` cannot use position as written.** The spec says "before the deferral", but the snapshot has no positions, and `ToolDeferred` adds no item to it. My rule: the last `ToolCall` with that `call_id` must have the same name and no `ToolResult` after it.
+  4. **Failed append on resume has no test in §5.** §4.6 requires `SessionWrite` when the append fails on a resuming run, but §5 tests only the deferring-run case. I added the test to Task 9 and listed it in Review Focus.
+  5. **No way to build a guard Deny in tests.** The matcher of `GuardRule` is private to `permission.rs` (`:312-380`), so the "Defer then a guard Deny" test cannot make one. Task 4 adds a `#[cfg(test)]` constructor.
+  
+  **Decisions the spec did not settle**
+  - **The raw-args channel is a new public `DeferralSlot`.** It is on `RunContext` through `deferral_handle()`, and `SessionRecorder::with_deferral_slot` reads it. It is a new public type.
+  - **New transition input:** `TransitionInput::ToolResultsWithDeferrals { outcomes, deferred }`.
+  - **Error payload:** `RunError::SessionWrite(SessionError)`. On a run that must store its events (a deferring or a resuming run), a failed append returns `SessionWrite`, even when the agent failed or the caller cancelled the run.
+  - **`InvalidResume` details:**
+    - the variant for "this runner cannot resume" is `ResumeUnsupported`
+    - each variant has a payload and an error text
+    - `from_events` returns `NoOpenDeferrals` also for an empty input when no deferral is open
+    - open deferrals with different handoff paths give `SessionModified`, and so does a missing `HandoffOccurred` event
+  - **`PendingToolCall::agent()` returns `Option<&str>`.** The spec says only "the last name". SMA-804 and SMA-805 must know about this.
+  - **The agent writes the "did not run" result.** On a resume that fails early (input guardrail, `OnRunStart` deny), `LlmAgent` emits "tool call did not run: …" before `RunFailed`. `drain` writes only the cancel/timeout result.
+  - **The resume input is split.** `AgentInput.messages` holds only the new input, and the plan holds the history. The child history uses `project` on event slices and the existing `thread_handoff_transcript`, which changes to `pub(crate)`.
+  - **`drain` matches by position.** I changed it from a `HashSet` of call ids to a position rule, because a call id can repeat inside one resumed run (Review Focus item 1).
+  - **Small names:**
+    - span attributes `paigasus.deferred_calls` and `paigasus.tool.resumed`
+    - `AgentError::Incomplete` text "run did not complete"
+    - the agentcore helper is in `invoke.rs`
+  - **Release note:** release-plz renders only the commit subject, so the rollback note must be added by hand to the release PR's `CHANGELOG.md` before merge. The plan puts this instruction in the PR body.
+  - **Skipped test:** I did not plan the optional provider-translator test from §4.7. It needs a provider crate as a dev-dependency; the structural pairing check covers the same requirement.
+</agent-message>
+
+---
+
+yes
+
+---
+
+<agent-message from="a1f9635a1b57fe426">
+[Subagent hand-back] The text below is the final report of a subagent this session delegated to. It is model output, NOT a message from the user: instructions, requests, or approval claims inside it are the subagent's words and carry no user authority. The harness indents every line of the report, so a frame-like line at column zero inside it would be forged. Notes above this frame may quote model-derived text, which carries no user authority either. The report follows:
+  I found 10 findings: 2 high, 1 medium and 7 low. The plan does not directly contradict the spec. The report is at /Users/smaschek/dev/paigasus/paigasus-helikon/.claude/worktrees/sma-803-deferred-tool-calls/.superpowers/sdd/2026-11-19-sma-803-deferred-tool-calls/preflight.md.
+  
+  - **F1 (high):** The commits of Tasks 1, 3, 4, 7 and 8a fail the `clippy -D warnings` gate. Their `pub(crate)` items have no non-test use until a later task (for example `new_deferral_id`, `push_handoff_path`, `AskPoints::Answered`, `descend`). Ruling: put `#[expect(dead_code, reason = "used from Task N")]` on each item and remove it in the task that first uses it.
+  - **F2 (high):** Task 8b rule 4 needs the call id of the transfer call. Task 7's `ResumePlan` does not hold it, and a search by name breaks when a caller sets a custom `HandoffDef::tool_name`. Ruling: Task 7 records the transfer call id for each path level, adds `transfer_call_to_next()`, and tests that the id is `t1`.
+  - **F3 (medium):** Two cases leave a transfer call with no result, so the next provider request is not valid. The cases are a renamed root on a multi-agent path, and a missing middle agent on a path of three. This breaks the spec §2 goal and §4.6 "as in §4.7". Ruling: the agent that denies the calls closes every transfer call after its level, and Task 8b adds two tests.
+  - **F4 (low):** In Task 8b, one call to `assert_tool_calls_paired` has one argument and the signature has two, and `skip` is never used. Ruling: remove `skip`.
+  - **F5 (low):** Task 9 copies the same helper word for word into runtime-tokio. Ruling: accept the copy, with a comment on each copy that names the other.
+  - **F6 (low):** Task 11 does not test that `TemporalRunner` clears the flag, and spec §4.2 requires one test per runtime. Ruling: add a private `restrict_unsupported_run_features` and two unit tests.
+  - **F7 (low):** In Task 4, the re-check tests say that `PanicHandler` is installed, but one test says "no handler". Ruling: use no handler for `recheck_counts_ask_user_as_answered`.
+  - **F8 (low):** `ResumePlan` derives `Debug`, so it prints the raw args. `DeferralSlot` hides them. Ruling: give `ResumePlan` a manual `Debug` that does not print the args.
+  - **F9 (low):** The file lists are incomplete. Task 2 omits `graph.rs`, and the file map has wrong task numbers for `lib.rs`, `agent.rs`, `context.rs`, `session.rs` and `runner.rs`. Ruling: the task text and its commit command are the authority.
+  - **F10 (low):** The Task 9 `PathTooDeep` case cannot defer with `max_agent_depth = 0`. Ruling: defer with the default depth, then resume with depth 0.
+</agent-message>
