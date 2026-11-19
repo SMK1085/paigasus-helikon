@@ -63,7 +63,7 @@ A typical run walks `CallingModel → ExecutingTools → CallingModel → … �
   carries arguments has its name emitted at end-of-stream.
 - Semantic items (carry a full `Item`): `MessageOutput { item }`, `ToolCallItem { item }`, `ToolOutputItem { item }`, `HandoffItem { from, to }`.
 - Transitions: `AgentUpdated { agent }`.
-- Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }` (the `args` are the effective arguments, redacted), `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`.
+- Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }` (the `args` are the effective arguments; they are redacted when output redaction is on), `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`.
 - Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision.
 
 The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them; the `MessageOutput` / `ToolCallItem` / `ToolOutputItem` events carry the same content re-aggregated into a complete `Item` once the turn settles.
@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`RunResultStreaming::new(stream).collect().await?` drains every event, returning a `RunResult` whose `final_output: String` is the concatenated text of the *last* `MessageOutput` assistant message, alongside the full `events` vector and aggregated `usage`. A terminal `RunFailed` surfaces as `Err(RunError)`. For structured output, use `collect_typed::<T>()` instead. A run that ends with `RunDeferred` has no final output. `collect` returns a `RunResult` with `stop_reason` set to `StopReason::Deferred { calls }`, and `collect_typed` returns `AgentError::Incomplete`. `RunResult.stop_reason` is `StopReason::Completed` for a run that finished.
+`RunResultStreaming::new(stream).collect().await?` drains every event, returning a `RunResult` whose `final_output: String` is the concatenated text of the *last* `MessageOutput` assistant message, alongside the full `events` vector and aggregated `usage`. A terminal `RunFailed` surfaces as `Err(RunError)`. For structured output, use `collect_typed::<T>()` instead. A run that ends with `RunDeferred` has no final output. For such a run, `collect` returns a `RunResult` with `StopReason::Deferred { calls }` in `stop_reason`. `collect_typed` returns `AgentError::Incomplete`. `RunResult.stop_reason` is `StopReason::Completed` for a run that finished.
 
 ## Consuming events live
 

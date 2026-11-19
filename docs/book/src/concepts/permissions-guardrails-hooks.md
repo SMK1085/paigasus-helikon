@@ -85,6 +85,8 @@ A deferred tool call does not wait inside the run. The run ends, and the host de
 
 **The end of the run.** The run stops with `StopReason::Deferred { calls }`. The stream ends with `AgentEvent::RunDeferred`, after one `ApprovalRequested` event for each call. The session gets one `tool_deferred` event for each call. `collect_typed` returns `AgentError::Incomplete`, because the run has no final output.
 
+**Repeated call ids.** A handoff transfer call has no result while the child agent runs. Some providers make call ids for each response, for example `fc_0` from Gemini. Then a call of the child agent can have the same call id as the transfer call. Such a call is not deferred, because the session cannot keep the deferral open. The call is denied with the result "permission denied: deferral not possible: call id {call_id} repeats in this run".
+
 **The resume.** The host resolves each open call with the `deferral_id` of the call. Only a runner that supports resume can do this today: `TokioRunner`.
 
 ```rust,ignore
@@ -109,9 +111,9 @@ let result = TokioRunner.run(&agent, ctx, input, config).await?;
 - `PathTooDeep`: the handoff path is longer than `max_agent_depth` allows.
 - `ResumeUnsupported`: the runner cannot resume deferred calls.
 
-**One writer for each session.** The host must make sure that only one run uses a session at a time, for example with a lease. Two resumes of one session at the same time can both run an approved tool.
+**One writer for each session.** Only one run at a time must use a session. The host must make sure of this, for example with a lease. Two resumes of one session at the same time can both run an approved tool.
 
-**Secrets.** The session stores the raw effective arguments of a deferred call, because the resume runs the tool with these arguments. A secret in the arguments persists in the session store. Events carry redacted arguments. A `PreToolUse` hook that adds a secret to the arguments of a call that can defer has the same effect.
+**Secrets.** The session stores the raw effective arguments of a deferred call. The resume runs the tool with these arguments. Thus a secret in the arguments persists in the session store. A `PreToolUse` hook that adds a secret to the arguments of a call that can defer has the same effect. When output redaction is on, events carry redacted arguments. When output redaction is off, events carry the raw arguments.
 
 **Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back below this version, because an older reader cannot parse the row. Enable deferral only after every reader of the session store runs this version.
 
