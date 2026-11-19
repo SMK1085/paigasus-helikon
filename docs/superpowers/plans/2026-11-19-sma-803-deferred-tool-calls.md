@@ -970,6 +970,7 @@ git commit -m "feat(core): SMA-803 run resolved deferred calls after a re-check 
 2. `next_agent() == None` → Task 8a path.
 3. `next_agent() == Some(next)` and a handoff target with `agent().name() == next` exists → `child = ctx.handoff_child()`; depth check as in the `Handoff` arm (failure exit yields `not_run_results` first); do NOT fire `OnHandoff` and do NOT emit `HandoffItem`; yield `AgentUpdated { agent: next }`; run the target with `AgentInput { messages: input.messages, resume_plan: Some(plan.descend()), .. }`; re-yield with the same arms as the `Handoff` arm (drop `RunStarted`, sum `RunCompleted` and `RunDeferred` usage with a zero `parent_usage`); fire `OnSubagentStop { agent: next }` at the end; return.
 4. `next_agent() == Some(next)` with no such target → `plan = plan.with_all_denied(&format!("agent no longer available: {next}"))`; this agent runs the denials with its own `plan.history()` and continues its own loop.
+   Also close the handoff transfer call that leads to `next` (the `ToolCalled` before the last `HandoffOccurred` to `next`; Sven's decision at plan review, 2026-11-19). Insert a synthetic `ToolResult` for its `call_id` with the text `agent no longer available: {next}` directly after that `ToolCall` in the history of the model request, and emit a `ToolOutputItem` for it first in the resume block, so the recorder stores it before the denial results. This closes the transfer call only on this path; the general fix stays in SMA-810.
 
 - [ ] **Step 1: Write the failing tests** in `tests/deferred_resume.rs`
 
@@ -987,6 +988,9 @@ async fn handoff_resume_runs_the_call_on_the_child_with_the_child_conversation()
 async fn missing_handoff_target_denies_the_calls_at_the_deepest_reachable_agent()
 // resume with a triage that has no budgeting handoff → ToolOutputItem(b,
 // "permission denied: agent no longer available: budgeting"); triage's model is called next.
+// the transfer call t1 has a ToolResult "agent no longer available: budgeting" directly after its
+// ToolCall in triage's next request; a ToolOutputItem(t1, ...) comes before ToolOutputItem(b, ...).
+// assert_tool_calls_paired(&request, &[]) passes with no skip.
 ```
 
 Add a test helper in the file:
@@ -997,7 +1001,7 @@ Add a test helper in the file:
 fn assert_tool_calls_paired(messages: &[Item], skip: &[&str]);
 ```
 
-In the missing-target test, call it with `skip = ["<transfer call id>"]`: the root history still holds the handoff transfer call without a result (SMA-810, a non-goal of this ticket).
+In the missing-target test, call it with an empty `skip`: rule 4 closes the transfer call. Keep the `skip` parameter for other callers.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 

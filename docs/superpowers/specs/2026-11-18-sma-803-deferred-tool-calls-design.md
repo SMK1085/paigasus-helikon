@@ -435,6 +435,11 @@ cannot defer (§4.2), so a valid session never needs this path.
   that the path reaches resolves every pending call as
   `Denied { reason: "agent no longer available: {name}" }` and continues its
   own loop.
+  That agent also closes the handoff transfer call that leads to the missing
+  agent: it puts a synthetic result `agent no longer available: {name}`
+  directly after the transfer call, and records it before the denial
+  results. Without it, the next model request is not valid. Sven decided this
+  at plan review on 2026-11-19. The general fix stays in SMA-810.
 - The handoff re-yield adds the child usage to `parent_usage` for
   `RunDeferred`, as it does for `RunCompleted`. This needs an explicit arm,
   because other events pass through `other => yield other`.
