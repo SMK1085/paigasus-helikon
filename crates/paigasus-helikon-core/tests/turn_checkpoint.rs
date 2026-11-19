@@ -503,17 +503,25 @@ async fn stop_ends_cleanly_at_boundary() {
     assert_eq!(requests.lock().unwrap().len(), 1, "model called once");
     assert!(out.failure.is_none());
     assert_eq!(*runs.lock().unwrap(), 1, "OnRunComplete exactly once");
-    let rec = recorded(&out.events);
-    let called = rec
+    // Count in the raw events: `drain()` synthesizes a result for any call
+    // without one, so the recorded log cannot show a missing result.
+    let called = out
+        .events
         .iter()
-        .filter(|e| matches!(e, SessionEvent::ToolCalled { .. }))
+        .filter(|e| matches!(e, AgentEvent::ToolCallItem { .. }))
         .count();
-    let returned = rec
+    let returned = out
+        .events
         .iter()
-        .filter(|e| matches!(e, SessionEvent::ToolReturned { .. }))
+        .filter(|e| matches!(e, AgentEvent::ToolOutputItem { .. }))
         .count();
     assert_eq!(called, 2);
-    assert_eq!(called, returned);
+    assert_eq!(called, returned, "every tool call has a real result");
+    assert!(!recorded(&out.events).iter().any(|e| matches!(
+        e,
+        SessionEvent::ToolReturned { content, .. }
+            if format!("{content:?}").contains("tool call did not complete")
+    )));
 
     // collect() over the same stream shape.
     let (a2, _) = build();
