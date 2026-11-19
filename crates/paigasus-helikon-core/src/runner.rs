@@ -132,8 +132,8 @@ where
     /// a partial turn (or nothing) written. In the two strict cases of
     /// [`Runner::run`] (a run that defers or resumes), an append failure
     /// replaces the terminal event with `RunFailed` ("session write failed: ..."),
-    /// also when the run was cancelled or timed out. The runner records the error
-    /// in a [`SessionWriteSlot`], so [`RunResultStreaming::collect`] returns
+    /// also when the run was cancelled or timed out. A runner that supports deferred
+    /// tool calls records the error in a [`SessionWriteSlot`], so [`RunResultStreaming::collect`] returns
     /// [`RunError::SessionWrite`], as [`Runner::run`] does.
     ///
     /// The same cancellation precedence as [`Runner::run`] applies: once a real
