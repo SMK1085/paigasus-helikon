@@ -63,8 +63,8 @@ A typical run walks `CallingModel → ExecutingTools → CallingModel → … �
   carries arguments has its name emitted at end-of-stream.
 - Semantic items (carry a full `Item`): `MessageOutput { item }`, `ToolCallItem { item }`, `ToolOutputItem { item }`, `HandoffItem { from, to }`.
 - Transitions: `AgentUpdated { agent }`.
-- Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }` (the `args` are the effective arguments; they are redacted when output redaction is on), `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`.
-- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision.
+- Control: `GuardrailTriggered { kind, info }`, `ApprovalRequested { call_id, tool, args }` (the `args` are the effective arguments; they are redacted when output redaction is on), `PermissionDenied { tool, reason }`, `RepairStarted { attempt }`, `StructuredOutputFailed { schema_errors, final_text }`, `UserMessageInjected { content }`.
+- Terminal: `RunCompleted { usage }`, `RunFailed { error }`, `RunDeferred { calls, usage }`, `RunStopped { reason, usage }`. A run ends with exactly one of these. `RunDeferred` means the run stopped on tool calls that wait for a host decision. `RunStopped` means the host stopped the run at a turn boundary through the turn checkpoint.
 
 The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them; the `MessageOutput` / `ToolCallItem` / `ToolOutputItem` events carry the same content re-aggregated into a complete `Item` once the turn settles.
 
@@ -143,3 +143,89 @@ let config = RunConfig::new()
 ```
 
 Cancellation is *not* a `RunConfig` field — the canonical `CancellationToken` lives on `RunContext`. Cancellation and timeout are best-effort: a genuine terminal event that already occurred wins over a late cancel or timeout, so a caller cannot assume that calling `cancel()` always yields `RunError::Cancelled`.
+
+## Turn-boundary checkpoint
+
+A host can talk to a run while the run is in progress. For this, set a `TurnCheckpoint<Ctx>` on the `RunContext`. The loop calls it at each turn boundary. The checkpoint is optional. A `RunContext` without a checkpoint behaves as before.
+
+A turn boundary is the point after the tool results of a turn and before the next model call. These points are not boundaries: the first model call, a structured-output final turn, a repair turn, and a turn that ends the run with a final answer. A handoff child loop has its own boundaries.
+
+The checkpoint returns one `CheckpointDecision`:
+
+- `Continue` — call the model as normal.
+- `Inject(Vec<ContentPart>)` — add the parts as one user message, then call the model.
+- `Stop { reason }` — end the run at this boundary.
+
+```rust
+use async_trait::async_trait;
+use paigasus_helikon::core::{
+    CheckpointDecision, ContentPart, RunContext, TurnBoundary, TurnCheckpoint,
+};
+use std::sync::{Arc, Mutex};
+
+/// Hands out the messages of a host inbox, one per boundary.
+struct InboxCheckpoint {
+    inbox: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl TurnCheckpoint<()> for InboxCheckpoint {
+    async fn at_boundary(
+        &self,
+        _ctx: &RunContext<()>,
+        _boundary: &TurnBoundary,
+    ) -> CheckpointDecision {
+        match self.inbox.lock().unwrap().pop() {
+            Some(text) => CheckpointDecision::Inject(vec![ContentPart::Text { text }]),
+            None => CheckpointDecision::Continue,
+        }
+    }
+}
+
+let checkpoint = Arc::new(InboxCheckpoint {
+    inbox: Mutex::new(vec!["Use the savings account.".to_owned()]),
+});
+let ctx = RunContext::ephemeral(()).with_turn_checkpoint(checkpoint);
+```
+
+### Event order
+
+At a boundary, the loop emits the `ToolOutputItem` events of all tool results first. Then the checkpoint runs. On `Inject`, the loop emits `UserMessageInjected { content }`. Then it emits `TurnStarted` for the next turn. The injected user message always comes after the tool results. It never comes between a tool call and its result.
+
+### Inject rules
+
+- The parts must be user parts: `Text`, `Image` or `Audio`. A `ToolUse`, `ToolResult` or `Reasoning` part fails the run with `AgentError::InvalidInjection`.
+- `Inject` with an empty list is the same as `Continue`.
+- The input guardrails check the text of the injected content. A guardrail cannot check image or audio parts.
+- A guardrail tripwire ends the run with `RunStopped`, not with `RunFailed`. The loop does not emit `UserMessageInjected`. It does not store the rejected content.
+- An injected message is one user message. A host with several waiting items merges them into one `Vec<ContentPart>`.
+- `SessionRecorder` stores the message as a `SessionEvent::UserMessage`. Later runs of the session see it as a normal user message.
+
+### Commit rule
+
+The run owns the injected content only after `UserMessageInjected` is in the event stream. Before that event, the host owns the content. After that event, the host must not inject the content again. This is true also if the run ends before the model answers.
+
+### Stop rules
+
+`Stop` ends the run with `AgentEvent::RunStopped { reason, usage }` and `StopReason::Stopped`. It is not a failure. All tool calls of the last turn have results. The output guardrails do not run, and no final turn runs. `RunResultStreaming::collect` returns `Ok` with `stop_reason` set to `Stopped`.
+
+A guardrail stop has a `GuardrailTriggered` event before `RunStopped`, and no `UserMessageInjected` between them. The text of `reason` alone does not identify a guardrail stop.
+
+`Stop` is best effort. A run that ends with a final answer has no next boundary. A `Stop` decision cannot apply to it. The checkpoint does not run when the next turn would exceed `RunConfig::max_turns`. In that case the run fails with `AgentError::MaxTurnsExceeded`.
+
+### Rules for the checkpoint code
+
+1. Injected content has the trust of a user message. It has more trust than a tool result.
+2. Do not write to `ctx.session()` from the checkpoint. The recorder appends the events of the run when the run ends.
+3. The wait in `at_boundary` counts against `RunConfig::timeout`. The loop has no separate timeout for it.
+4. The runner can drop the stream while `at_boundary` waits. Then the future is dropped. Write `at_boundary` so that it is cancel-safe.
+5. Do not cancel the run from the checkpoint. A cancel ends the run as `Cancelled`. Return `Stop` instead.
+6. `TokioRunner` stores the session on a best-effort basis. If the store fails, the injected content is lost, although `UserMessageInjected` was in the stream. A host that needs a guarantee must check the stored session.
+
+### Where the checkpoint does not run
+
+- `TemporalRunner` ignores the checkpoint and logs a warning.
+- The HTTP runtimes (axum, actix and agentcore) clear the checkpoint on the context that they build. They log a warning if one was set.
+- Workflow, swarm and graph sub-agents do not call the checkpoint.
+- `AgentAsTool` sub-runs do not call the checkpoint.
+- The checkpoint does not run inside a tool call or before the first model call of a run.
