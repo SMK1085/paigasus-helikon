@@ -215,6 +215,17 @@ where
             let span = workflow_run_span(&name, ctx.tracer());
             yield AgentEvent::RunStarted { agent: name.clone() };
 
+            if crate::workflow::has_resume_input(&input) {
+                parent_failure.set(AgentError::Other(anyhow::anyhow!(
+                    "this agent cannot resume deferred calls"
+                )));
+                span.record("otel.status_code", "ERROR");
+                yield AgentEvent::RunFailed {
+                    error: "this agent cannot resume deferred calls".to_owned(),
+                };
+                return;
+            }
+
             let max = max_depth(ctx.run_config());
             if ctx.agent_depth() + 1 > max {
                 let err = AgentError::MaxAgentDepthExceeded { depth: ctx.agent_depth() + 1, max };

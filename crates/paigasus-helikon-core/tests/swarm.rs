@@ -196,3 +196,23 @@ async fn swarm_stream_survives_dropping_the_swarm() {
     let result = RunResultStreaming::new(stream).collect().await.unwrap();
     assert_eq!(result.final_output, "done");
 }
+
+#[tokio::test]
+async fn swarm_agent_rejects_resolutions() {
+    // A member run would add events beyond RunStarted and RunFailed.
+    let triage = member("triage", vec![text_final("ran")]);
+    let swarm = SwarmAgent::builder()
+        .name("s")
+        .member(triage)
+        .build()
+        .unwrap();
+    let input = AgentInput::from_user_text("x")
+        .with_resolution("d1", paigasus_helikon_core::ToolResolution::Approved);
+    let ctx: RunContext<()> = RunContext::ephemeral(());
+    let events: Vec<AgentEvent> = swarm.run(ctx, input).await.unwrap().collect().await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::RunFailed { error }) if error == "this agent cannot resume deferred calls"
+    ));
+    assert_eq!(events.len(), 2, "only RunStarted and RunFailed: {events:?}");
+}
