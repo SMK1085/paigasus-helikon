@@ -9,7 +9,7 @@
   session), SMA-795 and SMA-793 (consumers in paigasus-core).
 - **Review history:** one builder check ("nothing important left") and one
   adversarial challenge (verdict "needs rework"). §8 records how this revision
-  handles each finding.
+  handles each finding. Gate 1 approved by Sven on 2026-11-19.
 
 ## 1. Intent
 
@@ -562,18 +562,18 @@ run follows the flag.
 - Exact error, denial and synthetic-result texts.
 - Which book pages and README files change.
 
-## 7. Open questions for Sven
+## 7. Decisions on the open questions
+
+Sven approved the spec on 2026-11-19 with the picks below.
 
 1. On re-check, an ask point that did not fire at defer time (because the
    configuration changed) counts as answered. This follows the ADR text
-   literally. The alternative: such a new ask point denies the call. My pick:
-   follow the ADR.
+   literally.
 2. A `PreToolUse` deny that would apply at resume time is never evaluated,
-   because the ADR says "do not fire `PreToolUse` again". My pick: follow the
-   ADR. The deny rules, guards, mode and policy still run.
-3. With the flag off, a policy `Defer` is a `Deny`. The alternative is to treat
-   it as an `AskUser` (call the handler if one is installed). My pick: `Deny`,
-   as the ADR says for runners without support.
+   because the ADR says "do not fire `PreToolUse` again". The deny rules,
+   guards, mode and policy still run.
+3. With the flag off, a policy `Defer` is a `Deny`, as the ADR says for runners
+   without support.
 
 ## 8. Calls I made (for review)
 
