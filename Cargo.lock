@@ -4156,6 +4156,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trybuild",
+ "uuid",
 ]
 
 [[package]]

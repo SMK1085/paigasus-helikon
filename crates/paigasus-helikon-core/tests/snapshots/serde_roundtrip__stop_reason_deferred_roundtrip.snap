@@ -1,0 +1,22 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: "roundtrip(&StopReason::Deferred { calls: vec![call] })"
+---
+{
+  "type": "deferred",
+  "calls": [
+    {
+      "deferral_id": "6f1c1d3e-0000-4000-8000-000000000001",
+      "call_id": "call_1",
+      "tool": "pay",
+      "args": {
+        "amount": 10
+      },
+      "prompt": "Pay 10?",
+      "handoff_path": [
+        "triage",
+        "budgeting"
+      ]
+    }
+  ]
+}

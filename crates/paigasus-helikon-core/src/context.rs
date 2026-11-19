@@ -509,6 +509,13 @@ where
                             ApprovalOutcome::Deny { reason } => {
                                 return PermissionDecision::Deny { reason };
                             }
+                            ApprovalOutcome::Defer => {
+                                return PermissionDecision::Deny {
+                                    reason: format!(
+                                        "approval deferred, but this run cannot defer: {prompt}"
+                                    ),
+                                };
+                            }
                         }
                     }
                 }
@@ -554,6 +561,9 @@ where
                 Some(handler) => match handler.decide(tool, &prompt, args).await {
                     ApprovalOutcome::Allow => PermissionDecision::Allow,
                     ApprovalOutcome::Deny { reason } => PermissionDecision::Deny { reason },
+                    ApprovalOutcome::Defer => PermissionDecision::Deny {
+                        reason: format!("approval deferred, but this run cannot defer: {prompt}"),
+                    },
                 },
             },
             other => other,

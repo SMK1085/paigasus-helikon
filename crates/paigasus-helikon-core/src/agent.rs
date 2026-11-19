@@ -574,13 +574,21 @@ where
             // Permission authorize on the effective args. `Interceptors::authorize`
             // delegates to `RunContext::authorize_tool` — the same primitive a
             // durable runner calls directly via `execute_tool_call`.
-            match interceptors.authorize(&name, effect, &args).await {
+            let decision = match interceptors.authorize(&name, effect, &args).await {
+                crate::PermissionDecision::Defer { prompt } => crate::PermissionDecision::Deny {
+                    reason: format!("approval deferred, but this run cannot defer: {prompt}"),
+                },
+                other => other,
+            };
+            match decision {
                 crate::PermissionDecision::Allow => {}
                 crate::PermissionDecision::Replace { args: sanitized } => {
                     args = sanitized;
                 }
                 crate::PermissionDecision::Deny { reason }
-                | crate::PermissionDecision::AskUser { prompt: reason } => {
+                | crate::PermissionDecision::AskUser { prompt: reason }
+                // `Defer` became `Deny` above; this arm only keeps the match exhaustive.
+                | crate::PermissionDecision::Defer { prompt: reason } => {
                     denied_events
                         .lock()
                         .unwrap()

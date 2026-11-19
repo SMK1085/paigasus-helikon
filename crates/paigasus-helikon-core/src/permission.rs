@@ -52,6 +52,11 @@ pub enum PermissionDecision {
         /// Replacement JSON arguments.
         args: serde_json::Value,
     },
+    /// Defer the call to a later run; see `RunContext::with_deferred_tool_calls`.
+    Defer {
+        /// Prompt shown to the approver when the host resolves the call.
+        prompt: String,
+    },
 }
 
 /// Authorizes a tool call. The decision pipeline runs
@@ -275,6 +280,8 @@ pub enum ApprovalOutcome {
         /// Human-readable denial reason.
         reason: String,
     },
+    /// Defer the call to a later run.
+    Defer,
 }
 
 /// The action a tripped [`GuardRule`] takes. Evaluated **before** mode, so it
