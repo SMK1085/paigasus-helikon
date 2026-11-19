@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UEHvN2wFqMEJmiX41HvUK4",
+  "agent_id": "a33642a6e6731f263",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 10: workflow agents reject resume",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 102732,
+    "cache_read_tokens": 1496305,
+    "output_tokens": 13007,
+    "api_call_count": 18
+  },
+  "started_at": "2026-11-19T23:42:53.112149+01:00",
+  "completed_at": "2026-11-19T23:45:37.182404+01:00"
+}

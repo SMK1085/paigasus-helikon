@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_014ox76JCNGLW19TLxhbhzoz",
+  "agent_id": "a11855870c100a74e",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 11: TemporalRunner rejects resume",
+  "started_at": "2026-11-19T23:46:29.628658+01:00"
+}
