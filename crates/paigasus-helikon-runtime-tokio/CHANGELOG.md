@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.27](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.26...paigasus-helikon-runtime-tokio-v0.1.27) - 2026-11-20
+
+### Fixed
+
+- *(core)* SMA-810 give each handoff transfer call a tool result ([#358](https://github.com/SMK1085/paigasus-helikon/pull/358))
+
 ## [0.1.26](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-tokio-v0.1.25...paigasus-helikon-runtime-tokio-v0.1.26) - 2026-11-20
 
 ### Added
