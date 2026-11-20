@@ -118,8 +118,10 @@ Unit tests in the `tests` module of `request.rs`, with Anthropic wire arrays:
 - `mixed_assistant_inside_open_round_matches_top_level_form`: a parity test.
   The nested form `asst[text b, tu t3]` and the top-level form
   `asst(text b), ToolCall t3`, each inside an open round, give equal output.
-  The test asserts the parity, not a specific array. Its doc comment says that
-  both forms still give a rejected request (the known gap). Without condition 1
+  The test asserts the parity and also pins the current array of the nested
+  form, because parity alone does not catch removal of condition 1 (a text-only
+  top-level message then joins too). Its doc comment says that both forms still
+  give a rejected request (the known gap). Without condition 1
   this test fails.
 
 Live test: `nested_tool_use_inside_open_round_is_accepted` in

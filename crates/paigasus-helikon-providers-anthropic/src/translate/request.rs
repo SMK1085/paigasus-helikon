@@ -83,7 +83,9 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 }
             }
             Item::AssistantMessage { content, agent: _ } => {
-                let blocks = assistant_blocks(content);
+                let Value::Array(blocks) = assistant_blocks(content) else {
+                    unreachable!("assistant_blocks returns an array")
+                };
                 // An assistant item with no blocks acts as if it were absent:
                 // it flushes nothing (so an open tool round stays whole) and
                 // leaves the flag as it is (a drop of the user turn before
@@ -100,21 +102,15 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 // Setting `last_item_dropped` here is for symmetry. The flag
                 // is already `false`, because a `ToolResult` came after any
                 // dropped user message.
-                let only_tool_uses = {
-                    let arr = blocks.as_array().unwrap();
-                    !arr.is_empty() && arr.iter().all(|b| b["type"] == "tool_use")
-                };
+                let only_tool_uses =
+                    !blocks.is_empty() && blocks.iter().all(|b| b["type"] == "tool_use");
                 if only_tool_uses
                     && !pending_tool_results.is_empty()
                     && !round_is_answered(&messages, &pending_tool_results)
                 {
                     last_item_dropped = false;
-                    push_tool_uses(
-                        &mut messages,
-                        &mut pending_tool_use,
-                        blocks.as_array().unwrap().clone(),
-                    );
-                } else if !blocks.as_array().unwrap().is_empty() {
+                    push_tool_uses(&mut messages, &mut pending_tool_use, blocks);
+                } else if !blocks.is_empty() {
                     flush_pending_assistant(&mut messages, &mut pending_tool_use);
                     flush_pending_user(&mut messages, &mut pending_tool_results);
                     last_item_dropped = false;
@@ -900,6 +896,26 @@ mod tests {
     }
 
     #[test]
+    fn nested_tool_use_with_blank_text_inside_open_round_joins_it() {
+        let items = vec![
+            user("q"),
+            nested(vec![use_part("t1"), use_part("t2")]),
+            result("t1"),
+            nested(vec![text(" "), use_part("t3")]),
+            result("t2"),
+            result("t3"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1"), tu("t2"), tu("t3")]},
+                {"role": "user", "content": [tr("t1"), tr("t2"), tr("t3")]},
+            ])
+        );
+    }
+
+    #[test]
     fn nested_tool_use_joins_last_of_adjacent_assistant_run() {
         let items = vec![
             user("q"),
@@ -922,8 +938,9 @@ mod tests {
     }
 
     /// A message with text inside an open round still flushes, in both forms.
-    /// Both forms give a request that the API rejects (known gap, SMA-836).
-    /// The test asserts parity between the two forms, not that the output is valid.
+    /// The test pins today's shape, which the API rejects (known gap, SMA-836).
+    /// It also pins the parity between the two forms.
+    /// SMA-836 must update the expected array.
     #[test]
     fn mixed_assistant_inside_open_round_matches_top_level_form() {
         let head = vec![
