@@ -4522,6 +4522,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "paigasus-helikon-core",
+ "paigasus-helikon-deferral-testkit",
  "serde_json",
  "tokio",
  "tokio-util",

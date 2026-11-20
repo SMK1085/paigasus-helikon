@@ -27,6 +27,8 @@ fastrand     = { workspace = true }
 tokio      = { workspace = true, features = ["test-util"] }
 anyhow     = { workspace = true }
 serde_json = { workspace = true }
+# Path-only (no version) so cargo omits it from the published manifest.
+paigasus-helikon-deferral-testkit = { path = "../../tests/deferral-testkit" }
 
 [lints]
 workspace = true

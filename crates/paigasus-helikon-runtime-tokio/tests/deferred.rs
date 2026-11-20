@@ -7,17 +7,17 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use common::MockModel;
-use futures_core::stream::BoxStream;
 use futures_util::stream::StreamExt as _;
 use paigasus_helikon_core::{
     open_deferrals, Agent, AgentEvent, AgentInput, CancellationToken, ContentPart,
     ConversationSnapshot, FinishReason, Guardrail, GuardrailError, GuardrailInput, GuardrailKind,
     GuardrailVerdict, Hook, HookDecision, HookEvent, InvalidResume, Item, LlmAgent, MemorySession,
-    Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, PermissionDecision,
-    PermissionPolicy, RunConfig, RunContext, RunError, RunResult, Runner, SequenceId,
-    SequentialAgent, Session, SessionError, SessionEvent, StopReason, Tool, ToolContext, ToolError,
-    ToolOutput, ToolResolution,
+    ModelEvent, PermissionDecision, PermissionPolicy, RunConfig, RunContext, RunError, RunResult,
+    Runner, SequenceId, SequentialAgent, Session, SessionError, SessionEvent, StopReason, Tool,
+    ToolContext, ToolError, ToolOutput, ToolResolution,
+};
+use paigasus_helikon_deferral_testkit::{
+    assert_tool_calls_paired, with_late_transfer_results, RequestLog, LEGACY_CANCEL_TEXT,
 };
 use paigasus_helikon_runtime_tokio::TokioRunner;
 
@@ -67,40 +67,6 @@ impl PermissionPolicy<()> for PromptFromArgs {
         } else {
             PermissionDecision::Allow
         }
-    }
-}
-
-/// A [`MockModel`] that keeps every request it gets.
-struct RecordingModel {
-    inner: Arc<MockModel>,
-    requests: Mutex<Vec<ModelRequest>>,
-}
-
-impl RecordingModel {
-    fn with_scripts(scripts: Vec<Vec<ModelEvent>>) -> Arc<Self> {
-        Arc::new(Self {
-            inner: MockModel::with_scripts(scripts),
-            requests: Mutex::new(Vec::new()),
-        })
-    }
-    fn requests(&self) -> Vec<ModelRequest> {
-        self.requests.lock().unwrap().clone()
-    }
-}
-
-#[async_trait]
-impl Model for RecordingModel {
-    async fn invoke(
-        &self,
-        request: ModelRequest,
-        cancel: CancellationToken,
-    ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
-        self.requests.lock().unwrap().push(request.clone());
-        self.inner.invoke(request, cancel).await
-    }
-
-    fn capabilities(&self) -> ModelCapabilities {
-        ModelCapabilities::default()
     }
 }
 
@@ -270,11 +236,7 @@ fn transfer_turn(call_id: &str, target: &str) -> Vec<ModelEvent> {
 }
 
 /// An agent named `name` with the `pay` tool and the scripted model.
-fn pay_agent(
-    name: &str,
-    model: Arc<RecordingModel>,
-    pay: &Arc<PayTool>,
-) -> LlmAgent<(), RecordingModel> {
+fn pay_agent(name: &str, model: Arc<RequestLog>, pay: &Arc<PayTool>) -> LlmAgent<(), RequestLog> {
     LlmAgent::builder::<()>()
         .name(name)
         .shared_model(model)
@@ -386,7 +348,7 @@ async fn labels(session: &MemorySession) -> Vec<String> {
 /// session. Returns the session.
 async fn deferred_session(call_ids: &[&str]) -> Arc<MemorySession> {
     let session = Arc::new(MemorySession::new());
-    let model = RecordingModel::with_scripts(vec![pay_turn(call_ids)]);
+    let model = RequestLog::with_scripts(vec![pay_turn(call_ids)]);
     let agent = pay_agent("root", model, &PayTool::new());
     let result = run(&agent, ctx(session.clone(), true), user("go"))
         .await
@@ -416,57 +378,6 @@ fn invalid_resume(result: Result<RunResult, RunError>) -> InvalidResume {
     }
 }
 
-/// Each `ToolCall` has a `ToolResult` with the same call id later, with no
-/// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` closes
-/// one earlier open `ToolCall` with its call id. A call id can repeat only
-/// after its earlier call has a result. A call after a result starts a new
-/// round, so no call may wait for a result then.
-///
-/// Copy of `assert_tool_calls_paired` in
-/// `crates/paigasus-helikon-core/tests/common/mod.rs`. Keep the two copies
-/// the same.
-fn assert_tool_calls_paired(messages: &[Item]) {
-    // The calls that wait for a result, in call order.
-    let mut outstanding: Vec<&str> = Vec::new();
-    // A result came after the last call: the next call starts a new round.
-    let mut seen_result_since_call = false;
-    for item in messages {
-        match item {
-            Item::ToolCall { call_id, .. } => {
-                assert!(
-                    !outstanding.contains(&call_id.as_str()),
-                    "call {call_id} repeats while it waits for a result: {messages:?}"
-                );
-                assert!(
-                    !(seen_result_since_call && !outstanding.is_empty()),
-                    "call {call_id} starts a new round while {outstanding:?} wait for a result: {messages:?}"
-                );
-                seen_result_since_call = false;
-                outstanding.push(call_id);
-            }
-            Item::ToolResult { call_id, .. } => {
-                let Some(p) = outstanding.iter().position(|c| *c == call_id.as_str()) else {
-                    panic!("result {call_id} has no open earlier call: {messages:?}");
-                };
-                // Each result closes one call.
-                outstanding.remove(p);
-                seen_result_since_call = true;
-            }
-            Item::UserMessage { .. } | Item::AssistantMessage { .. } => {
-                assert!(
-                    outstanding.is_empty(),
-                    "tool calls {outstanding:?} are not paired: {messages:?}"
-                );
-            }
-            _ => {}
-        }
-    }
-    assert!(
-        outstanding.is_empty(),
-        "tool calls {outstanding:?} are not paired: {messages:?}"
-    );
-}
-
 /// The last three items of `messages` are the `pay` call `call_id`, its
 /// result and the user message `"next"`.
 fn assert_ends_with_result_then_next(messages: &[Item], call_id: &str) {
@@ -492,7 +403,7 @@ fn assert_ends_with_result_then_next(messages: &[Item], call_id: &str) {
 #[tokio::test]
 async fn deferral_round_trip_stores_raw_args() {
     let session = Arc::new(MemorySession::new());
-    let model = RecordingModel::with_scripts(vec![pay_turn(&["call_1"])]);
+    let model = RequestLog::with_scripts(vec![pay_turn(&["call_1"])]);
     let agent = LlmAgent::builder::<()>()
         .name("root")
         .shared_model(model)
@@ -579,7 +490,7 @@ async fn deferral_round_trip_stores_raw_args() {
 #[tokio::test]
 async fn run_streamed_ends_with_run_deferred_after_finalize() {
     let session = Arc::new(MemorySession::new());
-    let model = RecordingModel::with_scripts(vec![pay_turn(&["call_1"])]);
+    let model = RequestLog::with_scripts(vec![pay_turn(&["call_1"])]);
     let agent = pay_agent("root", model, &PayTool::new());
     let mut stream = TokioRunner
         .run_streamed(
@@ -621,7 +532,7 @@ async fn run_streamed_ends_with_run_deferred_after_finalize() {
 async fn resume_approved_runs_the_tool_once_with_recorded_args() {
     let session = deferred_session(&["call_1"]).await;
     let pay = PayTool::new();
-    let model = RecordingModel::with_scripts(vec![text_turn("done")]);
+    let model = RequestLog::with_scripts(vec![text_turn("done")]);
     let agent = pay_agent("root", Arc::clone(&model), &pay);
     let input = resolve_all(&session, ToolResolution::Approved).await;
 
@@ -653,7 +564,7 @@ async fn resume_approved_runs_the_tool_once_with_recorded_args() {
 async fn resume_denied_records_the_denial() {
     let session = deferred_session(&["call_1"]).await;
     let pay = PayTool::new();
-    let model = RecordingModel::with_scripts(vec![text_turn("ok")]);
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
     let agent = pay_agent("root", Arc::clone(&model), &pay);
     let input = resolve_all(
         &session,
@@ -688,7 +599,7 @@ async fn repeated_call_id_does_not_match_an_old_deferral() {
     let session = deferred_session(&["fc_0"]).await;
     let d1 = open_ids(&session).await.remove(0);
     let pay = PayTool::new();
-    let model = RecordingModel::with_scripts(vec![text_turn("paid"), pay_turn(&["fc_0"])]);
+    let model = RequestLog::with_scripts(vec![text_turn("paid"), pay_turn(&["fc_0"])]);
     let agent = pay_agent("root", Arc::clone(&model), &pay);
 
     run(
@@ -719,7 +630,7 @@ async fn repeated_call_id_does_not_match_an_old_deferral() {
     assert_eq!(reason, InvalidResume::UnknownDeferral { deferral_id: d1 });
     assert_eq!(log(&session).await.len(), len, "nothing is appended");
 
-    let model = RecordingModel::with_scripts(vec![text_turn("paid again")]);
+    let model = RequestLog::with_scripts(vec![text_turn("paid again")]);
     let agent = pay_agent("root", Arc::clone(&model), &pay);
     run(
         &agent,
@@ -738,12 +649,12 @@ async fn handoff_session() -> Arc<MemorySession> {
     let session = Arc::new(MemorySession::new());
     let budgeting = pay_agent(
         "budgeting",
-        RecordingModel::with_scripts(vec![pay_turn(&["call_1"])]),
+        RequestLog::with_scripts(vec![pay_turn(&["call_1"])]),
         &PayTool::new(),
     );
     let triage = LlmAgent::builder::<()>()
         .name("triage")
-        .shared_model(RecordingModel::with_scripts(vec![transfer_turn(
+        .shared_model(RequestLog::with_scripts(vec![transfer_turn(
             "t1",
             "budgeting",
         )]))
@@ -764,7 +675,7 @@ async fn handoff_session() -> Arc<MemorySession> {
 async fn invalid_resume_reasons_reach_the_caller() {
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("never")]),
+        RequestLog::with_scripts(vec![text_turn("never")]),
         &PayTool::new(),
     );
 
@@ -932,7 +843,7 @@ async fn invalid_resume_reasons_reach_the_caller() {
 async fn renamed_root_denies_and_continues() {
     let session = deferred_session(&["call_1"]).await;
     let pay = PayTool::new();
-    let model = RecordingModel::with_scripts(vec![text_turn("ok")]);
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
     let agent = pay_agent("other", Arc::clone(&model), &pay);
     let input = resolve_all(&session, ToolResolution::Approved).await;
 
@@ -956,7 +867,7 @@ async fn renamed_root_denies_and_continues() {
 async fn input_guardrail_tripwire_closes_the_deferral_before_the_input() {
     let session = deferred_session(&["call_1"]).await;
     let pay = PayTool::new();
-    let model = RecordingModel::with_scripts(vec![text_turn("never")]);
+    let model = RequestLog::with_scripts(vec![text_turn("never")]);
     let agent = LlmAgent::builder::<()>()
         .name("root")
         .shared_model(Arc::clone(&model))
@@ -989,7 +900,7 @@ async fn cancelled_resume_closes_the_deferral() {
     let pay = PayTool::blocking(Arc::clone(&gate));
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("never")]),
+        RequestLog::with_scripts(vec![text_turn("never")]),
         &pay,
     );
     let input = resolve_all(&session, ToolResolution::Approved).await;
@@ -1028,7 +939,7 @@ async fn workflow_agent_rejecting_a_resume_keeps_the_deferrals_open() {
 
     let step = pay_agent(
         "step",
-        RecordingModel::with_scripts(vec![text_turn("never")]),
+        RequestLog::with_scripts(vec![text_turn("never")]),
         &PayTool::new(),
     );
     let workflow = SequentialAgent::<()>::new("seq", "one step").then(step);
@@ -1058,7 +969,7 @@ async fn workflow_agent_rejecting_a_resume_keeps_the_deferrals_open() {
     let pay = PayTool::new();
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("done")]),
+        RequestLog::with_scripts(vec![text_turn("done")]),
         &pay,
     );
     let input = resolve_all(&session, ToolResolution::Approved).await;
@@ -1076,7 +987,7 @@ async fn workflow_agent_rejecting_a_resume_keeps_the_deferrals_open() {
 async fn failed_append_on_deferring_run_returns_session_write() {
     let failing: Arc<dyn Session> = Arc::new(FailingAppendSession(Arc::new(MemorySession::new())));
 
-    let model = RecordingModel::with_scripts(vec![pay_turn(&["call_1"])]);
+    let model = RequestLog::with_scripts(vec![pay_turn(&["call_1"])]);
     let agent = pay_agent("root", model, &PayTool::new());
     let result = run(&agent, ctx(failing.clone(), true), user("go")).await;
     assert!(
@@ -1087,7 +998,7 @@ async fn failed_append_on_deferring_run_returns_session_write() {
         "{result:?}"
     );
 
-    let model = RecordingModel::with_scripts(vec![pay_turn(&["call_1"])]);
+    let model = RequestLog::with_scripts(vec![pay_turn(&["call_1"])]);
     let agent = pay_agent("root", model, &PayTool::new());
     let events = run_streamed_events(&agent, ctx(failing.clone(), true), user("go")).await;
     match events.last() {
@@ -1104,11 +1015,11 @@ async fn failed_append_on_deferring_run_returns_session_write() {
     );
 
     // A run that does not defer keeps the best-effort write.
-    let model = RecordingModel::with_scripts(vec![text_turn("hi")]);
+    let model = RequestLog::with_scripts(vec![text_turn("hi")]);
     let agent = pay_agent("root", model, &PayTool::new());
     let result = run(&agent, ctx(failing.clone(), true), user("go")).await;
     assert_eq!(result.expect("best-effort write").final_output, "hi");
-    let model = RecordingModel::with_scripts(vec![text_turn("hi")]);
+    let model = RequestLog::with_scripts(vec![text_turn("hi")]);
     let agent = pay_agent("root", model, &PayTool::new());
     let events = run_streamed_events(&agent, ctx(failing, true), user("go")).await;
     assert!(
@@ -1125,7 +1036,7 @@ async fn failed_append_on_resume_returns_session_write() {
 
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("done")]),
+        RequestLog::with_scripts(vec![text_turn("done")]),
         &pay,
     );
     let input = resolve_all(&session, ToolResolution::Approved).await;
@@ -1141,7 +1052,7 @@ async fn failed_append_on_resume_returns_session_write() {
 
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("done")]),
+        RequestLog::with_scripts(vec![text_turn("done")]),
         &pay,
     );
     let input = resolve_all(&session, ToolResolution::Approved).await;
@@ -1169,7 +1080,7 @@ async fn resume_works_with_flag_off() {
     let pay = PayTool::new();
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("done")]),
+        RequestLog::with_scripts(vec![text_turn("done")]),
         &pay,
     );
     let input = resolve_all(&session, ToolResolution::Approved).await;
@@ -1188,7 +1099,7 @@ async fn chained_deferral_resumes_twice() {
     let session = deferred_session(&["call_1"]).await;
     let d1 = open_ids(&session).await.remove(0);
     let pay = PayTool::new();
-    let model = RecordingModel::with_scripts(vec![pay_turn(&["call_2"]), text_turn("done")]);
+    let model = RequestLog::with_scripts(vec![pay_turn(&["call_2"]), text_turn("done")]);
     let agent = pay_agent("root", Arc::clone(&model), &pay);
 
     let result = run(
@@ -1231,7 +1142,7 @@ async fn mixed_resolutions_keep_call_order() {
     let open = open_ids(&session).await;
     assert_eq!(open.len(), 2);
     let pay = PayTool::new();
-    let model = RecordingModel::with_scripts(vec![text_turn("done")]);
+    let model = RequestLog::with_scripts(vec![text_turn("done")]);
     let agent = pay_agent("root", Arc::clone(&model), &pay);
 
     let len = log(&session).await.len();
@@ -1290,9 +1201,9 @@ async fn mixed_resolutions_keep_call_order() {
 async fn handoff_deferral_round_trip() {
     let session = handoff_session().await;
     let pay = PayTool::new();
-    let child_model = RecordingModel::with_scripts(vec![text_turn("done")]);
+    let child_model = RequestLog::with_scripts(vec![text_turn("done")]);
     let budgeting = pay_agent("budgeting", Arc::clone(&child_model), &pay);
-    let root_model = RecordingModel::with_scripts(vec![]);
+    let root_model = RequestLog::with_scripts(vec![]);
     let triage = LlmAgent::builder::<()>()
         .name("triage")
         .shared_model(Arc::clone(&root_model))
@@ -1326,19 +1237,14 @@ async fn handoff_deferral_round_trip() {
 async fn handoff_run_with_ids(
     transfer_id: &str,
     pay_id: &str,
-) -> (
-    RunResult,
-    Arc<MemorySession>,
-    Arc<PayTool>,
-    Arc<RecordingModel>,
-) {
+) -> (RunResult, Arc<MemorySession>, Arc<PayTool>, Arc<RequestLog>) {
     let session = Arc::new(MemorySession::new());
     let pay = PayTool::new();
-    let child_model = RecordingModel::with_scripts(vec![pay_turn(&[pay_id]), text_turn("done")]);
+    let child_model = RequestLog::with_scripts(vec![pay_turn(&[pay_id]), text_turn("done")]);
     let budgeting = pay_agent("budgeting", Arc::clone(&child_model), &pay);
     let triage = LlmAgent::builder::<()>()
         .name("triage")
-        .shared_model(RecordingModel::with_scripts(vec![transfer_turn(
+        .shared_model(RequestLog::with_scripts(vec![transfer_turn(
             transfer_id,
             "budgeting",
         )]))
@@ -1383,11 +1289,11 @@ async fn deferral_with_the_call_id_of_a_transfer_call_defers() {
 
     // Resume: the deferred call runs once on the child.
     let resume_pay = PayTool::new();
-    let resume_model = RecordingModel::with_scripts(vec![text_turn("done")]);
+    let resume_model = RequestLog::with_scripts(vec![text_turn("done")]);
     let budgeting = pay_agent("budgeting", Arc::clone(&resume_model), &resume_pay);
     let triage = LlmAgent::builder::<()>()
         .name("triage")
-        .shared_model(RecordingModel::with_scripts(vec![]))
+        .shared_model(RequestLog::with_scripts(vec![]))
         .handoff(budgeting)
         .build();
     let input = resolve_all(&session, ToolResolution::Approved).await;
@@ -1437,7 +1343,7 @@ async fn failed_append_on_failing_resume_is_session_write_in_every_path() {
     let failing: Arc<dyn Session> = Arc::new(FailingAppendSession(session.clone()));
     let agent = LlmAgent::builder::<()>()
         .name("root")
-        .shared_model(RecordingModel::with_scripts(vec![]))
+        .shared_model(RequestLog::with_scripts(vec![]))
         .shared_tool(PayTool::new() as Arc<dyn Tool<()>>)
         .input_guardrail(TripAlways)
         .build();
@@ -1456,7 +1362,7 @@ async fn failed_append_on_resume_collects_as_session_write() {
     let pay = PayTool::new();
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("done")]),
+        RequestLog::with_scripts(vec![text_turn("done")]),
         &pay,
     );
     let input = resolve_all(&session, ToolResolution::Approved).await;
@@ -1468,7 +1374,7 @@ async fn failed_append_on_resume_collects_as_session_write() {
     let failing: Arc<dyn Session> = Arc::new(FailingAppendSession(Arc::new(MemorySession::new())));
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![pay_turn(&["call_1"])]),
+        RequestLog::with_scripts(vec![pay_turn(&["call_1"])]),
         &PayTool::new(),
     );
     assert_session_write(&collect_streamed(&agent, ctx(failing, true), user("go")).await);
@@ -1485,7 +1391,7 @@ async fn cancelled_resume(
     let pay = PayTool::blocking(Arc::clone(&gate));
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("never")]),
+        RequestLog::with_scripts(vec![text_turn("never")]),
         &pay,
     );
     let input = resolve_all(session, ToolResolution::Approved).await;
@@ -1521,7 +1427,7 @@ async fn failed_append_on_plain_run_keeps_its_result() {
 
     let agent = pay_agent(
         "root",
-        RecordingModel::with_scripts(vec![text_turn("hi")]),
+        RequestLog::with_scripts(vec![text_turn("hi")]),
         &PayTool::new(),
     );
     let result = collect_streamed(&agent, ctx(failing(), true), user("go")).await;
@@ -1556,12 +1462,12 @@ async fn completed_handoff_session() -> Arc<MemorySession> {
     let session = Arc::new(MemorySession::new());
     let budgeting = pay_agent(
         "budgeting",
-        RecordingModel::with_scripts(vec![text_turn("done")]),
+        RequestLog::with_scripts(vec![text_turn("done")]),
         &PayTool::new(),
     );
     let triage = LlmAgent::builder::<()>()
         .name("triage")
-        .shared_model(RecordingModel::with_scripts(vec![transfer_turn(
+        .shared_model(RequestLog::with_scripts(vec![transfer_turn(
             "t1",
             "budgeting",
         )]))
@@ -1574,63 +1480,14 @@ async fn completed_handoff_session() -> Arc<MemorySession> {
     session
 }
 
-/// A copy of `session` in the layout of core 0.6.0 (before SMA-810).
-///
-/// `session` must hold one handoff run in the current layout. This removes
-/// each `ToolReturned` directly after a `HandoffOccurred` (the transfer
-/// results of that handoff response) and appends a cancel result for each
-/// removed one at the end of the run's events, in call order. (A copy of the
-/// helper in core `tests/deferred_resume.rs`.)
-async fn with_late_transfer_results(session: &Arc<MemorySession>) -> Arc<MemorySession> {
-    let recorded = session.events(None).await.unwrap();
-    let mut events = Vec::with_capacity(recorded.len());
-    let mut late = Vec::new();
-    let mut after_handoff = false;
-    for ev in recorded {
-        match &ev {
-            SessionEvent::HandoffOccurred { .. } => {
-                after_handoff = true;
-                events.push(ev);
-            }
-            SessionEvent::ToolReturned {
-                call_id, content, ..
-            } if after_handoff => {
-                let text = text_of(content);
-                assert!(
-                    text.starts_with("transferred to ")
-                        || text.starts_with("transfer not performed"),
-                    "{call_id} after a handoff is not a transfer result: {text}"
-                );
-                late.push(call_id.clone());
-            }
-            _ => {
-                after_handoff = false;
-                events.push(ev);
-            }
-        }
-    }
-    assert!(!late.is_empty(), "the log has no transfer result to move");
-    events.extend(late.into_iter().map(|id| {
-        SessionEvent::tool_returned(
-            id,
-            vec![ContentPart::Text {
-                text: CANCELLED.to_owned(),
-            }],
-        )
-    }));
-    let legacy = Arc::new(MemorySession::new());
-    legacy.append(&events).await.unwrap();
-    legacy
-}
-
 /// Run `triage` again on `session` with a new input, and check its model
 /// request: the tool calls are paired, and the result directly after the
 /// transfer call `t1` is `transferred to budgeting`.
 async fn assert_second_run_sends_paired_history(session: Arc<MemorySession>) {
-    let root_model = RecordingModel::with_scripts(vec![text_turn("again")]);
+    let root_model = RequestLog::with_scripts(vec![text_turn("again")]);
     let budgeting = pay_agent(
         "budgeting",
-        RecordingModel::with_scripts(vec![]),
+        RequestLog::with_scripts(vec![]),
         &PayTool::new(),
     );
     let triage = LlmAgent::builder::<()>()
@@ -1689,7 +1546,7 @@ async fn second_run_on_a_legacy_session_sends_paired_history() {
             "tool_called(t1)".to_owned(),
             "handoff(triage->budgeting)".to_owned(),
             "assistant_message".to_owned(),
-            format!("tool_returned(t1, {CANCELLED})"),
+            format!("tool_returned(t1, {LEGACY_CANCEL_TEXT})"),
         ]
     );
     assert_second_run_sends_paired_history(session).await;
