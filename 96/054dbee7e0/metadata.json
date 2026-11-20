@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "96054dbee7e0",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-827-gemini-provider-drops-thoughtsignature-so",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-sma-827-gemini-thought-signatures-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/96/054dbee7e0/0/metadata.json",
+      "transcript": "/96/054dbee7e0/0/full.jsonl",
+      "compact_transcript": "/96/054dbee7e0/0/transcript.jsonl",
+      "content_hash": "/96/054dbee7e0/0/content_hash.txt",
+      "prompt": "/96/054dbee7e0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 173828,
+    "cache_read_tokens": 4693869,
+    "output_tokens": 46131,
+    "api_call_count": 36,
+    "subagent_tokens": {
+      "input_tokens": 54,
+      "cache_creation_tokens": 238168,
+      "cache_read_tokens": 1120383,
+      "output_tokens": 21177,
+      "api_call_count": 26
+    }
+  },
+  "redaction": {
+    "replacements": 43,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 12,
+      "credentialed_uri": 0,
+      "entropy": 31,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01G8sPgu45yP19RiLMEA4rCy",
+  "agent_id": "a615bced13a4bba07",
+  "subagent_type": "Explore",
+  "task_description": "Map impact of new ContentPart variant",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 85661,
+    "cache_read_tokens": 616201,
+    "output_tokens": 11404,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-20T22:46:42.513422+01:00",
+  "completed_at": "2026-11-20T22:48:09.819771+01:00"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014Tm86wqEeLUfJwr36HR2eU",
+  "agent_id": "a44a2b82665b574f2",
+  "subagent_type": "general-purpose",
+  "task_description": "Builder check on SMA-827 spec",
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 55716,
+    "cache_read_tokens": 77755,
+    "output_tokens": 2686,
+    "api_call_count": 2
+  },
+  "started_at": "2026-11-20T22:50:32.180447+01:00",
+  "completed_at": "2026-11-20T22:50:56.411383+01:00"
+}
