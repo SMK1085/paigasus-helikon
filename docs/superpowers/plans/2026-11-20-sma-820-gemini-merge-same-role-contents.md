@@ -85,6 +85,8 @@ The commit body says: a result closes the earliest open call with its id (the co
 
 ### Task 2: Merge adjacent same-role contents and drop empty parts
 
+> Note: after the live run, Sven added the tool-result boundary (see the spec, "Merge"). The expected arrays in Step 1 for `tool_result_then_user_message_request_shape` and for the "more than two" test changed to match. The latter is now `adjacent_user_texts_merge_but_not_into_a_tool_result`.
+
 **Files:**
 - Modify: `crates/paigasus-helikon-providers-gemini/src/translate/request.rs` (`items_to_contents`, `user_parts`, `assistant_parts`; the test `tool_result_then_user_message_request_shape` and its doc comment)
 - Modify: `crates/paigasus-helikon-providers-gemini/src/translate/mod.rs:223-236` (inline asserts in `snap_parallel_same_name_tool_calls`)

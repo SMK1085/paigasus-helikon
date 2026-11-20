@@ -143,10 +143,12 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
 
 /// Merge adjacent entries of the same role into one content, in order.
 ///
-/// A `user` entry whose first part is not a `functionResponse` never merges
-/// into a `user` content that ends in a `functionResponse`; it starts a new
-/// content. Gemini 3 checks thought signatures in the current turn, and a
-/// merged text makes it see the call there (SMA-827 adds the signatures).
+/// Two `user` entries do not merge when exactly one side of the joint is a
+/// `functionResponse`. Gemini 3 starts the current turn at the last `user`
+/// content that is not a tool result, and it checks thought signatures only in
+/// that turn. The SDK sends no signatures yet (SMA-827). A text and a
+/// `functionResponse` in one content would keep the unsigned `functionCall` in
+/// the current turn, and Gemini would return HTTP 400.
 /// An entry with no parts is dropped first, so it never emits `"parts": []`.
 fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
     let is_response = |p: Option<&Value>| p.is_some_and(|p| p.get("functionResponse").is_some());
@@ -159,8 +161,7 @@ fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
             Some((last_role, last_parts))
                 if *last_role == role
                     && !(role == "user"
-                        && is_response(last_parts.last())
-                        && !is_response(parts.first())) =>
+                        && is_response(last_parts.last()) != is_response(parts.first())) =>
             {
                 last_parts.extend(parts)
             }
@@ -198,7 +199,8 @@ fn user_parts<'a>(
     let mut out = Vec::new();
     for p in content {
         match p {
-            // Gemini rejects an empty text part.
+            // The translator drops empty text, as SMA-804 spec section 5.3
+            // asks every translator to do.
             ContentPart::Text { text } if text.is_empty() => {}
             ContentPart::Text { text } => out.push(json!({ "text": text })),
             ContentPart::Image {
@@ -689,6 +691,52 @@ mod tests {
                 {"role": "model", "parts": [fc("fc_0", "search")]},
                 {"role": "user", "parts": [fr("fc_0", "search", json!({}))]},
                 {"role": "user", "parts": [{"text": "one"}, {"text": "two"}]},
+            ])
+        );
+    }
+
+    #[test]
+    fn user_text_before_a_tool_result_does_not_merge_into_it() {
+        let items = vec![
+            user("q"),
+            call("fc_0", "search"),
+            user("note"),
+            result("fc_0", "{}"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [fc("fc_0", "search")]},
+                {"role": "user", "parts": [{"text": "note"}]},
+                {"role": "user", "parts": [fr("fc_0", "search", json!({}))]},
+            ])
+        );
+    }
+
+    #[test]
+    fn three_parallel_results_merge_into_one_user_content() {
+        let items = vec![
+            user("x"),
+            call("fc_0", "search"),
+            call("fc_1", "search"),
+            call("fc_2", "search"),
+            result("fc_0", "{}"),
+            result("fc_1", "{}"),
+            result("fc_2", "{}"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "x"}]},
+                {"role": "model", "parts": [fc("fc_0", "search"), fc("fc_1", "search"), fc("fc_2", "search")]},
+                {"role": "user", "parts": [
+                    fr("fc_0", "search", json!({})),
+                    fr("fc_1", "search", json!({})),
+                    fr("fc_2", "search", json!({})),
+                ]},
             ])
         );
     }

@@ -28,8 +28,8 @@ Size: a small change in the Gemini translator. Files: `crates/paigasus-helikon-p
 
 ## Goals
 
-- The translator never sends two adjacent contents with the same role. It merges them into one
-  content and keeps the order of the parts.
+- The translator merges adjacent contents with the same role into one content and keeps the order
+  of the parts. The one exception is the tool-result boundary (see "Merge").
 - The rule applies to every item, so replayed session items are also covered.
 - Each `functionResponse` gets the name of the call that it closes, by the core pairing rule
   (below), within the limits in "Known limits".
@@ -61,9 +61,12 @@ Sven approved approach 1 on 2026-11-20, and approved this spec at GATE 1 on 2026
 - Build a `Vec<(role, Vec<Value>)>` in item order, then fold it: when the role of an entry equals
   the role of the last merged entry, append its parts; else start a new content.
 - **Exception, the tool-result boundary** (added 2026-11-20 after the live run, Sven's decision):
-  a `user` entry whose first part is not a `functionResponse` does not merge into a `user` content
-  whose last part is a `functionResponse`. It starts a new `user` content. So a user text after a
-  tool result stays a separate content, as on `main`.
+  two `user` entries do not merge when exactly one side of the joint is a `functionResponse`. That
+  is, `is_fr(last part of the previous content) != is_fr(first part of the new entry)`. The new
+  entry starts a new `user` content. So a user text after a tool result, and a tool result after a
+  user text, each stay a separate content. A result after a result and a text after a text still
+  merge. The symmetric form was added after the final review; the first form covered only a text
+  after a result.
   - Reason: Gemini 3 checks thought signatures only in the current turn, and the current turn
     starts at the last `user` content that is not a tool result. With the merge, `user[fr, text]`
     keeps the call in the current turn, and the translator sends no signature (SMA-827): HTTP 400
@@ -129,11 +132,10 @@ Sven approved approach 1 on 2026-11-20, and approved this spec at GATE 1 on 2026
 The merge depends on one invariant: the next `user` content answers each `functionCall` of a
 `model` content. Two real core histories do not hold it:
 
-1. **Open deferred calls.** `RunDeferred` leaves calls with no result. `CompactingSession` sends
-   `snapshot + prompt` to its model (`compacting_session.rs:200-211`). With a Gemini summarizer
-   this gives, for example, `model[fc c1, fc c2], user[fr c1, text]`. Probe shape 14 shows what
-   Gemini does with it. This spec does not add synthetic results; if shape 14 fails, a follow-up
-   issue covers it.
+1. **Open deferred calls.** `RunDeferred` leaves calls with no result. This case does not occur
+   through `CompactingSession`: `maybe_compact` skips compaction while a deferral is open
+   (`compacting_session.rs:171-179`). Probe shape 14 shows that Gemini would accept such a history
+   anyway. This spec does not add synthetic results.
 2. **Replay of a `ParallelAgent` session.** Sibling events interleave through `select_all`
    (`workflow.rs:377`), and sibling Gemini agents all start at `fc_0`. The merge can put two
    `functionCall` parts with the same id into one content. No order rule can name those results
@@ -150,8 +152,12 @@ Unit tests in `request.rs` assert the full `contents` array, as
   Sven changed that on 2026-11-20 after the live run.
 - The tool-result boundary: a user text after results stays separate; a result after a result
   still merges; a user text after a user text still merges.
-- More than two adjacent contents with the same role merge into one, in order (a result, then two
-  user messages).
+- `adjacent_user_texts_merge_but_not_into_a_tool_result`: two user texts merge into one content;
+  they do not merge into the preceding tool result.
+- `user_text_before_a_tool_result_does_not_merge_into_it`: a user text, then a tool result, stay two
+  `user` contents.
+- `three_parallel_results_merge_into_one_user_content`: three results merge into one `user`
+  content, in order.
 - Two calls in different turns that share `fc_0` (`search`, then `pay`): correct name on each
   `functionResponse`.
 - Two calls in one round that share `fc_0` (`search`, then `pay`), as two `ToolCall` items and as
