@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0129PMVGD8npiLF2wcwrQpGr",
+  "agent_id": "a8e28f032d0fcf421",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 4: provider fallback tests",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 66625,
+    "cache_read_tokens": 1101709,
+    "output_tokens": 5815,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-21T00:13:31.629576+01:00",
+  "completed_at": "2026-11-21T00:15:29.242304+01:00"
+}

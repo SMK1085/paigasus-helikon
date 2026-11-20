@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "0f41db828ed8",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-830-let-a-tool-declare-a-provider-tool-type",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/CHANGELOG.md",
+    "crates/paigasus-helikon-evals/CHANGELOG.md",
+    "crates/paigasus-helikon-mcp/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-anthropic/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-bedrock/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-gemini/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-litellm/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-openai/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-actix/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-agentcore/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-axum/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-temporal/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-tokio/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-postgres/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-redis/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-sqlite/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-testkit/CHANGELOG.md",
+    "crates/paigasus-helikon-tools/CHANGELOG.md",
+    "crates/paigasus-helikon/CHANGELOG.md",
+    "docs/book/src/concepts/model-providers.md",
+    "docs/book/src/concepts/tools.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0f/41db828ed8/0/metadata.json",
+      "transcript": "/0f/41db828ed8/0/full.jsonl",
+      "compact_transcript": "/0f/41db828ed8/0/transcript.jsonl",
+      "content_hash": "/0f/41db828ed8/0/content_hash.txt",
+      "prompt": "/0f/41db828ed8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 9624,
+    "cache_read_tokens": 1771663,
+    "output_tokens": 3961,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 36,
+      "cache_creation_tokens": 123212,
+      "cache_read_tokens": 1248389,
+      "output_tokens": 8205,
+      "api_call_count": 18
+    }
+  },
+  "redaction": {
+    "replacements": 62,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 62,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
