@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01CV31WAwYoffnv9kqSZfJK5",
+  "agent_id": "a73adb12bd6e65e69",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 1: move helpers",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 82021,
+    "cache_read_tokens": 680912,
+    "output_tokens": 4947,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-20T20:24:51.285034+01:00",
+  "completed_at": "2026-11-20T20:26:23.575845+01:00"
+}
