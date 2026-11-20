@@ -4560,8 +4560,11 @@ dependencies = [
 name = "paigasus-helikon-sessions-testkit"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
+ "futures-core",
  "jiff",
  "paigasus-helikon-core",
+ "serde_json",
  "tokio",
 ]
 

@@ -1,10 +1,10 @@
 # paigasus-helikon-sessions-testkit
 
 Session conformance suite for Paigasus Helikon backends, including your own.
-The suite runs four tests against a `Session` implementation: append and read,
-exclusive watermark, projection, and concurrent writers. The session backend
-crates of Paigasus Helikon use it. You can use it to test a backend that you
-write.
+The suite runs five tests against a `Session` implementation: append and read,
+exclusive watermark, projection, concurrent writers, and deferred tool calls.
+The session backend crates of Paigasus Helikon use it. You can use it to test a
+backend that you write.
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-sessions-testkit)
 - [Guide & concepts](https://smk1085.github.io/paigasus-helikon/) — see [sessions](https://smk1085.github.io/paigasus-helikon/concepts/sessions.html)
@@ -60,6 +60,7 @@ Each test is also a public function. Each one takes the same factory as
 - `run_watermark_exclusive`
 - `run_projection`
 - `run_concurrent_writers`
+- `run_tool_deferred`
 
 ## Same core version
 
@@ -78,8 +79,10 @@ the requirement of the testkit.
 
 On 0.x versions, new sub-tests arrive in patch releases. A new sub-test can
 fail a backend that passed before. To control the upgrade, pin an exact
-version, for example `=0.1.0`. A requirement such as `=0.1` or `0.1` still
-accepts every `0.1` patch release.
+version, for example `=0.1.1`. A requirement such as `=0.1` or `0.1` still
+accepts every `0.1` patch release. A patch release can also move the core
+requirement: 0.1.0 uses core 0.5, and 0.1.1 uses core 0.6. So an exact pin
+must match your core version.
 
 ## License
 
