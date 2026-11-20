@@ -58,9 +58,14 @@
 //! the handoff child can reuse its provider id. The mapper decides this case lazily.
 //! An unnamed `ToolCallDelta` for `x` is held when the current occurrence of `x` had no
 //! item and started before the latest `HandoffItem`. Further unnamed deltas for `x`
-//! join the held chunks. If a named delta for `x` comes next, it is a new call (core
-//! names a call once): it starts a new occurrence, and the held chunks are its first
-//! args. If the `ToolCallItem` for `x` comes first, the held chunks belong to the
+//! join the held chunks. If a named delta for `x` comes next, and the current
+//! occurrence already had a name, it is a new call (core names a call once): it starts
+//! a new occurrence, and the held chunks are its first args. If the current occurrence
+//! had no name yet, the name is its first name: the held chunks go to the current
+//! occurrence, in order, and it goes on as one span. One case stays ambiguous: a
+//! dropped call of a handoff response never got its name, and the child reuses its id.
+//! The child's first name then attaches to the dropped call. The mapper has no branch
+//! or response tag to tell them apart. If the `ToolCallItem` for `x` comes first, the held chunks belong to the
 //! current occurrence and go to it, in order, before the item. A result for `x` or the
 //! run end also gives the held chunks to the current occurrence. So under
 //! `ParallelAgent`, a sibling's unfinished call keeps its span and its id across a
@@ -255,17 +260,27 @@ impl EventMapper {
                 } else {
                     // A name after held chunks proves a new call: the held chunks
                     // are its first args, received before this delta.
-                    let held = if name.is_some() {
+                    // Exception: if the current occurrence has no name yet, this is
+                    // its first name, and the held chunks belong to it. They go out
+                    // in one piece with this delta, so the name is known at START.
+                    let first_name = self.current.get(call_id).is_some_and(|occ| !occ.named);
+                    let mut held = if name.is_some() {
                         self.take_held(call_id)
                     } else {
                         None
                     };
+                    let mut args = args_delta.clone();
+                    if first_name {
+                        if let Some(h) = held.take() {
+                            args = format!("{h}{args}");
+                        }
+                    }
                     let agui_id =
                         self.occurrence_for_delta(call_id, name.is_some(), held.is_some());
                     if let Some(held) = held {
                         self.buffered_calls.push((agui_id.clone(), held));
                     }
-                    self.feed_delta(&agui_id, name.as_deref(), args_delta, &mut out);
+                    self.feed_delta(&agui_id, name.as_deref(), &args, &mut out);
                 }
             }
             AgentEvent::ToolCallItem { item } => {
@@ -2515,6 +2530,44 @@ mod tests {
                 event::run_finished("t1", "r1"),
             ],
         );
+    }
+
+    /// SMA-810 (G5): branch A streams an unnamed chunk for `a`, buffered while B's
+    /// transfer call is open, before the handoff of branch B. A's first name comes after the handoff. It is the first name of the
+    /// current occurrence, so the held chunk stays on `a`: one span, no alias.
+    #[test]
+    fn a_late_first_name_after_a_handoff_stays_on_its_call() {
+        let events = vec![
+            turn(1),
+            turn(1),
+            tc_delta("t", Some("transfer_to_billing"), "{}"),
+            tc_delta("a", None, "{\"q\":"),
+            tc_item("t", "transfer_to_billing"),
+            AgentEvent::HandoffItem {
+                from: "triage".to_owned(),
+                to: "billing".to_owned(),
+            },
+            tc_result("t", "transferred to billing"),
+            tc_delta("a", None, "1,"),
+            tc_delta("a", Some("lookup"), "\"r\":2}"),
+            tc_item("a", "lookup"),
+            tc_result("a", "found"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
+        assert_eq!(
+            starts(&frames),
+            pairs(&[("t", "transfer_to_billing"), ("a", "lookup")]),
+            "{frames:?}"
+        );
+        let args: String = frames
+            .iter()
+            .filter(|f| f["type"] == "TOOL_CALL_ARGS" && f["toolCallId"] == "a")
+            .map(|f| f["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(args, "{\"q\":1,\"r\":2}", "{frames:?}");
+        assert_eq!(result_ids(&frames), vec!["t", "a"], "{frames:?}");
     }
 
     /// SMA-810 (G5): the run ends while chunks are held and no name or item decided

@@ -303,8 +303,14 @@ PR review changes (2026-11-20):
   started before the latest `HandoffItem`. More unnamed deltas for `x` join the held
   chunks.
 - A named delta for `x` after held chunks is a new call, because core names a call
-  once. It starts a new occurrence (alias rule as before). The held chunks are its
-  first args.
+  once, but only if the current occurrence of `x` already had a name. It starts a new
+  occurrence (alias rule as before). The held chunks are its first args. If the current
+  occurrence has no name yet, the name is its first name. The held chunks go to the
+  current occurrence in order, then the name and args of this delta. It stays one span
+  with one AG-UI id and no alias. One case stays ambiguous. A dropped call of a handoff
+  response never received its name, and the child reuses its id. The child's first name
+  then attaches to the dropped call. The mapper has no branch or response tag to tell
+  them apart.
 - The item for `x` before a name means that the held chunks belong to the current
   occurrence. They go to it in order, before the item. A result for `x` and the run end
   do the same.
