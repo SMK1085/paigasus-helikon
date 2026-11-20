@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - This version replaces `0.2.26`. Version `0.2.26` requires `paigasus-helikon-core` 0.7, but it was released as a patch, so `cargo update` gave it to users who stay on core 0.6. Version `0.2.26` is yanked. The content of this version is the same as `0.2.26`.
 - This version requires `paigasus-helikon-core` 0.7. If you stay on core 0.6, use `0.2.25`, the last version for core 0.6. A requirement cannot select a version below its minimum, so if your requirement is higher than `0.2.25` (for example a requirement that `cargo add` wrote for a yanked version), change it to `"0.2.25"` first, then run `cargo update`.
-- If you already use core 0.7, change your requirement on `paigasus-helikon-tools` to `"0.3"`. If you do not, and your requirement allows the core 0.6 versions (for example `"0.1"`), `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
+- If you already use core 0.7, change your requirement on `paigasus-helikon-tools` to `"0.3"`. If you do not, and your requirement allows the core 0.6 versions (for example `"0.2"`), `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
 
 ## [0.2.26](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-tools-v0.2.25...paigasus-helikon-tools-v0.2.26) - 2026-11-20
 

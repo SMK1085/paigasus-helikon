@@ -153,10 +153,11 @@ New worktree from current `main`, branch `feature/sma-838-breaking-cascade-guard
 | `empty_package_list_fails` | metadata with no publishable packages | exit 1 |
 | `push_event_skips` | `CASCADE_EVENT=push` | exit 0, output contains `notice` |
 | `unknown_event_fails` | `CASCADE_EVENT=schedule` | exit 1 |
+| `zero_zero_scheme` | core 0.0.3→0.0.4 (Cargo treats every `0.0.z` change as breaking), dep-a 0.2.0→0.2.1 | exit 1, names `dep-a` and `0.3.0` |
 | `dev_and_unpublished_ignored` | core breaking; dev-only dependent and unpublished member patch; others breaking | exit 0 |
 
 - [ ] **Step 2: Run it.** `bash scripts/check-breaking-cascade-selftest.sh` → FAIL (script missing).
-- [ ] **Step 3: Implement the script** per the Interfaces block and spec "PR 2". Minimum version for a breaking bump of `old`: `0.y.z` → `0.(y+1).0`; `x.y.z` with `x ≥ 1` → `(x+1).0.0`. The failure message for a violation ends with the fix text: open a `!` PR that adds an upgrade note under `## [Unreleased]` in each listed crate's CHANGELOG, and let release-plz regenerate the release PR.
+- [ ] **Step 3: Implement the script** per the Interfaces block and spec "PR 2". A change of a `0.0.z` version is always breaking (Cargo semantics), and a `0.0.z` crate's minimum next breaking version is `0.0.(z+1)`. Minimum version for a breaking bump of `old`: `0.y.z` (y ≥ 1) → `0.(y+1).0`; `x.y.z` with `x ≥ 1` → `(x+1).0.0`. The failure message for a violation ends with the fix text: open a `!` PR that adds an upgrade note under `## [Unreleased]` in each listed crate's CHANGELOG, and let release-plz regenerate the release PR.
 - [ ] **Step 4: Run** the self-test → all pass. Run `bash scripts/check-breaking-cascade.sh` locally on the branch → exit 0 (no version changes on this branch).
 - [ ] **Step 5: Commit** both scripts with `ci(release): SMA-838 add the breaking-cascade guard and its self-test`.
 
