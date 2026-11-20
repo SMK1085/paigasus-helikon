@@ -93,7 +93,8 @@ ticket removes the ignore.
   - `cargo audit --deny warnings`
   - `cargo deny --all-features check` (the CI command in `deny.yml`)
   - `cargo package -p paigasus-helikon-sessions-sqlite --no-verify`, then
-    confirm that the manifest under `target/package/` has `sqlx` version
+    read `Cargo.toml` from the `.crate` archive in `target/package/`
+    (`--no-verify` does not unpack it) and confirm that it has `sqlx` version
     `0.9.1`
 - No mdBook or README text names the `sqlx` version, so no doc edit is
   needed. This is a conscious call.

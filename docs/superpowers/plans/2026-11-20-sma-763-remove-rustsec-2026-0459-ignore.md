@@ -46,7 +46,7 @@
 Run:
 ```bash
 cargo package -p paigasus-helikon-sessions-sqlite --no-verify --allow-dirty
-grep -A1 '^\[dependencies.sqlx\]' target/package/paigasus-helikon-sessions-sqlite-*/Cargo.toml
+tar -xzOf target/package/paigasus-helikon-sessions-sqlite-*.crate '*/Cargo.toml' | grep -A1 '^\[dependencies.sqlx\]'
 ```
 Expected: `version = "0.9"`. This is the value that the change must move to `"0.9.1"`.
 
@@ -83,7 +83,7 @@ bash scripts/check-advisory-ignore-sync.sh           # exit 0
 cargo audit --deny warnings                          # exit 0
 cargo deny --all-features check                      # exit 0
 cargo package -p paigasus-helikon-sessions-sqlite --no-verify --allow-dirty
-grep -A1 '^\[dependencies.sqlx\]' target/package/paigasus-helikon-sessions-sqlite-*/Cargo.toml   # version = "0.9.1"
+tar -xzOf target/package/paigasus-helikon-sessions-sqlite-*.crate '*/Cargo.toml' | grep -A1 '^\[dependencies.sqlx\]'   # version = "0.9.1"
 ```
 
 - [ ] **Step 6: Run clippy and the tests**
