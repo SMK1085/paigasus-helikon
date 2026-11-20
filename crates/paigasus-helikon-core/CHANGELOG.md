@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.21...paigasus-helikon-core-v0.5.22) - 2026-11-20
+
+### Added
+
+- *(core)* SMA-803 add deferred tool calls ([#344](https://github.com/SMK1085/paigasus-helikon/pull/344))
+
 ## [0.5.21](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.20...paigasus-helikon-core-v0.5.21) - 2026-11-12
 
 ### Other
