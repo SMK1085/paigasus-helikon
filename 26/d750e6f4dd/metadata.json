@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "26d750e6f4dd",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-819-anthropic-translator-sends-an-empty-text",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/src/translate/mod.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/translate/request.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/26/d750e6f4dd/0/metadata.json",
+      "transcript": "/26/d750e6f4dd/0/full.jsonl",
+      "compact_transcript": "/26/d750e6f4dd/0/transcript.jsonl",
+      "content_hash": "/26/d750e6f4dd/0/content_hash.txt",
+      "prompt": "/26/d750e6f4dd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 21495,
+    "cache_read_tokens": 2446269,
+    "output_tokens": 10344,
+    "api_call_count": 11,
+    "subagent_tokens": {
+      "input_tokens": 58,
+      "cache_creation_tokens": 265341,
+      "cache_read_tokens": 2423005,
+      "output_tokens": 21959,
+      "api_call_count": 29
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
