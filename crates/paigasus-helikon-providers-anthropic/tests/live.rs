@@ -6,7 +6,7 @@
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ResponseFormat,
+    CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ResponseFormat, ToolDef,
 };
 use paigasus_helikon_providers_anthropic::{AnthropicModel, CacheStrategy};
 
@@ -158,4 +158,140 @@ async fn cache_strategy_round_trip() {
         tracing::info!("cache_prefix_too_small: live cache test ran below per-model write minimum",);
         // Pass — caching at <write-minimum is a documented no-op.
     }
+}
+
+fn assistant(s: &str) -> Item {
+    Item::AssistantMessage {
+        content: vec![ContentPart::Text { text: s.to_owned() }],
+        agent: None,
+    }
+}
+
+fn call(id: &str) -> Item {
+    Item::ToolCall {
+        call_id: id.to_owned(),
+        name: "ping".to_owned(),
+        args: serde_json::json!({}),
+    }
+}
+
+fn result(id: &str) -> Item {
+    Item::ToolResult {
+        call_id: id.to_owned(),
+        content: vec![ContentPart::Text {
+            text: "pong".to_owned(),
+        }],
+    }
+}
+
+/// Send `messages` to the strict model and panic on any stream error.
+async fn run_accepted(messages: Vec<Item>, with_tool: bool, last_turn_cache: bool) {
+    let mut builder = AnthropicModel::messages("claude-sonnet-4-6");
+    if last_turn_cache {
+        builder = builder.cache_strategy(CacheStrategy::LastTurn);
+    }
+    let model = builder.build().unwrap();
+    let req = req_with(messages, |r| {
+        r.model_settings.max_output_tokens = Some(64);
+        if with_tool {
+            r.tools = vec![ToolDef {
+                name: "ping".to_owned(),
+                description: "Ping.".to_owned(),
+                schema: serde_json::json!({"type": "object"}),
+            }];
+        }
+    });
+    let mut s = model.invoke(req, CancellationToken::new()).await.unwrap();
+    while let Some(ev) = s.next().await {
+        if let Err(e) = ev {
+            panic!("stream error: {e:?}");
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn blank_user_after_tool_result_is_accepted() {
+    if skip_if_no_key() {
+        return;
+    }
+    let msgs = vec![
+        user("call ping"),
+        assistant("calling"),
+        call("toolu_01A09q90qw90lq917835lq9"),
+        result("toolu_01A09q90qw90lq917835lq9"),
+        user(""),
+    ];
+    run_accepted(msgs, true, false).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn blank_user_after_tool_result_with_last_turn_cache_is_accepted() {
+    if skip_if_no_key() {
+        return;
+    }
+    let msgs = vec![
+        user("call ping"),
+        assistant("calling"),
+        call("toolu_01A09q90qw90lq917835lq9"),
+        result("toolu_01A09q90qw90lq917835lq9"),
+        user(""),
+    ];
+    run_accepted(msgs, true, true).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn reasoning_only_assistant_tool_loop_is_accepted() {
+    if skip_if_no_key() {
+        return;
+    }
+    let msgs = vec![
+        user("call ping"),
+        Item::AssistantMessage {
+            content: vec![ContentPart::Reasoning {
+                text: "scratch".to_owned(),
+            }],
+            agent: None,
+        },
+        call("toolu_01A09q90qw90lq917835lq9"),
+        result("toolu_01A09q90qw90lq917835lq9"),
+        assistant("done"),
+        user("thanks, reply ok"),
+    ];
+    run_accepted(msgs, true, false).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn replayed_blank_user_is_accepted() {
+    if skip_if_no_key() {
+        return;
+    }
+    let msgs = vec![
+        user("hi"),
+        assistant("Hello"),
+        user(""),
+        user("Reply with ok"),
+    ];
+    run_accepted(msgs, false, false).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn tool_only_multi_round_loop_is_accepted() {
+    if skip_if_no_key() {
+        return;
+    }
+    let msgs = vec![
+        user("ping twice"),
+        call("toolu_01A09q90qw90lq917835lq9"),
+        result("toolu_01A09q90qw90lq917835lq9"),
+        call("toolu_01B09q90qw90lq917835lq8"),
+        result("toolu_01B09q90qw90lq917835lq8"),
+        assistant("done"),
+        user("reply ok"),
+    ];
+    run_accepted(msgs, true, false).await;
 }
