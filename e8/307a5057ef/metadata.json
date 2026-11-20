@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "e8307a5057ef",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-828-share-the-deferral-test-helpers-between-core",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "Cargo.lock",
+    "crates/paigasus-helikon-core/Cargo.toml",
+    "crates/paigasus-helikon-core/tests/common/mod.rs",
+    "crates/paigasus-helikon-core/tests/deferred_resume.rs",
+    "crates/paigasus-helikon-core/tests/handoff_transfer_result.rs",
+    "crates/paigasus-helikon-core/tests/subagent_propagation.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e8/307a5057ef/0/metadata.json",
+      "transcript": "/e8/307a5057ef/0/full.jsonl",
+      "compact_transcript": "/e8/307a5057ef/0/transcript.jsonl",
+      "content_hash": "/e8/307a5057ef/0/content_hash.txt",
+      "prompt": "/e8/307a5057ef/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 12564,
+    "cache_read_tokens": 1950873,
+    "output_tokens": 5512,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 38,
+      "cache_creation_tokens": 133527,
+      "cache_read_tokens": 1434597,
+      "output_tokens": 10385,
+      "api_call_count": 19
+    }
+  },
+  "redaction": {
+    "replacements": 37,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 37,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
