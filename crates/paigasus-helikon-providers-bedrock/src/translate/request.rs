@@ -3,14 +3,15 @@
 //! Rules per SMA-329 spec §6 "Wire translation":
 //! - `Item::System` → `SystemContentBlock::Text`; system blocks are never mixed
 //!   into the `messages` slice.
-//! - Strictly alternating user / assistant turns required by Converse.
-//! - First message must be `user` (a synthetic empty user turn is prepended when
-//!   the first real item is assistant-role).
+//! - Blank text (empty or whitespace-only) is never sent: Converse rejects it.
+//!   A dropped block leaves no placeholder. An `Item::System` with only blank
+//!   text adds no system block.
+//! - Adjacent same-role turns are joined into one turn.
 //! - `Item::ToolCall` / `ContentPart::ToolUse` → `ContentBlock::ToolUse` on
 //!   the assistant turn.
 //! - `Item::ToolResult` queued pending → flushed as `ContentBlock::ToolResult`
 //!   blocks prepended to the next user turn.
-//! - Empty conversation (no messages after system extraction) → error.
+//! - No message with content after blank text is dropped → error.
 
 use aws_sdk_bedrockruntime::types::{
     ContentBlock, ConversationRole, Message, SystemContentBlock, ToolResultBlock,
@@ -28,14 +29,14 @@ pub(crate) struct TranslatedMessages {
     /// System prompt blocks (`SystemContentBlock::Text`) extracted from
     /// `Item::System` entries.
     pub(crate) system: Vec<SystemContentBlock>,
-    /// Strictly alternating conversation turns.
+    /// Conversation turns. Adjacent same-role turns are joined.
     pub(crate) messages: Vec<Message>,
 }
 
 /// Translate the conversation into Bedrock Converse `Message`s.
 ///
-/// Returns an error when the conversation is empty (has no non-system items
-/// after stripping `Item::System` entries).
+/// Returns an error when no message with content remains. Empty or
+/// whitespace-only text and unsupported parts are not sent.
 pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, ModelError> {
     let mut system: Vec<SystemContentBlock> = Vec::new();
     let mut messages: Vec<Message> = Vec::new();
@@ -93,7 +94,9 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 flush_assistant(&mut messages, &mut pending_assistant);
                 flush_user_results(&mut messages, &mut pending_tool_results);
                 let text = text_of(content);
-                system.push(SystemContentBlock::Text(text));
+                if !is_blank(&text) {
+                    system.push(SystemContentBlock::Text(text));
+                }
             }
 
             Item::UserMessage { content } => {
@@ -103,7 +106,9 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 for part in content {
                     match part {
                         ContentPart::Text { text } => {
-                            blocks.push(ContentBlock::Text(text.clone()));
+                            if !is_blank(text) {
+                                blocks.push(ContentBlock::Text(text.clone()));
+                            }
                         }
                         ContentPart::ToolResult { call_id, content } => {
                             // Native Anthropic-shaped ToolResult inside a UserMessage.
@@ -145,7 +150,9 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 for part in content {
                     match part {
                         ContentPart::Text { text } => {
-                            blocks.push(ContentBlock::Text(text.clone()));
+                            if !is_blank(text) {
+                                blocks.push(ContentBlock::Text(text.clone()));
+                            }
                         }
                         ContentPart::ToolUse {
                             call_id,
@@ -231,27 +238,22 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
     flush_assistant(&mut messages, &mut pending_assistant);
     flush_user_results(&mut messages, &mut pending_tool_results);
 
-    // Guard: empty conversation.
+    // Guard: nothing to send.
     if messages.is_empty() {
         return Err(ModelError::Other(anyhow::anyhow!(
-            "Bedrock Converse requires at least one non-system message"
+            "no message with content to send (empty or whitespace-only text and unsupported parts are not sent)"
         )));
-    }
-
-    // Guard: first message must be user — synthesize a minimal user turn.
-    if messages[0].role == ConversationRole::Assistant {
-        let placeholder = Message::builder()
-            .role(ConversationRole::User)
-            .content(ContentBlock::Text(String::new()))
-            .build()
-            .expect("placeholder user turn always valid");
-        messages.insert(0, placeholder);
     }
 
     Ok(TranslatedMessages { system, messages })
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// `true` when `text` is empty or only whitespace. Converse rejects such blocks.
+fn is_blank(text: &str) -> bool {
+    text.trim().is_empty()
+}
 
 /// Extract and concatenate all text from a `Vec<ContentPart>`.
 fn text_of(parts: &[ContentPart]) -> String {
@@ -408,12 +410,13 @@ mod tests {
     }
 
     #[test]
-    fn assistant_first_gets_synthetic_user_prepended() {
+    fn assistant_first_is_sent_without_placeholder() {
         let items = vec![assistant(vec![text("done")])];
-        let tm = items_to_messages(&items).unwrap();
-        assert_eq!(tm.messages.len(), 2);
-        assert_eq!(tm.messages[0].role, ConversationRole::User);
-        assert_eq!(tm.messages[1].role, ConversationRole::Assistant);
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([{"role": "assistant", "content": [{"type": "text", "text": "done"}]}])
+        );
     }
 
     #[test]
@@ -424,13 +427,11 @@ mod tests {
             args: json!({"host": "example.com"}),
         }];
         let w = wire(&items).unwrap();
-        // ToolCall flushes as an assistant turn; leading-assistant rule kicks in.
         let msgs = w["messages"].as_array().unwrap();
-        assert_eq!(msgs.len(), 2); // synthetic user + assistant
-        let assistant_msg = &msgs[1];
-        assert_eq!(assistant_msg["role"], "assistant");
-        assert_eq!(assistant_msg["content"][0]["type"], "tool_use");
-        assert_eq!(assistant_msg["content"][0]["toolUseId"], "tu_1");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["role"], "assistant");
+        assert_eq!(msgs[0]["content"][0]["type"], "tool_use");
+        assert_eq!(msgs[0]["content"][0]["toolUseId"], "tu_1");
     }
 
     #[test]
@@ -632,5 +633,174 @@ mod tests {
         assert_eq!(tm.messages.len(), 3);
         assert_eq!(tm.messages[2].role, ConversationRole::User);
         assert_eq!(tm.messages[2].content.len(), 2);
+    }
+
+    // ── SMA-824: blank text is never sent ─────────────────────────────────────
+
+    const NO_CONTENT: &str = "no message with content to send";
+
+    fn t(role: &str, s: &str) -> Value {
+        json!({"role": role, "content": [{"type": "text", "text": s}]})
+    }
+
+    fn tool_use_item(id: &str) -> ContentPart {
+        ContentPart::ToolUse {
+            call_id: id.to_owned(),
+            name: "ping".to_owned(),
+            args: json!({}),
+        }
+    }
+
+    fn result_item(id: &str, s: &str) -> Item {
+        Item::ToolResult {
+            call_id: id.to_owned(),
+            content: vec![text(s)],
+        }
+    }
+
+    fn blank_between(blank: &str) -> Vec<Item> {
+        vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text(blank)]),
+            user(vec![text("r")]),
+        ]
+    }
+
+    #[test]
+    fn empty_text_part_is_dropped() {
+        let w = wire(&blank_between("")).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+        );
+    }
+
+    #[test]
+    fn whitespace_only_text_part_is_dropped() {
+        let w = wire(&blank_between("  \n\t")).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+        );
+    }
+
+    #[test]
+    fn unicode_whitespace_text_part_is_dropped() {
+        let w = wire(&blank_between("\u{00A0}\u{2003}")).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+        );
+    }
+
+    #[test]
+    fn blank_text_is_dropped_but_real_text_kept_verbatim() {
+        let w = wire(&[user(vec![text(""), text("  hi  ")])]).unwrap();
+        assert_eq!(w["messages"], json!([t("user", "  hi  ")]));
+    }
+
+    #[test]
+    fn blank_user_text_keeps_pending_tool_results() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("tu_1")]),
+            result_item("tu_1", "pong"),
+            user(vec![text("")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([
+                t("user", "q"),
+                {"role": "assistant", "content": [{"type": "tool_use", "toolUseId": "tu_1", "name": "ping"}]},
+                {"role": "user", "content": [{"type": "tool_result", "toolUseId": "tu_1", "content": "pong"}]},
+            ])
+        );
+    }
+
+    #[test]
+    fn blank_assistant_text_is_dropped() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("  "), text("a")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(w["messages"], json!([t("user", "q"), t("assistant", "a")]));
+    }
+
+    #[test]
+    fn assistant_with_no_blocks_is_not_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("")]),
+            user(vec![text("r")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([{"role": "user", "content": [
+                {"type": "text", "text": "q"},
+                {"type": "text", "text": "r"},
+            ]}])
+        );
+    }
+
+    #[test]
+    fn replayed_blank_user_between_real_turns_is_dropped() {
+        let w = wire(&blank_between("")).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+        );
+    }
+
+    #[test]
+    fn blank_first_user_gives_assistant_first() {
+        let items = vec![
+            user(vec![text("")]),
+            assistant(vec![text("a")]),
+            user(vec![text("b")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(w["messages"], json!([t("assistant", "a"), t("user", "b")]));
+    }
+
+    #[test]
+    fn whitespace_only_system_is_absent() {
+        let tm = items_to_messages(&[system("  \n"), user(vec![text("hi")])]).unwrap();
+        assert!(tm.system.is_empty());
+        for items in [vec![system("")], vec![system("  "), user(vec![text("")])]] {
+            let err = items_to_messages(&items).unwrap_err();
+            assert!(matches!(err, ModelError::Other(_)));
+            assert!(err.to_string().contains(NO_CONTENT), "{err}");
+        }
+    }
+
+    #[test]
+    fn blank_system_inside_open_round_still_flushes() {
+        let build = |sys: &str| {
+            vec![
+                user(vec![text("q")]),
+                assistant(vec![tool_use_item("tu_1")]),
+                result_item("tu_1", "r"),
+                system(sys),
+                user(vec![text("next")]),
+            ]
+        };
+        let blank = items_to_messages(&build(" ")).unwrap();
+        let real = items_to_messages(&build("s")).unwrap();
+        assert!(blank.system.is_empty());
+        assert_eq!(
+            messages_to_wire_json(&blank)["messages"],
+            messages_to_wire_json(&real)["messages"]
+        );
+    }
+
+    #[test]
+    fn only_blank_user_returns_error() {
+        let err = items_to_messages(&[user(vec![text("")])]).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(err.to_string().contains(NO_CONTENT), "{err}");
     }
 }
