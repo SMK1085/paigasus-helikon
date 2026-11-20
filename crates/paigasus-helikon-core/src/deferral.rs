@@ -584,11 +584,10 @@ fn handoff_indices(
 ///
 /// A child view pairs each tool result with one open call of the view: the
 /// result closes the earliest open call with its call id. The view drops a
-/// result that closes no open call. The session recorder closes the
-/// transfer calls of a run with a synthetic result after the handoff, and
-/// the child view has no transfer call. A child call can use the call id of
-/// a transfer call, so a match by call id alone can keep two results for one
-/// call.
+/// result that closes no open call. The parent emits the transfer result
+/// after the handoff (an older session can hold a late result), and the child
+/// view has no transfer call. A child call can use the call id of a transfer
+/// call, so a match by call id alone can keep two results for one call.
 fn agent_view(
     events: &[crate::SessionEvent],
     handoffs: &[usize],
@@ -647,17 +646,7 @@ pub(crate) struct TransferCall {
 /// by their tool name, because a handoff can use a custom tool name.
 fn transfer_calls_before(events: &[crate::SessionEvent], handoff_at: usize) -> Vec<TransferCall> {
     use crate::SessionEvent;
-    let start = handoff_at
-        - events[..handoff_at]
-            .iter()
-            .rev()
-            .take_while(|e| {
-                matches!(
-                    e,
-                    SessionEvent::ToolCalled { .. } | SessionEvent::AssistantMessage { .. }
-                )
-            })
-            .count();
+    let start = crate::session::transfer_run_start(events, handoff_at);
     (start..handoff_at)
         .filter_map(|at| {
             match &events[at] {
@@ -996,8 +985,9 @@ mod tests {
 
     #[test]
     fn child_history_drops_the_recorder_result_of_a_transfer_call() {
-        // The session recorder closes each transfer call at the end of the
-        // run with a synthetic result.
+        // The parent now emits the transfer result after the handoff. A
+        // session stored before that change can still hold a late result
+        // that the recorder wrote at the end of the run.
         let mut events = three_level();
         for id in ["t1", "t2"] {
             events.push(SessionEvent::tool_returned(id, text("cancelled")));
@@ -1095,6 +1085,31 @@ mod tests {
             [transfer("t", 1), transfer("u", 0)]
         );
         assert_eq!(p.descend().transfer_calls_to_next(), [transfer("t", 0)]);
+    }
+
+    #[test]
+    fn transfer_calls_to_next_in_the_new_layout() {
+        // Each transfer call has its result directly after the handoff.
+        let events = vec![
+            SessionEvent::user_message(text("hi")),
+            SessionEvent::tool_called("t", "transfer_to_mid", serde_json::json!({})),
+            SessionEvent::tool_called("u", "transfer_to_mid", serde_json::json!({})),
+            SessionEvent::handoff_occurred("root", "mid"),
+            SessionEvent::tool_returned("t", text("transferred to mid")),
+            SessionEvent::tool_returned(
+                "u",
+                text("transfer not performed: this response already transferred to mid"),
+            ),
+            SessionEvent::tool_called("b", "pay", serde_json::json!({"amount": 5})),
+            deferred("d1", "b", &["root", "mid"]),
+        ];
+        let input = AgentInput::new().with_resolution("d1", ToolResolution::Approved);
+        let p = plan(&events, &input).unwrap();
+        assert_eq!(
+            p.transfer_calls_to_next(),
+            [transfer("t", 0), transfer("u", 0)]
+        );
+        assert!(p.descend().transfer_calls_to_next().is_empty());
     }
 
     #[test]

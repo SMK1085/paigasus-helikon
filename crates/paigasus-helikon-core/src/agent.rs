@@ -828,24 +828,6 @@ where
                             result: Err(format!("unknown tool: {name}")),
                         });
                     }
-                    // A transfer call above this agent with the same call
-                    // id has no result while the run goes on. The session
-                    // log cannot keep such a deferral open, so deny the call.
-                    if interceptors.ctx.open_call_ids().contains(&call_id) {
-                        let reason =
-                            format!("deferral not possible: call id {call_id} repeats in this run");
-                        denied_events
-                            .lock()
-                            .unwrap()
-                            .push(crate::AgentEvent::PermissionDenied {
-                                tool: name.clone(),
-                                reason: reason.clone(),
-                            });
-                        return ConcurrentOutcome::Done(crate::ToolCallOutcome {
-                            call_id,
-                            result: Err(format!("permission denied: {reason}")),
-                        });
-                    }
                     return ConcurrentOutcome::Deferred(crate::PendingToolCall::new(
                         crate::deferral::new_deferral_id(),
                         call_id,
@@ -1119,8 +1101,10 @@ where
                         let msg = err.to_string();
                         run_span.record("otel.status_code", "ERROR");
                         failure.set(err);
-                        // The calls do not run, so their transfer calls stay
-                        // open unless this exit closes them.
+                        // The calls do not run. In a session stored by core
+                        // 0.6.0 or earlier, their transfer calls stay open
+                        // unless this exit closes them. A newer session
+                        // already holds the transfer result.
                         for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
                             yield crate::AgentEvent::ToolOutputItem { item };
                         }
@@ -1233,8 +1217,8 @@ where
                 } else {
                     None
                 };
-                // The transfer calls of a handoff get no result while the
-                // child runs. Keep their call ids for the child.
+                // The call ids of the transfer calls of a handoff. The parent
+                // emits a result for each of them after the handoff.
                 let transfer_call_ids: Vec<String> =
                     if matches!(next_action, crate::NextAction::Handoff) {
                         events
@@ -1622,7 +1606,7 @@ where
                             _ => return,
                         };
 
-                        let child = ctx.handoff_child().with_open_call_ids(transfer_call_ids);
+                        let child = ctx.handoff_child();
                         if child.agent_depth() > max_agent_depth {
                             let err = crate::AgentError::MaxAgentDepthExceeded {
                                 depth: child.agent_depth(),
@@ -1675,12 +1659,16 @@ where
                             from: agent_name.clone(),
                             to: target.clone(),
                         };
-                        yield crate::AgentEvent::AgentUpdated {
-                            agent: target.clone(),
-                        };
 
                         let input = crate::AgentInput { messages: transcript, ..Default::default() };
-                        let mut sub = match target_agent.run(child, input).await {
+                        // Starting the child emits no event. Start it before the
+                        // transfer results, because their text tells whether
+                        // the target started.
+                        let started = target_agent.run(child, input).await;
+                        for item in transfer_results(&transfer_call_ids, &target, started.is_ok()) {
+                            yield crate::AgentEvent::ToolOutputItem { item };
+                        }
+                        let mut sub = match started {
                             Ok(s) => s,
                             Err(e) => {
                                 let msg = e.to_string();
@@ -1689,6 +1677,9 @@ where
                                 yield crate::AgentEvent::RunFailed { error: msg };
                                 return;
                             }
+                        };
+                        yield crate::AgentEvent::AgentUpdated {
+                            agent: target.clone(),
                         };
                         while let Some(ev) = sub.next().await {
                             if let Some(ev) = reyield_child_event(ev, parent_usage, &run_span) {
@@ -1706,6 +1697,33 @@ where
 
         Ok(Box::pin(stream))
     }
+}
+
+/// The tool results of the transfer calls of one handoff, in call order.
+///
+/// `started` tells whether the target agent's `run` returned `Ok`. When it
+/// did, the first call gets `transferred to {target}`, and each other call
+/// of the same response gets a "transfer not performed" text. When it did
+/// not, every call gets `transfer failed: {target} did not start`. The text
+/// holds no error detail, because the result goes to a model.
+fn transfer_results(call_ids: &[String], target: &str, started: bool) -> Vec<crate::Item> {
+    call_ids
+        .iter()
+        .enumerate()
+        .map(|(i, call_id)| {
+            let text = if !started {
+                format!("transfer failed: {target} did not start")
+            } else if i == 0 {
+                format!("transferred to {target}")
+            } else {
+                format!("transfer not performed: this response already transferred to {target}")
+            };
+            crate::Item::ToolResult {
+                call_id: call_id.clone(),
+                content: vec![crate::ContentPart::Text { text }],
+            }
+        })
+        .collect()
 }
 
 // ── Error types ───────────────────────────────────────────────────────────────

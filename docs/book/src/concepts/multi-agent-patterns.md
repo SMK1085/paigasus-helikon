@@ -97,8 +97,13 @@ work. Two handoffs whose names slug to the same `transfer_to_*` tool are rejecte
 with a collision error before the first model call, rather than silently
 mis-routing.
 
-When a handoff fires, the stream emits a `HandoffItem { from, to }` followed by
-`AgentUpdated { agent }`, then the target agent's events. The terminal
+When a handoff fires, the stream emits a `HandoffItem { from, to }`. Then it emits one
+`ToolOutputItem` for each transfer call of the response. Then it emits
+`AgentUpdated { agent }`, then the target agent's events. The first transfer
+call gets the result "transferred to {target}". Each other transfer call of the
+same response gets "transfer not performed: this response already transferred
+to {target}". If the target run cannot start, every transfer call of the
+response gets the result "transfer failed: {target} did not start". The terminal
 `RunCompleted.usage` sums the parent and the post-handoff sub-run. A handoff
 chain is bounded by `RunConfig::max_agent_depth`; exceeding it fails the run with
 `AgentError::MaxAgentDepthExceeded`.
