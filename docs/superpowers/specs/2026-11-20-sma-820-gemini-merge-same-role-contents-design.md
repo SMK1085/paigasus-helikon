@@ -60,6 +60,18 @@ Sven approved approach 1 on 2026-11-20, and approved this spec at GATE 1 on 2026
 
 - Build a `Vec<(role, Vec<Value>)>` in item order, then fold it: when the role of an entry equals
   the role of the last merged entry, append its parts; else start a new content.
+- **Exception, the tool-result boundary** (added 2026-11-20 after the live run, Sven's decision):
+  a `user` entry whose first part is not a `functionResponse` does not merge into a `user` content
+  whose last part is a `functionResponse`. It starts a new `user` content. So a user text after a
+  tool result stays a separate content, as on `main`.
+  - Reason: Gemini 3 checks thought signatures only in the current turn, and the current turn
+    starts at the last `user` content that is not a tool result. With the merge, `user[fr, text]`
+    keeps the call in the current turn, and the translator sends no signature (SMA-827): HTTP 400
+    (probe shape 3 with no signature; the first live run of this branch failed 3 of 3 this way).
+    The split shape gets HTTP 200 with and without a signature (probe shape 2).
+  - Consequence: the SMA-804 `Inject` shape stays two adjacent `user` contents. The probe shows
+    that Gemini accepts it. Parallel results, adjacent user texts, and all `model` contents still
+    merge. Review this exception when SMA-827 lands.
 - An entry with no parts is dropped before the fold. Today only an empty `user` content is
   dropped. An assistant message with only `Reasoning` parts gives a `model` content with
   `"parts": []`.
@@ -132,8 +144,12 @@ The merge depends on one invariant: the next `user` content answers each `functi
 Unit tests in `request.rs` assert the full `contents` array, as
 `tool_result_then_user_message_request_shape` does:
 
-- Change `tool_result_then_user_message_request_shape` (and its doc comment) to one merged
-  `role: user` content: the `functionResponse` part, then the text part.
+- `tool_result_then_user_message_request_shape` (and its doc comment): the assistant text and
+  the call merge into one `model` content; the `functionResponse` content and the user text stay
+  two `user` contents (the tool-result boundary). The ticket asked for one merged `user` content;
+  Sven changed that on 2026-11-20 after the live run.
+- The tool-result boundary: a user text after results stays separate; a result after a result
+  still merges; a user text after a user text still merges.
 - More than two adjacent contents with the same role merge into one, in order (a result, then two
   user messages).
 - Two calls in different turns that share `fc_0` (`search`, then `pay`): correct name on each
@@ -218,10 +234,9 @@ call into an earlier turn, and Gemini checks signatures only in the current turn
 
 What this means:
 
-- Defect 1 (adjacent same-role contents) causes no failure on `gemini-3.8-flash`. Both the split and
-  the merged shapes are accepted. The merge stays as the ticket requires: it is safe on the API, it
-  gives the shape that Gemini itself sends, and no official source promises that the split shape
-  stays accepted.
+- Defect 1 (adjacent same-role contents) causes no failure on `gemini-3.8-flash`. With a signature,
+  both the split and the merged shapes are accepted. Without a signature, only the split shape is
+  accepted (shapes 2 vs 3). So the merge keeps the tool-result boundary (see "Merge").
 - Defect 2 (wrong name) is a **hard failure**: HTTP 400 on the next model call. Part 2 is the fix
   that matters for users.
 - Gemini accepts a second response for one call (13). The translator still drops it, to match core.
@@ -239,13 +254,27 @@ in SMA-565.
 ### After the fix
 
 The live test in `tests/live.rs` runs through the real translator. Because the translator sends no
-thought signatures, each history in the test ends with a user text after the last tool result, so
-no call is in the current turn. Shape 9 shows that Gemini checks names in earlier turns too, so the
+thought signatures, each history in the test ends with a user text after the last tool result. With
+the tool-result boundary, that text is a separate `user` content, so no call is in the current turn.
+(The first version of this section assumed this without the boundary. The first live run proved it
+wrong: 3 of 3 tests got HTTP 400 for a missing thought signature.) Shape 9 shows that Gemini checks names in earlier turns too, so the
 cross-turn `fc_0` history still tests the name fix. The test model defaults to `gemini-3.8-flash`
 (override with `GEMINI_MODEL_ID`); the default of the existing `dev_model()` changes from
 `gemini-2.5-flash` to `gemini-3.8-flash`, because the old default returns 404 for new users.
 
-- After: _pending (runs at the end of implementation)._
+Results after the fix (2026-11-20, `gemini-3.8-flash`, `cargo test -p paigasus-helikon-providers-gemini
+--test live -- --ignored live_developer_`):
+
+| Live test | This branch | Control: same test file on `main` (e7ac5377) |
+|---|---|---|
+| `live_developer_text_turn` | pass | pass |
+| `live_developer_structured_output` | pass | pass |
+| `live_developer_tool_result_then_user_text` | pass | pass |
+| `live_developer_parallel_round` | pass | pass |
+| `live_developer_cross_turn_repeated_call_id` | pass | **fail: HTTP 400 "Request contains an invalid argument."** |
+
+The first run of this branch, before the tool-result boundary, failed the three tool tests with
+HTTP 400 "Function call is missing a thought_signature".
 
 Scope of the check: Developer API only. Vertex uses the same translator.
 
