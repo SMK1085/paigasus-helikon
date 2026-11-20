@@ -58,6 +58,13 @@
 //! Remote-URL images, audio parts, and non-text tool-result parts are silently
 //! dropped during request translation. Reasoning streaming (`ModelEvent::ReasoningDelta`)
 //! is not yet emitted by this provider.
+//!
+//! Tool loops on Gemini 3 work with thought signatures. The provider keeps each
+//! signature and sends it back on its own call. For a call of the current turn
+//! with no valid signature, it sends the documented dummy value. It sends the
+//! dummy only for Gemini 3 and later ids, and it is live-tested only on
+//! `gemini-3.8-flash` (Developer API). Vertex signatures are not live-tested.
+//! Text-level signatures are not sent back.
 
 /// Key under which this crate stores its data in `ProviderData` parts and events.
 pub const PROVIDER_DATA_KEY: &str = "gemini";

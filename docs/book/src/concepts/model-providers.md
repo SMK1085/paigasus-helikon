@@ -313,7 +313,9 @@ provider keeps each signature as `ContentPart::ProviderData` (key
 also restores the call order that Gemini returned. For a call of the current
 turn that has no valid signature, it sends the documented dummy value
 `skip_thought_signature_validator`. A signature from another model id or
-another API counts as not valid. These limits apply:
+another API counts as not valid. The dummy is sent only for Gemini 3 and later
+ids. Gemini 1.x and 2.x requests keep their earlier shape and get no dummy.
+These limits apply:
 
 - Vertex signatures are not live-tested.
 - The dummy value is live-tested only on `gemini-3.8-flash` (Developer API).

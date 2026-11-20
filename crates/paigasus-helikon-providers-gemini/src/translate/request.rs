@@ -245,7 +245,9 @@ pub(crate) fn items_to_contents(
             restore_call_order(parts);
         }
     }
-    add_dummy_signatures(&mut merged);
+    if uses_dummy_signature(model_id) {
+        add_dummy_signatures(&mut merged);
+    }
     let contents: Vec<Value> = merged
         .into_iter()
         .map(|(role, parts)| {
@@ -335,6 +337,17 @@ fn restore_call_order(parts: &mut [Part]) {
     for (slot, part) in slots.into_iter().zip(calls) {
         parts[slot] = part;
     }
+}
+
+/// Say whether a request for `model_id` may carry [`DUMMY_THOUGHT_SIGNATURE`].
+///
+/// The dummy is live-tested only on Gemini 3. Requests for a Gemini 1.x or
+/// 2.x id stay as they were before SMA-827 and get no dummy. Every other id
+/// (Gemini 3 and later, unknown ids) gets it. The check uses the part of the id
+/// after the last `/`, so `models/gemini-2.5-flash` and Vertex resource paths work.
+fn uses_dummy_signature(model_id: &str) -> bool {
+    let name = model_id.rsplit('/').next().unwrap_or(model_id);
+    !(name.starts_with("gemini-1") || name.starts_with("gemini-2"))
 }
 
 /// Put [`DUMMY_THOUGHT_SIGNATURE`] on each `functionCall` part of a `model`
@@ -1372,6 +1385,55 @@ mod tests {
                 {"role": "model", "parts": [fc_dummy("fc_0", "pay"), fc_dummy("fc_1", "pay")]},
                 {"role": "user", "parts": [fr("fc_0", "pay", json!({})), fr("fc_1", "pay", json!({}))]},
             ])
+        );
+    }
+
+    #[test]
+    fn gemini_2_history_gets_no_dummy() {
+        for model in [
+            "gemini-2.5-flash",
+            "models/gemini-2.0-flash",
+            "projects/p/locations/l/publishers/google/models/gemini-2.5-pro",
+            "gemini-1.5-pro",
+        ] {
+            let items = vec![user("q"), call("call_1", "search")];
+            let t = items_to_contents(&items, model, A).unwrap();
+            assert_eq!(
+                t.contents[1],
+                json!({"role": "model", "parts": [fc("call_1", "search")]}),
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_3_and_unknown_ids_keep_the_dummy() {
+        for model in ["models/gemini-3.8-flash", "gemini-4-pro", "my-tuned-model"] {
+            let items = vec![user("q"), call("call_1", "search")];
+            let t = items_to_contents(&items, model, A).unwrap();
+            assert_eq!(
+                t.contents[1],
+                json!({"role": "model", "parts": [fc_dummy("call_1", "search")]}),
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_2_real_signature_is_still_sent_back() {
+        let model = "gemini-2.5-flash";
+        let items = vec![
+            user("q"),
+            assistant(vec![pd(
+                "call_1",
+                json!({"index": 0, "thoughtSignature": "SIG_A", "model": model, "api": A}),
+            )]),
+            call("call_1", "search"),
+        ];
+        let t = items_to_contents(&items, model, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [fc_sig("call_1", "search", "SIG_A")]})
         );
     }
 

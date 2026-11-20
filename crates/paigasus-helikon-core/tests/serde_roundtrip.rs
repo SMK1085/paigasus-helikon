@@ -151,6 +151,34 @@ fn content_part_reasoning_roundtrip() {
 }
 
 #[test]
+fn model_turn_with_provider_data_roundtrip() {
+    let items = vec![
+        Item::AssistantMessage {
+            content: vec![ContentPart::ProviderData {
+                provider: "gemini".into(),
+                call_id: Some("call_1".into()),
+                data: serde_json::json!({
+                    "index": 0,
+                    "thoughtSignature": "SIG_A",
+                    "model": "gemini-3.8-flash",
+                    "api": "developer",
+                }),
+            }],
+            agent: None,
+        },
+        Item::ToolCall {
+            call_id: "call_1".into(),
+            name: "search".into(),
+            args: serde_json::json!({}),
+        },
+    ];
+    let turn = ModelTurn::new(items, TokenUsage::default(), FinishReason::ToolCalls);
+    let original = serde_json::to_value(&turn).unwrap();
+    let parsed: ModelTurn = serde_json::from_value(original.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), original);
+}
+
+#[test]
 fn content_part_provider_data_roundtrip() {
     let with_id = ContentPart::ProviderData {
         provider: "gemini".into(),

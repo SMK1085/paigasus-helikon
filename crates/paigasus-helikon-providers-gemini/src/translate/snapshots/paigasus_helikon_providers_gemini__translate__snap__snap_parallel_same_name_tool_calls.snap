@@ -21,8 +21,7 @@ expression: b
             },
             "id": "fc_0",
             "name": "search"
-          },
-          "thoughtSignature": "skip_thought_signature_validator"
+          }
         },
         {
           "functionCall": {
@@ -31,8 +30,7 @@ expression: b
             },
             "id": "fc_1",
             "name": "search"
-          },
-          "thoughtSignature": "skip_thought_signature_validator"
+          }
         }
       ],
       "role": "model"

@@ -249,6 +249,9 @@ proved this shape (HTTP 200 on `gemini-3.8-flash`). Outside the current turn, no
 This is a hard rule: a content with at least one valid signature is sent as received, and the
 other calls stay unsigned, as Gemini returned them. Google says the dummy can make the answer worse,
 so it is only the fallback. The dummy goes into one `const` with a doc comment and its source.
+The dummy is sent only for Gemini 3 and later ids (the part of the model id after the last `/` must not
+start with `gemini-1` or `gemini-2`). Gemini 1.x and 2.x requests keep today's shape and get no dummy;
+real signatures are still sent back on every model.
 
 **SMA-820 boundary.** The tool-result boundary in `merge_same_role` stays. Its doc comment changes:
 the reason is no longer "the SDK sends no signatures". See "Left for Sven".
