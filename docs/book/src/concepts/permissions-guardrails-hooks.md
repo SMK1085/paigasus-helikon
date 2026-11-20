@@ -85,7 +85,7 @@ A deferred tool call does not wait inside the run. The run ends, and the host de
 
 **The end of the run.** The run stops with `StopReason::Deferred { calls }`. The stream ends with `AgentEvent::RunDeferred`, after one `ApprovalRequested` event for each call. The session gets one `tool_deferred` event for each call. `collect_typed` returns `AgentError::Incomplete`, because the run has no completed answer.
 
-**Repeated call ids.** A handoff transfer call has no result while the child agent runs. Some providers make call ids for each response, for example `fc_0` from Gemini. Then a call of the child agent can have the same call id as the transfer call. Such a call is not deferred, because the session cannot keep the deferral open. The call is denied with the result "permission denied: deferral not possible: call id {call_id} repeats in this run".
+**Repeated call ids.** Some providers make call ids for each response, for example `fc_0` from Gemini. Then a call of the child agent can have the same call id as the transfer call. Such a call is deferred as usual. The parent emits the result of the transfer call directly after the handoff, so the transfer call is closed before the child agent starts. The session can then keep the deferral open.
 
 **The resume.** The host resolves each open call with the `deferral_id` of the call. Only a runner that supports resume can do this today: `TokioRunner`.
 

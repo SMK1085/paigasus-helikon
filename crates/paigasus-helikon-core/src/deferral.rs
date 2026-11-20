@@ -584,9 +584,9 @@ fn handoff_indices(
 ///
 /// A child view pairs each tool result with one open call of the view: the
 /// result closes the earliest open call with its call id. The view drops a
-/// result that closes no open call. The session recorder closes the
-/// transfer calls of a run with a synthetic result after the handoff, and
-/// the child view has no transfer call. A child call can use the call id of
+/// result that closes no open call. The parent emits the transfer result after the handoff (an older
+/// session can hold a late result), and the child view has no transfer
+/// call. A child call can use the call id of
 /// a transfer call, so a match by call id alone can keep two results for one
 /// call.
 fn agent_view(
@@ -986,8 +986,9 @@ mod tests {
 
     #[test]
     fn child_history_drops_the_recorder_result_of_a_transfer_call() {
-        // The session recorder closes each transfer call at the end of the
-        // run with a synthetic result.
+        // The parent now emits the transfer result after the handoff. A
+        // session stored before that change can still hold a late result
+        // that the recorder wrote at the end of the run.
         let mut events = three_level();
         for id in ["t1", "t2"] {
             events.push(SessionEvent::tool_returned(id, text("cancelled")));

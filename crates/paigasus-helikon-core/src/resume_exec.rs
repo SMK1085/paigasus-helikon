@@ -146,12 +146,12 @@ pub(crate) fn not_run_results(calls: &[PlannedCall]) -> Vec<AgentEvent> {
 /// inserted results in path order, for the agent to emit before the denial
 /// results.
 ///
-/// A transfer call that already has a result (the session recorder closes
-/// transfer calls at the end of a run) keeps that result, but this moves it
+/// A transfer call that already has a result keeps that result, but this moves it
 /// to directly after the call. The move changes only the model request, so
 /// it is not returned and the session gets no second result. A result
 /// belongs to the earliest open call with its call id, as in the session
-/// recorder.
+/// recorder. Now the parent emits the transfer result directly after the
+/// handoff. A late result exists only in a session stored before that change.
 pub(crate) fn close_open_transfers(
     plan: &crate::ResumePlan,
     conversation: &mut Vec<Item>,

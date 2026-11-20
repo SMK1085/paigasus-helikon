@@ -63,6 +63,13 @@ message list. Most variants map one-to-one to an `Item`; `HandoffOccurred` and
 `ToolDeferred` are audit-only and yield no message; `Compacted` drops the `original_count`
 preceding events' messages and emits the summary as an `Item::System`.
 
+`project()` also repairs a session that was stored before the handoff transfer
+result was emitted directly after the handoff. In such a log, the result of a
+transfer call comes late, after the child events. `project()` moves that result
+to directly after the transfer calls. It replaces the synthetic cancel text with
+the transfer text. The stored log does not change. Every snapshot has the
+repair.
+
 **Provider caveat:** a `Compacted` summary renders as `Item::System`, and both
 shipped provider translators reshape system messages — Anthropic hoists them to
 the top-level `system` field, OpenAI concatenates them at the top of the
