@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_012W2PXf94WTC2aV2jtdvHMD",
+  "agent_id": "a48f40273467050ea",
+  "task_description": "Final whole-branch review SMA-804",
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 199527,
+    "cache_read_tokens": 6180560,
+    "output_tokens": 34232,
+    "api_call_count": 44
+  },
+  "started_at": "2026-11-20T07:54:30.338351+01:00",
+  "completed_at": "2026-11-20T08:01:12.764349+01:00"
+}
