@@ -297,14 +297,23 @@ Local-review changes (2026-11-20):
 
 PR review changes (2026-11-20):
 
-- At `HandoffItem`, the mapper flushes every occurrence that had no `ToolCallItem` (the
-  non-transfer calls of the handoff response, which core drops) as a complete span, and
-  retires it. The transfer call keeps its occurrence, so its result after `HandoffItem`
-  finds its AG-UI id. Limit: under `ParallelAgent`, one branch's `HandoffItem` also
-  retires a sibling's unfinished calls.
+- At `HandoffItem`, the mapper only counts the handoff. It does not flush or retire a
+  call. Each occurrence records the count when it starts.
+- An unnamed delta for `x` is held when the current occurrence of `x` had no item and
+  started before the latest `HandoffItem`. More unnamed deltas for `x` join the held
+  chunks.
+- A named delta for `x` after held chunks is a new call, because core names a call
+  once. It starts a new occurrence (alias rule as before). The held chunks are its
+  first args.
+- The item for `x` before a name means that the held chunks belong to the current
+  occurrence. They go to it in order, before the item. A result for `x` and the run end
+  do the same.
+- So under `ParallelAgent` with unique ids, a sibling's unfinished call keeps its span
+  and its id across a handoff, as on `main`. The parent's dropped call is flushed at
+  the run end, as on `main`.
 - The hold-back rule is: an unnamed delta that starts an occurrence with an alias (AG-UI
-  id differs from the provider id) waits for its name. This covers a reused id, an id
-  retired at a handoff, and an id that an orphan result used.
+  id differs from the provider id) waits for its name. This covers a reused id and an id
+  that an orphan result used.
 - A result with no occurrence uses its provider id only when the run has not emitted
   that id. Otherwise it gets a new id by the same `{id}~{n}` rule.
 

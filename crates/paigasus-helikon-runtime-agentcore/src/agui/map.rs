@@ -53,12 +53,19 @@
 //! (`START`, `ARGS`, `END`, `RESULT`) uses that AG-UI id. A result for a provider id
 //! with no occurrence uses the provider id, or the next free `{id}~{n}` when the run
 //! already emitted that id, and the run counts the id as used.
-//! A `HandoffItem` retires every occurrence that did not have its `ToolCallItem`
-//! (core drops the non-transfer calls of a handoff response): the mapper closes or
-//! flushes each one as a complete span and removes its occurrence, so the child's
-//! next call with that id is a new occurrence. The transfer call keeps its occurrence,
-//! so the transfer result uses its AG-UI id. The limit: under `ParallelAgent`, the
-//! `HandoffItem` of one branch also retires the unfinished calls of a sibling branch.
+//! A `HandoffItem` changes no occurrence and emits no tool-call frame. Core drops the
+//! non-transfer calls of a handoff response, so such a call never gets its item, and
+//! the handoff child can reuse its provider id. The mapper decides this case lazily.
+//! An unnamed `ToolCallDelta` for `x` is held when the current occurrence of `x` had no
+//! item and started before the latest `HandoffItem`. Further unnamed deltas for `x`
+//! join the held chunks. If a named delta for `x` comes next, it is a new call (core
+//! names a call once): it starts a new occurrence, and the held chunks are its first
+//! args. If the `ToolCallItem` for `x` comes first, the held chunks belong to the
+//! current occurrence and go to it, in order, before the item. A result for `x` or the
+//! run end also gives the held chunks to the current occurrence. So under
+//! `ParallelAgent`, a sibling's unfinished call keeps its span and its id across a
+//! handoff. The transfer call had its item, so the transfer result uses its AG-UI id.
+//! The parent's dropped call is flushed at the run end, if it is still buffered then.
 //! AG-UI ids are unique per run only: each request gets a new mapper.
 //!
 //! A `helikon.approval` frame carries two ids. `tool_call_id` is the AG-UI id of the
@@ -104,6 +111,10 @@ struct Occurrence {
     named: bool,
     /// Whether the `ToolCallItem` of this occurrence was seen.
     item_seen: bool,
+    /// The number of `HandoffItem`s that the run had seen when this occurrence
+    /// started. An unnamed delta for an occurrence that started before the latest
+    /// `HandoffItem` and had no item is held (see the module doc).
+    handoffs_before: u32,
 }
 
 /// Stateful `AgentEvent` → AG-UI frame mapper for exactly one run.
@@ -160,6 +171,13 @@ pub(crate) struct EventMapper {
     awaiting_name: HashSet<String>,
     /// Whether a `STEP_STARTED` is currently unmatched.
     step_open: bool,
+    /// The number of `HandoffItem`s that the run has seen.
+    handoffs_seen: u32,
+    /// Held unnamed args chunks per provider id: `(provider id, chunks)`. The next
+    /// named delta for that id (a new call) or the next item, result or run end
+    /// (the current occurrence) decides where they go. A `Vec` for a deterministic
+    /// flush order.
+    held_chunks: Vec<(String, String)>,
 }
 
 impl EventMapper {
@@ -182,6 +200,8 @@ impl EventMapper {
             completed_calls: HashSet::new(),
             awaiting_name: HashSet::new(),
             step_open: false,
+            handoffs_seen: 0,
+            held_chunks: Vec::new(),
         }
     }
 
@@ -225,47 +245,27 @@ impl EventMapper {
                 args_delta,
             } => {
                 self.close_text(&mut out);
-                let call_id = &self.occurrence_for_delta(call_id, name.is_some());
-                if let Some(name) = name {
-                    self.awaiting_name.remove(call_id);
-                    self.call_names
-                        .entry(call_id.clone())
-                        .or_insert_with(|| name.clone());
-                }
-                if self.open_call.as_deref() == Some(call_id.as_str()) {
-                    // A continuation of the currently-open call.
-                    out.push(event::tool_call_args(call_id, args_delta));
-                } else if self.open_call.is_none() && !self.awaiting_name.contains(call_id) {
-                    // Nothing else is streaming and the call does not wait for its
-                    // name: open this call now. If chunks for it were buffered while
-                    // another call held the single active span, or while it waited
-                    // for its name, replay them first — they were received before this one, and a
-                    // client concatenating `TOOL_CALL_ARGS` deltas would otherwise
-                    // rebuild the call's arguments out of order.
-                    let buffered = self.take_buffered(call_id);
-                    out.push(event::tool_call_start(
-                        call_id,
-                        self.name_of(call_id),
-                        &self.current_message,
-                    ));
-                    if let Some(buffered) = buffered {
-                        out.push(event::tool_call_args(call_id, &buffered));
-                    }
-                    out.push(event::tool_call_args(call_id, args_delta));
-                    self.open_call = Some(call_id.clone());
-                } else {
-                    // A different call is streaming (AG-UI permits only one active
-                    // span), or this new occurrence of a reused id waits for its
-                    // name (`TOOL_CALL_START` carries it): buffer this id's content
-                    // rather than emitting a START now — it is flushed as a complete span once
-                    // its own `ToolCallItem` arrives, when a later delta resumes it
-                    // above, or at the latest when the run ends.
-                    match self.buffered_calls.iter_mut().find(|(id, _)| id == call_id) {
+                if name.is_none() && self.holds_chunk(call_id) {
+                    // The current occurrence started before the latest handoff and
+                    // had no item: the next name or item decides where this goes.
+                    match self.held_chunks.iter_mut().find(|(id, _)| id == call_id) {
                         Some(entry) => entry.1.push_str(args_delta),
-                        None => self
-                            .buffered_calls
-                            .push((call_id.clone(), args_delta.clone())),
+                        None => self.held_chunks.push((call_id.clone(), args_delta.clone())),
                     }
+                } else {
+                    // A name after held chunks proves a new call: the held chunks
+                    // are its first args, received before this delta.
+                    let held = if name.is_some() {
+                        self.take_held(call_id)
+                    } else {
+                        None
+                    };
+                    let agui_id =
+                        self.occurrence_for_delta(call_id, name.is_some(), held.is_some());
+                    if let Some(held) = held {
+                        self.buffered_calls.push((agui_id.clone(), held));
+                    }
+                    self.feed_delta(&agui_id, name.as_deref(), args_delta, &mut out);
                 }
             }
             AgentEvent::ToolCallItem { item } => {
@@ -276,6 +276,9 @@ impl EventMapper {
                     args,
                 } = item
                 {
+                    // Held chunks for this id belong to the current occurrence: the
+                    // item comes after all deltas of its call.
+                    self.release_held(call_id, &mut out);
                     let call_id = &self.occurrence_for_item(call_id);
                     if self.open_call.as_deref() == Some(call_id.as_str()) {
                         // The call this item describes is the one currently open.
@@ -308,8 +311,11 @@ impl EventMapper {
                 }
             }
             AgentEvent::ToolOutputItem { item } => {
-                self.close_call(&mut out);
                 self.close_text(&mut out);
+                if let Item::ToolResult { call_id, .. } = item {
+                    self.release_held(call_id, &mut out);
+                }
+                self.close_call(&mut out);
                 if let Item::ToolResult { call_id, content } = item {
                     // The result belongs to the current occurrence of its provider id:
                     // in a sequential flow a result comes before the next call that
@@ -366,7 +372,9 @@ impl EventMapper {
                 self.streamed_text = false;
             }
             AgentEvent::HandoffItem { .. } => {
-                self.retire_unfinished_calls(&mut out);
+                // Only a marker: the next unnamed delta for an unfinished call is held
+                // until a name or an item decides its call (see the module doc).
+                self.handoffs_seen += 1;
                 out.push(self.custom("helikon.handoff", ev));
             }
             AgentEvent::AgentUpdated { .. } => out.push(self.custom("helikon.agent_updated", ev)),
@@ -493,11 +501,12 @@ impl EventMapper {
     /// attaches to the occurrence that the first delta started. When an unnamed
     /// delta starts a new occurrence that gets an alias (a reused id: the current
     /// occurrence already had its item, or the run used the id before, for example
-    /// for an occurrence that a handoff retired), the new occurrence waits for its
-    /// name (`awaiting_name`).
-    fn occurrence_for_delta(&mut self, call_id: &str, has_name: bool) -> String {
+    /// because an orphan result used it), the new occurrence waits for its name
+    /// (`awaiting_name`). `force_new` starts a new occurrence in all cases: a named
+    /// delta after held chunks is a new call.
+    fn occurrence_for_delta(&mut self, call_id: &str, has_name: bool, force_new: bool) -> String {
         if let Some(occ) = self.current.get_mut(call_id) {
-            if !(occ.item_seen || (has_name && occ.named)) {
+            if !(force_new || occ.item_seen || (has_name && occ.named)) {
                 occ.named |= has_name;
                 return occ.agui_id.clone();
             }
@@ -541,6 +550,7 @@ impl EventMapper {
                 agui_id: agui_id.clone(),
                 named: false,
                 item_seen: false,
+                handoffs_before: self.handoffs_seen,
             },
         );
         agui_id
@@ -560,49 +570,78 @@ impl EventMapper {
         }
     }
 
-    /// Retire every occurrence that did not have its `ToolCallItem` when a
-    /// `HandoffItem` arrives. Core drops the non-transfer calls of a handoff
-    /// response, so no item comes for them. Each one that is still open or buffered
-    /// is closed or flushed as a complete span, and its provider id loses its
-    /// occurrence, so the child's next call with that id starts a new occurrence.
-    /// The ids stay in `used_ids`. Occurrences that had their item (the transfer
-    /// call) stay, so the transfer result still finds its AG-UI id.
-    fn retire_unfinished_calls(&mut self, out: &mut Vec<Value>) {
-        let mut retired: HashSet<String> = HashSet::new();
-        self.current.retain(|_, occ| {
-            if occ.item_seen {
-                true
-            } else {
-                retired.insert(occ.agui_id.clone());
-                false
+    /// Feed one args chunk to AG-UI id `call_id`: emit it in the open span, open the
+    /// span, or buffer it (see the `ToolCallDelta` arm).
+    fn feed_delta(
+        &mut self,
+        call_id: &str,
+        name: Option<&str>,
+        args_delta: &str,
+        out: &mut Vec<Value>,
+    ) {
+        if let Some(name) = name {
+            self.awaiting_name.remove(call_id);
+            self.call_names
+                .entry(call_id.to_owned())
+                .or_insert_with(|| name.to_owned());
+        }
+        if self.open_call.as_deref() == Some(call_id) {
+            // A continuation of the currently-open call.
+            out.push(event::tool_call_args(call_id, args_delta));
+        } else if self.open_call.is_none() && !self.awaiting_name.contains(call_id) {
+            // Nothing else is streaming and the call does not wait for its
+            // name: open this call now. If chunks for it were buffered while
+            // another call held the single active span, or while it waited
+            // for its name, replay them first — they were received before this one, and a
+            // client concatenating `TOOL_CALL_ARGS` deltas would otherwise
+            // rebuild the call's arguments out of order.
+            let buffered = self.take_buffered(call_id);
+            out.push(event::tool_call_start(
+                call_id,
+                self.name_of(call_id),
+                &self.current_message,
+            ));
+            if let Some(buffered) = buffered {
+                out.push(event::tool_call_args(call_id, &buffered));
             }
-        });
-        if retired.is_empty() {
-            return;
+            out.push(event::tool_call_args(call_id, args_delta));
+            self.open_call = Some(call_id.to_owned());
+        } else {
+            // A different call is streaming (AG-UI permits only one active
+            // span), or this new occurrence of a reused id waits for its
+            // name (`TOOL_CALL_START` carries it): buffer this id's content
+            // rather than emitting a START now — it is flushed as a complete span once
+            // its own `ToolCallItem` arrives, when a later delta resumes it
+            // above, or at the latest when the run ends.
+            match self.buffered_calls.iter_mut().find(|(id, _)| id == call_id) {
+                Some(entry) => entry.1.push_str(args_delta),
+                None => self
+                    .buffered_calls
+                    .push((call_id.to_owned(), args_delta.to_owned())),
+            }
         }
-        for id in &retired {
-            self.awaiting_name.remove(id);
-        }
-        let open_retired = self
-            .open_call
-            .as_ref()
-            .is_some_and(|id| retired.contains(id));
-        let buffered_retired = self
-            .buffered_calls
-            .iter()
-            .any(|(id, _)| retired.contains(id));
-        if !(open_retired || buffered_retired) {
-            return;
-        }
-        self.close_text(out);
-        self.close_call(out);
-        let (flush, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.buffered_calls)
-            .into_iter()
-            .partition(|(id, _)| retired.contains(id));
-        self.buffered_calls = keep;
-        for (id, args) in flush {
-            let name = self.name_of(&id).to_owned();
-            self.emit_span(&id, &name, &args, out);
+    }
+
+    /// Whether an unnamed delta for provider id `call_id` must be held: its current
+    /// occurrence had no item and started before the latest `HandoffItem`.
+    fn holds_chunk(&self, call_id: &str) -> bool {
+        self.current
+            .get(call_id)
+            .is_some_and(|occ| !occ.item_seen && occ.handoffs_before < self.handoffs_seen)
+    }
+
+    /// Remove and return the chunks held for provider id `call_id`, if any.
+    fn take_held(&mut self, call_id: &str) -> Option<String> {
+        let pos = self.held_chunks.iter().position(|(id, _)| id == call_id)?;
+        Some(self.held_chunks.remove(pos).1)
+    }
+
+    /// Give the chunks held for provider id `call_id`, if any, to its current
+    /// occurrence.
+    fn release_held(&mut self, call_id: &str, out: &mut Vec<Value>) {
+        if let Some(held) = self.take_held(call_id) {
+            let agui_id = self.agui_id_of(call_id);
+            self.feed_delta(&agui_id, None, &held, out);
         }
     }
 
@@ -649,11 +688,17 @@ impl EventMapper {
         }
     }
 
-    /// Close every still-open pair: text/thinking, the open tool call, every
+    /// Close every still-open pair: text/thinking, held chunks (given to their current
+    /// occurrence), the open tool call, every
     /// still-buffered tool call (each as a complete span), then the step. Nothing
     /// may be left buffered once a run terminates.
     fn close_all(&mut self, out: &mut Vec<Value>) {
         self.close_text(out);
+        // Held chunks that no name or item decided belong to the current occurrence.
+        for (id, held) in std::mem::take(&mut self.held_chunks) {
+            let agui_id = self.agui_id_of(&id);
+            self.feed_delta(&agui_id, None, &held, out);
+        }
         self.close_call(out);
         for (id, args) in std::mem::take(&mut self.buffered_calls) {
             let name = self.name_of(&id).to_owned();
@@ -853,9 +898,10 @@ mod tests {
     ///
     /// A provider id can repeat in one run (Gemini numbers its calls `fc_{n}` per
     /// response). The oracle finds the occurrences from the fixture's own structure,
-    /// not from the mapper's rule: it cuts the events at each `TurnStarted` and each
-    /// `HandoffItem`, and each provider id seen (as a delta or an item) in one cut is
-    /// one occurrence. Occurrence 1 of `x` is `x`, a later one is `x~n` with the
+    /// not from the mapper's rule: it cuts the events at each `TurnStarted`, and each
+    /// provider id seen (as a delta or an item) in one cut is one occurrence. A
+    /// `HandoffItem` is not a cut: in the fixtures, a handoff child's calls come after
+    /// its own `TurnStarted`, and a sibling branch's call can cross a handoff. Occurrence 1 of `x` is `x`, a later one is `x~n` with the
     /// smallest `n` ≥ 2 that no earlier occurrence took. This holds for the
     /// sequential fixtures only: a `ParallelAgent` fixture, where a sibling's
     /// `TurnStarted` cuts one call in two, must use [`assert_tool_call_nesting`].
@@ -911,7 +957,7 @@ mod tests {
         let mut want_results: Vec<String> = Vec::new();
         for e in events {
             match e {
-                AgentEvent::TurnStarted { .. } | AgentEvent::HandoffItem { .. } => cut += 1,
+                AgentEvent::TurnStarted { .. } => cut += 1,
                 AgentEvent::ToolCallDelta {
                     call_id,
                     args_delta,
@@ -2371,12 +2417,13 @@ mod tests {
     }
 
     /// SMA-810 (G5): core drops the non-transfer calls of a handoff response, so
-    /// `search fc_0` never gets a `ToolCallItem`. The `HandoffItem` retires it: its
-    /// span is complete, and the child's `lookup fc_0` is a new occurrence. The
-    /// child's first delta has no name, so the span waits for it and opens as
-    /// `lookup` with all of its args. The transfer result uses the transfer's id.
+    /// `search fc_0` never gets a `ToolCallItem`. The child's first delta for `fc_0`
+    /// has no name, so the mapper holds it. The next delta carries the name `lookup`:
+    /// it starts a new occurrence `fc_0~2`, and the held chunk is its first args. The
+    /// `search` span keeps only its own args. The transfer result uses the
+    /// transfer's id.
     #[test]
-    fn a_handoff_retires_the_unfinished_calls_of_the_handoff_response() {
+    fn a_held_chunk_after_a_handoff_goes_to_the_call_that_its_name_starts() {
         let events = vec![
             turn(1),
             tc_delta("fc_0", Some("search"), "{\"q\":\"s\"}"),
@@ -2418,6 +2465,87 @@ mod tests {
         assert_eq!(args_of("fc_0"), "{\"q\":\"s\"}", "{frames:?}");
         assert_eq!(args_of("fc_0~2"), "{\"id\":7}", "{frames:?}");
         assert_eq!(result_ids(&frames), vec!["fc_1", "fc_0~2"], "{frames:?}");
+    }
+
+    /// SMA-810 (G5): under `ParallelAgent`, branch B hands off while branch A's call
+    /// `a` has its deltas but not its item. The `HandoffItem` changes nothing for
+    /// `a`: A's unnamed chunk after the handoff is held, and A's item gives it to `a`.
+    /// With unique provider ids the frames are exactly the frames of the mapper
+    /// before SMA-810: one span `a` named `lookup` with all of its args, and the
+    /// result on `a`. No alias `a~2` appears.
+    #[test]
+    fn a_sibling_call_across_a_handoff_keeps_its_span_and_its_id() {
+        let handoff = AgentEvent::HandoffItem {
+            from: "triage".to_owned(),
+            to: "billing".to_owned(),
+        };
+        let events = vec![
+            turn(1),
+            turn(1),
+            tc_delta("t", Some("transfer_to_billing"), "{}"),
+            tc_delta("a", Some("lookup"), "{\"q\":"),
+            tc_delta("a", None, "1,"),
+            tc_item("t", "transfer_to_billing"),
+            handoff.clone(),
+            tc_result("t", "transferred to billing"),
+            tc_delta("a", None, "\"r\":2}"),
+            tc_item("a", "lookup"),
+            tc_result("a", "found"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
+        assert_eq!(
+            frames,
+            vec![
+                event::step_started("turn"),
+                event::step_finished("turn"),
+                event::step_started("turn"),
+                event::tool_call_start("t", "transfer_to_billing", ""),
+                event::tool_call_args("t", "{}"),
+                event::tool_call_end("t"),
+                event::custom("helikon.handoff", to_value(&handoff)),
+                event::tool_call_result("t", "transferred to billing"),
+                event::tool_call_start("a", "lookup", ""),
+                event::tool_call_args("a", "{\"q\":1,"),
+                event::tool_call_args("a", "\"r\":2}"),
+                event::tool_call_end("a"),
+                event::tool_call_result("a", "found"),
+                event::step_finished("turn"),
+                event::run_finished("t1", "r1"),
+            ],
+        );
+    }
+
+    /// SMA-810 (G5): the run ends while chunks are held and no name or item decided
+    /// them. They go to the current occurrence, so no args chunk is lost.
+    #[test]
+    fn held_chunks_go_to_the_current_occurrence_at_the_run_end() {
+        let events = vec![
+            turn(1),
+            tc_delta("t", Some("transfer_to_billing"), "{}"),
+            tc_delta("a", Some("lookup"), "{\"q\":"),
+            tc_item("t", "transfer_to_billing"),
+            AgentEvent::HandoffItem {
+                from: "triage".to_owned(),
+                to: "billing".to_owned(),
+            },
+            tc_delta("a", None, "1}"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_call_nesting(&frames);
+        let args: String = frames
+            .iter()
+            .filter(|f| f["type"] == "TOOL_CALL_ARGS" && f["toolCallId"] == "a")
+            .map(|f| f["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(args, "{\"q\":1}", "{frames:?}");
+        assert_eq!(
+            starts(&frames),
+            pairs(&[("t", "transfer_to_billing"), ("a", "lookup")]),
+            "no alias: {frames:?}"
+        );
     }
 
     /// SMA-810 (G5): a result for a call that is still buffered (only possible under
