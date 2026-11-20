@@ -483,4 +483,9 @@ async fn inject_then_defer_then_resume() {
     assert_eq!((seen[0].completed_turn, seen[0].next_turn), (0, 1));
     let events = session.events(None).await.unwrap();
     assert!(open_deferrals(&events).is_empty(), "{events:?}");
+    assert_eq!(
+        tool_returned_count(&events),
+        3,
+        "resumed run reaches the normal tool boundary: {events:?}"
+    );
 }
