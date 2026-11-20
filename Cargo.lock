@@ -4562,6 +4562,7 @@ version = "0.1.1"
 dependencies = [
  "jiff",
  "paigasus-helikon-core",
+ "serde_json",
  "tokio",
 ]
 
