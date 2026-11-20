@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "bd1a54032ac3",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-810-handoff-transfer-call-has-no-tool-result-so",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-sma-810-handoff-transfer-result-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/1a54032ac3/0/metadata.json",
+      "transcript": "/bd/1a54032ac3/0/full.jsonl",
+      "compact_transcript": "/bd/1a54032ac3/0/transcript.jsonl",
+      "content_hash": "/bd/1a54032ac3/0/content_hash.txt",
+      "prompt": "/bd/1a54032ac3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 3179,
+    "cache_read_tokens": 1133406,
+    "output_tokens": 2116,
+    "api_call_count": 3,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 3829,
+      "cache_read_tokens": 238899,
+      "output_tokens": 3577,
+      "api_call_count": 2
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
