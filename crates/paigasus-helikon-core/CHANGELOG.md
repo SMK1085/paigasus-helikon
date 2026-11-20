@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(core)* SMA-803 add deferred tool calls ([#344](https://github.com/SMK1085/paigasus-helikon/pull/344))
 
+### Upgrade notes
+
+- Once a host stores a `tool_deferred` event, it cannot roll back below this version, because an older reader cannot parse the row. Enable deferral only after every reader of the session store runs this version.
+
 ## [0.5.21](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.20...paigasus-helikon-core-v0.5.21) - 2026-11-12
 
 ### Other
