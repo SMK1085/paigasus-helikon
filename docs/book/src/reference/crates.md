@@ -1,13 +1,13 @@
 # Crate overview
 
-The workspace is **21 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself), plus three further internal, non-published Cargo workspace members outside `crates/` (see below). This page is the ownership map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
+The workspace is **21 crates** under `crates/`, all named `paigasus-helikon-*` (plus the `paigasus-helikon` facade itself), plus four further internal, non-published Cargo workspace members outside `crates/` (see below). This page is the ownership map: one row per crate, what it owns, whether it is published, and how the crates depend on each other.
 
 For orientation — how to pick crates and add them to your `Cargo.toml` — see [workspace layout](../getting-started/workspace-layout.md). For the rendered rustdoc, see [API docs](./api-docs.md).
 
 ## Dependency direction
 
 - `paigasus-helikon-core` is the root: it owns the trait surface, the agent loop, the event stream, and the carrier types. It depends on no other workspace crate.
-- The provider, session, tool, MCP, and runtime crates each depend on `core` and on nothing else in the workspace (`-tools` carries a path-only dev-dep on `-providers-openai` for an example; it is stripped from the published manifest).
+- The provider, session, tool, MCP, and runtime crates each depend on `core` and on nothing else in the workspace (`-tools` carries a path-only dev-dep on `-providers-openai` for an example; it is stripped from the published manifest; `-core` and `-runtime-tokio` carry a path-only dev-dep on the internal `paigasus-helikon-deferral-testkit` for their tests, stripped the same way).
 - `paigasus-helikon-macros` is a proc-macro crate; its `#[tool]` expansion targets `core` types in the consumer's crate.
 - `paigasus-helikon` is the **facade**: it re-exports `core` unconditionally and the sibling crates behind Cargo features. Application crates normally depend on the facade alone and turn on the features they need.
 - `paigasus-helikon-cli` consumes `core` and the sibling crates it needs (`-evals`, `-runtime-tokio`, `-providers-openai`, `-providers-anthropic`, `-mcp`) directly — not the facade. It publishes to crates.io as a binary crate; its lib target is internal (`missing_docs` opted out) and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves.
@@ -42,13 +42,14 @@ This table deliberately carries no version numbers. Each published crate's name 
 
 Every crate under `crates/` publishes to crates.io — the last two stubs (`-evals`, `-cli`) ascended to real implementations in SMA-332/SMA-333, following the four-remaining-crates ascend before them (`-runtime-axum`, `-runtime-temporal`, `-runtime-agentcore`).
 
-The workspace has three further members outside `crates/`:
+The workspace has four further members outside `crates/`:
 
 - `paigasus-helikon-runtime-http-conformance` (under `tests/runtime-http-conformance/`, `version = "0.0.0"`, `publish = false`) — an internal axum⇔actix wire-format conformance suite exercising both HTTP runtimes against the same test cases.
 - `paigasus-helikon-workspace-lints` (under `tests/workspace-lints/`, `version = "0.0.0"`, `publish = false`) — an internal workspace-wide source-lint suite; its current lint asserts that no `tracing` macro passes `target`/`parent` with `=` instead of `:` (which would silently record a field and leave the event on its module-path target).
 - `paigasus-helikon-provider-stream-conformance` (under `tests/provider-stream-conformance/`, `version = "0.0.0"`, `publish = false`) — the cross-provider `Model::invoke` stream event-ordering conformance suite, driving every provider translator over a paced HTTP server.
+- `paigasus-helikon-deferral-testkit` (under `tests/deferral-testkit/`, `version = "0.0.0"`, `publish = false`) — the test helpers (the tool-pairing oracle, a request-recording model, the legacy-layout session rewrite) that the core and runtime-tokio integration tests share.
 
-All three are intentional non-published test harnesses, not stubs.
+All four are intentional non-published members, not stubs: three test harnesses and one shared test-helper library.
 
 ## Facade feature → re-export map
 
