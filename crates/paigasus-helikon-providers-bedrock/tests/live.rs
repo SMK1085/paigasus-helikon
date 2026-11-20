@@ -3,7 +3,7 @@
 //! All tests are `#[ignore]` so they don't run in CI.
 //! Activate locally with:
 //! ```sh
-//! BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0 \
+//! BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-5-5 \
 //! AWS_DEFAULT_REGION=us-east-1 \
 //! cargo test -p paigasus-helikon-providers-bedrock -- --ignored
 //! ```
@@ -45,6 +45,71 @@ fn user(s: &str) -> Item {
     Item::UserMessage {
         content: vec![ContentPart::Text { text: s.to_owned() }],
     }
+}
+
+fn assistant(s: &str) -> Item {
+    Item::AssistantMessage {
+        content: vec![ContentPart::Text { text: s.to_owned() }],
+        agent: None,
+    }
+}
+
+fn tool_call(call_id: &str, name: &str) -> Item {
+    Item::ToolCall {
+        call_id: call_id.to_owned(),
+        name: name.to_owned(),
+        args: serde_json::json!({}),
+    }
+}
+
+fn tool_result(call_id: &str, text: &str) -> Item {
+    Item::ToolResult {
+        call_id: call_id.to_owned(),
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
+    }
+}
+
+fn ping_tool() -> ToolDef {
+    ToolDef {
+        name: "ping".to_owned(),
+        description: "Ping a host".to_owned(),
+        schema: serde_json::json!({"type": "object", "properties": {}}),
+    }
+}
+
+/// Send `messages` (with optional `tools`) and assert the stream ends with no
+/// `Err` event and carries at least one `TokenDelta` or `Finish` event.
+async fn send_and_assert_ok(model_id: &str, messages: Vec<Item>, tools: Vec<ToolDef>) {
+    let model = BedrockModel::from_env(model_id)
+        .await
+        .expect("from_env should succeed");
+
+    let mut req = ModelRequest::new();
+    req.messages = messages;
+    req.tools = tools;
+    req.model_settings.max_output_tokens = Some(64);
+
+    let mut s = model
+        .invoke(req, CancellationToken::new())
+        .await
+        .expect("invoke should succeed");
+
+    let mut had_error = false;
+    let mut saw_output = false;
+    while let Some(ev) = s.next().await {
+        match ev {
+            Ok(ModelEvent::TokenDelta { .. } | ModelEvent::Finish { .. }) => saw_output = true,
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("[live] stream error: {e:?}");
+                had_error = true;
+            }
+        }
+    }
+    assert!(!had_error, "stream must complete without error");
+    assert!(saw_output, "stream must carry a TokenDelta or Finish event");
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -227,4 +292,120 @@ async fn structured_output_synthesis() {
         parsed["operation"].is_string(),
         "expected 'operation' string in response"
     );
+}
+
+/// Spec case (a): a blank user turn after a tool result must be dropped, not
+/// sent as an empty text block.
+#[tokio::test]
+#[ignore]
+async fn blank_user_after_tool_result_is_dropped() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    send_and_assert_ok(
+        &model_id,
+        vec![
+            user("Ping the host."),
+            Item::AssistantMessage {
+                content: vec![ContentPart::ToolUse {
+                    call_id: "tu_1".to_owned(),
+                    name: "ping".to_owned(),
+                    args: serde_json::json!({}),
+                }],
+                agent: None,
+            },
+            tool_result("tu_1", "pong"),
+            user(""),
+        ],
+        vec![ping_tool()],
+    )
+    .await;
+}
+
+/// Spec case (b): a replayed blank user turn between real turns is dropped.
+#[tokio::test]
+#[ignore]
+async fn replayed_blank_user_is_dropped() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    send_and_assert_ok(
+        &model_id,
+        vec![
+            user("Name a color."),
+            assistant("Blue."),
+            user(""),
+            user("Name another."),
+        ],
+        vec![],
+    )
+    .await;
+}
+
+/// Spec case (c): a whitespace-only assistant turn before a tool round is
+/// dropped without reordering the tool round.
+#[tokio::test]
+#[ignore]
+async fn whitespace_assistant_before_tool_round_keeps_order() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    send_and_assert_ok(
+        &model_id,
+        vec![
+            user("Ping the host."),
+            assistant("  "),
+            tool_call("tu_1", "ping"),
+            tool_result("tu_1", "pong"),
+            assistant("The host answered."),
+            user("Thanks. Say bye."),
+        ],
+        vec![ping_tool()],
+    )
+    .await;
+}
+
+/// Spec case (d): an assistant-first conversation is sent without a
+/// placeholder user turn. Only Anthropic Claude models accept this.
+#[tokio::test]
+#[ignore]
+async fn assistant_first_is_sent_without_placeholder() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !model_id.contains("anthropic.claude") {
+        eprintln!(
+            "[live] SKIPPING assistant_first_is_sent_without_placeholder: \
+             {model_id} is not an anthropic.claude model"
+        );
+        return;
+    }
+    send_and_assert_ok(
+        &model_id,
+        vec![assistant("Hello."), user("Say hi.")],
+        vec![],
+    )
+    .await;
+}
+
+/// Spec case (e): a whitespace-only system item produces no system block.
+#[tokio::test]
+#[ignore]
+async fn whitespace_only_system_is_absent() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    send_and_assert_ok(
+        &model_id,
+        vec![
+            Item::System {
+                content: vec![ContentPart::Text {
+                    text: "  \n".to_owned(),
+                }],
+            },
+            user("Say hi."),
+        ],
+        vec![],
+    )
+    .await;
 }

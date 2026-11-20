@@ -3,14 +3,15 @@
 //! Rules per SMA-329 spec §6 "Wire translation":
 //! - `Item::System` → `SystemContentBlock::Text`; system blocks are never mixed
 //!   into the `messages` slice.
-//! - Strictly alternating user / assistant turns required by Converse.
-//! - First message must be `user` (a synthetic empty user turn is prepended when
-//!   the first real item is assistant-role).
+//! - Blank text (empty or whitespace-only) is never sent: Converse rejects it.
+//!   A dropped block leaves no placeholder. An `Item::System` with only blank
+//!   text adds no system block.
+//! - Adjacent same-role turns are joined into one turn.
 //! - `Item::ToolCall` / `ContentPart::ToolUse` → `ContentBlock::ToolUse` on
 //!   the assistant turn.
 //! - `Item::ToolResult` queued pending → flushed as `ContentBlock::ToolResult`
 //!   blocks prepended to the next user turn.
-//! - Empty conversation (no messages after system extraction) → error.
+//! - No message with content after blank text is dropped → error.
 
 use aws_sdk_bedrockruntime::types::{
     ContentBlock, ConversationRole, Message, SystemContentBlock, ToolResultBlock,
@@ -28,14 +29,16 @@ pub(crate) struct TranslatedMessages {
     /// System prompt blocks (`SystemContentBlock::Text`) extracted from
     /// `Item::System` entries.
     pub(crate) system: Vec<SystemContentBlock>,
-    /// Strictly alternating conversation turns.
+    /// Conversation turns. Adjacent same-role turns are joined.
     pub(crate) messages: Vec<Message>,
 }
 
 /// Translate the conversation into Bedrock Converse `Message`s.
 ///
-/// Returns an error when the conversation is empty (has no non-system items
-/// after stripping `Item::System` entries).
+/// Returns an error when no message with content remains. Empty or
+/// whitespace-only text and unsupported parts are not sent. Also returns an
+/// error when the last user message had only empty or whitespace-only text and
+/// the request would then end with an assistant message.
 pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, ModelError> {
     let mut system: Vec<SystemContentBlock> = Vec::new();
     let mut messages: Vec<Message> = Vec::new();
@@ -45,6 +48,9 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
     let mut pending_assistant: Vec<ContentBlock> = Vec::new();
     // Pending ToolResult blocks to prepend to the next user turn.
     let mut pending_tool_results: Vec<ContentBlock> = Vec::new();
+    // `true` when the latest user message had blank text and produced no
+    // block. Dropping it could leave the request ending with an assistant turn.
+    let mut last_user_dropped = false;
 
     /// Flush `pending_assistant` into an assistant Message on `messages`.
     ///
@@ -72,16 +78,28 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
         }
     }
 
-    /// Flush `pending_tool_results` into a new user Message on `messages`.
+    /// Flush `pending_tool_results` into a user Message on `messages`.
+    ///
+    /// If the last message is already a user turn, the results are appended to
+    /// it (coalescing) rather than creating a new turn.
     fn flush_user_results(messages: &mut Vec<Message>, pending: &mut Vec<ContentBlock>) {
         if !pending.is_empty() {
             let content = std::mem::take(pending);
-            let msg = Message::builder()
-                .role(ConversationRole::User)
-                .set_content(Some(content))
-                .build()
-                .expect("role + non-empty content always valid");
-            messages.push(msg);
+            if messages
+                .last()
+                .map(|m| m.role == ConversationRole::User)
+                .unwrap_or(false)
+            {
+                let last = messages.last_mut().unwrap();
+                last.content.extend(content);
+            } else {
+                let msg = Message::builder()
+                    .role(ConversationRole::User)
+                    .set_content(Some(content))
+                    .build()
+                    .expect("role + non-empty content always valid");
+                messages.push(msg);
+            }
         }
     }
 
@@ -93,17 +111,24 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 flush_assistant(&mut messages, &mut pending_assistant);
                 flush_user_results(&mut messages, &mut pending_tool_results);
                 let text = text_of(content);
-                system.push(SystemContentBlock::Text(text));
+                if !is_blank(&text) {
+                    system.push(SystemContentBlock::Text(text));
+                }
             }
 
             Item::UserMessage { content } => {
                 flush_assistant(&mut messages, &mut pending_assistant);
                 // Pending tool results precede any user text in this turn.
                 let mut blocks: Vec<ContentBlock> = std::mem::take(&mut pending_tool_results);
+                let mut had_blank_text = false;
                 for part in content {
                     match part {
                         ContentPart::Text { text } => {
-                            blocks.push(ContentBlock::Text(text.clone()));
+                            if is_blank(text) {
+                                had_blank_text = true;
+                            } else {
+                                blocks.push(ContentBlock::Text(text.clone()));
+                            }
                         }
                         ContentPart::ToolResult { call_id, content } => {
                             // Native Anthropic-shaped ToolResult inside a UserMessage.
@@ -118,6 +143,7 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                         }
                     }
                 }
+                last_user_dropped = had_blank_text && blocks.is_empty();
                 if !blocks.is_empty() {
                     if messages
                         .last()
@@ -139,13 +165,13 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
             }
 
             Item::AssistantMessage { content, .. } => {
-                flush_user_results(&mut messages, &mut pending_tool_results);
-                flush_assistant(&mut messages, &mut pending_assistant);
                 let mut blocks: Vec<ContentBlock> = Vec::new();
                 for part in content {
                     match part {
                         ContentPart::Text { text } => {
-                            blocks.push(ContentBlock::Text(text.clone()));
+                            if !is_blank(text) {
+                                blocks.push(ContentBlock::Text(text.clone()));
+                            }
                         }
                         ContentPart::ToolUse {
                             call_id,
@@ -174,7 +200,26 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                         }
                     }
                 }
-                if !blocks.is_empty() {
+                // An assistant item with no blocks acts as if it were absent:
+                // it flushes nothing, so an open tool round stays whole.
+                //
+                // A message made only of tool uses is the nested form of
+                // `Item::ToolCall`. Inside an open round (results pending,
+                // not all calls answered) it joins that round, as a call
+                // does. A flush would put a user turn that lacks some
+                // results right after the open assistant turn.
+                if !blocks.is_empty()
+                    && blocks.iter().all(|b| matches!(b, ContentBlock::ToolUse(_)))
+                    && !pending_tool_results.is_empty()
+                    && !round_is_answered(&messages, &pending_tool_results)
+                {
+                    last_user_dropped = false;
+                    pending_assistant.extend(blocks);
+                } else if !blocks.is_empty() {
+                    last_user_dropped = false;
+                    // Queued calls go first, then the results that answer them.
+                    flush_assistant(&mut messages, &mut pending_assistant);
+                    flush_user_results(&mut messages, &mut pending_tool_results);
                     if messages
                         .last()
                         .map(|m| m.role == ConversationRole::Assistant)
@@ -199,6 +244,15 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 name,
                 args,
             } => {
+                last_user_dropped = false;
+                // A new call follows results already seen. Close that user
+                // turn only when the last assistant round is fully answered;
+                // otherwise the call joins that round.
+                if !pending_tool_results.is_empty()
+                    && round_is_answered(&messages, &pending_tool_results)
+                {
+                    flush_user_results(&mut messages, &mut pending_tool_results);
+                }
                 // Queue onto the pending assistant turn (flushed when a user
                 // turn / system / end-of-input is encountered).
                 let tool_use = ToolUseBlock::builder()
@@ -211,6 +265,7 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
             }
 
             Item::ToolResult { call_id, content } => {
+                last_user_dropped = false;
                 // Flush the preceding assistant turn that requested this result.
                 flush_assistant(&mut messages, &mut pending_assistant);
                 // Queue onto pending user / tool-result turn.
@@ -231,27 +286,57 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
     flush_assistant(&mut messages, &mut pending_assistant);
     flush_user_results(&mut messages, &mut pending_tool_results);
 
-    // Guard: empty conversation.
+    // Guard: nothing to send.
     if messages.is_empty() {
         return Err(ModelError::Other(anyhow::anyhow!(
-            "Bedrock Converse requires at least one non-system message"
+            "no message with content to send (empty or whitespace-only text and unsupported parts are not sent)"
         )));
     }
 
-    // Guard: first message must be user — synthesize a minimal user turn.
-    if messages[0].role == ConversationRole::Assistant {
-        let placeholder = Message::builder()
-            .role(ConversationRole::User)
-            .content(ContentBlock::Text(String::new()))
-            .build()
-            .expect("placeholder user turn always valid");
-        messages.insert(0, placeholder);
+    // Guard: a dropped blank user message must not leave the request ending
+    // with an assistant turn. Converse would treat that as a prefill.
+    if last_user_dropped
+        && messages
+            .last()
+            .is_some_and(|m| m.role == ConversationRole::Assistant)
+    {
+        return Err(ModelError::Other(anyhow::anyhow!(
+            "the last user message had only empty or whitespace-only text, which is not sent; the request would end with an assistant message"
+        )));
     }
 
     Ok(TranslatedMessages { system, messages })
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// `true` when `text` is empty or only whitespace. Converse rejects such blocks.
+fn is_blank(text: &str) -> bool {
+    text.trim().is_empty()
+}
+
+/// `true` when every `ToolUse` id in the trailing run of assistant messages
+/// has a matching `ToolResult` in `results`. Converse joins adjacent assistant
+/// messages into one turn, so the whole run is one round. Also `true` when the
+/// last message is not an assistant message, so the results then flush as
+/// before.
+fn round_is_answered(messages: &[Message], results: &[ContentBlock]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .take_while(|m| m.role == ConversationRole::Assistant)
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::ToolUse(tu) => Some(tu.tool_use_id.as_str()),
+            _ => None,
+        })
+        .all(|id| {
+            results.iter().any(|r| match r {
+                ContentBlock::ToolResult(tr) => tr.tool_use_id == id,
+                _ => false,
+            })
+        })
+}
 
 /// Extract and concatenate all text from a `Vec<ContentPart>`.
 fn text_of(parts: &[ContentPart]) -> String {
@@ -408,12 +493,13 @@ mod tests {
     }
 
     #[test]
-    fn assistant_first_gets_synthetic_user_prepended() {
+    fn assistant_first_is_sent_without_placeholder() {
         let items = vec![assistant(vec![text("done")])];
-        let tm = items_to_messages(&items).unwrap();
-        assert_eq!(tm.messages.len(), 2);
-        assert_eq!(tm.messages[0].role, ConversationRole::User);
-        assert_eq!(tm.messages[1].role, ConversationRole::Assistant);
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([{"role": "assistant", "content": [{"type": "text", "text": "done"}]}])
+        );
     }
 
     #[test]
@@ -424,13 +510,11 @@ mod tests {
             args: json!({"host": "example.com"}),
         }];
         let w = wire(&items).unwrap();
-        // ToolCall flushes as an assistant turn; leading-assistant rule kicks in.
         let msgs = w["messages"].as_array().unwrap();
-        assert_eq!(msgs.len(), 2); // synthetic user + assistant
-        let assistant_msg = &msgs[1];
-        assert_eq!(assistant_msg["role"], "assistant");
-        assert_eq!(assistant_msg["content"][0]["type"], "tool_use");
-        assert_eq!(assistant_msg["content"][0]["toolUseId"], "tu_1");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["role"], "assistant");
+        assert_eq!(msgs[0]["content"][0]["type"], "tool_use");
+        assert_eq!(msgs[0]["content"][0]["toolUseId"], "tu_1");
     }
 
     #[test]
@@ -632,5 +716,687 @@ mod tests {
         assert_eq!(tm.messages.len(), 3);
         assert_eq!(tm.messages[2].role, ConversationRole::User);
         assert_eq!(tm.messages[2].content.len(), 2);
+    }
+
+    // ── SMA-824: blank text is never sent ─────────────────────────────────────
+
+    const NO_CONTENT: &str = "no message with content to send";
+
+    fn t(role: &str, s: &str) -> Value {
+        json!({"role": role, "content": [{"type": "text", "text": s}]})
+    }
+
+    fn tool_use_item(id: &str) -> ContentPart {
+        ContentPart::ToolUse {
+            call_id: id.to_owned(),
+            name: "ping".to_owned(),
+            args: json!({}),
+        }
+    }
+
+    fn result_item(id: &str, s: &str) -> Item {
+        Item::ToolResult {
+            call_id: id.to_owned(),
+            content: vec![text(s)],
+        }
+    }
+
+    fn blank_between(blank: &str) -> Vec<Item> {
+        vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text(blank)]),
+            user(vec![text("r")]),
+        ]
+    }
+
+    #[test]
+    fn empty_text_part_is_dropped() {
+        let w = wire(&blank_between("")).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+        );
+    }
+
+    #[test]
+    fn whitespace_only_text_part_is_dropped() {
+        let w = wire(&blank_between("  \n\t")).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+        );
+    }
+
+    #[test]
+    fn unicode_whitespace_text_part_is_dropped() {
+        let w = wire(&blank_between("\u{00A0}\u{2003}")).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+        );
+    }
+
+    #[test]
+    fn blank_text_is_dropped_but_real_text_kept_verbatim() {
+        let w = wire(&[user(vec![text(""), text("  hi  ")])]).unwrap();
+        assert_eq!(w["messages"], json!([t("user", "  hi  ")]));
+    }
+
+    #[test]
+    fn blank_user_text_keeps_pending_tool_results() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("tu_1")]),
+            result_item("tu_1", "pong"),
+            user(vec![text("")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([
+                t("user", "q"),
+                {"role": "assistant", "content": [{"type": "tool_use", "toolUseId": "tu_1", "name": "ping"}]},
+                {"role": "user", "content": [{"type": "tool_result", "toolUseId": "tu_1", "content": "pong"}]},
+            ])
+        );
+    }
+
+    #[test]
+    fn blank_assistant_text_is_dropped() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("  "), text("a")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(w["messages"], json!([t("user", "q"), t("assistant", "a")]));
+    }
+
+    #[test]
+    fn assistant_with_no_blocks_is_not_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("")]),
+            user(vec![text("r")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([{"role": "user", "content": [
+                {"type": "text", "text": "q"},
+                {"type": "text", "text": "r"},
+            ]}])
+        );
+    }
+
+    #[test]
+    fn replayed_blank_user_between_real_turns_is_dropped() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            user(vec![text("r")]),
+            assistant(vec![text("b")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(
+            w["messages"],
+            json!([
+                t("user", "q"),
+                t("assistant", "a"),
+                t("user", "r"),
+                t("assistant", "b")
+            ])
+        );
+    }
+
+    #[test]
+    fn blank_first_user_gives_assistant_first() {
+        let items = vec![
+            user(vec![text("")]),
+            assistant(vec![text("a")]),
+            user(vec![text("b")]),
+        ];
+        let w = wire(&items).unwrap();
+        assert_eq!(w["messages"], json!([t("assistant", "a"), t("user", "b")]));
+    }
+
+    #[test]
+    fn whitespace_only_system_is_absent() {
+        let tm = items_to_messages(&[system("  \n"), user(vec![text("hi")])]).unwrap();
+        assert!(tm.system.is_empty());
+        for items in [vec![system("")], vec![system("  "), user(vec![text("")])]] {
+            let err = items_to_messages(&items).unwrap_err();
+            assert!(matches!(err, ModelError::Other(_)));
+            assert!(err.to_string().contains(NO_CONTENT), "{err}");
+        }
+    }
+
+    #[test]
+    fn blank_system_inside_open_round_still_flushes() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            system(" "),
+            call_item("t3"),
+        ];
+        let tm = items_to_messages(&items).unwrap();
+        assert!(tm.system.is_empty());
+        assert_eq!(
+            messages_to_wire_json(&tm)["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tu("t3")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn only_blank_user_returns_error() {
+        let err = items_to_messages(&[user(vec![text("")])]).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(err.to_string().contains(NO_CONTENT), "{err}");
+    }
+
+    // ── Tool rounds keep item order (SMA-824) ─────────────────────────────
+
+    fn call_item(id: &str) -> Item {
+        Item::ToolCall {
+            call_id: id.to_owned(),
+            name: "ping".to_owned(),
+            args: json!({}),
+        }
+    }
+
+    fn tu(id: &str) -> Value {
+        json!({"type": "tool_use", "toolUseId": id, "name": "ping"})
+    }
+
+    fn tr(id: &str) -> Value {
+        json!({"type": "tool_result", "toolUseId": id, "content": id.replace('t', "r")})
+    }
+
+    fn tx(s: &str) -> Value {
+        json!({"type": "text", "text": s})
+    }
+
+    fn msg(role: &str, content: Vec<Value>) -> Value {
+        json!({"role": role, "content": content})
+    }
+
+    /// `r1` answers `t1`, and so on.
+    fn res(id: &str) -> Item {
+        result_item(id, &id.replace('t', "r"))
+    }
+
+    fn two_rounds() -> Vec<Item> {
+        vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            call_item("t1"),
+            res("t1"),
+            call_item("t2"),
+        ]
+    }
+
+    fn two_rounds_expected() -> Vec<Value> {
+        vec![
+            msg("user", vec![tx("q")]),
+            msg("assistant", vec![tx("a"), tu("t1")]),
+            msg("user", vec![tr("t1")]),
+            msg("assistant", vec![tu("t2")]),
+        ]
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_does_not_fold_into_earlier_assistant() {
+        let mut items = two_rounds();
+        items.push(res("t2"));
+        let mut exp = two_rounds_expected();
+        exp.push(msg("user", vec![tr("t2")]));
+        assert_eq!(wire(&items).unwrap()["messages"], json!(exp));
+    }
+
+    #[test]
+    fn orphan_result_before_tool_call_flushes_as_before() {
+        let items = vec![
+            user(vec![text("q")]),
+            result_item("rX", "x"),
+            call_item("t1"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg(
+                    "user",
+                    vec![
+                        tx("q"),
+                        json!({"type": "tool_result", "toolUseId": "rX", "content": "x"})
+                    ]
+                ),
+                msg("assistant", vec![tu("t1")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_at_end_of_input() {
+        assert_eq!(
+            wire(&two_rounds()).unwrap()["messages"],
+            json!(two_rounds_expected())
+        );
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_at_system() {
+        let mut items = two_rounds();
+        items.push(system("s"));
+        let tm = items_to_messages(&items).unwrap();
+        assert_eq!(
+            messages_to_wire_json(&tm)["messages"],
+            json!(two_rounds_expected())
+        );
+        assert_eq!(tm.system.len(), 1);
+        assert!(matches!(&tm.system[0], SystemContentBlock::Text(t) if t == "s"));
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_at_user_message() {
+        let mut items = two_rounds();
+        items.push(user(vec![text("x")]));
+        let mut exp = two_rounds_expected();
+        exp.push(msg("user", vec![tx("x")]));
+        assert_eq!(wire(&items).unwrap()["messages"], json!(exp));
+    }
+
+    fn alternating_expected() -> Value {
+        json!([
+            msg("user", vec![tx("q")]),
+            msg("assistant", vec![tu("t1")]),
+            msg("user", vec![tr("t1")]),
+            msg("assistant", vec![tu("t2")]),
+            msg("user", vec![tr("t2")]),
+            msg("assistant", vec![tx("done")]),
+        ])
+    }
+
+    #[test]
+    fn multi_round_tool_loop_without_assistant_text_alternates() {
+        let items = vec![
+            user(vec![text("q")]),
+            call_item("t1"),
+            res("t1"),
+            call_item("t2"),
+            res("t2"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(wire(&items).unwrap()["messages"], alternating_expected());
+    }
+
+    #[test]
+    fn reasoning_only_multi_round_loop_alternates() {
+        let reasoning = || {
+            assistant(vec![ContentPart::Reasoning {
+                text: "thinking".to_owned(),
+            }])
+        };
+        let items = vec![
+            user(vec![text("q")]),
+            reasoning(),
+            call_item("t1"),
+            res("t1"),
+            reasoning(),
+            call_item("t2"),
+            res("t2"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(wire(&items).unwrap()["messages"], alternating_expected());
+    }
+
+    #[test]
+    fn whitespace_assistant_before_tool_call_keeps_order() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("  ")]),
+            call_item("t1"),
+            res("t1"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tx("done")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn interleaved_parallel_round_is_not_split() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            call_item("t3"),
+            res("t2"),
+            res("t3"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2"), tu("t3")]),
+                msg("user", vec![tr("t1"), tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn out_of_order_results_keep_one_round() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t2"),
+            res("t1"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2")]),
+                msg("user", vec![tr("t2"), tr("t1")]),
+                msg("assistant", vec![tx("done")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn dropped_assistant_inside_open_round_does_not_split_it() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            assistant(vec![text("")]),
+            res("t2"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2")]),
+                msg("user", vec![tr("t1"), tr("t2")]),
+                msg("assistant", vec![tx("done")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn dropped_assistant_between_result_and_user_keeps_one_user_turn() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1")]),
+            res("t1"),
+            assistant(vec![ContentPart::Reasoning {
+                text: "thinking".to_owned(),
+            }]),
+            user(vec![text("next")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1")]),
+                msg("user", vec![tr("t1"), tx("next")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn assistant_message_flushes_calls_before_results() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            call_item("t1"),
+            call_item("t2"),
+            res("t1"),
+            call_item("t3"),
+            assistant(vec![text("b")]),
+            res("t2"),
+            res("t3"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("a"), tu("t1"), tu("t2"), tu("t3")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tx("b")]),
+                msg("user", vec![tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_tool_use_inside_open_round_joins_it() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            assistant(vec![tool_use_item("t3")]),
+            res("t2"),
+            res("t3"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2"), tu("t3")]),
+                msg("user", vec![tr("t1"), tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_tool_use_after_answered_round_starts_new_round() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1")]),
+            res("t1"),
+            assistant(vec![tool_use_item("t2")]),
+            res("t2"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tu("t2")]),
+                msg("user", vec![tr("t2")]),
+            ])
+        );
+    }
+
+    // ── Drop-induced final assistant message ──────────────────────────────
+
+    fn assert_ends_with_assistant_error(items: &[Item]) {
+        let err = items_to_messages(items).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(
+            err.to_string()
+                .contains("would end with an assistant message"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn trailing_blank_user_after_assistant_is_error() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+        ]);
+    }
+
+    #[test]
+    fn trailing_blank_user_then_blank_assistant_is_error() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            assistant(vec![text("")]),
+        ]);
+    }
+
+    #[test]
+    fn trailing_blank_user_then_reasoning_assistant_is_error() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            assistant(vec![ContentPart::Reasoning {
+                text: "think".to_owned(),
+            }]),
+        ]);
+    }
+
+    #[test]
+    fn system_after_dropped_user_keeps_flag() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            system("s"),
+        ]);
+    }
+
+    #[test]
+    fn blank_user_then_kept_assistant_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            assistant(vec![text("b")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("a"), tx("b")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn trailing_blank_user_after_tool_result_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            call_item("t1"),
+            res("t1"),
+            user(vec![text("")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("a"), tu("t1")]),
+                msg("user", vec![tr("t1")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn caller_prefill_is_sent() {
+        let items = vec![user(vec![text("q")]), assistant(vec![text("a")])];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+        );
+    }
+
+    #[test]
+    fn caller_prefill_keeps_trailing_whitespace() {
+        let items = vec![user(vec![text("q")]), assistant(vec![text("Sure.\n")])];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("Sure.\n")])
+            ])
+        );
+    }
+
+    #[test]
+    fn trailing_blank_assistant_without_dropped_user_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            assistant(vec![text("")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+        );
+    }
+
+    #[test]
+    fn trailing_reasoning_assistant_without_dropped_user_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            assistant(vec![ContentPart::Reasoning {
+                text: "think".to_owned(),
+            }]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+        );
+    }
+
+    #[test]
+    fn trailing_empty_or_image_user_keeps_main_behavior() {
+        let image = ContentPart::Image {
+            source: paigasus_helikon_core::MediaSource::Url {
+                url: "https://example.com/a.png".to_owned(),
+            },
+        };
+        for last in [user(vec![]), user(vec![image])] {
+            let items = vec![user(vec![text("q")]), assistant(vec![text("a")]), last];
+            assert_eq!(
+                wire(&items).unwrap()["messages"],
+                json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+            );
+        }
+    }
+
+    #[test]
+    fn blank_user_with_nested_tool_result_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![ContentPart::ToolUse {
+                call_id: "t1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            }]),
+            user(vec![
+                ContentPart::ToolResult {
+                    call_id: "t1".to_owned(),
+                    content: vec![text("r1")],
+                },
+                text(""),
+            ]),
+        ];
+        let w = wire(&items).unwrap();
+        let msgs = w["messages"].as_array().unwrap();
+        assert_eq!(msgs.last().unwrap(), &msg("user", vec![tr("t1")]));
     }
 }
