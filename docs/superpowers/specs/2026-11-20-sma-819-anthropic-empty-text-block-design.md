@@ -165,6 +165,24 @@ before you change the design. If P5, P6, P7 or P8 gets a 400, record it and
 report it at the next gate. Decision (c) already blocks a drop-induced
 prefill, so these results are for the record.
 
+### Probe results (2026-11-20, real key)
+
+| # | `claude-haiku-4-5` | `claude-sonnet-4-6` |
+|---|--------------------|---------------------|
+| P1 | 400 `messages: text content blocks must be non-empty` | 400, same text |
+| P2 | 400 `messages: text content blocks must contain non-whitespace text` | 400, same text |
+| P3 | 200 (turns joined) | 200 |
+| P4 | 200 (turns joined) | 200 |
+| P5 | 200 (prefill continued) | 400 `This model does not support assistant message prefill. The conversation must end with a user message.` |
+| P6 | not run | 400, same prefill text |
+| P7 | 400 `messages: final assistant content cannot end with trailing whitespace` | 400, same text |
+| P8 | 200 (treated as a prefill) | 400, same prefill text |
+| P9 | 200 | not run |
+
+No stop condition fired. P3 and P4 confirm the reliance on joined turns. P5,
+P6 and P8 confirm decision (c): on newer models a drop-induced prefill is a
+400, and on older models it continues the old answer.
+
 ### Live tests (after the fix)
 
 Add `#[ignore]` tests to `tests/live.rs`. Record the output of a real run in
