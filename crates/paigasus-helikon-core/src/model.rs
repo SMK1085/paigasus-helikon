@@ -483,8 +483,8 @@ pub enum ModelError {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ModelTurn {
-    /// Reconstructed items: an optional leading `AssistantMessage` (text
-    /// and/or reasoning content) followed by zero or more `ToolCall`s, in
+    /// Reconstructed items: an optional leading `AssistantMessage` (text,
+    /// reasoning and/or provider data content, in that order) followed by zero or more `ToolCall`s, in
     /// deterministic `call_id`-sorted order.
     pub items: Vec<crate::Item>,
     /// The last [`ModelEvent::Usage`] snapshot observed (last-wins; usage
@@ -531,10 +531,11 @@ fn build_items(
     agent_name: &str,
     text: String,
     reasoning: String,
+    provider_data: Vec<crate::ContentPart>,
     tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
 ) -> Result<Vec<crate::Item>, String> {
     let mut items = Vec::new();
-    if !text.is_empty() || !reasoning.is_empty() {
+    if !text.is_empty() || !reasoning.is_empty() || !provider_data.is_empty() {
         let mut content = Vec::new();
         if !reasoning.is_empty() {
             content.push(crate::ContentPart::Reasoning { text: reasoning });
@@ -542,6 +543,7 @@ fn build_items(
         if !text.is_empty() {
             content.push(crate::ContentPart::Text { text });
         }
+        content.extend(provider_data);
         items.push(crate::Item::AssistantMessage {
             content,
             agent: Some(agent_name.to_owned()),
@@ -581,6 +583,7 @@ pub struct ModelTurnAccumulator {
     agent_name: String,
     text: String,
     reasoning: String,
+    provider_data: Vec<crate::ContentPart>,
     tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
     finish_reason: FinishReason,
     latest_usage: Option<crate::TokenUsage>,
@@ -594,6 +597,7 @@ impl ModelTurnAccumulator {
             agent_name: agent_name.into(),
             text: String::new(),
             reasoning: String::new(),
+            provider_data: Vec::new(),
             tool_accum: std::collections::BTreeMap::new(),
             finish_reason: FinishReason::Stop,
             latest_usage: None,
@@ -636,15 +640,28 @@ impl ModelTurnAccumulator {
             ModelEvent::Finish { reason } => {
                 self.finish_reason = reason.clone();
             }
-            // Placeholder: the accumulator does not store provider data yet.
-            ModelEvent::ProviderData { .. } => {}
+            ModelEvent::ProviderData {
+                provider,
+                call_id,
+                data,
+            } => self.provider_data.push(crate::ContentPart::ProviderData {
+                provider: provider.clone(),
+                call_id: call_id.clone(),
+                data: data.clone(),
+            }),
         }
     }
 
     /// Reassemble. `Err(String)` = invalid JSON in accumulated tool-call
     /// args.
     pub fn finish(self) -> Result<ModelTurn, String> {
-        let items = build_items(&self.agent_name, self.text, self.reasoning, self.tool_accum)?;
+        let items = build_items(
+            &self.agent_name,
+            self.text,
+            self.reasoning,
+            self.provider_data,
+            self.tool_accum,
+        )?;
         Ok(ModelTurn {
             items,
             usage: self.latest_usage.unwrap_or_default(),
@@ -689,6 +706,78 @@ mod model_turn_tests {
         assert_eq!(turn.usage.input_tokens, 10);
         assert_eq!(turn.usage.total_tokens, 15);
         assert_eq!(turn.finish_reason, crate::FinishReason::ToolCalls);
+    }
+
+    fn provider_data_event(call_id: Option<&str>, n: u32) -> ModelEvent {
+        ModelEvent::ProviderData {
+            provider: "gemini".into(),
+            call_id: call_id.map(str::to_owned),
+            data: serde_json::json!({ "index": n }),
+        }
+    }
+
+    #[test]
+    fn tool_only_turn_with_provider_data_gets_assistant_message() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&ModelEvent::ToolCallDelta {
+            call_id: "b".into(),
+            name: Some("t".into()),
+            args_delta: "{}".into(),
+        });
+        acc.observe(&provider_data_event(Some("b"), 0));
+        acc.observe(&ModelEvent::Finish {
+            reason: crate::FinishReason::ToolCalls,
+        });
+        let turn = acc.finish().unwrap();
+        let expected = vec![
+            crate::Item::AssistantMessage {
+                content: vec![crate::ContentPart::ProviderData {
+                    provider: "gemini".into(),
+                    call_id: Some("b".into()),
+                    data: serde_json::json!({ "index": 0 }),
+                }],
+                agent: Some("a1".into()),
+            },
+            crate::Item::ToolCall {
+                call_id: "b".into(),
+                name: "t".into(),
+                args: serde_json::json!({}),
+            },
+        ];
+        assert_eq!(
+            serde_json::to_value(&turn.items).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_data_follows_reasoning_and_text() {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        acc.observe(&provider_data_event(None, 1));
+        acc.observe(&ModelEvent::ReasoningDelta { text: "r".into() });
+        acc.observe(&ModelEvent::TokenDelta { text: "t".into() });
+        acc.observe(&provider_data_event(Some("x"), 2));
+        let turn = acc.finish().unwrap();
+        let crate::Item::AssistantMessage { content, .. } = &turn.items[0] else {
+            panic!("expected an assistant message");
+        };
+        assert_eq!(
+            content,
+            &vec![
+                crate::ContentPart::Reasoning { text: "r".into() },
+                crate::ContentPart::Text { text: "t".into() },
+                crate::ContentPart::ProviderData {
+                    provider: "gemini".into(),
+                    call_id: None,
+                    data: serde_json::json!({ "index": 1 }),
+                },
+                crate::ContentPart::ProviderData {
+                    provider: "gemini".into(),
+                    call_id: Some("x".into()),
+                    data: serde_json::json!({ "index": 2 }),
+                },
+            ]
+        );
     }
 
     #[test]
