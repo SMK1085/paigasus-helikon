@@ -172,7 +172,7 @@ temporalio-workflow = { version = "1.0", default-features = false }
 # reqwest/async-openai in the workspace — no second provider is introduced.
 # The "ring"-based paths (legacy-rustls-ring, tls-rustls) are intentionally
 # omitted: they either pull RUSTSEC-2026-0098 or cause a multi-provider panic.
-aws-config             = { version = "1.8.18", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
+aws-config             = { version = "1.13.3", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
 aws-sdk-bedrockruntime = { version = "1.135.0", default-features = false, features = ["rt-tokio"] }
 aws-smithy-eventstream = { version = "0.61.2", default-features = false }
 aws-smithy-types       = { version = "1.5.0", default-features = false }
