@@ -67,8 +67,8 @@ preceding events' messages and emits the summary as an `Item::System`.
 result was emitted directly after the handoff. In such a log, the result of a
 transfer call comes late, after the child events. `project()` moves that result
 to directly after the transfer calls. It replaces the synthetic cancel text with
-the transfer text. The stored log does not change. Every snapshot has the
-repair.
+the transfer text. The stored log does not change. Every built-in session
+backend builds its snapshot with `project()`, so its snapshot has the repair.
 
 **Provider caveat:** a `Compacted` summary renders as `Item::System`, and both
 shipped provider translators reshape system messages — Anthropic hoists them to

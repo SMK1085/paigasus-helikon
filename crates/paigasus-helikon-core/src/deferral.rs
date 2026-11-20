@@ -584,11 +584,10 @@ fn handoff_indices(
 ///
 /// A child view pairs each tool result with one open call of the view: the
 /// result closes the earliest open call with its call id. The view drops a
-/// result that closes no open call. The parent emits the transfer result after the handoff (an older
-/// session can hold a late result), and the child view has no transfer
-/// call. A child call can use the call id of
-/// a transfer call, so a match by call id alone can keep two results for one
-/// call.
+/// result that closes no open call. The parent emits the transfer result
+/// after the handoff (an older session can hold a late result), and the child
+/// view has no transfer call. A child call can use the call id of a transfer
+/// call, so a match by call id alone can keep two results for one call.
 fn agent_view(
     events: &[crate::SessionEvent],
     handoffs: &[usize],

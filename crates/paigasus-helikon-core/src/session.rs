@@ -356,9 +356,9 @@ impl Session for MemorySession {
 /// observation-only in the event log; the model sees the summary text but
 /// as a top-level system instruction, not a positional cutover.
 ///
-/// **Repair of old handoff logs.** A session that a core version before
-/// SMA-810 stored has the result of each handoff transfer call at the end of
-/// the run, after the events of the target agent. `project` moves each such
+/// **Repair of old handoff logs.** A session stored by core 0.6.0 or earlier
+/// (before SMA-810) has the result of each handoff transfer call at the end
+/// of the run, after the events of the target agent. `project` moves each such
 /// result to directly after the transfer calls of its handoff response, in
 /// call order. If a moved result has the synthetic cancel text, `project`
 /// replaces it with `transferred to {target}` (the first transfer call of the
@@ -424,6 +424,10 @@ fn repair_legacy_transfer_results(
     // Step 1: the transfer calls of each handoff response.
     let mut responses: Vec<TransferResponse> = Vec::new();
     let mut is_transfer = vec![false; events.len()];
+    // `response_at[h]`: the response index of the `HandoffOccurred` at `h`.
+    let mut response_at: Vec<Option<usize>> = vec![None; events.len()];
+    // `response_of[c]`: the response index of the transfer call at `c`.
+    let mut response_of: Vec<Option<usize>> = vec![None; events.len()];
     for (at, ev) in events.iter().enumerate() {
         if let SessionEvent::HandoffOccurred { to, .. } = ev {
             let calls: Vec<usize> = (transfer_run_start(events, at)..at)
@@ -431,8 +435,10 @@ fn repair_legacy_transfer_results(
                 .collect();
             for &c in &calls {
                 is_transfer[c] = true;
+                response_of[c] = Some(responses.len());
             }
             if !calls.is_empty() {
+                response_at[at] = Some(responses.len());
                 responses.push(TransferResponse {
                     to: to.clone(),
                     calls,
@@ -444,19 +450,53 @@ fn repair_legacy_transfer_results(
         return 0;
     }
 
-    // Step 2: the result event of each transfer call. A result closes the most
-    // recent open non-transfer call with its id, else the earliest open
-    // transfer call with its id.
+    // Step 2: the result event of each transfer call. A result closes, in
+    // this order of preference:
+    // 1. if it is in the run of `ToolReturned` events directly after a
+    //    `HandoffOccurred`: the earliest open transfer call of that handoff
+    //    response with its id;
+    // 2. if it has a transfer text: the earliest open transfer call with its
+    //    id (a transfer text never closes a non-transfer call while a
+    //    transfer call with its id is open);
+    // 3. the most recent open non-transfer call with its id;
+    // 4. the earliest open transfer call with its id.
     let mut result_of: Vec<Option<usize>> = vec![None; events.len()];
     let mut open: Vec<(usize, &str)> = Vec::new();
+    // The response index while the events directly after its handoff are
+    // `ToolReturned` events.
+    let mut after_handoff: Option<usize> = None;
     for (at, ev) in events.iter().enumerate() {
+        let handoff_run = after_handoff.take();
         match ev {
+            SessionEvent::HandoffOccurred { .. } => after_handoff = response_at[at],
             SessionEvent::ToolCalled { call_id, .. } => open.push((at, call_id)),
             SessionEvent::ToolReturned { call_id, .. }
             | SessionEvent::ToolDeferred { call_id, .. } => {
-                let pos = open
-                    .iter()
-                    .rposition(|&(c, id)| id == call_id && !is_transfer[c])
+                let returned = matches!(ev, SessionEvent::ToolReturned { .. });
+                if returned {
+                    after_handoff = handoff_run;
+                }
+                let of_handoff = handoff_run.filter(|_| returned).and_then(|r| {
+                    open.iter()
+                        .position(|&(c, id)| id == call_id && response_of[c] == Some(r))
+                });
+                let transfer_text = || {
+                    matches!(ev, SessionEvent::ToolReturned { content, .. }
+                        if has_transfer_text(content))
+                };
+                let pos = of_handoff
+                    .or_else(|| {
+                        transfer_text()
+                            .then(|| {
+                                open.iter()
+                                    .position(|&(c, id)| id == call_id && is_transfer[c])
+                            })
+                            .flatten()
+                    })
+                    .or_else(|| {
+                        open.iter()
+                            .rposition(|&(c, id)| id == call_id && !is_transfer[c])
+                    })
                     .or_else(|| {
                         open.iter()
                             .position(|&(c, id)| id == call_id && is_transfer[c])
@@ -547,6 +587,16 @@ fn repair_legacy_transfer_results(
     }
     *messages = out;
     count
+}
+
+/// Whether `content` starts with one of the texts that the runtime gives a
+/// handoff transfer call: `transferred to `, `transfer not performed: ` or
+/// `transfer failed: `.
+fn has_transfer_text(content: &[ContentPart]) -> bool {
+    matches!(content.first(), Some(ContentPart::Text { text })
+        if ["transferred to ", "transfer not performed: ", "transfer failed: "]
+            .iter()
+            .any(|p| text.starts_with(p)))
 }
 
 /// Whether `item` is a tool result with exactly the synthetic cancel text.
@@ -1959,6 +2009,103 @@ mod repair_tests {
                 s("am", "", "child"),
             ]
         );
+    }
+
+    /// The number of results that the repair moves in `events`.
+    fn moves(events: &[SessionEvent]) -> usize {
+        let (mut messages, sources) = project_events(events);
+        repair_legacy_transfer_results(events, &mut messages, &sources)
+    }
+
+    #[test]
+    fn new_layout_repeated_id_projects_unchanged() {
+        let events = vec![
+            user("hi"),
+            tc("fc_0", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tr("fc_0", TO_BUDGETING),
+            tc("fc_0", "lookup"),
+            tr("fc_0", "S data"),
+        ];
+        assert_eq!(moves(&events), 0);
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "fc_0", "transfer_to_budgeting"),
+                s("tr", "fc_0", TO_BUDGETING),
+                s("tc", "fc_0", "lookup"),
+                s("tr", "fc_0", "S data"),
+            ]
+        );
+    }
+
+    #[test]
+    fn result_directly_after_the_handoff_closes_its_transfer_call() {
+        // An open non-transfer `fc_0` call (for example from a parallel
+        // branch) does not take the result that follows the handoff.
+        let events = vec![
+            tc("fc_0", "lookup"),
+            user("next"),
+            tc("fc_0", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tr("fc_0", "custom"),
+            tr("fc_0", "found"),
+        ];
+        assert_eq!(moves(&events), 0);
+        assert_eq!(
+            shape(&events),
+            [
+                s("tc", "fc_0", "lookup"),
+                s("user", "", "next"),
+                s("tc", "fc_0", "transfer_to_budgeting"),
+                s("tr", "fc_0", "custom"),
+                s("tr", "fc_0", "found"),
+            ]
+        );
+    }
+
+    #[test]
+    fn transfer_text_result_is_never_paired_with_a_non_transfer_call() {
+        let events = vec![
+            tc("fc_0", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tc("fc_0", "lookup"),
+            tr("fc_0", TO_BUDGETING),
+            tr("fc_0", "S data"),
+        ];
+        let shape = shape(&events);
+        // The transfer text stays with the transfer call, and "S data" stays
+        // with the lookup call.
+        assert_eq!(
+            shape,
+            [
+                s("tc", "fc_0", "transfer_to_budgeting"),
+                s("tr", "fc_0", TO_BUDGETING),
+                s("tc", "fc_0", "lookup"),
+                s("tr", "fc_0", "S data"),
+            ]
+        );
+        assert_eq!(moves(&events), 1);
+        for prefix in ["transfer not performed: x", "transfer failed: x"] {
+            let events = vec![
+                tc("fc_0", "transfer_to_budgeting"),
+                ho("triage", "budgeting"),
+                tc("fc_0", "lookup"),
+                tr("fc_0", prefix),
+                tr("fc_0", "S data"),
+            ];
+            assert_eq!(shape_of_results(&events), [prefix, "S data"]);
+        }
+    }
+
+    /// The text of each projected tool result, in order.
+    fn shape_of_results(events: &[SessionEvent]) -> Vec<String> {
+        shape(events)
+            .into_iter()
+            .filter(|(kind, _, _)| *kind == "tr")
+            .map(|(_, _, t)| t)
+            .collect()
     }
 
     #[test]

@@ -1101,8 +1101,10 @@ where
                         let msg = err.to_string();
                         run_span.record("otel.status_code", "ERROR");
                         failure.set(err);
-                        // The calls do not run, so their transfer calls stay
-                        // open unless this exit closes them.
+                        // The calls do not run. In a session stored by core
+                        // 0.6.0 or earlier, their transfer calls stay open
+                        // unless this exit closes them. A newer session
+                        // already holds the transfer result.
                         for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
                             yield crate::AgentEvent::ToolOutputItem { item };
                         }
