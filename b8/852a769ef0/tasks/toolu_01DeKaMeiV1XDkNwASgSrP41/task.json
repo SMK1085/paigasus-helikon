@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DeKaMeiV1XDkNwASgSrP41",
+  "agent_id": "ad6e8664b79a4e04e",
+  "subagent_type": "general-purpose",
+  "task_description": "Final branch review SMA-763",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 68905,
+    "cache_read_tokens": 332269,
+    "output_tokens": 4590,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-20T15:41:43.064406+01:00",
+  "completed_at": "2026-11-20T15:42:29.740888+01:00"
+}
