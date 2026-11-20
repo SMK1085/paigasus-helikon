@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.17...paigasus-helikon-runtime-agentcore-v0.3.0) - 2026-11-20
+
+### Breaking changes
+
+- This version replaces `0.2.16` and `0.2.17`. These versions require `paigasus-helikon-core` 0.7, but they were released as patches, so `cargo update` gave them to users who stay on core 0.6. Both versions are yanked. The content of this version is the same as `0.2.17`.
+- This version requires `paigasus-helikon-core` 0.7. If you stay on core 0.6, keep the previous version. After the yank, `cargo update` selects it.
+- If you already use core 0.7, change your requirement on `paigasus-helikon-runtime-agentcore` to `"0.3"`. If you do not, `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
+
 ## [0.2.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.16...paigasus-helikon-runtime-agentcore-v0.2.17) - 2026-11-20
 
 ### Other

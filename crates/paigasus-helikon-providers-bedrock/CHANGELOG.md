@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.11...paigasus-helikon-providers-bedrock-v0.2.0) - 2026-11-20
+
+### Breaking changes
+
+- This version replaces `0.1.11`. Version `0.1.11` requires `paigasus-helikon-core` 0.7, but it was released as a patch, so `cargo update` gave it to users who stay on core 0.6. Version `0.1.11` is yanked. This version also contains the fix below, which `0.1.11` does not have.
+- This version requires `paigasus-helikon-core` 0.7. If you stay on core 0.6, keep the previous version. After the yank, `cargo update` selects it.
+- If you already use core 0.7, change your requirement on `paigasus-helikon-providers-bedrock` to `"0.2"`. If you do not, `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
+
+### Fixed
+
+- *(providers)* SMA-832 detect the bedrock family behind global, jp, au, ca and in prefixes and in ARNs ([#370](https://github.com/SMK1085/paigasus-helikon/pull/370))
+
 ## [0.1.11](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.10...paigasus-helikon-providers-bedrock-v0.1.11) - 2026-11-20
 
 ### Fixed
