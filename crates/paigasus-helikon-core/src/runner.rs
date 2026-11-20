@@ -108,7 +108,7 @@ where
     ///
     /// **Cancellation/timeout is best-effort and loses to a genuine terminal
     /// event that already occurred.** If the run reaches a terminal
-    /// (`RunCompleted`/`RunFailed`/`RunDeferred`) before — or in the same poll as — a cancel or
+    /// (`RunCompleted`/`RunFailed`/`RunDeferred`/`RunStopped`) before — or in the same poll as — a cancel or
     /// timeout, the runner reports that real outcome (`Ok`, or the structured
     /// `Err(RunError::Agent(..))`), not `Err(RunError::Cancelled)` /
     /// `Err(RunError::Timeout)`. The cancel/timeout wins only when it aborted the
@@ -415,7 +415,9 @@ impl RunResultStreaming {
     /// A terminal `AgentEvent::RunDeferred` sets `stop_reason` to
     /// `StopReason::Deferred`, and a terminal `AgentEvent::RunStopped` sets it
     /// to `StopReason::Stopped`. Both return `Ok` with the usage of the
-    /// terminal event.
+    /// terminal event, unless the runner recorded a failed strict session write
+    /// (see [`RunResultStreaming::with_session_write`]). A recorded write error
+    /// wins: `collect` then returns `Err(RunError::SessionWrite)`.
     pub async fn collect(mut self) -> Result<RunResult, RunError> {
         use futures_util::stream::StreamExt;
         let mut events = Vec::new();

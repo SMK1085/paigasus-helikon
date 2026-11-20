@@ -642,6 +642,7 @@ fn reyield_child_event(
             let mut total = parent_usage;
             total.add(usage);
             record_usage(&total);
+            run_span.record("paigasus.stop_reason", reason.as_str());
             Some(AgentEvent::RunStopped {
                 reason,
                 usage: total,
@@ -1312,11 +1313,19 @@ where
                                     }
                                     crate::CheckpointDecision::Inject(parts) => {
                                         cp_span.record("decision", "inject");
+                                        // Allow-list: `ContentPart` is `#[non_exhaustive]`,
+                                        // so a new variant must fail until it is allowed here.
                                         let bad = parts.iter().find_map(|p| match p {
+                                            crate::ContentPart::Text { .. }
+                                            | crate::ContentPart::Image { .. }
+                                            | crate::ContentPart::Audio { .. } => None,
                                             crate::ContentPart::ToolUse { .. } => Some("ToolUse"),
                                             crate::ContentPart::ToolResult { .. } => Some("ToolResult"),
                                             crate::ContentPart::Reasoning { .. } => Some("Reasoning"),
-                                            _ => None,
+                                            // Unreachable in this crate today. A new variant
+                                            // lands here until it is allowed above.
+                                            #[allow(unreachable_patterns)]
+                                            _ => Some("unsupported"),
                                         });
                                         if let Some(kind) = bad {
                                             let err = crate::AgentError::InvalidInjection {

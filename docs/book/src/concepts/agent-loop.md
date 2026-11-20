@@ -197,6 +197,7 @@ At a boundary, the loop emits the `ToolOutputItem` events of all tool results fi
 - The parts must be user parts: `Text`, `Image` or `Audio`. A `ToolUse`, `ToolResult` or `Reasoning` part fails the run with `AgentError::InvalidInjection`.
 - `Inject` with an empty list is the same as `Continue`.
 - The input guardrails check the text of the injected content. A guardrail cannot check image or audio parts.
+- A guardrail that returns an error (`Err`) counts as a tripwire. The run stops in the same way. An outage of a moderation service therefore stops every run that injects content.
 - A guardrail tripwire ends the run with `RunStopped`, not with `RunFailed`. The loop does not emit `UserMessageInjected`. It does not store the rejected content.
 - An injected message is one user message. A host with several waiting items merges them into one `Vec<ContentPart>`.
 - `SessionRecorder` stores the message as a `SessionEvent::UserMessage`. Later runs of the session see it as a normal user message.

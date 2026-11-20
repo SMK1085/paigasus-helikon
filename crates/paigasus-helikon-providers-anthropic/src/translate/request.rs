@@ -423,7 +423,7 @@ mod tests {
     /// Pins today's behaviour: an empty text part is emitted as an empty
     /// text block, not dropped.
     #[test]
-    fn empty_text_part_is_dropped_or_rejected() {
+    fn empty_text_part_is_emitted_as_empty_block() {
         let items = vec![Item::UserMessage {
             content: vec![text("")],
         }];
