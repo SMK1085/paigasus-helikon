@@ -67,7 +67,7 @@ where
     let mut args = call.args.clone();
     let decision = match run_ctx.authorize_tool(&call.name, effect, &args).await {
         crate::PermissionDecision::Defer { prompt } => crate::PermissionDecision::Deny {
-            reason: format!("approval deferred, but this run cannot defer: {prompt}"),
+            reason: run_ctx.cannot_defer_reason(&prompt),
         },
         other => other,
     };

@@ -658,11 +658,27 @@ where
         match decided {
             Authorization::Defer { prompt, .. } if !self.deferred_tool_calls_enabled() => {
                 Authorization::Deny {
-                    reason: format!("approval deferred, but this run cannot defer: {prompt}"),
+                    reason: self.cannot_defer_reason(&prompt),
                 }
             }
             other => other,
         }
+    }
+
+    /// The deny reason for a deferral that this run cannot keep.
+    ///
+    /// The reason reaches the `PermissionDenied` event and the model-facing
+    /// tool result. A policy can make the prompt from the call arguments, so
+    /// with output redaction on, the prompt is redacted with the run's secret
+    /// set (as in the redacted event copy of a deferred call).
+    pub(crate) fn cannot_defer_reason(&self, prompt: &str) -> String {
+        let prompt = if self.redact_output() {
+            let secrets = crate::redaction::SecretSet::from_env_and_extra(self.extra_secrets());
+            crate::redaction::redact_str(prompt, &secrets)
+        } else {
+            prompt.to_owned()
+        };
+        format!("approval deferred, but this run cannot defer: {prompt}")
     }
 
     /// Resolve one ask point. Returns `Err(reason)` when the call must be
