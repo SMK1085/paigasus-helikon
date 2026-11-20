@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "d3badb0de63b",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-838-release-the-dependents-of-a-core-minor-bump",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-openai/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-actix/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-agentcore/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-axum/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-temporal/CHANGELOG.md",
+    "crates/paigasus-helikon-tools/CHANGELOG.md",
+    "docs/superpowers/plans/2026-11-20-core-cascade.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d3/badb0de63b/0/metadata.json",
+      "transcript": "/d3/badb0de63b/0/full.jsonl",
+      "compact_transcript": "/d3/badb0de63b/0/transcript.jsonl",
+      "content_hash": "/d3/badb0de63b/0/content_hash.txt",
+      "prompt": "/d3/badb0de63b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 2616,
+    "cache_read_tokens": 812262,
+    "output_tokens": 1968,
+    "api_call_count": 2
+  },
+  "redaction": {
+    "replacements": 113,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 113,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
