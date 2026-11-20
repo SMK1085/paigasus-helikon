@@ -346,11 +346,7 @@ mod tests {
     fn tool_choice_none_emits_native_none() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "search".to_owned(),
-            description: "".to_owned(),
-            schema: serde_json::json!({}),
-        }];
+        req.tools = vec![ToolDef::new("search", "", serde_json::json!({}))];
         req.model_settings.tool_choice = Some(ToolChoice::None);
         let p = build_body(&cfg(), &req).unwrap();
         assert_eq!(p.body["tool_choice"], serde_json::json!({"type": "none"}));
@@ -384,11 +380,11 @@ mod tests {
     fn reserved_tool_name_rejected_synchronously() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "__paigasus_structured_output__".to_owned(),
-            description: "".to_owned(),
-            schema: serde_json::json!({}),
-        }];
+        req.tools = vec![ToolDef::new(
+            "__paigasus_structured_output__",
+            "",
+            serde_json::json!({}),
+        )];
         let err = build_body(&cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }

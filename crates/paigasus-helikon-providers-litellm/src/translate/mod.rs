@@ -140,14 +140,14 @@ mod tests {
     }
 
     fn tool_def() -> ToolDef {
-        ToolDef {
-            name: "get_weather".into(),
-            description: "Look up weather".into(),
-            schema: serde_json::json!({
+        ToolDef::new(
+            "get_weather",
+            "Look up weather",
+            serde_json::json!({
                 "type": "object",
                 "properties": {"city": {"type": "string"}}
             }),
-        }
+        )
     }
 
     #[test]

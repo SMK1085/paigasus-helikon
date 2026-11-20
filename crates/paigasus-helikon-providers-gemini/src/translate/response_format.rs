@@ -83,11 +83,7 @@ mod tests {
     #[test]
     fn structured_output_with_tools_conflicts() {
         let rf = ResponseFormat::JsonObject;
-        let tdef = vec![ToolDef {
-            name: "t".into(),
-            description: "".into(),
-            schema: json!({}),
-        }];
+        let tdef = vec![ToolDef::new("t", "", json!({}))];
         assert!(validate_conflict(Some(&rf), &tdef, None).is_err());
     }
 

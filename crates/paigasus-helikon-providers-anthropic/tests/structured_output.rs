@@ -135,11 +135,7 @@ async fn json_schema_plus_caller_tool_choice_tool_returns_synchronous_other() {
         .unwrap();
     let req = req_with(
         vec![user("hi")],
-        vec![ToolDef {
-            name: "search".to_owned(),
-            description: "".to_owned(),
-            schema: serde_json::json!({}),
-        }],
+        vec![ToolDef::new("search", "", serde_json::json!({}))],
         |r| {
             r.model_settings.response_format = Some(ResponseFormat::JsonSchema {
                 name: "Person".to_owned(),
@@ -171,11 +167,7 @@ async fn reserved_tool_name_returns_synchronous_other() {
         .unwrap();
     let req = req_with(
         vec![user("hi")],
-        vec![ToolDef {
-            name: SYNTH_NAME.to_owned(),
-            description: "".to_owned(),
-            schema: serde_json::json!({}),
-        }],
+        vec![ToolDef::new(SYNTH_NAME, "", serde_json::json!({}))],
         |_| {},
     );
     let result = model.invoke(req, CancellationToken::new()).await;

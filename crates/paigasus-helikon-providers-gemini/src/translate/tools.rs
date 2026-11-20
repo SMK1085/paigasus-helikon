@@ -45,11 +45,11 @@ mod tests {
     use super::*;
 
     fn defs() -> Vec<ToolDef> {
-        vec![ToolDef {
-            name: "search".into(),
-            description: "search the web".into(),
-            schema: json!({ "type": "object", "properties": { "q": { "type": "string" } }, "additionalProperties": false }),
-        }]
+        vec![ToolDef::new(
+            "search",
+            "search the web",
+            json!({ "type": "object", "properties": { "q": { "type": "string" } }, "additionalProperties": false }),
+        )]
     }
 
     #[test]

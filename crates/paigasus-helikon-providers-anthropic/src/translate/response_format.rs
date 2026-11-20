@@ -90,22 +90,14 @@ mod tests {
 
     #[test]
     fn reserved_name_rejected_in_user_tools() {
-        let defs = vec![ToolDef {
-            name: SYNTHESIZED_TOOL_NAME.to_owned(),
-            description: "x".to_owned(),
-            schema: json!({}),
-        }];
+        let defs = vec![ToolDef::new(SYNTHESIZED_TOOL_NAME, "x", json!({}))];
         let err = validate_tool_names(&defs).unwrap_err();
         assert!(err.contains("reserved"));
     }
 
     #[test]
     fn normal_tool_names_pass() {
-        let defs = vec![ToolDef {
-            name: "search".to_owned(),
-            description: "x".to_owned(),
-            schema: json!({}),
-        }];
+        let defs = vec![ToolDef::new("search", "x", json!({}))];
         assert!(validate_tool_names(&defs).is_ok());
     }
 

@@ -32,11 +32,11 @@ mod tests {
 
     #[test]
     fn passes_through_name_description_and_schema() {
-        let defs = vec![ToolDef {
-            name: "search".to_owned(),
-            description: "search the web".to_owned(),
-            schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
-        }];
+        let defs = vec![ToolDef::new(
+            "search",
+            "search the web",
+            json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+        )];
         let out = translate_tools(&defs);
         assert_eq!(out[0]["name"], "search");
         assert_eq!(out[0]["description"], "search the web");

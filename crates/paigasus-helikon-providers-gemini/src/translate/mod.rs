@@ -163,11 +163,11 @@ mod snap {
     fn snap_tool_declarations_and_choice_auto() {
         let mut r = ModelRequest::new();
         r.messages = vec![user("search")];
-        r.tools = vec![ToolDef {
-            name: "search".into(),
-            description: "search".into(),
-            schema: json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
-        }];
+        r.tools = vec![ToolDef::new(
+            "search",
+            "search",
+            json!({ "type": "object", "properties": { "q": { "type": "string" } } }),
+        )];
         r.model_settings.tool_choice = Some(ToolChoice::Auto);
         insta::assert_json_snapshot!(body(r));
     }
@@ -274,11 +274,7 @@ mod snap {
     fn structured_output_plus_tools_errors() {
         let mut r = ModelRequest::new();
         r.messages = vec![user("x")];
-        r.tools = vec![ToolDef {
-            name: "t".into(),
-            description: "".into(),
-            schema: json!({}),
-        }];
+        r.tools = vec![ToolDef::new("t", "", json!({}))];
         r.model_settings.response_format = Some(ResponseFormat::JsonObject);
         let err = build_request(&cfg(), &r).unwrap_err();
         insta::assert_snapshot!(err.to_string());
@@ -318,11 +314,11 @@ mod snap {
     fn tool_choice_naming_undeclared_tool_errors() {
         let mut r = ModelRequest::new();
         r.messages = vec![user("go")];
-        r.tools = vec![ToolDef {
-            name: "search".into(),
-            description: "search".into(),
-            schema: json!({ "type": "object", "properties": {} }),
-        }];
+        r.tools = vec![ToolDef::new(
+            "search",
+            "search",
+            json!({ "type": "object", "properties": {} }),
+        )];
         r.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "missing".into(),
         });

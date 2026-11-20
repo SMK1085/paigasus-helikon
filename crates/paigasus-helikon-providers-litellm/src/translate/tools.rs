@@ -42,14 +42,14 @@ mod tests {
     use super::*;
 
     fn def() -> ToolDef {
-        ToolDef {
-            name: "get_weather".into(),
-            description: "Look up weather".into(),
-            schema: json!({
+        ToolDef::new(
+            "get_weather",
+            "Look up weather",
+            json!({
                 "type": "object",
                 "properties": {"city": {"type": "string"}}
             }),
-        }
+        )
     }
 
     #[test]

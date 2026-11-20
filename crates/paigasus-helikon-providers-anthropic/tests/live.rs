@@ -209,11 +209,11 @@ async fn run_accepted(messages: Vec<Item>, with_tool: bool, last_turn_cache: boo
     let req = req_with(messages, |r| {
         r.model_settings.max_output_tokens = Some(64);
         if with_tool {
-            r.tools = vec![ToolDef {
-                name: "ping".to_owned(),
-                description: "Ping.".to_owned(),
-                schema: serde_json::json!({"type": "object"}),
-            }];
+            r.tools = vec![ToolDef::new(
+                "ping",
+                "Ping.",
+                serde_json::json!({"type": "object"}),
+            )];
         }
     });
     let mut s = model.invoke(req, CancellationToken::new()).await.unwrap();

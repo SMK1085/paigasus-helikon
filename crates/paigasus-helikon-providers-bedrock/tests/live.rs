@@ -72,11 +72,11 @@ fn tool_result(call_id: &str, text: &str) -> Item {
 }
 
 fn ping_tool() -> ToolDef {
-    ToolDef {
-        name: "ping".to_owned(),
-        description: "Ping a host".to_owned(),
-        schema: serde_json::json!({"type": "object", "properties": {}}),
-    }
+    ToolDef::new(
+        "ping",
+        "Ping a host",
+        serde_json::json!({"type": "object", "properties": {}}),
+    )
 }
 
 /// Send `messages` (with optional `tools`) and assert the stream ends with no
@@ -200,11 +200,11 @@ async fn tool_with_tagged_enum_and_nested_generic() {
     req.messages = vec![user(
         "Record a deposit of $500 with tags [\"savings\", \"monthly\"].",
     )];
-    req.tools = vec![ToolDef {
-        name: "record_transaction".to_owned(),
-        description: "Record a financial transaction".to_owned(),
-        schema: tool_schema,
-    }];
+    req.tools = vec![ToolDef::new(
+        "record_transaction",
+        "Record a financial transaction",
+        tool_schema,
+    )];
     req.model_settings.max_output_tokens = Some(512);
 
     let mut s = model

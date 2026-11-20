@@ -54,11 +54,11 @@ mod tests {
     use serde_json::json;
 
     fn simple_def(name: &str) -> ToolDef {
-        ToolDef {
-            name: name.to_owned(),
-            description: "a tool".to_owned(),
-            schema: json!({"type": "object", "properties": {"x": {"type": "string"}}}),
-        }
+        ToolDef::new(
+            name,
+            "a tool",
+            json!({"type": "object", "properties": {"x": {"type": "string"}}}),
+        )
     }
 
     #[test]
@@ -86,11 +86,7 @@ mod tests {
 
     #[test]
     fn reserved_name_returns_error() {
-        let defs = vec![ToolDef {
-            name: SYNTHESIZED_TOOL_NAME.to_owned(),
-            description: "bad".to_owned(),
-            schema: json!({}),
-        }];
+        let defs = vec![ToolDef::new(SYNTHESIZED_TOOL_NAME, "bad", json!({}))];
         let err = tool_specs(&defs, Ruleset::Strict).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
         let msg = format!("{err}");
@@ -100,15 +96,15 @@ mod tests {
     #[test]
     fn schema_rewriter_strips_unsupported_keywords() {
         // $schema should be stripped by the Strict rewriter.
-        let defs = vec![ToolDef {
-            name: "foo".to_owned(),
-            description: "".to_owned(),
-            schema: json!({
+        let defs = vec![ToolDef::new(
+            "foo",
+            "",
+            json!({
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
                 "properties": {"n": {"type": "integer"}}
             }),
-        }];
+        )];
         let specs = tool_specs(&defs, Ruleset::Strict).unwrap();
         // The Document should not contain "$schema" — we can only verify this
         // indirectly by confirming the spec was built successfully (the rewriter

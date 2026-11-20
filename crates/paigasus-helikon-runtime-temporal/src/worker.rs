@@ -396,11 +396,7 @@ impl<Ctx: Send + Sync + 'static> TemporalAgentWorkerBuilder<Ctx> {
         let tool_defs = agent
             .tools
             .iter()
-            .map(|t| ToolDef {
-                name: t.name().to_owned(),
-                description: t.description().to_owned(),
-                schema: t.schema().clone(),
-            })
+            .map(|t| ToolDef::from_tool::<Ctx, _>(t.as_ref()))
             .collect();
         let plan = AgentPlan {
             tool_defs,
@@ -778,6 +774,16 @@ mod tests {
                 static SCHEMA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
                 SCHEMA.get_or_init(|| serde_json::json!({ "type": "object" }))
             }
+            fn provider_types(&self) -> &[paigasus_helikon_core::ProviderToolType] {
+                static TYPES: std::sync::OnceLock<Vec<paigasus_helikon_core::ProviderToolType>> =
+                    std::sync::OnceLock::new();
+                TYPES.get_or_init(|| {
+                    vec![paigasus_helikon_core::ProviderToolType::new(
+                        "anthropic",
+                        "memory_20250818",
+                    )]
+                })
+            }
             async fn invoke(
                 &self,
                 _ctx: &paigasus_helikon_core::ToolContext<()>,
@@ -809,6 +815,13 @@ mod tests {
         assert_eq!(def.name, "agent-1");
         assert_eq!(def.plan.tool_defs.len(), 1);
         assert_eq!(def.plan.tool_defs[0].name, "noop");
+        assert_eq!(
+            def.plan.tool_defs[0].provider_types,
+            vec![paigasus_helikon_core::ProviderToolType::new(
+                "anthropic",
+                "memory_20250818"
+            )]
+        );
         assert_eq!(def.tools.len(), 1);
     }
 
