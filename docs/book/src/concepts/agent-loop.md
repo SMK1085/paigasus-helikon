@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`RunResultStreaming::new(stream).collect().await?` drains every event, returning a `RunResult` whose `final_output: String` is the concatenated text of the *last* `MessageOutput` assistant message, alongside the full `events` vector and aggregated `usage`. A terminal `RunFailed` surfaces as `Err(RunError)`. For structured output, use `collect_typed::<T>()` instead. A run that ends with `RunDeferred` has no final output. For such a run, `collect` returns a `RunResult` with `StopReason::Deferred { calls }` in `stop_reason`. `collect_typed` returns `AgentError::Incomplete`. `RunResult.stop_reason` is `StopReason::Completed` for a run that finished.
+`RunResultStreaming::new(stream).collect().await?` drains every event, returning a `RunResult` whose `final_output: String` is the concatenated text of the *last* `MessageOutput` assistant message, alongside the full `events` vector and aggregated `usage`. A terminal `RunFailed` surfaces as `Err(RunError)`. For structured output, use `collect_typed::<T>()` instead. A run that ends with `RunDeferred` has no completed answer. For such a run, `collect` returns a `RunResult` with `StopReason::Deferred { calls }` in `stop_reason`. Its `final_output` can be non-empty: it keeps the text of an earlier `MessageOutput`, for example "I will ask for approval". That text is not a completed answer. Check `stop_reason` before you use `final_output`. Do not expect an empty string. `collect_typed` returns `AgentError::Incomplete`. `RunResult.stop_reason` is `StopReason::Completed` for a run that finished.
 
 ## Consuming events live
 

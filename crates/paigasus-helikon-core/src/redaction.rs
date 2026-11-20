@@ -67,6 +67,10 @@ fn is_common_word(v: &str) -> bool {
 ///   different casing in output is not caught by the value-scan.
 /// - **Key-name scan is underscore-form only** (`X_API_KEY`, not `X-API-KEY`)
 ///   and does not scan JSON object keys.
+/// - **Object keys are copied unchanged:** neither scan applies to a JSON
+///   object key, so a known secret value that is an object key stays in the
+///   output. This applies to tool output and also to the redacted event
+///   copies of deferred call arguments (`ApprovalRequested`, `RunDeferred`).
 pub fn redact(value: &Value, secrets: &SecretSet) -> Value {
     match value {
         Value::String(s) => Value::String(redact_str(s, secrets)),

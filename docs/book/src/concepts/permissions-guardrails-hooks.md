@@ -81,9 +81,9 @@ A deferred tool call does not wait inside the run. The run ends, and the host de
 - `AgentAsTool` sub-runs and workflow children keep the flag off.
 - Handoff children keep the flag as the parent has it.
 - `TemporalRunner`, `runtime-axum`, `runtime-actix` and `runtime-agentcore` do not support deferral. They clear the flag.
-- With the flag off, a `Defer` is a deny. The reason is "approval deferred, but this run cannot defer: ..." followed by the prompt.
+- With the flag off, a `Defer` is a deny. The reason is "approval deferred, but this run cannot defer: ..." followed by the prompt. When output redaction is on, the reason carries the redacted prompt.
 
-**The end of the run.** The run stops with `StopReason::Deferred { calls }`. The stream ends with `AgentEvent::RunDeferred`, after one `ApprovalRequested` event for each call. The session gets one `tool_deferred` event for each call. `collect_typed` returns `AgentError::Incomplete`, because the run has no final output.
+**The end of the run.** The run stops with `StopReason::Deferred { calls }`. The stream ends with `AgentEvent::RunDeferred`, after one `ApprovalRequested` event for each call. The session gets one `tool_deferred` event for each call. `collect_typed` returns `AgentError::Incomplete`, because the run has no completed answer.
 
 **Repeated call ids.** A handoff transfer call has no result while the child agent runs. Some providers make call ids for each response, for example `fc_0` from Gemini. Then a call of the child agent can have the same call id as the transfer call. Such a call is not deferred, because the session cannot keep the deferral open. The call is denied with the result "permission denied: deferral not possible: call id {call_id} repeats in this run".
 
@@ -115,7 +115,7 @@ let result = TokioRunner.run(&agent, ctx, input, config).await?;
 
 **One writer for each session.** Only one run at a time must use a session. The host must make sure of this, for example with a lease. Two resumes of one session at the same time can both run an approved tool.
 
-**Secrets.** The session stores the raw effective arguments of a deferred call. The resume runs the tool with these arguments. Thus a secret in the arguments persists in the session store. A `PreToolUse` hook that adds a secret to the arguments of a call that can defer has the same effect. When output redaction is on, events carry redacted arguments and redacted prompts, because a policy can make the prompt from the arguments. The session keeps the raw prompt. When output redaction is off, events carry the raw arguments and the raw prompt.
+**Secrets.** The session stores the raw effective arguments of a deferred call. The resume runs the tool with these arguments. Thus a secret in the arguments persists in the session store. A `PreToolUse` hook that adds a secret to the arguments of a call that can defer has the same effect. When output redaction is on, events carry redacted arguments and redacted prompts, because a policy can make the prompt from the arguments. The session keeps the raw prompt. Redaction copies JSON object keys unchanged, as it does for tool output. Thus a known secret that is an object key in the arguments stays in the `ApprovalRequested` and `RunDeferred` events. When output redaction is off, events carry the raw arguments and the raw prompt.
 
 **Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back below this version, because an older reader cannot parse the row. Enable deferral only after every reader of the session store runs this version.
 

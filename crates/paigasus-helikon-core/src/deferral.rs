@@ -75,7 +75,9 @@ impl PendingToolCall {
 
     /// The redacted event copy of this call. The redaction applies to the
     /// arguments and to the prompt, because a policy can make the prompt from
-    /// the arguments.
+    /// the arguments. As for tool output, [`crate::redaction::redact`] copies
+    /// JSON object keys unchanged, so a known secret that is an object key
+    /// stays in the copy.
     pub(crate) fn redacted(&self, secrets: &crate::redaction::SecretSet) -> Self {
         Self {
             args: crate::redaction::redact(&self.args, secrets),

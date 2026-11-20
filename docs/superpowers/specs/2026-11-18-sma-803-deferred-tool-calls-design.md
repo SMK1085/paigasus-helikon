@@ -358,8 +358,10 @@ definition):
    the recorder the plan (see "Session order").
 4. Run the agent. Finalize. If the append fails on a resuming run, return
    `Err(RunError::SessionWrite(..))` (`run_streamed`: yield `RunFailed`). The
-   approved tool may have run. The error tells the host that the session did not
-   store the result.
+   approved tool may have run. The error does not prove that the session did
+   not store the result: `CompactingSession` can store the events and then fail
+   on the compaction. Before it recovers, the host must read the session to see
+   its state.
 
 **Agent steps (`LlmAgent`):**
 
