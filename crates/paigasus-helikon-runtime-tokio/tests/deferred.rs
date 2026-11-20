@@ -419,11 +419,12 @@ fn invalid_resume(result: Result<RunResult, RunError>) -> InvalidResume {
 /// Each `ToolCall` has a `ToolResult` with the same call id later, with no
 /// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` closes
 /// one earlier open `ToolCall` with its call id. A call id can repeat only
-/// after its earlier call has a result.
+/// after its earlier call has a result. A call after a result starts a new
+/// round, so no call may wait for a result then.
 ///
 /// Copy of `assert_tool_calls_paired` in
-/// `crates/paigasus-helikon-core/tests/deferred_resume.rs` (pre-flight ruling
-/// F5). Keep the two copies the same.
+/// `crates/paigasus-helikon-core/tests/common/mod.rs`. Keep the two copies
+/// the same.
 fn assert_tool_calls_paired(messages: &[Item]) {
     // The calls that wait for a result, in call order.
     let mut outstanding: Vec<&str> = Vec::new();

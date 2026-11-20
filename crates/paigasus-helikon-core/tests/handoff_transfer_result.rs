@@ -5,18 +5,18 @@
 mod common;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::{MockModel, MockTool};
+use common::{assert_tool_calls_paired, DeferB, MockModel, MockTool, RequestLog};
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt as _;
 use paigasus_helikon_core::{
     open_deferrals, project, Agent, AgentError, AgentEvent, AgentInput, CancellationToken,
     ContentPart, FinishReason, Hook, HookDecision, HookEvent, HookRegistry, Item, LlmAgent,
-    MemorySession, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
-    PermissionDecision, PermissionPolicy, ResumePlan, RunConfig, RunContext, Session, SessionEvent,
-    SessionRecorder, SwarmAgent, Tool, ToolResolution, TracerHandle,
+    MemorySession, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, ResumePlan,
+    RunConfig, RunContext, Session, SessionEvent, SessionRecorder, SwarmAgent, Tool,
+    ToolResolution, TracerHandle,
 };
 
 const CANCEL: &str = "tool call did not complete (run cancelled/timed out)";
@@ -176,50 +176,6 @@ fn assert_no_transfer_result(events: &[AgentEvent], call_id: &str) {
     assert!(
         matches!(events.last(), Some(AgentEvent::RunFailed { .. })),
         "{events:?}"
-    );
-}
-
-/// Each `ToolCall` has a `ToolResult` with the same call id later, with no
-/// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` closes
-/// one earlier open `ToolCall` with its call id. A call id can repeat only
-/// after its earlier call has a result. A call after a result starts a new
-/// round, so no call may wait for a result then.
-fn assert_tool_calls_paired(messages: &[Item]) {
-    let mut outstanding: Vec<&str> = Vec::new();
-    let mut seen_result_since_call = false;
-    for item in messages {
-        match item {
-            Item::ToolCall { call_id, .. } => {
-                assert!(
-                    !outstanding.contains(&call_id.as_str()),
-                    "call {call_id} repeats while it waits for a result: {messages:?}"
-                );
-                assert!(
-                    !(seen_result_since_call && !outstanding.is_empty()),
-                    "call {call_id} starts a new round while {outstanding:?} wait for a result: {messages:?}"
-                );
-                seen_result_since_call = false;
-                outstanding.push(call_id);
-            }
-            Item::ToolResult { call_id, .. } => {
-                let Some(p) = outstanding.iter().position(|c| *c == call_id.as_str()) else {
-                    panic!("result {call_id} has no open earlier call: {messages:?}");
-                };
-                outstanding.remove(p);
-                seen_result_since_call = true;
-            }
-            Item::UserMessage { .. } | Item::AssistantMessage { .. } => {
-                assert!(
-                    outstanding.is_empty(),
-                    "tool calls {outstanding:?} are not paired: {messages:?}"
-                );
-            }
-            _ => {}
-        }
-    }
-    assert!(
-        outstanding.is_empty(),
-        "tool calls {outstanding:?} are not paired: {messages:?}"
     );
 }
 
@@ -596,61 +552,6 @@ async fn nested_handoff_gives_each_transfer_call_its_own_result() {
 }
 
 // ── T6: three levels with one call id ────────────────────────────────────────
-
-/// Defers every call to tool `b`; allows the rest.
-struct DeferB;
-
-#[async_trait]
-impl PermissionPolicy<()> for DeferB {
-    async fn check(
-        &self,
-        _ctx: &RunContext<()>,
-        tool: &str,
-        _args: &serde_json::Value,
-    ) -> PermissionDecision {
-        if tool == "b" {
-            PermissionDecision::Defer {
-                prompt: "pay?".to_owned(),
-            }
-        } else {
-            PermissionDecision::Allow
-        }
-    }
-}
-
-/// A [`MockModel`] that keeps every request it gets.
-struct RequestLog {
-    inner: Arc<MockModel>,
-    requests: Mutex<Vec<ModelRequest>>,
-}
-
-impl RequestLog {
-    fn with_scripts(scripts: Vec<Vec<ModelEvent>>) -> Arc<Self> {
-        Arc::new(Self {
-            inner: MockModel::with_scripts(scripts),
-            requests: Mutex::new(Vec::new()),
-        })
-    }
-    fn requests(&self) -> Vec<ModelRequest> {
-        self.requests.lock().unwrap().clone()
-    }
-}
-
-#[async_trait]
-impl Model for RequestLog {
-    async fn invoke(
-        &self,
-        request: ModelRequest,
-        cancel: CancellationToken,
-    ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
-        self.requests.lock().unwrap().push(request.clone());
-        self.inner.invoke(request, cancel).await
-    }
-
-    fn capabilities(&self) -> ModelCapabilities {
-        ModelCapabilities::default()
-    }
-}
 
 fn deferring_ctx(session: &Arc<MemorySession>) -> RunContext<()> {
     session_ctx(session).with_permission_policy(Arc::new(DeferB))

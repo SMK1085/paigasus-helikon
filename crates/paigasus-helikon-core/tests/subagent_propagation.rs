@@ -7,13 +7,11 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use common::{MockAgent, MockModel, MockTool};
-use futures_core::stream::BoxStream;
+use common::{DeferB, MockAgent, MockModel, MockTool, RequestLog};
 use paigasus_helikon_core::{
-    Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, CancellationToken, ContentPart,
-    FinishReason, GuardRule, Hook, HookDecision, HookEvent, HookRegistry, Item, LlmAgent, Model,
-    ModelCapabilities, ModelError, ModelEvent, ModelRequest, PermissionDecision, PermissionMode,
-    PermissionPolicy, RunContext, Tool,
+    Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, ContentPart, FinishReason, GuardRule,
+    Hook, HookDecision, HookEvent, HookRegistry, Item, LlmAgent, ModelEvent, PermissionMode,
+    RunContext, Tool,
 };
 
 /// Turn 1: call `tool_name` with `{}`. Turn 2: stop with `"done"`. Two scripts so
@@ -334,49 +332,6 @@ async fn agent_as_tool_fires_on_subagent_stop_on_failure() {
 
 // ── SMA-803: a sub-run cannot defer a tool call ─────────────────────────────
 
-/// Defers every call to tool `b`; allows the rest.
-struct DeferB;
-
-#[async_trait]
-impl PermissionPolicy<()> for DeferB {
-    async fn check(
-        &self,
-        _ctx: &RunContext<()>,
-        tool: &str,
-        _args: &serde_json::Value,
-    ) -> PermissionDecision {
-        if tool == "b" {
-            PermissionDecision::Defer {
-                prompt: "policy says wait".to_owned(),
-            }
-        } else {
-            PermissionDecision::Allow
-        }
-    }
-}
-
-/// A [`MockModel`] that records the requests it receives.
-struct CapturingModel {
-    inner: Arc<MockModel>,
-    requests: Mutex<Vec<ModelRequest>>,
-}
-
-#[async_trait]
-impl Model for CapturingModel {
-    async fn invoke(
-        &self,
-        request: ModelRequest,
-        cancel: CancellationToken,
-    ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
-        self.requests.lock().unwrap().push(request.clone());
-        self.inner.invoke(request, cancel).await
-    }
-
-    fn capabilities(&self) -> ModelCapabilities {
-        ModelCapabilities::default()
-    }
-}
-
 /// The text of each `ToolResult` item in `items`.
 fn tool_result_texts(items: &[Item]) -> Vec<String> {
     items
@@ -413,10 +368,7 @@ const CANNOT_DEFER: &str = "approval deferred, but this run cannot defer: ";
 /// deferral there is a denial, and the parent run completes.
 #[tokio::test]
 async fn deferral_is_denied_inside_agent_as_tool_sub_run() {
-    let inner_model = Arc::new(CapturingModel {
-        inner: MockModel::with_scripts(call_then_stop("b")),
-        requests: Mutex::new(Vec::new()),
-    });
+    let inner_model = RequestLog::with_scripts(call_then_stop("b"));
     let inner_b = MockTool::new("b", serde_json::json!({"ok": true}));
     let inner = LlmAgent::builder::<()>()
         .name("inner")
@@ -447,7 +399,7 @@ async fn deferral_is_denied_inside_agent_as_tool_sub_run() {
 
     let events = drain(&parent, ctx).await;
 
-    let requests = inner_model.requests.lock().unwrap().clone();
+    let requests = inner_model.requests();
     assert_eq!(
         requests.len(),
         2,
