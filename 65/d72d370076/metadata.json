@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "65d72d370076",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-824-bedrock-translator-sends-an-empty-text-block",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-sma-824-bedrock-empty-text-block-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/65/d72d370076/0/metadata.json",
+      "transcript": "/65/d72d370076/0/full.jsonl",
+      "compact_transcript": "/65/d72d370076/0/transcript.jsonl",
+      "content_hash": "/65/d72d370076/0/content_hash.txt",
+      "prompt": "/65/d72d370076/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 140817,
+    "cache_read_tokens": 4196592,
+    "output_tokens": 34329,
+    "api_call_count": 33,
+    "subagent_tokens": {
+      "input_tokens": 56,
+      "cache_creation_tokens": 190420,
+      "cache_read_tokens": 3621070,
+      "output_tokens": 70619,
+      "api_call_count": 28
+    }
+  },
+  "redaction": {
+    "replacements": 24,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 56,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
