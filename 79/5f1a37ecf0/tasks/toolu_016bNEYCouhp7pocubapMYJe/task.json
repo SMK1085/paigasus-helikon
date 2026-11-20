@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_016bNEYCouhp7pocubapMYJe",
+  "agent_id": "a21bfe65ea366d85f",
+  "subagent_type": "feature-factory:spec-challenger",
+  "task_description": "Challenge the core-cascade spec",
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 118747,
+    "cache_read_tokens": 1967530,
+    "output_tokens": 46998,
+    "api_call_count": 24
+  },
+  "started_at": "2026-11-20T23:18:40.804337+01:00",
+  "completed_at": "2026-11-20T23:26:53.648287+01:00"
+}

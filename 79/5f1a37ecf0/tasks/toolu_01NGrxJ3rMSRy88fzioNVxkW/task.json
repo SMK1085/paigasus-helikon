@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NGrxJ3rMSRy88fzioNVxkW",
+  "agent_id": "a45e8dedad9108758",
+  "subagent_type": "general-purpose",
+  "task_description": "Research release-plz dependent bumps",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 92670,
+    "cache_read_tokens": 941734,
+    "output_tokens": 7057,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-20T23:07:43.381714+01:00",
+  "completed_at": "2026-11-20T23:09:30.421077+01:00"
+}

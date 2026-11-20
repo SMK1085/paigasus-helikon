@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "795f1a37ecf0",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-838-release-the-dependents-of-a-core-minor-bump",
+  "checkpoints_count": 13,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-core-cascade-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/79/5f1a37ecf0/0/metadata.json",
+      "transcript": "/79/5f1a37ecf0/0/full.jsonl",
+      "compact_transcript": "/79/5f1a37ecf0/0/transcript.jsonl",
+      "content_hash": "/79/5f1a37ecf0/0/content_hash.txt",
+      "prompt": "/79/5f1a37ecf0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 106362,
+    "cache_read_tokens": 15829787,
+    "output_tokens": 59154,
+    "api_call_count": 61,
+    "subagent_tokens": {
+      "input_tokens": 90,
+      "cache_creation_tokens": 271244,
+      "cache_read_tokens": 3201624,
+      "output_tokens": 60122,
+      "api_call_count": 45
+    }
+  },
+  "redaction": {
+    "replacements": 89,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 89,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
