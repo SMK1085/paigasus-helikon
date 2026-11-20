@@ -163,7 +163,7 @@ use paigasus_helikon::core::{
 };
 use std::sync::{Arc, Mutex};
 
-/// Hands out the messages of a host inbox, one per boundary.
+/// Hands out the newest message of a host inbox at each boundary.
 struct InboxCheckpoint {
     inbox: Mutex<Vec<String>>,
 }
@@ -175,7 +175,7 @@ impl TurnCheckpoint<()> for InboxCheckpoint {
         _ctx: &RunContext<()>,
         _boundary: &TurnBoundary,
     ) -> CheckpointDecision {
-        match self.inbox.lock().unwrap().pop() {
+        match self.inbox.lock().unwrap().last().cloned() {
             Some(text) => CheckpointDecision::Inject(vec![ContentPart::Text { text }]),
             None => CheckpointDecision::Continue,
         }
@@ -187,6 +187,8 @@ let checkpoint = Arc::new(InboxCheckpoint {
 });
 let ctx = RunContext::ephemeral(()).with_turn_checkpoint(checkpoint);
 ```
+
+The checkpoint does not remove the item from the inbox. The host removes it when it sees `UserMessageInjected` in the event stream (see "Commit rule" below). If a guardrail rejects the item, or a cancel ends the run first, the item stays in the inbox. This example needs `Runner::run_streamed`. The stream gives `UserMessageInjected` to the host before the loop reaches the next boundary. `Runner::run` returns the events only when the run ends, so with `run` this checkpoint injects the same item again at each boundary.
 
 ### Event order
 
@@ -221,7 +223,7 @@ A guardrail stop has a `GuardrailTriggered` event before `RunStopped`, and no `U
 3. The wait in `at_boundary` counts against `RunConfig::timeout`. The loop has no separate timeout for it.
 4. The runner can drop the stream while `at_boundary` waits. Then the future is dropped. Write `at_boundary` so that it is cancel-safe.
 5. Do not cancel the run from the checkpoint. A cancel ends the run as `Cancelled`. Return `Stop` instead.
-6. `TokioRunner` stores the session on a best-effort basis. If the store fails, the injected content is lost, although `UserMessageInjected` was in the stream. A host that needs a guarantee must check the stored session.
+6. `TokioRunner` stores the session on a best-effort basis. If the store fails, the injected content can be missing from the session, although `UserMessageInjected` was in the stream. A host that needs a guarantee must check the stored session before it delivers the content again.
 
 ### Where the checkpoint does not run
 

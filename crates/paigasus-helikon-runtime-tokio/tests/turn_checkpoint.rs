@@ -261,7 +261,10 @@ async fn cancel_while_checkpoint_waits() {
     )
     .await
     .expect("no hang");
-    canceller.await.unwrap();
+    tokio::time::timeout(LIMIT, canceller)
+        .await
+        .expect("canceller notified")
+        .unwrap();
     assert!(matches!(r, Err(RunError::Cancelled)), "{r:?}");
 
     let events = session.events(None).await.unwrap();
@@ -299,7 +302,10 @@ async fn cancel_while_injection_guardrail_waits() {
     )
     .await
     .expect("no hang");
-    canceller.await.unwrap();
+    tokio::time::timeout(LIMIT, canceller)
+        .await
+        .expect("canceller notified")
+        .unwrap();
     assert!(matches!(r, Err(RunError::Cancelled)), "{r:?}");
 
     let events = session.events(None).await.unwrap();
