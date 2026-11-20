@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01AejvS9Bkf3kwQg6W8NqeHr",
+  "agent_id": "af1413a7a3ddc87d5",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix CodeRabbit round 1 on PR 344",
+  "token_usage": {
+    "input_tokens": 126,
+    "cache_creation_tokens": 195343,
+    "cache_read_tokens": 9000578,
+    "output_tokens": 47841,
+    "api_call_count": 63
+  },
+  "started_at": "2026-11-20T01:17:23.260158+01:00",
+  "completed_at": "2026-11-20T01:29:31.512006+01:00"
+}
