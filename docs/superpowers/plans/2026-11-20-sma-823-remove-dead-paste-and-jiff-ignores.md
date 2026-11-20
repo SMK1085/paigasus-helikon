@@ -55,10 +55,11 @@ Run:
 ```bash
 bash scripts/check-advisory-ignore-sync.sh
 cargo audit --deny warnings
-cargo deny --all-features check 2>&1 | grep -E 'advisory-not-detected|^(advisories|bans|licenses|sources) (ok|FAILED)'
+cargo deny --all-features check > deny.log 2>&1; echo "deny exit=$?"
+grep -E 'advisory-not-detected|(advisories|bans|licenses|sources) (ok|FAILED)' deny.log
 ruby -ryaml -e 'YAML.load_file(".github/dependabot.yml"); puts "yaml ok"'
 ```
-Expected: sync script prints `advisory ignore lists agree (N entries)`; audit exits 0; deny shows `advisories ok`, `bans ok`, `licenses ok`, `sources ok`, and no `advisory-not-detected` line for the removed IDs; `yaml ok`.
+Expected: sync script prints `advisory ignore lists agree (N entries)`; audit exits 0; `deny exit=0`, and `deny.log` shows `advisories ok`, `bans ok`, `licenses ok`, `sources ok`, and no `advisory-not-detected` line for the removed IDs; `yaml ok`.
 
 - [ ] **Step 5: Commit**
 
