@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "313ea6f28244",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-838-release-the-dependents-of-a-core-minor-bump",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-cli/CHANGELOG.md",
+    "crates/paigasus-helikon-evals/CHANGELOG.md",
+    "crates/paigasus-helikon-mcp/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-anthropic/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-bedrock/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-gemini/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-litellm/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-openai/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-actix/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-agentcore/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-axum/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-temporal/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-tokio/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-postgres/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-redis/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-sqlite/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-testkit/CHANGELOG.md",
+    "crates/paigasus-helikon-tools/CHANGELOG.md",
+    "crates/paigasus-helikon/CHANGELOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/31/3ea6f28244/0/metadata.json",
+      "transcript": "/31/3ea6f28244/0/full.jsonl",
+      "compact_transcript": "/31/3ea6f28244/0/transcript.jsonl",
+      "content_hash": "/31/3ea6f28244/0/content_hash.txt",
+      "prompt": "/31/3ea6f28244/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 6915,
+    "cache_read_tokens": 2263758,
+    "output_tokens": 3582,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 68,
+      "cache_creation_tokens": 62091,
+      "cache_read_tokens": 2926520,
+      "output_tokens": 21013,
+      "api_call_count": 32
+    }
+  },
+  "redaction": {
+    "replacements": 106,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 106,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
