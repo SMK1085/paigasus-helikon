@@ -215,6 +215,7 @@ git commit -m "fix(providers-anthropic): SMA-819 fail early when no valid reques
   - `blank_user_after_tool_result_with_last_turn_cache_is_accepted`: the same with `.cache_strategy(CacheStrategy::LastTurn)`.
   - `reasoning_only_assistant_tool_loop_is_accepted`: user, assistant `[Reasoning "scratch"]`, `ToolCall tu_1`, `ToolResult tu_1 "pong"`, assistant `"done"`, user `"thanks, reply ok"`.
   - `replayed_blank_user_is_accepted`: user `"hi"`, assistant `"Hello"`, user `""`, user `"Reply with ok"`.
+  - `tool_only_multi_round_loop_is_accepted`: user `"ping twice"`, `ToolCall tu_a`, `ToolResult tu_a "pong"`, `ToolCall tu_b`, `ToolResult tu_b "pong"`, assistant `"done"`, user `"reply ok"`. This is the replay shape that SMA-810 handoff sessions produce.
 
   Use the real tool-use ID format `toolu_01...` for `call_id` values.
 
