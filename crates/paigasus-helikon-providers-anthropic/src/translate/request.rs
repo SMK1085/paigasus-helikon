@@ -12,9 +12,9 @@ use serde_json::{json, Value};
 pub(crate) struct TranslatedMessages {
     pub(crate) system: Option<Value>,
     pub(crate) messages: Value,
-    /// `true` when the last conversation item was a user or assistant
-    /// message that produced no message and the last sent message is an
-    /// assistant one.
+    /// `true` when the last user message produced no message, no kept
+    /// message or tool item follows it (dropped assistant items do not
+    /// count), and the last sent message is an assistant one.
     pub(crate) trailing_message_dropped: bool,
 }
 
@@ -69,11 +69,15 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 }
             }
             Item::AssistantMessage { content, agent: _ } => {
-                flush_pending_assistant(&mut messages, &mut pending_tool_use);
-                flush_pending_user(&mut messages, &mut pending_tool_results);
                 let blocks = assistant_blocks(content);
-                last_item_dropped = blocks.as_array().unwrap().is_empty();
-                if !last_item_dropped {
+                // An assistant item with no blocks acts as if it were absent:
+                // it flushes nothing (so an open tool round stays whole) and
+                // leaves the flag as it is (a drop of the user turn before
+                // it still counts). A kept assistant message ends the drop.
+                if !blocks.as_array().unwrap().is_empty() {
+                    flush_pending_assistant(&mut messages, &mut pending_tool_use);
+                    flush_pending_user(&mut messages, &mut pending_tool_results);
+                    last_item_dropped = false;
                     messages.push(json!({"role": "assistant", "content": blocks}));
                 }
             }
@@ -851,6 +855,82 @@ mod tests {
         let out = translate_messages(&items);
         assert_eq!(out.messages, json!([utext("q"), atext("a")]));
         assert!(out.trailing_message_dropped);
+    }
+
+    /// A dropped assistant item inside an open parallel round does not
+    /// split the round.
+    #[test]
+    fn dropped_assistant_inside_open_round_does_not_split_it() {
+        let items = vec![
+            user("q"),
+            asst("a"),
+            call("t1"),
+            call("t2"),
+            result("t1"),
+            asst(""),
+            call("t3"),
+            result("t2"),
+            result("t3"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "a"}, tu("t1"), tu("t2"), tu("t3"),
+                ]},
+                {"role": "user", "content": [tr("t1"), tr("t2"), tr("t3")]},
+            ])
+        );
+    }
+
+    /// A dropped assistant item between a tool result and a user message
+    /// does not split the user turn.
+    #[test]
+    fn dropped_assistant_between_result_and_user_keeps_one_user_turn() {
+        let items = vec![
+            user("q"),
+            asst("a"),
+            call("t1"),
+            result("t1"),
+            asst(" "),
+            user("r"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [{"type": "text", "text": "a"}, tu("t1")]},
+                {"role": "user", "content": [tr("t1"), {"type": "text", "text": "r"}]},
+            ])
+        );
+    }
+
+    /// A caller prefill that ends with a reasoning-only assistant item is
+    /// not a drop-induced prefill: no user turn was dropped.
+    #[test]
+    fn trailing_reasoning_assistant_without_dropped_user_does_not_set_flag() {
+        let items = vec![
+            user("q"),
+            asst("a"),
+            Item::AssistantMessage {
+                content: vec![ContentPart::Reasoning {
+                    text: "scratch".to_owned(),
+                }],
+                agent: None,
+            },
+        ];
+        let out = translate_messages(&items);
+        assert_eq!(out.messages, json!([utext("q"), atext("a")]));
+        assert!(!out.trailing_message_dropped);
+    }
+
+    #[test]
+    fn trailing_blank_assistant_without_dropped_user_does_not_set_flag() {
+        let items = vec![user("q"), asst("a"), asst("")];
+        let out = translate_messages(&items);
+        assert_eq!(out.messages, json!([utext("q"), atext("a")]));
+        assert!(!out.trailing_message_dropped);
     }
 
     #[test]

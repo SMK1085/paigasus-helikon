@@ -67,7 +67,11 @@ These paths make a blank text part:
    - the drops leave no messages;
    - the last conversation item (`UserMessage`, `AssistantMessage`, `ToolCall`
      or `ToolResult`) is a `UserMessage` that the translator dropped, and the
-     request now ends with an assistant message.
+     request now ends with an assistant message. An `AssistantMessage` that the
+     translator also drops after that user message does not count as a later
+     item, so `user q, assistant a, user "", assistant ""` is rejected. A
+     dropped assistant item with no dropped user message before it is a caller
+     prefill and is sent.
 
    A caller that ends the item list with an assistant message on purpose (a
    prefill) is not blocked. The translator reports the second case to
