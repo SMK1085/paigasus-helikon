@@ -120,7 +120,7 @@ Insert in both CHANGELOGs, directly under `## [Unreleased]`, with one blank line
 - This release requires `jiff` 1. The `ts` fields of `SessionEvent` and the return value of `SessionEvent::ts()` now have the type `jiff::Timestamp` from jiff 1. A `Timestamp` from jiff 0.2 is a different type.
 - If your code passes a `Timestamp` into a `SessionEvent`, or uses the value from `ts()` with jiff code, change your `jiff` requirement to `1`. Read the [jiff 1.0 changelog](https://github.com/BurntSushi/jiff/blob/master/CHANGELOG.md) for the APIs that jiff renamed.
 - If your code uses only the constructors that set `ts` to the current time (for example `SessionEvent::user_message`) and does not read `ts`, it needs no change.
-- Upgrade `paigasus-helikon-core` and `paigasus-helikon` to 0.7 together. If your lockfile keeps `paigasus-helikon` 0.6 after `cargo update`, it can hold two copies of core. Run `cargo tree -d -i paigasus-helikon-core` to find them.
+- Upgrade `paigasus-helikon-core` and `paigasus-helikon` to 0.7 together. If your lockfile keeps `paigasus-helikon` 0.6 after `cargo update`, it can hold two copies of core. Run `cargo tree -d` to find them.
 - The JSON format of a stored `SessionEvent` does not change. Session rows that an earlier version wrote stay readable.
 ```
 
@@ -131,7 +131,7 @@ Expected: `test result: ok. 4 passed`. A failure here means the stored format ch
 
 - [ ] **Step 5: Run the jiff crates' tests**
 
-Run: `cargo test -p paigasus-helikon-core -p paigasus-helikon-sessions-sqlite -p paigasus-helikon-sessions-testkit -p paigasus-helikon-evals -p paigasus-helikon-runtime-agentcore -p paigasus-helikon --all-features 2>&1 | grep -E '^test result|FAILED|panicked'`
+Run: `cargo test -p paigasus-helikon-core -p paigasus-helikon-sessions-sqlite -p paigasus-helikon-sessions-testkit -p paigasus-helikon-evals -p paigasus-helikon-runtime-agentcore -p paigasus-helikon --all-features --no-fail-fast 2>&1 | grep -E '^test result|FAILED|panicked'`
 Expected: every `test result: ok`, except the `trybuild_ui` binary, which fails with the 5 known mismatches (`builder_missing_model`, `builder_missing_name`, `builder_model_twice`, `builder_name_twice`, `builder_source_blocks_build`). Any other failure is a real failure.
 
 - [ ] **Step 6: Run the local CI gates**
@@ -173,7 +173,7 @@ Expected: `release-plz --version` prints `release-plz 0.4.3`.
 
 - [ ] **Step 2: Build the squash commit in a scratch clone**
 
-Clone the worktree into `$S/clone` with all tags (`git clone --no-local <worktree> "$S/clone"`, then `git fetch --tags https://github.com/SMK1085/paigasus-helikon.git main`). In the clone only: check out `origin/main` from GitHub on a new local branch, apply the branch diff as one commit (`git diff origin/main...<branch-head> | git apply --index`), and commit with the message `chore(deps)!: SMA-831 upgrade jiff to 1 (#999)` and no body.
+Clone the worktree into `$S/clone` with all tags (`git clone --no-local <worktree> "$S/clone"`, then `git fetch --tags https://github.com/SMK1085/paigasus-helikon.git +main:refs/remotes/gh/main`). In the clone only: create a local branch named `main` at `gh/main` (release-plz reads the local `main`), apply the branch diff as one commit (`git diff gh/main...<branch-head> | git apply --index`), and commit with the message `chore(deps)!: SMA-831 upgrade jiff to 1 (#999)` and no body.
 Expected: `git log -1 --format=%B` prints the title line only.
 
 - [ ] **Step 3: Run release-plz update**

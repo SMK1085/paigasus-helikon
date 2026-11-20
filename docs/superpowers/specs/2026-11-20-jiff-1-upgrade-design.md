@@ -123,7 +123,7 @@ minor bump.
      `SessionEvent::user_message`) and does not read `ts` needs no change;
    - upgrade core and the facade together, and upgrade them to 0.7. If the
      lockfile still holds facade 0.6 after a `cargo update`, it can hold two
-     copies of core. Check with `cargo tree -d -i paigasus-helikon-core`;
+     copies of core. Check with `cargo tree -d`;
    - the stored JSON format does not change, so old rows stay readable;
    - link the jiff 1.0 changelog for the APIs that jiff itself renamed.
 5. mdBook and READMEs: the only jiff reference is
