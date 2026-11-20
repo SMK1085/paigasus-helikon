@@ -209,9 +209,10 @@ guards. The `fmt` checkout gets `fetch-depth: 2`.
 - **Packages.** From `cargo metadata --no-deps` at the head: each publishable
   workspace member (`publish` not `[]`/false), with its normal (not dev, not
   build) dependencies on other workspace members.
-- **Breaking bump.** For `0.y.z`, `y` increases (or the major does). For
-  `x.y.z` with `x ≥ 1`, `x` increases. A version that goes down fails with its
-  own message.
+- **Breaking bump.** For `0.0.z`, any change of `z` (Cargo treats each
+  `0.0.z` as incompatible). For `0.y.z` with `y ≥ 1`, `y` increases (or the
+  major does). For `x.y.z` with `x ≥ 1`, `x` increases. A version that goes
+  down fails with its own message.
 - **Rule.** If a publishable crate has a breaking bump, each publishable,
   non-exempt workspace crate with a normal dependency on it must also have a
   breaking bump in its own scheme. The rule is not transitive by itself; each
@@ -219,7 +220,11 @@ guards. The `fmt` checkout gets `fetch-depth: 2`.
   head version and the minimum version it needs.
 - **Exemption.** `paigasus-helikon-cli`, with its reason in a comment (binary
   crate; the library is internal).
-- **New crates.** A crate that is absent at the base is skipped.
+- **New crates.** Packages are matched by name, not by path. A crate is new
+  only when no package with its name exists at the base; a new crate is
+  skipped. A crate that exists at the base under another path is an existing
+  crate and is checked. A failed base read for an existing crate fails the
+  guard.
 - **Loud failure.** If the base versions cannot be read, or no publishable
   crate is found, the script fails.
 - **Message.** The failure text says how to fix it: open a `!` PR that adds an

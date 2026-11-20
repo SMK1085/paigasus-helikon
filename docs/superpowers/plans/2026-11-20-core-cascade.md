@@ -132,7 +132,7 @@ New worktree from current `main`, branch `feature/sma-838-breaking-cascade-guard
 - Produces: `bash scripts/check-breaking-cascade.sh` — exit 0 pass, exit 1 violation or loud failure, with messages on stderr. Environment overrides (used by the self-test; in CI they are unset):
   - `CASCADE_EVENT` — overrides `GITHUB_EVENT_NAME`.
   - `CASCADE_METADATA` — path to a `cargo metadata --no-deps --format-version 1` JSON for the head (default: run `cargo metadata`).
-  - `CASCADE_BASE_VERSIONS` — path to a file of `<name> <version>` lines for the base (default: read each head package's `manifest_path`, relative to the repo root, at the base revision with `git show <base>:<path>` and take its `version`).
+  - `CASCADE_BASE_VERSIONS` — path to a file of `<name> <version>` lines for the base. Default: list every `Cargo.toml` at the base revision (`git ls-tree -r --name-only <base>`), read each with `git show <base>:<path>`, and map `[package] name` → `version`. Packages are matched **by name**, never by the head `manifest_path`, so a crate that moved directory is still an existing crate. A base read that fails for any manifest fails the guard.
   - `CASCADE_BASE_REV` — overrides the base revision.
 - Base revision default: `pull_request` → `HEAD^1`; `push` → print `notice: push event, no PR base; skipping` and exit 0; empty event (local run) → `git merge-base origin/main HEAD`; any other event → fail.
 
@@ -149,6 +149,7 @@ New worktree from current `main`, branch `feature/sma-838-breaking-cascade-guard
 | `major_scheme` | core 0.9.0→1.0.0, dep-a 1.2.0→1.3.0 | exit 1, names `dep-a` and `2.0.0` |
 | `version_down` | dep-a 0.2.0→0.1.9 | exit 1, output contains `goes down` |
 | `new_crate_skipped` | new crate absent at base | exit 0 |
+| `moved_crate_checked` | dep-a exists at base under another path; core 0.7→0.8, dep-a 0.2.0→0.2.1 | exit 1, names `dep-a` |
 | `unreadable_base` | `CASCADE_BASE_VERSIONS` points to a missing file | exit 1 |
 | `empty_package_list_fails` | metadata with no publishable packages | exit 1 |
 | `push_event_skips` | `CASCADE_EVENT=push` | exit 0, output contains `notice` |
