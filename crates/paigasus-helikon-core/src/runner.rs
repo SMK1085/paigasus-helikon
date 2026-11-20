@@ -108,7 +108,7 @@ where
     ///
     /// **Cancellation/timeout is best-effort and loses to a genuine terminal
     /// event that already occurred.** If the run reaches a terminal
-    /// (`RunCompleted`/`RunFailed`/`RunDeferred`) before — or in the same poll as — a cancel or
+    /// (`RunCompleted`/`RunFailed`/`RunDeferred`/`RunStopped`) before — or in the same poll as — a cancel or
     /// timeout, the runner reports that real outcome (`Ok`, or the structured
     /// `Err(RunError::Agent(..))`), not `Err(RunError::Cancelled)` /
     /// `Err(RunError::Timeout)`. The cancel/timeout wins only when it aborted the
@@ -260,12 +260,18 @@ impl RunConfig {
 pub struct RunResult<T = String> {
     /// The model's final assistant output, deserialized into `T`. For
     /// the default `T = String` this is the literal text.
+    ///
+    /// Check `stop_reason` before you use this field. On a run that did not
+    /// complete (`StopReason::Deferred` or `StopReason::Stopped`), it holds
+    /// the text of the last assistant message, if any. That text is not a
+    /// final answer, and it did not pass the output guardrails.
     pub final_output: T,
     /// Every [`AgentEvent`] emitted during the run, in order.
     pub events: Vec<AgentEvent>,
     /// Aggregated token usage across every turn of the run.
     pub usage: TokenUsage,
-    /// Why the run stopped. A deferred run carries the pending tool calls.
+    /// Why the run stopped. A deferred run carries the pending tool calls. A
+    /// run that the turn checkpoint stopped carries the stop reason.
     ///
     /// When output redaction is on, the args of these calls are the redacted
     /// copy. Do not use them to run or to hash a call. The stored
@@ -282,7 +288,8 @@ impl RunResult<String> {
     /// configured structured output upstream — without it,
     /// `parse_final` is just a JSON parse over unstructured text.
     ///
-    /// Check `stop_reason` first: a deferred run has no final output to parse.
+    /// Check `stop_reason` first: a deferred or stopped run has no final
+    /// output to parse. The parsed result keeps `stop_reason`.
     pub fn parse_final<T>(self) -> Result<RunResult<T>, serde_json::Error>
     where
         T: serde::de::DeserializeOwned + schemars::JsonSchema,
@@ -404,6 +411,13 @@ impl RunResultStreaming {
     /// the result is the terminal assistant output, not intermediate text.
     /// Structured-output callers go through `RunResult::<String>::parse_final::<T>()`
     /// (SMA-313).
+    ///
+    /// A terminal `AgentEvent::RunDeferred` sets `stop_reason` to
+    /// `StopReason::Deferred`, and a terminal `AgentEvent::RunStopped` sets it
+    /// to `StopReason::Stopped`. Both return `Ok` with the usage of the
+    /// terminal event, unless the runner recorded a failed strict session write
+    /// (see [`RunResultStreaming::with_session_write`]). A recorded write error
+    /// wins: `collect` then returns `Err(RunError::SessionWrite)`.
     pub async fn collect(mut self) -> Result<RunResult, RunError> {
         use futures_util::stream::StreamExt;
         let mut events = Vec::new();
@@ -432,6 +446,12 @@ impl RunResultStreaming {
                     usage = *u;
                     stop_reason = crate::StopReason::Deferred {
                         calls: calls.clone(),
+                    };
+                }
+                crate::AgentEvent::RunStopped { reason, usage: u } => {
+                    usage = *u;
+                    stop_reason = crate::StopReason::Stopped {
+                        reason: reason.clone(),
                     };
                 }
                 crate::AgentEvent::RunFailed { error } => {
@@ -472,6 +492,10 @@ impl RunResultStreaming {
     /// [`AgentEvent::StructuredOutputFailed`]) become
     /// [`AgentError::InvalidStructuredOutput`]; any other terminal
     /// [`AgentEvent::RunFailed`] becomes [`AgentError::Other`].
+    ///
+    /// A run that did not complete (a terminal [`AgentEvent::RunDeferred`] or
+    /// [`AgentEvent::RunStopped`]) returns [`AgentError::Incomplete`] with its
+    /// stop reason.
     pub async fn collect_typed<T>(mut self) -> Result<RunResult<T>, AgentError>
     where
         T: serde::de::DeserializeOwned,
@@ -501,6 +525,12 @@ impl RunResultStreaming {
                     usage = *u;
                     stop_reason = crate::StopReason::Deferred {
                         calls: calls.clone(),
+                    };
+                }
+                AgentEvent::RunStopped { reason, usage: u } => {
+                    usage = *u;
+                    stop_reason = crate::StopReason::Stopped {
+                        reason: reason.clone(),
                     };
                 }
                 AgentEvent::StructuredOutputFailed {

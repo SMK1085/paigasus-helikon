@@ -294,3 +294,96 @@ async fn oneshot_run_clears_the_deferral_flag() {
     let v: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(v["output"], "deferral=false");
 }
+
+// ── Turn checkpoint is not supported over HTTP ─────────────────────────────
+
+/// A checkpoint that counts its calls.
+struct CountingCheckpoint(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl paigasus_helikon_core::TurnCheckpoint<()> for CountingCheckpoint {
+    async fn at_boundary(
+        &self,
+        _ctx: &paigasus_helikon_core::RunContext<()>,
+        _boundary: &paigasus_helikon_core::TurnBoundary,
+    ) -> paigasus_helikon_core::CheckpointDecision {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        paigasus_helikon_core::CheckpointDecision::Continue
+    }
+}
+
+/// A provider that sets a counting checkpoint on every context.
+struct CheckpointProvider(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait(?Send)]
+impl paigasus_helikon_runtime_actix::ContextProvider<()> for CheckpointProvider {
+    async fn build(
+        &self,
+        _req: &actix_web::HttpRequest,
+        session: Arc<dyn paigasus_helikon_core::Session>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<paigasus_helikon_core::RunContext<()>, paigasus_helikon_runtime_actix::ServerError>
+    {
+        Ok(paigasus_helikon_core::RunContext::ephemeral(())
+            .with_session(session)
+            .with_cancel(cancel)
+            .with_turn_checkpoint(Arc::new(CountingCheckpoint(Arc::clone(&self.0)))))
+    }
+}
+
+/// An agent that makes one tool turn: it calls the turn checkpoint at the
+/// boundary, as the agent loop does, when the context carries one.
+struct OneTurnAgent;
+
+#[async_trait::async_trait]
+impl paigasus_helikon_core::Agent<()> for OneTurnAgent {
+    fn name(&self) -> &str {
+        "probe"
+    }
+
+    fn description(&self) -> &str {
+        "calls the turn checkpoint once"
+    }
+
+    async fn run(
+        &self,
+        ctx: paigasus_helikon_core::RunContext<()>,
+        _input: paigasus_helikon_core::AgentInput,
+    ) -> Result<
+        futures_util::stream::BoxStream<'static, AgentEvent>,
+        paigasus_helikon_core::AgentError,
+    > {
+        use futures_util::StreamExt as _;
+        if let Some(cp) = ctx.turn_checkpoint() {
+            let boundary = paigasus_helikon_core::TurnBoundary::new(0, 1, "probe", 0);
+            cp.at_boundary(&ctx, &boundary).await;
+        }
+        let events = vec![AgentEvent::RunCompleted {
+            usage: paigasus_helikon_core::TokenUsage::default(),
+        }];
+        Ok(futures_util::stream::iter(events).boxed())
+    }
+}
+
+/// The HTTP runtime cannot support the checkpoint yet, so it clears it. A
+/// provider that sets one sees a counter of 0, and the run still completes.
+#[tokio::test]
+async fn context_provider_checkpoint_never_fires() {
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server = AgentServer::<()>::builder()
+        .context_provider(Arc::new(CheckpointProvider(Arc::clone(&counter))))
+        .agent(Arc::new(OneTurnAgent))
+        .build()
+        .expect("server builds");
+    let base = support::spawn_actix_server(server);
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/agents/probe/runs"))
+        .header("content-type", "application/json")
+        .body(r#"{"input":"hi"}"#)
+        .send()
+        .await
+        .unwrap();
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["status"], "completed");
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

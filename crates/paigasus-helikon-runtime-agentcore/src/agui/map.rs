@@ -296,6 +296,18 @@ impl EventMapper {
                 self.streamed_text = false;
                 out.push(event::run_finished(&self.thread_id, &self.run_id));
             }
+            AgentEvent::UserMessageInjected { .. } => {
+                out.push(self.custom("helikon.user_message_injected", ev));
+            }
+            // AG-UI has no "stopped" run event. A stop is a controlled end, not a
+            // failure, so the stream ends with `RUN_FINISHED`; the CUSTOM frame before
+            // it carries the reason and usage.
+            AgentEvent::RunStopped { .. } => {
+                self.close_all(&mut out);
+                self.streamed_text = false;
+                out.push(self.custom("helikon.run_stopped", ev));
+                out.push(event::run_finished(&self.thread_id, &self.run_id));
+            }
             AgentEvent::RunFailed { error } => {
                 self.close_all(&mut out);
                 self.streamed_text = false;
@@ -669,6 +681,40 @@ mod tests {
             },
         ]);
         assert_eq!(t, vec!["RUN_STARTED", "RUN_FINISHED"]);
+    }
+
+    #[test]
+    fn user_message_injected_maps_to_a_custom_frame() {
+        let mut m = EventMapper::new("t".to_owned(), "r".to_owned());
+        let frames = m.push(&AgentEvent::UserMessageInjected {
+            content: vec![ContentPart::Text {
+                text: "hi".to_owned(),
+            }],
+        });
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "CUSTOM");
+        assert_eq!(frames[0]["name"], "helikon.user_message_injected");
+    }
+
+    #[test]
+    fn run_stopped_maps_to_a_custom_frame_then_run_finished() {
+        let t = types(&[
+            AgentEvent::RunStarted {
+                agent: "a".to_owned(),
+            },
+            AgentEvent::RunStopped {
+                reason: "enough".to_owned(),
+                usage: TokenUsage::default(),
+            },
+        ]);
+        assert_eq!(t, vec!["RUN_STARTED", "CUSTOM", "RUN_FINISHED"]);
+        let mut m = EventMapper::new("t".to_owned(), "r".to_owned());
+        let frames = m.push(&AgentEvent::RunStopped {
+            reason: "enough".to_owned(),
+            usage: TokenUsage::default(),
+        });
+        assert_eq!(frames[0]["name"], "helikon.run_stopped");
+        assert_eq!(frames[0]["value"]["reason"], "enough");
     }
 
     #[test]

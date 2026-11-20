@@ -119,6 +119,13 @@ pub enum StopReason {
         /// The deferred tool calls.
         calls: Vec<PendingToolCall>,
     },
+    /// The host stopped the run at a turn boundary through the turn
+    /// checkpoint ([`crate::CheckpointDecision::Stop`], or an input guardrail
+    /// tripwire on injected content).
+    Stopped {
+        /// The reason from the terminal `AgentEvent::RunStopped`.
+        reason: String,
+    },
 }
 
 /// A resume request that the runner rejects as invalid.

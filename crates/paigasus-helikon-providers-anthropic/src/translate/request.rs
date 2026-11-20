@@ -378,6 +378,62 @@ mod tests {
         assert_eq!(blocks[1]["text"], "now what?");
     }
 
+    /// SMA-804: a checkpoint `Inject` leaves a tool result directly followed
+    /// by a user message. The translator folds both into one user turn.
+    #[test]
+    fn tool_result_then_user_message_request_shape() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("start")],
+            },
+            Item::AssistantMessage {
+                content: vec![text("calling")],
+                agent: None,
+            },
+            Item::ToolCall {
+                call_id: "tu_1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "tu_1".to_owned(),
+                content: vec![text("pong")],
+            },
+            Item::UserMessage {
+                content: vec![text("news")],
+            },
+        ];
+        let out = translate_messages(&items);
+        assert_eq!(
+            out.messages,
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "start"}]},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "calling"},
+                    {"type": "tool_use", "id": "tu_1", "name": "ping", "input": {}},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "tu_1", "content": "pong"},
+                    {"type": "text", "text": "news"},
+                ]},
+            ])
+        );
+    }
+
+    /// Pins today's behaviour: an empty text part is emitted as an empty
+    /// text block, not dropped.
+    #[test]
+    fn empty_text_part_is_emitted_as_empty_block() {
+        let items = vec![Item::UserMessage {
+            content: vec![text("")],
+        }];
+        let out = translate_messages(&items);
+        assert_eq!(
+            out.messages,
+            json!([{"role": "user", "content": [{"type": "text", "text": ""}]}])
+        );
+    }
+
     #[test]
     fn trailing_tool_result_synthesizes_user_turn() {
         let items = vec![

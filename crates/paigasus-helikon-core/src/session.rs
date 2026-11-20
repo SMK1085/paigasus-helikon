@@ -644,6 +644,10 @@ impl SessionRecorder {
                     }
                 }
             }
+            AgentEvent::UserMessageInjected { content } => {
+                self.events
+                    .push(SessionEvent::user_message(content.clone()));
+            }
             _ => {}
         }
     }
@@ -1101,6 +1105,38 @@ mod recorder_tests {
         assert!(matches!(&out[1], SessionEvent::ToolReturned { call_id, .. } if call_id == "c1"));
         assert!(
             matches!(&out[2], SessionEvent::HandoffOccurred { from, to, .. } if from == "a" && to == "b")
+        );
+    }
+
+    #[test]
+    fn observe_user_message_injected_records_user_message() {
+        let mut r = SessionRecorder::new("root");
+        r.observe(&AgentEvent::ToolCallItem {
+            item: Item::ToolCall {
+                call_id: "c1".into(),
+                name: "echo".into(),
+                args: serde_json::json!({}),
+            },
+        });
+        r.observe(&AgentEvent::ToolOutputItem {
+            item: Item::ToolResult {
+                call_id: "c1".into(),
+                content: text("ok"),
+            },
+        });
+        r.observe(&AgentEvent::UserMessageInjected {
+            content: text("hi"),
+        });
+        let out = r.drain();
+        assert_eq!(out.len(), 3);
+        assert!(matches!(&out[0], SessionEvent::ToolCalled { .. }));
+        assert!(matches!(&out[1], SessionEvent::ToolReturned { .. }));
+        assert!(
+            matches!(&out[2], SessionEvent::UserMessage { content, .. } if content == &text("hi"))
+        );
+        let snapshot = project(&out);
+        assert!(
+            matches!(snapshot.messages.last(), Some(Item::UserMessage { content }) if content == &text("hi"))
         );
     }
 

@@ -510,3 +510,46 @@ async fn deferral_is_denied_inside_a_workflow_child() {
         "{events:?}"
     );
 }
+
+/// Test F — SMA-804: the turn checkpoint is **never** carried into an
+/// agent-as-tool sub-run. `ToolContext` has no checkpoint carrier and the
+/// `agent_as_tool::invoke` rebuild must not add one, so a host checkpoint sees
+/// only its own run's boundaries. Probe: the inner `MockAgent` records whether
+/// the `RunContext` it receives has no checkpoint.
+#[tokio::test]
+async fn agent_as_tool_sub_context_has_no_turn_checkpoint() {
+    use paigasus_helikon_core::{CheckpointDecision, TurnBoundary, TurnCheckpoint};
+
+    struct Noop;
+
+    #[async_trait]
+    impl TurnCheckpoint<()> for Noop {
+        async fn at_boundary(&self, _: &RunContext<()>, _: &TurnBoundary) -> CheckpointDecision {
+            CheckpointDecision::Continue
+        }
+    }
+
+    let observed: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    let obs = Arc::clone(&observed);
+    let inner = MockAgent::<()>::new("probe", move |ctx| {
+        *obs.lock().unwrap() = Some(ctx.turn_checkpoint().is_none());
+        Vec::new()
+    });
+    let wrapper = AgentAsTool::new(inner).with_name("probe");
+
+    let run_ctx: RunContext<()> =
+        RunContext::ephemeral(()).with_turn_checkpoint(Arc::new(Noop) as Arc<_>);
+    assert!(run_ctx.turn_checkpoint().is_some(), "parent carries one");
+
+    let tc = run_ctx.to_tool_context();
+    let _ = wrapper
+        .invoke(&tc, serde_json::json!({ "input": "probe" }))
+        .await
+        .expect("invoke ok");
+
+    assert_eq!(
+        *observed.lock().unwrap(),
+        Some(true),
+        "the sub-run context must not carry the parent's turn checkpoint"
+    );
+}

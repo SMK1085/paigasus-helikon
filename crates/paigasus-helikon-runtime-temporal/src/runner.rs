@@ -103,6 +103,12 @@ impl TemporalRunnerConfig {
 /// Holds a connected [`temporalio_client::Client`] and a
 /// [`TemporalRunnerConfig`]; each `run` starts one durable workflow execution
 /// on the configured task queue. Construct via [`TemporalRunner::new`].
+///
+/// # Turn checkpoint
+///
+/// `TemporalRunner` does not support the turn checkpoint. The workflow builds
+/// its own run context, so a checkpoint on the context that the caller passes
+/// to `run` never runs. The runner logs a warning when it ignores one.
 pub struct TemporalRunner {
     client: Client,
     config: TemporalRunnerConfig,
@@ -189,6 +195,15 @@ impl TemporalRunner {
         let timeout = config.timeout;
         let max_turns = config.max_turns;
         let parallel_tool_call_limit = config.parallel_tool_call_limit;
+
+        // The workflow rebuilds its own context, so a host checkpoint on this
+        // context never reaches the agent loop. Tell the host.
+        if ctx.turn_checkpoint().is_some() {
+            tracing::warn!(
+                target: "paigasus::runtime_temporal::runner",
+                "turn checkpoint is not supported by this runtime; ignored"
+            );
+        }
 
         let ctx = restrict_unsupported_run_features(ctx).with_run_config(config);
         let cancel = ctx.cancel().clone();

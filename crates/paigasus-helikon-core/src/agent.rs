@@ -384,7 +384,7 @@ impl LlmAgent<(), (), String> {
 
 /// The unified event stream emitted by an [`Agent`].
 ///
-/// Eighteen variants spanning lifecycle, raw streaming deltas,
+/// Twenty variants spanning lifecycle, raw streaming deltas,
 /// post-aggregation semantic items, agent transitions, control signals,
 /// and terminal outcomes. The semantic-item variants
 /// (`MessageOutput`, `ToolCallItem`, `ToolOutputItem`) carry a full
@@ -512,6 +512,19 @@ pub enum AgentEvent {
         final_text: String,
     },
 
+    /// The host injected a user message at a turn boundary through the
+    /// turn checkpoint (see [`crate::TurnCheckpoint`]).
+    ///
+    /// Commit rule: the run owns the injected content if and only if this
+    /// event is in the event stream. Before this event, the host owns the
+    /// content. The session recorder stores the content as a user message,
+    /// so a later run of the same session sees it. This event is not
+    /// terminal.
+    UserMessageInjected {
+        /// The injected user content parts.
+        content: Vec<crate::ContentPart>,
+    },
+
     // --- Terminal ---
     /// The run finished normally.
     RunCompleted {
@@ -536,11 +549,20 @@ pub enum AgentEvent {
         /// Aggregated usage across the run.
         usage: TokenUsage,
     },
+    /// The host stopped the run at a turn boundary through the turn
+    /// checkpoint. This is a controlled end, not a failure.
+    RunStopped {
+        /// The reason the host gave for the stop.
+        reason: String,
+        /// Aggregated usage across every turn that ran.
+        usage: TokenUsage,
+    },
 }
 
 impl AgentEvent {
-    /// `true` for the three events that end a run: [`AgentEvent::RunCompleted`],
-    /// [`AgentEvent::RunFailed`] and [`AgentEvent::RunDeferred`].
+    /// `true` for the four events that end a run: [`AgentEvent::RunCompleted`],
+    /// [`AgentEvent::RunFailed`], [`AgentEvent::RunDeferred`] and
+    /// [`AgentEvent::RunStopped`].
     ///
     /// This is the single definition of "terminal" every runner shares. A
     /// runner's cancel/timeout boundary loses to a terminal that already
@@ -550,7 +572,10 @@ impl AgentEvent {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::RunCompleted { .. } | Self::RunFailed { .. } | Self::RunDeferred { .. }
+            Self::RunCompleted { .. }
+                | Self::RunFailed { .. }
+                | Self::RunDeferred { .. }
+                | Self::RunStopped { .. }
         )
     }
 }
@@ -584,8 +609,8 @@ enum ConcurrentOutcome {
 
 /// Map one event of a handoff child run to the event that the parent
 /// stream yields. Drops the child `RunStarted`. Adds `parent_usage` to the
-/// usage of `RunCompleted` and `RunDeferred`, and records the total on
-/// `run_span`. Passes every other event through.
+/// usage of `RunCompleted`, `RunDeferred` and `RunStopped`, and records the
+/// total on `run_span`. Passes every other event through.
 fn reyield_child_event(
     ev: AgentEvent,
     parent_usage: TokenUsage,
@@ -610,6 +635,16 @@ fn reyield_child_event(
             run_span.record("paigasus.deferred_calls", calls.len() as i64);
             Some(AgentEvent::RunDeferred {
                 calls,
+                usage: total,
+            })
+        }
+        AgentEvent::RunStopped { reason, usage } => {
+            let mut total = parent_usage;
+            total.add(usage);
+            record_usage(&total);
+            run_span.record("paigasus.stop_reason", reason.as_str());
+            Some(AgentEvent::RunStopped {
+                reason,
                 usage: total,
             })
         }
@@ -955,6 +990,7 @@ where
                 gen_ai.usage.input_tokens = tracing::field::Empty,
                 gen_ai.usage.output_tokens = tracing::field::Empty,
                 paigasus.deferred_calls = tracing::field::Empty,
+                paigasus.stop_reason = tracing::field::Empty,
                 otel.status_code = tracing::field::Empty,
             );
             run_span.record("otel.name", format!("invoke_agent {agent_name}").as_str());
@@ -1213,7 +1249,7 @@ where
                     } else {
                         Vec::new()
                     };
-                let (events, next_action, next_state) = if let Some((kind, info)) = output_trip {
+                let (events, mut next_action, next_state) = if let Some((kind, info)) = output_trip {
                     run_span.record("otel.status_code", "ERROR");
                     failure.set(crate::AgentError::Guardrail { kind: kind.clone() });
                     (
@@ -1232,6 +1268,127 @@ where
                 for ev in events {
                     match &ev {
                         crate::AgentEvent::TurnStarted { turn } => {
+                            // SMA-804: turn-boundary checkpoint. The batch that
+                            // closes a tool turn and opens the next model turn
+                            // is the boundary; the checkpoint runs before the
+                            // turn span and the `OnTurnStart` hook.
+                            let boundary_turn = match (&loop_state, &next_action) {
+                                (
+                                    crate::LoopState::ExecutingTools { turn: t, .. },
+                                    crate::NextAction::CallModel { .. },
+                                ) => Some(*t),
+                                _ => None,
+                            };
+                            if let (Some(t), Some(cp)) = (boundary_turn, ctx.turn_checkpoint()) {
+                                let boundary = crate::TurnBoundary::new(
+                                    t,
+                                    *turn,
+                                    agent_name.clone(),
+                                    ctx.agent_depth(),
+                                );
+                                let cp_span = tracing::info_span!(
+                                    target: "paigasus::core::agent",
+                                    parent: &run_span,
+                                    "agent.turn_checkpoint",
+                                    otel.kind = "internal",
+                                    decision = tracing::field::Empty,
+                                );
+                                let decision = cp
+                                    .at_boundary(&ctx, &boundary)
+                                    .instrument(cp_span.clone())
+                                    .await;
+                                // One private stop path, shared by `Stop` and the
+                                // guardrail tripwire. SMA-804 Task 4 fills it in.
+                                let mut stop_reason: Option<String> = None;
+                                match decision {
+                                    crate::CheckpointDecision::Continue => {
+                                        cp_span.record("decision", "continue");
+                                    }
+                                    crate::CheckpointDecision::Stop { reason } => {
+                                        cp_span.record("decision", "stop");
+                                        stop_reason = Some(reason);
+                                    }
+                                    crate::CheckpointDecision::Inject(parts) if parts.is_empty() => {
+                                        cp_span.record("decision", "inject");
+                                    }
+                                    crate::CheckpointDecision::Inject(parts) => {
+                                        cp_span.record("decision", "inject");
+                                        // Allow-list: `ContentPart` is `#[non_exhaustive]`,
+                                        // so a new variant must fail until it is allowed here.
+                                        let bad = parts.iter().find_map(|p| match p {
+                                            crate::ContentPart::Text { .. }
+                                            | crate::ContentPart::Image { .. }
+                                            | crate::ContentPart::Audio { .. } => None,
+                                            crate::ContentPart::ToolUse { .. } => Some("ToolUse"),
+                                            crate::ContentPart::ToolResult { .. } => Some("ToolResult"),
+                                            crate::ContentPart::Reasoning { .. } => Some("Reasoning"),
+                                            // Unreachable in this crate today. A new variant
+                                            // lands here until it is allowed above.
+                                            #[allow(unreachable_patterns)]
+                                            _ => Some("unsupported"),
+                                        });
+                                        if let Some(kind) = bad {
+                                            let err = crate::AgentError::InvalidInjection {
+                                                reason: format!(
+                                                    "injected content contains a {kind} part; only text, image and audio parts are allowed"
+                                                ),
+                                            };
+                                            let msg = err.to_string();
+                                            run_span.record("otel.status_code", "ERROR");
+                                            failure.set(err);
+                                            yield crate::AgentEvent::RunFailed { error: msg };
+                                            return;
+                                        }
+                                        let item = crate::Item::UserMessage { content: parts };
+                                        let text = user_text_of(std::slice::from_ref(&item));
+                                        if let Some((kind, info)) =
+                                            interceptors.run_input_guardrails(&text).await
+                                        {
+                                            yield crate::AgentEvent::GuardrailTriggered {
+                                                kind,
+                                                info,
+                                            };
+                                            stop_reason = Some("input guardrail tripwire".to_owned());
+                                        } else {
+                                            if let crate::Item::UserMessage { content } = &item {
+                                                yield crate::AgentEvent::UserMessageInjected {
+                                                    content: content.clone(),
+                                                };
+                                            }
+                                            conversation.push(item.clone());
+                                            if let crate::NextAction::CallModel { request } =
+                                                &mut next_action
+                                            {
+                                                request.messages.push(item);
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(reason) = stop_reason {
+                                    // A clean stop: not an error, so the failure
+                                    // slot stays empty and `OnRunComplete` fires
+                                    // through the `Terminate` arm.
+                                    let stop_usage = match &loop_state {
+                                        crate::LoopState::ExecutingTools { usage, .. } => *usage,
+                                        _ => TokenUsage::default(),
+                                    };
+                                    run_span.record(
+                                        "gen_ai.usage.input_tokens",
+                                        stop_usage.input_tokens as i64,
+                                    );
+                                    run_span.record(
+                                        "gen_ai.usage.output_tokens",
+                                        stop_usage.output_tokens as i64,
+                                    );
+                                    run_span.record("paigasus.stop_reason", reason.as_str());
+                                    yield crate::AgentEvent::RunStopped {
+                                        reason,
+                                        usage: stop_usage,
+                                    };
+                                    next_action = crate::NextAction::Terminate;
+                                    break;
+                                }
+                            }
                             let s = tracing::info_span!(
                                 target: "paigasus::core::agent",
                                 parent: &run_span,
@@ -1616,6 +1773,14 @@ pub enum AgentError {
         feature: &'static str,
     },
 
+    /// New in SMA-804: a [`crate::TurnCheckpoint`] returned content that cannot
+    /// be injected as a user message (a tool-use, tool-result or reasoning part).
+    #[error("invalid injection: {reason}")]
+    InvalidInjection {
+        /// Why the injected content was rejected.
+        reason: String,
+    },
+
     /// A handoff chain or `AgentAsTool` nesting exceeded
     /// [`crate::RunConfig::max_agent_depth`].
     #[error("agent nesting depth ({depth}) exceeded max ({max})")]
@@ -1634,7 +1799,8 @@ pub enum AgentError {
         limit: u32,
     },
 
-    /// The run stopped without a final output (for example, a deferral).
+    /// The run stopped without a final output (for example, a deferral or a
+    /// turn checkpoint stop).
     #[error("run did not complete")]
     Incomplete {
         /// Why the run stopped.
@@ -1886,7 +2052,8 @@ mod terminal_tests {
         match ev {
             AgentEvent::RunCompleted { .. }
             | AgentEvent::RunFailed { .. }
-            | AgentEvent::RunDeferred { .. } => true,
+            | AgentEvent::RunDeferred { .. }
+            | AgentEvent::RunStopped { .. } => true,
             AgentEvent::RunStarted { .. }
             | AgentEvent::TurnStarted { .. }
             | AgentEvent::TokenDelta { .. }
@@ -1901,6 +2068,7 @@ mod terminal_tests {
             | AgentEvent::ApprovalRequested { .. }
             | AgentEvent::PermissionDenied { .. }
             | AgentEvent::RepairStarted { .. }
+            | AgentEvent::UserMessageInjected { .. }
             | AgentEvent::StructuredOutputFailed { .. } => false,
         }
     }
@@ -1967,6 +2135,11 @@ mod terminal_tests {
                 schema_errors: vec!["e".to_owned()],
                 final_text: "x".to_owned(),
             },
+            AgentEvent::UserMessageInjected {
+                content: vec![crate::ContentPart::Text {
+                    text: "hi".to_owned(),
+                }],
+            },
             AgentEvent::RunCompleted {
                 usage: TokenUsage::default(),
             },
@@ -1977,19 +2150,23 @@ mod terminal_tests {
                 calls: vec![],
                 usage: TokenUsage::default(),
             },
+            AgentEvent::RunStopped {
+                reason: "stop".to_owned(),
+                usage: TokenUsage::default(),
+            },
         ]
     }
 
     #[test]
     fn every_variant_covers_the_whole_enum() {
         // Assert on *distinct* discriminants, not length: a plain count would
-        // also pass for 17 copies of one variant, letting a newly added variant
+        // also pass for 20 copies of one variant, letting a newly added variant
         // slip past `is_terminal_agrees_with_the_exhaustive_classification`.
         let discriminants: std::collections::HashSet<_> =
             every_variant().iter().map(std::mem::discriminant).collect();
         assert_eq!(
             discriminants.len(),
-            18,
+            20,
             "every_variant() must construct one instance of each distinct AgentEvent variant"
         );
     }
@@ -2020,15 +2197,15 @@ mod terminal_tests {
     }
 
     #[test]
-    fn exactly_three_variants_are_terminal() {
+    fn exactly_four_variants_are_terminal() {
         let terminal: Vec<_> = every_variant()
             .into_iter()
             .filter(AgentEvent::is_terminal)
             .collect();
         assert_eq!(
             terminal.len(),
-            3,
-            "expected exactly RunCompleted + RunFailed + RunDeferred: {terminal:?}"
+            4,
+            "expected exactly RunCompleted + RunFailed + RunDeferred + RunStopped: {terminal:?}"
         );
     }
 }

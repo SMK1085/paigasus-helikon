@@ -172,23 +172,36 @@ pub(crate) async fn invocations<Ctx: Send + Sync + 'static>(
     }
 }
 
-/// Clears run features this runtime does not support. SMA-804 adds its checkpoint clear here.
+/// Clears the run features that this runtime does not support.
 ///
 /// This runtime does not support deferred tool calls. The helper clears the flag,
 /// so a `Defer` decision becomes a `Deny`, and logs one warning when the flag
+/// was set.
+///
+/// The turn checkpoint needs a host that can stay with the run between turns.
+/// This runtime cannot do that, so the helper clears a checkpoint that the
+/// context provider set, and logs a warning. It logs only when a checkpoint
 /// was set.
 pub(crate) fn restrict_unsupported_run_features<Ctx>(ctx: RunContext<Ctx>) -> RunContext<Ctx>
 where
     Ctx: Send + Sync + 'static,
 {
-    if ctx.deferred_tool_calls_enabled() {
+    let ctx = if ctx.deferred_tool_calls_enabled() {
         tracing::warn!(
             target: "paigasus::runtime_agentcore::invoke",
             "the AgentCore runtime does not support deferred tool calls; the flag is cleared and a Defer becomes a Deny"
         );
-        return ctx.with_deferred_tool_calls(false);
+        ctx.with_deferred_tool_calls(false)
+    } else {
+        ctx
+    };
+    if ctx.turn_checkpoint().is_some() {
+        tracing::warn!(
+            target: "paigasus::runtime_agentcore::invoke",
+            "turn checkpoint is not supported by this runtime; ignored"
+        );
     }
-    ctx
+    ctx.without_turn_checkpoint()
 }
 
 /// `true` if the request's `Accept` header selects the buffered JSON transport
@@ -1096,5 +1109,101 @@ mod tests {
             "expected the turn's user message to be persisted, got {:?}",
             snapshot.messages[0]
         );
+    }
+
+    // ── Turn checkpoint is not supported by this runtime ───────────────────
+
+    /// A checkpoint that counts its calls.
+    struct CountingCheckpoint(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    #[async_trait]
+    impl paigasus_helikon_core::TurnCheckpoint<()> for CountingCheckpoint {
+        async fn at_boundary(
+            &self,
+            _ctx: &RunContext<()>,
+            _boundary: &paigasus_helikon_core::TurnBoundary,
+        ) -> paigasus_helikon_core::CheckpointDecision {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            paigasus_helikon_core::CheckpointDecision::Continue
+        }
+    }
+
+    /// A provider that sets a counting checkpoint on every context.
+    struct CheckpointProvider(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    #[async_trait]
+    impl paigasus_helikon_runtime_axum::ContextProvider<()> for CheckpointProvider {
+        async fn build(
+            &self,
+            _parts: &axum::http::request::Parts,
+            session: std::sync::Arc<dyn paigasus_helikon_core::Session>,
+            cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<RunContext<()>, paigasus_helikon_runtime_axum::ServerError> {
+            Ok(RunContext::ephemeral(())
+                .with_session(session)
+                .with_cancel(cancel)
+                .with_turn_checkpoint(std::sync::Arc::new(CountingCheckpoint(
+                    std::sync::Arc::clone(&self.0),
+                ))))
+        }
+    }
+
+    /// An agent that makes one tool turn: it calls the turn checkpoint at the
+    /// boundary, as the agent loop does, when the context carries one.
+    struct OneTurnAgent;
+
+    #[async_trait]
+    impl Agent<()> for OneTurnAgent {
+        fn name(&self) -> &str {
+            "probe"
+        }
+
+        fn description(&self) -> &str {
+            "calls the turn checkpoint once"
+        }
+
+        async fn run(
+            &self,
+            ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            if let Some(cp) = ctx.turn_checkpoint() {
+                let boundary = paigasus_helikon_core::TurnBoundary::new(0, 1, "probe", 0);
+                cp.at_boundary(&ctx, &boundary).await;
+            }
+            let events = vec![AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            }];
+            Ok(stream::iter(events).boxed())
+        }
+    }
+
+    /// The runtime cannot support the checkpoint yet, so it clears it. A
+    /// provider that sets one sees a counter of 0, and the run completes.
+    #[tokio::test]
+    async fn context_provider_checkpoint_never_fires() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server = AgentCoreServer::builder()
+            .agent(std::sync::Arc::new(OneTurnAgent))
+            .context_provider(std::sync::Arc::new(CheckpointProvider(
+                std::sync::Arc::clone(&counter),
+            )))
+            .build()
+            .expect("server builds");
+        let resp = server
+            .router()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/invocations")
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"prompt":"hi"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

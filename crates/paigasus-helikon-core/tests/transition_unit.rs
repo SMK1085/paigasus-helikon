@@ -196,6 +196,48 @@ fn tool_results_advance_to_next_call_model() {
 }
 
 #[test]
+fn tool_results_batch_ends_with_turn_started() {
+    // The turn-boundary checkpoint in the driver depends on this order:
+    // every ToolOutputItem first, TurnStarted last.
+    let calls = vec![
+        ToolCallRequest {
+            call_id: "1".into(),
+            name: "a".into(),
+            args: serde_json::json!({}),
+        },
+        ToolCallRequest {
+            call_id: "2".into(),
+            name: "b".into(),
+            args: serde_json::json!({}),
+        },
+    ];
+    let state = LoopState::ExecutingTools {
+        calls,
+        turn: 0,
+        usage: TokenUsage::default(),
+    };
+    let outcomes = ["1", "2"]
+        .into_iter()
+        .map(|id| ToolCallOutcome {
+            call_id: id.into(),
+            result: Ok(vec![ContentPart::Text { text: "ok".into() }]),
+        })
+        .collect();
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let outcome = transition(
+        &state,
+        TransitionInput::ToolResults { outcomes },
+        &ctx_with(5, &conversation, &settings),
+    );
+    assert_matches!(outcome.next_action, NextAction::CallModel { .. });
+    assert_eq!(outcome.events.len(), 3);
+    assert_matches!(&outcome.events[0], AgentEvent::ToolOutputItem { .. });
+    assert_matches!(&outcome.events[1], AgentEvent::ToolOutputItem { .. });
+    assert_matches!(&outcome.events[2], AgentEvent::TurnStarted { turn: 1 });
+}
+
+#[test]
 fn calling_model_at_max_turns_fails() {
     let max_turns = 4;
     let state = LoopState::CallingModel {
