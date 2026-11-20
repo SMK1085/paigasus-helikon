@@ -2,9 +2,9 @@
 
 Session conformance suite for Paigasus Helikon backends, including your own.
 The suite runs five tests against a `Session` implementation: append and read,
-exclusive watermark, projection, concurrent writers, and deferred tool calls. The session backend
-crates of Paigasus Helikon use it. You can use it to test a backend that you
-write.
+exclusive watermark, projection, concurrent writers, and deferred tool calls.
+The session backend crates of Paigasus Helikon use it. You can use it to test a
+backend that you write.
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-sessions-testkit)
 - [Guide & concepts](https://smk1085.github.io/paigasus-helikon/) — see [sessions](https://smk1085.github.io/paigasus-helikon/concepts/sessions.html)

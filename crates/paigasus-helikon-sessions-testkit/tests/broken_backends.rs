@@ -38,10 +38,22 @@ fn broken(fault: Fault) -> Arc<dyn Session> {
     })
 }
 
-/// Replace every JSON number by its `f64` value, recursively.
+/// Round-trip every JSON number through `f64`, recursively. Only a value that
+/// `f64` cannot hold exactly (the 2^53+1 `ref_id`) changes. A whole number that
+/// converts back to the same integer keeps its integer kind, so every other
+/// number stays equal.
 fn through_f64(v: &mut Value) {
     match v {
-        Value::Number(n) => *v = Value::from(n.as_f64().expect("number fits f64")),
+        Value::Number(n) => {
+            let f = n.as_f64().expect("number fits f64");
+            let exact_i = n.as_i64().filter(|i| (*i as f64) == f && f as i64 == *i);
+            let exact_u = n.as_u64().filter(|u| (*u as f64) == f && f as u64 == *u);
+            *v = match (exact_i, exact_u) {
+                (Some(i), _) => Value::from(i),
+                (_, Some(u)) => Value::from(u),
+                _ => Value::from(f),
+            };
+        }
         Value::Array(a) => a.iter_mut().for_each(through_f64),
         Value::Object(o) => o.values_mut().for_each(through_f64),
         _ => {}
@@ -114,12 +126,17 @@ impl Session for Broken {
     async fn snapshot(&self) -> Result<ConversationSnapshot, SessionError> {
         let mut snap = self.inner.snapshot().await?;
         if matches!(self.fault, Fault::RenameSnapshotToolCall) {
+            let mut renamed = false;
             for item in snap.messages.iter_mut() {
                 if let Item::ToolCall { name, .. } = item {
-                    *name = "transfer_fund".into();
-                    break;
+                    if name == "transfer_funds" {
+                        *name = "transfer_fund".into();
+                        renamed = true;
+                        break;
+                    }
                 }
             }
+            assert!(renamed, "Broken: no transfer_funds ToolCall in snapshot");
         }
         Ok(snap)
     }

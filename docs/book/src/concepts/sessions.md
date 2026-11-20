@@ -365,7 +365,9 @@ Every shipped `Session` backend passes the same conformance suite from the
 
 `MemorySession`, `SqliteSession`, `PostgresSession`, and `RedisSession` all run
 `run_all`. Adding a new backend means passing this suite before it ships.
-The testkit also runs `run_tool_deferred` against `CompactingSession<MemorySession>` with `threshold(1)`. This proves that the wrapper stores deferrals exactly and does not compact over an open deferral.
+The testkit also runs `run_tool_deferred` against
+`CompactingSession<MemorySession>` with `threshold(1)`. This proves that the
+wrapper stores deferrals exactly and does not compact over an open deferral.
 
 ### Run the suite against your own backend
 

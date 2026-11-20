@@ -210,6 +210,7 @@ where
 const D1: &str = "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b";
 const D2: &str = "0b8e7d6c-5a4f-4e3d-9c2b-1a0f9e8d7c6b";
 const D3: &str = "d3a1b2c4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+// The trailing space is on purpose: a backend that trims text must fail.
 const D1_PROMPT: &str = "Approve the transfer of 1250.75 EUR?\nPayee: Hausverwaltung Nord ";
 
 /// A whole-second timestamp that is different for each event of the log.
