@@ -158,7 +158,7 @@ For explicit configuration, use the synchronous builder:
 use aws_config::BehaviorVersion;
 use paigasus_helikon::bedrock::BedrockModel;
 
-let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_11_10())
+let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_11_17())
     .region(aws_config::Region::new("us-east-1"))
     .load()
     .await;

@@ -186,7 +186,7 @@ mod tests {
             .build()
             .expect("tokio runtime");
         rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_11_10())
+            let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_11_17())
                 .region(Region::new("us-east-1"))
                 .test_credentials()
                 .load()
