@@ -111,6 +111,12 @@ pub enum Violation {
         /// How many deltas for that `call_id` carried `Some(name)`.
         count: usize,
     },
+    /// A `ProviderData` event named a `call_id` for which the stream carried no
+    /// `ToolCallDelta` (assertion 8).
+    ProviderDataUnknownCall {
+        /// The `call_id` that no streamed tool call used.
+        call_id: String,
+    },
     /// The stream did not produce the minimum evidence its scenario requires,
     /// so the assertions would have passed vacuously.
     InsufficientEvidence(&'static str),
