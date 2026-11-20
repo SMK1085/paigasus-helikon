@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "105a3bda42ca",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-838-release-the-dependents-of-a-core-minor-bump",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/paigasus-helikon-cli/Cargo.toml",
+    "crates/paigasus-helikon-evals/Cargo.toml",
+    "crates/paigasus-helikon-mcp/Cargo.toml",
+    "crates/paigasus-helikon-providers-anthropic/Cargo.toml",
+    "crates/paigasus-helikon-providers-bedrock/Cargo.toml",
+    "crates/paigasus-helikon-providers-gemini/Cargo.toml",
+    "crates/paigasus-helikon-providers-litellm/Cargo.toml",
+    "crates/paigasus-helikon-providers-openai/Cargo.toml",
+    "crates/paigasus-helikon-runtime-actix/Cargo.toml",
+    "crates/paigasus-helikon-runtime-agentcore/Cargo.toml",
+    "crates/paigasus-helikon-runtime-axum/Cargo.toml",
+    "crates/paigasus-helikon-runtime-temporal/Cargo.toml",
+    "crates/paigasus-helikon-runtime-tokio/Cargo.toml",
+    "crates/paigasus-helikon-sessions-postgres/Cargo.toml",
+    "crates/paigasus-helikon-sessions-redis/Cargo.toml",
+    "crates/paigasus-helikon-sessions-sqlite/Cargo.toml",
+    "crates/paigasus-helikon-sessions-testkit/Cargo.toml",
+    "crates/paigasus-helikon-tools/Cargo.toml",
+    "crates/paigasus-helikon/Cargo.toml",
+    "docs/book/src/concepts/model-providers.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/10/5a3bda42ca/0/metadata.json",
+      "transcript": "/10/5a3bda42ca/0/full.jsonl",
+      "compact_transcript": "/10/5a3bda42ca/0/transcript.jsonl",
+      "content_hash": "/10/5a3bda42ca/0/content_hash.txt",
+      "prompt": "/10/5a3bda42ca/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 3691,
+    "cache_read_tokens": 1665625,
+    "output_tokens": 3101,
+    "api_call_count": 5,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 68694,
+      "cache_read_tokens": 58552,
+      "output_tokens": 462,
+      "api_call_count": 2
+    }
+  },
+  "redaction": {
+    "replacements": 93,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 93,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
