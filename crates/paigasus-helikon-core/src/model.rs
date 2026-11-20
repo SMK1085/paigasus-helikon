@@ -236,6 +236,26 @@ pub enum ModelEvent {
         /// reasoning from output tokens.
         reasoning_tokens: Option<u32>,
     },
+    /// Opaque data that one provider translator owns, for example a Gemini
+    /// `thoughtSignature`.
+    ///
+    /// `provider` is a wire-format key that one translator owns. It is not the
+    /// value of [`Model::provider`]. A translator reads only the data with its
+    /// own key and ignores all other data without a warning. `call_id:
+    /// Some(id)` means the data belongs to the tool call with that id in the
+    /// same response. The position of the event in the stream has no meaning.
+    /// [`ModelTurnAccumulator`] stores the data as a
+    /// [`crate::ContentPart::ProviderData`] part in the assistant message. See that
+    /// variant for the full contract, including the rollback note.
+    ProviderData {
+        /// Wire-format key of the translator that owns `data`, for example
+        /// `"gemini"`.
+        provider: String,
+        /// The tool call that `data` belongs to, when it belongs to one.
+        call_id: Option<String>,
+        /// Opaque payload. Only the owning translator reads it.
+        data: serde_json::Value,
+    },
     /// Terminal event for a single response.
     Finish {
         /// Why the response ended.
@@ -616,6 +636,8 @@ impl ModelTurnAccumulator {
             ModelEvent::Finish { reason } => {
                 self.finish_reason = reason.clone();
             }
+            // Placeholder: the accumulator does not store provider data yet.
+            ModelEvent::ProviderData { .. } => {}
         }
     }
 

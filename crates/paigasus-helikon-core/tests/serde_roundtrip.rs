@@ -150,6 +150,40 @@ fn content_part_reasoning_roundtrip() {
     insta::assert_snapshot!(roundtrip(&part));
 }
 
+#[test]
+fn content_part_provider_data_roundtrip() {
+    let with_id = ContentPart::ProviderData {
+        provider: "gemini".into(),
+        call_id: Some("call_1".into()),
+        data: serde_json::json!({"index": 0}),
+    };
+    let json = roundtrip(&with_id);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"type":"provider_data","provider":"gemini","call_id":"call_1","data":{"index":0}})
+    );
+    assert_eq!(serde_json::from_str::<ContentPart>(&json).unwrap(), with_id);
+    insta::assert_snapshot!(json);
+
+    let without_id = ContentPart::ProviderData {
+        provider: "gemini".into(),
+        call_id: None,
+        data: serde_json::json!({"index": 0}),
+    };
+    let json = roundtrip(&without_id);
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"type":"provider_data","provider":"gemini","data":{"index":0}})
+    );
+    assert!(v.get("call_id").is_none());
+    assert_eq!(
+        serde_json::from_str::<ContentPart>(&json).unwrap(),
+        without_id
+    );
+}
+
 // --- MediaSource ---
 
 #[test]

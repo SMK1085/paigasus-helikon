@@ -1,0 +1,12 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: json
+---
+{
+  "type": "provider_data",
+  "provider": "gemini",
+  "call_id": "call_1",
+  "data": {
+    "index": 0
+  }
+}

@@ -44,6 +44,8 @@ fn part_chars(part: &ContentPart) -> usize {
         ContentPart::ToolResult { content, .. } => content.iter().map(part_chars).sum(),
         // Image/Audio sources are not projected text.
         ContentPart::Image { .. } | ContentPart::Audio { .. } => 0,
+        // Opaque provider data is not projected text.
+        ContentPart::ProviderData { .. } => 0,
     }
 }
 
