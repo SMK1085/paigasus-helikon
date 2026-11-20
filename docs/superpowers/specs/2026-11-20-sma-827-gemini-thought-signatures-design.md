@@ -163,10 +163,9 @@ calls, so a provider-data-only message cannot reach it. The builder confirms tha
 
 ### Core: the other places that match on the new variants
 
-- `token_counter.rs` `part_chars`: `ProviderData` counts as 0 characters, because it is not
-  model-visible text and only the owning provider sends it. The probe records whether
-  `promptTokenCount` changes with the real signature against the dummy. If it changes a lot, the
-  builder brings it back before the plan is final.
+- `token_counter.rs` `part_chars`: `ProviderData` counts the serialized length of `data`. The probe
+  showed that Gemini bills the signature as input (see "Probe results"). Sven decided this after
+  capture 6. Core does not know which provider will send the data, so it counts all of it.
 - `agent.rs` event forwarding (around line 1475): `ModelEvent::ProviderData` is not forwarded as an
   `AgentEvent`. The accumulator still observes it.
 - `agent.rs` injection allow-list (around line 1298) already rejects an unknown part. No change.
@@ -282,6 +281,49 @@ transcribed from the captures, with each real signature replaced by a placeholde
 signature goes into the repo or the PR body. Vertex is not probed; the spec states this limit in the
 Gemini README.
 
+### Probe results (2026-11-20)
+
+Sven ran the probe against the Developer API on `gemini-3.8-flash`. No real signature value is
+recorded here. Lengths are given.
+
+**Capture 1 (streamed, three parallel calls).** HTTP 200, `finishReason` STOP. The stream has four
+SSE chunks. Chunks 0 to 2 each hold one part with one `functionCall`. Chunk 3 holds `{"text": ""}`
+with `finishReason: STOP` and no signature. `functionCall.id` is present on every call (native ids
+of the form `call_<digits>`). `thoughtSignature` is a sibling of `functionCall` in the same part and
+the same chunk. It is on the first call only, and it is 1140 characters long. The other two calls
+have no signature. This matches the design.
+
+Core sorts calls by `call_id` (`BTreeMap`). In this capture the sort moved the signed call from
+first to last. So the order risk is real, and the `index` field is needed to restore the order.
+
+**Capture 2 (streamed text answer).** Four text chunks. The last chunk is
+`{"text": "", "thoughtSignature": <3036 characters>}`. A text-level signature exists, on an empty
+final text part. The design ignores it (non-goal).
+
+**Second turns (`generateContent`).**
+
+| Capture | Shape | HTTP | finish | promptTokenCount |
+|---|---|---|---|---|
+| 3 | real signature as received | 200 | STOP | 351 |
+| 4 | signed call moved to last | 200 | STOP | 351 |
+| 5 | signed first, two unsigned calls swapped | 200 | STOP | 351 |
+| 6 | dummy on each call | 200 | STOP | 183 |
+| 7 | no signature | 400 "Function call is missing a thought_signature in functionCall parts", position 2 | - | - |
+| 8 | SMA-820 shape 3, merged `user[functionResponse x3, text]`, real signature | 200 | STOP | 357 |
+| 9 | other model | skipped (`GEMINI_MODEL_ID_2` not set) | - | - |
+
+**Conclusions.**
+
+- The wire shape matches the design. No stop condition triggers on capture 1 or 3.
+- Gemini does not check the order of the calls (captures 4 and 5). The `index` sort is not required.
+  The design keeps it, because it is harmless and it restores what Gemini sent.
+- The signature is billed input: 351 against 183 prompt tokens for one 1140-character signature,
+  about 168 tokens. This triggered the plan's stop condition. Sven decided that the core token
+  estimate counts `ProviderData` as the serialized length of `data`, not 0.
+- The merged shape (capture 8) gets HTTP 200 with the real signature. So the SMA-820 tool-result
+  boundary is not needed when signatures are present. See "Left for Sven".
+- Cross-model use and Vertex were not probed. They stay documented limits.
+
 ## Tests
 
 - **Core accumulator:** a tool-only turn with provider data gives
@@ -334,7 +376,7 @@ Gemini README.
   the rollback note.
 - mdBook: `docs/book/src/concepts/core-primitives.md` (around line 35, the new variant),
   `model-providers.md` (around line 55, and the Gemini limitations section around lines 296-300),
-  `sessions.md` (around lines 270-274, provider data counts 0 in the token estimate), and
+  `sessions.md` (around lines 270-274, provider data counts its data length in the token estimate), and
   `agent-loop.md` (around lines 64-69: `MessageOutput` now also comes on a Gemini tool-only turn).
 - `crates/paigasus-helikon-providers-gemini/README.md` limitations section (around line 89): tool
   loops on Gemini 3 work; Vertex signatures are not live-tested; text-level signatures are not sent.
@@ -357,11 +399,10 @@ Gemini README.
 
 ## Left for Sven
 
-- **The SMA-820 tool-result boundary.** With valid signatures (and the dummy as fallback), every
-  call in the current turn is signed, so the merged shape `user[functionResponse, text]` probably
-  gets HTTP 200, and the boundary may not be necessary. Capture 8 gives the evidence. My proposal:
-  keep the boundary in this PR, because it changes nothing that works today, and decide on its
-  removal with the capture result.
+- **The SMA-820 tool-result boundary.** Capture 8 gave HTTP 200 for the merged shape
+  `user[functionResponse x3, text]` with the real signature. So the boundary is not needed when
+  signatures are present. My proposal: keep the boundary in this PR, because it changes nothing
+  that works today. Sven decides on its removal.
 - **Follow-up tickets.** After approval I file in Linear: (1) the Anthropic thinking round trip with
   this carrier; (2) the Gemini 3 signature error through the OpenAI provider on Gemini's
   OpenAI-compatible endpoint and through LiteLLM, if Sven wants it tracked.
