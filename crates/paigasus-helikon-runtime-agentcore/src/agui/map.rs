@@ -43,9 +43,14 @@
 //! one call's deltas and its item. The first occurrence of `x` keeps the id `x`; a
 //! later one gets `x~n`, with the smallest `n` ≥ 2 that the run has not emitted yet,
 //! so an alias never equals a provider id of the run. Every frame of the call
-//! (`START`, `ARGS`, `END`, `RESULT`) and the `call_id` of a `helikon.approval` frame
-//! use that AG-UI id. AG-UI ids are unique per run only: each request gets a new
-//! mapper.
+//! (`START`, `ARGS`, `END`, `RESULT`) uses that AG-UI id. A result for a provider id
+//! with no occurrence uses the provider id, and the run counts that id as used.
+//! AG-UI ids are unique per run only: each request gets a new mapper.
+//!
+//! A `helikon.approval` frame carries two ids. `tool_call_id` is the AG-UI id of the
+//! current occurrence: it links the approval to the call's span. `call_id` is the
+//! provider id: it matches `RunDeferred.calls[].call_id`, which the client uses to
+//! resolve the deferral.
 
 use std::collections::{HashMap, HashSet};
 
@@ -286,7 +291,12 @@ impl EventMapper {
                 if let Item::ToolResult { call_id, content } = item {
                     // The result belongs to the current occurrence of its provider id:
                     // in a sequential flow a result comes before the next call that
-                    // could reuse the id. With no occurrence, the provider id is used.
+                    // could reuse the id. With no occurrence, the provider id is used,
+                    // and the run counts it as used, so a later call with that id
+                    // gets an alias.
+                    if !self.current.contains_key(call_id) {
+                        self.used_ids.insert(call_id.clone());
+                    }
                     let call_id = self.agui_id_of(call_id);
                     if let Some(buffered) = self.take_buffered(&call_id) {
                         // Only possible under `ParallelAgent`: the call is still
@@ -331,12 +341,14 @@ impl EventMapper {
             AgentEvent::AgentUpdated { .. } => out.push(self.custom("helikon.agent_updated", ev)),
             AgentEvent::GuardrailTriggered { .. } => out.push(self.custom("helikon.guardrail", ev)),
             AgentEvent::ApprovalRequested { call_id, .. } => {
-                // Carry the AG-UI id of the current occurrence, so a client can
-                // connect the approval to the call's span.
+                // Keep `call_id` as the provider id (it matches
+                // `RunDeferred.calls[].call_id`). Add `tool_call_id`, the AG-UI id
+                // of the current occurrence, so a client can connect the approval
+                // to the call's span.
                 let mut frame = self.custom("helikon.approval", ev);
                 if let Some(value) = frame["value"].as_object_mut() {
                     value.insert(
-                        "call_id".to_owned(),
+                        "tool_call_id".to_owned(),
                         Value::String(self.agui_id_of(call_id)),
                     );
                 }
@@ -2171,7 +2183,8 @@ mod tests {
     }
 
     /// SMA-810 (G5): a `helikon.approval` frame for a reused id carries the AG-UI id
-    /// of the current occurrence, so a client can connect it to the span.
+    /// of the current occurrence in `tool_call_id`, so a client can connect it to the
+    /// span. `call_id` stays the provider id, which matches `RunDeferred`.
     #[test]
     fn approval_frame_uses_the_current_alias() {
         let events = vec![
@@ -2195,8 +2208,32 @@ mod tests {
             .iter()
             .find(|f| f["name"] == "helikon.approval")
             .unwrap();
-        assert_eq!(approval["value"]["call_id"], "fc_0~2", "{frames:?}");
+        assert_eq!(approval["value"]["tool_call_id"], "fc_0~2", "{frames:?}");
+        assert_eq!(approval["value"]["call_id"], "fc_0", "{frames:?}");
         assert_eq!(approval["value"]["tool"], "pay", "{frames:?}");
+    }
+
+    /// SMA-810: a result for a provider id with no occurrence uses the provider id.
+    /// The run counts that id as used, so a later streamed call with the same id gets
+    /// an alias, and the client sees two different ids.
+    #[test]
+    fn a_result_with_no_occurrence_reserves_its_id() {
+        let events = vec![
+            turn(1),
+            tc_result("fc_0", "orphan"),
+            turn(2),
+            tc_delta("fc_0", Some("lookup"), "{}"),
+            tc_item("fc_0", "lookup"),
+            tc_result("fc_0", "found"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_eq!(
+            starts(&frames),
+            pairs(&[("fc_0~2", "lookup")]),
+            "{frames:?}"
+        );
+        assert_eq!(result_ids(&frames), vec!["fc_0", "fc_0~2"], "{frames:?}");
     }
 
     /// SMA-810 (G5): a result for a call that is still buffered (only possible under
