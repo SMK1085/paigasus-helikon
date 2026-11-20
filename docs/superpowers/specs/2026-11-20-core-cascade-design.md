@@ -140,13 +140,13 @@ release-plz then only publishes them.
 |---|---|---|
 | `paigasus-helikon-evals` | 0.1.22 | 0.2.0 |
 | `paigasus-helikon-mcp` | 0.1.26 | 0.2.0 |
-| `paigasus-helikon-providers-anthropic` | 0.1.29 | 0.2.0 |
+| `paigasus-helikon-providers-anthropic` | 0.1.29, 0.1.30 | 0.2.0 |
 | `paigasus-helikon-providers-bedrock` | 0.1.11 | 0.2.0 |
 | `paigasus-helikon-providers-gemini` | 0.1.11 | 0.2.0 |
 | `paigasus-helikon-providers-litellm` | 0.1.11 | 0.2.0 |
 | `paigasus-helikon-providers-openai` | 0.2.34 | 0.3.0 |
 | `paigasus-helikon-runtime-actix` | 0.2.11 | 0.3.0 |
-| `paigasus-helikon-runtime-agentcore` | 0.2.16 | 0.3.0 |
+| `paigasus-helikon-runtime-agentcore` | 0.2.16, 0.2.17 | 0.3.0 |
 | `paigasus-helikon-runtime-axum` | 0.2.11 | 0.3.0 |
 | `paigasus-helikon-runtime-temporal` | 0.5.5 | 0.6.0 |
 | `paigasus-helikon-runtime-tokio` | 0.1.27 | 0.2.0 |
@@ -155,8 +155,8 @@ release-plz then only publishes them.
 | `paigasus-helikon-sessions-sqlite` | 0.1.30 | 0.2.0 |
 | `paigasus-helikon-sessions-testkit` | 0.1.3 | 0.2.0 |
 | `paigasus-helikon-tools` | 0.2.26 | 0.3.0 |
-| `paigasus-helikon` (facade) | 0.7.0 | 0.7.1 |
-| `paigasus-helikon-cli` | 0.1.44 | 0.1.45 |
+| `paigasus-helikon` (facade) | 0.7.0, 0.7.1 | 0.7.2 |
+| `paigasus-helikon-cli` | 0.1.44, 0.1.45 | 0.1.46 |
 
 Changes:
 
@@ -259,11 +259,25 @@ Docs:
    run fails part way, re-run it; release-plz skips the versions that are
    already published.
 4. Check that no release PR opens for the merge commit.
-5. Sven runs the 19 yanks (17 dependents, facade 0.7.0, CLI 0.1.44). The
+5. Sven runs the 23 yanks (the 21 dependent patch versions in the table, facade 0.7.0 and 0.7.1, CLI 0.1.44 and 0.1.45; see the update note). The
    commands are in the PR body.
 6. Check on crates.io that each yanked version shows `yanked: true` and each
    new version does not.
 7. Correct the body of the GitHub release `paigasus-helikon-core-v0.7.0`.
+
+## Update 2026-11-20: main moved during implementation
+
+Release PR #369 merged while PR 1 was in progress. It published facade 0.7.1,
+CLI 0.1.45, providers-anthropic 0.1.30 (with the SMA-834 fix) and
+runtime-agentcore 0.2.17, all as patches that require core 0.7. PR #370 merged
+the SMA-832 bedrock fix, not yet released. PR 1 was rebased onto that `main`:
+
+- The facade moves to 0.7.2 and the CLI to 0.1.46 (the next free numbers).
+- providers-anthropic 0.2.0 and runtime-agentcore 0.3.0 replace two yanked
+  versions each. providers-bedrock 0.2.0 also contains the SMA-832 fix.
+- The yank list is 23 versions (table above).
+- No `chore: release` PR may merge before PR 1. Each one publishes more patches
+  that require core 0.7.
 
 ## Left to the builder
 
