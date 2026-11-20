@@ -226,7 +226,8 @@ async fn does_not_compact_while_a_deferral_is_open() {
         .threshold(100)
         .build()
         .unwrap();
-    // Open a deferral first, then push the log far over the threshold.
+    // One append puts the log far over the threshold and opens a deferral:
+    // a long user message, then the deferred call.
     let call = paigasus_helikon_core::PendingToolCall::new(
         "d1",
         "c1",
@@ -236,12 +237,12 @@ async fn does_not_compact_while_a_deferral_is_open() {
         Vec::new(),
     );
     cs.append(&[
+        user(&"x".repeat(500)),
         SessionEvent::tool_called("c1", "tool", serde_json::json!({})),
         SessionEvent::tool_deferred(&call),
     ])
     .await
     .unwrap();
-    cs.append(&[user(&"x".repeat(500))]).await.unwrap();
     let raw = cs.events(None).await.unwrap();
     assert!(
         !raw.iter()
@@ -250,11 +251,12 @@ async fn does_not_compact_while_a_deferral_is_open() {
     );
     assert_eq!(model.calls.load(Ordering::SeqCst), 0, "no model call");
 
-    // Close the deferral; the next append compacts again.
-    cs.append(&[
-        SessionEvent::tool_returned("c1", vec![ContentPart::Text { text: "ok".into() }]),
-        user(&"y".repeat(500)),
-    ])
+    // Close the deferral with the result alone. The log is still over the
+    // threshold, so this append compacts.
+    cs.append(&[SessionEvent::tool_returned(
+        "c1",
+        vec![ContentPart::Text { text: "ok".into() }],
+    )])
     .await
     .unwrap();
     let raw = cs.events(None).await.unwrap();
