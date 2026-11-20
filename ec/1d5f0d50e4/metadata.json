@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "ec1d5f0d50e4",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-828-share-the-deferral-test-helpers-between-core",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "release-plz.toml",
+    "tests/deferral-testkit/Cargo.toml",
+    "tests/deferral-testkit/src/lib.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/1d5f0d50e4/0/metadata.json",
+      "transcript": "/ec/1d5f0d50e4/0/full.jsonl",
+      "compact_transcript": "/ec/1d5f0d50e4/0/transcript.jsonl",
+      "content_hash": "/ec/1d5f0d50e4/0/content_hash.txt",
+      "prompt": "/ec/1d5f0d50e4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 15904,
+    "cache_read_tokens": 1446159,
+    "output_tokens": 3631,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 8,
+      "cache_creation_tokens": 76823,
+      "cache_read_tokens": 204655,
+      "output_tokens": 990,
+      "api_call_count": 4
+    }
+  },
+  "redaction": {
+    "replacements": 31,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 31,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
