@@ -214,7 +214,14 @@ mod tests {
             .build()
             .expect("tokio runtime");
         let res = rt.block_on(m.invoke(req, CancellationToken::new()));
-        assert!(res.is_err());
+        match res {
+            Err(ModelError::Other(e)) => assert!(
+                e.to_string().contains("no message with content to send"),
+                "unexpected error: {e}"
+            ),
+            Err(e) => panic!("unexpected error variant: {e}"),
+            Ok(_) => panic!("expected an error"),
+        }
     }
 
     #[test]

@@ -1178,6 +1178,16 @@ mod tests {
     }
 
     #[test]
+    fn system_after_dropped_user_keeps_flag() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            system("s"),
+        ]);
+    }
+
+    #[test]
     fn blank_user_then_kept_assistant_is_sent() {
         let items = vec![
             user(vec![text("q")]),
