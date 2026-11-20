@@ -25,6 +25,7 @@ async-stream   = { workspace = true }
 jiff           = { workspace = true }
 globset        = { workspace = true }
 tracing        = { workspace = true }
+uuid           = { workspace = true }
 
 [dev-dependencies]
 insta                    = { workspace = true, features = ["yaml", "json"] }

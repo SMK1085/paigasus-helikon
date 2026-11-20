@@ -90,6 +90,8 @@ where
 pub struct AgentInput {
     /// The initial conversation. Typically one [`crate::Item::UserMessage`].
     pub messages: Vec<crate::Item>,
+    resolutions: Vec<(String, crate::ToolResolution)>,
+    resume_plan: Option<crate::ResumePlan>,
 }
 
 impl AgentInput {
@@ -104,7 +106,44 @@ impl AgentInput {
             messages: vec![crate::Item::UserMessage {
                 content: vec![crate::ContentPart::Text { text: text.into() }],
             }],
+            ..Default::default()
         }
+    }
+
+    /// Add the host decision for one deferred tool call.
+    ///
+    /// Resolutions keep the order in which you add them.
+    ///
+    /// One writer per session at a time: two resumes of one session at the
+    /// same time can both run an approved tool.
+    #[must_use]
+    pub fn with_resolution(
+        mut self,
+        deferral_id: impl Into<String>,
+        resolution: crate::ToolResolution,
+    ) -> Self {
+        self.resolutions.push((deferral_id.into(), resolution));
+        self
+    }
+
+    /// The host decisions for deferred tool calls, in the order added.
+    pub fn resolutions(&self) -> &[(String, crate::ToolResolution)] {
+        &self.resolutions
+    }
+
+    /// Attach a validated resume plan.
+    ///
+    /// A deferral-aware runner sets this. It makes the plan with
+    /// [`crate::ResumePlan::from_events`] from the session log and this input.
+    #[must_use]
+    pub fn with_resume_plan(mut self, plan: crate::ResumePlan) -> Self {
+        self.resume_plan = Some(plan);
+        self
+    }
+
+    /// The resume plan that a deferral-aware runner attached, if any.
+    pub fn resume_plan(&self) -> Option<&crate::ResumePlan> {
+        self.resume_plan.as_ref()
     }
 }
 
@@ -345,7 +384,7 @@ impl LlmAgent<(), (), String> {
 
 /// The unified event stream emitted by an [`Agent`].
 ///
-/// Seventeen variants spanning lifecycle, raw streaming deltas,
+/// Eighteen variants spanning lifecycle, raw streaming deltas,
 /// post-aggregation semantic items, agent transitions, control signals,
 /// and terminal outcomes. The semantic-item variants
 /// (`MessageOutput`, `ToolCallItem`, `ToolOutputItem`) carry a full
@@ -445,7 +484,7 @@ pub enum AgentEvent {
         call_id: String,
         /// Tool name.
         tool: String,
-        /// JSON arguments the model proposed to call the tool with.
+        /// Effective JSON arguments (after `PreToolUse` and any policy `Replace`), redacted with the run's secret set when output redaction is on.
         args: serde_json::Value,
     },
     /// A tool call was denied by the permission layer. The model separately
@@ -484,11 +523,24 @@ pub enum AgentEvent {
         /// Human-readable error message.
         error: String,
     },
+    /// The run stopped on tool calls that need a later decision.
+    RunDeferred {
+        /// The deferred tool calls.
+        ///
+        /// When output redaction is on, the args and the prompt of these
+        /// calls are the redacted copy. Do not use them to run or to hash a
+        /// call. The stored `SessionEvent::ToolDeferred` events hold the raw
+        /// effective args and the raw prompt. They are the source of truth
+        /// for the resume.
+        calls: Vec<crate::PendingToolCall>,
+        /// Aggregated usage across the run.
+        usage: TokenUsage,
+    },
 }
 
 impl AgentEvent {
-    /// `true` for the two events that end a run: [`AgentEvent::RunCompleted`]
-    /// and [`AgentEvent::RunFailed`].
+    /// `true` for the three events that end a run: [`AgentEvent::RunCompleted`],
+    /// [`AgentEvent::RunFailed`] and [`AgentEvent::RunDeferred`].
     ///
     /// This is the single definition of "terminal" every runner shares. A
     /// runner's cancel/timeout boundary loses to a terminal that already
@@ -496,7 +548,10 @@ impl AgentEvent {
     /// variant from silently defaulting to non-terminal here.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::RunCompleted { .. } | Self::RunFailed { .. })
+        matches!(
+            self,
+            Self::RunCompleted { .. } | Self::RunFailed { .. } | Self::RunDeferred { .. }
+        )
     }
 }
 
@@ -518,6 +573,145 @@ fn user_text_of(conversation: &[crate::Item]) -> String {
     s
 }
 
+/// The outcome of one tool call of a turn.
+#[derive(Debug)]
+enum ConcurrentOutcome {
+    /// The call ran, failed, or was denied. Its result goes into the conversation.
+    Done(crate::ToolCallOutcome),
+    /// The call was deferred and did not run. Holds the raw effective args.
+    Deferred(crate::PendingToolCall),
+}
+
+/// Map one event of a handoff child run to the event that the parent
+/// stream yields. Drops the child `RunStarted`. Adds `parent_usage` to the
+/// usage of `RunCompleted` and `RunDeferred`, and records the total on
+/// `run_span`. Passes every other event through.
+fn reyield_child_event(
+    ev: AgentEvent,
+    parent_usage: TokenUsage,
+    run_span: &tracing::Span,
+) -> Option<AgentEvent> {
+    let record_usage = |total: &TokenUsage| {
+        run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
+        run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
+    };
+    match ev {
+        AgentEvent::RunStarted { .. } => None,
+        AgentEvent::RunCompleted { usage } => {
+            let mut total = parent_usage;
+            total.add(usage);
+            record_usage(&total);
+            Some(AgentEvent::RunCompleted { usage: total })
+        }
+        AgentEvent::RunDeferred { calls, usage } => {
+            let mut total = parent_usage;
+            total.add(usage);
+            record_usage(&total);
+            run_span.record("paigasus.deferred_calls", calls.len() as i64);
+            Some(AgentEvent::RunDeferred {
+                calls,
+                usage: total,
+            })
+        }
+        other => Some(other),
+    }
+}
+
+/// The `tool.execute` span of one tool call. `resumed` marks a resumed
+/// deferred call (`paigasus.tool.resumed = true`); a normal call leaves that
+/// field empty, so it is not exported.
+pub(crate) fn tool_execute_span(
+    parent: &tracing::Span,
+    name: &str,
+    resumed: bool,
+) -> tracing::Span {
+    let span = tracing::info_span!(
+        target: "paigasus::core::agent",
+        parent: parent,
+        "tool.execute",
+        otel.name = tracing::field::Empty,
+        otel.kind = "internal",
+        gen_ai.operation.name = "execute_tool",
+        gen_ai.tool.name = %name,
+        paigasus.tool.resumed = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+    );
+    span.record("otel.name", format!("execute_tool {name}").as_str());
+    if resumed {
+        span.record("paigasus.tool.resumed", true);
+    }
+    span
+}
+
+/// Invoke `tool` with `args`, fire `PostToolUse` on the raw JSON output, and
+/// finalize the output. Redaction is the final transform. Call it inside the
+/// call's `tool.execute` span: a tool error marks that span as `ERROR`.
+pub(crate) async fn invoke_and_finalize<Ctx>(
+    tool: &std::sync::Arc<dyn crate::Tool<Ctx>>,
+    tool_ctx: &crate::ToolContext<Ctx>,
+    args: serde_json::Value,
+    interceptors: &crate::control::Interceptors<'_, Ctx>,
+    redact_output: bool,
+    secrets: &crate::redaction::SecretSet,
+) -> Result<Vec<crate::ContentPart>, String>
+where
+    Ctx: Send + Sync + 'static,
+{
+    // Keep the tool's raw JSON output so the PostToolUse hook sees the
+    // structured value, not a stringified form.
+    let output_json = match tool.invoke(tool_ctx, args).await {
+        Ok(output) => output.content,
+        Err(e) => {
+            tracing::Span::current().record("otel.status_code", "ERROR");
+            return Err(e.to_string());
+        }
+    };
+    // PostToolUse hook (ReplaceOutput / Deny→denial). The hook receives the
+    // raw `serde_json::Value`; a `ReplaceOutput` value (or the original) is
+    // rendered to content parts only at the end.
+    let post = interceptors
+        .fire(&crate::HookEvent::PostToolUse {
+            tool: tool.name().to_owned(),
+            output: output_json.clone(),
+        })
+        .await;
+    if let Some(reason) = post.denied {
+        return Err(format!("blocked by PostToolUse hook: {reason}"));
+    }
+    let final_json = post.replacement.unwrap_or(output_json);
+    // Redaction is the FINAL transform — after user PostToolUse hooks — so a
+    // hook cannot reintroduce an unredacted secret. Shared with the
+    // durable-runner pipeline in `tool_exec.rs`.
+    Ok(crate::finalize_tool_output(
+        final_json,
+        redact_output,
+        secrets,
+    ))
+}
+
+/// Await `futures` in their order: all at once, or at most `limit` at a time.
+pub(crate) async fn run_with_limit<F>(
+    futures: impl Iterator<Item = F>,
+    limit: Option<std::num::NonZeroUsize>,
+) -> Vec<F::Output>
+where
+    F: std::future::Future,
+{
+    match limit {
+        None => futures_util::future::join_all(futures).await,
+        Some(n) => {
+            use futures_util::stream::StreamExt as _;
+            let collected: Vec<_> = futures.collect();
+            futures_util::stream::iter(collected)
+                .buffered(n.get())
+                .collect()
+                .await
+        }
+    }
+}
+
+/// Run the tool calls of one turn. Returns one outcome per call, in call
+/// order, and the `PermissionDenied` events of the turn.
 async fn run_tools_concurrent<Ctx>(
     tools: &[std::sync::Arc<dyn crate::Tool<Ctx>>],
     calls: &[crate::ToolCallRequest],
@@ -525,13 +719,14 @@ async fn run_tools_concurrent<Ctx>(
     tool_ctx: &crate::ToolContext<Ctx>,
     limit: Option<std::num::NonZeroUsize>,
     parent: &tracing::Span,
-) -> (Vec<crate::ToolCallOutcome>, Vec<crate::AgentEvent>)
+) -> (Vec<ConcurrentOutcome>, Vec<crate::AgentEvent>)
 where
     Ctx: Send + Sync + 'static,
 {
     let denied_events: std::sync::Mutex<Vec<crate::AgentEvent>> = std::sync::Mutex::new(Vec::new());
     let redact_output = interceptors.ctx.redact_output();
     let secrets = crate::redaction::SecretSet::from_env_and_extra(interceptors.ctx.extra_secrets());
+    let handoff_path = interceptors.ctx.handoff_path();
 
     let futures = calls.iter().map(|call| {
         let tool = tools.iter().find(|t| t.name() == call.name).cloned();
@@ -544,17 +739,7 @@ where
         let orig_args = call.args.clone();
         let denied_events = &denied_events;
         let secrets = &secrets;
-        let span = tracing::info_span!(
-            target: "paigasus::core::agent",
-            parent: parent,
-            "tool.execute",
-            otel.name = tracing::field::Empty,
-            otel.kind = "internal",
-            gen_ai.operation.name = "execute_tool",
-            gen_ai.tool.name = %name,
-            otel.status_code = tracing::field::Empty,
-        );
-        span.record("otel.name", format!("execute_tool {name}").as_str());
+        let span = tool_execute_span(parent, &name, false);
         async move {
             // PreToolUse hook.
             let pre = interceptors
@@ -564,23 +749,25 @@ where
                 })
                 .await;
             if let Some(reason) = pre.denied {
-                return crate::ToolCallOutcome {
+                return ConcurrentOutcome::Done(crate::ToolCallOutcome {
                     call_id,
                     result: Err(format!("blocked by PreToolUse hook: {reason}")),
-                };
+                });
             }
             let mut args = pre.replacement.unwrap_or(orig_args);
 
-            // Permission authorize on the effective args. `Interceptors::authorize`
-            // delegates to `RunContext::authorize_tool` — the same primitive a
-            // durable runner calls directly via `execute_tool_call`.
-            match interceptors.authorize(&name, effect, &args).await {
-                crate::PermissionDecision::Allow => {}
-                crate::PermissionDecision::Replace { args: sanitized } => {
+            // Permission authorize on the effective args. This is the pipeline
+            // of `RunContext::authorize_tool`, with the detailed result. It
+            // gives `Defer` only when deferred tool calls are on for this run.
+            let decision = interceptors
+                .authorize_detailed(&name, effect, &args, crate::context::AskPoints::Ask)
+                .await;
+            match decision {
+                crate::context::Authorization::Allow => {}
+                crate::context::Authorization::Replace { args: sanitized } => {
                     args = sanitized;
                 }
-                crate::PermissionDecision::Deny { reason }
-                | crate::PermissionDecision::AskUser { prompt: reason } => {
+                crate::context::Authorization::Deny { reason } => {
                     denied_events
                         .lock()
                         .unwrap()
@@ -588,76 +775,74 @@ where
                             tool: name.clone(),
                             reason: reason.clone(),
                         });
-                    return crate::ToolCallOutcome {
+                    return ConcurrentOutcome::Done(crate::ToolCallOutcome {
                         call_id,
                         result: Err(format!("permission denied: {reason}")),
-                    };
+                    });
+                }
+                crate::context::Authorization::Defer {
+                    prompt,
+                    args: effective,
+                } => {
+                    // A call to a tool that the agent does not have is not
+                    // deferred: an approval for it would be wasted.
+                    if tool.is_none() {
+                        tracing::Span::current().record("otel.status_code", "ERROR");
+                        return ConcurrentOutcome::Done(crate::ToolCallOutcome {
+                            call_id,
+                            result: Err(format!("unknown tool: {name}")),
+                        });
+                    }
+                    // A transfer call above this agent with the same call
+                    // id has no result while the run goes on. The session
+                    // log cannot keep such a deferral open, so deny the call.
+                    if interceptors.ctx.open_call_ids().contains(&call_id) {
+                        let reason =
+                            format!("deferral not possible: call id {call_id} repeats in this run");
+                        denied_events
+                            .lock()
+                            .unwrap()
+                            .push(crate::AgentEvent::PermissionDenied {
+                                tool: name.clone(),
+                                reason: reason.clone(),
+                            });
+                        return ConcurrentOutcome::Done(crate::ToolCallOutcome {
+                            call_id,
+                            result: Err(format!("permission denied: {reason}")),
+                        });
+                    }
+                    return ConcurrentOutcome::Deferred(crate::PendingToolCall::new(
+                        crate::deferral::new_deferral_id(),
+                        call_id,
+                        name,
+                        effective,
+                        prompt,
+                        handoff_path.to_vec(),
+                    ));
                 }
             }
 
-            // Invoke. Keep the tool's raw JSON output so the PostToolUse hook
-            // sees the structured value, not a stringified form.
+            // Invoke, PostToolUse, then redaction (the final transform).
             let outcome = match tool {
-                Some(t) => match t.invoke(tool_ctx, args).await {
-                    Ok(output) => Ok(output.content),
-                    Err(e) => {
-                        tracing::Span::current().record("otel.status_code", "ERROR");
-                        Err(e.to_string())
-                    }
-                },
+                Some(t) => {
+                    invoke_and_finalize(&t, tool_ctx, args, interceptors, redact_output, secrets)
+                        .await
+                }
                 None => {
                     tracing::Span::current().record("otel.status_code", "ERROR");
                     Err(format!("unknown tool: {name}"))
                 }
             };
 
-            // PostToolUse hook (ReplaceOutput / Deny→denial). The hook receives
-            // the raw `serde_json::Value`; a `ReplaceOutput` value (or the
-            // original) is rendered to content parts only at the end.
-            let outcome = match outcome {
-                Ok(output_json) => {
-                    let post = interceptors
-                        .fire(&crate::HookEvent::PostToolUse {
-                            tool: name.clone(),
-                            output: output_json.clone(),
-                        })
-                        .await;
-                    if let Some(reason) = post.denied {
-                        Err(format!("blocked by PostToolUse hook: {reason}"))
-                    } else {
-                        let final_json = post.replacement.unwrap_or(output_json);
-                        // Redaction is the FINAL transform — after user PostToolUse
-                        // hooks — so a hook cannot reintroduce an unredacted secret.
-                        // Shared with the durable-runner pipeline in `tool_exec.rs`.
-                        Ok(crate::finalize_tool_output(
-                            final_json,
-                            redact_output,
-                            secrets,
-                        ))
-                    }
-                }
-                Err(e) => Err(e),
-            };
-
-            crate::ToolCallOutcome {
+            ConcurrentOutcome::Done(crate::ToolCallOutcome {
                 call_id,
                 result: outcome,
-            }
+            })
         }
         .instrument(span)
     });
 
-    let outcomes = match limit {
-        None => futures_util::future::join_all(futures).await,
-        Some(n) => {
-            use futures_util::stream::StreamExt as _;
-            let collected: Vec<_> = futures.collect();
-            futures_util::stream::iter(collected)
-                .buffered(n.get())
-                .collect()
-                .await
-        }
-    };
+    let outcomes = run_with_limit(futures, limit).await;
     (outcomes, denied_events.into_inner().unwrap())
 }
 
@@ -685,6 +870,10 @@ where
     ) -> Result<futures_core::stream::BoxStream<'static, crate::AgentEvent>, AgentError> {
         use futures_util::stream::StreamExt as _;
 
+        // This agent is the last name in the handoff path of its deferred calls.
+        let mut ctx = ctx;
+        ctx.push_handoff_path(self.name.clone());
+
         // Snapshot everything the stream needs — it outlives `&self`.
         let model = std::sync::Arc::clone(&self.model);
         let tools = self.tools.clone();
@@ -711,6 +900,9 @@ where
         let output_guardrails = self.output_guardrails.clone();
         let agent_hooks = self.hooks.clone();
         let max_agent_depth = effective_config.max_agent_depth;
+        let mut input = input;
+        let has_resolutions = !input.resolutions.is_empty();
+        let resume_plan = input.resume_plan.take();
 
         let stream = async_stream::stream! {
             // SMA-346: structured failures are recorded here and read by the
@@ -720,14 +912,32 @@ where
             // arm (state-machine sites via LoopState::Failed).
             let failure = ctx.failure_handle();
 
-            // Seed conversation: optional system message + user input.
+            // Seed conversation: optional system message + the resume history
+            // (if any) + user input. The results of the resumed calls go
+            // between the history and the new input (at `results_at`).
             let mut conversation: Vec<crate::Item> = Vec::new();
             if !instructions_text.is_empty() {
                 conversation.push(crate::Item::System {
                     content: vec![crate::ContentPart::Text { text: instructions_text }],
                 });
             }
+            if let Some(plan) = &resume_plan {
+                conversation.extend(plan.history().iter().cloned());
+            }
+            let results_at = conversation.len();
             conversation.extend(input.messages.iter().cloned());
+            // A resume that routes to a handoff target gives it the new input.
+            let resume_messages = if resume_plan.is_some() {
+                input.messages.clone()
+            } else {
+                Vec::new()
+            };
+            // The synthetic results for a run that ends before the resume ran
+            // its calls. Each failure exit before that point yields them first.
+            let not_run = resume_plan
+                .as_ref()
+                .map(|p| crate::resume_exec::not_run_results(p.calls()))
+                .unwrap_or_default();
 
             let mut loop_state = crate::LoopState::CallingModel { turn: 0, usage: crate::TokenUsage::default() };
             let mut tx_input = crate::TransitionInput::Start { messages: input.messages };
@@ -744,6 +954,7 @@ where
                 langfuse.trace.tags = tracing::field::Empty,
                 gen_ai.usage.input_tokens = tracing::field::Empty,
                 gen_ai.usage.output_tokens = tracing::field::Empty,
+                paigasus.deferred_calls = tracing::field::Empty,
                 otel.status_code = tracing::field::Empty,
             );
             run_span.record("otel.name", format!("invoke_agent {agent_name}").as_str());
@@ -762,6 +973,16 @@ where
 
             yield crate::AgentEvent::RunStarted { agent: agent_name.clone() };
 
+            // Resolutions without a resume plan: only a deferral-aware runner
+            // can validate them against the session log.
+            if has_resolutions && resume_plan.is_none() {
+                let msg = "resolutions require a deferral-aware runner";
+                run_span.record("otel.status_code", "ERROR");
+                failure.set(crate::AgentError::Other(anyhow::anyhow!(msg)));
+                yield crate::AgentEvent::RunFailed { error: msg.to_owned() };
+                return;
+            }
+
             // SMA-324: synthetic transfer tools; fail fast on name collisions.
             let handoff_defs: Vec<crate::HandoffDef> =
                 handoffs.iter().map(|h| h.to_def()).collect();
@@ -778,6 +999,9 @@ where
                         ));
                         let msg = err.to_string();
                         failure.set(err);
+                        for ev in not_run {
+                            yield ev;
+                        }
                         yield crate::AgentEvent::RunFailed { error: msg };
                         return;
                     }
@@ -802,6 +1026,9 @@ where
                 let msg = err.to_string();
                 run_span.record("otel.status_code", "ERROR");
                 failure.set(err);
+                for ev in not_run {
+                    yield ev;
+                }
                 yield crate::AgentEvent::RunFailed { error: msg };
                 return;
             }
@@ -811,12 +1038,144 @@ where
             let seed_text = user_text_of(&conversation);
             if let Some((kind, info)) = interceptors.run_input_guardrails(&seed_text).await {
                 run_span.record("otel.status_code", "ERROR");
+                for ev in not_run {
+                    yield ev;
+                }
                 yield crate::AgentEvent::GuardrailTriggered { kind: kind.clone(), info };
                 failure.set(crate::AgentError::Guardrail { kind });
                 yield crate::AgentEvent::RunFailed {
                     error: "input guardrail tripwire".to_owned(),
                 };
                 return;
+            }
+
+            // Resume: run the resolved deferred calls before the first turn,
+            // so their results come before any `TurnStarted` (the session
+            // recorder takes them by that position).
+            if let Some(plan) = resume_plan {
+                // The routing rules of spec §4.7. A renamed root (only
+                // possible at the root level) denies every call here.
+                let renamed = plan.expected_agent() != agent_name;
+                let next = if renamed {
+                    None
+                } else {
+                    plan.next_agent().map(str::to_owned)
+                };
+                let target_agent = next.as_deref().and_then(|next| {
+                    handoffs
+                        .iter()
+                        .find(|h| h.agent().name() == next)
+                        .map(|h| std::sync::Arc::clone(h.agent()))
+                });
+
+                // The path continues to a handoff target: the target runs the
+                // calls. The session already holds this handoff, so there is
+                // no `OnHandoff` and no `HandoffItem`, and this agent emits no
+                // `TurnStarted` (the recorder takes the resume results up to
+                // the first one).
+                if let (Some(next), Some(target_agent)) = (next.as_ref(), target_agent) {
+                    let child = ctx.handoff_child();
+                    if child.agent_depth() > max_agent_depth {
+                        let err = crate::AgentError::MaxAgentDepthExceeded {
+                            depth: child.agent_depth(),
+                            max: max_agent_depth,
+                        };
+                        let msg = err.to_string();
+                        run_span.record("otel.status_code", "ERROR");
+                        failure.set(err);
+                        // The calls do not run, so their transfer calls stay
+                        // open unless this exit closes them.
+                        for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                            yield crate::AgentEvent::ToolOutputItem { item };
+                        }
+                        for ev in not_run {
+                            yield ev;
+                        }
+                        yield crate::AgentEvent::RunFailed { error: msg };
+                        return;
+                    }
+                    yield crate::AgentEvent::AgentUpdated { agent: next.clone() };
+                    let child_input = crate::AgentInput {
+                        messages: resume_messages,
+                        resume_plan: Some(plan.descend()),
+                        ..Default::default()
+                    };
+                    let mut sub = match target_agent.run(child, child_input).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let msg = e.to_string();
+                            run_span.record("otel.status_code", "ERROR");
+                            failure.set(e);
+                            for item in crate::resume_exec::close_open_transfers(&plan, &mut conversation) {
+                                yield crate::AgentEvent::ToolOutputItem { item };
+                            }
+                            for ev in not_run {
+                                yield ev;
+                            }
+                            yield crate::AgentEvent::RunFailed { error: msg };
+                            return;
+                        }
+                    };
+                    while let Some(ev) = sub.next().await {
+                        if let Some(ev) =
+                            reyield_child_event(ev, crate::TokenUsage::default(), &run_span)
+                        {
+                            yield ev;
+                        }
+                    }
+                    let _ = interceptors
+                        .fire(&crate::HookEvent::OnSubagentStop { agent: next.clone() })
+                        .await;
+                    return;
+                }
+
+                // This agent runs the calls: the plan ends here, or the root
+                // was renamed, or the next agent is not a handoff target any
+                // more. In the last two cases every call is denied.
+                let plan = if renamed {
+                    plan.with_all_denied(&format!(
+                        "agent no longer available: {}",
+                        plan.expected_agent()
+                    ))
+                } else if let Some(next) = &next {
+                    plan.with_all_denied(&format!("agent no longer available: {next}"))
+                } else {
+                    plan
+                };
+                // Close the open transfer calls after this level, so that the
+                // next model request is valid. Their results come first in
+                // the resume block. They are in the history, before
+                // `results_at`.
+                let closed = crate::resume_exec::close_open_transfers(&plan, &mut conversation);
+                let results_at = results_at + closed.len();
+                for item in closed {
+                    yield crate::AgentEvent::ToolOutputItem { item };
+                }
+                let tool_ctx = ctx.to_tool_context();
+                let (outcomes, denied) = crate::resume_exec::run_resolved_calls(
+                    &tools,
+                    plan.calls(),
+                    &interceptors,
+                    &tool_ctx,
+                    parallel_tool_call_limit,
+                    &run_span,
+                )
+                .await;
+                for ev in denied {
+                    yield ev;
+                }
+                let mut results = Vec::with_capacity(outcomes.len());
+                for o in outcomes {
+                    let item = crate::Item::ToolResult {
+                        call_id: o.call_id,
+                        content: o.result.unwrap_or_else(|e| {
+                            vec![crate::ContentPart::Text { text: e }]
+                        }),
+                    };
+                    yield crate::AgentEvent::ToolOutputItem { item: item.clone() };
+                    results.push(item);
+                }
+                conversation.splice(results_at..results_at, results);
             }
 
             loop {
@@ -838,6 +1197,22 @@ where
                 } else {
                     None
                 };
+                // The transfer calls of a handoff get no result while the
+                // child runs. Keep their call ids for the child.
+                let transfer_call_ids: Vec<String> =
+                    if matches!(next_action, crate::NextAction::Handoff) {
+                        events
+                            .iter()
+                            .filter_map(|ev| match ev {
+                                crate::AgentEvent::ToolCallItem {
+                                    item: crate::Item::ToolCall { call_id, .. },
+                                } => Some(call_id.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                 let (events, next_action, next_state) = if let Some((kind, info)) = output_trip {
                     run_span.record("otel.status_code", "ERROR");
                     failure.set(crate::AgentError::Guardrail { kind: kind.clone() });
@@ -898,6 +1273,11 @@ where
                         crate::AgentEvent::RunCompleted { usage } => {
                             run_span.record("gen_ai.usage.input_tokens", usage.input_tokens as i64);
                             run_span.record("gen_ai.usage.output_tokens", usage.output_tokens as i64);
+                        }
+                        crate::AgentEvent::RunDeferred { calls, usage } => {
+                            run_span.record("gen_ai.usage.input_tokens", usage.input_tokens as i64);
+                            run_span.record("gen_ai.usage.output_tokens", usage.output_tokens as i64);
+                            run_span.record("paigasus.deferred_calls", calls.len() as i64);
                         }
                         crate::AgentEvent::RunFailed { .. } => {
                             run_span.record("otel.status_code", "ERROR");
@@ -1010,7 +1390,7 @@ where
                     crate::NextAction::ExecuteTools { calls } => {
                         let tool_ctx = ctx.to_tool_context();
                         let tool_parent = turn_span.as_ref().unwrap_or(&run_span);
-                        let (outcomes, denied) = run_tools_concurrent(
+                        let (results, denied) = run_tools_concurrent(
                             &tools,
                             &calls,
                             &interceptors,
@@ -1022,15 +1402,45 @@ where
                         for ev in denied {
                             yield ev;
                         }
-                        for o in &outcomes {
-                            conversation.push(crate::Item::ToolResult {
-                                call_id: o.call_id.clone(),
-                                content: o.result.clone().unwrap_or_else(|e| {
-                                    vec![crate::ContentPart::Text { text: e }]
-                                }),
-                            });
+                        let mut outcomes = Vec::with_capacity(results.len());
+                        let mut raw_pendings = Vec::new();
+                        for r in results {
+                            match r {
+                                ConcurrentOutcome::Done(o) => {
+                                    conversation.push(crate::Item::ToolResult {
+                                        call_id: o.call_id.clone(),
+                                        content: o.result.clone().unwrap_or_else(|e| {
+                                            vec![crate::ContentPart::Text { text: e }]
+                                        }),
+                                    });
+                                    outcomes.push(o);
+                                }
+                                ConcurrentOutcome::Deferred(p) => raw_pendings.push(p),
+                            }
                         }
-                        tx_input = crate::TransitionInput::ToolResults { outcomes };
+                        tx_input = if raw_pendings.is_empty() {
+                            crate::TransitionInput::ToolResults { outcomes }
+                        } else {
+                            // The events reach clients, so they carry redacted
+                            // args and prompts. The slot keeps the raw calls
+                            // for the session recorder and the resume.
+                            let event_copies: Vec<crate::PendingToolCall> = if ctx.redact_output() {
+                                let secrets = crate::redaction::SecretSet::from_env_and_extra(
+                                    ctx.extra_secrets(),
+                                );
+                                raw_pendings
+                                    .iter()
+                                    .map(|p| p.redacted(&secrets))
+                                    .collect()
+                            } else {
+                                raw_pendings.clone()
+                            };
+                            ctx.deferral_handle().record(raw_pendings);
+                            crate::TransitionInput::ToolResultsWithDeferrals {
+                                outcomes,
+                                deferred: event_copies,
+                            }
+                        };
                     }
                     crate::NextAction::Terminate => {
                         let _ = interceptors.fire(&crate::HookEvent::OnRunComplete).await;
@@ -1055,7 +1465,7 @@ where
                             _ => return,
                         };
 
-                        let child = ctx.handoff_child();
+                        let child = ctx.handoff_child().with_open_call_ids(transfer_call_ids);
                         if child.agent_depth() > max_agent_depth {
                             let err = crate::AgentError::MaxAgentDepthExceeded {
                                 depth: child.agent_depth(),
@@ -1112,7 +1522,7 @@ where
                             agent: target.clone(),
                         };
 
-                        let input = crate::AgentInput { messages: transcript };
+                        let input = crate::AgentInput { messages: transcript, ..Default::default() };
                         let mut sub = match target_agent.run(child, input).await {
                             Ok(s) => s,
                             Err(e) => {
@@ -1124,16 +1534,8 @@ where
                             }
                         };
                         while let Some(ev) = sub.next().await {
-                            match ev {
-                                crate::AgentEvent::RunStarted { .. } => {}
-                                crate::AgentEvent::RunCompleted { usage } => {
-                                    let mut total = parent_usage;
-                                    total.add(usage);
-                                    run_span.record("gen_ai.usage.input_tokens", total.input_tokens as i64);
-                                    run_span.record("gen_ai.usage.output_tokens", total.output_tokens as i64);
-                                    yield crate::AgentEvent::RunCompleted { usage: total };
-                                }
-                                other => yield other,
+                            if let Some(ev) = reyield_child_event(ev, parent_usage, &run_span) {
+                                yield ev;
                             }
                         }
                         let _ = interceptors
@@ -1230,6 +1632,13 @@ pub enum AgentError {
     MaxHandoffsExceeded {
         /// The configured budget that was exceeded.
         limit: u32,
+    },
+
+    /// The run stopped without a final output (for example, a deferral).
+    #[error("run did not complete")]
+    Incomplete {
+        /// Why the run stopped.
+        stop_reason: crate::StopReason,
     },
 
     /// Escape hatch.
@@ -1434,7 +1843,10 @@ mod redaction_e2e_tests {
             run_tools_concurrent(&tools, &calls, &interceptors, &tool_ctx, None, &span).await;
 
         assert_eq!(outcomes.len(), 1);
-        let parts = outcomes[0].result.as_ref().expect("tool ran ok");
+        let ConcurrentOutcome::Done(outcome) = &outcomes[0] else {
+            panic!("expected a Done outcome, got {:?}", outcomes[0]);
+        };
+        let parts = outcome.result.as_ref().expect("tool ran ok");
         // Collect all text across content parts and assert redaction.
         let rendered: String = parts
             .iter()
@@ -1472,7 +1884,9 @@ mod terminal_tests {
     /// inside `AgentEvent::is_terminal`'s `matches!`.
     fn classify(ev: &AgentEvent) -> bool {
         match ev {
-            AgentEvent::RunCompleted { .. } | AgentEvent::RunFailed { .. } => true,
+            AgentEvent::RunCompleted { .. }
+            | AgentEvent::RunFailed { .. }
+            | AgentEvent::RunDeferred { .. } => true,
             AgentEvent::RunStarted { .. }
             | AgentEvent::TurnStarted { .. }
             | AgentEvent::TokenDelta { .. }
@@ -1559,6 +1973,10 @@ mod terminal_tests {
             AgentEvent::RunFailed {
                 error: "boom".to_owned(),
             },
+            AgentEvent::RunDeferred {
+                calls: vec![],
+                usage: TokenUsage::default(),
+            },
         ]
     }
 
@@ -1571,7 +1989,7 @@ mod terminal_tests {
             every_variant().iter().map(std::mem::discriminant).collect();
         assert_eq!(
             discriminants.len(),
-            17,
+            18,
             "every_variant() must construct one instance of each distinct AgentEvent variant"
         );
     }
@@ -1588,15 +2006,29 @@ mod terminal_tests {
     }
 
     #[test]
-    fn exactly_two_variants_are_terminal() {
+    fn with_resolution_accumulates_in_order() {
+        let i = AgentInput::new()
+            .with_resolution("a", crate::ToolResolution::Approved)
+            .with_resolution(
+                "b",
+                crate::ToolResolution::Denied {
+                    reason: "no".into(),
+                },
+            );
+        assert_eq!(i.resolutions().len(), 2);
+        assert_eq!(i.resolutions()[0].0, "a");
+    }
+
+    #[test]
+    fn exactly_three_variants_are_terminal() {
         let terminal: Vec<_> = every_variant()
             .into_iter()
             .filter(AgentEvent::is_terminal)
             .collect();
         assert_eq!(
             terminal.len(),
-            2,
-            "expected exactly RunCompleted + RunFailed: {terminal:?}"
+            3,
+            "expected exactly RunCompleted + RunFailed + RunDeferred: {terminal:?}"
         );
     }
 }

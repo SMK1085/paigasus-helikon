@@ -134,3 +134,23 @@ async fn escalate_from_real_tool_stops_the_loop() {
         .iter()
         .any(|e| matches!(e, AgentEvent::RunFailed { .. })));
 }
+
+#[tokio::test]
+async fn loop_agent_rejects_resolutions() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let r = runs.clone();
+    let child = MockAgent::new("child", move |_| {
+        r.fetch_add(1, Ordering::SeqCst);
+        msg_and_complete("child", "ran", 0)
+    });
+    let la = LoopAgent::new("loop", "", 3).then(child);
+    let input = AgentInput::from_user_text("x")
+        .with_resolution("d1", paigasus_helikon_core::ToolResolution::Approved);
+    let events: Vec<AgentEvent> =
+        futures_util::StreamExt::collect(la.run(ctx(), input).await.unwrap()).await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::RunFailed { error }) if error == "this agent cannot resume deferred calls"
+    ));
+    assert_eq!(runs.load(Ordering::SeqCst), 0, "no child ran");
+}

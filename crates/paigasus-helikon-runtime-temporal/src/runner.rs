@@ -11,6 +11,14 @@
 //! locally — it only needs [`paigasus_helikon_core::Agent::name`] to address
 //! the registered agent and to seed the session recorder.
 //!
+//! # Deferred tool calls
+//!
+//! `TemporalRunner` does not support deferred tool calls. It clears the
+//! deferral flag of the run context, so a `Defer` decision becomes a `Deny`. It
+//! rejects an input with resolutions, and a session with open deferrals, with
+//! `RunError::InvalidResume`. It does not record a lost session write in a
+//! `SessionWriteSlot`.
+//!
 //! # Session semantics (mirrors `TokioRunner`)
 //!
 //! `run`/`run_streamed` load persisted history and seed the conversation as
@@ -27,8 +35,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::stream::{self, StreamExt as _};
 use paigasus_helikon_core::{
-    Agent, AgentEvent, AgentInput, CancellationToken, FailureSlot, RunConfig, RunContext, RunError,
-    RunInterrupt, RunResult, RunResultStreaming, Runner, Session, SessionRecorder,
+    open_deferrals, Agent, AgentEvent, AgentInput, CancellationToken, FailureSlot, InvalidResume,
+    RunConfig, RunContext, RunError, RunInterrupt, RunResult, RunResultStreaming, Runner, Session,
+    SessionEvent, SessionRecorder,
 };
 use temporalio_client::{
     Client, WorkflowCancelOptions, WorkflowGetResultOptions, WorkflowStartOptions,
@@ -181,9 +190,17 @@ impl TemporalRunner {
         let max_turns = config.max_turns;
         let parallel_tool_call_limit = config.parallel_tool_call_limit;
 
-        let ctx = ctx.with_run_config(config);
+        let ctx = restrict_unsupported_run_features(ctx).with_run_config(config);
         let cancel = ctx.cancel().clone();
         let session = ctx.session().clone();
+
+        // This runner cannot resume deferred calls. Reject a resume before
+        // anything is recorded.
+        let events = session
+            .events(None)
+            .await
+            .map_err(|e| RunError::Other(anyhow::Error::new(e)))?;
+        reject_deferred_resume(&events, &input)?;
 
         // Session read failure is a hard error (mirrors `TokioRunner`).
         let (merged, recorder) = load_and_record(&session, agent.name(), input).await?;
@@ -356,6 +373,36 @@ async fn load_and_record(
     Ok((merged, Arc::new(Mutex::new(recorder))))
 }
 
+/// Clear the run features this runner does not support.
+///
+/// `TemporalRunner` does not support deferred tool calls. It clears the flag,
+/// so a `Defer` decision becomes a `Deny`, and logs one warning when the flag
+/// was set.
+fn restrict_unsupported_run_features<Ctx>(ctx: RunContext<Ctx>) -> RunContext<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    if ctx.deferred_tool_calls_enabled() {
+        tracing::warn!(
+            target: "paigasus::runtime_temporal::runner",
+            "TemporalRunner does not support deferred tool calls; the flag is cleared and a Defer becomes a Deny"
+        );
+        return ctx.with_deferred_tool_calls(false);
+    }
+    ctx
+}
+
+/// Reject an input that resumes deferred tool calls.
+///
+/// Returns `Err(RunError::InvalidResume(InvalidResume::ResumeUnsupported))`
+/// when the input has resolutions or the log has open deferrals.
+fn reject_deferred_resume(events: &[SessionEvent], input: &AgentInput) -> Result<(), RunError> {
+    if !input.resolutions().is_empty() || !open_deferrals(events).is_empty() {
+        return Err(RunError::InvalidResume(InvalidResume::ResumeUnsupported));
+    }
+    Ok(())
+}
+
 /// Post-run finalization: drain the recorder and append the run's events.
 /// Persistence is best-effort — an append error is logged, never propagated.
 /// (Mirrors `TokioRunner::finalize`.)
@@ -376,7 +423,10 @@ async fn finalize(session: &Arc<dyn Session>, recorder: &Arc<Mutex<SessionRecord
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paigasus_helikon_core::{AgentError, ContentPart, Item, TokenUsage};
+    use paigasus_helikon_core::{
+        AgentError, ContentPart, HookRegistry, Item, MemorySession, PendingToolCall, TokenUsage,
+        ToolResolution, TracerHandle,
+    };
 
     /// Unwrap a synthesized terminal to its message, asserting the variant on
     /// the way through — something the old `-> Option<String>` signature made
@@ -387,6 +437,79 @@ mod tests {
             Some(other) => panic!("synthesized terminal must be RunFailed, got {other:?}"),
             None => None,
         }
+    }
+
+    fn deferred(id: &str) -> SessionEvent {
+        SessionEvent::tool_deferred(&PendingToolCall::new(
+            format!("d-{id}"),
+            id,
+            "refund",
+            serde_json::json!({}),
+            "approve?",
+            Vec::new(),
+        ))
+    }
+
+    fn call(id: &str) -> SessionEvent {
+        SessionEvent::tool_called(id, "refund", serde_json::json!({}))
+    }
+
+    #[test]
+    fn rejects_resolutions() {
+        let input = AgentInput::new().with_resolution("d-c1", ToolResolution::Approved);
+        let err = reject_deferred_resume(&[], &input).unwrap_err();
+        assert!(matches!(
+            err,
+            RunError::InvalidResume(InvalidResume::ResumeUnsupported)
+        ));
+    }
+
+    #[test]
+    fn rejects_an_open_deferral() {
+        let events = [call("c1"), deferred("c1")];
+        let err = reject_deferred_resume(&events, &AgentInput::new()).unwrap_err();
+        assert!(matches!(
+            err,
+            RunError::InvalidResume(InvalidResume::ResumeUnsupported)
+        ));
+    }
+
+    #[test]
+    fn accepts_a_clean_log() {
+        assert!(reject_deferred_resume(&[], &AgentInput::new()).is_ok());
+    }
+
+    #[test]
+    fn accepts_a_closed_deferral() {
+        let events = [
+            call("c1"),
+            deferred("c1"),
+            SessionEvent::tool_returned("c1", Vec::new()),
+        ];
+        assert!(reject_deferred_resume(&events, &AgentInput::new()).is_ok());
+    }
+
+    fn test_ctx() -> RunContext<()> {
+        RunContext::new(
+            Arc::new(()),
+            Arc::new(MemorySession::new()),
+            HookRegistry::new(),
+            TracerHandle::default(),
+            CancellationToken::new(),
+        )
+    }
+
+    #[test]
+    fn restrict_clears_the_deferral_flag() {
+        let ctx = test_ctx().with_deferred_tool_calls(true);
+        assert!(ctx.deferred_tool_calls_enabled());
+        assert!(!restrict_unsupported_run_features(ctx).deferred_tool_calls_enabled());
+    }
+
+    #[test]
+    fn restrict_passes_a_context_without_the_flag() {
+        let ctx = restrict_unsupported_run_features(test_ctx());
+        assert!(!ctx.deferred_tool_calls_enabled());
     }
 
     #[test]

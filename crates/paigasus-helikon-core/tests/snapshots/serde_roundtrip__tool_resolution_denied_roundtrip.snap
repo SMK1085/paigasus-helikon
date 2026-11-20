@@ -1,0 +1,8 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: "roundtrip(&ToolResolution::Denied { reason: \"no\".into() })"
+---
+{
+  "type": "denied",
+  "reason": "no"
+}

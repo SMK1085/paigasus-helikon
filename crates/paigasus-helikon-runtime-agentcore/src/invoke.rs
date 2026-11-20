@@ -163,12 +163,32 @@ pub(crate) async fn invocations<Ctx: Send + Sync + 'static>(
     // doc comment).
     let cancel_for_run = cancel.clone();
     let ctx = state.context.build(&parts, session, cancel).await?;
+    let ctx = restrict_unsupported_run_features(ctx);
 
     if json_mode {
         run_json(&state, ctx, cancel_for_run, input).await
     } else {
         Ok(run_sse(&state, ctx, cancel_for_run, input).await)
     }
+}
+
+/// Clears run features this runtime does not support. SMA-804 adds its checkpoint clear here.
+///
+/// This runtime does not support deferred tool calls. The helper clears the flag,
+/// so a `Defer` decision becomes a `Deny`, and logs one warning when the flag
+/// was set.
+pub(crate) fn restrict_unsupported_run_features<Ctx>(ctx: RunContext<Ctx>) -> RunContext<Ctx>
+where
+    Ctx: Send + Sync + 'static,
+{
+    if ctx.deferred_tool_calls_enabled() {
+        tracing::warn!(
+            target: "paigasus::runtime_agentcore::invoke",
+            "the AgentCore runtime does not support deferred tool calls; the flag is cleared and a Defer becomes a Deny"
+        );
+        return ctx.with_deferred_tool_calls(false);
+    }
+    ctx
 }
 
 /// `true` if the request's `Accept` header selects the buffered JSON transport
@@ -507,6 +527,99 @@ mod tests {
             .await
             .unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    // ── deferral flag ──────────────────────────────────────────────────────
+
+    #[test]
+    fn restrict_clears_the_deferral_flag() {
+        let ctx = RunContext::ephemeral(()).with_deferred_tool_calls(true);
+        assert!(ctx.deferred_tool_calls_enabled());
+        assert!(!restrict_unsupported_run_features(ctx).deferred_tool_calls_enabled());
+    }
+
+    #[test]
+    fn restrict_keeps_a_context_without_the_flag() {
+        let ctx = restrict_unsupported_run_features(RunContext::ephemeral(()));
+        assert!(!ctx.deferred_tool_calls_enabled());
+    }
+
+    /// A provider that turns the deferral flag on.
+    struct DeferringProvider;
+
+    #[async_trait]
+    impl paigasus_helikon_runtime_axum::ContextProvider<()> for DeferringProvider {
+        async fn build(
+            &self,
+            _parts: &axum::http::request::Parts,
+            session: Arc<dyn paigasus_helikon_core::Session>,
+            cancel: CancellationToken,
+        ) -> Result<RunContext<()>, paigasus_helikon_runtime_axum::ServerError> {
+            Ok(RunContext::ephemeral(())
+                .with_session(session)
+                .with_cancel(cancel)
+                .with_deferred_tool_calls(true))
+        }
+    }
+
+    /// Reports whether the deferral flag reached the agent.
+    struct DeferralProbe;
+
+    #[async_trait]
+    impl Agent<()> for DeferralProbe {
+        fn name(&self) -> &str {
+            "probe"
+        }
+
+        fn description(&self) -> &str {
+            "reports the deferral flag"
+        }
+
+        async fn run(
+            &self,
+            ctx: RunContext<()>,
+            _input: AgentInput,
+        ) -> Result<BoxStream<'static, AgentEvent>, AgentError> {
+            let events = vec![
+                AgentEvent::MessageOutput {
+                    item: Item::AssistantMessage {
+                        content: vec![ContentPart::Text {
+                            text: format!("deferral={}", ctx.deferred_tool_calls_enabled()),
+                        }],
+                        agent: None,
+                    },
+                },
+                AgentEvent::RunCompleted {
+                    usage: TokenUsage::default(),
+                },
+            ];
+            Ok(stream::iter(events).boxed())
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_clears_the_deferral_flag() {
+        let server = AgentCoreServer::<()>::builder()
+            .agent(std::sync::Arc::new(DeferralProbe))
+            .context_provider(Arc::new(DeferringProvider))
+            .build()
+            .expect("server builds");
+        let resp = server
+            .router()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/invocations")
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"prompt":"hi"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["final_output"], "deferral=false");
     }
 
     // ── (b) JSON mode ──────────────────────────────────────────────────────

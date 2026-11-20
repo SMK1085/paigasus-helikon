@@ -1,0 +1,7 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: "roundtrip(&StopReason::Completed)"
+---
+{
+  "type": "completed"
+}

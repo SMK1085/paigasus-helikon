@@ -1,7 +1,7 @@
 //! Unit tests for [`project`].
 
 use jiff::Timestamp;
-use paigasus_helikon_core::{project, ContentPart, Item, SessionEvent};
+use paigasus_helikon_core::{open_deferrals, project, ContentPart, Item, SessionEvent};
 
 fn epoch() -> Timestamp {
     Timestamp::from_second(0).expect("0 is a valid timestamp")
@@ -181,4 +181,87 @@ fn two_consecutive_compactions_chain() {
         },
         other => panic!("expected System, got {other:?}"),
     }
+}
+
+#[test]
+fn tool_deferred_produces_no_message_and_compaction_math_holds() {
+    let deferred = SessionEvent::ToolDeferred {
+        deferral_id: "d1".into(),
+        call_id: "c1".into(),
+        name: "calc".into(),
+        args: serde_json::json!({"x": 1}),
+        prompt: "ok?".into(),
+        handoff_path: vec![],
+        ts: epoch(),
+    };
+    let before = project(&[user("hi"), tool_called("c1")]).messages;
+    let mut evs = vec![user("hi"), tool_called("c1"), deferred];
+    // user + ToolCall; the deferral adds no message and changes none.
+    let after = project(&evs).messages;
+    assert_eq!(after.len(), 2);
+    assert!(matches!(&after[1], Item::ToolCall { call_id, .. } if call_id == "c1"));
+    assert_eq!(
+        serde_json::to_value(&after).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+    // Compacting the three events removes both messages and pushes one System.
+    evs.push(compacted("sum", 3));
+    let snap = project(&evs);
+    assert_eq!(snap.messages.len(), 1);
+    assert!(matches!(snap.messages[0], Item::System { .. }));
+}
+
+fn tool_deferred(deferral_id: &str, call_id: &str) -> SessionEvent {
+    SessionEvent::ToolDeferred {
+        deferral_id: deferral_id.into(),
+        call_id: call_id.into(),
+        name: "calc".into(),
+        args: serde_json::json!({"x": 1}),
+        prompt: "ok?".into(),
+        handoff_path: vec![],
+        ts: epoch(),
+    }
+}
+
+fn open_ids(evs: &[SessionEvent]) -> Vec<String> {
+    open_deferrals(evs)
+        .iter()
+        .map(|c| c.deferral_id().to_owned())
+        .collect()
+}
+
+#[test]
+fn open_deferrals_uses_the_position_rule() {
+    // The ToolDeferred args differ from the ToolCalled args, so the check
+    // below proves which event the args come from.
+    let raw_args = serde_json::json!({"x": 2, "token": "raw"});
+    let d2 = SessionEvent::ToolDeferred {
+        deferral_id: "d2".into(),
+        call_id: "fc_0".into(),
+        name: "calc".into(),
+        args: raw_args.clone(),
+        prompt: "ok?".into(),
+        handoff_path: vec![],
+        ts: epoch(),
+    };
+    let evs = vec![
+        tool_called("fc_0"),
+        tool_deferred("d1", "fc_0"),
+        tool_returned("fc_0"),
+        tool_called("fc_0"),
+        d2,
+    ];
+    assert_eq!(open_ids(&evs), ["d2"]);
+    // Built from the ToolDeferred fields, raw args included.
+    assert_eq!(open_deferrals(&evs)[0].args(), &raw_args);
+}
+
+#[test]
+fn open_deferrals_ignores_a_result_before_the_deferral() {
+    let evs = vec![
+        tool_returned("fc_0"),
+        tool_called("fc_0"),
+        tool_deferred("d1", "fc_0"),
+    ];
+    assert_eq!(open_ids(&evs), ["d1"]);
 }

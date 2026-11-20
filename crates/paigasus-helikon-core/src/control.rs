@@ -7,10 +7,10 @@
 
 use std::sync::Arc;
 
-use crate::{
-    Guardrail, Hook, HookDecision, HookEvent, HookRegistry, PermissionDecision, RunContext,
-    ToolEffect,
-};
+use crate::context::{AskPoints, Authorization};
+#[cfg(test)]
+use crate::PermissionDecision;
+use crate::{Guardrail, Hook, HookDecision, HookEvent, HookRegistry, RunContext, ToolEffect};
 
 /// Borrows everything the control seams need for one run.
 pub(crate) struct Interceptors<'a, Ctx>
@@ -113,6 +113,9 @@ where
     /// (never `AskUser` — that is resolved here via the approval handler, default
     /// Deny). Delegates to `RunContext::authorize_tool` — the primitive a
     /// durable runner calls directly without needing this loop-private borrow.
+    ///
+    /// Only the unit tests use it. The loop calls `authorize_detailed`.
+    #[cfg(test)]
     pub(crate) async fn authorize(
         &self,
         tool: &str,
@@ -120,6 +123,21 @@ where
         args: &serde_json::Value,
     ) -> PermissionDecision {
         self.ctx.authorize_tool(tool, effect, args).await
+    }
+
+    /// Authorize one tool call with the detailed result (the deferred args
+    /// included). `asks` selects normal authorization or the re-check of an
+    /// approved deferred call. Delegates to `RunContext::authorize_tool_detailed`.
+    pub(crate) async fn authorize_detailed(
+        &self,
+        tool: &str,
+        effect: ToolEffect,
+        args: &serde_json::Value,
+        asks: AskPoints,
+    ) -> Authorization {
+        self.ctx
+            .authorize_tool_detailed(tool, effect, args, asks)
+            .await
     }
 }
 
@@ -582,5 +600,385 @@ mod authorize_tests {
                 .await,
             PermissionDecision::Allow
         ));
+    }
+
+    // ---- SMA-803: Defer and the re-check mode ----
+
+    use crate::{GuardAction, GuardRule};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    struct DeferHandler;
+    #[async_trait]
+    impl ApprovalHandler for DeferHandler {
+        async fn decide(&self, _: &str, _: &str, _: &serde_json::Value) -> ApprovalOutcome {
+            ApprovalOutcome::Defer
+        }
+    }
+
+    /// Answers the scripted outcomes in call order and counts the calls.
+    struct CountingHandler {
+        count: AtomicUsize,
+        script: Mutex<Vec<ApprovalOutcome>>,
+    }
+    impl CountingHandler {
+        fn new(script: Vec<ApprovalOutcome>) -> Self {
+            Self {
+                count: AtomicUsize::new(0),
+                script: Mutex::new(script),
+            }
+        }
+    }
+    #[async_trait]
+    impl ApprovalHandler for CountingHandler {
+        async fn decide(&self, _: &str, _: &str, _: &serde_json::Value) -> ApprovalOutcome {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            self.script.lock().unwrap().remove(0)
+        }
+    }
+
+    struct PanicHandler;
+    #[async_trait]
+    impl ApprovalHandler for PanicHandler {
+        async fn decide(&self, _: &str, _: &str, _: &serde_json::Value) -> ApprovalOutcome {
+            panic!("the approval handler must not be called on re-check");
+        }
+    }
+
+    struct DeferPolicy;
+    #[async_trait]
+    impl PermissionPolicy<()> for DeferPolicy {
+        async fn check(
+            &self,
+            _: &RunContext<()>,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> PermissionDecision {
+            PermissionDecision::Defer {
+                prompt: "policy says wait".into(),
+            }
+        }
+    }
+
+    struct ReplacePolicy(serde_json::Value);
+    #[async_trait]
+    impl PermissionPolicy<()> for ReplacePolicy {
+        async fn check(
+            &self,
+            _: &RunContext<()>,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> PermissionDecision {
+            PermissionDecision::Replace {
+                args: self.0.clone(),
+            }
+        }
+    }
+
+    struct DenyPolicy;
+    #[async_trait]
+    impl PermissionPolicy<()> for DenyPolicy {
+        async fn check(
+            &self,
+            _: &RunContext<()>,
+            _: &str,
+            _: &serde_json::Value,
+        ) -> PermissionDecision {
+            PermissionDecision::Deny {
+                reason: "policy says no".into(),
+            }
+        }
+    }
+
+    fn dctx() -> RunContext<()> {
+        ctx().with_deferred_tool_calls(true)
+    }
+
+    fn rm_root() -> serde_json::Value {
+        json!({ "command": "rm -rf /" })
+    }
+
+    fn rm_root_etc() -> serde_json::Value {
+        json!({ "command": "rm -rf / > /etc/passwd" })
+    }
+
+    fn env_write() -> serde_json::Value {
+        json!({ "command": "rm -rf / > .env" })
+    }
+
+    fn never_guard() -> GuardRule {
+        GuardRule::dotpath_with_action(GuardAction::Deny {
+            reason: "never".into(),
+        })
+    }
+
+    async fn ask(c: &RunContext<()>, effect: ToolEffect, args: serde_json::Value) -> Authorization {
+        c.authorize_tool_detailed("Bash", effect, &args, AskPoints::Ask)
+            .await
+    }
+
+    async fn recheck(
+        c: &RunContext<()>,
+        effect: ToolEffect,
+        args: serde_json::Value,
+    ) -> Authorization {
+        c.authorize_tool_detailed("Bash", effect, &args, AskPoints::Answered)
+            .await
+    }
+
+    #[tokio::test]
+    async fn policy_defer_defers() {
+        let c = dctx().with_permission_policy(Arc::new(DeferPolicy));
+        let r = ask(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(
+            matches!(&r, Authorization::Defer { prompt, .. } if prompt == "policy says wait"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_defer_on_guard_ask_defers() {
+        let c = dctx().with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(
+            matches!(&r, Authorization::Defer { prompt, args }
+                if prompt == "destructive command: recursive force-remove of / or ~"
+                    && *args == rm_root()),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_defer_on_ask_user_defers() {
+        let c = dctx()
+            .with_permission_policy(Arc::new(AskPolicy))
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(
+            matches!(&r, Authorization::Defer { prompt, .. } if prompt == "ok?"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_guard_asks_call_the_handler_twice_and_defer_then_deny_denies() {
+        let handler = Arc::new(CountingHandler::new(vec![
+            ApprovalOutcome::Defer,
+            ApprovalOutcome::Deny {
+                reason: "no".into(),
+            },
+        ]));
+        let c = dctx().with_approval_handler(handler.clone());
+        let r = ask(&c, ToolEffect::SideEffect, rm_root_etc()).await;
+        assert!(
+            matches!(&r, Authorization::Deny { reason } if reason == "no"),
+            "{r:?}"
+        );
+        assert_eq!(handler.count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn two_guard_asks_both_deferred_join_prompts() {
+        let c = dctx().with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root_etc()).await;
+        assert!(
+            matches!(&r, Authorization::Defer { prompt, .. }
+                if prompt == "destructive command: recursive force-remove of / or ~\nwrite to a protected system path"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn defer_then_later_guard_deny_denies() {
+        let c = dctx()
+            .with_guard_rules(vec![never_guard()])
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, env_write()).await;
+        assert!(
+            matches!(&r, Authorization::Deny { reason } if reason == "never"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn defer_then_plan_on_write_tool_denies() {
+        let c = dctx()
+            .with_permission_mode(PermissionMode::Plan)
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::Write, rm_root()).await;
+        assert!(matches!(r, Authorization::Deny { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn defer_then_dont_ask_denies() {
+        let c = dctx()
+            .with_permission_mode(PermissionMode::DontAsk)
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(matches!(r, Authorization::Deny { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn deferred_guard_beats_allow_rule() {
+        let c = dctx()
+            .with_allow_rules(vec![crate::AllowRule::tool("Bash")])
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(matches!(r, Authorization::Defer { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn deferred_guard_beats_bypass() {
+        let c = dctx()
+            .with_permission_mode(PermissionMode::Bypass)
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(matches!(r, Authorization::Defer { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn deferred_guard_beats_accept_edits_on_write() {
+        let c = dctx()
+            .with_permission_mode(PermissionMode::AcceptEdits)
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::Write, rm_root()).await;
+        assert!(matches!(r, Authorization::Defer { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn deferred_guard_with_no_policy_defers() {
+        let c = dctx().with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(matches!(r, Authorization::Defer { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn deferred_guard_beats_policy_allow() {
+        let c = dctx()
+            .with_permission_policy(Arc::new(AllowPolicy))
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(matches!(r, Authorization::Defer { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn deferred_guard_with_policy_replace_defers_with_replaced_args() {
+        let c = dctx()
+            .with_permission_policy(Arc::new(ReplacePolicy(json!({"command":"echo safe"}))))
+            .with_approval_handler(Arc::new(DeferHandler));
+        let r = ask(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(
+            matches!(&r, Authorization::Defer { args, .. } if *args == json!({"command":"echo safe"})),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn flag_off_maps_defer_to_deny() {
+        let c = ctx().with_permission_policy(Arc::new(DeferPolicy));
+        let r = ask(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(
+            matches!(&r, Authorization::Deny { reason }
+                if reason == "approval deferred, but this run cannot defer: policy says wait"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_authorize_tool_returns_defer_variant() {
+        let c = dctx().with_permission_policy(Arc::new(DeferPolicy));
+        let r = c
+            .authorize_tool("Bash", ToolEffect::SideEffect, &json!({ "command": "ls" }))
+            .await;
+        assert!(
+            matches!(&r, PermissionDecision::Defer { prompt } if prompt == "policy says wait"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recheck_counts_guard_ask_as_answered() {
+        let c = dctx().with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::SideEffect, rm_root()).await;
+        assert!(matches!(r, Authorization::Allow), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn recheck_counts_ask_user_as_answered() {
+        // Ruling F7: no handler is installed, so the normal path would deny.
+        let c = dctx().with_permission_policy(Arc::new(AskPolicy));
+        let r = recheck(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(matches!(r, Authorization::Allow), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn recheck_counts_policy_defer_as_answered() {
+        let c = ctx()
+            .with_permission_policy(Arc::new(DeferPolicy))
+            .with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(matches!(r, Authorization::Allow), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn recheck_runs_deny_rules() {
+        let c = dctx()
+            .with_deny_rules(vec![DenyRule::tool("Bash")])
+            .with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(matches!(r, Authorization::Deny { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn recheck_runs_guard_deny() {
+        let c = dctx()
+            .with_guard_rules(vec![never_guard()])
+            .with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::SideEffect, env_write()).await;
+        assert!(
+            matches!(&r, Authorization::Deny { reason } if reason == "never"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recheck_runs_mode() {
+        let c = dctx()
+            .with_permission_mode(PermissionMode::Plan)
+            .with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::Write, json!({ "command": "ls" })).await;
+        assert!(matches!(r, Authorization::Deny { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn recheck_runs_policy_deny() {
+        let c = dctx()
+            .with_permission_policy(Arc::new(DenyPolicy))
+            .with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(matches!(r, Authorization::Deny { .. }), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn recheck_allow_rule_short_circuits() {
+        let c = dctx()
+            .with_allow_rules(vec![crate::AllowRule::tool("Bash")])
+            .with_permission_policy(Arc::new(DenyPolicy))
+            .with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(matches!(r, Authorization::Allow), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn recheck_policy_replace_is_returned_for_comparison() {
+        let x = json!({ "command": "echo safe" });
+        let c = dctx()
+            .with_permission_policy(Arc::new(ReplacePolicy(x.clone())))
+            .with_approval_handler(Arc::new(PanicHandler));
+        let r = recheck(&c, ToolEffect::SideEffect, json!({ "command": "ls" })).await;
+        assert!(
+            matches!(&r, Authorization::Replace { args } if *args == x),
+            "{r:?}"
+        );
     }
 }

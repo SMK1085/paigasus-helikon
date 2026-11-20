@@ -208,3 +208,31 @@ async fn graph_duplicate_edge_declaration_runs_dependent_node_exactly_once() {
     assert_eq!(updates_for_b, 1, "b must be scheduled exactly once");
     assert_eq!(state.get("b"), Some(serde_json::json!("B-out")));
 }
+
+#[tokio::test]
+async fn graph_agent_rejects_resolutions() {
+    let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let r = runs.clone();
+    let child = common::MockAgent::new("child", move |_| {
+        r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        vec![]
+    });
+    let graph = GraphAgent::builder()
+        .name("g")
+        .node("child", child)
+        .build()
+        .unwrap();
+    let input = AgentInput::from_user_text("x")
+        .with_resolution("d1", paigasus_helikon_core::ToolResolution::Approved);
+    let ctx: RunContext<()> = RunContext::ephemeral(());
+    let events: Vec<AgentEvent> = graph.run(ctx, input).await.unwrap().collect().await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::RunFailed { error }) if error == "this agent cannot resume deferred calls"
+    ));
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no child ran"
+    );
+}

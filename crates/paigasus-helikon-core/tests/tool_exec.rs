@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use paigasus_helikon_core::redaction::SecretSet;
 use paigasus_helikon_core::{
-    execute_tool_call, finalize_tool_output, AgentEvent, ContentPart, DenyRule, Tool,
-    ToolCallRequest,
+    execute_tool_call, finalize_tool_output, AgentEvent, ContentPart, DenyRule, PermissionDecision,
+    PermissionPolicy, RunContext, Tool, ToolCallRequest,
 };
 
 use common::{noop_run_context, MockTool};
@@ -83,6 +83,46 @@ async fn unknown_tool_errors_without_an_event() {
     assert!(event.is_none());
 }
 
+struct DeferPolicy;
+#[async_trait::async_trait]
+impl PermissionPolicy<()> for DeferPolicy {
+    async fn check(
+        &self,
+        _: &RunContext<()>,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> PermissionDecision {
+        PermissionDecision::Defer {
+            prompt: "policy says wait".into(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn defer_is_a_deny_on_the_durable_path_even_with_the_flag_on() {
+    let ctx = noop_run_context::<()>()
+        .with_deferred_tool_calls(true)
+        .with_permission_policy(Arc::new(DeferPolicy));
+    let tool_ctx = ctx.to_tool_context();
+    let tool = MockTool::new("secret", serde_json::json!({ "ok": true }));
+    let tools: Vec<Arc<dyn Tool<()>>> = vec![tool.clone() as Arc<dyn Tool<()>>];
+
+    let (outcome, event) = execute_tool_call(&tools, &ctx, &tool_ctx, &call("secret")).await;
+
+    assert_eq!(
+        outcome.result,
+        Err(
+            "permission denied: approval deferred, but this run cannot defer: policy says wait"
+                .to_owned()
+        )
+    );
+    assert!(matches!(
+        event,
+        Some(AgentEvent::PermissionDenied { tool, .. }) if tool == "secret"
+    ));
+    assert!(tool.invocations().is_empty(), "the tool must not run");
+}
+
 #[test]
 fn finalize_tool_output_passes_plain_strings_through_unredacted() {
     let parts = finalize_tool_output(
@@ -96,4 +136,74 @@ fn finalize_tool_output_passes_plain_strings_through_unredacted() {
             text: "plain".to_owned()
         }]
     );
+}
+
+const PROMPT_SECRET: &str = "sk-test-PROMPT-SECRET-5678";
+
+/// Defers every call with a prompt that holds a known secret.
+struct DeferWithSecret;
+#[async_trait::async_trait]
+impl PermissionPolicy<()> for DeferWithSecret {
+    async fn check(
+        &self,
+        _: &RunContext<()>,
+        _: &str,
+        _: &serde_json::Value,
+    ) -> PermissionDecision {
+        PermissionDecision::Defer {
+            prompt: format!("pay with key {PROMPT_SECRET}?"),
+        }
+    }
+}
+
+/// The denial of a deferred call carries the redacted prompt, in the
+/// `PermissionDenied` event and in the tool result.
+async fn assert_deferred_denial_is_redacted(ctx: RunContext<()>) {
+    let ctx = ctx
+        .with_extra_secrets(vec![PROMPT_SECRET.into()])
+        .with_permission_policy(Arc::new(DeferWithSecret));
+    let tool_ctx = ctx.to_tool_context();
+    let tool = MockTool::new("pay", serde_json::json!({ "ok": true }));
+    let tools: Vec<Arc<dyn Tool<()>>> = vec![tool.clone() as Arc<dyn Tool<()>>];
+
+    let (outcome, event) = execute_tool_call(&tools, &ctx, &tool_ctx, &call("pay")).await;
+
+    let err = outcome.result.expect_err("a deferral is a deny here");
+    assert!(
+        err.starts_with("permission denied: approval deferred, but this run cannot defer: "),
+        "{err}"
+    );
+    assert!(!err.contains(PROMPT_SECRET), "the tool result leaks: {err}");
+    let Some(AgentEvent::PermissionDenied { reason, .. }) = event else {
+        panic!("no PermissionDenied event: {event:?}");
+    };
+    assert!(reason.starts_with("approval deferred"), "{reason}");
+    assert!(!reason.contains(PROMPT_SECRET), "the event leaks: {reason}");
+    assert!(tool.invocations().is_empty(), "the tool must not run");
+}
+
+#[tokio::test]
+async fn deferred_denial_redacts_the_prompt_with_the_flag_off() {
+    assert_deferred_denial_is_redacted(noop_run_context::<()>()).await;
+}
+
+#[tokio::test]
+async fn deferred_denial_redacts_the_prompt_on_the_durable_path() {
+    assert_deferred_denial_is_redacted(noop_run_context::<()>().with_deferred_tool_calls(true))
+        .await;
+}
+
+#[tokio::test]
+async fn deferred_denial_keeps_the_prompt_without_redaction() {
+    let ctx = noop_run_context::<()>()
+        .without_output_redaction()
+        .with_extra_secrets(vec![PROMPT_SECRET.into()])
+        .with_permission_policy(Arc::new(DeferWithSecret));
+    let tool_ctx = ctx.to_tool_context();
+    let tools: Vec<Arc<dyn Tool<()>>> = Vec::new();
+
+    let (outcome, _) = execute_tool_call(&tools, &ctx, &tool_ctx, &call("pay")).await;
+
+    let err = outcome.result.expect_err("a deferral is a deny here");
+    assert!(err.contains(PROMPT_SECRET), "{err}");
 }

@@ -8,9 +8,12 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use common::{MockAgent, MockModel, MockTool};
+use futures_core::stream::BoxStream;
 use paigasus_helikon_core::{
-    Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, FinishReason, GuardRule, Hook,
-    HookDecision, HookEvent, HookRegistry, LlmAgent, ModelEvent, PermissionMode, RunContext, Tool,
+    Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, CancellationToken, ContentPart,
+    FinishReason, GuardRule, Hook, HookDecision, HookEvent, HookRegistry, Item, LlmAgent, Model,
+    ModelCapabilities, ModelError, ModelEvent, ModelRequest, PermissionDecision, PermissionMode,
+    PermissionPolicy, RunContext, Tool,
 };
 
 /// Turn 1: call `tool_name` with `{}`. Turn 2: stop with `"done"`. Two scripts so
@@ -326,5 +329,184 @@ async fn agent_as_tool_fires_on_subagent_stop_on_failure() {
     assert!(
         seen.lock().unwrap().iter().any(|n| n == "inner"),
         "OnSubagentStop fires even when the agent-as-tool sub-run fails"
+    );
+}
+
+// ── SMA-803: a sub-run cannot defer a tool call ─────────────────────────────
+
+/// Defers every call to tool `b`; allows the rest.
+struct DeferB;
+
+#[async_trait]
+impl PermissionPolicy<()> for DeferB {
+    async fn check(
+        &self,
+        _ctx: &RunContext<()>,
+        tool: &str,
+        _args: &serde_json::Value,
+    ) -> PermissionDecision {
+        if tool == "b" {
+            PermissionDecision::Defer {
+                prompt: "policy says wait".to_owned(),
+            }
+        } else {
+            PermissionDecision::Allow
+        }
+    }
+}
+
+/// A [`MockModel`] that records the requests it receives.
+struct CapturingModel {
+    inner: Arc<MockModel>,
+    requests: Mutex<Vec<ModelRequest>>,
+}
+
+#[async_trait]
+impl Model for CapturingModel {
+    async fn invoke(
+        &self,
+        request: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
+        self.requests.lock().unwrap().push(request.clone());
+        self.inner.invoke(request, cancel).await
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+/// The text of each `ToolResult` item in `items`.
+fn tool_result_texts(items: &[Item]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|i| match i {
+            Item::ToolResult { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn drain(agent: &impl Agent<()>, ctx: RunContext<()>) -> Vec<AgentEvent> {
+    use futures_util::StreamExt as _;
+    agent
+        .run(ctx, AgentInput::from_user_text("go"))
+        .await
+        .expect("run starts")
+        .collect()
+        .await
+}
+
+const CANNOT_DEFER: &str = "approval deferred, but this run cannot defer: ";
+
+/// The fourth `RunContext` copy site: `AgentAsTool` builds its sub-context with
+/// `RunContext::new`, so the sub-run does not inherit the deferral flag. A
+/// deferral there is a denial, and the parent run completes.
+#[tokio::test]
+async fn deferral_is_denied_inside_agent_as_tool_sub_run() {
+    let inner_model = Arc::new(CapturingModel {
+        inner: MockModel::with_scripts(call_then_stop("b")),
+        requests: Mutex::new(Vec::new()),
+    });
+    let inner_b = MockTool::new("b", serde_json::json!({"ok": true}));
+    let inner = LlmAgent::builder::<()>()
+        .name("inner")
+        .shared_model(Arc::clone(&inner_model))
+        .shared_tool(Arc::clone(&inner_b) as Arc<dyn Tool<()>>)
+        .build();
+    let wrapper = AgentAsTool::new(inner).with_name("inner");
+
+    let mut parent_script = vec![vec![
+        ModelEvent::ToolCallDelta {
+            call_id: "p1".to_owned(),
+            name: Some("inner".to_owned()),
+            args_delta: r#"{"input":"go"}"#.to_owned(),
+        },
+        ModelEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        },
+    ]];
+    parent_script.push(call_then_stop("unused").remove(1));
+    let parent = LlmAgent::builder::<()>()
+        .name("parent")
+        .shared_model(MockModel::with_scripts(parent_script))
+        .tool(wrapper)
+        .build();
+    let ctx = RunContext::ephemeral(())
+        .with_deferred_tool_calls(true)
+        .with_permission_policy(Arc::new(DeferB));
+
+    let events = drain(&parent, ctx).await;
+
+    let requests = inner_model.requests.lock().unwrap().clone();
+    assert_eq!(
+        requests.len(),
+        2,
+        "the inner loop continues after the denial"
+    );
+    let texts = tool_result_texts(&requests[1].messages);
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(
+        texts[0].starts_with(&format!("permission denied: {CANNOT_DEFER}")),
+        "{texts:?}"
+    );
+    assert_eq!(inner_b.invocations().len(), 0);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RunDeferred { .. })),
+        "{events:?}"
+    );
+    assert!(
+        matches!(events.last(), Some(AgentEvent::RunCompleted { .. })),
+        "{events:?}"
+    );
+}
+
+/// A workflow child (`subagent_child`) does not inherit the deferral flag.
+#[tokio::test]
+async fn deferral_is_denied_inside_a_workflow_child() {
+    use paigasus_helikon_core::SequentialAgent;
+
+    let b = MockTool::new("b", serde_json::json!({"ok": true}));
+    let child = LlmAgent::builder::<()>()
+        .name("child")
+        .shared_model(MockModel::with_scripts(call_then_stop("b")))
+        .shared_tool(Arc::clone(&b) as Arc<dyn Tool<()>>)
+        .build();
+    let workflow = SequentialAgent::<()>::new("seq", "one step").then(child);
+    let ctx = RunContext::ephemeral(())
+        .with_deferred_tool_calls(true)
+        .with_permission_policy(Arc::new(DeferB));
+
+    let events = drain(&workflow, ctx).await;
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AgentEvent::PermissionDenied { tool, reason }
+                if tool == "b" && reason.starts_with(CANNOT_DEFER)
+        )),
+        "{events:?}"
+    );
+    assert_eq!(b.invocations().len(), 0);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RunDeferred { .. })),
+        "{events:?}"
+    );
+    assert!(
+        matches!(events.last(), Some(AgentEvent::RunCompleted { .. })),
+        "{events:?}"
     );
 }

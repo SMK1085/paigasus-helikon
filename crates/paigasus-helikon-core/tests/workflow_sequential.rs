@@ -130,3 +130,23 @@ async fn fail_fast_stops_later_steps_and_surfaces_structured_error() {
         "fail-fast: second step must not run"
     );
 }
+
+#[tokio::test]
+async fn sequential_agent_rejects_resolutions() {
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let r = runs.clone();
+    let child = MockAgent::new("child", move |_| {
+        r.fetch_add(1, Ordering::SeqCst);
+        msg_and_complete("child", "ran", 0)
+    });
+    let seq = SequentialAgent::new("seq", "").then(child);
+    let input = AgentInput::from_user_text("x")
+        .with_resolution("d1", paigasus_helikon_core::ToolResolution::Approved);
+    let events: Vec<AgentEvent> =
+        futures_util::StreamExt::collect(seq.run(ctx(), input).await.unwrap()).await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::RunFailed { error }) if error == "this agent cannot resume deferred calls"
+    ));
+    assert_eq!(runs.load(Ordering::SeqCst), 0, "no child ran");
+}

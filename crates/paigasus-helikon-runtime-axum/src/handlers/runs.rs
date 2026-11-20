@@ -53,6 +53,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::Principal,
+    context::restrict_unsupported_run_features,
     dto::{AsyncAccepted, RunRequest, RunResponse},
     error::{AuthRejection, ServerError},
     event_log::EventLog,
@@ -218,6 +219,7 @@ pub(crate) async fn create_run<Ctx: Send + Sync + 'static>(
     //    the context provider fails.
     let cancel = CancellationToken::new();
     let ctx = state.context.build(&parts, session, cancel.clone()).await?;
+    let ctx = restrict_unsupported_run_features(ctx);
     let (run_id, handle) = state.registry.create(name, principal.clone(), cancel)?;
 
     // 6. Spawn the writer task: drive the agent and drain its events into the log.

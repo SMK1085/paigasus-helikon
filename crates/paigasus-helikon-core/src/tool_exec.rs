@@ -65,13 +65,21 @@ where
         .unwrap_or(crate::ToolEffect::SideEffect);
 
     let mut args = call.args.clone();
-    match run_ctx.authorize_tool(&call.name, effect, &args).await {
+    let decision = match run_ctx.authorize_tool(&call.name, effect, &args).await {
+        crate::PermissionDecision::Defer { prompt } => crate::PermissionDecision::Deny {
+            reason: run_ctx.cannot_defer_reason(&prompt),
+        },
+        other => other,
+    };
+    match decision {
         crate::PermissionDecision::Allow => {}
         crate::PermissionDecision::Replace { args: sanitized } => {
             args = sanitized;
         }
         crate::PermissionDecision::Deny { reason }
-        | crate::PermissionDecision::AskUser { prompt: reason } => {
+        | crate::PermissionDecision::AskUser { prompt: reason }
+        // `Defer` became `Deny` above; this arm only keeps the match exhaustive.
+        | crate::PermissionDecision::Defer { prompt: reason } => {
             let outcome = crate::ToolCallOutcome {
                 call_id: call.call_id.clone(),
                 result: Err(format!("permission denied: {reason}")),

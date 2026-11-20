@@ -215,6 +215,17 @@ where
             let span = workflow_run_span(&name, ctx.tracer());
             yield AgentEvent::RunStarted { agent: name.clone() };
 
+            if crate::workflow::has_resume_input(&input) {
+                parent_failure.set(AgentError::Other(anyhow::anyhow!(
+                    "this agent cannot resume deferred calls"
+                )));
+                span.record("otel.status_code", "ERROR");
+                yield AgentEvent::RunFailed {
+                    error: "this agent cannot resume deferred calls".to_owned(),
+                };
+                return;
+            }
+
             let max = max_depth(ctx.run_config());
             if ctx.agent_depth() + 1 > max {
                 let err = AgentError::MaxAgentDepthExceeded { depth: ctx.agent_depth() + 1, max };
@@ -255,7 +266,10 @@ where
                             });
                         }
                     }
-                    let node_input = AgentInput { messages };
+                    // `resolutions` is private to `agent.rs`, so struct-update
+                    // syntax is unavailable here.
+                    let mut node_input = AgentInput::new();
+                    node_input.messages = messages;
 
                     match nodes[i].1.run(child, node_input).instrument(span.clone()).await {
                         Ok(s) => running.push(Box::pin(s.map(move |ev| (i, ev)))

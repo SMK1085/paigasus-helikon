@@ -89,11 +89,26 @@ where
     /// above. Note this is an ordering guarantee, not a durability one: persistence is
     /// best-effort, so an implementation may log rather than propagate an append
     /// failure, and a run that fails before the agent starts never reaches finalize at
-    /// all.
+    /// all. There are two strict cases. A run that ends with `RunDeferred` and a run
+    /// that resumes deferred tool calls must not lose the write. On an append failure
+    /// they return [`RunError::SessionWrite`]: the session lost the deferral, or the
+    /// results of calls that may have run.
+    ///
+    /// **Deferred tool calls.** A run whose input has resolutions, or whose session has
+    /// open deferrals ([`crate::open_deferrals`]), resumes the deferred calls. The
+    /// runner validates the request with [`crate::ResumePlan::from_events`] before the
+    /// agent starts. An invalid request returns [`RunError::InvalidResume`], and the
+    /// runner records nothing. A runner that does not support resume must reject a run
+    /// on a session with open deferrals (use [`crate::open_deferrals`]). Otherwise its
+    /// run puts a user message after a `ToolCall` that has no result.
+    ///
+    /// **One writer per session at a time.** The host must make sure of this (for
+    /// example with a lease). Two resumes of one session at the same time can both run
+    /// an approved tool.
     ///
     /// **Cancellation/timeout is best-effort and loses to a genuine terminal
     /// event that already occurred.** If the run reaches a terminal
-    /// (`RunCompleted`/`RunFailed`) before — or in the same poll as — a cancel or
+    /// (`RunCompleted`/`RunFailed`/`RunDeferred`) before — or in the same poll as — a cancel or
     /// timeout, the runner reports that real outcome (`Ok`, or the structured
     /// `Err(RunError::Agent(..))`), not `Err(RunError::Cancelled)` /
     /// `Err(RunError::Timeout)`. The cancel/timeout wins only when it aborted the
@@ -114,7 +129,14 @@ where
     /// Session loading/seeding matches [`Runner::run`]. **The returned stream
     /// must be driven to its terminal for the run's events to be persisted:** a
     /// consumer that drops the stream early may skip the finalize step and leave
-    /// a partial turn (or nothing) written.
+    /// a partial turn (or nothing) written. In the two strict cases of
+    /// [`Runner::run`] (a run that defers or resumes), the `TokioRunner` replaces the
+    /// terminal event with `RunFailed` ("session write failed: ...") when an append
+    /// fails. It does this also when the run was cancelled or timed out. It records
+    /// the error in a [`SessionWriteSlot`], so [`RunResultStreaming::collect`] returns
+    /// [`RunError::SessionWrite`], as [`Runner::run`] does. The `TemporalRunner` and
+    /// the HTTP runtimes do not support deferred tool calls. They have no strict
+    /// case, so they do not make this replacement.
     ///
     /// The same cancellation precedence as [`Runner::run`] applies: once a real
     /// terminal event has been yielded, a late cancel/timeout does not append a
@@ -136,6 +158,10 @@ where
     /// continue a multi-turn session, or to retry a failed run without
     /// re-appending the previous turn's user message. (With a `Session` present,
     /// [`Runner::run`]'s `input` is the *new turn*; the session owns history.)
+    ///
+    /// The empty input has no resolutions. So on a session with open deferred
+    /// tool calls, this returns [`RunError::InvalidResume`]. To resume deferred
+    /// calls, use [`Runner::run`] with an input that resolves each open call.
     async fn resume(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -148,6 +174,9 @@ where
     /// Streaming counterpart of [`Runner::resume`]: resumes from session
     /// history with no new input and returns a streaming result handle instead
     /// of an aggregated [`RunResult`].
+    ///
+    /// As with [`Runner::resume`], a session with open deferred tool calls
+    /// gives [`RunError::InvalidResume`].
     async fn resume_streamed(
         &self,
         agent: &(dyn Agent<Ctx> + '_),
@@ -236,6 +265,13 @@ pub struct RunResult<T = String> {
     pub events: Vec<AgentEvent>,
     /// Aggregated token usage across every turn of the run.
     pub usage: TokenUsage,
+    /// Why the run stopped. A deferred run carries the pending tool calls.
+    ///
+    /// When output redaction is on, the args of these calls are the redacted
+    /// copy. Do not use them to run or to hash a call. The stored
+    /// `SessionEvent::ToolDeferred` events hold the raw effective args. They
+    /// are the source of truth for the resume.
+    pub stop_reason: crate::StopReason,
 }
 
 impl RunResult<String> {
@@ -245,6 +281,8 @@ impl RunResult<String> {
     /// The `T: JsonSchema` bound is the marker that the caller has
     /// configured structured output upstream — without it,
     /// `parse_final` is just a JSON parse over unstructured text.
+    ///
+    /// Check `stop_reason` first: a deferred run has no final output to parse.
     pub fn parse_final<T>(self) -> Result<RunResult<T>, serde_json::Error>
     where
         T: serde::de::DeserializeOwned + schemars::JsonSchema,
@@ -254,6 +292,7 @@ impl RunResult<String> {
             final_output,
             events: self.events,
             usage: self.usage,
+            stop_reason: self.stop_reason,
         })
     }
 }
@@ -273,6 +312,45 @@ pub struct RunResultStreaming {
     /// [`RunResultStreaming::new`], in which case `collect` falls back to the
     /// string error from [`AgentEvent::RunFailed`].
     failure: Option<FailureSlot>,
+    /// Side-channel carrying a lost session write, when a runner wired one in
+    /// via [`RunResultStreaming::with_session_write`].
+    session_write: Option<SessionWriteSlot>,
+}
+
+/// A shared slot where a runner records a session write that failed.
+///
+/// A run that defers or resumes deferred tool calls must not lose its write.
+/// When the append fails, the runner records the error here and ends the
+/// stream with `RunFailed`. Then [`RunResultStreaming::collect`] returns
+/// [`RunError::SessionWrite`] with the recorded error, before any other
+/// result.
+#[derive(Clone, Default)]
+pub struct SessionWriteSlot(std::sync::Arc<std::sync::Mutex<Option<crate::SessionError>>>);
+
+impl SessionWriteSlot {
+    /// Make an empty slot.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the error of a failed session write.
+    pub fn set(&self, err: crate::SessionError) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
+    }
+
+    /// Take the recorded error, if any.
+    pub(crate) fn take(&self) -> Option<crate::SessionError> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
+
+impl std::fmt::Debug for SessionWriteSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = self.0.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        f.debug_struct("SessionWriteSlot")
+            .field("error", &set)
+            .finish()
+    }
 }
 
 impl RunResultStreaming {
@@ -282,7 +360,25 @@ impl RunResultStreaming {
         Self {
             events,
             failure: None,
+            session_write: None,
         }
+    }
+
+    /// Attach the slot where the runner records a failed session write.
+    ///
+    /// After the stream is drained, a recorded error wins over every other
+    /// result: [`RunResultStreaming::collect`] returns
+    /// [`RunError::SessionWrite`], and [`RunResultStreaming::collect_typed`]
+    /// returns [`AgentError::Session`] with the recorded error.
+    #[must_use]
+    pub fn with_session_write(mut self, slot: SessionWriteSlot) -> Self {
+        self.session_write = Some(slot);
+        self
+    }
+
+    /// Take a recorded session-write error. Call only after the stream is drained.
+    fn take_session_write(&self) -> Option<crate::SessionError> {
+        self.session_write.as_ref().and_then(SessionWriteSlot::take)
     }
 
     /// Wrap an event stream together with the [`FailureSlot`] the agent records
@@ -296,6 +392,7 @@ impl RunResultStreaming {
         Self {
             events,
             failure: Some(failure),
+            session_write: None,
         }
     }
 
@@ -312,6 +409,7 @@ impl RunResultStreaming {
         let mut events = Vec::new();
         let mut final_output = String::new();
         let mut usage = crate::TokenUsage::default();
+        let mut stop_reason = crate::StopReason::Completed;
         // Capture the RunFailed string but keep draining: state-machine failures
         // record their structured error AFTER yielding RunFailed, so the slot is
         // only guaranteed populated once the stream ends.
@@ -330,6 +428,12 @@ impl RunResultStreaming {
                     }
                 }
                 crate::AgentEvent::RunCompleted { usage: u } => usage = *u,
+                crate::AgentEvent::RunDeferred { calls, usage: u } => {
+                    usage = *u;
+                    stop_reason = crate::StopReason::Deferred {
+                        calls: calls.clone(),
+                    };
+                }
                 crate::AgentEvent::RunFailed { error } => {
                     failed = Some(error.clone());
                 }
@@ -338,6 +442,9 @@ impl RunResultStreaming {
             events.push(ev);
         }
 
+        if let Some(e) = self.take_session_write() {
+            return Err(RunError::SessionWrite(e));
+        }
         if let Some(err_msg) = failed {
             if let Some(err) = self.failure.as_ref().and_then(FailureSlot::take) {
                 return Err(RunError::Agent(err));
@@ -349,6 +456,7 @@ impl RunResultStreaming {
             final_output,
             events,
             usage,
+            stop_reason,
         })
     }
 
@@ -372,6 +480,7 @@ impl RunResultStreaming {
         let mut events = Vec::new();
         let mut final_text = String::new();
         let mut usage = crate::TokenUsage::default();
+        let mut stop_reason = crate::StopReason::Completed;
         let mut structured_err: Option<(Vec<String>, String)> = None;
         let mut failed: Option<String> = None;
 
@@ -388,6 +497,12 @@ impl RunResultStreaming {
                     }
                 }
                 AgentEvent::RunCompleted { usage: u } => usage = *u,
+                AgentEvent::RunDeferred { calls, usage: u } => {
+                    usage = *u;
+                    stop_reason = crate::StopReason::Deferred {
+                        calls: calls.clone(),
+                    };
+                }
                 AgentEvent::StructuredOutputFailed {
                     schema_errors,
                     final_text: ft,
@@ -402,6 +517,9 @@ impl RunResultStreaming {
             events.push(ev);
         }
 
+        if let Some(e) = self.take_session_write() {
+            return Err(AgentError::Session(e));
+        }
         if let Some(err_msg) = failed {
             // Primary: the structured side-channel (populated post-drain).
             if let Some(err) = self.failure.as_ref().and_then(FailureSlot::take) {
@@ -418,6 +536,10 @@ impl RunResultStreaming {
             return Err(AgentError::Other(anyhow::anyhow!(err_msg)));
         }
 
+        if stop_reason != crate::StopReason::Completed {
+            return Err(AgentError::Incomplete { stop_reason });
+        }
+
         let final_output = serde_json::from_str::<T>(final_text.trim()).map_err(|e| {
             AgentError::Other(anyhow::anyhow!(
                 "collect_typed: failed to deserialize final output: {e}"
@@ -427,6 +549,7 @@ impl RunResultStreaming {
             final_output,
             events,
             usage,
+            stop_reason,
         })
     }
 }
@@ -486,6 +609,19 @@ pub enum RunError {
     /// The run exceeded its configured [`RunConfig::timeout`].
     #[error("run timed out")]
     Timeout,
+
+    /// The resume request is invalid.
+    #[error("invalid resume: {0}")]
+    InvalidResume(#[from] crate::InvalidResume),
+
+    /// A session write failed.
+    ///
+    /// This error does not prove that the session stored nothing. A session
+    /// can store the events and then fail. For example, `CompactingSession`
+    /// appends the events and then returns the error of a failed compaction.
+    /// The host must read the session to see its state before it recovers.
+    #[error("session write failed: {0}")]
+    SessionWrite(#[source] crate::SessionError),
 
     /// Escape hatch.
     #[error(transparent)]
@@ -877,5 +1013,128 @@ mod interrupt_tests {
                 "{i:?}: From must agree with run_error"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod deferral_result_tests {
+    use super::*;
+    use crate::{InvalidResume, PendingToolCall, SessionError, StopReason};
+
+    fn call() -> PendingToolCall {
+        PendingToolCall::new("d1", "c1", "pay", serde_json::json!({}), "Pay?", vec![])
+    }
+
+    fn assistant(text: &str) -> AgentEvent {
+        AgentEvent::MessageOutput {
+            item: crate::Item::AssistantMessage {
+                content: vec![crate::ContentPart::Text { text: text.into() }],
+                agent: None,
+            },
+        }
+    }
+
+    fn streaming(events: Vec<AgentEvent>) -> RunResultStreaming {
+        RunResultStreaming::new(Box::pin(futures_util::stream::iter(events)))
+    }
+
+    #[tokio::test]
+    async fn collect_maps_run_deferred_to_ok_with_stop_reason() {
+        let c = call();
+        let usage = TokenUsage {
+            input_tokens: 5,
+            ..Default::default()
+        };
+        let r = streaming(vec![
+            assistant("asking"),
+            AgentEvent::RunDeferred {
+                calls: vec![c.clone()],
+                usage,
+            },
+        ])
+        .collect()
+        .await
+        .expect("a deferred run is Ok");
+        assert_eq!(r.final_output, "asking");
+        assert_eq!(r.usage.input_tokens, 5);
+        assert_eq!(r.stop_reason, StopReason::Deferred { calls: vec![c] });
+    }
+
+    #[tokio::test]
+    async fn collect_without_terminal_is_completed() {
+        let r = streaming(vec![assistant("hi")]).collect().await.unwrap();
+        assert_eq!(r.stop_reason, StopReason::Completed);
+    }
+
+    #[test]
+    fn parse_final_copies_stop_reason() {
+        let r = RunResult {
+            final_output: "1".to_owned(),
+            stop_reason: StopReason::Deferred {
+                calls: vec![call()],
+            },
+            ..Default::default()
+        };
+        let typed = r.parse_final::<u32>().unwrap();
+        assert_eq!(typed.final_output, 1);
+        assert!(matches!(typed.stop_reason, StopReason::Deferred { .. }));
+    }
+
+    #[test]
+    fn run_error_new_variants_render() {
+        assert_eq!(
+            RunError::from(InvalidResume::NoOpenDeferrals).to_string(),
+            "invalid resume: the session has no open deferred tool calls"
+        );
+        assert!(RunError::SessionWrite(SessionError::Unavailable)
+            .to_string()
+            .starts_with("session write failed: "));
+    }
+
+    #[tokio::test]
+    async fn collect_returns_a_recorded_session_write_before_the_agent_error() {
+        let failure = FailureSlot::new();
+        failure.set(AgentError::Other(anyhow::anyhow!("agent broke")));
+        let slot = SessionWriteSlot::new();
+        slot.set(SessionError::Unavailable);
+        let r = RunResultStreaming::with_failure(
+            Box::pin(futures_util::stream::iter(vec![AgentEvent::RunFailed {
+                error: "session write failed: session backend unavailable".to_owned(),
+            }])),
+            failure,
+        )
+        .with_session_write(slot)
+        .collect()
+        .await;
+        assert!(
+            matches!(r, Err(RunError::SessionWrite(SessionError::Unavailable))),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_typed_reports_a_recorded_session_write() {
+        let slot = SessionWriteSlot::new();
+        slot.set(SessionError::Unavailable);
+        let r = streaming(vec![AgentEvent::RunFailed {
+            error: "x".to_owned(),
+        }])
+        .with_session_write(slot)
+        .collect_typed::<String>()
+        .await;
+        match r {
+            Err(AgentError::Session(SessionError::Unavailable)) => {}
+            other => panic!("expected AgentError::Session(Unavailable), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_without_a_recorded_session_write_is_unchanged() {
+        let r = streaming(vec![assistant("hi")])
+            .with_session_write(SessionWriteSlot::new())
+            .collect()
+            .await
+            .expect("ok");
+        assert_eq!(r.final_output, "hi");
     }
 }

@@ -408,3 +408,67 @@ fn conversation_snapshot_roundtrip() {
     ];
     insta::assert_snapshot!(roundtrip(&snapshot));
 }
+
+// --- Deferral ---
+
+#[test]
+fn stop_reason_completed_roundtrip() {
+    insta::assert_snapshot!(roundtrip(&StopReason::Completed));
+}
+
+#[test]
+fn stop_reason_deferred_roundtrip() {
+    let call = PendingToolCall::new(
+        "6f1c1d3e-0000-4000-8000-000000000001",
+        "call_1",
+        "pay",
+        serde_json::json!({ "amount": 10 }),
+        "Pay 10?",
+        vec!["triage".into(), "budgeting".into()],
+    );
+    insta::assert_snapshot!(roundtrip(&StopReason::Deferred { calls: vec![call] }));
+}
+
+#[test]
+fn tool_resolution_approved_roundtrip() {
+    insta::assert_snapshot!(roundtrip(&ToolResolution::Approved));
+}
+
+#[test]
+fn tool_resolution_denied_roundtrip() {
+    insta::assert_snapshot!(roundtrip(&ToolResolution::Denied {
+        reason: "no".into()
+    }));
+}
+
+#[test]
+fn agent_event_run_deferred_roundtrip() {
+    let mut usage = TokenUsage::default();
+    usage.input_tokens = 7;
+    let call = PendingToolCall::new(
+        "6f1c1d3e-0000-4000-8000-000000000001",
+        "call_1",
+        "pay",
+        serde_json::json!({ "amount": 10 }),
+        "Pay 10?",
+        vec!["triage".into()],
+    );
+    insta::assert_snapshot!(roundtrip(&AgentEvent::RunDeferred {
+        calls: vec![call],
+        usage
+    }));
+}
+
+#[test]
+fn session_event_tool_deferred_roundtrip() {
+    let ev = SessionEvent::ToolDeferred {
+        deferral_id: "6f1c1d3e-0000-4000-8000-000000000001".into(),
+        call_id: "call_1".into(),
+        name: "pay".into(),
+        args: serde_json::json!({ "amount": 10 }),
+        prompt: "Pay 10?".into(),
+        handoff_path: vec!["triage".into()],
+        ts: pinned_ts(),
+    };
+    insta::assert_snapshot!(roundtrip(&ev));
+}

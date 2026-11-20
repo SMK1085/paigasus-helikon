@@ -3,8 +3,8 @@
 
 use paigasus_helikon_core::{
     transition, AgentEvent, ContentPart, FinishReason, Item, LoopState, ModelSettings, NextAction,
-    OutputType, ResponseFormat, TokenUsage, ToolCallOutcome, ToolCallRequest, TransitionCtx,
-    TransitionInput,
+    OutputType, PendingToolCall, ResponseFormat, TokenUsage, ToolCallOutcome, ToolCallRequest,
+    TransitionCtx, TransitionInput,
 };
 
 /// Minimal schema struct for structured-output tests.
@@ -244,7 +244,7 @@ fn compacting_surfaces_not_implemented() {
 }
 
 #[test]
-fn needs_approval_surfaces_not_implemented() {
+fn needs_approval_is_terminal() {
     let state = LoopState::NeedsApproval { pending: vec![] };
     let conversation = vec![];
     let settings = ModelSettings::new();
@@ -254,11 +254,93 @@ fn needs_approval_surfaces_not_implemented() {
         &ctx_with(16, &conversation, &settings),
     );
 
+    assert_matches!(
+        outcome.next_state,
+        LoopState::Failed(paigasus_helikon_core::AgentError::Other(_))
+    );
+    assert_matches!(outcome.next_action, NextAction::Terminate);
+}
+
+#[test]
+fn tool_results_with_deferrals_emits_approval_then_run_deferred() {
+    let calls = vec![
+        ToolCallRequest {
+            call_id: "a".into(),
+            name: "tool_a".into(),
+            args: serde_json::json!({}),
+        },
+        ToolCallRequest {
+            call_id: "b".into(),
+            name: "tool_b".into(),
+            args: serde_json::json!({"x": 1}),
+        },
+    ];
+    let mut usage = TokenUsage::default();
+    usage.input_tokens = 5;
+    // turn 15 of 16: a plain ToolResults would trip MaxTurnsExceeded here.
+    let state = LoopState::ExecutingTools {
+        calls,
+        turn: 15,
+        usage,
+    };
+    let outcomes = vec![ToolCallOutcome {
+        call_id: "a".into(),
+        result: Ok(vec![ContentPart::Text {
+            text: "ok-a".into(),
+        }]),
+    }];
+    let deferred = vec![PendingToolCall::new(
+        "d-1",
+        "b",
+        "tool_b",
+        serde_json::json!({"x": 1}),
+        "wait",
+        vec!["root".to_owned()],
+    )];
+    let conversation = vec![];
+    let settings = ModelSettings::new();
+    let outcome = transition(
+        &state,
+        TransitionInput::ToolResultsWithDeferrals {
+            outcomes,
+            deferred: deferred.clone(),
+        },
+        &ctx_with(16, &conversation, &settings),
+    );
+
+    assert_eq!(outcome.events.len(), 3, "{:?}", outcome.events);
+    assert!(
+        matches!(
+            &outcome.events[0],
+            AgentEvent::ToolOutputItem { item: Item::ToolResult { call_id, .. } } if call_id == "a"
+        ),
+        "{:?}",
+        outcome.events[0]
+    );
+    assert!(
+        matches!(
+            &outcome.events[1],
+            AgentEvent::ApprovalRequested { call_id, tool, args }
+                if call_id == "b" && tool == "tool_b" && *args == serde_json::json!({"x": 1})
+        ),
+        "{:?}",
+        outcome.events[1]
+    );
+    assert!(
+        matches!(
+            &outcome.events[2],
+            AgentEvent::RunDeferred { calls, usage }
+                if *calls == deferred && usage.input_tokens == 5
+        ),
+        "{:?}",
+        outcome.events[2]
+    );
     match outcome.next_state {
-        LoopState::Failed(paigasus_helikon_core::AgentError::NotImplemented { feature }) => {
-            assert_eq!(feature, "approval");
+        LoopState::NeedsApproval { pending } => {
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].call_id, "b");
         }
-        other => panic!("expected Failed(NotImplemented), got {other:?}"),
+        other => panic!("expected NeedsApproval, got {other:?}"),
     }
     assert_matches!(outcome.next_action, NextAction::Terminate);
 }

@@ -8,9 +8,9 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 
 use crate::{
-    project, CancellationToken, ContentPart, ConversationSnapshot, HeuristicTokenCounter, Item,
-    Model, ModelEvent, ModelRequest, ModelSettings, SequenceId, Session, SessionError,
-    SessionEvent, TokenCounter,
+    open_deferrals, project, CancellationToken, ContentPart, ConversationSnapshot,
+    HeuristicTokenCounter, Item, Model, ModelEvent, ModelRequest, ModelSettings, SequenceId,
+    Session, SessionError, SessionEvent, TokenCounter,
 };
 
 const DEFAULT_PROMPT: &str = "Summarize the conversation so far into a concise summary, \
@@ -168,6 +168,16 @@ impl<S: Session> CompactingSession<S> {
 
         // 3. Authoritative count.
         let evs = self.inner.events(None).await?;
+        // An open deferral leaves a ToolCall without a ToolResult. A summary
+        // of that log would drop the pending call. Skip without updating the
+        // cheap estimate, so the next append re-checks.
+        if !open_deferrals(&evs).is_empty() {
+            tracing::debug!(
+                target: "paigasus::core::compaction",
+                "CompactingSession: a deferral is open; skipping compaction"
+            );
+            return Ok(());
+        }
         let snap = project(&evs);
         let tokens = self.counter.count(&snap.messages);
         if tokens <= self.threshold {

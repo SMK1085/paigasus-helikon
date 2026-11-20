@@ -138,3 +138,26 @@ async fn duplicate_branch_keys_fail_fast() {
         "got {err:?}"
     );
 }
+
+#[tokio::test]
+async fn parallel_agent_rejects_resolutions() {
+    let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let r = runs.clone();
+    let child = MockAgent::new("child", move |_| {
+        r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        msg_and_complete("child", "ran", 0)
+    });
+    let par = ParallelAgent::new("par", "").branch("k", child);
+    let input = AgentInput::from_user_text("x")
+        .with_resolution("d1", paigasus_helikon_core::ToolResolution::Approved);
+    let events: Vec<AgentEvent> = par.run(ctx(), input).await.unwrap().collect().await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::RunFailed { error }) if error == "this agent cannot resume deferred calls"
+    ));
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no child ran"
+    );
+}

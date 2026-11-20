@@ -14,8 +14,8 @@ A tool call is authorized by the pipeline `deny rules › guard rules › allow 
 
 - `PermissionMode` — a `#[non_exhaustive]` enum: `Default` (defer to policy; permissive when no policy), `AcceptEdits` (auto-approve tools whose `ToolEffect` is `Write`), `Plan` (deny any tool whose `ToolEffect` is not `ReadOnly`), `Bypass` (allow all — deny rules still apply), and `DontAsk` (deny-by-default headless lockdown — the policy is never invoked; only an allow rule can permit a call). Mode is **tighten-only**: `RunContext::with_permission_mode` refuses to loosen `Bypass` (it may only tighten to `DontAsk`), and `DontAsk` is terminal. `Bypass` and `DontAsk` both propagate to sub-agents.
 - `DenyRule` — a first-class rule evaluated **before** mode, so it overrides even `Bypass`. Matches by exact tool name (`DenyRule::tool("Bash")`), by Bash sub-command program (`DenyRule::bash_command("rm")`), or by filesystem path glob (`DenyRule::read(".env")` / `DenyRule::edit("dist/**")` — see **Allow rules & filesystem path rules** below). See also **Guard rules** below for the higher-level Bash-command matcher.
-- `PermissionPolicy<Ctx>` — the `canUseTool` trait. Its async `check` returns a `PermissionDecision`: `Allow`, `Deny { reason }`, `AskUser { prompt }`, or `Replace { args }` (sanitize the call's arguments before execution).
-- `ApprovalHandler` — resolves an `AskUser` decision out of band. Its `decide` returns an `ApprovalOutcome` (`Allow` or `Deny { reason }`) — it cannot recursively ask. With **no** approval handler installed, `AskUser` resolves to deny.
+- `PermissionPolicy<Ctx>` — the `canUseTool` trait. Its async `check` returns a `PermissionDecision`: `Allow`, `Deny { reason }`, `AskUser { prompt }`, `Replace { args }` (sanitize the call's arguments before execution), or `Defer { prompt }` (see **Deferred tool calls** below).
+- `ApprovalHandler` — resolves an `AskUser` decision out of band. Its `decide` returns an `ApprovalOutcome` (`Allow`, `Deny { reason }`, or `Defer`) — it cannot recursively ask. With **no** approval handler installed, `AskUser` resolves to deny.
 
 Permissions attach to the `RunContext`:
 
@@ -69,6 +69,55 @@ let ctx: RunContext<()> = RunContext::ephemeral(())
 ```
 
 `with_permission_mode`, `with_deny_rules`, `with_permission_policy`, and `with_approval_handler` are consuming builder methods on `RunContext`; the corresponding readers are `permission_mode`, `deny_rules`, `permission_policy`, and `approval_handler`. A tool's `ToolEffect` (`ReadOnly`, `Write`, or `SideEffect`) is what `AcceptEdits` and `Plan` mode test against — see [Tools](./tools.md).
+
+### Deferred tool calls
+
+A deferred tool call does not wait inside the run. The run ends, and the host decides later. The host then starts a new run that resumes the call.
+
+**What defers.** A policy can return `PermissionDecision::Defer`. An `ApprovalHandler` can return `ApprovalOutcome::Defer` for a guard `Ask` or for an `AskUser`. Every ask point calls the handler. One tool call can therefore cause more than one `decide` call.
+
+**Opt-in.** Deferral is off by default. Turn it on with `RunContext::with_deferred_tool_calls(true)`.
+
+- `AgentAsTool` sub-runs and workflow children keep the flag off.
+- Handoff children keep the flag as the parent has it.
+- `TemporalRunner`, `runtime-axum`, `runtime-actix` and `runtime-agentcore` do not support deferral. They clear the flag.
+- With the flag off, a `Defer` is a deny. The reason is "approval deferred, but this run cannot defer: ..." followed by the prompt. When output redaction is on, the reason carries the redacted prompt.
+
+**The end of the run.** The run stops with `StopReason::Deferred { calls }`. The stream ends with `AgentEvent::RunDeferred`, after one `ApprovalRequested` event for each call. The session gets one `tool_deferred` event for each call. `collect_typed` returns `AgentError::Incomplete`, because the run has no completed answer.
+
+**Repeated call ids.** A handoff transfer call has no result while the child agent runs. Some providers make call ids for each response, for example `fc_0` from Gemini. Then a call of the child agent can have the same call id as the transfer call. Such a call is not deferred, because the session cannot keep the deferral open. The call is denied with the result "permission denied: deferral not possible: call id {call_id} repeats in this run".
+
+**The resume.** The host resolves each open call with the `deferral_id` of the call. Only a runner that supports resume can do this today: `TokioRunner`.
+
+```rust,ignore
+let input = AgentInput::new()
+    .with_resolution(pending.deferral_id(), ToolResolution::Approved);
+let result = TokioRunner.run(&agent, ctx, input, config).await?;
+```
+
+`ToolResolution::Denied { reason }` records a denial result. The tool does not run, and the model sees the reason.
+
+**The re-check.** An approved call does not get a second `PreToolUse` hook. All other checks run again: deny rules, guard rules, allow rules, mode and policy. An ask point counts as answered. Any deny wins. A `Replace` that gives different arguments is a deny. A policy `Replace` must therefore give the same result each time. `PostToolUse` and secret redaction apply to the result of an approved call.
+
+**Resolve all calls together.** The host must resolve every open call in one resume. A request that does not do this returns `RunError::InvalidResume` with one of these reasons:
+
+- `NoOpenDeferrals`: the session has no open deferred call.
+- `UnresolvedDeferrals`: an open call has no resolution.
+- `UnknownDeferral`: a resolution names a call that is not open.
+- `DuplicateResolution`: two resolutions name the same call.
+- `SessionModified`: the session changed after the deferral.
+- `CallNotInHistory`: a compactor removed the `ToolCall` item from the history.
+- `ToolItemsInInput`: the resume input has tool call or tool result items. This includes a `ContentPart::ToolUse` or `ContentPart::ToolResult` part in a message.
+- `PathTooDeep`: the handoff path is longer than `max_agent_depth` allows.
+- `ResumeUnsupported`: the runner cannot resume deferred calls.
+
+**Workflow agents cannot resume.** A workflow agent (for example `SequentialAgent`) rejects a resume with `RunFailed`. `TokioRunner` then records nothing, so the deferrals stay open. Resume them through an `LlmAgent`.
+
+**One writer for each session.** Only one run at a time must use a session. The host must make sure of this, for example with a lease. Two resumes of one session at the same time can both run an approved tool.
+
+**Secrets.** The session stores the raw effective arguments of a deferred call. The resume runs the tool with these arguments. Thus a secret in the arguments persists in the session store. A `PreToolUse` hook that adds a secret to the arguments of a call that can defer has the same effect. When output redaction is on, events carry redacted arguments and redacted prompts, because a policy can make the prompt from the arguments. The session keeps the raw prompt. Redaction copies JSON object keys unchanged, as it does for tool output. Thus a known secret that is an object key in the arguments stays in the `ApprovalRequested` and `RunDeferred` events. When output redaction is off, events carry the raw arguments and the raw prompt.
+
+**Rollback note.** Once a host stores a `tool_deferred` event, it cannot roll back below this version, because an older reader cannot parse the row. Enable deferral only after every reader of the session store runs this version.
 
 ### Guard rules & the destructive-command breaker
 

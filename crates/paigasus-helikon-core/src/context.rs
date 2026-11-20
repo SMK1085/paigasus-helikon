@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use crate::DeferralSlot;
 use crate::{
     ActionsHandle, AllowRule, ApprovalHandler, ApprovalOutcome, DenyRule, FailureSlot, Hook,
     PermissionDecision, PermissionMode, PermissionPolicy, RunConfig, Session, SessionState,
@@ -97,6 +98,72 @@ where
     redact_output: bool,
     /// Extra secret values to redact, beyond the auto-sourced env set.
     extra_secrets: Vec<String>,
+    /// Whether a `Defer` decision may end the run with `RunDeferred`.
+    /// Opt-in; a handoff child inherits it, a sub-agent child clears it.
+    deferred_tool_calls: bool,
+    /// Agent names from the root agent to the current agent. Extended on
+    /// each handoff; empty for a sub-agent child.
+    handoff_path: Vec<String>,
+    /// Where a run records the tool calls it deferred. Shared with handoff
+    /// children, fresh for sub-agent children.
+    deferrals: DeferralSlot,
+    /// Call ids of the handoff transfer calls of the agents above this one.
+    /// They have no result while the run goes on. A call with one of these
+    /// ids is not deferred. Extended on each handoff; empty for a sub-agent
+    /// child.
+    open_call_ids: Vec<String>,
+}
+
+/// How the ask points of the authorization pipeline (each guard `Ask` and a
+/// policy `AskUser` or `Defer`) resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AskPoints {
+    /// Normal authorization: each ask point calls the approval handler.
+    Ask,
+    /// Re-check of an approved deferred call: every ask point counts as answered.
+    Answered,
+}
+
+/// The detailed result of the authorization pipeline.
+#[derive(Debug, Clone)]
+pub(crate) enum Authorization {
+    /// Run the call with its args.
+    Allow,
+    /// Run the call with these args.
+    Replace {
+        /// The replacement args from the policy.
+        args: serde_json::Value,
+    },
+    /// Do not run the call.
+    Deny {
+        /// The denial reason.
+        reason: String,
+    },
+    /// Only with `AskPoints::Ask` and the flag on. `args` are the effective args
+    /// (the policy's replaced args when a `Replace` met the deferred mark).
+    Defer {
+        /// The distinct prompts of the deferred ask points, joined with `"\n"`.
+        prompt: String,
+        /// The effective args of the call.
+        args: serde_json::Value,
+    },
+}
+
+/// The deferred mark of one authorization, and the prompts that set it.
+#[derive(Debug, Default)]
+struct DeferMark {
+    mark: bool,
+    prompts: Vec<String>,
+}
+
+impl DeferMark {
+    /// Set the mark and record `prompt` (once; the pipeline order is kept).
+    fn defer(&mut self, prompt: &str) {
+        self.mark = true;
+        if !self.prompts.iter().any(|p| p == prompt) {
+            self.prompts.push(prompt.to_owned());
+        }
+    }
 }
 
 impl<Ctx> RunContext<Ctx>
@@ -131,6 +198,10 @@ where
             default_guards: true,
             redact_output: true,
             extra_secrets: Vec::new(),
+            deferred_tool_calls: false,
+            handoff_path: Vec::new(),
+            deferrals: DeferralSlot::new(),
+            open_call_ids: Vec::new(),
         }
     }
 
@@ -260,6 +331,60 @@ where
         self.failure.clone()
     }
 
+    /// Allow or forbid ending the run with `RunDeferred` when a tool call
+    /// gets a `Defer` decision (consuming builder). The default is `false`.
+    ///
+    /// - A direct `agent.run(ctx, input)` with the flag on can end with
+    ///   `RunDeferred`. Only a runner that supports deferral can resume it.
+    /// - A `PreToolUse` hook that adds a secret to the arguments of a call
+    ///   that can defer makes the secret persist in the session store.
+    /// - A runtime without deferral support clears the flag.
+    /// - Limit: a handoff transfer call has no result while the child agent
+    ///   runs. If a call to defer has the same call id as such a transfer
+    ///   call, the call is not deferred. It is denied with the result
+    ///   `permission denied: deferral not possible: call id {call_id} repeats
+    ///   in this run`. This can occur with a provider that makes call ids per
+    ///   response, for example `fc_0` from Gemini.
+    pub fn with_deferred_tool_calls(mut self, enabled: bool) -> Self {
+        self.deferred_tool_calls = enabled;
+        self
+    }
+
+    /// Whether a `Defer` decision may end the run with `RunDeferred`.
+    pub fn deferred_tool_calls_enabled(&self) -> bool {
+        self.deferred_tool_calls
+    }
+
+    /// Agent names from the root agent to the current agent.
+    pub fn handoff_path(&self) -> &[String] {
+        &self.handoff_path
+    }
+
+    /// Add an agent name to the end of the handoff path.
+    pub(crate) fn push_handoff_path(&mut self, agent: impl Into<String>) {
+        self.handoff_path.push(agent.into());
+    }
+
+    /// The call ids of the open handoff transfer calls above this agent.
+    pub(crate) fn open_call_ids(&self) -> &[String] {
+        &self.open_call_ids
+    }
+
+    /// Add the call ids of the transfer calls of a handoff (consuming
+    /// builder). These calls get no result while the child runs.
+    pub(crate) fn with_open_call_ids(mut self, ids: impl IntoIterator<Item = String>) -> Self {
+        self.open_call_ids.extend(ids);
+        self
+    }
+
+    /// Clone the handle to the slot where this run records deferred tool calls.
+    ///
+    /// This is runner plumbing. It gives the session recorder the raw
+    /// effective arguments of each deferred call.
+    pub fn deferral_handle(&self) -> DeferralSlot {
+        self.deferrals.clone()
+    }
+
     /// Nesting depth that produced this context (0 at top level).
     pub fn agent_depth(&self) -> u32 {
         self.agent_depth
@@ -309,6 +434,10 @@ where
             default_guards: self.default_guards,
             redact_output: self.redact_output,
             extra_secrets: self.extra_secrets.clone(),
+            deferred_tool_calls: self.deferred_tool_calls,
+            handoff_path: self.handoff_path.clone(),
+            deferrals: self.deferrals.clone(),
+            open_call_ids: self.open_call_ids.clone(),
         }
     }
 
@@ -338,6 +467,10 @@ where
             default_guards: self.default_guards,
             redact_output: self.redact_output,
             extra_secrets: self.extra_secrets.clone(),
+            deferred_tool_calls: false,
+            handoff_path: Vec::new(),
+            deferrals: DeferralSlot::new(),
+            open_call_ids: Vec::new(),
         }
     }
 
@@ -466,15 +599,129 @@ where
     /// with exactly the same pipeline the ephemeral agent loop applies
     /// inline, without needing a borrow of the loop's private control-layer
     /// type.
+    ///
+    /// Returns [`PermissionDecision::Defer`] only when an ask point deferred
+    /// and deferred tool calls are on for this run (see
+    /// [`RunContext::with_deferred_tool_calls`]). With the flag off, a
+    /// deferral is a `Deny`. The result is never `AskUser`.
     pub async fn authorize_tool(
         &self,
         tool: &str,
         effect: ToolEffect,
         args: &serde_json::Value,
     ) -> PermissionDecision {
+        match self
+            .authorize_tool_detailed(tool, effect, args, AskPoints::Ask)
+            .await
+        {
+            Authorization::Allow => PermissionDecision::Allow,
+            Authorization::Replace { args } => PermissionDecision::Replace { args },
+            Authorization::Deny { reason } => PermissionDecision::Deny { reason },
+            Authorization::Defer { prompt, .. } => PermissionDecision::Defer { prompt },
+        }
+    }
+
+    /// The authorization pipeline with the detailed result (spec §4.3, §4.8).
+    ///
+    /// With [`AskPoints::Ask`], each ask point calls the approval handler, also
+    /// after an earlier ask point deferred. A deferral sets the deferred mark;
+    /// any `Deny` still wins, and every exit that would allow the call returns
+    /// [`Authorization::Defer`] instead. With [`AskPoints::Answered`], every
+    /// ask point counts as answered, the handler is never called, and the
+    /// result is never `Defer`. A `Defer` becomes a `Deny` when deferred tool
+    /// calls are off for this run.
+    pub(crate) async fn authorize_tool_detailed(
+        &self,
+        tool: &str,
+        effect: ToolEffect,
+        args: &serde_json::Value,
+        asks: AskPoints,
+    ) -> Authorization {
+        let mut mark = DeferMark::default();
+        let decided = self
+            .authorize_stages(tool, effect, args, asks, &mut mark)
+            .await;
+        let decided = match decided {
+            deny @ Authorization::Deny { .. } => deny,
+            other if !mark.mark => other,
+            // The mark is set: an exit that would run the call defers it.
+            Authorization::Allow => Authorization::Defer {
+                prompt: mark.prompts.join("\n"),
+                args: args.clone(),
+            },
+            Authorization::Replace { args: replaced } => Authorization::Defer {
+                prompt: mark.prompts.join("\n"),
+                args: replaced,
+            },
+            defer @ Authorization::Defer { .. } => defer,
+        };
+        match decided {
+            Authorization::Defer { prompt, .. } if !self.deferred_tool_calls_enabled() => {
+                Authorization::Deny {
+                    reason: self.cannot_defer_reason(&prompt),
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// The deny reason for a deferral that this run cannot keep.
+    ///
+    /// The reason reaches the `PermissionDenied` event and the model-facing
+    /// tool result. A policy can make the prompt from the call arguments, so
+    /// with output redaction on, the prompt is redacted with the run's secret
+    /// set (as in the redacted event copy of a deferred call).
+    pub(crate) fn cannot_defer_reason(&self, prompt: &str) -> String {
+        let prompt = if self.redact_output() {
+            let secrets = crate::redaction::SecretSet::from_env_and_extra(self.extra_secrets());
+            crate::redaction::redact_str(prompt, &secrets)
+        } else {
+            prompt.to_owned()
+        };
+        format!("approval deferred, but this run cannot defer: {prompt}")
+    }
+
+    /// Resolve one ask point. Returns `Err(reason)` when the call must be
+    /// denied, `Ok(())` when the ask point is cleared or deferred.
+    async fn resolve_ask_point(
+        &self,
+        tool: &str,
+        prompt: &str,
+        args: &serde_json::Value,
+        asks: AskPoints,
+        mark: &mut DeferMark,
+        no_handler_reason: impl FnOnce() -> String,
+    ) -> Result<(), String> {
+        if asks == AskPoints::Answered {
+            // The host approved the deferred call: this ask point is answered.
+            return Ok(());
+        }
+        let Some(handler) = self.approval_handler() else {
+            return Err(no_handler_reason());
+        };
+        match handler.decide(tool, prompt, args).await {
+            ApprovalOutcome::Allow => Ok(()),
+            ApprovalOutcome::Deny { reason } => Err(reason),
+            ApprovalOutcome::Defer => {
+                mark.defer(prompt);
+                Ok(())
+            }
+        }
+    }
+
+    /// The pipeline stages. Returns `Allow`, `Replace` or `Deny`, never
+    /// `Defer`; deferrals go into `mark`, and the caller applies it.
+    async fn authorize_stages(
+        &self,
+        tool: &str,
+        effect: ToolEffect,
+        args: &serde_json::Value,
+        asks: AskPoints,
+        mark: &mut DeferMark,
+    ) -> Authorization {
         // 1. Deny rules — absolute, override even Bypass.
         if self.deny_rules().iter().any(|r| r.matches(tool, args)) {
-            return PermissionDecision::Deny {
+            return Authorization::Deny {
                 reason: format!("denied by deny rule: {tool}"),
             };
         }
@@ -489,26 +736,23 @@ where
             if guard.matches(tool, args) {
                 match guard.action() {
                     crate::GuardAction::Deny { reason } => {
-                        return PermissionDecision::Deny {
+                        return Authorization::Deny {
                             reason: reason.clone(),
                         };
                     }
                     crate::GuardAction::Ask { prompt } => {
-                        let Some(handler) = self.approval_handler() else {
-                            return PermissionDecision::Deny {
-                                reason: format!("destructive command requires approval: {prompt}"),
-                            };
-                        };
-                        // Approval clears THIS guard only — continue the pipeline
-                        // so later guards and the allow/mode/policy steps still
-                        // apply. A matching allow rule may still short-circuit
-                        // before mode/policy; approval itself is not a blanket
-                        // authorization.
-                        match handler.decide(tool, prompt, args).await {
-                            ApprovalOutcome::Allow => continue,
-                            ApprovalOutcome::Deny { reason } => {
-                                return PermissionDecision::Deny { reason };
-                            }
+                        // Approval (or a deferral) clears THIS guard only —
+                        // continue the pipeline so later guards and the
+                        // allow/mode/policy steps still apply. A matching allow
+                        // rule may still short-circuit before mode/policy;
+                        // approval itself is not a blanket authorization.
+                        if let Err(reason) = self
+                            .resolve_ask_point(tool, prompt, args, asks, mark, || {
+                                format!("destructive command requires approval: {prompt}")
+                            })
+                            .await
+                        {
+                            return Authorization::Deny { reason };
                         }
                     }
                 }
@@ -519,22 +763,25 @@ where
         // the policy AND any mode restriction (including Plan's read-only gate).
         // Deny and guard already ran, so this cannot resurrect a denied/guarded
         // call.
+        // A deferred mark from step 2 turns this short-circuit into a deferral
+        // (in the caller).
         if self.allow_rules().iter().any(|r| r.matches(tool, args)) {
-            return PermissionDecision::Allow;
+            return Authorization::Allow;
         }
-        // 4. Mode.
+        // 4. Mode. With the mark set, `Bypass` and `AcceptEdits` defer (in the
+        // caller): guards exist to beat `Bypass`.
         match self.permission_mode() {
-            PermissionMode::Bypass => return PermissionDecision::Allow,
+            PermissionMode::Bypass => return Authorization::Allow,
             PermissionMode::Plan if effect != ToolEffect::ReadOnly => {
-                return PermissionDecision::Deny {
+                return Authorization::Deny {
                     reason: format!("Plan mode forbids the side-effecting tool `{tool}`"),
                 };
             }
             PermissionMode::AcceptEdits if effect == ToolEffect::Write => {
-                return PermissionDecision::Allow;
+                return Authorization::Allow;
             }
             PermissionMode::DontAsk => {
-                return PermissionDecision::Deny {
+                return Authorization::Deny {
                     reason: format!("DontAsk mode: no allow rule matched `{tool}`"),
                 };
             }
@@ -542,21 +789,33 @@ where
         }
         // 5. Policy (canUseTool). None ⇒ permissive.
         let decision = match self.permission_policy() {
-            None => return PermissionDecision::Allow,
+            None => return Authorization::Allow,
             Some(policy) => policy.check(self, tool, args).await,
         };
-        // 6. AskUser ⇒ approval handler; None ⇒ Deny.
+        // 6. AskUser ⇒ approval handler (None ⇒ Deny); Defer ⇒ the mark.
         match decision {
-            PermissionDecision::AskUser { prompt } => match self.approval_handler() {
-                None => PermissionDecision::Deny {
-                    reason: "no approval handler installed".to_owned(),
-                },
-                Some(handler) => match handler.decide(tool, &prompt, args).await {
-                    ApprovalOutcome::Allow => PermissionDecision::Allow,
-                    ApprovalOutcome::Deny { reason } => PermissionDecision::Deny { reason },
-                },
-            },
-            other => other,
+            PermissionDecision::Allow => Authorization::Allow,
+            PermissionDecision::Replace { args } => Authorization::Replace { args },
+            PermissionDecision::Deny { reason } => Authorization::Deny { reason },
+            PermissionDecision::AskUser { prompt } => {
+                match self
+                    .resolve_ask_point(tool, &prompt, args, asks, mark, || {
+                        "no approval handler installed".to_owned()
+                    })
+                    .await
+                {
+                    Ok(()) => Authorization::Allow,
+                    Err(reason) => Authorization::Deny { reason },
+                }
+            }
+            PermissionDecision::Defer { prompt } => {
+                // A policy deferral needs no handler. On re-check it counts as
+                // answered.
+                if asks == AskPoints::Ask {
+                    mark.defer(&prompt);
+                }
+                Authorization::Allow
+            }
         }
     }
 
@@ -612,6 +871,50 @@ mod runcontext_tests {
     use super::*;
     use crate::{MemorySession, RunConfig};
     use std::sync::Arc;
+
+    fn pending() -> crate::PendingToolCall {
+        crate::PendingToolCall::new("d", "c", "t", serde_json::json!({}), "p", vec![])
+    }
+
+    #[test]
+    fn deferred_tool_calls_default_off_and_round_trips() {
+        let c: RunContext<()> = RunContext::ephemeral(());
+        assert!(!c.deferred_tool_calls_enabled());
+        assert!(c
+            .with_deferred_tool_calls(true)
+            .deferred_tool_calls_enabled());
+    }
+
+    #[test]
+    fn handoff_child_keeps_flag_and_path_and_shares_deferral_slot() {
+        let mut p: RunContext<()> = RunContext::ephemeral(()).with_deferred_tool_calls(true);
+        p.push_handoff_path("root");
+        let c = p.handoff_child();
+        assert!(c.deferred_tool_calls_enabled());
+        assert_eq!(c.handoff_path(), &["root".to_owned()]);
+        c.deferral_handle().record(vec![pending()]);
+        assert_eq!(p.deferral_handle().calls().len(), 1);
+    }
+
+    #[test]
+    fn subagent_child_clears_flag_path_and_slot() {
+        let mut p: RunContext<()> = RunContext::ephemeral(()).with_deferred_tool_calls(true);
+        p.push_handoff_path("root");
+        let c = p.subagent_child();
+        assert!(!c.deferred_tool_calls_enabled());
+        assert!(c.handoff_path().is_empty());
+        c.deferral_handle().record(vec![pending()]);
+        assert!(p.deferral_handle().calls().is_empty());
+    }
+
+    #[test]
+    fn handoff_child_keeps_open_call_ids_and_subagent_child_clears_them() {
+        let p: RunContext<()> = RunContext::ephemeral(()).with_open_call_ids(["fc_0".to_owned()]);
+        let c = p.handoff_child().with_open_call_ids(["fc_1".to_owned()]);
+        assert_eq!(c.open_call_ids(), &["fc_0".to_owned(), "fc_1".to_owned()]);
+        assert_eq!(p.open_call_ids(), &["fc_0".to_owned()]);
+        assert!(c.subagent_child().open_call_ids().is_empty());
+    }
 
     #[test]
     fn failure_handle_shares_the_context_slot() {
