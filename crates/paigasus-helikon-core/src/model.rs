@@ -118,7 +118,8 @@ impl ModelRequest {
 
 /// Owned snapshot of a [`crate::Tool`] for cross-async-boundary use
 /// inside [`ModelRequest`].
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ToolDef {
     /// Identifier the model uses when emitting a tool call.
     pub name: String,
@@ -126,6 +127,83 @@ pub struct ToolDef {
     pub description: String,
     /// JSON Schema for the tool's argument object.
     pub schema: serde_json::Value,
+    /// Provider-defined tool types this tool can map to. Empty for a plain
+    /// function tool. See [`ProviderToolType`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_types: Vec<ProviderToolType>,
+}
+
+impl ToolDef {
+    /// Build a plain function tool definition with no provider tool types.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        schema: serde_json::Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            schema,
+            provider_types: Vec::new(),
+        }
+    }
+
+    /// Set the provider tool types of this definition.
+    #[must_use]
+    pub fn with_provider_types(mut self, provider_types: Vec<ProviderToolType>) -> Self {
+        self.provider_types = provider_types;
+        self
+    }
+
+    /// Snapshot a [`crate::Tool`]: copy its name, description, schema and
+    /// provider tool types.
+    pub fn from_tool<Ctx, T>(tool: &T) -> Self
+    where
+        Ctx: Send + Sync + 'static,
+        T: crate::Tool<Ctx> + ?Sized,
+    {
+        Self {
+            name: tool.name().to_owned(),
+            description: tool.description().to_owned(),
+            schema: tool.schema().clone(),
+            provider_types: tool.provider_types().to_vec(),
+        }
+    }
+}
+
+/// A provider-defined tool type that a tool can map to.
+///
+/// A provider that recognizes `provider` sends `type_name` (with `params`)
+/// in place of a plain function tool. Other providers ignore the entry.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct ProviderToolType {
+    /// Provider identifier, for example `"anthropic"`.
+    pub provider: String,
+    /// The provider's name for the tool type. Serialized under the key `"type"`.
+    #[serde(rename = "type")]
+    pub type_name: String,
+    /// Extra provider-specific fields for the tool entry.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub params: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ProviderToolType {
+    /// Build an entry with empty `params`.
+    pub fn new(provider: impl Into<String>, type_name: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            type_name: type_name.into(),
+            params: serde_json::Map::new(),
+        }
+    }
+
+    /// Set the provider-specific `params`.
+    #[must_use]
+    pub fn with_params(mut self, params: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.params = params;
+        self
+    }
 }
 
 /// Provider-tuning knobs.

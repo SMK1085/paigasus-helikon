@@ -745,15 +745,15 @@ fn last_assistant_content(items: &[Item]) -> Vec<ContentPart> {
 /// The synthetic `ToolDef` the model sees for one handoff (no arguments — the
 /// conversation is the payload).
 fn handoff_tool_def(def: &crate::HandoffDef) -> ToolDef {
-    ToolDef {
-        name: def.tool_name.clone(),
-        description: def.description.clone(),
-        schema: serde_json::json!({
+    ToolDef::new(
+        def.tool_name.clone(),
+        def.description.clone(),
+        serde_json::json!({
             "type": "object",
             "properties": {},
             "additionalProperties": false
         }),
-    }
+    )
 }
 
 /// Real tools + synthetic transfer tools, for an unconstrained model turn.

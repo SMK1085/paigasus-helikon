@@ -906,11 +906,7 @@ where
         let output_type = self.output_type.clone();
         let tool_defs: Vec<crate::ToolDef> = tools
             .iter()
-            .map(|t| crate::ToolDef {
-                name: t.name().to_owned(),
-                description: t.description().to_owned(),
-                schema: t.schema().clone(),
-            })
+            .map(|t| crate::ToolDef::from_tool(t.as_ref()))
             .collect();
         let handoffs = self.handoffs.clone();
         let input_guardrails = self.input_guardrails.clone();
