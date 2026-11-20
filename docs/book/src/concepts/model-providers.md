@@ -186,7 +186,7 @@ Family detection reads the first segment of the model ID. If the first segment
 is not a provider name, detection reads the second segment. This skips a
 geographic prefix. The known prefixes are `us.`, `eu.`, `apac.`, `jp.`, `au.`,
 `ca.`, `in.` and `global.`. A future prefix works too. For example,
-`global.anthropic.claude-sonnet-5-5` is identified as `Anthropic`.
+`global.anthropic.claude-sonnet-4-5-20250929-v1:0` is identified as `Anthropic`.
 
 For an ARN, detection uses the resource ID, which is the text after the last
 `/`. An opaque ARN, such as an application inference profile ARN, gives

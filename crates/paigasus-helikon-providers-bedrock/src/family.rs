@@ -152,6 +152,7 @@ mod tests {
             ("arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic),
             ("ARN:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x", Anthropic),
             ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0", Anthropic),
+            ("arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/anthropic.claude:1", Anthropic),
             ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6", Unknown),
             ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/", Unknown),
             ("arn:aws:bedrock", Unknown),
