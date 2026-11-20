@@ -73,16 +73,28 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
         }
     }
 
-    /// Flush `pending_tool_results` into a new user Message on `messages`.
+    /// Flush `pending_tool_results` into a user Message on `messages`.
+    ///
+    /// If the last message is already a user turn, the results are appended to
+    /// it (coalescing) rather than creating a new turn.
     fn flush_user_results(messages: &mut Vec<Message>, pending: &mut Vec<ContentBlock>) {
         if !pending.is_empty() {
             let content = std::mem::take(pending);
-            let msg = Message::builder()
-                .role(ConversationRole::User)
-                .set_content(Some(content))
-                .build()
-                .expect("role + non-empty content always valid");
-            messages.push(msg);
+            if messages
+                .last()
+                .map(|m| m.role == ConversationRole::User)
+                .unwrap_or(false)
+            {
+                let last = messages.last_mut().unwrap();
+                last.content.extend(content);
+            } else {
+                let msg = Message::builder()
+                    .role(ConversationRole::User)
+                    .set_content(Some(content))
+                    .build()
+                    .expect("role + non-empty content always valid");
+                messages.push(msg);
+            }
         }
     }
 
@@ -144,8 +156,6 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
             }
 
             Item::AssistantMessage { content, .. } => {
-                flush_user_results(&mut messages, &mut pending_tool_results);
-                flush_assistant(&mut messages, &mut pending_assistant);
                 let mut blocks: Vec<ContentBlock> = Vec::new();
                 for part in content {
                     match part {
@@ -181,7 +191,12 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                         }
                     }
                 }
+                // An assistant item with no blocks acts as if it were absent:
+                // it flushes nothing, so an open tool round stays whole.
                 if !blocks.is_empty() {
+                    // Queued calls go first, then the results that answer them.
+                    flush_assistant(&mut messages, &mut pending_assistant);
+                    flush_user_results(&mut messages, &mut pending_tool_results);
                     if messages
                         .last()
                         .map(|m| m.role == ConversationRole::Assistant)
@@ -206,6 +221,14 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 name,
                 args,
             } => {
+                // A new call follows results already seen. Close that user
+                // turn only when the last assistant round is fully answered;
+                // otherwise the call joins that round.
+                if !pending_tool_results.is_empty()
+                    && round_is_answered(&messages, &pending_tool_results)
+                {
+                    flush_user_results(&mut messages, &mut pending_tool_results);
+                }
                 // Queue onto the pending assistant turn (flushed when a user
                 // turn / system / end-of-input is encountered).
                 let tool_use = ToolUseBlock::builder()
@@ -253,6 +276,29 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
 /// `true` when `text` is empty or only whitespace. Converse rejects such blocks.
 fn is_blank(text: &str) -> bool {
     text.trim().is_empty()
+}
+
+/// `true` when every `ToolUse` id in the trailing run of assistant messages
+/// has a matching `ToolResult` in `results`. Converse joins adjacent assistant
+/// messages into one turn, so the whole run is one round. Also `true` when the
+/// last message is not an assistant message, so the results then flush as
+/// before.
+fn round_is_answered(messages: &[Message], results: &[ContentBlock]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .take_while(|m| m.role == ConversationRole::Assistant)
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::ToolUse(tu) => Some(tu.tool_use_id.as_str()),
+            _ => None,
+        })
+        .all(|id| {
+            results.iter().any(|r| match r {
+                ContentBlock::ToolResult(tr) => tr.tool_use_id == id,
+                _ => false,
+            })
+        })
 }
 
 /// Extract and concatenate all text from a `Vec<ContentPart>`.
@@ -802,5 +848,265 @@ mod tests {
         let err = items_to_messages(&[user(vec![text("")])]).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
         assert!(err.to_string().contains(NO_CONTENT), "{err}");
+    }
+
+    // ── Tool rounds keep item order (SMA-824) ─────────────────────────────
+
+    fn call_item(id: &str) -> Item {
+        Item::ToolCall {
+            call_id: id.to_owned(),
+            name: "ping".to_owned(),
+            args: json!({}),
+        }
+    }
+
+    fn tu(id: &str) -> Value {
+        json!({"type": "tool_use", "toolUseId": id, "name": "ping"})
+    }
+
+    fn tr(id: &str) -> Value {
+        json!({"type": "tool_result", "toolUseId": id, "content": id.replace('t', "r")})
+    }
+
+    fn tx(s: &str) -> Value {
+        json!({"type": "text", "text": s})
+    }
+
+    fn msg(role: &str, content: Vec<Value>) -> Value {
+        json!({"role": role, "content": content})
+    }
+
+    /// `r1` answers `t1`, and so on.
+    fn res(id: &str) -> Item {
+        result_item(id, &id.replace('t', "r"))
+    }
+
+    fn two_rounds() -> Vec<Item> {
+        vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            call_item("t1"),
+            res("t1"),
+            call_item("t2"),
+        ]
+    }
+
+    fn two_rounds_expected() -> Vec<Value> {
+        vec![
+            msg("user", vec![tx("q")]),
+            msg("assistant", vec![tx("a"), tu("t1")]),
+            msg("user", vec![tr("t1")]),
+            msg("assistant", vec![tu("t2")]),
+        ]
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_does_not_fold_into_earlier_assistant() {
+        let mut items = two_rounds();
+        items.push(res("t2"));
+        let mut exp = two_rounds_expected();
+        exp.push(msg("user", vec![tr("t2")]));
+        assert_eq!(wire(&items).unwrap()["messages"], json!(exp));
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_at_end_of_input() {
+        assert_eq!(
+            wire(&two_rounds()).unwrap()["messages"],
+            json!(two_rounds_expected())
+        );
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_at_system() {
+        let mut items = two_rounds();
+        items.push(system("s"));
+        let tm = items_to_messages(&items).unwrap();
+        assert_eq!(
+            messages_to_wire_json(&tm)["messages"],
+            json!(two_rounds_expected())
+        );
+        assert_eq!(tm.system.len(), 1);
+        assert!(matches!(&tm.system[0], SystemContentBlock::Text(t) if t == "s"));
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_at_user_message() {
+        let mut items = two_rounds();
+        items.push(user(vec![text("x")]));
+        let mut exp = two_rounds_expected();
+        exp.push(msg("user", vec![tx("x")]));
+        assert_eq!(wire(&items).unwrap()["messages"], json!(exp));
+    }
+
+    fn alternating_expected() -> Value {
+        json!([
+            msg("user", vec![tx("q")]),
+            msg("assistant", vec![tu("t1")]),
+            msg("user", vec![tr("t1")]),
+            msg("assistant", vec![tu("t2")]),
+            msg("user", vec![tr("t2")]),
+            msg("assistant", vec![tx("done")]),
+        ])
+    }
+
+    #[test]
+    fn multi_round_tool_loop_without_assistant_text_alternates() {
+        let items = vec![
+            user(vec![text("q")]),
+            call_item("t1"),
+            res("t1"),
+            call_item("t2"),
+            res("t2"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(wire(&items).unwrap()["messages"], alternating_expected());
+    }
+
+    #[test]
+    fn reasoning_only_multi_round_loop_alternates() {
+        let reasoning = || {
+            assistant(vec![ContentPart::Reasoning {
+                text: "thinking".to_owned(),
+            }])
+        };
+        let items = vec![
+            user(vec![text("q")]),
+            reasoning(),
+            call_item("t1"),
+            res("t1"),
+            reasoning(),
+            call_item("t2"),
+            res("t2"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(wire(&items).unwrap()["messages"], alternating_expected());
+    }
+
+    #[test]
+    fn whitespace_assistant_before_tool_call_keeps_order() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("  ")]),
+            call_item("t1"),
+            res("t1"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tx("done")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn interleaved_parallel_round_is_not_split() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            call_item("t3"),
+            res("t2"),
+            res("t3"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2"), tu("t3")]),
+                msg("user", vec![tr("t1"), tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn out_of_order_results_keep_one_round() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t2"),
+            res("t1"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2")]),
+                msg("user", vec![tr("t2"), tr("t1")]),
+                msg("assistant", vec![tx("done")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn dropped_assistant_inside_open_round_does_not_split_it() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            assistant(vec![text("")]),
+            res("t2"),
+            assistant(vec![text("done")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2")]),
+                msg("user", vec![tr("t1"), tr("t2")]),
+                msg("assistant", vec![tx("done")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn dropped_assistant_between_result_and_user_keeps_one_user_turn() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1")]),
+            res("t1"),
+            assistant(vec![ContentPart::Reasoning {
+                text: "thinking".to_owned(),
+            }]),
+            user(vec![text("next")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1")]),
+                msg("user", vec![tr("t1"), tx("next")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn assistant_message_flushes_calls_before_results() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            call_item("t1"),
+            call_item("t2"),
+            res("t1"),
+            call_item("t3"),
+            assistant(vec![text("b")]),
+            res("t2"),
+            res("t3"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("a"), tu("t1"), tu("t2"), tu("t3")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tx("b")]),
+                msg("user", vec![tr("t2"), tr("t3")]),
+            ])
+        );
     }
 }
