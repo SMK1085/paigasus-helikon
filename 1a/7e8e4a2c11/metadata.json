@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "1a7e8e4a2c11",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-834-anthropic-translator-splits-an-open-tool",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/src/translate/request.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1a/7e8e4a2c11/0/metadata.json",
+      "transcript": "/1a/7e8e4a2c11/0/full.jsonl",
+      "compact_transcript": "/1a/7e8e4a2c11/0/transcript.jsonl",
+      "content_hash": "/1a/7e8e4a2c11/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 19237,
+    "cache_read_tokens": 1207559,
+    "output_tokens": 3834,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 6,
+      "cache_creation_tokens": 55393,
+      "cache_read_tokens": 149672,
+      "output_tokens": 573,
+      "api_call_count": 3
+    }
+  },
+  "redaction": {
+    "replacements": 176,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 176,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
