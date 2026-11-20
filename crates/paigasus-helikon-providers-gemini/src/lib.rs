@@ -59,6 +59,9 @@
 //! dropped during request translation. Reasoning streaming (`ModelEvent::ReasoningDelta`)
 //! is not yet emitted by this provider.
 
+/// Key under which this crate stores its data in `ProviderData` parts and events.
+pub const PROVIDER_DATA_KEY: &str = "gemini";
+
 mod auth;
 mod builder;
 mod capabilities;

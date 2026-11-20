@@ -36,6 +36,8 @@ pub(crate) struct Part {
     pub(crate) text: Option<String>,
     #[serde(default)]
     pub(crate) function_call: Option<FunctionCall>,
+    #[serde(default)]
+    pub(crate) thought_signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -99,3 +99,40 @@ async fn multi_chunk_usage_emits_usage_per_chunk() {
         "expected one Usage event per SSE chunk carrying usageMetadata; got {usage_count}"
     );
 }
+
+/// A real capture of three parallel calls: only the first part is signed.
+#[tokio::test]
+async fn parallel_signed_fixture_emits_provider_data_per_call() {
+    let evs = run(include_str!("fixtures/parallel_signed.sse")).await;
+    let data: Vec<(Option<String>, serde_json::Value)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ModelEvent::ProviderData {
+                provider,
+                call_id,
+                data,
+            }) => {
+                assert_eq!(provider, "gemini");
+                Some((call_id.clone(), data.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let calls: Vec<String> = evs
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ModelEvent::ToolCallDelta { call_id, .. }) => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(data.len(), 3);
+    assert_eq!(calls.len(), 3);
+    for (i, (call_id, d)) in data.iter().enumerate() {
+        assert_eq!(call_id.as_deref(), Some(calls[i].as_str()));
+        assert_eq!(d["index"], i);
+    }
+    assert_eq!(data[0].1["thoughtSignature"], "SIG_A");
+    assert_eq!(data[0].1["api"], "developer");
+    assert!(data[1].1.get("thoughtSignature").is_none());
+    assert!(data[2].1.get("thoughtSignature").is_none());
+}

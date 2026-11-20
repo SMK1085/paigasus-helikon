@@ -13,6 +13,16 @@ pub(crate) enum Transport {
     Vertex { project: String, location: String },
 }
 
+impl Transport {
+    /// Short name of the API, stored beside a thought signature.
+    pub(crate) fn api_name(&self) -> &'static str {
+        match self {
+            Transport::Developer => "developer",
+            Transport::Vertex { .. } => "vertex",
+        }
+    }
+}
+
 /// Errors raised while building a [`crate::GeminiModel`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
