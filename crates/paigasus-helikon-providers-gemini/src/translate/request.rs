@@ -83,7 +83,7 @@ impl<'a> OpenCalls<'a> {
 pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, ModelError> {
     let mut calls = OpenCalls::new(items);
     let mut system_parts: Vec<Value> = Vec::new();
-    let mut contents: Vec<Value> = Vec::new();
+    let mut entries: Vec<(&'static str, Vec<Value>)> = Vec::new();
 
     for it in items {
         match it {
@@ -91,14 +91,7 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
                 system_parts.extend(text_parts(content));
             }
             Item::UserMessage { content } => {
-                let parts = user_parts(content, &mut calls)?;
-                // A UserMessage carrying only a ToolResult becomes one
-                // functionResponse part (non-empty); guard anyway so a
-                // genuinely empty turn is dropped rather than emitting
-                // `"parts": []`.
-                if !parts.is_empty() {
-                    contents.push(json!({ "role": "user", "parts": parts }));
-                }
+                entries.push(("user", user_parts(content, &mut calls)?));
             }
             Item::AssistantMessage { content, .. } => {
                 for p in content {
@@ -106,7 +99,7 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
                         calls.open(call_id, name);
                     }
                 }
-                contents.push(json!({ "role": "model", "parts": assistant_parts(content) }));
+                entries.push(("model", assistant_parts(content)));
             }
             Item::ToolCall {
                 call_id,
@@ -114,29 +107,30 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
                 args,
             } => {
                 calls.open(call_id, name);
-                contents.push(json!({
-                    "role": "model",
-                    "parts": [ { "functionCall": { "id": call_id, "name": name, "args": args } } ]
-                }));
+                entries.push((
+                    "model",
+                    vec![json!({ "functionCall": { "id": call_id, "name": name, "args": args } })],
+                ));
             }
             Item::ToolResult { call_id, content } => {
                 if let Some(name) = calls.close(call_id)? {
-                    contents.push(json!({
-                        "role": "user",
-                        "parts": [ {
+                    entries.push((
+                        "user",
+                        vec![json!({
                             "functionResponse": {
                                 "id": call_id,
                                 "name": name,
                                 "response": tool_response_object(content),
                             }
-                        } ]
-                    }));
+                        })],
+                    ));
                 }
             }
             _ => {}
         }
     }
 
+    let contents = merge_same_role(entries);
     if contents.is_empty() {
         return Err(ModelError::Other(anyhow::anyhow!(
             "gemini request has no user/model turns (empty or system-only conversation)"
@@ -145,6 +139,29 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
 
     let system = (!system_parts.is_empty()).then(|| json!({ "parts": system_parts }));
     Ok(TranslatedContents { system, contents })
+}
+
+/// Merge adjacent entries of the same role into one content, in order.
+///
+/// Gemini wants strictly alternating roles, so two adjacent `user` (or
+/// `model`) entries become one content (SMA-820). An entry with no parts is
+/// dropped first, so it never emits `"parts": []` and never splits its
+/// neighbours.
+fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
+    let mut merged: Vec<(&'static str, Vec<Value>)> = Vec::new();
+    for (role, parts) in entries {
+        if parts.is_empty() {
+            continue;
+        }
+        match merged.last_mut() {
+            Some((last_role, last_parts)) if *last_role == role => last_parts.extend(parts),
+            _ => merged.push((role, parts)),
+        }
+    }
+    merged
+        .into_iter()
+        .map(|(role, parts)| json!({ "role": role, "parts": parts }))
+        .collect()
 }
 
 fn text_parts(content: &[ContentPart]) -> Vec<Value> {
@@ -172,6 +189,8 @@ fn user_parts<'a>(
     let mut out = Vec::new();
     for p in content {
         match p {
+            // Gemini rejects an empty text part.
+            ContentPart::Text { text } if text.is_empty() => {}
             ContentPart::Text { text } => out.push(json!({ "text": text })),
             ContentPart::Image {
                 source: MediaSource::Base64 { mime_type, data },
@@ -205,6 +224,7 @@ fn assistant_parts(content: &[ContentPart]) -> Vec<Value> {
     let mut out = Vec::new();
     for p in content {
         match p {
+            ContentPart::Text { text } if text.is_empty() => {}
             ContentPart::Text { text } => out.push(json!({ "text": text })),
             ContentPart::ToolUse {
                 call_id,
@@ -322,7 +342,8 @@ mod tests {
     }
 
     /// SMA-804: a checkpoint `Inject` leaves a tool result directly followed
-    /// by a user message. Gemini receives two consecutive `user` contents.
+    /// by a user message. SMA-820: the translator merges them into one `user`
+    /// content, so Gemini no longer receives two adjacent `user` contents.
     #[test]
     fn tool_result_then_user_message_request_shape() {
         let items = vec![
@@ -351,10 +372,8 @@ mod tests {
             Value::Array(t.contents),
             json!([
                 {"role": "user", "parts": [{"text": "start"}]},
-                {"role": "model", "parts": [{"text": "calling"}]},
-                {"role": "model", "parts": [{"functionCall": {"id": "fc_0", "name": "search", "args": {"q": "cats"}}}]},
-                {"role": "user", "parts": [{"functionResponse": {"id": "fc_0", "name": "search", "response": {"hits": 3}}}]},
-                {"role": "user", "parts": [{"text": "news"}]},
+                {"role": "model", "parts": [{"text": "calling"}, {"functionCall": {"id": "fc_0", "name": "search", "args": {"q": "cats"}}}]},
+                {"role": "user", "parts": [{"functionResponse": {"id": "fc_0", "name": "search", "response": {"hits": 3}}}, {"text": "news"}]},
             ])
         );
     }
@@ -623,10 +642,181 @@ mod tests {
             user("b"),
         ];
         let t = items_to_contents(&items).unwrap();
-        assert!(t
-            .contents
-            .iter()
-            .all(|c| !c["parts"].as_array().unwrap().is_empty()));
+        assert_eq!(responses(&t), pairs(&[("fc_0", "search")]));
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "a"}]},
+                {"role": "model", "parts": [{"functionCall": {"id": "fc_0", "name": "search", "args": {}}}]},
+                {"role": "user", "parts": [
+                    {"functionResponse": {"id": "fc_0", "name": "search", "response": {}}},
+                    {"text": "b"}
+                ]},
+            ])
+        );
+    }
+
+    fn fr(id: &str, name: &str, response: Value) -> Value {
+        json!({"functionResponse": {"id": id, "name": name, "response": response}})
+    }
+
+    fn fc(id: &str, name: &str) -> Value {
+        json!({"functionCall": {"id": id, "name": name, "args": {}}})
+    }
+
+    #[test]
+    fn more_than_two_adjacent_same_role_contents_merge_in_order() {
+        let items = vec![
+            user("start"),
+            call("fc_0", "search"),
+            result("fc_0", "{}"),
+            user("one"),
+            user("two"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(t.contents.len(), 3);
+        assert_eq!(
+            t.contents[2],
+            json!({"role": "user", "parts": [fr("fc_0", "search", json!({})), {"text": "one"}, {"text": "two"}]})
+        );
+    }
+
+    #[test]
+    fn parallel_calls_merge_into_one_model_and_one_user_content() {
+        let items = vec![
+            user("x"),
+            call("fc_0", "search"),
+            call("fc_1", "search"),
+            result("fc_0", "{\"n\":1}"),
+            result("fc_1", "{\"n\":2}"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "x"}]},
+                {"role": "model", "parts": [fc("fc_0", "search"), fc("fc_1", "search")]},
+                {"role": "user", "parts": [
+                    fr("fc_0", "search", json!({"n": 1})),
+                    fr("fc_1", "search", json!({"n": 2}))
+                ]},
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_result_and_text_merge_with_preceding_tool_result() {
+        let items = vec![
+            user("x"),
+            call("fc_0", "search"),
+            call("fc_1", "pay"),
+            result("fc_0", "{}"),
+            Item::UserMessage {
+                content: vec![
+                    ContentPart::ToolResult {
+                        call_id: "fc_1".into(),
+                        content: vec![ContentPart::Text { text: "{}".into() }],
+                    },
+                    ContentPart::Text {
+                        text: "next".into(),
+                    },
+                ],
+            },
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            t.contents.last().unwrap(),
+            &json!({"role": "user", "parts": [
+                fr("fc_0", "search", json!({})),
+                fr("fc_1", "pay", json!({})),
+                {"text": "next"}
+            ]})
+        );
+    }
+
+    #[test]
+    fn system_between_user_messages_does_not_split_them() {
+        let items = vec![
+            user("a"),
+            Item::System {
+                content: vec![ContentPart::Text {
+                    text: "be terse".into(),
+                }],
+            },
+            user("b"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([{"role": "user", "parts": [{"text": "a"}, {"text": "b"}]}])
+        );
+        assert_eq!(t.system.unwrap()["parts"][0]["text"], "be terse");
+    }
+
+    #[test]
+    fn reasoning_only_assistant_message_is_dropped_and_neighbours_merge() {
+        let items = vec![
+            user("a"),
+            Item::AssistantMessage {
+                content: vec![ContentPart::Reasoning { text: "r".into() }],
+                agent: None,
+            },
+            user("b"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([{"role": "user", "parts": [{"text": "a"}, {"text": "b"}]}])
+        );
+    }
+
+    #[test]
+    fn assistant_text_tool_use_and_tool_call_form_one_model_content() {
+        let items = vec![
+            user("a"),
+            Item::AssistantMessage {
+                content: vec![
+                    ContentPart::Text { text: "t".into() },
+                    ContentPart::ToolUse {
+                        call_id: "fc_0".into(),
+                        name: "search".into(),
+                        args: json!({}),
+                    },
+                ],
+                agent: None,
+            },
+            call("fc_1", "pay"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(t.contents.len(), 2);
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [{"text": "t"}, fc("fc_0", "search"), fc("fc_1", "pay")]})
+        );
+    }
+
+    #[test]
+    fn empty_text_part_is_dropped() {
+        let items = vec![
+            user("a"),
+            call("fc_0", "search"),
+            result("fc_0", "{}"),
+            Item::UserMessage {
+                content: vec![ContentPart::Text {
+                    text: String::new(),
+                }],
+            },
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            t.contents.last().unwrap(),
+            &json!({"role": "user", "parts": [fr("fc_0", "search", json!({}))]})
+        );
+    }
+
+    #[test]
+    fn only_empty_user_text_is_an_empty_conversation_error() {
+        assert!(items_to_contents(&[user("")]).is_err());
     }
 
     #[test]

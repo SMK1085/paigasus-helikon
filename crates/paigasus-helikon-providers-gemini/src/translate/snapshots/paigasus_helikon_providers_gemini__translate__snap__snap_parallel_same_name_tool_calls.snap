@@ -22,12 +22,7 @@ expression: b
             "id": "fc_0",
             "name": "search"
           }
-        }
-      ],
-      "role": "model"
-    },
-    {
-      "parts": [
+        },
         {
           "functionCall": {
             "args": {
@@ -50,12 +45,7 @@ expression: b
               "n": 1
             }
           }
-        }
-      ],
-      "role": "user"
-    },
-    {
-      "parts": [
+        },
         {
           "functionResponse": {
             "id": "fc_1",
