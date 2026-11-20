@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.28](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.27...paigasus-helikon-providers-anthropic-v0.1.28) - 2026-11-20
+
+### Fixed
+
+- *(providers-anthropic)* SMA-819 drop empty text blocks and keep tool rounds in order ([#353](https://github.com/SMK1085/paigasus-helikon/pull/353))
+
 ## [0.1.27](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.26...paigasus-helikon-providers-anthropic-v0.1.27) - 2026-11-20
 
 ### Added
