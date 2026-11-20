@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GgLty1xeJv5CPRJSNDHwAJ",
+  "agent_id": "ab81a0c8b8c572c37",
+  "subagent_type": "general-purpose",
+  "task_description": "Add full JSON watermark checks",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 75062,
+    "cache_read_tokens": 348820,
+    "output_tokens": 2842,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-20T16:19:31.425528+01:00",
+  "completed_at": "2026-11-20T16:19:54.798519+01:00"
+}
