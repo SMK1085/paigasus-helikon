@@ -135,47 +135,57 @@ pub(crate) fn not_run_results(calls: &[PlannedCall]) -> Vec<AgentEvent> {
 /// this, because the target of each such call does not run. A routing exit
 /// that fails before the target runs uses it too.
 ///
-/// For each transfer call in `conversation` that has no later result, this
-/// puts the synthetic result `agent no longer available: {name}` directly
-/// after the call (`name` is the agent that the call led to). It returns the
+/// Every transfer call of each handoff response on the path is closed: a
+/// handoff response can hold more than one transfer call. Each transfer call
+/// is found by the position that its own handoff recorded, not by its call
+/// id alone, because two transfer calls on the path can share a call id.
+///
+/// For each transfer call in `conversation` that has no result, this puts
+/// the synthetic result `agent no longer available: {name}` directly after
+/// the call (`name` is the agent that the call led to). It returns the
 /// inserted results in path order, for the agent to emit before the denial
 /// results.
 ///
-/// A transfer call that already has a later result (the session recorder
-/// closes transfer calls at the end of a run) keeps that result, but this
-/// moves it to directly after the call. The move changes only the model
-/// request, so it is not returned and the session gets no second result.
+/// A transfer call that already has a result (the session recorder closes
+/// transfer calls at the end of a run) keeps that result, but this moves it
+/// to directly after the call. The move changes only the model request, so
+/// it is not returned and the session gets no second result. A result
+/// belongs to the earliest open call with its call id, as in the session
+/// recorder.
 pub(crate) fn close_open_transfers(
     plan: &crate::ResumePlan,
     conversation: &mut Vec<Item>,
 ) -> Vec<Item> {
-    let mut transfers: Vec<(String, String)> = Vec::new();
+    let mut transfers: Vec<(crate::deferral::TransferCall, String)> = Vec::new();
     let mut level = plan.clone();
     while let Some(next) = level.next_agent() {
-        if let Some(call_id) = level.transfer_call_to_next() {
-            transfers.push((call_id.to_owned(), next.to_owned()));
+        for call in level.transfer_calls_to_next() {
+            transfers.push((call.clone(), next.to_owned()));
         }
         level = level.descend();
     }
 
     let mut closed = Vec::new();
-    for (call_id, name) in transfers {
+    for (call, name) in transfers {
         let Some(at) = conversation
             .iter()
-            .rposition(|i| matches!(i, Item::ToolCall { call_id: id, .. } if *id == call_id))
+            .enumerate()
+            .rev()
+            .filter(
+                |(_, i)| matches!(i, Item::ToolCall { call_id, .. } if *call_id == call.call_id),
+            )
+            .nth(call.later_calls)
+            .map(|(at, _)| at)
         else {
             continue;
         };
-        let answered = conversation[at + 1..]
-            .iter()
-            .position(|i| matches!(i, Item::ToolResult { call_id: id, .. } if *id == call_id));
-        if let Some(offset) = answered {
-            let result = conversation.remove(at + 1 + offset);
+        if let Some(result_at) = paired_result(conversation, at) {
+            let result = conversation.remove(result_at);
             conversation.insert(at + 1, result);
             continue;
         }
         let result = Item::ToolResult {
-            call_id,
+            call_id: call.call_id,
             content: vec![ContentPart::Text {
                 text: format!("agent no longer available: {name}"),
             }],
@@ -184,6 +194,28 @@ pub(crate) fn close_open_transfers(
         closed.push(result);
     }
     closed
+}
+
+/// The index of the result in `conversation` that closes the `ToolCall` at
+/// `call_at`, if any. Each result closes the earliest open call with its
+/// call id.
+fn paired_result(conversation: &[Item], call_at: usize) -> Option<usize> {
+    // The open calls, as (call id, index), in conversation order.
+    let mut open: Vec<(&str, usize)> = Vec::new();
+    for (at, item) in conversation.iter().enumerate() {
+        match item {
+            Item::ToolCall { call_id, .. } => open.push((call_id, at)),
+            Item::ToolResult { call_id, .. } => {
+                if let Some(p) = open.iter().position(|(id, _)| id == call_id) {
+                    if open.remove(p).1 == call_at {
+                        return Some(at);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]

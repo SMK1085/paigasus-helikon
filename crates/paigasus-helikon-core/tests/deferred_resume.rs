@@ -651,7 +651,21 @@ async fn text_then_call_b_session(path: &[&str]) -> Arc<MemorySession> {
 }
 
 async fn handoff_session_with(path: &[&str], leaf_turn: Vec<ModelEvent>) -> Arc<MemorySession> {
+    let transfer_turns = (0..path.len() - 1)
+        .map(|i| transfer_turn(&transfer_id(i), path[i + 1]))
+        .collect();
+    scripted_handoff_session(path, transfer_turns, leaf_turn).await
+}
+
+/// As [`handoff_session_with`], but `transfer_turns[i]` is the handoff
+/// response of `path[i]`.
+async fn scripted_handoff_session(
+    path: &[&str],
+    mut transfer_turns: Vec<Vec<ModelEvent>>,
+    leaf_turn: Vec<ModelEvent>,
+) -> Arc<MemorySession> {
     let leaf = path.len() - 1;
+    assert_eq!(transfer_turns.len(), leaf);
     let mut agent: Arc<dyn Agent<()>> = Arc::new(
         LlmAgent::builder::<()>()
             .name(path[leaf])
@@ -663,10 +677,7 @@ async fn handoff_session_with(path: &[&str], leaf_turn: Vec<ModelEvent>) -> Arc<
         agent = Arc::new(
             LlmAgent::builder::<()>()
                 .name(path[i])
-                .shared_model(MockModel::with_scripts(vec![transfer_turn(
-                    &transfer_id(i),
-                    path[i + 1],
-                )]))
+                .shared_model(MockModel::with_scripts(vec![transfer_turns.remove(i)]))
                 .shared_handoff(agent)
                 .build(),
         );
@@ -697,7 +708,13 @@ async fn handoff_session_with(path: &[&str], leaf_turn: Vec<ModelEvent>) -> Arc<
 /// (`t1`, `t2`, ...). The session recorder closes them at the end of the
 /// run; a log from another writer can leave them open.
 async fn open_transfer_session(path: &[&str]) -> Arc<MemorySession> {
-    let recorded = handoff_session(path).await.events(None).await.unwrap();
+    without_transfer_results(&handoff_session(path).await).await
+}
+
+/// A copy of `session` without the results of the transfer calls (each call
+/// id that starts with `t`).
+async fn without_transfer_results(session: &Arc<MemorySession>) -> Arc<MemorySession> {
+    let recorded = session.events(None).await.unwrap();
     let events: Vec<SessionEvent> = recorded
         .into_iter()
         .filter(|e| {
@@ -1125,6 +1142,180 @@ async fn missing_middle_agent_on_a_recorded_log_moves_the_transfer_results_next_
         "permission denied: agent no longer available: budgeting"
     );
     assert_recorded_transfers_moved(&session, &events, &model.requests()).await;
+}
+
+/// One handoff response with a transfer call for each `(call_id, target)`.
+fn transfer_turn_with(calls: &[(&str, &str)]) -> Vec<ModelEvent> {
+    let mut turn: Vec<ModelEvent> = calls
+        .iter()
+        .map(|(call_id, target)| ModelEvent::ToolCallDelta {
+            call_id: (*call_id).to_owned(),
+            name: Some(format!("transfer_to_{target}")),
+            args_delta: "{}".to_owned(),
+        })
+        .collect();
+    turn.push(ModelEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    turn
+}
+
+/// `messages` has `count` calls `call_id`, and a result `call_id` follows
+/// each call directly. Returns the result texts in call order.
+fn results_after_each_call(messages: &[Item], call_id: &str, count: usize) -> Vec<String> {
+    let mut texts = Vec::new();
+    for (at, item) in messages.iter().enumerate() {
+        if !matches!(item, Item::ToolCall { call_id: id, .. } if id == call_id) {
+            continue;
+        }
+        match messages.get(at + 1) {
+            Some(Item::ToolResult {
+                call_id: id,
+                content,
+            }) if id == call_id => texts.push(text_of(content)),
+            other => panic!("{call_id} at {at} is not closed directly after: {other:?}"),
+        }
+    }
+    assert_eq!(texts.len(), count, "{messages:?}");
+    texts
+}
+
+/// The number of `ToolOutputItem` events for `call_id`.
+fn output_count(events: &[AgentEvent], call_id: &str) -> usize {
+    events
+        .iter()
+        .filter(|e| {
+            matches!(e, AgentEvent::ToolOutputItem { item: Item::ToolResult { call_id: id, .. } }
+                if id == call_id)
+        })
+        .count()
+}
+
+/// triage's handoff response holds two transfer calls to budgeting.
+async fn two_transfer_calls_session(leaf_turn: Vec<ModelEvent>) -> Arc<MemorySession> {
+    scripted_handoff_session(
+        &["triage", "budgeting"],
+        vec![transfer_turn_with(&[
+            ("t1", "budgeting"),
+            ("t1b", "budgeting"),
+        ])],
+        leaf_turn,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn missing_target_closes_every_open_transfer_call_of_one_handoff_response() {
+    let session = without_transfer_results(&two_transfer_calls_session(call_b_turn()).await).await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let triage = resume_agent("triage", Arc::clone(&model), Arc::clone(&b)).build();
+
+    let events = resume_handoff(&session, "triage", &triage).await;
+
+    assert!(b.invocations().is_empty(), "a denied call does not run");
+    for id in ["t1", "t1b"] {
+        assert_eq!(
+            tool_output_text(&events, id),
+            "agent no longer available: budgeting"
+        );
+        assert!(output_index(&events, id) < output_index(&events, "call_b"));
+        assert_eq!(stored_results(&session, id).await, 1, "{id}");
+    }
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    for r in &requests {
+        assert_tool_calls_paired(&r.messages);
+    }
+    assert_transfer_closed(&requests[0].messages, "t1", "budgeting");
+    assert_transfer_closed(&requests[0].messages, "t1b", "budgeting");
+}
+
+#[tokio::test]
+async fn missing_target_moves_every_recorded_transfer_result_of_one_handoff_response() {
+    let session = two_transfer_calls_session(text_then_call_b_turn()).await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let triage = resume_agent("triage", Arc::clone(&model), Arc::clone(&b)).build();
+
+    let events = resume_handoff(&session, "triage", &triage).await;
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    for r in &requests {
+        assert_tool_calls_paired(&r.messages);
+        assert_result_adjacent(&r.messages, "t1");
+        assert_result_adjacent(&r.messages, "t1b");
+    }
+    for id in ["t1", "t1b"] {
+        assert_no_output(&events, id);
+        assert_eq!(stored_results(&session, id).await, 1, "{id}");
+    }
+}
+
+/// A path of three whose two transfer calls share the call id `t`.
+async fn shared_transfer_id_session(leaf_turn: Vec<ModelEvent>) -> Arc<MemorySession> {
+    scripted_handoff_session(
+        &["triage", "budgeting", "savings"],
+        vec![
+            transfer_turn("t", "budgeting"),
+            transfer_turn("t", "savings"),
+        ],
+        leaf_turn,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn renamed_root_closes_two_open_transfer_calls_that_share_one_call_id() {
+    let session = without_transfer_results(&shared_transfer_id_session(call_b_turn()).await).await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let other = resume_agent("other", Arc::clone(&model), Arc::clone(&b)).build();
+
+    let events = resume_handoff(&session, "other", &other).await;
+
+    assert_eq!(
+        tool_output_text(&events, "call_b"),
+        "permission denied: agent no longer available: triage"
+    );
+    assert_eq!(output_count(&events, "t"), 2, "{events:?}");
+    assert_eq!(stored_results(&session, "t").await, 2);
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    for r in &requests {
+        assert_tool_calls_paired(&r.messages);
+    }
+    assert_eq!(
+        results_after_each_call(&requests[0].messages, "t", 2),
+        [
+            "agent no longer available: budgeting",
+            "agent no longer available: savings"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn missing_middle_agent_moves_two_recorded_transfer_results_that_share_one_call_id() {
+    let session = shared_transfer_id_session(text_then_call_b_turn()).await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let triage = resume_agent("triage", Arc::clone(&model), Arc::clone(&b)).build();
+
+    let events = resume_handoff(&session, "triage", &triage).await;
+
+    assert_eq!(
+        tool_output_text(&events, "call_b"),
+        "permission denied: agent no longer available: budgeting"
+    );
+    assert_no_output(&events, "t");
+    assert_eq!(stored_results(&session, "t").await, 2);
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    for r in &requests {
+        assert_tool_calls_paired(&r.messages);
+    }
+    results_after_each_call(&requests[0].messages, "t", 2);
 }
 
 /// The events of a routing exit that fails before the target runs: the

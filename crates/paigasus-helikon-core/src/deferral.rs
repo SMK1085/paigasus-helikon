@@ -304,8 +304,9 @@ pub struct ResumePlan {
     path: Vec<String>,
     /// `histories[i]` is the conversation of `path[i]`; `[0]` is the snapshot.
     histories: Vec<Vec<crate::Item>>,
-    /// `transfers[i]` is the transfer call id from `path[i]` to `path[i + 1]`.
-    transfers: Vec<Option<String>>,
+    /// `transfers[i]` holds the transfer calls of the handoff response from
+    /// `path[i]` to `path[i + 1]`, in log order.
+    transfers: Vec<Vec<TransferCall>>,
     /// The path entry of the agent that receives this plan.
     level: usize,
 }
@@ -454,7 +455,7 @@ impl ResumePlan {
             }
         }
         let transfers = (1..path.len())
-            .map(|level| transfer_call_before(events, handoffs[level]))
+            .map(|level| transfer_calls_before(events, handoffs[level]))
             .collect();
 
         let calls = open
@@ -504,9 +505,10 @@ impl ResumePlan {
         self.path.get(self.level + 1).map(String::as_str)
     }
 
-    /// The transfer call id from the receiving agent to [`Self::next_agent`].
-    pub(crate) fn transfer_call_to_next(&self) -> Option<&str> {
-        self.transfers.get(self.level)?.as_deref()
+    /// The transfer calls of the handoff response from the receiving agent to
+    /// [`Self::next_agent`], in log order. Empty at the end of the path.
+    pub(crate) fn transfer_calls_to_next(&self) -> &[TransferCall] {
+        self.transfers.get(self.level).map_or(&[], Vec::as_slice)
     }
 
     /// The conversation that the receiving agent saw when the call was
@@ -611,29 +613,58 @@ fn agent_view(
     view
 }
 
-/// The transfer call id of the handoff at `handoff_at`.
+/// One transfer call of a handoff response, found by its position.
+///
+/// Two calls on the path can have the same call id, so the call id alone
+/// does not find the call. `later_calls` is the number of `ToolCalled`
+/// events with the same call id after this call in the log. Each
+/// conversation on the path holds every call after a transfer call of its
+/// own level or deeper, so the call is the `ToolCall` item with this call id
+/// that has `later_calls` such items after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransferCall {
+    /// The call id of the transfer call.
+    pub(crate) call_id: String,
+    /// The number of later `ToolCalled` events with the same call id.
+    pub(crate) later_calls: usize,
+}
+
+/// The transfer calls of the handoff at `handoff_at`, in log order.
 ///
 /// The loop records the transfer `ToolCalled` events of a handoff response
 /// directly before the `HandoffOccurred` event, with the assistant text of
-/// that response. The first transfer call names the target. This finds the
-/// call by its position, not by its tool name, because a handoff can use a
-/// custom tool name.
-fn transfer_call_before(events: &[crate::SessionEvent], handoff_at: usize) -> Option<String> {
+/// that response. A response can hold more than one transfer call; the
+/// first one names the target. This finds the calls by their position, not
+/// by their tool name, because a handoff can use a custom tool name.
+fn transfer_calls_before(events: &[crate::SessionEvent], handoff_at: usize) -> Vec<TransferCall> {
     use crate::SessionEvent;
-    events[..handoff_at]
-        .iter()
-        .rev()
-        .take_while(|e| {
-            matches!(
-                e,
-                SessionEvent::ToolCalled { .. } | SessionEvent::AssistantMessage { .. }
-            )
-        })
-        .filter_map(|e| match e {
-            SessionEvent::ToolCalled { call_id, .. } => Some(call_id.clone()),
+    let start = handoff_at
+        - events[..handoff_at]
+            .iter()
+            .rev()
+            .take_while(|e| {
+                matches!(
+                    e,
+                    SessionEvent::ToolCalled { .. } | SessionEvent::AssistantMessage { .. }
+                )
+            })
+            .count();
+    (start..handoff_at)
+        .filter_map(|at| {
+            match &events[at] {
+            SessionEvent::ToolCalled { call_id, .. } => Some(TransferCall {
+                call_id: call_id.clone(),
+                later_calls: events[at + 1..]
+                    .iter()
+                    .filter(|e| {
+                        matches!(e, SessionEvent::ToolCalled { call_id: id, .. } if id == call_id)
+                    })
+                    .count(),
+            }),
             _ => None,
+        }
         })
-        .last()
+        .collect()
 }
 
 #[cfg(test)]
@@ -898,7 +929,7 @@ mod tests {
             }
         );
         assert_eq!(p.next_agent(), None);
-        assert_eq!(p.transfer_call_to_next(), None);
+        assert!(p.transfer_calls_to_next().is_empty());
         assert_eq!(
             format!("{:?}", p.history()),
             format!("{:?}", project(&two_deferrals()).messages)
@@ -1026,18 +1057,49 @@ mod tests {
         );
     }
 
+    fn transfer(call_id: &str, later_calls: usize) -> TransferCall {
+        TransferCall {
+            call_id: call_id.to_owned(),
+            later_calls,
+        }
+    }
+
     #[test]
-    fn transfer_call_to_next_is_the_handoff_call_id() {
+    fn transfer_calls_to_next_keep_each_call_of_a_response_and_its_position() {
+        // root's handoff response holds two transfer calls; mid's transfer
+        // call has the same call id as the first of them.
+        let events = vec![
+            SessionEvent::user_message(text("hi")),
+            SessionEvent::assistant_message(text("routing"), "root"),
+            SessionEvent::tool_called("t", "transfer_to_mid", serde_json::json!({})),
+            SessionEvent::tool_called("u", "transfer_to_mid", serde_json::json!({})),
+            SessionEvent::handoff_occurred("root", "mid"),
+            SessionEvent::tool_called("t", "go_leaf", serde_json::json!({})),
+            SessionEvent::handoff_occurred("mid", "leaf"),
+            SessionEvent::tool_called("c1", "pay", serde_json::json!({"amount": 5})),
+            deferred("d1", "c1", &["root", "mid", "leaf"]),
+        ];
+        let input = AgentInput::new().with_resolution("d1", ToolResolution::Approved);
+        let p = plan(&events, &input).unwrap();
+        assert_eq!(
+            p.transfer_calls_to_next(),
+            [transfer("t", 1), transfer("u", 0)]
+        );
+        assert_eq!(p.descend().transfer_calls_to_next(), [transfer("t", 0)]);
+    }
+
+    #[test]
+    fn transfer_calls_to_next_are_the_handoff_calls() {
         let events = handoff_fixture();
         let input = AgentInput::new().with_resolution("d1", ToolResolution::Approved);
         let p = ResumePlan::from_events(&events, &project(&events), "triage", &input, 8).unwrap();
-        assert_eq!(p.transfer_call_to_next(), Some("t1"));
-        assert_eq!(p.descend().transfer_call_to_next(), None);
+        assert_eq!(p.transfer_calls_to_next(), [transfer("t1", 0)]);
+        assert!(p.descend().transfer_calls_to_next().is_empty());
 
         let events = three_level();
         let p = plan(&events, &input).unwrap();
-        assert_eq!(p.transfer_call_to_next(), Some("t1"));
-        assert_eq!(p.descend().transfer_call_to_next(), Some("t2"));
+        assert_eq!(p.transfer_calls_to_next(), [transfer("t1", 0)]);
+        assert_eq!(p.descend().transfer_calls_to_next(), [transfer("t2", 0)]);
         let leaf = p.descend().descend();
         assert_eq!(leaf.expected_agent(), "leaf");
         assert!(
