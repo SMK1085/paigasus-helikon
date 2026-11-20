@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.14](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.6.13...paigasus-helikon-v0.6.14) - 2026-11-20
+
+### Other
+
+- updated the following local packages: paigasus-helikon-evals, paigasus-helikon-sessions-postgres, paigasus-helikon-sessions-sqlite
+
 ## [0.6.13](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.6.12...paigasus-helikon-v0.6.13) - 2026-11-20
 
 ### Other
