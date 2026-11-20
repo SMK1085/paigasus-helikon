@@ -46,11 +46,12 @@ hyper                 = { version = "1", default-features = false, features = ["
 hyper-util            = { version = "0.1", default-features = false, features = ["tokio"] }
 insta                 = "1"
 globset               = "0.4"
-# Caret requirement, not an exact pin: an exact pin goes into every published
-# manifest and blocks consumers that need a newer jiff (SMA-818). jiff 0.2.29
-# pulled `defmt` -> `proc-macro-error2` (RUSTSEC-2026-0173); 0.2.46 does not.
-# `jiff::Timestamp` is public API of core, so jiff 1.0 is a breaking change.
-jiff                  = { version = "0.2.46", features = ["serde"] }
+# Caret requirement, not an exact pin. An exact pin goes into every published
+# manifest and blocks consumers that need a newer jiff (SMA-818).
+# `jiff::Timestamp` is public API of core (`SessionEvent.ts`). The next jiff
+# major version is a breaking change of core and the facade. Its PR title
+# must carry `!` (SMA-831).
+jiff                  = { version = "1", features = ["serde"] }
 jsonschema            = { version = "0.61", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"

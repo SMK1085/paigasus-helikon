@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- This release requires `jiff` 1. The `ts` fields of `SessionEvent` and the return value of `SessionEvent::ts()` now have the type `jiff::Timestamp` from jiff 1. A `Timestamp` from jiff 0.2 is a different type.
+- If your code passes a `Timestamp` into a `SessionEvent`, or uses the value from `ts()` with jiff code, change your `jiff` requirement to `1`. Read the [jiff 1.0 changelog](https://github.com/BurntSushi/jiff/blob/master/CHANGELOG.md) for the APIs that jiff renamed.
+- If your code uses only the constructors that set `ts` to the current time (for example `SessionEvent::user_message`) and does not read `ts`, it needs no change.
+- Upgrade `paigasus-helikon-core` and `paigasus-helikon` to 0.7 together.
+- The next patch release of each other `paigasus-helikon-*` crate requires core 0.7. If your `Cargo.toml` requires `paigasus-helikon-core` 0.6 directly, change it to `0.7` before you run `cargo update`. If you cannot upgrade core yet, keep the other `paigasus-helikon-*` crates at their current versions with `cargo update --precise`. Two copies of core in one build cause errors such as "trait not implemented". Run `cargo tree -d` to find the copies.
+- The JSON format of a stored `SessionEvent` does not change. Session rows that an earlier version wrote stay readable.
+
 ## [0.6.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.5.21...paigasus-helikon-core-v0.6.0) - 2026-11-20
 
 ### Added
