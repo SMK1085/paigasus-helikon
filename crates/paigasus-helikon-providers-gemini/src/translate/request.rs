@@ -172,27 +172,29 @@ fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
             Class::Mixed
         }
     };
-    let mut merged: Vec<(&'static str, Vec<Value>)> = Vec::new();
+    // Each merged entry keeps its class, so a merge never rescans the parts.
+    let mut merged: Vec<(&'static str, Class, Vec<Value>)> = Vec::new();
     for (role, parts) in entries {
         if parts.is_empty() {
             continue;
         }
+        let incoming = class(&parts);
         match merged.last_mut() {
-            Some((last_role, last_parts))
+            // A merge needs equal classes that are not `Mixed`, so the stored
+            // class stays correct after it.
+            Some((last_role, last_class, last_parts))
                 if *last_role == role
-                    && (role != "user" || {
-                        let c = class(last_parts);
-                        c != Class::Mixed && c == class(&parts)
-                    }) =>
+                    && (role != "user"
+                        || (*last_class != Class::Mixed && *last_class == incoming)) =>
             {
                 last_parts.extend(parts)
             }
-            _ => merged.push((role, parts)),
+            _ => merged.push((role, incoming, parts)),
         }
     }
     merged
         .into_iter()
-        .map(|(role, parts)| json!({ "role": role, "parts": parts }))
+        .map(|(role, _, parts)| json!({ "role": role, "parts": parts }))
         .collect()
 }
 
