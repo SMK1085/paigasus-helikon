@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01WyyCLNAFxJbVTNzLjoZikX",
+  "agent_id": "ab05ffba639f15ce6",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit non-provider Linear issues",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 87204,
+    "cache_read_tokens": 215442,
+    "output_tokens": 3182,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-20T15:21:56.983772+01:00",
+  "completed_at": "2026-11-20T15:22:20.896523+01:00"
+}
