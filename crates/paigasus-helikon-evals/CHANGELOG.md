@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking changes
 
 - This version replaces `0.1.22`. Version `0.1.22` requires `paigasus-helikon-core` 0.7, but it was released as a patch, so `cargo update` gave it to users who stay on core 0.6. Version `0.1.22` is yanked. The content of this version is the same as `0.1.22`.
-- This version requires `paigasus-helikon-core` 0.7. If you stay on core 0.6, keep the previous version. After the yank, `cargo update` selects it.
-- If you already use core 0.7, change your requirement on `paigasus-helikon-evals` to `"0.2"`. If you do not, `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
+- This version requires `paigasus-helikon-core` 0.7. If you stay on core 0.6, use `0.1.21`, the last version for core 0.6. A requirement cannot select a version below its minimum, so if your requirement is higher than `0.1.21` (for example a requirement that `cargo add` wrote for a yanked version), change it to `"0.1.21"` first, then run `cargo update`.
+- If you already use core 0.7, change your requirement on `paigasus-helikon-evals` to `"0.2"`. If you do not, and your requirement allows the core 0.6 versions (for example `"0.1"`), `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
 
 ## [0.1.22](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-evals-v0.1.21...paigasus-helikon-evals-v0.1.22) - 2026-11-20
 
