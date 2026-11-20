@@ -47,13 +47,15 @@ Run:
 ```bash
 set -o pipefail
 for c in paigasus-helikon-sessions-sqlite paigasus-helikon-sessions-postgres paigasus-helikon-evals; do
-  cargo package -p "$c" --no-verify --allow-dirty
-  n=$c-$(cargo pkgid -p "$c" | sed 's/.*[#@]//')
+  n=$c-$(cargo pkgid -p "$c" | sed 's/.*[#@]//') || { echo "FAIL: $c"; break; }
+  rm -f "target/package/$n.crate"   # never read a stale archive
+  cargo package -p "$c" --no-verify --allow-dirty || { echo "FAIL: $c"; break; }
   printf '%s: ' "$c"
-  tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]' | tail -1
+  tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]' | tail -1 \
+    || { echo "FAIL: $c"; break; }
 done
 ```
-Expected: `version = "0.9"` for each of the three crates. This is the value that the change must move to `"0.9.1"`.
+Expected: `version = "0.9"` for each of the three crates, and no `FAIL:` line. A `FAIL:` line stops the loop; treat it as a failed check. This is the value that the change must move to `"0.9.1"`.
 
 - [ ] **Step 2: Remove the ignore block from both policy files**
 
@@ -89,10 +91,12 @@ cargo audit --deny warnings                          # exit 0
 cargo deny --all-features check                      # exit 0
 set -o pipefail
 for c in paigasus-helikon-sessions-sqlite paigasus-helikon-sessions-postgres paigasus-helikon-evals; do
-  cargo package -p "$c" --no-verify --allow-dirty
-  n=$c-$(cargo pkgid -p "$c" | sed 's/.*[#@]//')
+  n=$c-$(cargo pkgid -p "$c" | sed 's/.*[#@]//') || { echo "FAIL: $c"; break; }
+  rm -f "target/package/$n.crate"   # never read a stale archive
+  cargo package -p "$c" --no-verify --allow-dirty || { echo "FAIL: $c"; break; }
   printf '%s: ' "$c"
-  tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]' | tail -1
+  tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]' | tail -1 \
+    || { echo "FAIL: $c"; break; }
 done   # each crate: version = "0.9.1"
 ```
 

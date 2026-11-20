@@ -48,6 +48,12 @@ ticket removes the ignore.
   dependency, run `cargo update -p libsqlite3-sys` again, and confirm that
   the resolved version is at least 0.39. Without the second update, the
   old version can stay in the lockfile, because `sqlx` still accepts it.
+  The version check does not cover SQLCipher builds: with the
+  `bundled-sqlcipher` feature, `libsqlite3-sys` 0.39.0 and 0.39.1 bundle
+  `sqlcipher-src =419.0.6`, which contains the affected SQLite 3.53.4
+  (stated in the RUSTSEC-2026-0459 text). SQLCipher users must check the
+  bundled SQLCipher version separately. 0.40.0 uses `sqlcipher-src
+  =420.0.0`.
   The PR body and the
   release notes must say this.
 
