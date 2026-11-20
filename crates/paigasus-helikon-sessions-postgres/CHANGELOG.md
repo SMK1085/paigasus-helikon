@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-postgres-v0.1.9...paigasus-helikon-sessions-postgres-v0.1.10) - 2026-11-20
+
+### Security
+
+- Require `sqlx` 0.9.1 or later ([#351](https://github.com/SMK1085/paigasus-helikon/pull/351)). This addresses RUSTSEC-2026-0459 (CVE-2026-119375): `libsqlite3-sys` before 0.39 bundles an affected SQLite. `sqlx` 0.9.0 caps `libsqlite3-sys` below 0.38, so it cannot resolve a fixed version.
+- The new floor does not update an existing lockfile. Run `cargo update -p libsqlite3-sys`, then check that `cargo tree -i libsqlite3-sys` shows 0.39 or later. If another dependency caps it lower, update that dependency and run the update again. Builds with `bundled-sqlcipher` must also check the bundled SQLCipher version.
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.1.9](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-postgres-v0.1.8...paigasus-helikon-sessions-postgres-v0.1.9) - 2026-11-20
 
 ### Other
