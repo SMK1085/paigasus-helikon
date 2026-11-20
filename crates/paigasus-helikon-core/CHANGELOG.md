@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.6.0...paigasus-helikon-core-v0.7.0) - 2026-11-20
+
+### Fixed
+
+- *(core)* SMA-810 give each handoff transfer call a tool result ([#358](https://github.com/SMK1085/paigasus-helikon/pull/358))
+
+### Other
+
+- *(deps)* [**breaking**] SMA-831 upgrade jiff to 1 ([#367](https://github.com/SMK1085/paigasus-helikon/pull/367))
+- *(core)* SMA-828 share the deferral test helpers with runtime-tokio ([#366](https://github.com/SMK1085/paigasus-helikon/pull/366))
+- *(core)* SMA-826 move the shared core test helpers into tests/common ([#359](https://github.com/SMK1085/paigasus-helikon/pull/359))
+
 ### Upgrade notes
 
 - This release requires `jiff` 1. The `ts` fields of `SessionEvent` and the return value of `SessionEvent::ts()` now have the type `jiff::Timestamp` from jiff 1. A `Timestamp` from jiff 0.2 is a different type.
