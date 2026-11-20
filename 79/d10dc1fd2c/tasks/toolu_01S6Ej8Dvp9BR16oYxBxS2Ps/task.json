@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01S6Ej8Dvp9BR16oYxBxS2Ps",
+  "agent_id": "af3253c650bf6c832",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix wave: widen the upgrade note",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 71199,
+    "cache_read_tokens": 335629,
+    "output_tokens": 3109,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-20T22:04:37.279422+01:00",
+  "completed_at": "2026-11-20T22:04:58.514938+01:00"
+}
