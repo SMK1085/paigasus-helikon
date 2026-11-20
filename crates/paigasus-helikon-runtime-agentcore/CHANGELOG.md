@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.16...paigasus-helikon-runtime-agentcore-v0.2.17) - 2026-11-20
+
+### Other
+
+- updated the following local packages: paigasus-helikon-providers-anthropic
+
 ## [0.2.16](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-agentcore-v0.2.15...paigasus-helikon-runtime-agentcore-v0.2.16) - 2026-11-20
 
 ### Fixed

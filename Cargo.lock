@@ -4098,7 +4098,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "paigasus-helikon"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4140,7 +4140,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-cli"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4287,7 +4287,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-anthropic"
-version = "0.1.29"
+version = "0.1.30"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4422,7 +4422,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-agentcore"
-version = "0.2.16"
+version = "0.2.17"
 dependencies = [
  "anyhow",
  "async-trait",
