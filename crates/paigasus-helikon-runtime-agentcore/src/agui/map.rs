@@ -51,7 +51,14 @@
 //! later one gets `x~n`, with the smallest `n` ≥ 2 that the run has not emitted yet,
 //! so an alias never equals a provider id of the run. Every frame of the call
 //! (`START`, `ARGS`, `END`, `RESULT`) uses that AG-UI id. A result for a provider id
-//! with no occurrence uses the provider id, and the run counts that id as used.
+//! with no occurrence uses the provider id, or the next free `{id}~{n}` when the run
+//! already emitted that id, and the run counts the id as used.
+//! A `HandoffItem` retires every occurrence that did not have its `ToolCallItem`
+//! (core drops the non-transfer calls of a handoff response): the mapper closes or
+//! flushes each one as a complete span and removes its occurrence, so the child's
+//! next call with that id is a new occurrence. The transfer call keeps its occurrence,
+//! so the transfer result uses its AG-UI id. The limit: under `ParallelAgent`, the
+//! `HandoffItem` of one branch also retires the unfinished calls of a sibling branch.
 //! AG-UI ids are unique per run only: each request gets a new mapper.
 //!
 //! A `helikon.approval` frame carries two ids. `tool_call_id` is the AG-UI id of the
@@ -306,13 +313,19 @@ impl EventMapper {
                 if let Item::ToolResult { call_id, content } = item {
                     // The result belongs to the current occurrence of its provider id:
                     // in a sequential flow a result comes before the next call that
-                    // could reuse the id. With no occurrence, the provider id is used,
-                    // and the run counts it as used, so a later call with that id
-                    // gets an alias.
-                    if !self.current.contains_key(call_id) {
-                        self.used_ids.insert(call_id.clone());
-                    }
-                    let call_id = self.agui_id_of(call_id);
+                    // could reuse the id. With no occurrence, the result uses the
+                    // provider id, or the next free `{id}~{n}` when the run already
+                    // emitted that id (for example as the alias of another call). The
+                    // run counts the id as used, so a later call with that provider
+                    // id gets an alias.
+                    let call_id = match self.current.get(call_id) {
+                        Some(occ) => occ.agui_id.clone(),
+                        None => {
+                            let id = self.unused_id(call_id);
+                            self.used_ids.insert(id.clone());
+                            id
+                        }
+                    };
                     if let Some(buffered) = self.take_buffered(&call_id) {
                         // Only possible under `ParallelAgent`: the call is still
                         // buffered. Flush it first, with its name, so its result never
@@ -352,7 +365,10 @@ impl EventMapper {
                 }
                 self.streamed_text = false;
             }
-            AgentEvent::HandoffItem { .. } => out.push(self.custom("helikon.handoff", ev)),
+            AgentEvent::HandoffItem { .. } => {
+                self.retire_unfinished_calls(&mut out);
+                out.push(self.custom("helikon.handoff", ev));
+            }
             AgentEvent::AgentUpdated { .. } => out.push(self.custom("helikon.agent_updated", ev)),
             AgentEvent::GuardrailTriggered { .. } => out.push(self.custom("helikon.guardrail", ev)),
             AgentEvent::ApprovalRequested { call_id, .. } => {
@@ -475,22 +491,22 @@ impl EventMapper {
     /// the current occurrence already had a name. An unnamed delta before the item
     /// stays on the current occurrence, and a name that arrives on a later delta
     /// attaches to the occurrence that the first delta started. When an unnamed
-    /// delta starts a new occurrence because the current one already had its item
-    /// (a reused id), the new occurrence waits for its name (`awaiting_name`).
+    /// delta starts a new occurrence that gets an alias (a reused id: the current
+    /// occurrence already had its item, or the run used the id before, for example
+    /// for an occurrence that a handoff retired), the new occurrence waits for its
+    /// name (`awaiting_name`).
     fn occurrence_for_delta(&mut self, call_id: &str, has_name: bool) -> String {
-        let mut reused = false;
         if let Some(occ) = self.current.get_mut(call_id) {
             if !(occ.item_seen || (has_name && occ.named)) {
                 occ.named |= has_name;
                 return occ.agui_id.clone();
             }
-            reused = occ.item_seen;
         }
         let agui_id = self.new_occurrence(call_id);
         if let Some(occ) = self.current.get_mut(call_id) {
             occ.named = has_name;
         }
-        if reused && !has_name {
+        if agui_id != call_id && !has_name {
             self.awaiting_name.insert(agui_id.clone());
         }
         agui_id
@@ -517,14 +533,7 @@ impl EventMapper {
     /// `call_id` itself when the run has not used it, else `{call_id}~{n}` with the
     /// smallest `n` ≥ 2 that the run has not used.
     fn new_occurrence(&mut self, call_id: &str) -> String {
-        let agui_id = if self.used_ids.contains(call_id) {
-            (2u64..)
-                .map(|n| format!("{call_id}~{n}"))
-                .find(|alias| !self.used_ids.contains(alias))
-                .expect("an unbounded range always yields an unused alias")
-        } else {
-            call_id.to_owned()
-        };
+        let agui_id = self.unused_id(call_id);
         self.used_ids.insert(agui_id.clone());
         self.current.insert(
             call_id.to_owned(),
@@ -535,6 +544,66 @@ impl EventMapper {
             },
         );
         agui_id
+    }
+
+    /// The first AG-UI id for provider id `call_id` that the run has not used:
+    /// `call_id` itself, else `{call_id}~{n}` with the smallest `n` ≥ 2 that is not
+    /// used. It does not mark the id as used.
+    fn unused_id(&self, call_id: &str) -> String {
+        if self.used_ids.contains(call_id) {
+            (2u64..)
+                .map(|n| format!("{call_id}~{n}"))
+                .find(|alias| !self.used_ids.contains(alias))
+                .expect("an unbounded range always yields an unused alias")
+        } else {
+            call_id.to_owned()
+        }
+    }
+
+    /// Retire every occurrence that did not have its `ToolCallItem` when a
+    /// `HandoffItem` arrives. Core drops the non-transfer calls of a handoff
+    /// response, so no item comes for them. Each one that is still open or buffered
+    /// is closed or flushed as a complete span, and its provider id loses its
+    /// occurrence, so the child's next call with that id starts a new occurrence.
+    /// The ids stay in `used_ids`. Occurrences that had their item (the transfer
+    /// call) stay, so the transfer result still finds its AG-UI id.
+    fn retire_unfinished_calls(&mut self, out: &mut Vec<Value>) {
+        let mut retired: HashSet<String> = HashSet::new();
+        self.current.retain(|_, occ| {
+            if occ.item_seen {
+                true
+            } else {
+                retired.insert(occ.agui_id.clone());
+                false
+            }
+        });
+        if retired.is_empty() {
+            return;
+        }
+        for id in &retired {
+            self.awaiting_name.remove(id);
+        }
+        let open_retired = self
+            .open_call
+            .as_ref()
+            .is_some_and(|id| retired.contains(id));
+        let buffered_retired = self
+            .buffered_calls
+            .iter()
+            .any(|(id, _)| retired.contains(id));
+        if !(open_retired || buffered_retired) {
+            return;
+        }
+        self.close_text(out);
+        self.close_call(out);
+        let (flush, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.buffered_calls)
+            .into_iter()
+            .partition(|(id, _)| retired.contains(id));
+        self.buffered_calls = keep;
+        for (id, args) in flush {
+            let name = self.name_of(&id).to_owned();
+            self.emit_span(&id, &name, &args, out);
+        }
     }
 
     /// The AG-UI id of the current occurrence of provider id `call_id`, or `call_id`
@@ -859,11 +928,20 @@ mod tests {
                 AgentEvent::ToolOutputItem {
                     item: Item::ToolResult { call_id, .. },
                 } => {
-                    // A result with no occurrence uses the provider id, and the
-                    // mapper counts that id as used, as the oracle does here.
+                    // A result with no occurrence uses the provider id, or the next
+                    // free `{id}~{n}` when that id is already taken, and the mapper
+                    // counts the id as used, as the oracle does here.
                     let id = latest.get(call_id).cloned().unwrap_or_else(|| {
-                        taken.insert(call_id.clone());
-                        call_id.clone()
+                        let id = if taken.contains(call_id) {
+                            (2..)
+                                .map(|n| format!("{call_id}~{n}"))
+                                .find(|alias| !taken.contains(alias))
+                                .unwrap()
+                        } else {
+                            call_id.clone()
+                        };
+                        taken.insert(id.clone());
+                        id
                     });
                     want_results.push(id);
                 }
@@ -2262,6 +2340,84 @@ mod tests {
             "{frames:?}"
         );
         assert_eq!(result_ids(&frames), vec!["fc_0", "fc_0~2"], "{frames:?}");
+    }
+
+    /// SMA-810 (G5): a result with no occurrence whose provider id the run already
+    /// emitted (here as the alias `x~2` of another call) gets a new AG-UI id by the
+    /// same smallest-unused rule, so it does not attach to that other call.
+    #[test]
+    fn a_result_with_no_occurrence_never_reuses_an_emitted_id() {
+        let events = vec![
+            turn(1),
+            tc_delta("x", Some("a"), "{}"),
+            tc_item("x", "a"),
+            tc_result("x", "ra"),
+            turn(2),
+            tc_delta("x", Some("b"), "{}"),
+            tc_item("x", "b"),
+            tc_result("x", "rb"),
+            turn(3),
+            tc_result("x~2", "orphan"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
+        assert_eq!(
+            starts(&frames),
+            pairs(&[("x", "a"), ("x~2", "b")]),
+            "{frames:?}"
+        );
+        assert_eq!(result_ids(&frames), vec!["x", "x~2", "x~2~2"], "{frames:?}");
+    }
+
+    /// SMA-810 (G5): core drops the non-transfer calls of a handoff response, so
+    /// `search fc_0` never gets a `ToolCallItem`. The `HandoffItem` retires it: its
+    /// span is complete, and the child's `lookup fc_0` is a new occurrence. The
+    /// child's first delta has no name, so the span waits for it and opens as
+    /// `lookup` with all of its args. The transfer result uses the transfer's id.
+    #[test]
+    fn a_handoff_retires_the_unfinished_calls_of_the_handoff_response() {
+        let events = vec![
+            turn(1),
+            tc_delta("fc_0", Some("search"), "{\"q\":\"s\"}"),
+            tc_delta("fc_1", Some("transfer_to_billing"), "{}"),
+            tc_item("fc_1", "transfer_to_billing"),
+            AgentEvent::HandoffItem {
+                from: "triage".to_owned(),
+                to: "billing".to_owned(),
+            },
+            tc_result("fc_1", "transferred to billing"),
+            AgentEvent::AgentUpdated {
+                agent: "billing".to_owned(),
+            },
+            turn(1),
+            tc_delta("fc_0", None, "{\"id\":"),
+            tc_delta("fc_0", Some("lookup"), "7}"),
+            tc_item("fc_0", "lookup"),
+            tc_result("fc_0", "found"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
+        assert_eq!(
+            starts(&frames),
+            pairs(&[
+                ("fc_0", "search"),
+                ("fc_1", "transfer_to_billing"),
+                ("fc_0~2", "lookup"),
+            ]),
+            "{frames:?}"
+        );
+        let args_of = |id: &str| -> String {
+            frames
+                .iter()
+                .filter(|f| f["type"] == "TOOL_CALL_ARGS" && f["toolCallId"] == id)
+                .map(|f| f["delta"].as_str().unwrap())
+                .collect()
+        };
+        assert_eq!(args_of("fc_0"), "{\"q\":\"s\"}", "{frames:?}");
+        assert_eq!(args_of("fc_0~2"), "{\"id\":7}", "{frames:?}");
+        assert_eq!(result_ids(&frames), vec!["fc_1", "fc_0~2"], "{frames:?}");
     }
 
     /// SMA-810 (G5): a result for a call that is still buffered (only possible under
