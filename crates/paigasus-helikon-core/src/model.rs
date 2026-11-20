@@ -477,15 +477,16 @@ pub enum ModelError {
 ///
 /// Reassembled from a [`ModelEvent`] stream by [`ModelTurnAccumulator`]: the
 /// concatenated text/reasoning deltas become at most one
-/// [`crate::Item::AssistantMessage`], each distinct `ToolCallDelta` `call_id`
-/// becomes one [`crate::Item::ToolCall`], `usage` is the last `Usage`
-/// snapshot observed, and `finish_reason` is the terminal `Finish` reason.
+/// [`crate::Item::AssistantMessage`]. Provider data alone also creates that
+/// message. Each distinct `ToolCallDelta` `call_id` becomes one
+/// [`crate::Item::ToolCall`], `usage` is the last `Usage` snapshot observed,
+/// and `finish_reason` is the terminal `Finish` reason.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ModelTurn {
     /// Reconstructed items: an optional leading `AssistantMessage` (text,
-    /// reasoning and/or provider data content, in that order) followed by zero or more `ToolCall`s, in
-    /// deterministic `call_id`-sorted order.
+    /// reasoning and/or provider data content, in that order) followed by
+    /// zero or more `ToolCall`s, in deterministic `call_id`-sorted order.
     pub items: Vec<crate::Item>,
     /// The last [`ModelEvent::Usage`] snapshot observed (last-wins; usage
     /// snapshots are never summed within a turn), or the zero default if

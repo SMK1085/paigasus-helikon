@@ -431,9 +431,11 @@ impl RunResultStreaming {
 
         while let Some(ev) = self.events.next().await {
             match &ev {
+                // A message with only provider data has no text. Skip it, so it
+                // does not clear the text of an earlier message.
                 crate::AgentEvent::MessageOutput {
-                    item: crate::Item::AssistantMessage { content, .. },
-                } => {
+                    item: item @ crate::Item::AssistantMessage { content, .. },
+                } if !item.is_provider_data_only() => {
                     final_output.clear();
                     for part in content {
                         if let crate::ContentPart::Text { text } = part {
@@ -510,9 +512,10 @@ impl RunResultStreaming {
 
         while let Some(ev) = self.events.next().await {
             match &ev {
+                // See `collect`: a provider-data-only message has no text.
                 AgentEvent::MessageOutput {
-                    item: Item::AssistantMessage { content, .. },
-                } => {
+                    item: item @ Item::AssistantMessage { content, .. },
+                } if !item.is_provider_data_only() => {
                     final_text.clear();
                     for part in content {
                         if let ContentPart::Text { text } = part {
