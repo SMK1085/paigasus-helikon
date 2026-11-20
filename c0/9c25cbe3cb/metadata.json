@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "c09c25cbe3cb",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-831-upgrade-jiff-to-10-as-a-breaking-change-of",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "crates/paigasus-helikon-core/CHANGELOG.md",
+    "crates/paigasus-helikon/CHANGELOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c0/9c25cbe3cb/0/metadata.json",
+      "transcript": "/c0/9c25cbe3cb/0/full.jsonl",
+      "compact_transcript": "/c0/9c25cbe3cb/0/transcript.jsonl",
+      "content_hash": "/c0/9c25cbe3cb/0/content_hash.txt",
+      "prompt": "/c0/9c25cbe3cb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 21561,
+    "cache_read_tokens": 2651085,
+    "output_tokens": 9104,
+    "api_call_count": 14,
+    "subagent_tokens": {
+      "input_tokens": 92,
+      "cache_creation_tokens": 336401,
+      "cache_read_tokens": 3726746,
+      "output_tokens": 28621,
+      "api_call_count": 45
+    }
+  },
+  "redaction": {
+    "replacements": 47,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 47,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
