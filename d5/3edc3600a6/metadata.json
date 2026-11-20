@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "d53edc3600a6",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-816-add-a-sessioneventtooldeferred-conformance",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock",
+    "crates/paigasus-helikon-sessions-testkit/Cargo.toml",
+    "crates/paigasus-helikon-sessions-testkit/src/lib.rs",
+    "crates/paigasus-helikon-sessions-testkit/tests/memory.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d5/3edc3600a6/0/metadata.json",
+      "transcript": "/d5/3edc3600a6/0/full.jsonl",
+      "compact_transcript": "/d5/3edc3600a6/0/transcript.jsonl",
+      "content_hash": "/d5/3edc3600a6/0/content_hash.txt",
+      "prompt": "/d5/3edc3600a6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 29517,
+    "cache_read_tokens": 2037412,
+    "output_tokens": 3859,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 58,
+      "cache_creation_tokens": 219059,
+      "cache_read_tokens": 2799294,
+      "output_tokens": 33715,
+      "api_call_count": 29
+    }
+  },
+  "redaction": {
+    "replacements": 18,
+    "layers": {
+      "betterleaks": 22,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 2,
+      "credentialed_uri": 2,
+      "entropy": 2,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
