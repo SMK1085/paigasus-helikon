@@ -23,14 +23,14 @@
     "api_call_count": 7
   },
   "redaction": {
-    "replacements": 25,
+    "replacements": 28,
     "layers": {
       "betterleaks": 0,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 0,
       "credentialed_uri": 0,
-      "entropy": 57,
+      "entropy": 60,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
@@ -119,6 +119,37 @@
       "collapse": {
         "target": "tool_pair",
         "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_012tvhfK9TzE4W26Xrnuhnp3",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "207de46fc762",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 539,
+        "end": 540,
+        "entry_ids": [
+          "119b97ce-5530-4269-a0c3-4177935a00f8"
+        ],
+        "tool_use_id": "toolu_012tvhfK9TzE4W26Xrnuhnp3"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_012tvhfK9TzE4W26Xrnuhnp3"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
         "default_collapsed": true
       }
     }
