@@ -44,8 +44,9 @@ fn part_chars(part: &ContentPart) -> usize {
         ContentPart::ToolResult { content, .. } => content.iter().map(part_chars).sum(),
         // Image/Audio sources are not projected text.
         ContentPart::Image { .. } | ContentPart::Audio { .. } => 0,
-        // Opaque provider data is not projected text.
-        ContentPart::ProviderData { .. } => 0,
+        // A provider bills opaque data (a Gemini thought signature) as input
+        // tokens. Count the length of `data`. `provider` and `call_id` do not count.
+        ContentPart::ProviderData { data, .. } => json_chars(data),
     }
 }
 
@@ -96,5 +97,25 @@ mod tests {
         ];
         // Non-zero: System content + tool name + args JSON all contribute.
         assert!(HeuristicTokenCounter.count(&items) > 0);
+    }
+
+    #[test]
+    fn provider_data_counts_the_length_of_its_data() {
+        let data = serde_json::json!({"thoughtSignature": "SIG_A"});
+        let expected = serde_json::to_string(&data).unwrap().chars().count();
+        let item = |call_id: Option<String>, provider: &str| Item::AssistantMessage {
+            content: vec![ContentPart::ProviderData {
+                provider: provider.into(),
+                call_id,
+                data: data.clone(),
+            }],
+            agent: None,
+        };
+        assert_eq!(item_chars(&item(None, "gemini")), expected);
+        // `provider` and `call_id` do not count.
+        assert_eq!(
+            item_chars(&item(Some("call_1".into()), "a-much-longer-provider-key")),
+            expected
+        );
     }
 }
