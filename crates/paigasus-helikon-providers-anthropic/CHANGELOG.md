@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.30](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.29...paigasus-helikon-providers-anthropic-v0.1.30) - 2026-11-20
+
+### Fixed
+
+- *(providers)* SMA-834 let tool-use-only assistant messages join an open anthropic round ([#368](https://github.com/SMK1085/paigasus-helikon/pull/368))
+
 ## [0.1.29](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.28...paigasus-helikon-providers-anthropic-v0.1.29) - 2026-11-20
 
 ### Other
