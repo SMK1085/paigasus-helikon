@@ -33,13 +33,19 @@ ticket removes the ignore.
 ## What the floor raise does, and what it does not do
 
 - **It does:** exclude `sqlx` 0.9.0. A dependency graph that is pinned to
-  `sqlx` 0.9.0 cannot resolve our new releases. Thus a graph that uses our
-  new releases can always resolve a fixed `libsqlite3-sys`.
+  `sqlx` 0.9.0 cannot resolve our new releases. Thus `sqlx` no longer
+  blocks a fixed `libsqlite3-sys` in a graph that uses our new releases.
+  Another dependency can still block it. For example, `rusqlite` 0.37.0
+  requires `libsqlite3-sys ^0.35.0`, and `links = "sqlite3"` allows only
+  one version in a graph.
 - **It does not:** move `libsqlite3-sys` in an existing lockfile.
   `sqlx-sqlite` 0.9.1 still accepts 0.37.0. A user who runs
   `cargo update -p paigasus-helikon-sessions-sqlite` gets `sqlx` 0.9.1, but
   keeps `libsqlite3-sys` 0.37.0. A minimal-versions resolve picks 0.30.1. The
-  user must also run `cargo update -p libsqlite3-sys`. The PR body and the
+  user must also run `cargo update -p libsqlite3-sys`, and then check the
+  resolved version with `cargo tree -i libsqlite3-sys`. If another
+  dependency caps it below 0.39, the user must update or remove that
+  dependency too. The PR body and the
   release notes must say this.
 
 ## Goals
@@ -82,7 +88,10 @@ ticket removes the ignore.
   requirement changes. Precedent: the SMA-818 jiff pin change gave evals
   0.1.20 and sessions-sqlite 0.1.28 an "update Cargo.toml dependencies"
   entry.
-- `Cargo.lock` must not change. Check with `git diff --exit-code Cargo.lock`.
+- `Cargo.lock` must not change against the PR base. Check with
+  `git diff --exit-code origin/main -- Cargo.lock`. A plain
+  `git diff --exit-code Cargo.lock` misses a change that is already
+  committed.
 - Gates to run before push:
   - `cargo fmt --all -- --check`
   - `cargo clippy --workspace --all-features --all-targets -- -D warnings`
@@ -93,17 +102,28 @@ ticket removes the ignore.
   - `cargo audit --deny warnings`
   - `cargo deny --all-features check` (the CI command in `deny.yml`)
   - `cargo package -p paigasus-helikon-sessions-sqlite --no-verify`, then
-    read `Cargo.toml` from the `.crate` archive in `target/package/`
-    (`--no-verify` does not unpack it) and confirm that it has `sqlx` version
-    `0.9.1`
+    read `<name>-<version>/Cargo.toml` from the archive
+    `target/package/<name>-<version>.crate` (`--no-verify` does not unpack
+    it) and confirm that it has `sqlx` version `0.9.1`. Use the exact
+    archive and member names, not globs: GNU tar needs `--wildcards` for a
+    member pattern, and a glob can match an older archive.
 - No mdBook or README text names the `sqlx` version, so no doc edit is
   needed. This is a conscious call.
 
 ## Rollback
 
 If `sqlx` 0.9.1 is yanked before a later 0.9.x release, a fresh resolve of
-our new releases fails. Existing lockfiles still build. To roll back, revert
-the pin to `"0.9"` and restore the ignore in both policy files.
+our new releases fails. Existing lockfiles still build. To roll back:
+
+1. Revert the pin to `"0.9"` and restore the ignore in both policy files.
+2. Release new versions of evals, sessions-sqlite and sessions-postgres
+   (and the cascade) with the relaxed requirement. A repository revert
+   alone does not change manifests that are already on crates.io.
+3. Tell users to update to those versions. The releases that require 0.9.1
+   cannot be fixed in place.
+
+The trade-off: under `sqlx` 0.9.0, no fixed `libsqlite3-sys` resolves. A
+rollback thus brings back the RUSTSEC-2026-0459 exposure and its ignore.
 
 ## After merge
 
