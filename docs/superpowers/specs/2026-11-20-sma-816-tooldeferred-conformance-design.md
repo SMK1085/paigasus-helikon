@@ -1,6 +1,6 @@
 # SMA-816: `ToolDeferred` conformance test in the sessions testkit
 
-Status: draft, revised after the spec challenge, waiting for Gate 1.
+Status: approved at Gate 1 by Sven on 2026-11-20, after the spec challenge.
 
 ## Intent
 
