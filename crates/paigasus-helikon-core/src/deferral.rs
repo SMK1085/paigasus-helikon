@@ -1088,6 +1088,31 @@ mod tests {
     }
 
     #[test]
+    fn transfer_calls_to_next_in_the_new_layout() {
+        // Each transfer call has its result directly after the handoff.
+        let events = vec![
+            SessionEvent::user_message(text("hi")),
+            SessionEvent::tool_called("t", "transfer_to_mid", serde_json::json!({})),
+            SessionEvent::tool_called("u", "transfer_to_mid", serde_json::json!({})),
+            SessionEvent::handoff_occurred("root", "mid"),
+            SessionEvent::tool_returned("t", text("transferred to mid")),
+            SessionEvent::tool_returned(
+                "u",
+                text("transfer not performed: this response already transferred to mid"),
+            ),
+            SessionEvent::tool_called("b", "pay", serde_json::json!({"amount": 5})),
+            deferred("d1", "b", &["root", "mid"]),
+        ];
+        let input = AgentInput::new().with_resolution("d1", ToolResolution::Approved);
+        let p = plan(&events, &input).unwrap();
+        assert_eq!(
+            p.transfer_calls_to_next(),
+            [transfer("t", 0), transfer("u", 0)]
+        );
+        assert!(p.descend().transfer_calls_to_next().is_empty());
+    }
+
+    #[test]
     fn transfer_calls_to_next_are_the_handoff_calls() {
         let events = handoff_fixture();
         let input = AgentInput::new().with_resolution("d1", ToolResolution::Approved);

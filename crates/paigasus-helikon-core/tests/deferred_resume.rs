@@ -675,8 +675,9 @@ fn text_then_call_b_turn() -> Vec<ModelEvent> {
 }
 
 /// As [`handoff_session`], but the last agent writes text before its call,
-/// so a child `AssistantMessage` sits between each transfer call and the
-/// recorder's result for it.
+/// so a child `AssistantMessage` sits in the log after the transfer calls
+/// and their results. In the old layout ([`with_late_transfer_results`]),
+/// the text sits between each transfer call and its late result.
 async fn text_then_call_b_session(path: &[&str]) -> Arc<MemorySession> {
     handoff_session_with(path, text_then_call_b_turn()).await
 }
@@ -736,10 +737,65 @@ async fn scripted_handoff_session(
 }
 
 /// As [`handoff_session`], but the log has no result for the transfer calls
-/// (`t1`, `t2`, ...). The session recorder closes them at the end of the
-/// run; a log from another writer can leave them open.
+/// (`t1`, `t2`, ...). The agent gives each transfer call its result directly
+/// after the handoff; a log from another writer can leave them open.
 async fn open_transfer_session(path: &[&str]) -> Arc<MemorySession> {
     without_transfer_results(&handoff_session(path).await).await
+}
+
+/// The synthetic cancel text of core 0.6.0. It must equal
+/// `CANCELLED_TOOL_CALL_TEXT` in `session.rs`, or `project()` does not
+/// rewrite it.
+const CANCELLED: &str = "tool call did not complete (run cancelled/timed out)";
+
+/// A copy of `session` in the layout of core 0.6.0 (before SMA-810).
+///
+/// `session` must hold one handoff run in the current layout. This removes
+/// each `ToolReturned` directly after a `HandoffOccurred` (the transfer
+/// results of that handoff response) and appends a cancel result for each
+/// removed one at the end of the run's events, in call order. The run's
+/// events end with its `ToolDeferred` events, so the cancels come after
+/// them, where the core 0.6.0 recorder put them.
+async fn with_late_transfer_results(session: &Arc<MemorySession>) -> Arc<MemorySession> {
+    let recorded = session.events(None).await.unwrap();
+    let mut events = Vec::with_capacity(recorded.len());
+    let mut late = Vec::new();
+    let mut after_handoff = false;
+    for ev in recorded {
+        match &ev {
+            SessionEvent::HandoffOccurred { .. } => {
+                after_handoff = true;
+                events.push(ev);
+            }
+            SessionEvent::ToolReturned {
+                call_id, content, ..
+            } if after_handoff => {
+                let text = text_of(content);
+                assert!(
+                    text.starts_with("transferred to ")
+                        || text.starts_with("transfer not performed"),
+                    "{call_id} after a handoff is not a transfer result: {text}"
+                );
+                late.push(call_id.clone());
+            }
+            _ => {
+                after_handoff = false;
+                events.push(ev);
+            }
+        }
+    }
+    assert!(!late.is_empty(), "the log has no transfer result to move");
+    events.extend(late.into_iter().map(|id| {
+        SessionEvent::tool_returned(
+            id,
+            vec![ContentPart::Text {
+                text: CANCELLED.to_owned(),
+            }],
+        )
+    }));
+    let legacy = Arc::new(MemorySession::new());
+    legacy.append(&events).await.unwrap();
+    legacy
 }
 
 /// A copy of `session` without the results of the transfer calls (each call
@@ -1001,7 +1057,7 @@ async fn missing_handoff_target_denies_the_calls_at_the_deepest_reachable_agent(
 
 #[tokio::test]
 async fn missing_handoff_target_adds_no_second_result_to_a_closed_transfer_call() {
-    // The session recorder already closed t1 at the end of the deferring run.
+    // The deferring run already gave t1 its result directly after the handoff.
     let session = handoff_session(&["triage", "budgeting"]).await;
     let b = MockTool::new("b", serde_json::json!({ "paid": true }));
     let model = RequestLog::with_scripts(vec![text_turn("ok")]);
@@ -1120,9 +1176,11 @@ async fn missing_deeper_target_denies_at_the_middle_agent() {
     );
 }
 
-/// Check a denial resume on a live log where the child wrote text: the
-/// recorder's results for `t1` and `t2` sit directly after their calls in
-/// every request, and the session gets no second result for them.
+/// Check a denial resume on a recorded log where the child wrote text: the
+/// recorded results for `t1` and `t2` sit directly after their calls in
+/// every request, and the session gets no second result for them. The log
+/// can be in the current layout or in the old layout
+/// ([`with_late_transfer_results`]).
 async fn assert_recorded_transfers_moved(
     session: &MemorySession,
     events: &[AgentEvent],
@@ -1141,15 +1199,27 @@ async fn assert_recorded_transfers_moved(
             if text_of(content) == "checking")),
         "the child text must be in the request: {m:?}"
     );
+    assert_eq!(result_text_after(m, "t1"), "transferred to budgeting");
+    assert_eq!(result_text_after(m, "t2"), "transferred to savings");
     for id in ["t1", "t2"] {
         assert_no_output(events, id);
         assert_eq!(stored_results(session, id).await, 1, "{id}");
     }
 }
 
-#[tokio::test]
-async fn renamed_root_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls() {
-    let session = text_then_call_b_session(&["triage", "budgeting", "savings"]).await;
+/// The text of the result directly after the first call `call_id` in
+/// `messages`.
+fn result_text_after(messages: &[Item], call_id: &str) -> String {
+    results_after_each_call(messages, call_id, 1).remove(0)
+}
+
+/// A path of three where the leaf wrote text before its call to `b`.
+async fn recorded_path_of_three() -> Arc<MemorySession> {
+    text_then_call_b_session(&["triage", "budgeting", "savings"]).await
+}
+
+/// Resume `session` (a [`recorded_path_of_three`]) with a renamed root.
+async fn renamed_root_moves_the_recorded_transfer_results(session: Arc<MemorySession>) {
     let b = MockTool::new("b", serde_json::json!({ "paid": true }));
     let model = RequestLog::with_scripts(vec![text_turn("ok")]);
     let other = resume_agent("other", Arc::clone(&model), Arc::clone(&b)).build();
@@ -1164,8 +1234,18 @@ async fn renamed_root_on_a_recorded_log_moves_the_transfer_results_next_to_their
 }
 
 #[tokio::test]
-async fn missing_middle_agent_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls() {
-    let session = text_then_call_b_session(&["triage", "budgeting", "savings"]).await;
+async fn renamed_root_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls() {
+    renamed_root_moves_the_recorded_transfer_results(recorded_path_of_three().await).await;
+}
+
+#[tokio::test]
+async fn legacy_renamed_root_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls() {
+    let session = with_late_transfer_results(&recorded_path_of_three().await).await;
+    renamed_root_moves_the_recorded_transfer_results(session).await;
+}
+
+/// Resume `session` (a [`recorded_path_of_three`]) with no middle agent.
+async fn missing_middle_agent_moves_the_recorded_transfer_results(session: Arc<MemorySession>) {
     let b = MockTool::new("b", serde_json::json!({ "paid": true }));
     let model = RequestLog::with_scripts(vec![text_turn("ok")]);
     let triage = resume_agent("triage", Arc::clone(&model), Arc::clone(&b)).build();
@@ -1177,6 +1257,18 @@ async fn missing_middle_agent_on_a_recorded_log_moves_the_transfer_results_next_
         "permission denied: agent no longer available: budgeting"
     );
     assert_recorded_transfers_moved(&session, &events, &model.requests()).await;
+}
+
+#[tokio::test]
+async fn missing_middle_agent_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls() {
+    missing_middle_agent_moves_the_recorded_transfer_results(recorded_path_of_three().await).await;
+}
+
+#[tokio::test]
+async fn legacy_missing_middle_agent_on_a_recorded_log_moves_the_transfer_results_next_to_their_calls(
+) {
+    let session = with_late_transfer_results(&recorded_path_of_three().await).await;
+    missing_middle_agent_moves_the_recorded_transfer_results(session).await;
 }
 
 /// One handoff response with a transfer call for each `(call_id, target)`.
@@ -1266,9 +1358,9 @@ async fn missing_target_closes_every_open_transfer_call_of_one_handoff_response(
     assert_transfer_closed(&requests[0].messages, "t1b", "budgeting");
 }
 
-#[tokio::test]
-async fn missing_target_moves_every_recorded_transfer_result_of_one_handoff_response() {
-    let session = two_transfer_calls_session(text_then_call_b_turn()).await;
+/// Resume `session` (a [`two_transfer_calls_session`] where the leaf wrote
+/// text) with no handoff target.
+async fn missing_target_moves_the_recorded_transfer_results(session: Arc<MemorySession>) {
     let b = MockTool::new("b", serde_json::json!({ "paid": true }));
     let model = RequestLog::with_scripts(vec![text_turn("ok")]);
     let triage = resume_agent("triage", Arc::clone(&model), Arc::clone(&b)).build();
@@ -1286,6 +1378,26 @@ async fn missing_target_moves_every_recorded_transfer_result_of_one_handoff_resp
         assert_no_output(&events, id);
         assert_eq!(stored_results(&session, id).await, 1, "{id}");
     }
+    let m = &requests[0].messages;
+    assert_eq!(result_text_after(m, "t1"), "transferred to budgeting");
+    assert_eq!(
+        result_text_after(m, "t1b"),
+        "transfer not performed: this response already transferred to budgeting"
+    );
+}
+
+#[tokio::test]
+async fn missing_target_moves_every_recorded_transfer_result_of_one_handoff_response() {
+    let session = two_transfer_calls_session(text_then_call_b_turn()).await;
+    missing_target_moves_the_recorded_transfer_results(session).await;
+}
+
+#[tokio::test]
+async fn legacy_missing_target_moves_every_recorded_transfer_result_of_one_handoff_response() {
+    let session =
+        with_late_transfer_results(&two_transfer_calls_session(text_then_call_b_turn()).await)
+            .await;
+    missing_target_moves_the_recorded_transfer_results(session).await;
 }
 
 #[tokio::test]
@@ -1388,9 +1500,9 @@ async fn renamed_root_closes_two_open_transfer_calls_that_share_one_call_id() {
     );
 }
 
-#[tokio::test]
-async fn missing_middle_agent_moves_two_recorded_transfer_results_that_share_one_call_id() {
-    let session = shared_transfer_id_session(text_then_call_b_turn()).await;
+/// Resume `session` (a [`shared_transfer_id_session`] where the leaf wrote
+/// text) with no middle agent.
+async fn missing_middle_agent_moves_the_shared_id_transfer_results(session: Arc<MemorySession>) {
     let b = MockTool::new("b", serde_json::json!({ "paid": true }));
     let model = RequestLog::with_scripts(vec![text_turn("ok")]);
     let triage = resume_agent("triage", Arc::clone(&model), Arc::clone(&b)).build();
@@ -1408,7 +1520,24 @@ async fn missing_middle_agent_moves_two_recorded_transfer_results_that_share_one
     for r in &requests {
         assert_tool_calls_paired(&r.messages);
     }
-    results_after_each_call(&requests[0].messages, "t", 2);
+    assert_eq!(
+        results_after_each_call(&requests[0].messages, "t", 2),
+        ["transferred to budgeting", "transferred to savings"]
+    );
+}
+
+#[tokio::test]
+async fn missing_middle_agent_moves_two_recorded_transfer_results_that_share_one_call_id() {
+    let session = shared_transfer_id_session(text_then_call_b_turn()).await;
+    missing_middle_agent_moves_the_shared_id_transfer_results(session).await;
+}
+
+#[tokio::test]
+async fn legacy_missing_middle_agent_moves_two_recorded_transfer_results_that_share_one_call_id() {
+    let session =
+        with_late_transfer_results(&shared_transfer_id_session(text_then_call_b_turn()).await)
+            .await;
+    missing_middle_agent_moves_the_shared_id_transfer_results(session).await;
 }
 
 /// The events of a routing exit that fails before the target runs: the
@@ -1505,4 +1634,124 @@ async fn route_whose_target_fails_to_start_closes_the_open_transfer_call() {
     let error = paigasus_helikon_core::AgentError::NotImplemented { feature: "boom" }.to_string();
     assert_failed_route_closes_the_transfer(&events, &error, true);
     assert_eq!(stored_results(&session, "t1").await, 1);
+}
+
+/// A session whose `snapshot()` maps each event to its message in event
+/// order, with no `project()` repair. The rest goes to the inner session.
+/// A custom `Session` can work like this, so the resume must still pair each
+/// late transfer result with its call.
+struct RawSnapshotSession(Arc<MemorySession>);
+
+#[async_trait]
+impl Session for RawSnapshotSession {
+    async fn append(
+        &self,
+        events: &[SessionEvent],
+    ) -> Result<(), paigasus_helikon_core::SessionError> {
+        self.0.append(events).await
+    }
+    async fn events(
+        &self,
+        since: Option<paigasus_helikon_core::SequenceId>,
+    ) -> Result<Vec<SessionEvent>, paigasus_helikon_core::SessionError> {
+        self.0.events(since).await
+    }
+    async fn snapshot(
+        &self,
+    ) -> Result<paigasus_helikon_core::ConversationSnapshot, paigasus_helikon_core::SessionError>
+    {
+        let mut snapshot = paigasus_helikon_core::ConversationSnapshot::default();
+        for ev in self.0.events(None).await? {
+            let item = match ev {
+                SessionEvent::UserMessage { content, .. } => Item::UserMessage { content },
+                SessionEvent::AssistantMessage { content, agent, .. } => Item::AssistantMessage {
+                    content,
+                    agent: Some(agent),
+                },
+                SessionEvent::ToolCalled {
+                    call_id,
+                    name,
+                    args,
+                    ..
+                } => Item::ToolCall {
+                    call_id,
+                    name,
+                    args,
+                },
+                SessionEvent::ToolReturned {
+                    call_id, content, ..
+                } => Item::ToolResult { call_id, content },
+                SessionEvent::HandoffOccurred { .. } | SessionEvent::ToolDeferred { .. } => {
+                    continue
+                }
+                other => panic!("unexpected event in the raw snapshot: {other:?}"),
+            };
+            snapshot.messages.push(item);
+        }
+        Ok(snapshot)
+    }
+}
+
+#[tokio::test]
+async fn renamed_root_on_an_unrepaired_snapshot_moves_each_late_transfer_result_to_its_call() {
+    // The old layout, two transfer calls that share the id `t`, and no text:
+    // the raw snapshot has both late cancels after the call to `b`.
+    let legacy = with_late_transfer_results(&shared_transfer_id_session(call_b_turn()).await).await;
+    let raw = RawSnapshotSession(Arc::clone(&legacy));
+    let snapshot = raw.snapshot().await.unwrap();
+    let call_b = snapshot
+        .messages
+        .iter()
+        .position(|i| matches!(i, Item::ToolCall { call_id, .. } if call_id == "call_b"))
+        .expect("the call to b");
+    assert!(
+        snapshot.messages[call_b + 1..]
+            .iter()
+            .filter(|i| matches!(i, Item::ToolResult { call_id, .. } if call_id == "t"))
+            .count()
+            == 2,
+        "the raw snapshot keeps the late results: {:?}",
+        snapshot.messages
+    );
+
+    let events = legacy.events(None).await.unwrap();
+    let open = open_deferrals(&events);
+    assert_eq!(open.len(), 1, "{open:?}");
+    let input = AgentInput::from_user_text("next")
+        .with_resolution(open[0].deferral_id(), ToolResolution::Approved);
+    let plan =
+        ResumePlan::from_events(&events, &snapshot, "other", &input, 8).expect("valid resume");
+    let input = input.with_resume_plan(plan);
+
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let other = resume_agent("other", Arc::clone(&model), Arc::clone(&b)).build();
+    let ctx = RunContext::new(
+        Arc::new(()),
+        Arc::new(RawSnapshotSession(Arc::clone(&legacy))) as Arc<dyn Session>,
+        HookRegistry::new(),
+        TracerHandle::default(),
+        CancellationToken::new(),
+    )
+    .with_permission_policy(Arc::new(DeferB));
+    let events = run_events(&other, ctx, input).await;
+
+    assert!(b.invocations().is_empty(), "a denied call does not run");
+    assert_eq!(
+        tool_output_text(&events, "call_b"),
+        "permission denied: agent no longer available: triage"
+    );
+    // The recorded results move; the resume emits no new result for `t`.
+    assert_no_output(&events, "t");
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    for r in &requests {
+        assert_tool_calls_paired(&r.messages);
+    }
+    // Each result is directly after its own call. The raw snapshot does not
+    // rewrite the cancel text.
+    assert_eq!(
+        results_after_each_call(&requests[0].messages, "t", 2),
+        [CANCELLED, CANCELLED]
+    );
 }

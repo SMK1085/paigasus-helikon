@@ -1546,3 +1546,150 @@ async fn failed_append_on_plain_run_keeps_its_result() {
         "{result:?}"
     );
 }
+
+// ── Second runs after a handoff (SMA-810) ───────────────────────────────────
+
+/// Run a handoff `triage -> budgeting` (budgeting answers "done") into a new
+/// session. Returns the session.
+async fn completed_handoff_session() -> Arc<MemorySession> {
+    let session = Arc::new(MemorySession::new());
+    let budgeting = pay_agent(
+        "budgeting",
+        RecordingModel::with_scripts(vec![text_turn("done")]),
+        &PayTool::new(),
+    );
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RecordingModel::with_scripts(vec![transfer_turn(
+            "t1",
+            "budgeting",
+        )]))
+        .handoff(budgeting)
+        .build();
+    let result = run(&triage, ctx(session.clone(), false), user("hi"))
+        .await
+        .expect("the handoff run succeeds");
+    assert_eq!(result.final_output, "done");
+    session
+}
+
+/// A copy of `session` in the layout of core 0.6.0 (before SMA-810).
+///
+/// `session` must hold one handoff run in the current layout. This removes
+/// each `ToolReturned` directly after a `HandoffOccurred` (the transfer
+/// results of that handoff response) and appends a cancel result for each
+/// removed one at the end of the run's events, in call order. (A copy of the
+/// helper in core `tests/deferred_resume.rs`.)
+async fn with_late_transfer_results(session: &Arc<MemorySession>) -> Arc<MemorySession> {
+    let recorded = session.events(None).await.unwrap();
+    let mut events = Vec::with_capacity(recorded.len());
+    let mut late = Vec::new();
+    let mut after_handoff = false;
+    for ev in recorded {
+        match &ev {
+            SessionEvent::HandoffOccurred { .. } => {
+                after_handoff = true;
+                events.push(ev);
+            }
+            SessionEvent::ToolReturned {
+                call_id, content, ..
+            } if after_handoff => {
+                let text = text_of(content);
+                assert!(
+                    text.starts_with("transferred to ")
+                        || text.starts_with("transfer not performed"),
+                    "{call_id} after a handoff is not a transfer result: {text}"
+                );
+                late.push(call_id.clone());
+            }
+            _ => {
+                after_handoff = false;
+                events.push(ev);
+            }
+        }
+    }
+    assert!(!late.is_empty(), "the log has no transfer result to move");
+    events.extend(late.into_iter().map(|id| {
+        SessionEvent::tool_returned(
+            id,
+            vec![ContentPart::Text {
+                text: CANCELLED.to_owned(),
+            }],
+        )
+    }));
+    let legacy = Arc::new(MemorySession::new());
+    legacy.append(&events).await.unwrap();
+    legacy
+}
+
+/// Run `triage` again on `session` with a new input, and check its model
+/// request: the tool calls are paired, and the result directly after the
+/// transfer call `t1` is `transferred to budgeting`.
+async fn assert_second_run_sends_paired_history(session: Arc<MemorySession>) {
+    let root_model = RecordingModel::with_scripts(vec![text_turn("again")]);
+    let budgeting = pay_agent(
+        "budgeting",
+        RecordingModel::with_scripts(vec![]),
+        &PayTool::new(),
+    );
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(Arc::clone(&root_model))
+        .handoff(budgeting)
+        .build();
+    let result = run(&triage, ctx(session.clone(), false), user("more"))
+        .await
+        .expect("the second run succeeds");
+    assert_eq!(result.final_output, "again");
+
+    let requests = root_model.requests();
+    assert_eq!(requests.len(), 1);
+    let m = &requests[0].messages;
+    assert_tool_calls_paired(m);
+    let call = m
+        .iter()
+        .position(|i| matches!(i, Item::ToolCall { call_id, .. } if call_id == "t1"))
+        .unwrap_or_else(|| panic!("no transfer call: {m:?}"));
+    match m.get(call + 1) {
+        Some(Item::ToolResult { call_id, content }) if call_id == "t1" => {
+            assert_eq!(text_of(content), "transferred to budgeting");
+        }
+        other => panic!("the transfer result is not after its call: {other:?} in {m:?}"),
+    }
+    assert!(
+        matches!(m.last(), Some(Item::UserMessage { content }) if text_of(content) == "more"),
+        "{m:?}"
+    );
+}
+
+#[tokio::test]
+async fn second_run_after_a_handoff_sends_paired_history() {
+    let session = completed_handoff_session().await;
+    assert_eq!(
+        labels(&session).await,
+        [
+            "user_message(hi)",
+            "tool_called(t1)",
+            "handoff(triage->budgeting)",
+            "tool_returned(t1, transferred to budgeting)",
+            "assistant_message",
+        ]
+    );
+    assert_second_run_sends_paired_history(session).await;
+}
+
+#[tokio::test]
+async fn second_run_on_a_legacy_session_sends_paired_history() {
+    let session = with_late_transfer_results(&completed_handoff_session().await).await;
+    assert_eq!(
+        labels(&session).await,
+        [
+            "user_message(hi)".to_owned(),
+            "tool_called(t1)".to_owned(),
+            "handoff(triage->budgeting)".to_owned(),
+            "assistant_message".to_owned(),
+            format!("tool_returned(t1, {CANCELLED})"),
+        ]
+    );
+    assert_second_run_sends_paired_history(session).await;
+}
