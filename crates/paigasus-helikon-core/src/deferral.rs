@@ -571,9 +571,13 @@ fn handoff_indices(
 /// the parent view at its handoff (no tool items, plus a transfer note) and
 /// then adds the projection of the events after the handoff.
 ///
-/// A child view drops each tool result whose call is not in the view. The
-/// session recorder closes the transfer calls of a run with a synthetic
-/// result after the handoff, and the child view has no transfer call.
+/// A child view pairs each tool result with one open call of the view: the
+/// result closes the earliest open call with its call id. The view drops a
+/// result that closes no open call. The session recorder closes the
+/// transfer calls of a run with a synthetic result after the handoff, and
+/// the child view has no transfer call. A child call can use the call id of
+/// a transfer call, so a match by call id alone can keep two results for one
+/// call.
 fn agent_view(
     events: &[crate::SessionEvent],
     handoffs: &[usize],
@@ -588,13 +592,20 @@ fn agent_view(
     let mut view =
         crate::loop_state::thread_handoff_transcript(&agent_view(events, handoffs, level - 1, k));
     view.extend(crate::project(&events[k + 1..end]).messages);
-    let mut calls = std::collections::HashSet::new();
+    // The call ids of the open calls, in view order.
+    let mut open: Vec<String> = Vec::new();
     view.retain(|item| match item {
         Item::ToolCall { call_id, .. } => {
-            calls.insert(call_id.clone());
+            open.push(call_id.clone());
             true
         }
-        Item::ToolResult { call_id, .. } => calls.contains(call_id),
+        Item::ToolResult { call_id, .. } => match open.iter().position(|c| c == call_id) {
+            Some(p) => {
+                open.remove(p);
+                true
+            }
+            None => false,
+        },
         _ => true,
     });
     view
@@ -972,6 +983,46 @@ mod tests {
         );
         assert!(
             matches!(leaf.history().last(), Some(Item::ToolCall { call_id, .. }) if call_id == "c1")
+        );
+    }
+
+    #[test]
+    fn child_history_pairs_each_result_with_one_open_call() {
+        // The child's allowed call reuses the transfer call id `fc_0`. The
+        // log then has two `fc_0` results: the real one and the recorder's
+        // synthetic one. The child view keeps one result per call.
+        let events = vec![
+            SessionEvent::user_message(text("hi")),
+            SessionEvent::tool_called("fc_0", "transfer_to_budgeting", serde_json::json!({})),
+            SessionEvent::handoff_occurred("triage", "budgeting"),
+            SessionEvent::tool_called("fc_0", "lookup", serde_json::json!({})),
+            SessionEvent::tool_returned("fc_0", text("found")),
+            SessionEvent::tool_called("c1", "pay", serde_json::json!({"amount": 5})),
+            deferred("d1", "c1", &["triage", "budgeting"]),
+            SessionEvent::tool_returned("fc_0", text("cancelled")),
+        ];
+        let input = AgentInput::new().with_resolution("d1", ToolResolution::Approved);
+        let p = ResumePlan::from_events(&events, &project(&events), "triage", &input, 8).unwrap();
+        let child = p.descend();
+        let history = child.history();
+        let fc_0 = |want_call: bool| {
+            history
+                .iter()
+                .filter(|i| match i {
+                    Item::ToolCall { call_id, .. } => want_call && call_id == "fc_0",
+                    Item::ToolResult { call_id, .. } => !want_call && call_id == "fc_0",
+                    _ => false,
+                })
+                .count()
+        };
+        assert_eq!(fc_0(true), 1, "{history:?}");
+        assert_eq!(fc_0(false), 1, "{history:?}");
+        assert!(
+            history.iter().any(
+                |i| matches!(i, Item::ToolResult { call_id, content } if call_id == "fc_0"
+                    && content == &text("found"))
+            ),
+            "{history:?}"
         );
     }
 
