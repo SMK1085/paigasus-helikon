@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "bdd1b4e6bda6",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-831-upgrade-jiff-to-10-as-a-breaking-change-of",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-jiff-1-upgrade-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/d1b4e6bda6/0/metadata.json",
+      "transcript": "/bd/d1b4e6bda6/0/full.jsonl",
+      "compact_transcript": "/bd/d1b4e6bda6/0/transcript.jsonl",
+      "content_hash": "/bd/d1b4e6bda6/0/content_hash.txt",
+      "prompt": "/bd/d1b4e6bda6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 122405,
+    "cache_read_tokens": 3918891,
+    "output_tokens": 32589,
+    "api_call_count": 33,
+    "subagent_tokens": {
+      "input_tokens": 30,
+      "cache_creation_tokens": 95149,
+      "cache_read_tokens": 961582,
+      "output_tokens": 37299,
+      "api_call_count": 15
+    }
+  },
+  "redaction": {
+    "replacements": 19,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 19,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
