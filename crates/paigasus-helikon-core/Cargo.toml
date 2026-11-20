@@ -32,6 +32,10 @@ insta                    = { workspace = true, features = ["yaml", "json"] }
 # Path-only (no version) so cargo omits this dev-dep from the published
 # manifest — required to break the core<->macros dev-dependency publish cycle.
 paigasus-helikon-macros  = { path = "../paigasus-helikon-macros" }
+# Path-only (no version) so cargo omits it from the published manifest, as for
+# `paigasus-helikon-macros`. For integration tests only: code in `src/` under
+# `#[cfg(test)]` is a different copy of core and gets error E0308.
+paigasus-helikon-deferral-testkit = { path = "../../tests/deferral-testkit" }
 schemars                 = { workspace = true }
 serde_json               = { workspace = true }
 tokio                    = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }

@@ -1,0 +1,23 @@
+[package]
+name        = "paigasus-helikon-deferral-testkit"
+description = "Internal: test helpers shared by the core and runtime-tokio deferral tests."
+version     = "0.0.0"
+publish     = false
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+paigasus-helikon-core = { workspace = true }
+async-trait           = { workspace = true }
+futures-core          = { workspace = true }
+futures-util          = { workspace = true }
+anyhow                = { workspace = true }
+
+[lints]
+workspace = true

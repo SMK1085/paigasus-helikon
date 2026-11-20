@@ -4175,6 +4175,7 @@ dependencies = [
  "globset",
  "insta",
  "jiff",
+ "paigasus-helikon-deferral-testkit",
  "paigasus-helikon-macros",
  "schemars",
  "serde",
@@ -4186,6 +4187,17 @@ dependencies = [
  "tracing-subscriber",
  "trybuild",
  "uuid",
+]
+
+[[package]]
+name = "paigasus-helikon-deferral-testkit"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-core",
+ "futures-util",
+ "paigasus-helikon-core",
 ]
 
 [[package]]
@@ -4510,6 +4522,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "paigasus-helikon-core",
+ "paigasus-helikon-deferral-testkit",
  "serde_json",
  "tokio",
  "tokio-util",

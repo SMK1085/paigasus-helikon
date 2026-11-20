@@ -7,12 +7,13 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use common::{DeferB, MockAgent, MockModel, MockTool, RequestLog};
+use common::{DeferB, MockAgent, MockModel, MockTool};
 use paigasus_helikon_core::{
     Agent, AgentAsTool, AgentEvent, AgentInput, AllowRule, ContentPart, FinishReason, GuardRule,
     Hook, HookDecision, HookEvent, HookRegistry, Item, LlmAgent, ModelEvent, PermissionMode,
     RunContext, Tool,
 };
+use paigasus_helikon_deferral_testkit::RequestLog;
 
 /// Turn 1: call `tool_name` with `{}`. Turn 2: stop with `"done"`. Two scripts so
 /// the inner loop resumes after the tool result (or the permission denial) lands.
