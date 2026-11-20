@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "e00f2ba2a2aa",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-834-anthropic-translator-splits-an-open-tool",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e0/0f2ba2a2aa/0/metadata.json",
+      "transcript": "/e0/0f2ba2a2aa/0/full.jsonl",
+      "compact_transcript": "/e0/0f2ba2a2aa/0/transcript.jsonl",
+      "content_hash": "/e0/0f2ba2a2aa/0/content_hash.txt",
+      "prompt": "/e0/0f2ba2a2aa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 13749,
+    "cache_read_tokens": 1810380,
+    "output_tokens": 6119,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 38,
+      "cache_creation_tokens": 189909,
+      "cache_read_tokens": 1288203,
+      "output_tokens": 14594,
+      "api_call_count": 19
+    }
+  },
+  "redaction": {
+    "replacements": 251,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 251,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
