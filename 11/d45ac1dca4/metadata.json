@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "11d45ac1dca4",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-816-add-a-sessioneventtooldeferred-conformance",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-sma-816-tooldeferred-conformance-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/11/d45ac1dca4/0/metadata.json",
+      "transcript": "/11/d45ac1dca4/0/full.jsonl",
+      "compact_transcript": "/11/d45ac1dca4/0/transcript.jsonl",
+      "content_hash": "/11/d45ac1dca4/0/content_hash.txt",
+      "prompt": "/11/d45ac1dca4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 9893,
+    "cache_read_tokens": 2549861,
+    "output_tokens": 3977,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 18,
+      "cache_creation_tokens": 49001,
+      "cache_read_tokens": 601994,
+      "output_tokens": 4465,
+      "api_call_count": 9
+    }
+  },
+  "redaction": {
+    "replacements": 18,
+    "layers": {
+      "betterleaks": 22,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 2,
+      "credentialed_uri": 2,
+      "entropy": 2,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

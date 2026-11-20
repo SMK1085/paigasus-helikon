@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019aNrP8P3yc9tgQs4J3Rymo",
+  "agent_id": "a0cc7e914dffcc8b6",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave SMA-816",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 58075,
+    "cache_read_tokens": 661530,
+    "output_tokens": 4554,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-20T16:09:39.205546+01:00",
+  "completed_at": "2026-11-20T16:10:25.051775+01:00"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KixJCvmk4tzTS4uK4KDhap",
+  "agent_id": "a98d51da18e2bcee0",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-review final fix wave",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 55420,
+    "cache_read_tokens": 151444,
+    "output_tokens": 2609,
+    "api_call_count": 3
+  },
+  "started_at": "2026-11-20T16:10:41.282871+01:00",
+  "completed_at": "2026-11-20T16:11:01.903359+01:00"
+}
