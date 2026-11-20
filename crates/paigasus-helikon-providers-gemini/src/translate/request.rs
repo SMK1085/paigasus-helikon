@@ -8,10 +8,11 @@ use std::collections::HashSet;
 /// The dummy thought signature for a `functionCall` part that has no valid
 /// signature in the current turn.
 ///
-/// Source: the Gemini HTTP 400 error text for a missing signature names this
-/// value, and the SMA-820 probe got HTTP 200 with it on `gemini-3.8-flash`.
-/// Google warns that the dummy can make answers worse, so the translator uses
-/// it only as the fallback.
+/// Source: this is the dummy value that Google documents for a history with
+/// no signature. The SMA-820 probe and the SMA-827 probe (capture 6) got
+/// HTTP 200 with it on `gemini-3.8-flash` (Developer API). Google warns that
+/// the dummy can make answers worse, so the translator uses it only as the
+/// fallback.
 pub(crate) const DUMMY_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
 /// `contents` + optional `systemInstruction`.
@@ -352,9 +353,11 @@ fn add_dummy_signatures(merged: &mut [(&'static str, Vec<Part>)]) {
         if *role != "model" {
             continue;
         }
-        let mut calls = parts.iter().filter(|p| p.is_call());
-        if calls.clone().next().is_none() || calls.any(|p| p.json.get("thoughtSignature").is_some())
-        {
+        let has_call = parts.iter().any(Part::is_call);
+        let has_signature = parts
+            .iter()
+            .any(|p| p.is_call() && p.json.get("thoughtSignature").is_some());
+        if !has_call || has_signature {
             continue;
         }
         for p in parts.iter_mut().filter(|p| p.is_call()) {
@@ -1256,6 +1259,44 @@ mod tests {
                 ("call_m", "search"),
                 ("call_z", "search")
             ])
+        );
+    }
+
+    #[test]
+    fn signature_pairs_with_tool_use_in_the_same_message() {
+        let tool_use = |id: &str| ContentPart::ToolUse {
+            call_id: id.into(),
+            name: "search".into(),
+            args: json!({}),
+        };
+        let items = vec![
+            user("q"),
+            assistant(vec![
+                tool_use("b"),
+                tool_use("a"),
+                signed("a", 0, "SIG_A"),
+                unsigned("b", 1),
+            ]),
+            Item::UserMessage {
+                content: vec![
+                    ContentPart::ToolResult {
+                        call_id: "a".into(),
+                        content: vec![ContentPart::Text { text: "{}".into() }],
+                    },
+                    ContentPart::ToolResult {
+                        call_id: "b".into(),
+                        content: vec![ContentPart::Text { text: "{}".into() }],
+                    },
+                ],
+            },
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [
+                fc_sig("a", "search", "SIG_A"),
+                fc("b", "search"),
+            ]})
         );
     }
 
