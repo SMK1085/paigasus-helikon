@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "5fa24629c604",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-826-move-the-shared-core-test-helpers-into",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-core-shared-test-helpers-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5f/a24629c604/0/metadata.json",
+      "transcript": "/5f/a24629c604/0/full.jsonl",
+      "compact_transcript": "/5f/a24629c604/0/transcript.jsonl",
+      "content_hash": "/5f/a24629c604/0/content_hash.txt",
+      "prompt": "/5f/a24629c604/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 21771,
+    "cache_read_tokens": 2099072,
+    "output_tokens": 7371,
+    "api_call_count": 11,
+    "subagent_tokens": {
+      "input_tokens": 20,
+      "cache_creation_tokens": 67542,
+      "cache_read_tokens": 643512,
+      "output_tokens": 4627,
+      "api_call_count": 10
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
