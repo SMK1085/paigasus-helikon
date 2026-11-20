@@ -71,6 +71,10 @@
 //! `ParallelAgent`, a sibling's unfinished call keeps its span and its id across a
 //! handoff. The transfer call had its item, so the transfer result uses its AG-UI id.
 //! The parent's dropped call is flushed at the run end, if it is still buffered then.
+//! Accepted limit: a dropped call of a handoff response can stream only unnamed deltas
+//! before the handoff, and the child can then reuse its id and send the first name. The
+//! mapper emits two spans with one id, as `main` does: a delta for a closed span opens
+//! the same id again. Events carry no branch or response tag to tell this apart.
 //! AG-UI ids are unique per run only: each request gets a new mapper.
 //!
 //! A `helikon.approval` frame carries two ids. `tool_call_id` is the AG-UI id of the
@@ -2568,6 +2572,56 @@ mod tests {
             .collect();
         assert_eq!(args, "{\"q\":1,\"r\":2}", "{frames:?}");
         assert_eq!(result_ids(&frames), vec!["t", "a"], "{frames:?}");
+    }
+
+    /// SMA-810 (G5): pins an accepted limit (see the spec section "PR review changes").
+    /// A dropped unnamed call and a child call with the same id give two spans with one
+    /// id, the same frames as on `main`. This is not well-formed, so the oracle is not used.
+    #[test]
+    fn a_dropped_unnamed_call_and_a_reused_child_id_behave_as_on_main() {
+        let events = vec![
+            turn(1),
+            tc_delta("fc_0", None, "{\"q\":"),
+            tc_delta("fc_1", Some("transfer_to_billing"), "{}"),
+            tc_item("fc_1", "transfer_to_billing"),
+            AgentEvent::HandoffItem {
+                from: "triage".to_owned(),
+                to: "billing".to_owned(),
+            },
+            tc_result("fc_1", "transferred to billing"),
+            turn(2),
+            tc_delta("fc_0", Some("lookup"), "1}"),
+            tc_item("fc_0", "lookup"),
+            tc_result("fc_0", "found"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_call_nesting(&frames);
+        assert_eq!(
+            starts(&frames),
+            pairs(&[
+                ("fc_0", "unknown"),
+                ("fc_1", "transfer_to_billing"),
+                ("fc_0", "lookup")
+            ]),
+            "{frames:?}"
+        );
+        let args: Vec<(&str, &str)> = frames
+            .iter()
+            .filter(|f| f["type"] == "TOOL_CALL_ARGS")
+            .map(|f| {
+                (
+                    f["toolCallId"].as_str().unwrap(),
+                    f["delta"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            args,
+            vec![("fc_0", "{\"q\":"), ("fc_1", "{}"), ("fc_0", "1}")],
+            "{frames:?}"
+        );
+        assert_eq!(result_ids(&frames), vec!["fc_1", "fc_0"], "{frames:?}");
     }
 
     /// SMA-810 (G5): the run ends while chunks are held and no name or item decided

@@ -307,10 +307,15 @@ PR review changes (2026-11-20):
   occurrence (alias rule as before). The held chunks are its first args. If the current
   occurrence has no name yet, the name is its first name. The held chunks go to the
   current occurrence in order, then the name and args of this delta. It stays one span
-  with one AG-UI id and no alias. One case stays ambiguous. A dropped call of a handoff
-  response never received its name, and the child reuses its id. The child's first name
-  then attaches to the dropped call. The mapper has no branch or response tag to tell
-  them apart.
+  with one AG-UI id and no alias.
+- Decision (accepted limit): a dropped call of a handoff response can stream only
+  unnamed deltas before the handoff. The child can then reuse its id and send the first
+  name. This sequence gives two spans with one id: `fc_0` "unknown" with the dropped
+  fragments, then `fc_0` with the child's name and args. `main` gives the same frames,
+  because a delta for a closed span opens the same id again. The reason is that events
+  carry no branch or response tag, so the mapper cannot tell this sequence from other
+  cases. The test `a_dropped_unnamed_call_and_a_reused_child_id_behave_as_on_main` pins
+  the frames.
 - The item for `x` before a name means that the held chunks belong to the current
   occurrence. They go to it in order, before the item. A result for `x` and the run end
   do the same.
@@ -346,6 +351,9 @@ resume-window result) uses the provider id, as today.
   second time, so the output is exactly as today.
 - Limit: `ParallelAgent` branches that both use one provider id can still mix two calls.
   This is the same as today.
+- Limit (G5): a dropped unnamed call of a handoff response, followed by a child call
+  that reuses its provider id and sends the first name, gives two spans with one id. This
+  is the same as `main`. See "PR review changes".
 - Limit: AG-UI ids are unique **per run**. The mapper is new for each request
   (`agui/sse.rs`), so two runs in one AG-UI thread can both emit `fc_0`.
 - The module doc, the field docs and the invariant "one `toolCallId` maps to exactly one
