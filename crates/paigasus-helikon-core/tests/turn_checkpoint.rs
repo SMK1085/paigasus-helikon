@@ -14,7 +14,7 @@ use paigasus_helikon_core::{
     FinishReason, Guardrail, GuardrailError, GuardrailInput, GuardrailVerdict, Hook, HookDecision,
     HookEvent, Instructions, Item, LlmAgent, MediaSource, Model, ModelCapabilities, ModelError,
     ModelEvent, ModelRequest, ModelSettings, RunConfig, RunContext, SessionEvent, SessionRecorder,
-    TurnBoundary, TurnCheckpoint,
+    StopReason, TurnBoundary, TurnCheckpoint,
 };
 
 use common::{noop_run_context, MockTool};
@@ -538,13 +538,19 @@ async fn stop_ends_cleanly_at_boundary() {
     let collected = paigasus_helikon_core::RunResultStreaming::with_failure(stream, slot.clone())
         .collect()
         .await;
-    // Today `collect()` reads usage only from `RunCompleted`, so it returns
-    // `Ok` with a default usage; SMA-803 connects `RunStopped` to `RunResult`.
     let collected = collected.expect("a stopped run is not an error");
     assert!(matches!(
         collected.events.last(),
         Some(AgentEvent::RunStopped { .. })
     ));
+    assert_eq!(
+        collected.stop_reason,
+        StopReason::Stopped {
+            reason: "operator".into()
+        }
+    );
+    assert_eq!(collected.usage.input_tokens, 10);
+    assert_eq!(collected.usage.output_tokens, 4);
     assert!(slot.take().is_none());
 }
 
@@ -552,7 +558,11 @@ async fn tripwire_case(error: bool) {
     let (m, requests) = model(vec![tool_turn(1), text_turn("never")]);
     let g = Arc::new(BadTextGuardrail { error }) as Arc<dyn Guardrail<()>>;
     let cp = ScriptedCheckpoint::new(vec![CheckpointDecision::Inject(vec![text("bad")])]);
-    let out = run_with(&agent(m, RunConfig::default(), vec![g], vec![]), Some(cp)).await;
+    let out = run_with(
+        &agent(m, RunConfig::default(), vec![Arc::clone(&g)], vec![]),
+        Some(cp),
+    )
+    .await;
     let k = kinds(&out.events);
     let n = k.len();
     assert_eq!(&k[n - 2..], ["GuardrailTriggered", "RunStopped"], "{k:?}");
@@ -569,6 +579,27 @@ async fn tripwire_case(error: bool) {
         e,
         SessionEvent::UserMessage { content, .. } if format!("{content:?}").contains("bad")
     )));
+
+    // collect() reports the tripwire stop as `StopReason::Stopped`.
+    let (m2, _) = model(vec![tool_turn(1), text_turn("never")]);
+    let ctx = noop_run_context::<()>().with_turn_checkpoint(ScriptedCheckpoint::new(vec![
+        CheckpointDecision::Inject(vec![text("bad")]),
+    ]));
+    let slot = ctx.failure_handle();
+    let stream = agent(m2, RunConfig::default(), vec![g], vec![])
+        .run(ctx, AgentInput::from_user_text("hi"))
+        .await
+        .expect("run starts");
+    let collected = paigasus_helikon_core::RunResultStreaming::with_failure(stream, slot)
+        .collect()
+        .await
+        .expect("a stopped run is not an error");
+    assert_eq!(
+        collected.stop_reason,
+        StopReason::Stopped {
+            reason: "input guardrail tripwire".into()
+        }
+    );
 }
 
 #[tokio::test]
@@ -776,4 +807,57 @@ async fn sequential_workflow_children_never_call_checkpoint() {
         "workflow children must not call the checkpoint: {:?}",
         cp.boundaries()
     );
+}
+
+/// Defers every tool call.
+struct DeferAll;
+
+#[async_trait]
+impl paigasus_helikon_core::PermissionPolicy<()> for DeferAll {
+    async fn check(
+        &self,
+        _ctx: &RunContext<()>,
+        _tool: &str,
+        _args: &serde_json::Value,
+    ) -> paigasus_helikon_core::PermissionDecision {
+        paigasus_helikon_core::PermissionDecision::Defer {
+            prompt: "wait".to_owned(),
+        }
+    }
+}
+
+/// A turn that defers its tool call ends the run with `RunDeferred`. That is
+/// not a boundary: the loop does not call the model again, so the checkpoint
+/// is not called.
+#[tokio::test]
+async fn no_checkpoint_call_at_deferred_boundary() {
+    use futures_util::StreamExt as _;
+
+    let (m, requests) = model(vec![tool_turn(1), text_turn("never")]);
+    let a = agent(m, RunConfig::default(), vec![], vec![]);
+    let cp = ScriptedCheckpoint::new(vec![CheckpointDecision::Stop {
+        reason: "must not be called".into(),
+    }]);
+    let ctx = noop_run_context::<()>()
+        .with_deferred_tool_calls(true)
+        .with_permission_policy(Arc::new(DeferAll))
+        .with_turn_checkpoint(cp.clone());
+    let events: Vec<AgentEvent> = a
+        .run(ctx, AgentInput::from_user_text("hi"))
+        .await
+        .expect("run starts")
+        .collect()
+        .await;
+
+    assert!(
+        matches!(events.last(), Some(AgentEvent::RunDeferred { calls, .. }) if calls.len() == 1),
+        "{:?}",
+        kinds(&events)
+    );
+    assert!(
+        cp.boundaries().is_empty(),
+        "a deferred turn is not a boundary: {:?}",
+        cp.boundaries()
+    );
+    assert_eq!(requests.lock().unwrap().len(), 1, "model called once");
 }

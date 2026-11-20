@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`RunResultStreaming::new(stream).collect().await?` drains every event, returning a `RunResult` whose `final_output: String` is the concatenated text of the *last* `MessageOutput` assistant message, alongside the full `events` vector and aggregated `usage`. A terminal `RunFailed` surfaces as `Err(RunError)`. For structured output, use `collect_typed::<T>()` instead. A run that ends with `RunDeferred` has no completed answer. For such a run, `collect` returns a `RunResult` with `StopReason::Deferred { calls }` in `stop_reason`. Its `final_output` can be non-empty: it keeps the text of an earlier `MessageOutput`, for example "I will ask for approval". That text is not a completed answer. Check `stop_reason` before you use `final_output`. Do not expect an empty string. `collect_typed` returns `AgentError::Incomplete`. `RunResult.stop_reason` is `StopReason::Completed` for a run that finished.
+`RunResultStreaming::new(stream).collect().await?` drains every event, returning a `RunResult` whose `final_output: String` is the concatenated text of the *last* `MessageOutput` assistant message, alongside the full `events` vector and aggregated `usage`. A terminal `RunFailed` surfaces as `Err(RunError)`. For structured output, use `collect_typed::<T>()` instead. A run that ends with `RunDeferred` has no completed answer. For such a run, `collect` returns a `RunResult` with `StopReason::Deferred { calls }` in `stop_reason`. Its `final_output` can be non-empty: it keeps the text of an earlier `MessageOutput`, for example "I will ask for approval". That text is not a completed answer. Check `stop_reason` before you use `final_output`. Do not expect an empty string. `collect_typed` returns `AgentError::Incomplete`. A run that ends with `RunStopped` also has no completed answer. For such a run, `collect` returns `StopReason::Stopped { reason }` in `stop_reason`, and `collect_typed` returns `AgentError::Incomplete`. `RunResult.stop_reason` is `StopReason::Completed` for a run that finished.
 
 ## Consuming events live
 
@@ -148,7 +148,7 @@ Cancellation is *not* a `RunConfig` field — the canonical `CancellationToken` 
 
 A host can talk to a run while the run is in progress. For this, set a `TurnCheckpoint<Ctx>` on the `RunContext`. The loop calls it at each turn boundary. The checkpoint is optional. A `RunContext` without a checkpoint behaves as before.
 
-A turn boundary is the point after the tool results of a turn and before the next model call. These points are not boundaries: the first model call, a structured-output final turn, a repair turn, and a turn that ends the run with a final answer. A handoff child loop has its own boundaries.
+A turn boundary is the point after the tool results of a turn and before the next model call. These points are not boundaries: the first model call, a structured-output final turn, a repair turn, a turn that ends the run with a final answer, and a turn that ends the run with `RunDeferred`. A handoff child loop has its own boundaries.
 
 The checkpoint returns one `CheckpointDecision`:
 
@@ -207,7 +207,7 @@ The run owns the injected content only after `UserMessageInjected` is in the eve
 
 ### Stop rules
 
-`Stop` ends the run with `AgentEvent::RunStopped { reason, usage }` and `StopReason::Stopped`. It is not a failure. All tool calls of the last turn have results. The output guardrails do not run, and no final turn runs. `RunResultStreaming::collect` returns `Ok` with `stop_reason` set to `Stopped`.
+`Stop` ends the run with `AgentEvent::RunStopped { reason, usage }` and `StopReason::Stopped`. It is not a failure. All tool calls of the last turn have results. The output guardrails do not run, and no final turn runs. `RunResultStreaming::collect` returns `Ok` with `stop_reason` set to `StopReason::Stopped { reason }` and with the `usage` of `RunStopped`. `final_output` keeps the text of the last assistant message, if there is one. That text is not a final answer, and it did not pass the output guardrails. `collect_typed` returns `AgentError::Incomplete { stop_reason }`.
 
 A guardrail stop has a `GuardrailTriggered` event before `RunStopped`, and no `UserMessageInjected` between them. The text of `reason` alone does not identify a guardrail stop.
 

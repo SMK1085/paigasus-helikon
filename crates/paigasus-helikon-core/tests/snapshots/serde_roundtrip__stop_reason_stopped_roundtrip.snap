@@ -1,0 +1,8 @@
+---
+source: crates/paigasus-helikon-core/tests/serde_roundtrip.rs
+expression: "roundtrip(&StopReason::Stopped { reason: \"operator\".into() })"
+---
+{
+  "type": "stopped",
+  "reason": "operator"
+}

@@ -1790,7 +1790,8 @@ pub enum AgentError {
         limit: u32,
     },
 
-    /// The run stopped without a final output (for example, a deferral).
+    /// The run stopped without a final output (for example, a deferral or a
+    /// turn checkpoint stop).
     #[error("run did not complete")]
     Incomplete {
         /// Why the run stopped.

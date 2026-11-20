@@ -453,6 +453,13 @@ fn stop_reason_deferred_roundtrip() {
 }
 
 #[test]
+fn stop_reason_stopped_roundtrip() {
+    insta::assert_snapshot!(roundtrip(&StopReason::Stopped {
+        reason: "operator".into()
+    }));
+}
+
+#[test]
 fn tool_resolution_approved_roundtrip() {
     insta::assert_snapshot!(roundtrip(&ToolResolution::Approved));
 }
