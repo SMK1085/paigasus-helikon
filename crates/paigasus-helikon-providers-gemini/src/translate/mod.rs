@@ -53,7 +53,7 @@ pub(crate) fn build_request(
         }
     }
 
-    let translated = items_to_contents(&req.messages)?;
+    let translated = items_to_contents(&req.messages, &cfg.model_id, cfg.transport.api_name())?;
     let mut body = Map::new();
     body.insert("contents".into(), Value::Array(translated.contents));
     if let Some(sys) = translated.system {
@@ -92,9 +92,6 @@ pub(crate) fn build_request(
         body.insert("generationConfig".into(), Value::Object(gen));
     }
 
-    // model_id is carried by the URL, not the body (Developer/Vertex differ);
-    // reference it here so the orchestrator owns the full config surface.
-    let _ = &cfg.model_id;
     Ok(PreparedRequest {
         body: Value::Object(body),
     })
