@@ -225,6 +225,31 @@ mod tests {
     }
 
     #[test]
+    fn provider_data_only_message_keeps_output() {
+        let provider_data = Item::AssistantMessage {
+            content: vec![ContentPart::ProviderData {
+                provider: "gemini".to_owned(),
+                call_id: None,
+                data: serde_json::json!({"thoughtSignature": "SIG_A"}),
+            }],
+            agent: None,
+        };
+        let events = vec![
+            AgentEvent::MessageOutput {
+                item: assistant_text("hi"),
+            },
+            AgentEvent::MessageOutput {
+                item: provider_data,
+            },
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ];
+        let response = RunResponse::from_events(Uuid::nil(), events);
+        assert_eq!(response.output.as_deref(), Some("hi"));
+    }
+
+    #[test]
     fn request_accepts_both_forms() {
         let a: RunRequest = serde_json::from_str(r#"{"input":"hi"}"#).unwrap();
         assert_eq!(a.into_agent_input().messages.len(), 1);
