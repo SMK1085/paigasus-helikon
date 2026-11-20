@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-gemini-v0.1.10...paigasus-helikon-providers-gemini-v0.1.11) - 2026-11-20
+
+### Fixed
+
+- *(providers)* SMA-820 name gemini tool results from their own call and reject a result before its call ([#364](https://github.com/SMK1085/paigasus-helikon/pull/364))
+
 ## [0.1.10](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-gemini-v0.1.9...paigasus-helikon-providers-gemini-v0.1.10) - 2026-11-20
 
 ### Added

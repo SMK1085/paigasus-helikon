@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.10...paigasus-helikon-providers-bedrock-v0.1.11) - 2026-11-20
+
+### Fixed
+
+- *(providers)* SMA-824 drop blank text blocks and keep tool rounds in order in bedrock ([#365](https://github.com/SMK1085/paigasus-helikon/pull/365))
+
 ## [0.1.10](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.9...paigasus-helikon-providers-bedrock-v0.1.10) - 2026-11-20
 
 ### Added
