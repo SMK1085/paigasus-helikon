@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "ad56afb82b51",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-824-bedrock-translator-sends-an-empty-text-block",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-bedrock/tests/live.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ad/56afb82b51/0/metadata.json",
+      "transcript": "/ad/56afb82b51/0/full.jsonl",
+      "compact_transcript": "/ad/56afb82b51/0/transcript.jsonl",
+      "content_hash": "/ad/56afb82b51/0/content_hash.txt",
+      "prompt": "/ad/56afb82b51/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 27033,
+    "cache_read_tokens": 5187572,
+    "output_tokens": 10578,
+    "api_call_count": 20,
+    "subagent_tokens": {
+      "input_tokens": 34,
+      "cache_creation_tokens": 212609,
+      "cache_read_tokens": 1200650,
+      "output_tokens": 19975,
+      "api_call_count": 17
+    }
+  },
+  "redaction": {
+    "replacements": 59,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 91,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
