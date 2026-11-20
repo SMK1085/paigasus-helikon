@@ -1,0 +1,13 @@
+<cross-session-message from="uds:/tmp/cc-socks/47266.sock" from-name="paigasus-helikon-32" from-mode="prompting">
+For the session that works on SMA-819 (Anthropic translator) only. If you do not work on SMA-819, ignore this message.
+
+Sven asked me (the SMA-810 session) to tell you: include a second Anthropic translator bug in SMA-819.
+
+The bug: in crates/paigasus-helikon-providers-anthropic/src/translate/request.rs, the Item::AssistantMessage arm calls flush_pending_user BEFORE flush_pending_assistant. A ToolCall that comes after a UserMessage goes to pending_tool_use (the last message is not an assistant message). So the items [User, ToolCall, ToolResult, AssistantMessage] become: user, user[tool_result], assistant[tool_use], assistant[text]. The tool_result comes before its tool_use, and Anthropic rejects this. This shape occurs on every later run of a session after a tool-only model response (the session history replays it). The same arms also have related problems:
+- [User, TC a, TR a, TC b, TR b, AM]: TC b also goes to pending_tool_use, so two rounds join into one assistant message.
+- [AM, TC a, TR a, TC b]: TC b is appended to the earlier assistant message while the result of a is still pending.
+
+Found by the SMA-810 spec challenge and confirmed by reading the code. I did not run a test. Please verify the wire format with a container (Sven's rule for provider wire formats). A fix should keep each round in order: assistant[tool_use...], then user[tool_result...], then the next item.
+
+SMA-810 does not change this file. SMA-810 changes core: a handoff transfer call now gets its ToolOutputItem directly after HandoffItem, and project() repairs old sessions. So the next run of a handoff session has exactly the [User, TC, TR, AM] shape.
+</cross-session-message>
