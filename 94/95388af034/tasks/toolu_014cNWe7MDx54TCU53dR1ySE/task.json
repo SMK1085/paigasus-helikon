@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014cNWe7MDx54TCU53dR1ySE",
+  "agent_id": "a8f86e11cd1f81f6f",
+  "subagent_type": "feature-factory:spec-challenger",
+  "task_description": "Challenge SMA-810 spec",
+  "token_usage": {
+    "input_tokens": 164,
+    "cache_creation_tokens": 243219,
+    "cache_read_tokens": 12755640,
+    "output_tokens": 76036,
+    "api_call_count": 82
+  },
+  "started_at": "2026-11-20T15:07:56.741224+01:00",
+  "completed_at": "2026-11-20T15:22:39.120749+01:00"
+}
