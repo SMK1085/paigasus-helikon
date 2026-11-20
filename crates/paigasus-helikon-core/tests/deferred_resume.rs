@@ -6,74 +6,19 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use common::{MockModel, MockTool};
+use common::{assert_tool_calls_paired, DeferB, MockModel, MockTool, RequestLog};
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt as _;
 use paigasus_helikon_core::{
     open_deferrals, Agent, AgentEvent, AgentInput, CancellationToken, ContentPart, DenyRule,
     FinishReason, Guardrail, GuardrailError, GuardrailInput, GuardrailKind, GuardrailVerdict, Hook,
-    HookDecision, HookEvent, HookRegistry, Item, LlmAgent, MemorySession, Model, ModelCapabilities,
-    ModelError, ModelEvent, ModelRequest, PermissionDecision, PermissionPolicy, ResumePlan,
-    RunContext, Session, SessionEvent, SessionRecorder, Tool, ToolResolution, TracerHandle,
+    HookDecision, HookEvent, HookRegistry, Item, LlmAgent, MemorySession, ModelEvent, ModelRequest,
+    PermissionDecision, PermissionPolicy, ResumePlan, RunContext, Session, SessionEvent,
+    SessionRecorder, Tool, ToolResolution, TracerHandle,
 };
 
 const SECRET: &str = "sk-test-SECRET-1234";
 const NOT_RUN: &str = "tool call did not run: the run ended before the resume completed";
-
-/// Defers every call to tool `b`; allows the rest.
-struct DeferB;
-
-#[async_trait]
-impl PermissionPolicy<()> for DeferB {
-    async fn check(
-        &self,
-        _ctx: &RunContext<()>,
-        tool: &str,
-        _args: &serde_json::Value,
-    ) -> PermissionDecision {
-        if tool == "b" {
-            PermissionDecision::Defer {
-                prompt: "pay?".to_owned(),
-            }
-        } else {
-            PermissionDecision::Allow
-        }
-    }
-}
-
-/// A [`MockModel`] that keeps every request it gets.
-struct RequestLog {
-    inner: Arc<MockModel>,
-    requests: Mutex<Vec<ModelRequest>>,
-}
-
-impl RequestLog {
-    fn with_scripts(scripts: Vec<Vec<ModelEvent>>) -> Arc<Self> {
-        Arc::new(Self {
-            inner: MockModel::with_scripts(scripts),
-            requests: Mutex::new(Vec::new()),
-        })
-    }
-    fn requests(&self) -> Vec<ModelRequest> {
-        self.requests.lock().unwrap().clone()
-    }
-}
-
-#[async_trait]
-impl Model for RequestLog {
-    async fn invoke(
-        &self,
-        request: ModelRequest,
-        cancel: CancellationToken,
-    ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
-        self.requests.lock().unwrap().push(request.clone());
-        self.inner.invoke(request, cancel).await
-    }
-
-    fn capabilities(&self) -> ModelCapabilities {
-        ModelCapabilities::default()
-    }
-}
 
 fn recorded_args() -> serde_json::Value {
     serde_json::json!({ "amount": 5 })
@@ -571,52 +516,6 @@ async fn approved_call_whose_policy_now_changes_the_args_does_not_run() {
 
 const TRANSFER_NOTE: &str =
     "You are now handling a transferred conversation. Continue assisting the user.";
-
-/// Each `ToolCall` has a `ToolResult` with the same call id later, with no
-/// `UserMessage` or `AssistantMessage` between them. Each `ToolResult` closes
-/// one earlier open `ToolCall` with its call id. A call id can repeat only
-/// after its earlier call has a result.
-fn assert_tool_calls_paired(messages: &[Item]) {
-    // The calls that wait for a result, in call order.
-    let mut outstanding: Vec<&str> = Vec::new();
-    // A result came after the last call: the next call starts a new round.
-    let mut seen_result_since_call = false;
-    for item in messages {
-        match item {
-            Item::ToolCall { call_id, .. } => {
-                assert!(
-                    !outstanding.contains(&call_id.as_str()),
-                    "call {call_id} repeats while it waits for a result: {messages:?}"
-                );
-                assert!(
-                    !(seen_result_since_call && !outstanding.is_empty()),
-                    "call {call_id} starts a new round while {outstanding:?} wait for a result: {messages:?}"
-                );
-                seen_result_since_call = false;
-                outstanding.push(call_id);
-            }
-            Item::ToolResult { call_id, .. } => {
-                let Some(p) = outstanding.iter().position(|c| *c == call_id.as_str()) else {
-                    panic!("result {call_id} has no open earlier call: {messages:?}");
-                };
-                // Each result closes one call.
-                outstanding.remove(p);
-                seen_result_since_call = true;
-            }
-            Item::UserMessage { .. } | Item::AssistantMessage { .. } => {
-                assert!(
-                    outstanding.is_empty(),
-                    "tool calls {outstanding:?} are not paired: {messages:?}"
-                );
-            }
-            _ => {}
-        }
-    }
-    assert!(
-        outstanding.is_empty(),
-        "tool calls {outstanding:?} are not paired: {messages:?}"
-    );
-}
 
 #[test]
 #[should_panic(expected = "starts a new round")]
