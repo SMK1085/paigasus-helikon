@@ -18,8 +18,8 @@ class happened before between siblings: on 2026-08-14 runtime-temporal went
 The work lands as two PRs, in this order:
 
 1. **PR 1, repair.** Publish the 17 dependents again as breaking versions, and
-   facade 0.7.1 and CLI 0.1.45 on top of them. Then Sven yanks the 17 patch
-   versions, facade 0.7.0 and CLI 0.1.44.
+   facade 0.7.2 and CLI 0.1.46 on top of them. Then Sven yanks the 19 patch
+   versions, facade 0.7.0 and 0.7.1, and CLI 0.1.44 and 0.1.45.
 2. **PR 2, prevention.** A guard that fails a PR whose version changes give a
    crate a breaking bump without a breaking bump of each of its dependents,
    plus the written rule. PR 2 lands after PR 1 has published, so its own diff
@@ -29,8 +29,8 @@ The work lands as two PRs, in this order:
 
 - The 17 library dependents are on crates.io at their next breaking version
   (table below), each requiring core 0.7.
-- Facade 0.7.1 and CLI 0.1.45 are on crates.io and require the new versions.
-- After that, Sven yanks the 17 patch versions, facade 0.7.0 and CLI 0.1.44.
+- Facade 0.7.2 and CLI 0.1.46 are on crates.io and require the new versions.
+- After that, Sven yanks the 19 patch versions, facade 0.7.0 and 0.7.1, and CLI 0.1.44 and 0.1.45.
 - `scripts/check-breaking-cascade.sh` fails when a publishable crate gets a
   breaking bump and a non-exempt dependent of it does not. A self-test pins
   its behaviour. Both run in the required `fmt` job.
@@ -162,7 +162,7 @@ Changes:
 
 1. Each crate's `Cargo.toml` `version` per the table.
 2. Root `Cargo.toml` `[workspace.dependencies]`: each sibling pin's `version`
-   per the table, and the facade self-pin to 0.7.1. Check for any other
+   per the table, and the facade self-pin to 0.7.2. Check for any other
    version-carrying reference to `sessions-testkit`.
 3. `Cargo.lock` via a normal build.
 4. A hand-written `## [<new>]` section with today's date under
@@ -259,7 +259,7 @@ Docs:
    run fails part way, re-run it; release-plz skips the versions that are
    already published.
 4. Check that no release PR opens for the merge commit.
-5. Sven runs the 23 yanks (the 21 dependent patch versions in the table, facade 0.7.0 and 0.7.1, CLI 0.1.44 and 0.1.45; see the update note). The
+5. Sven runs the 23 yanks (the 19 dependent patch versions in the table, facade 0.7.0 and 0.7.1, CLI 0.1.44 and 0.1.45; see the update note). The
    commands are in the PR body.
 6. Check on crates.io that each yanked version shows `yanked: true` and each
    new version does not.
