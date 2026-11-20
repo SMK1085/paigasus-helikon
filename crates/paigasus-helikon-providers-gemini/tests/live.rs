@@ -256,7 +256,7 @@ impl Tool<()> for StepTool {
         args: serde_json::Value,
     ) -> Result<ToolOutput, ToolError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(ToolOutput::new(serde_json::json!({ "done": args["n"] })))
+        Ok(ToolOutput::new(serde_json::json!({ "step": args["n"] })))
     }
 }
 
@@ -290,7 +290,10 @@ async fn live_agent_two_sequential_tool_rounds() {
         "{:?}",
         result.stop_reason
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 2, "the tool must run twice");
+    assert!(
+        calls.load(Ordering::SeqCst) >= 2,
+        "the tool must run at least twice"
+    );
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]

@@ -6,7 +6,7 @@
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ModelTurnAccumulator,
-    ToolDef,
+    ToolChoice, ToolDef,
 };
 
 use crate::translate::build_request;
@@ -39,6 +39,10 @@ async fn live_signature_round_trip() {
         }],
     }];
     request.tools = vec![search_tool()];
+    // Turn 1 must call the tool. Turn 2 must not be forced.
+    request.model_settings.tool_choice = Some(ToolChoice::Tool {
+        name: "search".into(),
+    });
 
     // Turn 1: collect the turn and look for a signed call.
     let mut stream = model
@@ -86,14 +90,25 @@ async fn live_signature_round_trip() {
         }
     }
     request.messages = messages;
+    request.model_settings.tool_choice = None;
 
-    let body = build_request(&model.0, &request).unwrap().body.to_string();
+    let body = build_request(&model.0, &request).unwrap().body;
+    let signatures: Vec<&serde_json::Value> = body["contents"]
+        .as_array()
+        .expect("contents array")
+        .iter()
+        .flat_map(|c| c["parts"].as_array().into_iter().flatten())
+        .filter(|p| p.get("functionCall").is_some())
+        .map(|p| &p["thoughtSignature"])
+        .collect();
     assert!(
-        body.contains(&format!("\"thoughtSignature\":\"{signature}\"")),
-        "the exact signature is not in the request"
+        signatures.iter().any(|s| s.as_str() == Some(&signature)),
+        "no functionCall part carries the captured signature: {body}"
     );
     assert!(
-        !body.contains(crate::translate::request::DUMMY_THOUGHT_SIGNATURE),
+        !body
+            .to_string()
+            .contains(crate::translate::request::DUMMY_THOUGHT_SIGNATURE),
         "a dummy signature is in the request"
     );
 
