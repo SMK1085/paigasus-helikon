@@ -579,6 +579,8 @@ const TRANSFER_NOTE: &str =
 fn assert_tool_calls_paired(messages: &[Item]) {
     // The calls that wait for a result, in call order.
     let mut outstanding: Vec<&str> = Vec::new();
+    // A result came after the last call: the next call starts a new round.
+    let mut seen_result_since_call = false;
     for item in messages {
         match item {
             Item::ToolCall { call_id, .. } => {
@@ -586,6 +588,11 @@ fn assert_tool_calls_paired(messages: &[Item]) {
                     !outstanding.contains(&call_id.as_str()),
                     "call {call_id} repeats while it waits for a result: {messages:?}"
                 );
+                assert!(
+                    !(seen_result_since_call && !outstanding.is_empty()),
+                    "call {call_id} starts a new round while {outstanding:?} wait for a result: {messages:?}"
+                );
+                seen_result_since_call = false;
                 outstanding.push(call_id);
             }
             Item::ToolResult { call_id, .. } => {
@@ -594,6 +601,7 @@ fn assert_tool_calls_paired(messages: &[Item]) {
                 };
                 // Each result closes one call.
                 outstanding.remove(p);
+                seen_result_since_call = true;
             }
             Item::UserMessage { .. } | Item::AssistantMessage { .. } => {
                 assert!(
@@ -608,6 +616,29 @@ fn assert_tool_calls_paired(messages: &[Item]) {
         outstanding.is_empty(),
         "tool calls {outstanding:?} are not paired: {messages:?}"
     );
+}
+
+#[test]
+#[should_panic(expected = "starts a new round")]
+fn pairing_oracle_rejects_a_call_after_a_result_while_a_call_waits() {
+    // `t` has no result before the second round starts.
+    let call = |id: &str| Item::ToolCall {
+        call_id: id.into(),
+        name: "x".into(),
+        args: serde_json::json!({}),
+    };
+    let result = |id: &str| Item::ToolResult {
+        call_id: id.into(),
+        content: vec![],
+    };
+    assert_tool_calls_paired(&[
+        call("t"),
+        call("a"),
+        result("a"),
+        call("b"),
+        result("b"),
+        result("t"),
+    ]);
 }
 
 /// The call id of the transfer call from `path[i]` to `path[i + 1]`.
