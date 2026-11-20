@@ -2,8 +2,8 @@
 # Reference: https://docs.rs/cargo-audit/latest/cargo_audit/config/index.html
 #
 # Kept in sync with the [advisories].ignore list in /deny.toml — both tools
-# run as required CI gates (see .github/workflows/audit.yml and the deny job
-# in ci.yml) and must agree on what is policy-allowed.
+# run as required CI gates (see .github/workflows/audit.yml and
+# .github/workflows/deny.yml) and must agree on what is policy-allowed.
 
 [advisories]
 ignore = [
@@ -12,28 +12,23 @@ ignore = [
     # earlier dependency update; noticed and removed during the SMA-327
     # deny/audit reconciliation.
     #
-    # backoff is unmaintained; transitive via temporalio-client/temporalio-sdk-core
-    # 0.5 (Temporal Rust SDK, Public Preview). No fixed upgrade exists ("No safe
-    # upgrade is available"). Revisit on every temporalio-* bump (SMA-332).
-    "RUSTSEC-2025-0012",
-    # instant is unmaintained; transitive via backoff (above) from the same
-    # temporalio-* 0.5 stack. No fixed upgrade exists. Revisit on every
-    # temporalio-* bump (SMA-332).
-    "RUSTSEC-2024-0384",
-    # paste is unmaintained (archived by dtolnay; no vulnerability), pulled by
-    # parquet — the latest stable parquet (59.0.0, via paigasus-helikon-evals'
-    # trace-parquet feature) still depends on it and no paste-free release
-    # exists yet. Compile-time proc-macro only; revisit when arrow-rs drops it
-    # upstream. Accepted at SMA-333. Mirrored in /deny.toml.
-    "RUSTSEC-2024-0436",
+    # Historical note: the backoff (RUSTSEC-2025-0012) and instant
+    # (RUSTSEC-2024-0384) entries were removed in SMA-823. Neither crate is in
+    # Cargo.lock after the temporalio-* 1.0 upgrade.
+    #
+    # Historical note: the paste (RUSTSEC-2024-0436) entry was removed in
+    # SMA-823. parquet 60 does not depend on paste, and paste is not in
+    # Cargo.lock.
+    #
     # smartstring is unmaintained (no vulnerability), transitive via rhai
-    # (paigasus-helikon-cli's scripting engine). rhai 1.25.1 is the latest release
-    # and still depends on it non-optionally, so no upgrade path exists. Revisit on
-    # every rhai bump, or if the CLI drops rhai. Noticed on SMA-461 when the
+    # (paigasus-helikon-cli's scripting engine). rhai 1.27.0 (the version in
+    # Cargo.lock) still depends on it non-optionally, so no upgrade path
+    # exists. Revisit on every rhai bump, or if the CLI drops rhai. Noticed on SMA-461 when the
     # advisory landed mid-PR and reddened main too. Mirrored in /deny.toml.
     "RUSTSEC-2026-0249",
     # Historical note: the libsqlite3-sys (RUSTSEC-2026-0459) entry was removed
     # in SMA-763 after sqlx 0.9.1 allowed libsqlite3-sys >= 0.39.
+    #
     # chrono is unmaintained (no vulnerability; all versions affected, no fixed
     # version). The workspace does not depend on chrono directly. It comes in via
     # rmcp (which also enables schemars/chrono04), arrow/parquet, gcp_auth,
