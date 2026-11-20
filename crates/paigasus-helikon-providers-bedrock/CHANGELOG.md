@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.11...paigasus-helikon-providers-bedrock-v0.1.12) - 2026-11-20
+
+### Fixed
+
+- *(providers)* SMA-832 detect the bedrock family behind global, jp, au, ca and in prefixes and in ARNs ([#370](https://github.com/SMK1085/paigasus-helikon/pull/370))
+
 ## [0.1.11](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.1.10...paigasus-helikon-providers-bedrock-v0.1.11) - 2026-11-20
 
 ### Fixed
