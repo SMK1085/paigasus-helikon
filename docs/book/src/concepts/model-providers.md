@@ -53,7 +53,9 @@ These live in `paigasus_helikon::core` (re-exported from
 - `ResponseFormat` — `Text`, `JsonObject`, or `JsonSchema { name, schema, strict }`.
   Used to request structured output; see [Structured Output](./structured-output-builder.md).
 - `ModelEvent` — the streaming union: `TokenDelta`, `ReasoningDelta`,
-  `ToolCallDelta`, `Usage { input_tokens, output_tokens, cached_input_tokens,
+  `ToolCallDelta`, `ProviderData` (opaque data that one translator owns, for
+  example a Gemini thought signature; see
+  [Core Primitives](./core-primitives.md)), `Usage { input_tokens, output_tokens, cached_input_tokens,
   reasoning_tokens }`, and the terminal `Finish { reason }` (a `FinishReason`).
   **Contract clarification:** implementations MUST emit `Finish` at
   end-of-stream when a stop reason was observed, and MUST NOT emit it on
@@ -303,6 +305,24 @@ derived schemas for typical Rust structs and enums pass without manual adjustmen
 Remote-URL images, audio parts, and non-text tool-result parts are silently
 dropped during request translation. Reasoning streaming (`ModelEvent::ReasoningDelta`)
 is not yet emitted by this provider.
+
+Tool loops on Gemini 3 work. Gemini 3 returns a `thoughtSignature` with a
+tool call and rejects the next request if the signature is missing. The
+provider keeps each signature as `ContentPart::ProviderData` (key
+`PROVIDER_DATA_KEY`, value `"gemini"`) and sends it back on its own call. It
+also restores the call order that Gemini returned. For a call of the current
+turn that has no valid signature, it sends the documented dummy value
+`skip_thought_signature_validator`. A signature from another model id or
+another API counts as not valid. These limits apply:
+
+- Vertex signatures are not live-tested.
+- The dummy value is live-tested only on `gemini-3.8-flash` (Developer API).
+  It is not tested on Gemini 2.x (these ids return 404 for new users) or on
+  Vertex.
+- Text-level signatures are not sent back.
+
+Gemini bills signatures as input tokens, so provider data adds to the prompt
+size.
 
 > Model ids are illustrative — swap them for any model your account can reach.
 
