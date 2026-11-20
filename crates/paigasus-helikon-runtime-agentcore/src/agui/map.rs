@@ -11,9 +11,14 @@
 //!
 //! `ToolCallDelta` is emitted while the model stream drains; the matching
 //! `ToolCallItem` only afterwards. `TOOL_CALL_START` is therefore derived from the
-//! *first delta* for a call id — its `name` is populated only on that first delta,
-//! which is exactly the START payload — and never from `ToolCallItem`, which would
-//! put START after the ARGS frames it must precede.
+//! deltas for a call id, and never from `ToolCallItem`, which would put START after
+//! the ARGS frames it must precede. Usually the first delta opens the span, with the
+//! name it carries (or `"unknown"`). Core gives `name: Some` exactly once per call,
+//! but not always on the first delta (`paigasus-helikon-core/src/model.rs`). So when
+//! an unnamed delta starts a new occurrence of a reused provider id (see below), the
+//! mapper buffers the deltas of that occurrence until one of them carries the name;
+//! then START opens the span with that name and the buffered args follow. If no delta
+//! carries the name, the item, the result or the run end flushes the span.
 //!
 //! # One active tool-call span
 //!
@@ -34,11 +39,13 @@
 //! `fc_{n}` per response, so a later turn, or a handoff child, can reuse an id for a
 //! different call. The mapper therefore keys its per-call state on the **AG-UI id**
 //! of a call occurrence, not on the provider id. A new occurrence of provider id `x`
-//! starts only when the events prove that a new call started: a name-carrying
-//! `ToolCallDelta` for `x` when the current occurrence already had one (core gives
-//! `name: Some` exactly once per call) or already had its item (an item-only call,
-//! then a streamed call that reuses `x`), a `ToolCallItem` for `x` when the current
-//! occurrence already had its item, or the first event for `x`. There is no reset at
+//! starts only when the events prove that a new call started: any `ToolCallDelta`
+//! for `x` (named or not) when the current occurrence already had its item (the
+//! item comes after all deltas of a call), a name-carrying `ToolCallDelta` for `x`
+//! when the current occurrence already had one (core gives `name: Some` exactly once
+//! per call), a `ToolCallItem` for `x` when the current occurrence already had its
+//! item, or the first event for `x`. A name that arrives on a later delta belongs to
+//! the occurrence that the earlier unnamed delta started. There is no reset at
 //! `TurnStarted`: under `ParallelAgent` a sibling's `TurnStarted` can arrive between
 //! one call's deltas and its item. The first occurrence of `x` keeps the id `x`; a
 //! later one gets `x~n`, with the smallest `n` ≥ 2 that the run has not emitted yet,
@@ -122,14 +129,14 @@ pub(crate) struct EventMapper {
     /// and no `TOOL_CALL_END` yet. `None` if no call is currently open.
     open_call: Option<String>,
     /// Tool name per AG-UI call id, recorded from whichever `ToolCallDelta` first
-    /// carries one. Only a call's *first* delta populates `name`, but the delta that finally
+    /// carries one. Only one delta of a call carries `name`, but the delta that finally
     /// opens that call's span may be a continuation (its buffer resuming, or a
     /// revisit), so the name has to be remembered rather than read off the delta at
     /// hand — otherwise those spans render as `"unknown"`.
     call_names: HashMap<String, String>,
-    /// Calls whose deltas arrived while a *different* call was open: `(AG-UI id,
-    /// accumulated args)`. AG-UI permits only one active tool-call span at a
-    /// time, while core's `ToolCallDelta`s for different ids may interleave freely
+    /// Calls whose deltas arrived while a *different* call was open, or while the
+    /// call waits for its name (see `awaiting_name`): `(AG-UI id, accumulated args)`.
+    /// AG-UI permits only one active tool-call span at a time, while core's `ToolCallDelta`s for different ids may interleave freely
     /// (`paigasus-helikon-core/src/model.rs:56`) — buffering instead of closing and
     /// resuming preserves every args chunk exactly once and never emits an unmatched
     /// `TOOL_CALL_END`. A `Vec`, not a map, so flush order is deterministic.
@@ -140,6 +147,10 @@ pub(crate) struct EventMapper {
     /// Without this record the item's arm cannot tell "already rendered" from "never
     /// streamed, synthesize it", and emits a second complete span for one call.
     completed_calls: HashSet<String>,
+    /// AG-UI ids of the occurrences of a reused provider id that an unnamed delta
+    /// started, and that no delta has named yet. Their deltas are buffered, so that
+    /// `TOOL_CALL_START` carries the name that arrives on a later delta.
+    awaiting_name: HashSet<String>,
     /// Whether a `STEP_STARTED` is currently unmatched.
     step_open: bool,
 }
@@ -162,6 +173,7 @@ impl EventMapper {
             call_names: HashMap::new(),
             buffered_calls: Vec::new(),
             completed_calls: HashSet::new(),
+            awaiting_name: HashSet::new(),
             step_open: false,
         }
     }
@@ -208,6 +220,7 @@ impl EventMapper {
                 self.close_text(&mut out);
                 let call_id = &self.occurrence_for_delta(call_id, name.is_some());
                 if let Some(name) = name {
+                    self.awaiting_name.remove(call_id);
                     self.call_names
                         .entry(call_id.clone())
                         .or_insert_with(|| name.clone());
@@ -215,12 +228,13 @@ impl EventMapper {
                 if self.open_call.as_deref() == Some(call_id.as_str()) {
                     // A continuation of the currently-open call.
                     out.push(event::tool_call_args(call_id, args_delta));
-                } else if self.open_call.is_none() {
-                    // Nothing else is streaming: open this call now. If chunks for
-                    // it were buffered while another call held the single active
-                    // span, replay them first — they were received before this one,
-                    // and a client concatenating `TOOL_CALL_ARGS` deltas would
-                    // otherwise rebuild the call's arguments out of order.
+                } else if self.open_call.is_none() && !self.awaiting_name.contains(call_id) {
+                    // Nothing else is streaming and the call does not wait for its
+                    // name: open this call now. If chunks for it were buffered while
+                    // another call held the single active span, or while it waited
+                    // for its name, replay them first — they were received before this one, and a
+                    // client concatenating `TOOL_CALL_ARGS` deltas would otherwise
+                    // rebuild the call's arguments out of order.
                     let buffered = self.take_buffered(call_id);
                     out.push(event::tool_call_start(
                         call_id,
@@ -233,11 +247,12 @@ impl EventMapper {
                     out.push(event::tool_call_args(call_id, args_delta));
                     self.open_call = Some(call_id.clone());
                 } else {
-                    // A different call is streaming: AG-UI permits only one active
-                    // span, so buffer this id's content rather than interleaving a
-                    // second START — it is flushed as a complete span once its own
-                    // `ToolCallItem` arrives, when a later delta resumes it above,
-                    // or at the latest when the run ends.
+                    // A different call is streaming (AG-UI permits only one active
+                    // span), or this new occurrence of a reused id waits for its
+                    // name (`TOOL_CALL_START` carries it): buffer this id's content
+                    // rather than emitting a START now — it is flushed as a complete span once
+                    // its own `ToolCallItem` arrives, when a later delta resumes it
+                    // above, or at the latest when the run ends.
                     match self.buffered_calls.iter_mut().find(|(id, _)| id == call_id) {
                         Some(entry) => entry.1.push_str(args_delta),
                         None => self
@@ -453,21 +468,30 @@ impl EventMapper {
         }
     }
 
-    /// The AG-UI id for a `ToolCallDelta` of provider id `call_id`. A name-carrying
-    /// delta (`has_name`) starts a new occurrence when the current one already had
-    /// one, or already had its `ToolCallItem` (an item-only call from a non-streaming
-    /// provider, then a streamed call that reuses the id); any delta starts one when
-    /// `call_id` has no occurrence yet.
+    /// The AG-UI id for a `ToolCallDelta` of provider id `call_id`. Any delta, named
+    /// or not, starts a new occurrence when the current one already had its
+    /// `ToolCallItem` (the item comes after all deltas of a call), or when `call_id`
+    /// has no occurrence yet. A name-carrying delta (`has_name`) also starts one when
+    /// the current occurrence already had a name. An unnamed delta before the item
+    /// stays on the current occurrence, and a name that arrives on a later delta
+    /// attaches to the occurrence that the first delta started. When an unnamed
+    /// delta starts a new occurrence because the current one already had its item
+    /// (a reused id), the new occurrence waits for its name (`awaiting_name`).
     fn occurrence_for_delta(&mut self, call_id: &str, has_name: bool) -> String {
+        let mut reused = false;
         if let Some(occ) = self.current.get_mut(call_id) {
-            if !(has_name && (occ.named || occ.item_seen)) {
+            if !(occ.item_seen || (has_name && occ.named)) {
                 occ.named |= has_name;
                 return occ.agui_id.clone();
             }
+            reused = occ.item_seen;
         }
         let agui_id = self.new_occurrence(call_id);
         if let Some(occ) = self.current.get_mut(call_id) {
             occ.named = has_name;
+        }
+        if reused && !has_name {
+            self.awaiting_name.insert(agui_id.clone());
         }
         agui_id
     }
@@ -834,12 +858,15 @@ mod tests {
                 }
                 AgentEvent::ToolOutputItem {
                     item: Item::ToolResult { call_id, .. },
-                } => want_results.push(
-                    latest
-                        .get(call_id)
-                        .cloned()
-                        .unwrap_or_else(|| call_id.clone()),
-                ),
+                } => {
+                    // A result with no occurrence uses the provider id, and the
+                    // mapper counts that id as used, as the oracle does here.
+                    let id = latest.get(call_id).cloned().unwrap_or_else(|| {
+                        taken.insert(call_id.clone());
+                        call_id.clone()
+                    });
+                    want_results.push(id);
+                }
                 _ => {}
             }
         }
@@ -2228,6 +2255,7 @@ mod tests {
             completed(),
         ];
         let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
         assert_eq!(
             starts(&frames),
             pairs(&[("fc_0~2", "lookup")]),
@@ -2293,6 +2321,68 @@ mod tests {
             pairs(&[("x", "a"), ("x~2", "b")]),
             "{frames:?}"
         );
+        assert_eq!(result_ids(&frames), vec!["x", "x~2"], "{frames:?}");
+    }
+
+    /// A first-use call whose first delta has no name streams live, as before
+    /// SMA-810: the first delta opens the span with `"unknown"`, and the later name
+    /// does not change the START that the client already has.
+    #[test]
+    fn a_first_use_call_with_an_unnamed_first_delta_streams_live() {
+        let events = vec![
+            turn(1),
+            tc_delta("y", None, "{\"q\":"),
+            tc_delta("y", Some("b"), "1}"),
+            tc_item("y", "b"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
+        assert_eq!(
+            frames,
+            vec![
+                event::step_started("turn"),
+                event::tool_call_start("y", "unknown", ""),
+                event::tool_call_args("y", "{\"q\":"),
+                event::tool_call_args("y", "1}"),
+                event::tool_call_end("y"),
+                event::step_finished("turn"),
+                event::run_finished("t1", "r1"),
+            ],
+        );
+    }
+
+    /// SMA-810 (G5): core lets `name: Some` arrive on a later delta than the first
+    /// args chunk (`paigasus-helikon-core/src/model.rs`). After the item of the first
+    /// `x`, an unnamed delta for `x` already starts the new occurrence, and the name
+    /// that arrives later belongs to that occurrence.
+    #[test]
+    fn an_unnamed_first_delta_after_the_item_starts_a_new_occurrence() {
+        let events = vec![
+            turn(1),
+            tc_delta("x", Some("a"), "{}"),
+            tc_item("x", "a"),
+            tc_result("x", "ra"),
+            turn(2),
+            tc_delta("x", None, "{\"q\":"),
+            tc_delta("x", Some("b"), "1}"),
+            tc_item("x", "b"),
+            tc_result("x", "rb"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
+        assert_eq!(
+            starts(&frames),
+            pairs(&[("x", "a"), ("x~2", "b")]),
+            "{frames:?}"
+        );
+        let args: String = frames
+            .iter()
+            .filter(|f| f["type"] == "TOOL_CALL_ARGS" && f["toolCallId"] == "x~2")
+            .map(|f| f["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(args, "{\"q\":1}", "{frames:?}");
         assert_eq!(result_ids(&frames), vec!["x", "x~2"], "{frames:?}");
     }
 }
