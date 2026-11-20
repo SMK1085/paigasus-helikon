@@ -44,6 +44,10 @@ a helper that one binary does not use causes no warning.
 - No change to the runtime-tokio permission policies `DeferPolicy`
   (`tests/deferred.rs:31`) and `DeferPay` (`tests/turn_checkpoint.rs:317`).
   They defer the tool `pay`, so they are not copies of `DeferB`.
+- No change to the other runtime-tokio helper copies. `RecordingModel`
+  (`tests/deferred.rs:74-106`) is a copy of `RequestLog` with a different
+  name, and `with_late_transfer_results` also has a copy there. They cannot
+  move without a shared crate.
 - No `exclude = ["tests/"]` in a crate manifest. That changes the published
   package contents and needs its own ticket.
 - No other test helper moves (for example `tool_result_texts`, `call_b_turn`).
@@ -110,8 +114,9 @@ a helper that one binary does not use causes no warning.
   "Keep the two copies the same." *My call:* remove "(pre-flight ruling F5)",
   because it refers to a SMA-803 working document that is not in the repo
   history a reader has. Its code does not change.
-- **Commit type.** `test(core)` for the code, `docs(spec)` / `docs(plan)` for
-  the design files. The PR title is `test(core): SMA-826 move the shared core
+- **Commit type.** `test(core)` for the core code, `test(runtime-tokio)` for
+  the commit that changes only runtime-tokio, and `docs(spec)` / `docs(plan)`
+  for the design files. The PR title is `test(core): SMA-826 move the shared core
   test helpers into tests/common`.
 
 ## Release
@@ -123,7 +128,9 @@ attributes a bump by file path, and `.versionrc` controls only convco. Core
 
 So this PR makes release-plz propose a patch for core and runtime-tokio,
 and `dependencies_update` cascades to the dependents and the facade. Keep
-`test(core)`: it is the correct type, and it prevents a minor bump.
+`test(core)`: it is the correct type, and it keeps the change out of the
+Features section of the changelog. The commit type does not change the bump
+level here: on these 0.x crates, release-plz bumps a `feat` as a patch too.
 
 The SMA-810 core patch (`e7ac5377`) is on `main` and is not released. Release
 PR #357 carried it, but #357 was closed without a merge at 18:54 UTC on
