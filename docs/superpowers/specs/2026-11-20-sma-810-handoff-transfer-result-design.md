@@ -295,6 +295,19 @@ Local-review changes (2026-11-20):
   arguments. A first-use id streams exactly as before (the span opens on the first
   delta).
 
+PR review changes (2026-11-20):
+
+- At `HandoffItem`, the mapper flushes every occurrence that had no `ToolCallItem` (the
+  non-transfer calls of the handoff response, which core drops) as a complete span, and
+  retires it. The transfer call keeps its occurrence, so its result after `HandoffItem`
+  finds its AG-UI id. Limit: under `ParallelAgent`, one branch's `HandoffItem` also
+  retires a sibling's unfinished calls.
+- The hold-back rule is: an unnamed delta that starts an occurrence with an alias (AG-UI
+  id differs from the provider id) waits for its name. This covers a reused id, an id
+  retired at a handoff, and an id that an orphan result used.
+- A result with no occurrence uses its provider id only when the run has not emitted
+  that id. Otherwise it gets a new id by the same `{id}~{n}` rule.
+
 The AG-UI id of a new occurrence is `x` when `x` is not in `used_ids`. Otherwise it is
 `x~n` with the smallest `n` ≥ 2 such that `x~n` is not in `used_ids` (so an alias never
 equals a provider id that the run already emitted). Every frame for the call (`START`,
