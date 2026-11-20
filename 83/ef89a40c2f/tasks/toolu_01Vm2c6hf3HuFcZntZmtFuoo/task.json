@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Vm2c6hf3HuFcZntZmtFuoo",
+  "agent_id": "aafbffc5830c48000",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix two final-review wording items",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 53098,
+    "cache_read_tokens": 291287,
+    "output_tokens": 2400,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-20T22:07:35.651471+01:00",
+  "completed_at": "2026-11-20T22:07:54.464223+01:00"
+}
