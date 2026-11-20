@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Commit type and scope: `chore(deps)`. Message prefix: `chore(deps): SMA-763 ...`.
-- `Cargo.lock` must not change against the PR base: `git diff --exit-code origin/main -- Cargo.lock`.
+- `Cargo.lock` must not change against the PR base: `git diff --exit-code "$(git merge-base origin/main HEAD)" -- Cargo.lock`.
 - No hand bump of any crate `version`. No CHANGELOG edit.
 - Keep the `sqlx` `default-features = false` and `features = [...]` keys exactly as they are.
 - A RUSTSEC ID in a comment must be unquoted. `scripts/check-advisory-ignore-sync.sh` counts quoted IDs as entries.
@@ -24,8 +24,8 @@
 
 1. A quoted `"RUSTSEC-2026-0459"` left in a comment: the sync script then passes, but the ignore list is not what it seems. Pinned by the `grep` check in Task 1 Step 5.
 2. Only one of the two policy files edited: one gate stays different from the other. Pinned by `check-advisory-ignore-sync.sh` in Task 1 Step 5.
-3. `cargo` rewrites `Cargo.lock` after the pin change: the PR then carries an unreviewed dependency change. Pinned by `git diff --exit-code origin/main -- Cargo.lock` in Task 1 Step 5.
-4. The published manifest still says `0.9`: the floor raise has no effect for users. Pinned by the `cargo package` check in Task 1 Steps 1 and 5.
+3. `cargo` rewrites `Cargo.lock` after the pin change: the PR then carries an unreviewed dependency change. Pinned by `git diff --exit-code "$(git merge-base origin/main HEAD)" -- Cargo.lock` in Task 1 Step 5.
+4. The published manifest still says `0.9`: the floor raise has no effect for users. Pinned by the `cargo package` check of all three `sqlx` crates in Task 1 Steps 1 and 5.
 5. evals' feature-gated `sqlx` code not compiled: a break hides behind `trace-sqlite`. Pinned by `cargo test --workspace --all-features` in Task 1 Step 6.
 
 ---
@@ -45,12 +45,15 @@
 
 Run:
 ```bash
-cargo package -p paigasus-helikon-sessions-sqlite --no-verify --allow-dirty
 set -o pipefail
-n=paigasus-helikon-sessions-sqlite-$(cargo pkgid -p paigasus-helikon-sessions-sqlite | sed 's/.*[#@]//')
-tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]'
+for c in paigasus-helikon-sessions-sqlite paigasus-helikon-sessions-postgres paigasus-helikon-evals; do
+  cargo package -p "$c" --no-verify --allow-dirty
+  n=$c-$(cargo pkgid -p "$c" | sed 's/.*[#@]//')
+  printf '%s: ' "$c"
+  tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]' | tail -1
+done
 ```
-Expected: `version = "0.9"`. This is the value that the change must move to `"0.9.1"`.
+Expected: `version = "0.9"` for each of the three crates. This is the value that the change must move to `"0.9.1"`.
 
 - [ ] **Step 2: Remove the ignore block from both policy files**
 
@@ -79,15 +82,18 @@ Expected: exit 0.
 
 Run each command and check its result:
 ```bash
-git diff --exit-code origin/main -- Cargo.lock       # exit 0 (no change against the PR base)
+git diff --exit-code "$(git merge-base origin/main HEAD)" -- Cargo.lock   # exit 0 (no change since the branch point)
 grep -n '"RUSTSEC-2026-0459"' .cargo/audit.toml deny.toml   # no output, exit 1
 bash scripts/check-advisory-ignore-sync.sh           # exit 0
 cargo audit --deny warnings                          # exit 0
 cargo deny --all-features check                      # exit 0
-cargo package -p paigasus-helikon-sessions-sqlite --no-verify --allow-dirty
 set -o pipefail
-n=paigasus-helikon-sessions-sqlite-$(cargo pkgid -p paigasus-helikon-sessions-sqlite | sed 's/.*[#@]//')
-tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]'   # version = "0.9.1"
+for c in paigasus-helikon-sessions-sqlite paigasus-helikon-sessions-postgres paigasus-helikon-evals; do
+  cargo package -p "$c" --no-verify --allow-dirty
+  n=$c-$(cargo pkgid -p "$c" | sed 's/.*[#@]//')
+  printf '%s: ' "$c"
+  tar -xzOf "target/package/$n.crate" "$n/Cargo.toml" | grep -A1 '^\[dependencies.sqlx\]' | tail -1
+done   # each crate: version = "0.9.1"
 ```
 
 - [ ] **Step 6: Run clippy and the tests**

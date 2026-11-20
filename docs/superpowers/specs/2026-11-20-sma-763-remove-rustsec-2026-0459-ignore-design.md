@@ -45,7 +45,10 @@ ticket removes the ignore.
   user must also run `cargo update -p libsqlite3-sys`, and then check the
   resolved version with `cargo tree -i libsqlite3-sys`. If another
   dependency caps it below 0.39, the user must update or remove that
-  dependency too. The PR body and the
+  dependency, run `cargo update -p libsqlite3-sys` again, and confirm that
+  the resolved version is at least 0.39. Without the second update, the
+  old version can stay in the lockfile, because `sqlx` still accepts it.
+  The PR body and the
   release notes must say this.
 
 ## Goals
@@ -88,8 +91,9 @@ ticket removes the ignore.
   requirement changes. Precedent: the SMA-818 jiff pin change gave evals
   0.1.20 and sessions-sqlite 0.1.28 an "update Cargo.toml dependencies"
   entry.
-- `Cargo.lock` must not change against the PR base. Check with
-  `git diff --exit-code origin/main -- Cargo.lock`. A plain
+- `Cargo.lock` must not change against the branch point. Check with
+  `git diff --exit-code "$(git merge-base origin/main HEAD)" -- Cargo.lock`. Do not compare with the
+  `origin/main` tip, which can move after the branch starts. A plain
   `git diff --exit-code Cargo.lock` misses a change that is already
   committed.
 - Gates to run before push:
@@ -101,7 +105,8 @@ ticket removes the ignore.
   - `bash scripts/check-advisory-ignore-sync.sh`
   - `cargo audit --deny warnings`
   - `cargo deny --all-features check` (the CI command in `deny.yml`)
-  - `cargo package -p paigasus-helikon-sessions-sqlite --no-verify`, then
+  - `cargo package -p <crate> --no-verify` for each of evals,
+    sessions-sqlite and sessions-postgres, then
     read `<name>-<version>/Cargo.toml` from the archive
     `target/package/<name>-<version>.crate` (`--no-verify` does not unpack
     it) and confirm that it has `sqlx` version `0.9.1`. Use the exact
