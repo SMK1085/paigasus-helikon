@@ -60,8 +60,8 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 messages.push(json!({"role": "user", "content": blocks}));
             }
             Item::AssistantMessage { content, agent: _ } => {
-                flush_pending_user(&mut messages, &mut pending_tool_results);
                 flush_pending_assistant(&mut messages, &mut pending_tool_use);
+                flush_pending_user(&mut messages, &mut pending_tool_results);
                 messages.push(json!({
                     "role": "assistant",
                     "content": assistant_blocks(content),
@@ -72,6 +72,10 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 name,
                 args,
             } => {
+                // A new tool_use follows any results already seen, so close
+                // that user turn first; it must not fold into an older
+                // assistant message.
+                flush_pending_user(&mut messages, &mut pending_tool_results);
                 let block = json!({
                     "type": "tool_use",
                     "id": call_id,
@@ -85,6 +89,7 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 }
             }
             Item::ToolResult { call_id, content } => {
+                flush_pending_assistant(&mut messages, &mut pending_tool_use);
                 pending_tool_results.push(json!({
                     "type": "tool_result",
                     "tool_use_id": call_id,
@@ -270,6 +275,123 @@ mod tests {
         assert_eq!(content.as_array().unwrap().len(), 1);
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "answer");
+    }
+
+    #[test]
+    fn tool_only_turn_then_assistant_text_keeps_order() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("q")],
+            },
+            Item::ToolCall {
+                call_id: "tu_1".into(),
+                name: "ping".into(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "tu_1".into(),
+                content: vec![text("pong")],
+            },
+            Item::AssistantMessage {
+                content: vec![text("done")],
+                agent: None,
+            },
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "ping", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "pong"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+            ])
+        );
+    }
+
+    #[test]
+    fn tool_call_after_pending_result_does_not_fold_into_earlier_assistant() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("q")],
+            },
+            Item::AssistantMessage {
+                content: vec![text("a")],
+                agent: None,
+            },
+            Item::ToolCall {
+                call_id: "tu_1".into(),
+                name: "ping".into(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "tu_1".into(),
+                content: vec![text("r1")],
+            },
+            Item::ToolCall {
+                call_id: "tu_2".into(),
+                name: "ping".into(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "tu_2".into(),
+                content: vec![text("r2")],
+            },
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "tool_use", "id": "tu_1", "name": "ping", "input": {}}
+                ]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r1"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_2", "name": "ping", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_2", "content": "r2"}]},
+            ])
+        );
+    }
+
+    #[test]
+    fn multi_round_tool_loop_without_assistant_text_alternates() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("q")],
+            },
+            Item::ToolCall {
+                call_id: "tu_1".into(),
+                name: "ping".into(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "tu_1".into(),
+                content: vec![text("r1")],
+            },
+            Item::ToolCall {
+                call_id: "tu_2".into(),
+                name: "ping".into(),
+                args: json!({}),
+            },
+            Item::ToolResult {
+                call_id: "tu_2".into(),
+                content: vec![text("r2")],
+            },
+            Item::AssistantMessage {
+                content: vec![text("done")],
+                agent: None,
+            },
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "ping", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r1"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_2", "name": "ping", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_2", "content": "r2"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+            ])
+        );
     }
 
     #[test]
