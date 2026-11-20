@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "fade48d2a16e",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-828-share-the-deferral-test-helpers-between-core",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/book/src/reference/crates.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fa/de48d2a16e/0/metadata.json",
+      "transcript": "/fa/de48d2a16e/0/full.jsonl",
+      "compact_transcript": "/fa/de48d2a16e/0/transcript.jsonl",
+      "content_hash": "/fa/de48d2a16e/0/content_hash.txt",
+      "prompt": "/fa/de48d2a16e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 8904,
+    "cache_read_tokens": 1498390,
+    "output_tokens": 4353,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 22,
+      "cache_creation_tokens": 136988,
+      "cache_read_tokens": 702661,
+      "output_tokens": 6041,
+      "api_call_count": 11
+    }
+  },
+  "redaction": {
+    "replacements": 47,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 47,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
