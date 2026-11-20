@@ -1170,4 +1170,33 @@ mod deferral_result_tests {
             .expect("ok");
         assert_eq!(r.final_output, "hi");
     }
+
+    #[tokio::test]
+    async fn collect_typed_skips_provider_data_only_message() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Out {
+            ok: bool,
+        }
+        let data = AgentEvent::MessageOutput {
+            item: crate::Item::AssistantMessage {
+                content: vec![crate::ContentPart::ProviderData {
+                    provider: "gemini".to_owned(),
+                    call_id: Some("call_1".to_owned()),
+                    data: serde_json::json!({ "index": 0 }),
+                }],
+                agent: None,
+            },
+        };
+        let r = streaming(vec![
+            assistant("{\"ok\":true}"),
+            data,
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ])
+        .collect_typed::<Out>()
+        .await
+        .expect("typed output parses");
+        assert!(r.final_output.ok);
+    }
 }
