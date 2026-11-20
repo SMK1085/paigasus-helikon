@@ -88,7 +88,7 @@ let model = GeminiModel::vertex_from_env("gemini-2.5-flash").await?;
 
 ## Limitations
 
-The following content types are silently dropped during request translation:
+Request translation drops the following content (some drops log a `tracing` warning):
 
 - **Remote-URL images** — only inline base64-encoded images are forwarded; `ContentPart::ImageUrl` variants with remote URLs are omitted.
 - **Audio parts** — audio `ContentPart` variants are not supported by this provider and are dropped.
