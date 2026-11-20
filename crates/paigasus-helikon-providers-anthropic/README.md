@@ -21,6 +21,20 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 
 Pass `model` to `LlmAgent::builder::<()>().model(model)`. The provider lives entirely in this one construction line — everything downstream is provider-agnostic, so the same agent runs against any provider. See the [quickstart](https://smk1085.github.io/paigasus-helikon/getting-started/quickstart.html) for a full agent.
 
+## Native tool types
+
+Some Anthropic tools, such as the memory tool, use a typed entry in the request: `{"type": "memory_20250818", "name": "memory"}`. A tool can declare such a type with `Tool::provider_types`. The adapter then sends the typed entry for that tool. It sends no description and no input schema.
+
+```rust,ignore
+use paigasus_helikon_core::{ProviderToolType, ToolDef};
+use paigasus_helikon_providers_anthropic::PROVIDER_ID;
+
+let def = ToolDef::new("memory", "", serde_json::json!({"type": "object"}))
+    .with_provider_types(vec![ProviderToolType::new(PROVIDER_ID, "memory_20250818")]);
+```
+
+To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic entry for every tool. A wrapper tool must forward `provider_types` from the tool it wraps, or the typed entry is lost.
+
 ## Links
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-providers-anthropic)

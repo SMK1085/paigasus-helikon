@@ -6,9 +6,10 @@
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ResponseFormat, ToolDef,
+    CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ProviderToolType,
+    ResponseFormat, ToolDef,
 };
-use paigasus_helikon_providers_anthropic::{AnthropicModel, CacheStrategy};
+use paigasus_helikon_providers_anthropic::{AnthropicModel, CacheStrategy, PROVIDER_ID};
 
 fn skip_if_no_key() -> bool {
     if std::env::var("ANTHROPIC_API_KEY").is_err() {
@@ -333,4 +334,32 @@ async fn nested_tool_use_inside_open_round_is_accepted() {
         user("reply ok"),
     ];
     run_accepted(msgs, true, false).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn memory_typed_tool_smoke() {
+    if skip_if_no_key() {
+        return;
+    }
+    let model = AnthropicModel::messages("claude-sonnet-4-6")
+        .cache_strategy(CacheStrategy::Tools)
+        .build()
+        .unwrap();
+    let memory_def = ToolDef::new(
+        "memory",
+        "custom description",
+        serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+    )
+    .with_provider_types(vec![ProviderToolType::new(PROVIDER_ID, "memory_20250818")]);
+    let req = req_with(vec![user("Hello, ack only.")], |r| {
+        r.model_settings.max_output_tokens = Some(64);
+        r.tools = vec![memory_def];
+    });
+    let mut s = model.invoke(req, CancellationToken::new()).await.unwrap();
+    while let Some(ev) = s.next().await {
+        if let Err(e) = ev {
+            panic!("stream error: {e:?}");
+        }
+    }
 }

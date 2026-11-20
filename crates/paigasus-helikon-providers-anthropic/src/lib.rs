@@ -31,4 +31,10 @@ mod translate;
 
 pub use builder::{AnthropicModelBuilder, BuildError};
 pub use model::AnthropicModel;
+/// The provider id of this crate: `"anthropic"`.
+///
+/// Use it to declare an Anthropic tool type on a tool, for example
+/// `ProviderToolType::new(PROVIDER_ID, "memory_20250818")`.
+pub const PROVIDER_ID: &str = "anthropic";
+
 pub use settings::{CacheStrategy, ExtendedThinking};
