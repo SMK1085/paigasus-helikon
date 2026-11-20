@@ -218,8 +218,15 @@ Exceptions (an old log does not give exactly the new layout):
 
 Properties:
 
-- A log that has no `HandoffOccurred`, and a new-layout log, project exactly as today.
-  This includes `ParallelAgent` logs with repeated ids.
+- A log that has no `HandoffOccurred`, and a sequential new-layout log, project exactly
+  as today. This includes `ParallelAgent` logs with repeated ids and no handoff.
+- Final-review hardening (2026-11-20): a `ToolReturned` in the run directly after a
+  `HandoffOccurred` closes a transfer call of that response first. A result with a
+  transfer text (`transferred to `, `transfer not performed: `, `transfer failed: `)
+  closes an open transfer call with its id before any non-transfer call. So in a
+  new-layout `ParallelAgent` log where a sibling call with the same id comes between the
+  handoff and its result, the repair moves the transfer result next to its call instead
+  of swapping two results.
 - The repair adds and removes no message, so the message count stays the same.
   (`CompactingSession` checks `len()`, which does not change. Step 5 changes the text
   length, so its token estimate can change slightly. Tests must not assert equal token
@@ -274,8 +281,11 @@ equals a provider id that the run already emitted). Every frame for the call (`S
 `ARGS`, `END`, `RESULT`) uses the AG-UI id.
 
 **Results and approvals.** A `ToolOutputItem` for `x` uses the AG-UI id of the current
-occurrence of `x`. A `helikon.approval` CUSTOM frame (`ApprovalRequested`) also maps its
-`call_id` through the current occurrence, so a client can connect it to the span. A
+occurrence of `x`. A `helikon.approval` CUSTOM frame (`ApprovalRequested`) keeps
+`call_id` as the provider id (so it still matches `RunDeferred.calls[].call_id`) and adds
+`tool_call_id` with the AG-UI id of the current occurrence, so a client can connect it to
+the span. (Changed at the final review on 2026-11-20; the first version overwrote
+`call_id`, which broke the correlation with `RunDeferred`.) A
 result for an id with no occurrence (only possible under `ParallelAgent` or for a
 resume-window result) uses the provider id, as today.
 
