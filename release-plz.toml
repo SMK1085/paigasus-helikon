@@ -26,7 +26,7 @@ pr_name = "chore: release"
 [changelog]
 sort_commits = "newest"
 
-# Internal test harnesses: these three workspace members never publish.
+# Internal test harnesses: these four workspace members never publish.
 # publish = false in each Cargo.toml and release = false here MUST move
 # together.
 
@@ -50,5 +50,13 @@ release = false
 # members above.
 [[package]]
 name = "paigasus-helikon-provider-stream-conformance"
+publish = false
+release = false
+
+# Internal test helpers shared by the core and runtime-tokio deferral tests
+# (SMA-828). Never published, so it carries the same publish=false /
+# release=false pair as the members above.
+[[package]]
+name = "paigasus-helikon-deferral-testkit"
 publish = false
 release = false

@@ -4189,6 +4189,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "paigasus-helikon-deferral-testkit"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-core",
+ "futures-util",
+ "paigasus-helikon-core",
+]
+
+[[package]]
 name = "paigasus-helikon-evals"
 version = "0.1.21"
 dependencies = [

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/*", "tests/runtime-http-conformance", "tests/workspace-lints", "tests/provider-stream-conformance"]
+members  = ["crates/*", "tests/runtime-http-conformance", "tests/workspace-lints", "tests/provider-stream-conformance", "tests/deferral-testkit"]
 
 [workspace.package]
 version       = "0.0.0"
