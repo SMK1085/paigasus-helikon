@@ -224,6 +224,18 @@ impl GeminiModelBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_api_names() {
+        assert_eq!(Transport::Developer.api_name(), "developer");
+        let v = Transport::Vertex {
+            project: "p".to_owned(),
+            location: "l".to_owned(),
+        };
+        assert_eq!(v.api_name(), "vertex");
+    }
+
     use crate::auth::TokenProvider;
     use crate::GeminiModel;
     use async_trait::async_trait;

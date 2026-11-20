@@ -132,6 +132,7 @@ async fn parallel_signed_fixture_emits_provider_data_per_call() {
         assert_eq!(d["index"], i);
     }
     assert_eq!(data[0].1["thoughtSignature"], "SIG_A");
+    assert_eq!(data[0].1["model"], "gemini-2.5-flash");
     assert_eq!(data[0].1["api"], "developer");
     assert!(data[1].1.get("thoughtSignature").is_none());
     assert!(data[2].1.get("thoughtSignature").is_none());
