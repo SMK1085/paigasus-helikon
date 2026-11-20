@@ -50,7 +50,7 @@ globset               = "0.4"
 # manifest and blocks consumers that need a newer jiff (SMA-818). jiff 0.2.29
 # pulled `defmt` -> `proc-macro-error2` (RUSTSEC-2026-0173); 0.2.46 does not.
 # `jiff::Timestamp` is public API of core, so jiff 1.0 is a breaking change.
-jiff                  = { version = "0.2.46", features = ["serde"] }
+jiff                  = { version = "1.0.0", features = ["serde"] }
 jsonschema            = { version = "0.61", default-features = false }
 landlock              = "0.4"
 libc                  = "0.2"
