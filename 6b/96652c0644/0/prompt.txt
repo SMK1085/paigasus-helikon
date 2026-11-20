@@ -1,0 +1,9 @@
+We recently fixed entire in the paigasus-core repo, it seems still broken in this repo
+
+---
+
+I don't see recent sessions, last one is dated back to november
+
+---
+
+I look at the web page, I also added claude-code as you suggest, make sure changes are committed
