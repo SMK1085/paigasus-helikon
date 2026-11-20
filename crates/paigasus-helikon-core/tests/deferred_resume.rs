@@ -966,6 +966,10 @@ async fn handoff_resume_runs_the_call_on_the_child_with_the_child_conversation()
             .any(|i| matches!(i, Item::ToolCall { call_id, .. } if call_id == "t1")),
         "{m:?}"
     );
+    // The resume descends with no `HandoffItem`, so it adds no second
+    // result to the transfer call.
+    assert_no_output(&events, "t1");
+    assert_eq!(stored_results(&session, "t1").await, 1);
 }
 
 #[tokio::test]
@@ -1282,6 +1286,64 @@ async fn missing_target_moves_every_recorded_transfer_result_of_one_handoff_resp
         assert_no_output(&events, id);
         assert_eq!(stored_results(&session, id).await, 1, "{id}");
     }
+}
+
+#[tokio::test]
+async fn resume_route_exits_add_no_transfer_result() {
+    // The deferring run gave t1 its result directly after the handoff, so a
+    // resume that fails on its route adds no result to t1.
+    let session = handoff_session(&["triage", "budgeting"]).await;
+    assert_eq!(stored_results(&session, "t1").await, 1);
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let budgeting = resume_agent(
+        "budgeting",
+        RequestLog::with_scripts(vec![]),
+        Arc::clone(&b),
+    )
+    .build();
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RequestLog::with_scripts(vec![]))
+        .handoff(budgeting)
+        .build();
+    let ctx = session_ctx(&session)
+        .with_run_config(paigasus_helikon_core::RunConfig::new().with_max_agent_depth(0));
+
+    let events = resume_handoff_with(&session, "triage", &triage, ctx).await;
+
+    let depth = paigasus_helikon_core::AgentError::MaxAgentDepthExceeded { depth: 1, max: 0 };
+    assert_eq!(
+        kinds(&events),
+        [
+            "RunStarted".to_owned(),
+            "ToolOutputItem(call_b)".to_owned(),
+            format!("RunFailed({depth})"),
+        ]
+    );
+    assert_eq!(tool_output_text(&events, "call_b"), NOT_RUN);
+    assert_no_output(&events, "t1");
+    assert_eq!(stored_results(&session, "t1").await, 1);
+    assert!(b.invocations().is_empty());
+
+    // A target whose `run` returns `Err`.
+    let session = handoff_session(&["triage", "budgeting"]).await;
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RequestLog::with_scripts(vec![]))
+        .handoff(FailingBudgeting)
+        .build();
+
+    let events = resume_handoff(&session, "triage", &triage).await;
+
+    let boom = paigasus_helikon_core::AgentError::NotImplemented { feature: "boom" };
+    assert_eq!(
+        kinds(&events).last().cloned(),
+        Some(format!("RunFailed({boom})")),
+        "{events:?}"
+    );
+    assert_eq!(tool_output_text(&events, "call_b"), NOT_RUN);
+    assert_no_output(&events, "t1");
+    assert_eq!(stored_results(&session, "t1").await, 1);
 }
 
 /// A path of three whose two transfer calls share the call id `t`.

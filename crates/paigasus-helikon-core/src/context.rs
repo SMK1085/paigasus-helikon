@@ -107,11 +107,6 @@ where
     /// Where a run records the tool calls it deferred. Shared with handoff
     /// children, fresh for sub-agent children.
     deferrals: DeferralSlot,
-    /// Call ids of the handoff transfer calls of the agents above this one.
-    /// They have no result while the run goes on. A call with one of these
-    /// ids is not deferred. Extended on each handoff; empty for a sub-agent
-    /// child.
-    open_call_ids: Vec<String>,
     /// Optional turn-boundary checkpoint, called by the agent loop between
     /// the tool results of one turn and the next model call. Inherited by
     /// `handoff_child`, cleared by `subagent_child`, and **not** projected
@@ -206,7 +201,6 @@ where
             deferred_tool_calls: false,
             handoff_path: Vec::new(),
             deferrals: DeferralSlot::new(),
-            open_call_ids: Vec::new(),
             turn_checkpoint: None,
         }
     }
@@ -345,12 +339,6 @@ where
     /// - A `PreToolUse` hook that adds a secret to the arguments of a call
     ///   that can defer makes the secret persist in the session store.
     /// - A runtime without deferral support clears the flag.
-    /// - Limit: a handoff transfer call has no result while the child agent
-    ///   runs. If a call to defer has the same call id as such a transfer
-    ///   call, the call is not deferred. It is denied with the result
-    ///   `permission denied: deferral not possible: call id {call_id} repeats
-    ///   in this run`. This can occur with a provider that makes call ids per
-    ///   response, for example `fc_0` from Gemini.
     pub fn with_deferred_tool_calls(mut self, enabled: bool) -> Self {
         self.deferred_tool_calls = enabled;
         self
@@ -369,18 +357,6 @@ where
     /// Add an agent name to the end of the handoff path.
     pub(crate) fn push_handoff_path(&mut self, agent: impl Into<String>) {
         self.handoff_path.push(agent.into());
-    }
-
-    /// The call ids of the open handoff transfer calls above this agent.
-    pub(crate) fn open_call_ids(&self) -> &[String] {
-        &self.open_call_ids
-    }
-
-    /// Add the call ids of the transfer calls of a handoff (consuming
-    /// builder). These calls get no result while the child runs.
-    pub(crate) fn with_open_call_ids(mut self, ids: impl IntoIterator<Item = String>) -> Self {
-        self.open_call_ids.extend(ids);
-        self
     }
 
     /// Clone the handle to the slot where this run records deferred tool calls.
@@ -443,7 +419,6 @@ where
             deferred_tool_calls: self.deferred_tool_calls,
             handoff_path: self.handoff_path.clone(),
             deferrals: self.deferrals.clone(),
-            open_call_ids: self.open_call_ids.clone(),
             turn_checkpoint: self.turn_checkpoint.clone(),
         }
     }
@@ -477,7 +452,6 @@ where
             deferred_tool_calls: false,
             handoff_path: Vec::new(),
             deferrals: DeferralSlot::new(),
-            open_call_ids: Vec::new(),
             turn_checkpoint: None,
         }
     }
@@ -931,15 +905,6 @@ mod runcontext_tests {
         assert!(c.handoff_path().is_empty());
         c.deferral_handle().record(vec![pending()]);
         assert!(p.deferral_handle().calls().is_empty());
-    }
-
-    #[test]
-    fn handoff_child_keeps_open_call_ids_and_subagent_child_clears_them() {
-        let p: RunContext<()> = RunContext::ephemeral(()).with_open_call_ids(["fc_0".to_owned()]);
-        let c = p.handoff_child().with_open_call_ids(["fc_1".to_owned()]);
-        assert_eq!(c.open_call_ids(), &["fc_0".to_owned(), "fc_1".to_owned()]);
-        assert_eq!(p.open_call_ids(), &["fc_0".to_owned()]);
-        assert!(c.subagent_child().open_call_ids().is_empty());
     }
 
     struct ContinueCheckpoint;

@@ -1350,11 +1350,49 @@ async fn handoff_run_with_ids(
 }
 
 #[tokio::test]
-async fn deferral_with_the_call_id_of_an_open_transfer_call_is_denied() {
+async fn deferral_with_the_call_id_of_a_transfer_call_defers() {
     // Gemini makes `fc_{n}` ids per stream, so the transfer call and the
-    // child's first call can both be `fc_0`. Such a deferral cannot resume,
-    // so the call is denied.
+    // child's first call can both be `fc_0`. The transfer call gets its
+    // result directly after the handoff, so the child's deferral stays open
+    // and can resume.
     let (result, session, pay, child_model) = handoff_run_with_ids("fc_0", "fc_0").await;
+
+    assert!(
+        matches!(&result.stop_reason, StopReason::Deferred { calls } if calls.len() == 1),
+        "{:?}",
+        result.stop_reason
+    );
+    let open = open_deferrals(&log(&session).await);
+    assert_eq!(open.len(), 1, "one open deferral");
+    assert_eq!(open[0].call_id(), "fc_0");
+    assert!(pay.calls().is_empty(), "a deferred call does not run");
+    let labels = labels(&session).await;
+    let transferred = labels
+        .iter()
+        .position(|l| l == "tool_returned(fc_0, transferred to budgeting)")
+        .unwrap_or_else(|| panic!("no transfer result: {labels:?}"));
+    let deferred = labels
+        .iter()
+        .position(|l| l == "tool_deferred(fc_0)")
+        .unwrap_or_else(|| panic!("no deferral: {labels:?}"));
+    assert!(transferred < deferred, "{labels:?}");
+    for r in &child_model.requests() {
+        assert_tool_calls_paired(&r.messages);
+    }
+
+    // Resume: the deferred call runs once on the child.
+    let resume_pay = PayTool::new();
+    let resume_model = RecordingModel::with_scripts(vec![text_turn("done")]);
+    let budgeting = pay_agent("budgeting", Arc::clone(&resume_model), &resume_pay);
+    let triage = LlmAgent::builder::<()>()
+        .name("triage")
+        .shared_model(RecordingModel::with_scripts(vec![]))
+        .handoff(budgeting)
+        .build();
+    let input = resolve_all(&session, ToolResolution::Approved).await;
+    let result = run(&triage, ctx(session.clone(), true), input)
+        .await
+        .expect("resume succeeds");
 
     assert!(
         matches!(result.stop_reason, StopReason::Completed),
@@ -1362,22 +1400,10 @@ async fn deferral_with_the_call_id_of_an_open_transfer_call_is_denied() {
         result.stop_reason
     );
     assert_eq!(result.final_output, "done");
-    assert!(pay.calls().is_empty(), "a denied call does not run");
-    assert!(open_ids(&session).await.is_empty(), "no open deferral");
-    let labels = labels(&session).await;
-    assert!(
-        !labels.iter().any(|l| l.starts_with("tool_deferred")),
-        "{labels:?}"
-    );
-    assert!(
-        labels.contains(
-            &"tool_returned(fc_0, permission denied: deferral not possible: call id fc_0 repeats in this run)"
-                .to_owned()
-        ),
-        "{labels:?}"
-    );
-    let requests = child_model.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(resume_pay.calls().len(), 1, "pay runs once on resume");
+    assert!(open_ids(&session).await.is_empty());
+    let requests = resume_model.requests();
+    assert_eq!(requests.len(), 1);
     for r in &requests {
         assert_tool_calls_paired(&r.messages);
     }

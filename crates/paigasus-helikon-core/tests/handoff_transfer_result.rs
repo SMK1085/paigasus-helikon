@@ -5,17 +5,18 @@
 mod common;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use common::MockModel;
+use common::{MockModel, MockTool};
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt as _;
 use paigasus_helikon_core::{
-    project, Agent, AgentError, AgentEvent, AgentInput, CancellationToken, ContentPart,
-    FinishReason, Hook, HookDecision, HookEvent, HookRegistry, Item, LlmAgent, MemorySession,
-    Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, RunConfig, RunContext, Session,
-    SessionEvent, SessionRecorder, SwarmAgent, TracerHandle,
+    open_deferrals, project, Agent, AgentError, AgentEvent, AgentInput, CancellationToken,
+    ContentPart, FinishReason, Hook, HookDecision, HookEvent, HookRegistry, Item, LlmAgent,
+    MemorySession, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
+    PermissionDecision, PermissionPolicy, ResumePlan, RunConfig, RunContext, Session, SessionEvent,
+    SessionRecorder, SwarmAgent, Tool, ToolResolution, TracerHandle,
 };
 
 const CANCEL: &str = "tool call did not complete (run cancelled/timed out)";
@@ -152,6 +153,7 @@ fn label(e: &SessionEvent) -> String {
             call_id, content, ..
         } => format!("tool_returned({call_id}, {})", text_of(content)),
         SessionEvent::HandoffOccurred { to, .. } => format!("handoff({to})"),
+        SessionEvent::ToolDeferred { call_id, .. } => format!("tool_deferred({call_id})"),
         other => format!("{other:?}"),
     }
 }
@@ -591,4 +593,308 @@ async fn nested_handoff_gives_each_transfer_call_its_own_result() {
         ]
     );
     assert_tool_calls_paired(&project(&log).messages);
+}
+
+// ── T6: three levels with one call id ────────────────────────────────────────
+
+/// Defers every call to tool `b`; allows the rest.
+struct DeferB;
+
+#[async_trait]
+impl PermissionPolicy<()> for DeferB {
+    async fn check(
+        &self,
+        _ctx: &RunContext<()>,
+        tool: &str,
+        _args: &serde_json::Value,
+    ) -> PermissionDecision {
+        if tool == "b" {
+            PermissionDecision::Defer {
+                prompt: "pay?".to_owned(),
+            }
+        } else {
+            PermissionDecision::Allow
+        }
+    }
+}
+
+/// A [`MockModel`] that keeps every request it gets.
+struct RequestLog {
+    inner: Arc<MockModel>,
+    requests: Mutex<Vec<ModelRequest>>,
+}
+
+impl RequestLog {
+    fn with_scripts(scripts: Vec<Vec<ModelEvent>>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: MockModel::with_scripts(scripts),
+            requests: Mutex::new(Vec::new()),
+        })
+    }
+    fn requests(&self) -> Vec<ModelRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl Model for RequestLog {
+    async fn invoke(
+        &self,
+        request: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
+        self.requests.lock().unwrap().push(request.clone());
+        self.inner.invoke(request, cancel).await
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        ModelCapabilities::default()
+    }
+}
+
+fn deferring_ctx(session: &Arc<MemorySession>) -> RunContext<()> {
+    session_ctx(session).with_permission_policy(Arc::new(DeferB))
+}
+
+/// An agent `name` with the model `model` and the tool `b`.
+fn b_agent(name: &str, model: Arc<RequestLog>, b: &Arc<MockTool>) -> Arc<dyn Agent<()>> {
+    Arc::new(
+        LlmAgent::builder::<()>()
+            .name(name)
+            .shared_model(model)
+            .shared_tool(Arc::clone(b) as Arc<dyn Tool<()>>)
+            .build(),
+    )
+}
+
+/// An agent `name` with the model `model` that can hand off to `target`.
+fn handoff_agent(
+    name: &str,
+    model: Arc<RequestLog>,
+    target: Arc<dyn Agent<()>>,
+) -> Arc<dyn Agent<()>> {
+    Arc::new(
+        LlmAgent::builder::<()>()
+            .name(name)
+            .shared_model(model)
+            .shared_handoff(target)
+            .build(),
+    )
+}
+
+/// `triage → budgeting → savings`, with a model per agent from `scripts`.
+/// Returns the root and the three models.
+fn fc_0_chain(
+    scripts: [Vec<Vec<ModelEvent>>; 3],
+    b: &Arc<MockTool>,
+) -> (Arc<dyn Agent<()>>, Vec<Arc<RequestLog>>) {
+    let models: Vec<Arc<RequestLog>> = scripts.into_iter().map(RequestLog::with_scripts).collect();
+    let savings = b_agent("savings", Arc::clone(&models[2]), b);
+    let budgeting = handoff_agent("budgeting", Arc::clone(&models[1]), savings);
+    let triage = handoff_agent("triage", Arc::clone(&models[0]), budgeting);
+    (triage, models)
+}
+
+/// Run `triage(fc_0) → budgeting(fc_0) → savings`, where savings defers its
+/// call to `b`, also with the call id `fc_0`. Store the run in a new session.
+async fn fc_0_deferred_session() -> (Arc<MemorySession>, Vec<AgentEvent>, Vec<Arc<RequestLog>>) {
+    let b = MockTool::new("b", serde_json::json!({}));
+    let (triage, models) = fc_0_chain(
+        [
+            vec![transfer_turn("fc_0", "budgeting")],
+            vec![transfer_turn("fc_0", "savings")],
+            vec![calls_turn(&[("fc_0", "b")])],
+        ],
+        &b,
+    );
+    let session = Arc::new(MemorySession::new());
+    let ctx = deferring_ctx(&session).with_deferred_tool_calls(true);
+    let mut recorder = SessionRecorder::new("triage").with_deferral_slot(ctx.deferral_handle());
+    let input = AgentInput::from_user_text("hi");
+    recorder.record_input(&input.messages);
+    let events: Vec<AgentEvent> = triage
+        .run(ctx, input)
+        .await
+        .expect("run starts")
+        .collect()
+        .await;
+    for ev in &events {
+        recorder.observe(ev);
+    }
+    session.append(&recorder.drain()).await.unwrap();
+    assert!(b.invocations().is_empty(), "a deferred call does not run");
+    (session, events, models)
+}
+
+/// Resume the one open deferral of `session` as approved, with the root
+/// `root` and the agent `agent`. Returns the events. The recorder closes the
+/// deferral.
+async fn resume_approved(
+    session: &Arc<MemorySession>,
+    root: &str,
+    agent: &Arc<dyn Agent<()>>,
+) -> Vec<AgentEvent> {
+    let log = session.events(None).await.unwrap();
+    let snapshot = session.snapshot().await.unwrap();
+    let open = open_deferrals(&log);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0].call_id(), "fc_0");
+    let input = AgentInput::from_user_text("next")
+        .with_resolution(open[0].deferral_id(), ToolResolution::Approved);
+    let plan = ResumePlan::from_events(&log, &snapshot, root, &input, 8).expect("valid resume");
+    let input = input.with_resume_plan(plan.clone());
+    let mut recorder = SessionRecorder::new(root).with_resume_plan(&plan);
+    recorder.record_input(&input.messages);
+    let events: Vec<AgentEvent> = agent
+        .run(deferring_ctx(session), input)
+        .await
+        .expect("run starts")
+        .collect()
+        .await;
+    for ev in &events {
+        recorder.observe(ev);
+    }
+    session.append(&recorder.drain()).await.unwrap();
+    assert!(
+        open_deferrals(&session.events(None).await.unwrap()).is_empty(),
+        "{events:?}"
+    );
+    events
+}
+
+/// The stored results whose text starts with `transferred`.
+async fn stored_transfer_results(session: &MemorySession) -> usize {
+    session
+        .events(None)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            matches!(e, SessionEvent::ToolReturned { content, .. }
+                if text_of(content).starts_with("transferred"))
+        })
+        .count()
+}
+
+/// The resume of `fc_0` was denied with `reason`, and it added no transfer
+/// result.
+async fn assert_denied_with_no_new_transfer_result(
+    session: &MemorySession,
+    events: &[AgentEvent],
+    reason: &str,
+) {
+    let outs = outputs(events);
+    assert_eq!(
+        outs,
+        [("fc_0".to_owned(), format!("permission denied: {reason}"))],
+        "{events:?}"
+    );
+    assert_eq!(stored_transfer_results(session).await, 2);
+    // Two transfer results and the denial of the deferred call.
+    let fc_0_results = session
+        .events(None)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::ToolReturned { call_id, .. } if call_id == "fc_0"))
+        .count();
+    assert_eq!(fc_0_results, 3);
+}
+
+#[tokio::test]
+async fn three_levels_with_one_call_id_defer_and_resume() {
+    // (a) The run defers, and each transfer call has its result before the
+    // next call with the same id.
+    let (session, events, models) = fc_0_deferred_session().await;
+
+    assert!(
+        matches!(events.last(), Some(AgentEvent::RunDeferred { .. })),
+        "{events:?}"
+    );
+    let log = session.events(None).await.unwrap();
+    assert_eq!(
+        labels(&log),
+        [
+            "user",
+            "tool_called(fc_0)",
+            "handoff(budgeting)",
+            "tool_returned(fc_0, transferred to budgeting)",
+            "tool_called(fc_0)",
+            "handoff(savings)",
+            "tool_returned(fc_0, transferred to savings)",
+            "tool_called(fc_0)",
+            "tool_deferred(fc_0)",
+        ]
+    );
+    assert!(!labels(&log).iter().any(|l| l.contains(CANCEL)));
+    for m in &models {
+        for r in &m.requests() {
+            assert_tool_calls_paired(&r.messages);
+        }
+    }
+
+    // (b) A resume that approves runs `b` once, on savings.
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let (triage, models) = fc_0_chain([vec![], vec![], vec![text_turn("done")]], &b);
+
+    let events = resume_approved(&session, "triage", &triage).await;
+
+    assert_eq!(b.invocations().len(), 1, "b runs once");
+    assert_eq!(
+        outputs(&events),
+        [("fc_0".to_owned(), r#"{"paid":true}"#.to_owned())]
+    );
+    assert!(models[0].requests().is_empty());
+    assert!(models[1].requests().is_empty());
+    let requests = models[2].requests();
+    assert_eq!(requests.len(), 1);
+    for r in &requests {
+        assert_tool_calls_paired(&r.messages);
+    }
+    assert_eq!(stored_transfer_results(&session).await, 2);
+}
+
+#[tokio::test]
+async fn three_levels_with_one_call_id_deny_on_a_renamed_root() {
+    // (c) The root is now `other`, so the path cannot be followed.
+    let (session, _, _) = fc_0_deferred_session().await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let other = b_agent("other", Arc::clone(&model), &b);
+
+    let events = resume_approved(&session, "other", &other).await;
+
+    assert!(b.invocations().is_empty(), "a denied call does not run");
+    assert_denied_with_no_new_transfer_result(
+        &session,
+        &events,
+        "agent no longer available: triage",
+    )
+    .await;
+    for r in &model.requests() {
+        assert_tool_calls_paired(&r.messages);
+    }
+}
+
+#[tokio::test]
+async fn three_levels_with_one_call_id_deny_on_a_missing_middle_agent() {
+    // (c) triage hands off to savings now, not to budgeting.
+    let (session, _, _) = fc_0_deferred_session().await;
+    let b = MockTool::new("b", serde_json::json!({ "paid": true }));
+    let model = RequestLog::with_scripts(vec![text_turn("ok")]);
+    let savings = b_agent("savings", RequestLog::with_scripts(vec![]), &b);
+    let triage = handoff_agent("triage", Arc::clone(&model), savings);
+
+    let events = resume_approved(&session, "triage", &triage).await;
+
+    assert!(b.invocations().is_empty(), "a denied call does not run");
+    assert_denied_with_no_new_transfer_result(
+        &session,
+        &events,
+        "agent no longer available: budgeting",
+    )
+    .await;
+    for r in &model.requests() {
+        assert_tool_calls_paired(&r.messages);
+    }
 }
