@@ -83,4 +83,17 @@ mod tests {
             json!({"type": "function", "function": {"name": "f"}})
         );
     }
+
+    #[test]
+    fn provider_type_is_ignored() {
+        let plain = ToolDef::new("memory", "d", json!({"type": "object"}));
+        let typed =
+            plain
+                .clone()
+                .with_provider_types(vec![paigasus_helikon_core::ProviderToolType::new(
+                    "anthropic",
+                    "memory_20250818",
+                )]);
+        assert_eq!(to_tools(&[typed]), to_tools(&[plain]));
+    }
 }

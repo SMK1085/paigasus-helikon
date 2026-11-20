@@ -111,4 +111,19 @@ mod tests {
         // is unit-tested in schema.rs).
         assert_eq!(specs.len(), 1);
     }
+
+    #[test]
+    fn provider_type_is_ignored() {
+        let plain = ToolDef::new("memory", "d", json!({"type": "object"}));
+        let typed =
+            plain
+                .clone()
+                .with_provider_types(vec![paigasus_helikon_core::ProviderToolType::new(
+                    "anthropic",
+                    "memory_20250818",
+                )]);
+        let a = tool_specs(&[plain], Ruleset::Strict).unwrap();
+        let b = tool_specs(&[typed], Ruleset::Strict).unwrap();
+        assert_eq!(format!("{a:?}"), format!("{b:?}"));
+    }
 }
