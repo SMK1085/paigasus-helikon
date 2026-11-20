@@ -48,6 +48,20 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
         }
     }
 
+    /// Add `tool_use` blocks to the open assistant turn. When the last
+    /// message is an assistant message, extend it. Otherwise queue them.
+    fn push_tool_uses(
+        messages: &mut [Value],
+        pending_tool_use: &mut Vec<Value>,
+        blocks: Vec<Value>,
+    ) {
+        if let Some(last) = messages.last_mut().filter(|m| m["role"] == "assistant") {
+            last["content"].as_array_mut().unwrap().extend(blocks);
+        } else {
+            pending_tool_use.extend(blocks);
+        }
+    }
+
     for item in items {
         match item {
             Item::System { content } => {
@@ -69,12 +83,34 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 }
             }
             Item::AssistantMessage { content, agent: _ } => {
-                let blocks = assistant_blocks(content);
+                let Value::Array(blocks) = assistant_blocks(content) else {
+                    unreachable!("assistant_blocks returns an array")
+                };
                 // An assistant item with no blocks acts as if it were absent:
                 // it flushes nothing (so an open tool round stays whole) and
                 // leaves the flag as it is (a drop of the user turn before
                 // it still counts). A kept assistant message ends the drop.
-                if !blocks.as_array().unwrap().is_empty() {
+                //
+                // A message of only tool uses is the nested form of
+                // `Item::ToolCall`. Inside an open round it joins that round,
+                // as a call does. A flush would put a user turn that lacks
+                // some results right after the open assistant turn.
+                // On this path the last message is an assistant message
+                // (`round_is_answered` is `true` for an empty trailing
+                // assistant run). `pending_tool_use` is empty, because each
+                // `ToolResult` flushes it. So the append keeps the order.
+                // Setting `last_item_dropped` here is for symmetry. The flag
+                // is already `false`, because a `ToolResult` came after any
+                // dropped user message.
+                let only_tool_uses =
+                    !blocks.is_empty() && blocks.iter().all(|b| b["type"] == "tool_use");
+                if only_tool_uses
+                    && !pending_tool_results.is_empty()
+                    && !round_is_answered(&messages, &pending_tool_results)
+                {
+                    last_item_dropped = false;
+                    push_tool_uses(&mut messages, &mut pending_tool_use, blocks);
+                } else if !blocks.is_empty() {
                     flush_pending_assistant(&mut messages, &mut pending_tool_use);
                     flush_pending_user(&mut messages, &mut pending_tool_results);
                     last_item_dropped = false;
@@ -99,11 +135,7 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                     "name": name,
                     "input": args,
                 });
-                if let Some(last) = messages.last_mut().filter(|m| m["role"] == "assistant") {
-                    last["content"].as_array_mut().unwrap().push(block);
-                } else {
-                    pending_tool_use.push(block);
-                }
+                push_tool_uses(&mut messages, &mut pending_tool_use, vec![block]);
             }
             Item::ToolResult { call_id, content } => {
                 last_item_dropped = false;
@@ -777,6 +809,168 @@ mod tests {
 
     fn tr(id: &str) -> Value {
         json!({"type": "tool_result", "tool_use_id": id, "content": "pong"})
+    }
+
+    fn nested(parts: Vec<ContentPart>) -> Item {
+        Item::AssistantMessage {
+            content: parts,
+            agent: None,
+        }
+    }
+
+    fn use_part(id: &str) -> ContentPart {
+        ContentPart::ToolUse {
+            call_id: id.to_owned(),
+            name: "ping".to_owned(),
+            args: json!({}),
+        }
+    }
+
+    /// SMA-834: the nested form joins an open round as `Item::ToolCall` does.
+    #[test]
+    fn nested_tool_use_inside_open_round_joins_it() {
+        let items = vec![
+            user("q"),
+            nested(vec![use_part("t1"), use_part("t2")]),
+            result("t1"),
+            nested(vec![use_part("t3")]),
+            result("t2"),
+            result("t3"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1"), tu("t2"), tu("t3")]},
+                {"role": "user", "content": [tr("t1"), tr("t2"), tr("t3")]},
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_tool_use_after_answered_round_starts_new_round() {
+        let items = vec![
+            user("q"),
+            nested(vec![use_part("t1")]),
+            result("t1"),
+            nested(vec![use_part("t2")]),
+            result("t2"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1")]},
+                {"role": "user", "content": [tr("t1")]},
+                {"role": "assistant", "content": [tu("t2")]},
+                {"role": "user", "content": [tr("t2")]},
+            ])
+        );
+    }
+
+    /// The tool-use-only check reads the blocks after `assistant_blocks`
+    /// drops reasoning, so this message joins too.
+    #[test]
+    fn nested_tool_use_with_reasoning_inside_open_round_joins_it() {
+        let items = vec![
+            user("q"),
+            nested(vec![use_part("t1"), use_part("t2")]),
+            result("t1"),
+            nested(vec![
+                ContentPart::Reasoning {
+                    text: "scratch".to_owned(),
+                },
+                use_part("t3"),
+            ]),
+            result("t2"),
+            result("t3"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1"), tu("t2"), tu("t3")]},
+                {"role": "user", "content": [tr("t1"), tr("t2"), tr("t3")]},
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_tool_use_with_blank_text_inside_open_round_joins_it() {
+        let items = vec![
+            user("q"),
+            nested(vec![use_part("t1"), use_part("t2")]),
+            result("t1"),
+            nested(vec![text(" "), use_part("t3")]),
+            result("t2"),
+            result("t3"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1"), tu("t2"), tu("t3")]},
+                {"role": "user", "content": [tr("t1"), tr("t2"), tr("t3")]},
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_tool_use_joins_last_of_adjacent_assistant_run() {
+        let items = vec![
+            user("q"),
+            nested(vec![use_part("t1")]),
+            nested(vec![use_part("t2")]),
+            result("t2"),
+            nested(vec![use_part("t3")]),
+            result("t1"),
+            result("t3"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1")]},
+                {"role": "assistant", "content": [tu("t2"), tu("t3")]},
+                {"role": "user", "content": [tr("t2"), tr("t1"), tr("t3")]},
+            ])
+        );
+    }
+
+    /// A message with text inside an open round still flushes, in both forms.
+    /// The test pins today's shape, which the API rejects (known gap, SMA-836).
+    /// It also pins the parity between the two forms.
+    /// SMA-836 must update the expected array.
+    #[test]
+    fn mixed_assistant_inside_open_round_matches_top_level_form() {
+        let head = vec![
+            user("q"),
+            nested(vec![use_part("t1"), use_part("t2")]),
+            result("t1"),
+        ];
+        let tail = vec![result("t2"), result("t3")];
+        let mut nested_form = head.clone();
+        nested_form.push(nested(vec![text("b"), use_part("t3")]));
+        nested_form.extend(tail.clone());
+        let mut top_level = head;
+        top_level.push(asst("b"));
+        top_level.push(call("t3"));
+        top_level.extend(tail);
+        // Pin the shape too: both forms must flush, not join the open round.
+        assert_eq!(
+            translate_messages(&nested_form).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1"), tu("t2")]},
+                {"role": "user", "content": [tr("t1")]},
+                {"role": "assistant", "content": [{"type": "text", "text": "b"}, tu("t3")]},
+                {"role": "user", "content": [tr("t2"), tr("t3")]},
+            ])
+        );
+        assert_eq!(
+            translate_messages(&nested_form).messages,
+            translate_messages(&top_level).messages
+        );
     }
 
     /// Adjacent assistant messages are one API turn, so a round counts as

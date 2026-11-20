@@ -184,6 +184,21 @@ fn result(id: &str) -> Item {
     }
 }
 
+/// An assistant message with one nested `tool_use` block per id.
+fn nested(ids: &[&str]) -> Item {
+    Item::AssistantMessage {
+        content: ids
+            .iter()
+            .map(|id| ContentPart::ToolUse {
+                call_id: (*id).to_owned(),
+                name: "ping".to_owned(),
+                args: serde_json::json!({}),
+            })
+            .collect(),
+        agent: None,
+    }
+}
+
 /// Send `messages` to the strict model and panic on any stream error.
 async fn run_accepted(messages: Vec<Item>, with_tool: bool, last_turn_cache: bool) {
     let mut builder = AnthropicModel::messages("claude-sonnet-4-6");
@@ -290,6 +305,30 @@ async fn tool_only_multi_round_loop_is_accepted() {
         result("toolu_01A09q90qw90lq917835lq9"),
         call("toolu_01B09q90qw90lq917835lq8"),
         result("toolu_01B09q90qw90lq917835lq8"),
+        assistant("done"),
+        user("reply ok"),
+    ];
+    run_accepted(msgs, true, false).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn nested_tool_use_inside_open_round_is_accepted() {
+    if skip_if_no_key() {
+        return;
+    }
+    let (a, b, c) = (
+        "toolu_01A09q90qw90lq917835lq9",
+        "toolu_01B09q90qw90lq917835lq8",
+        "toolu_01C09q90qw90lq917835lq7",
+    );
+    let msgs = vec![
+        user("ping three times"),
+        nested(&[a, b]),
+        result(a),
+        nested(&[c]),
+        result(b),
+        result(c),
         assistant("done"),
         user("reply ok"),
     ];
