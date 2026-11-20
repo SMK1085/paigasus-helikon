@@ -60,7 +60,7 @@ The crate detects the model family from the Bedrock model ID and routes capabili
 
 | Family | Examples | Structured output | Forced tool choice |
 | --- | --- | --- | --- |
-| `Anthropic` | `anthropic.claude-*`, `us.anthropic.*` | yes (forced-tool synthesis) | yes |
+| `Anthropic` | `anthropic.claude-*`, `us.anthropic.*`, `global.anthropic.*` | yes (forced-tool synthesis) | yes |
 | `AmazonNova` | `amazon.nova-*` | yes (forced-tool synthesis) | yes |
 | `Mistral` | `mistral.mistral-*` | yes (forced-tool synthesis) | yes |
 | `AmazonTitan` | `amazon.titan-*` | no (degrades to text) | no |
@@ -68,7 +68,7 @@ The crate detects the model family from the Bedrock model ID and routes capabili
 | `Cohere` | `cohere.command-*` | no (degrades to text) | no |
 | `Unknown` | anything unrecognized | no | no |
 
-Cross-region inference profile prefixes (`us.`, `eu.`, `ap.`, `apac.`) are stripped before detection.
+Detection reads the first segment of the model ID. If the first segment is not a provider name, detection reads the second segment. This skips a geographic prefix. The known prefixes are `us.`, `eu.`, `apac.`, `jp.`, `au.`, `ca.`, `in.` and `global.`. A future prefix works too. For an ARN, detection uses the resource ID, which is the text after the last `/`. An opaque ARN, such as an application inference profile ARN, gives `Unknown`.
 
 ## Structured output and the schema rewriter
 

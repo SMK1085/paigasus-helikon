@@ -571,6 +571,28 @@ mod tests {
     }
 
     #[test]
+    fn json_schema_on_global_claude_profile_synthesizes() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("make a person")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Person".to_owned(),
+            schema: json!({"type": "object"}),
+            strict: false,
+        });
+        let p = build_request(&make_cfg("global.anthropic.claude-sonnet-5-5"), &req).unwrap();
+        assert!(p.synthesizing);
+        let tc = p.tool_config.as_ref().unwrap();
+        assert_eq!(tc.tools().len(), 1);
+        assert_eq!(
+            tc.tools()[0].as_tool_spec().unwrap().name(),
+            SYNTHESIZED_TOOL_NAME,
+        );
+        let tc_choice = tc.tool_choice().unwrap();
+        assert!(tc_choice.is_tool());
+        assert_eq!(tc_choice.as_tool().unwrap().name(), SYNTHESIZED_TOOL_NAME,);
+    }
+
+    #[test]
     fn json_schema_on_llama_degrades_to_no_synthesis() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("make a thing")];
