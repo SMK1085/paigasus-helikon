@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "87ee422c81fe",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-820-gemini-translator-sends-two-adjacent-user",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-sma-820-gemini-merge-same-role-contents-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/87/ee422c81fe/0/metadata.json",
+      "transcript": "/87/ee422c81fe/0/full.jsonl",
+      "compact_transcript": "/87/ee422c81fe/0/transcript.jsonl",
+      "content_hash": "/87/ee422c81fe/0/content_hash.txt",
+      "prompt": "/87/ee422c81fe/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 138556,
+    "cache_read_tokens": 4217645,
+    "output_tokens": 31083,
+    "api_call_count": 34,
+    "subagent_tokens": {
+      "input_tokens": 104,
+      "cache_creation_tokens": 161619,
+      "cache_read_tokens": 5284681,
+      "output_tokens": 58603,
+      "api_call_count": 52
+    }
+  },
+  "redaction": {
+    "replacements": 7,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 4,
+      "credentialed_uri": 0,
+      "entropy": 3,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
