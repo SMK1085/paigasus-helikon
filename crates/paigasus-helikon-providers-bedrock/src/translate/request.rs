@@ -202,7 +202,20 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 }
                 // An assistant item with no blocks acts as if it were absent:
                 // it flushes nothing, so an open tool round stays whole.
-                if !blocks.is_empty() {
+                //
+                // A message made only of tool uses is the nested form of
+                // `Item::ToolCall`. Inside an open round (results pending,
+                // not all calls answered) it joins that round, as a call
+                // does. A flush would put a user turn that lacks some
+                // results right after the open assistant turn.
+                if !blocks.is_empty()
+                    && blocks.iter().all(|b| matches!(b, ContentBlock::ToolUse(_)))
+                    && !pending_tool_results.is_empty()
+                    && !round_is_answered(&messages, &pending_tool_results)
+                {
+                    last_user_dropped = false;
+                    pending_assistant.extend(blocks);
+                } else if !blocks.is_empty() {
                     last_user_dropped = false;
                     // Queued calls go first, then the results that answer them.
                     flush_assistant(&mut messages, &mut pending_assistant);
@@ -1166,6 +1179,47 @@ mod tests {
                 msg("user", vec![tr("t1")]),
                 msg("assistant", vec![tx("b")]),
                 msg("user", vec![tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_tool_use_inside_open_round_joins_it() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            assistant(vec![tool_use_item("t3")]),
+            res("t2"),
+            res("t3"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2"), tu("t3")]),
+                msg("user", vec![tr("t1"), tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn nested_tool_use_after_answered_round_starts_new_round() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1")]),
+            res("t1"),
+            assistant(vec![tool_use_item("t2")]),
+            res("t2"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tu("t2")]),
+                msg("user", vec![tr("t2")]),
             ])
         );
     }
