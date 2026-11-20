@@ -647,17 +647,7 @@ pub(crate) struct TransferCall {
 /// by their tool name, because a handoff can use a custom tool name.
 fn transfer_calls_before(events: &[crate::SessionEvent], handoff_at: usize) -> Vec<TransferCall> {
     use crate::SessionEvent;
-    let start = handoff_at
-        - events[..handoff_at]
-            .iter()
-            .rev()
-            .take_while(|e| {
-                matches!(
-                    e,
-                    SessionEvent::ToolCalled { .. } | SessionEvent::AssistantMessage { .. }
-                )
-            })
-            .count();
+    let start = crate::session::transfer_run_start(events, handoff_at);
     (start..handoff_at)
         .filter_map(|at| {
             match &events[at] {

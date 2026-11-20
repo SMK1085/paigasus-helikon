@@ -355,19 +355,226 @@ impl Session for MemorySession {
 /// "summary replaces turns 1..N at this position" semantic is therefore
 /// observation-only in the event log; the model sees the summary text but
 /// as a top-level system instruction, not a positional cutover.
+///
+/// **Repair of old handoff logs.** A session that a core version before
+/// SMA-810 stored has the result of each handoff transfer call at the end of
+/// the run, after the events of the target agent. `project` moves each such
+/// result to directly after the transfer calls of its handoff response, in
+/// call order. If a moved result has the synthetic cancel text, `project`
+/// replaces it with `transferred to {target}` (the first transfer call of the
+/// response) or `transfer not performed: this response already transferred
+/// to {target}` (each other transfer call). No other result moves, and the
+/// number of messages does not change. For such a log, the snapshot order
+/// therefore no longer follows the event order one-to-one. The stored log
+/// does not change. A log with no `HandoffOccurred` event, and a log in the
+/// current layout, project in event order.
 pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
+    let (mut messages, sources) = project_events(events);
+    let moved = repair_legacy_transfer_results(events, &mut messages, &sources);
+    if moved > 0 {
+        tracing::debug!(
+            target: "paigasus::core::session",
+            moved,
+            "repaired legacy handoff transfer results"
+        );
+    }
+    ConversationSnapshot { messages }
+}
+
+/// The index where the run of `ToolCalled` / `AssistantMessage` events
+/// directly before `handoff_at` starts.
+///
+/// The `ToolCalled` events in `start..handoff_at` are the transfer calls of
+/// the handoff response that the `HandoffOccurred` at `handoff_at` records.
+pub(crate) fn transfer_run_start(events: &[SessionEvent], handoff_at: usize) -> usize {
+    handoff_at
+        - events[..handoff_at]
+            .iter()
+            .rev()
+            .take_while(|e| {
+                matches!(
+                    e,
+                    SessionEvent::ToolCalled { .. } | SessionEvent::AssistantMessage { .. }
+                )
+            })
+            .count()
+}
+
+/// The transfer calls of one handoff response.
+struct TransferResponse {
+    /// The incoming agent of the `HandoffOccurred` event.
+    to: String,
+    /// The event index of each transfer call, in call order.
+    calls: Vec<usize>,
+}
+
+/// Move the late result of each handoff transfer call to directly after the
+/// transfer calls of its response (sessions stored before SMA-810), and give
+/// a moved synthetic cancel result the transfer text. Returns the number of
+/// moved results.
+///
+/// `sources[m]` is the event index of `messages[m]`. The repair adds and
+/// removes no message. A result that is already directly after the transfer
+/// calls (the current layout) does not move, and no other result moves.
+fn repair_legacy_transfer_results(
+    events: &[SessionEvent],
+    messages: &mut Vec<Item>,
+    sources: &[usize],
+) -> usize {
+    // Step 1: the transfer calls of each handoff response.
+    let mut responses: Vec<TransferResponse> = Vec::new();
+    let mut is_transfer = vec![false; events.len()];
+    for (at, ev) in events.iter().enumerate() {
+        if let SessionEvent::HandoffOccurred { to, .. } = ev {
+            let calls: Vec<usize> = (transfer_run_start(events, at)..at)
+                .filter(|&i| matches!(events[i], SessionEvent::ToolCalled { .. }))
+                .collect();
+            for &c in &calls {
+                is_transfer[c] = true;
+            }
+            if !calls.is_empty() {
+                responses.push(TransferResponse {
+                    to: to.clone(),
+                    calls,
+                });
+            }
+        }
+    }
+    if responses.is_empty() {
+        return 0;
+    }
+
+    // Step 2: the result event of each transfer call. A result closes the most
+    // recent open non-transfer call with its id, else the earliest open
+    // transfer call with its id.
+    let mut result_of: Vec<Option<usize>> = vec![None; events.len()];
+    let mut open: Vec<(usize, &str)> = Vec::new();
+    for (at, ev) in events.iter().enumerate() {
+        match ev {
+            SessionEvent::ToolCalled { call_id, .. } => open.push((at, call_id)),
+            SessionEvent::ToolReturned { call_id, .. }
+            | SessionEvent::ToolDeferred { call_id, .. } => {
+                let pos = open
+                    .iter()
+                    .rposition(|&(c, id)| id == call_id && !is_transfer[c])
+                    .or_else(|| {
+                        open.iter()
+                            .position(|&(c, id)| id == call_id && is_transfer[c])
+                    });
+                if let Some(p) = pos {
+                    let (call, _) = open.remove(p);
+                    if is_transfer[call] && matches!(ev, SessionEvent::ToolReturned { .. }) {
+                        result_of[call] = Some(at);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Step 3 (done by the caller): the message index of each event.
+    let mut message_of: Vec<Option<usize>> = vec![None; events.len()];
+    for (m, &at) in sources.iter().enumerate() {
+        message_of[at] = Some(m);
+    }
+
+    // Step 4: plan the moves. `inserts` holds (anchor message, moved results);
+    // `rewrite[m]` holds the new text of a moved cancel result.
+    let mut moved = vec![false; messages.len()];
+    let mut rewrite: Vec<Option<String>> = vec![None; messages.len()];
+    let mut inserts: Vec<(usize, Vec<usize>)> = Vec::new();
+    for response in &responses {
+        let Some(last_call) = response.calls.iter().rev().find_map(|&c| message_of[c]) else {
+            continue;
+        };
+        // (message of the result, ordinal of its call in the response)
+        let results: Vec<(usize, usize)> = response
+            .calls
+            .iter()
+            .enumerate()
+            .filter(|&(_, &c)| message_of[c].is_some())
+            .filter_map(|(n, &c)| result_of[c].and_then(|r| message_of[r]).map(|m| (m, n)))
+            .collect();
+        let in_place = results
+            .iter()
+            .enumerate()
+            .take_while(|&(k, &(m, _))| m == last_call + 1 + k)
+            .count();
+        if in_place == results.len() {
+            continue;
+        }
+        let mut block = Vec::new();
+        for &(m, n) in &results[in_place..] {
+            moved[m] = true;
+            if is_cancel_text(&messages[m]) {
+                rewrite[m] = Some(if n == 0 {
+                    format!("transferred to {}", response.to)
+                } else {
+                    format!(
+                        "transfer not performed: this response already transferred to {}",
+                        response.to
+                    )
+                });
+            }
+            block.push(m);
+        }
+        inserts.push((last_call + in_place, block));
+    }
+    if inserts.is_empty() {
+        return 0;
+    }
+    inserts.sort_unstable_by_key(|&(anchor, _)| anchor);
+
+    // One rebuild pass.
+    let count = moved.iter().filter(|&&m| m).count();
+    let mut slots: Vec<Option<Item>> = std::mem::take(messages).into_iter().map(Some).collect();
+    for (m, text) in rewrite.into_iter().enumerate() {
+        if let (Some(text), Some(Item::ToolResult { content, .. })) = (text, slots[m].as_mut()) {
+            *content = vec![ContentPart::Text { text }];
+        }
+    }
+    let mut out = Vec::with_capacity(slots.len());
+    let mut next_insert = inserts.into_iter().peekable();
+    for m in 0..slots.len() {
+        if !moved[m] {
+            out.push(slots[m].take().expect("each message is taken once"));
+        }
+        while let Some((_, block)) = next_insert.next_if(|(anchor, _)| *anchor == m) {
+            for r in block {
+                out.push(slots[r].take().expect("each moved result is taken once"));
+            }
+        }
+    }
+    *messages = out;
+    count
+}
+
+/// Whether `item` is a tool result with exactly the synthetic cancel text.
+fn is_cancel_text(item: &Item) -> bool {
+    matches!(item, Item::ToolResult { content, .. }
+        if matches!(content.as_slice(), [ContentPart::Text { text }] if text == CANCELLED_TOOL_CALL_TEXT))
+}
+
+/// Project each event to its message, in event order, with no repair.
+///
+/// Returns the messages and, for each message, the index of the event that
+/// produced it (`sources`). The summary message of a `Compacted` event gets
+/// the index of that `Compacted` event.
+fn project_events(events: &[SessionEvent]) -> (Vec<Item>, Vec<usize>) {
     let mut messages: Vec<Item> = Vec::new();
+    let mut sources: Vec<usize> = Vec::new();
     // Parallel vec: contributions[i] = number of messages event i produced.
     // Needed because Compacted has to undo the message yield of the previous
     // N events, and yield varies per variant (HandoffOccurred = 0, others = 1).
     let mut contributions: Vec<usize> = Vec::new();
 
-    for ev in events {
+    for (at, ev) in events.iter().enumerate() {
         match ev {
             SessionEvent::UserMessage { content, .. } => {
                 messages.push(Item::UserMessage {
                     content: content.clone(),
                 });
+                sources.push(at);
                 contributions.push(1);
             }
             SessionEvent::AssistantMessage { content, agent, .. } => {
@@ -375,6 +582,7 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
                     content: content.clone(),
                     agent: Some(agent.clone()),
                 });
+                sources.push(at);
                 contributions.push(1);
             }
             SessionEvent::ToolCalled {
@@ -388,6 +596,7 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
                     name: name.clone(),
                     args: args.clone(),
                 });
+                sources.push(at);
                 contributions.push(1);
             }
             SessionEvent::ToolReturned {
@@ -397,6 +606,7 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
                     call_id: call_id.clone(),
                     content: content.clone(),
                 });
+                sources.push(at);
                 contributions.push(1);
             }
             SessionEvent::HandoffOccurred { .. } => {
@@ -431,6 +641,7 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
                 let drop_msg_count: usize = contributions[drop_from_idx..].iter().sum();
                 let new_len = messages.len() - drop_msg_count;
                 messages.truncate(new_len);
+                sources.truncate(new_len);
                 // Drop the contribution entries the Compacted event subsumed
                 // so a subsequent Compacted's `n` indexes back over the
                 // remaining events, not the already-summarized ones.
@@ -440,12 +651,13 @@ pub fn project(events: &[SessionEvent]) -> ConversationSnapshot {
                         text: summary.clone(),
                     }],
                 });
+                sources.push(at);
                 contributions.push(1);
             }
         }
     }
 
-    ConversationSnapshot { messages }
+    (messages, sources)
 }
 
 /// Accumulates one run's semantic items as [`SessionEvent`]s for the runner to
@@ -720,12 +932,17 @@ impl SessionRecorder {
     }
 }
 
+/// The text of the synthetic result for a tool call that a run left without a
+/// result.
+pub(crate) const CANCELLED_TOOL_CALL_TEXT: &str =
+    "tool call did not complete (run cancelled/timed out)";
+
 /// The synthetic result for a tool call that a run left without a result.
 fn cancelled_result(call_id: String) -> SessionEvent {
     SessionEvent::tool_returned(
         call_id,
         vec![ContentPart::Text {
-            text: "tool call did not complete (run cancelled/timed out)".to_owned(),
+            text: CANCELLED_TOOL_CALL_TEXT.to_owned(),
         }],
     )
 }
@@ -920,7 +1137,7 @@ mod recorder_tests {
         }
     }
 
-    const CANCEL: &str = "tool call did not complete (run cancelled/timed out)";
+    const CANCEL: &str = CANCELLED_TOOL_CALL_TEXT;
 
     #[test]
     fn drain_puts_resume_results_before_the_input() {
@@ -1322,5 +1539,453 @@ mod accessor_tests {
         };
         assert_eq!(ev.ts(), Timestamp::from_second(1_700_000_000).unwrap());
         assert_eq!(ev.ts_nanos_saturating(), 1_700_000_000_000_000_000);
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    //! The read-time repair of handoff logs stored before SMA-810 (G4).
+
+    use super::*;
+
+    const TO_BUDGETING: &str = "transferred to budgeting";
+    const NOT_PERFORMED: &str =
+        "transfer not performed: this response already transferred to budgeting";
+
+    fn text(s: &str) -> Vec<ContentPart> {
+        vec![ContentPart::Text { text: s.to_owned() }]
+    }
+    fn user(s: &str) -> SessionEvent {
+        SessionEvent::user_message(text(s))
+    }
+    fn am(s: &str, agent: &str) -> SessionEvent {
+        SessionEvent::assistant_message(text(s), agent)
+    }
+    fn tc(id: &str, name: &str) -> SessionEvent {
+        SessionEvent::tool_called(id, name, serde_json::json!({}))
+    }
+    fn tr(id: &str, s: &str) -> SessionEvent {
+        SessionEvent::tool_returned(id, text(s))
+    }
+    fn cancel(id: &str) -> SessionEvent {
+        tr(id, CANCELLED_TOOL_CALL_TEXT)
+    }
+    fn ho(from: &str, to: &str) -> SessionEvent {
+        SessionEvent::handoff_occurred(from, to)
+    }
+
+    /// `(kind, call_id or name, text)` for each projected item.
+    fn shape(events: &[SessionEvent]) -> Vec<(&'static str, String, String)> {
+        fn joined(content: &[ContentPart]) -> String {
+            content
+                .iter()
+                .map(|p| match p {
+                    ContentPart::Text { text } => text.as_str(),
+                    _ => "<non-text>",
+                })
+                .collect()
+        }
+        project(events)
+            .messages
+            .iter()
+            .map(|m| match m {
+                Item::UserMessage { content } => ("user", String::new(), joined(content)),
+                Item::AssistantMessage { content, .. } => ("am", String::new(), joined(content)),
+                Item::ToolCall { call_id, name, .. } => ("tc", call_id.clone(), name.clone()),
+                Item::ToolResult { call_id, content } => ("tr", call_id.clone(), joined(content)),
+                Item::System { content } => ("system", String::new(), joined(content)),
+            })
+            .collect()
+    }
+
+    fn s(kind: &'static str, id: &str, t: &str) -> (&'static str, String, String) {
+        (kind, id.to_owned(), t.to_owned())
+    }
+
+    #[test]
+    fn legacy_transfer_result_moves_next_to_its_call() {
+        let events = vec![
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            am("child", "budgeting"),
+            cancel("t"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", TO_BUDGETING),
+                s("am", "", "child"),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_two_transfer_calls_move_in_call_order() {
+        let events = vec![
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            tc("u", "transfer_to_savings"),
+            ho("triage", "budgeting"),
+            am("child", "budgeting"),
+            cancel("t"),
+            cancel("u"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tc", "u", "transfer_to_savings"),
+                s("tr", "t", TO_BUDGETING),
+                s("tr", "u", NOT_PERFORMED),
+                s("am", "", "child"),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_child_tool_rounds() {
+        let events = vec![
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tc("a", "lookup"),
+            tr("a", "A"),
+            tc("b", "lookup"),
+            tr("b", "B"),
+            am("done", "budgeting"),
+            cancel("t"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", TO_BUDGETING),
+                s("tc", "a", "lookup"),
+                s("tr", "a", "A"),
+                s("tc", "b", "lookup"),
+                s("tr", "b", "B"),
+                s("am", "", "done"),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_repeated_id_pairs_each_result_with_its_call() {
+        let events = vec![
+            user("hi"),
+            tc("fc_0", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tc("fc_0", "lookup"),
+            tr("fc_0", "found"),
+            tc("c1", "pay"),
+            cancel("c1"),
+            cancel("fc_0"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "fc_0", "transfer_to_budgeting"),
+                s("tr", "fc_0", TO_BUDGETING),
+                s("tc", "fc_0", "lookup"),
+                s("tr", "fc_0", "found"),
+                s("tc", "c1", "pay"),
+                s("tr", "c1", CANCELLED_TOOL_CALL_TEXT),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_repeated_id_three_levels() {
+        // triage -> budgeting -> savings, every call is `fc_0`.
+        let events = vec![
+            user("hi"),
+            tc("fc_0", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tc("fc_0", "transfer_to_savings"),
+            ho("budgeting", "savings"),
+            tc("fc_0", "lookup"),
+            tr("fc_0", "found"),
+            am("done", "savings"),
+            cancel("fc_0"),
+            cancel("fc_0"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "fc_0", "transfer_to_budgeting"),
+                s("tr", "fc_0", TO_BUDGETING),
+                s("tc", "fc_0", "transfer_to_savings"),
+                s("tr", "fc_0", "transferred to savings"),
+                s("tc", "fc_0", "lookup"),
+                s("tr", "fc_0", "found"),
+                s("am", "", "done"),
+            ]
+        );
+    }
+
+    #[test]
+    fn running_child_call_keeps_its_cancel() {
+        let events = vec![
+            tc("fc_0", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tc("fc_0", "pay"),
+            cancel("fc_0"),
+            cancel("fc_0"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("tc", "fc_0", "transfer_to_budgeting"),
+                s("tr", "fc_0", TO_BUDGETING),
+                s("tc", "fc_0", "pay"),
+                s("tr", "fc_0", CANCELLED_TOOL_CALL_TEXT),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_target_run_keeps_the_cancel_text() {
+        let events = vec![
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            cancel("t"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", CANCELLED_TOOL_CALL_TEXT),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_cancel_late_text_moves_and_keeps_its_text() {
+        let events = vec![
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            am("child", "budgeting"),
+            tr("t", "custom"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", "custom"),
+                s("am", "", "child"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unchanged_logs() {
+        let no_handoff = vec![
+            user("hi"),
+            tc("a", "lookup"),
+            am("text", "triage"),
+            tr("a", "A"),
+        ];
+        assert_eq!(
+            shape(&no_handoff),
+            [
+                s("user", "", "hi"),
+                s("tc", "a", "lookup"),
+                s("am", "", "text"),
+                s("tr", "a", "A"),
+            ]
+        );
+
+        let new_layout = vec![
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            tr("t", TO_BUDGETING),
+            am("child", "budgeting"),
+        ];
+        assert_eq!(
+            shape(&new_layout),
+            [
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", TO_BUDGETING),
+                s("am", "", "child"),
+            ]
+        );
+
+        let parallel = vec![
+            am("A", "a"),
+            tc("fc_0", "search"),
+            am("B", "b"),
+            tc("fc_0", "lookup"),
+            tr("fc_0", "search data"),
+            tr("fc_0", "lookup data"),
+        ];
+        assert_eq!(
+            shape(&parallel),
+            [
+                s("am", "", "A"),
+                s("tc", "fc_0", "search"),
+                s("am", "", "B"),
+                s("tc", "fc_0", "lookup"),
+                s("tr", "fc_0", "search data"),
+                s("tr", "fc_0", "lookup data"),
+            ]
+        );
+    }
+
+    #[test]
+    fn compaction_cases() {
+        // The compaction removes the transfer call: the result stays in place.
+        let removed = vec![
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            am("child", "budgeting"),
+            SessionEvent::compacted("summary", 3),
+            user("more"),
+            cancel("t"),
+        ];
+        assert_eq!(
+            shape(&removed),
+            [
+                s("user", "", "hi"),
+                s("system", "", "summary"),
+                s("user", "", "more"),
+                s("tr", "t", CANCELLED_TOOL_CALL_TEXT),
+            ]
+        );
+
+        // A compaction before the handoff: the handoff after the summary repairs.
+        let before = vec![
+            user("old"),
+            am("old answer", "triage"),
+            SessionEvent::compacted("summary", 2),
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            am("child", "budgeting"),
+            cancel("t"),
+        ];
+        assert_eq!(
+            shape(&before),
+            [
+                s("system", "", "summary"),
+                s("user", "", "hi"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", TO_BUDGETING),
+                s("am", "", "child"),
+            ]
+        );
+
+        // The repair adds and removes no message.
+        for events in [&removed, &before] {
+            let (raw, _) = project_events(events);
+            assert_eq!(project(events).messages.len(), raw.len());
+        }
+    }
+
+    #[test]
+    fn two_handoff_runs_in_one_log_each_repair_once() {
+        let events = vec![
+            // run 1, old layout
+            user("hi"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            am("child 1", "budgeting"),
+            cancel("t"),
+            // run 2, old layout
+            user("again"),
+            tc("u", "transfer_to_savings"),
+            ho("budgeting", "savings"),
+            am("child 2", "savings"),
+            cancel("u"),
+            // run 3, new layout
+            user("third"),
+            tc("v", "transfer_to_budgeting"),
+            ho("savings", "budgeting"),
+            tr("v", TO_BUDGETING),
+            am("child 3", "budgeting"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", TO_BUDGETING),
+                s("am", "", "child 1"),
+                s("user", "", "again"),
+                s("tc", "u", "transfer_to_savings"),
+                s("tr", "u", "transferred to savings"),
+                s("am", "", "child 2"),
+                s("user", "", "third"),
+                s("tc", "v", "transfer_to_budgeting"),
+                s("tr", "v", TO_BUDGETING),
+                s("am", "", "child 3"),
+            ]
+        );
+        let (mut messages, sources) = project_events(&events);
+        assert_eq!(
+            repair_legacy_transfer_results(&events, &mut messages, &sources),
+            2
+        );
+    }
+
+    #[test]
+    fn text_before_the_transfer_call_keeps_the_result_after_the_call() {
+        let events = vec![
+            user("hi"),
+            am("let me transfer you", "triage"),
+            tc("t", "transfer_to_budgeting"),
+            ho("triage", "budgeting"),
+            am("child", "budgeting"),
+            cancel("t"),
+        ];
+        assert_eq!(
+            shape(&events),
+            [
+                s("user", "", "hi"),
+                s("am", "", "let me transfer you"),
+                s("tc", "t", "transfer_to_budgeting"),
+                s("tr", "t", TO_BUDGETING),
+                s("am", "", "child"),
+            ]
+        );
+    }
+
+    #[test]
+    fn repair_is_a_no_op_on_a_new_layout_log() {
+        let run = |n: &str| {
+            vec![
+                user(n),
+                tc(&format!("t{n}"), "transfer_to_budgeting"),
+                tc(&format!("u{n}"), "transfer_to_savings"),
+                ho("triage", "budgeting"),
+                tr(&format!("t{n}"), TO_BUDGETING),
+                tr(&format!("u{n}"), NOT_PERFORMED),
+                tc("fc_0", "lookup"),
+                tr("fc_0", "found"),
+                am("child", "budgeting"),
+            ]
+        };
+        let mut events = run("1");
+        let first = shape(&events);
+        for n in ["2", "3"] {
+            events.extend(run(n));
+            let (mut messages, sources) = project_events(&events);
+            assert_eq!(
+                repair_legacy_transfer_results(&events, &mut messages, &sources),
+                0
+            );
+            assert_eq!(shape(&events)[..first.len()], first[..]);
+        }
     }
 }
