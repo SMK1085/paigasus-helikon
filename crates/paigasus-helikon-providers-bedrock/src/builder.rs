@@ -194,6 +194,13 @@ impl BedrockModelBuilder {
 
         // 3. Detect family and resolve capabilities.
         let family = ModelFamily::from_model_id(&self.model_id);
+        if family == ModelFamily::Unknown {
+            tracing::debug!(
+                target: "paigasus::bedrock::builder",
+                model_id = %self.model_id,
+                "model family not detected from the model id; structured-output synthesis and forced tool choice are off",
+            );
+        }
         let default_caps = caps_for(family);
         let capabilities = self.capabilities_override.unwrap_or(default_caps);
         let max_output_default = self.max_output_override;
@@ -439,5 +446,15 @@ mod tests {
             .build()
             .expect("build");
         assert!(!model.capabilities().structured_output);
+    }
+
+    #[test]
+    fn global_claude_profile_has_structured_output() {
+        let model = crate::BedrockModel::converse("global.anthropic.claude-sonnet-5-5")
+            .client(offline_client())
+            .build()
+            .expect("build");
+        assert!(model.capabilities().structured_output);
+        assert!(model.capabilities().parallel_tool_calls);
     }
 }
