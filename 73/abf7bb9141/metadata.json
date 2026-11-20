@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "73abf7bb9141",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-820-gemini-translator-sends-two-adjacent-user",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-gemini/src/translate/request.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/73/abf7bb9141/0/metadata.json",
+      "transcript": "/73/abf7bb9141/0/full.jsonl",
+      "compact_transcript": "/73/abf7bb9141/0/transcript.jsonl",
+      "content_hash": "/73/abf7bb9141/0/content_hash.txt",
+      "prompt": "/73/abf7bb9141/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 15839,
+    "cache_read_tokens": 1565170,
+    "output_tokens": 4841,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 6,
+      "cache_creation_tokens": 73559,
+      "cache_read_tokens": 130755,
+      "output_tokens": 407,
+      "api_call_count": 3
+    }
+  },
+  "redaction": {
+    "replacements": 14,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 4,
+      "credentialed_uri": 0,
+      "entropy": 10,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
