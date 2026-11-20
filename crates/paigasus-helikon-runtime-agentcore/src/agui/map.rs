@@ -36,7 +36,8 @@
 //! of a call occurrence, not on the provider id. A new occurrence of provider id `x`
 //! starts only when the events prove that a new call started: a name-carrying
 //! `ToolCallDelta` for `x` when the current occurrence already had one (core gives
-//! `name: Some` exactly once per call), a `ToolCallItem` for `x` when the current
+//! `name: Some` exactly once per call) or already had its item (an item-only call,
+//! then a streamed call that reuses `x`), a `ToolCallItem` for `x` when the current
 //! occurrence already had its item, or the first event for `x`. There is no reset at
 //! `TurnStarted`: under `ParallelAgent` a sibling's `TurnStarted` can arrive between
 //! one call's deltas and its item. The first occurrence of `x` keeps the id `x`; a
@@ -442,10 +443,12 @@ impl EventMapper {
 
     /// The AG-UI id for a `ToolCallDelta` of provider id `call_id`. A name-carrying
     /// delta (`has_name`) starts a new occurrence when the current one already had
-    /// one; any delta starts one when `call_id` has no occurrence yet.
+    /// one, or already had its `ToolCallItem` (an item-only call from a non-streaming
+    /// provider, then a streamed call that reuses the id); any delta starts one when
+    /// `call_id` has no occurrence yet.
     fn occurrence_for_delta(&mut self, call_id: &str, has_name: bool) -> String {
         if let Some(occ) = self.current.get_mut(call_id) {
-            if !(has_name && occ.named) {
+            if !(has_name && (occ.named || occ.item_seen)) {
                 occ.named |= has_name;
                 return occ.agui_id.clone();
             }
@@ -2228,5 +2231,31 @@ mod tests {
             pairs(&[("a", "first"), ("b", "second")]),
             "{frames:?}"
         );
+    }
+
+    /// SMA-810 (G5): an item-only call `x` (a non-streaming provider), then a
+    /// streamed call that reuses `x` (for example a handoff to an agent on a
+    /// streaming provider). The name-carrying delta after the item proves a new call,
+    /// so the second call gets its own AG-UI id, name and span.
+    #[test]
+    fn a_streamed_reuse_of_an_item_only_call_id_gets_its_own_span() {
+        let events = vec![
+            turn(1),
+            tc_item("x", "a"),
+            tc_result("x", "ra"),
+            turn(2),
+            tc_delta("x", Some("b"), "{\"k\":1}"),
+            tc_item("x", "b"),
+            tc_result("x", "rb"),
+            completed(),
+        ];
+        let frames = frames_of(&events);
+        assert_tool_calls_well_formed(&events, &frames);
+        assert_eq!(
+            starts(&frames),
+            pairs(&[("x", "a"), ("x~2", "b")]),
+            "{frames:?}"
+        );
+        assert_eq!(result_ids(&frames), vec!["x", "x~2"], "{frames:?}");
     }
 }
