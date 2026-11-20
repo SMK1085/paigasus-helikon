@@ -143,7 +143,9 @@ The sites to edit:
 2. Run `cargo package -p paigasus-helikon-sessions-testkit` and `cargo publish -p paigasus-helikon-sessions-testkit --dry-run`. Both build against registry core 0.6.0.
 3. Run the full local CI gate list from `CLAUDE.md`.
 4. On the PR, confirm that the `sessions-it` job ran the suites. It must not print "No session-related changes".
-5. Mutation check: temporarily weaken each assertion group of D2. For each one, confirm that a D6 negative test fails. Then restore the assertion.
+5. Mutation check: temporarily weaken each assertion group of D2, then restore it.
+   - For the per-field checks (1.2), the kinds checks (1.1 and 4) and the snapshot JSON check (2.2), confirm that a D6 negative test fails.
+   - Each D6 corruption fails an earlier check before it reaches group 3 or the 1.3 backstop. So for these two, change the expected value to a wrong one instead. Confirm that the memory test fails.
 
 ## Left to the builder
 
