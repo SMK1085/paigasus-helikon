@@ -34,12 +34,12 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
     let translated = request::translate_messages(&req.messages);
     if translated.messages.as_array().is_none_or(|a| a.is_empty()) {
         return Err(ModelError::Other(anyhow::anyhow!(
-            "no message with content to send (empty and whitespace-only text is not sent)"
+            "no message with content to send (empty or whitespace-only text and unsupported parts are not sent)"
         )));
     }
-    if translated.trailing_user_dropped {
+    if translated.trailing_message_dropped {
         return Err(ModelError::Other(anyhow::anyhow!(
-            "the last user message has no content after empty and whitespace-only text was dropped; the request would end with an assistant message"
+            "the last message has no content to send (empty or whitespace-only text and unsupported parts are not sent); the request would end with an assistant message"
         )));
     }
 
@@ -238,7 +238,27 @@ mod tests {
             user_text(""),
             asst_text("b"),
         ];
-        assert!(build_body(&cfg(), &req).is_ok());
+        let p = build_body(&cfg(), &req).unwrap();
+        assert_eq!(
+            p.body["messages"],
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "a"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "b"}]},
+            ])
+        );
+    }
+
+    #[test]
+    fn trailing_blank_assistant_after_blank_user_is_rejected() {
+        let err = build_err(vec![
+            user_text("q"),
+            asst_text("a"),
+            user_text(""),
+            asst_text(""),
+        ]);
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(err.to_string().contains("would end with an assistant"));
     }
 
     #[test]
@@ -252,12 +272,19 @@ mod tests {
             user_text(""),
         ];
         let p = build_body(&cfg(), &req).unwrap();
-        let msgs = p.body["messages"].as_array().unwrap();
-        let last = msgs.last().unwrap();
-        assert_eq!(last["role"], "user");
-        let blocks = last["content"].as_array().unwrap();
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0]["type"], "tool_result");
+        assert_eq!(
+            p.body["messages"],
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "tool_use", "id": "tu_1", "name": "ping", "input": {}},
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "tu_1", "content": "pong"},
+                ]},
+            ])
+        );
     }
 
     #[test]
@@ -283,6 +310,7 @@ mod tests {
             .last()
             .unwrap();
         assert_eq!(last_block["type"], "tool_result");
+        assert_eq!(last_block["tool_use_id"], "tu_1");
         assert!(last_block.get("cache_control").is_some());
         for m in msgs {
             for b in m["content"].as_array().unwrap() {
