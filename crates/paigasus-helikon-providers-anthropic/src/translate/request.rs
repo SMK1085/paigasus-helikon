@@ -14,8 +14,6 @@ pub(crate) struct TranslatedMessages {
     pub(crate) messages: Value,
     /// `true` when the last conversation item was a user message that
     /// produced no message and the last sent message is an assistant one.
-    // read by build_body in the next task
-    #[allow(dead_code)]
     pub(crate) trailing_user_dropped: bool,
 }
 

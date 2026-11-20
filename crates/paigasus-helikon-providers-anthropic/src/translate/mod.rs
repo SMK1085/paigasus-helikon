@@ -32,6 +32,16 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
     .map_err(|m| ModelError::Other(anyhow::anyhow!(m)))?;
 
     let translated = request::translate_messages(&req.messages);
+    if translated.messages.as_array().is_none_or(|a| a.is_empty()) {
+        return Err(ModelError::Other(anyhow::anyhow!(
+            "no message with content to send (empty and whitespace-only text is not sent)"
+        )));
+    }
+    if translated.trailing_user_dropped {
+        return Err(ModelError::Other(anyhow::anyhow!(
+            "the last user message has no content after empty and whitespace-only text was dropped; the request would end with an assistant message"
+        )));
+    }
 
     let mut tools_array = tools::translate_tools(&req.tools);
 
@@ -152,6 +162,134 @@ mod tests {
     fn user_text(s: &str) -> Item {
         Item::UserMessage {
             content: vec![ContentPart::Text { text: s.to_owned() }],
+        }
+    }
+
+    fn asst_text(s: &str) -> Item {
+        Item::AssistantMessage {
+            content: vec![ContentPart::Text { text: s.to_owned() }],
+            agent: None,
+        }
+    }
+
+    fn sys_text(s: &str) -> Item {
+        Item::System {
+            content: vec![ContentPart::Text { text: s.to_owned() }],
+        }
+    }
+
+    fn tool_call(id: &str) -> Item {
+        Item::ToolCall {
+            call_id: id.to_owned(),
+            name: "ping".to_owned(),
+            args: json!({}),
+        }
+    }
+
+    fn tool_result(id: &str) -> Item {
+        Item::ToolResult {
+            call_id: id.to_owned(),
+            content: vec![ContentPart::Text {
+                text: "pong".to_owned(),
+            }],
+        }
+    }
+
+    fn build_err(items: Vec<Item>) -> ModelError {
+        let mut req = ModelRequest::new();
+        req.messages = items;
+        build_body(&cfg(), &req).unwrap_err()
+    }
+
+    #[test]
+    fn blank_only_user_is_rejected() {
+        let err = build_err(vec![user_text("")]);
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(err.to_string().contains("no message with content"));
+    }
+
+    #[test]
+    fn system_only_is_rejected() {
+        let err = build_err(vec![sys_text("be nice")]);
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(err.to_string().contains("no message with content"));
+    }
+
+    #[test]
+    fn system_and_blank_user_is_rejected() {
+        let err = build_err(vec![sys_text("be nice"), user_text(" ")]);
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(err.to_string().contains("no message with content"));
+    }
+
+    #[test]
+    fn trailing_blank_user_after_assistant_is_rejected() {
+        let err = build_err(vec![user_text("q"), asst_text("a"), user_text("")]);
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(err.to_string().contains("would end with an assistant"));
+    }
+
+    #[test]
+    fn caller_prefill_after_blank_user_is_sent() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![
+            user_text("q"),
+            asst_text("a"),
+            user_text(""),
+            asst_text("b"),
+        ];
+        assert!(build_body(&cfg(), &req).is_ok());
+    }
+
+    #[test]
+    fn blank_user_after_tool_result_is_sent() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![
+            user_text("q"),
+            asst_text("a"),
+            tool_call("tu_1"),
+            tool_result("tu_1"),
+            user_text(""),
+        ];
+        let p = build_body(&cfg(), &req).unwrap();
+        let msgs = p.body["messages"].as_array().unwrap();
+        let last = msgs.last().unwrap();
+        assert_eq!(last["role"], "user");
+        let blocks = last["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "tool_result");
+    }
+
+    #[test]
+    fn last_turn_cache_skips_dropped_blank_user() {
+        let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-test")
+            .cache_strategy(crate::settings::CacheStrategy::LastTurn)
+            .build_config()
+            .unwrap();
+        let mut req = ModelRequest::new();
+        req.messages = vec![
+            user_text("q"),
+            asst_text("a"),
+            tool_call("tu_1"),
+            tool_result("tu_1"),
+            user_text(""),
+        ];
+        let p = build_body(&cfg, &req).unwrap();
+        let msgs = p.body["messages"].as_array().unwrap();
+        let last_block = msgs.last().unwrap()["content"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap();
+        assert_eq!(last_block["type"], "tool_result");
+        assert!(last_block.get("cache_control").is_some());
+        for m in msgs {
+            for b in m["content"].as_array().unwrap() {
+                if b["type"] == "text" {
+                    assert!(!b["text"].as_str().unwrap().trim().is_empty());
+                }
+            }
         }
     }
 

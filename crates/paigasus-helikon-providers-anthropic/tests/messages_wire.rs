@@ -163,3 +163,24 @@ async fn http_401_auth_maps_to_refused() {
         other => panic!("expected Refused, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn blank_only_request_fails_without_http_call() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(empty_stream_response())
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let model = AnthropicModel::messages("claude-sonnet-4-6")
+        .api_key("sk-test")
+        .base_url(server.uri())
+        .build()
+        .unwrap();
+    let res = model
+        .invoke(req_with(vec![user("  ")]), CancellationToken::new())
+        .await;
+    assert!(matches!(res, Err(ModelError::Other(_))));
+}
