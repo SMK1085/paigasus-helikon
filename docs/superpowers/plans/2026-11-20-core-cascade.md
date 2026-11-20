@@ -155,6 +155,7 @@ New worktree from current `main`, branch `feature/sma-838-breaking-cascade-guard
 | `push_event_skips` | `CASCADE_EVENT=push` | exit 0, output contains `notice` |
 | `unknown_event_fails` | `CASCADE_EVENT=schedule` | exit 1 |
 | `zero_zero_scheme` | core 0.0.3→0.0.4 (Cargo treats every `0.0.z` change as breaking), dep-a 0.2.0→0.2.1 | exit 1, names `dep-a` and `0.3.0` |
+| `zero_zero_to_minor` | core 0.0.3→0.1.3, dep-a 0.2.0→0.2.1 | exit 1, names `dep-a` |
 | `dev_and_unpublished_ignored` | core breaking; dev-only dependent and unpublished member patch; others breaking | exit 0 |
 
 - [ ] **Step 2: Run it.** `bash scripts/check-breaking-cascade-selftest.sh` → FAIL (script missing).

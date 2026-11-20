@@ -209,8 +209,8 @@ guards. The `fmt` checkout gets `fetch-depth: 2`.
 - **Packages.** From `cargo metadata --no-deps` at the head: each publishable
   workspace member (`publish` not `[]`/false), with its normal (not dev, not
   build) dependencies on other workspace members.
-- **Breaking bump.** For `0.0.z`, any change of `z` (Cargo treats each
-  `0.0.z` as incompatible). For `0.y.z` with `y ≥ 1`, `y` increases (or the
+- **Breaking bump.** If the base version is `0.0.z`, any change of the
+  version is breaking (Cargo treats each `0.0.z` as incompatible). For `0.y.z` with `y ≥ 1`, `y` increases (or the
   major does). For `x.y.z` with `x ≥ 1`, `x` increases. A version that goes
   down fails with its own message.
 - **Rule.** If a publishable crate has a breaking bump, each publishable,
