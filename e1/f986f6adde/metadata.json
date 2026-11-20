@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "e1f986f6adde",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-810-handoff-transfer-call-has-no-tool-result-so",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-core/tests/handoff_transfer_result.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/f986f6adde/0/metadata.json",
+      "transcript": "/e1/f986f6adde/0/full.jsonl",
+      "compact_transcript": "/e1/f986f6adde/0/transcript.jsonl",
+      "content_hash": "/e1/f986f6adde/0/content_hash.txt",
+      "prompt": "/e1/f986f6adde/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 7057,
+    "cache_read_tokens": 1845538,
+    "output_tokens": 2872,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 10,
+      "cache_creation_tokens": 61514,
+      "cache_read_tokens": 300260,
+      "output_tokens": 5018,
+      "api_call_count": 5
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
