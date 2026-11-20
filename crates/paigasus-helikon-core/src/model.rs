@@ -184,6 +184,10 @@ pub struct ProviderToolType {
     #[serde(rename = "type")]
     pub type_name: String,
     /// Extra provider-specific fields for the tool entry.
+    ///
+    /// A provider merges these keys into its tool entry. The Anthropic
+    /// provider removes `cache_control` and sets `type` and `name` itself.
+    /// It passes other keys, for example `description`, through unchanged.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub params: serde_json::Map<String, serde_json::Value>,
 }

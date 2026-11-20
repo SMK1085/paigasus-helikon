@@ -97,6 +97,14 @@ mod tests {
     }
 
     #[test]
+    fn description_in_params_passes_through() {
+        let out = translate_tools(&[with_params(json!({"description":"x"}))], true);
+        assert_eq!(out[0]["description"], "x");
+        assert_eq!(out[0]["type"], "memory_20250818");
+        assert_eq!(out[0]["name"], "memory");
+    }
+
+    #[test]
     fn cache_control_in_params_is_removed() {
         let out = translate_tools(
             &[with_params(json!({"cache_control":{"type":"ephemeral"}}))],

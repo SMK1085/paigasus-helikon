@@ -462,4 +462,25 @@ mod tests {
         assert!(p.body["tools"][0].get("input_schema").is_some());
         assert!(p.body["tools"][0].get("type").is_none());
     }
+
+    #[test]
+    fn public_setter_opt_out_reaches_body() {
+        let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-test")
+            .native_tool_types(false)
+            .build_config()
+            .unwrap();
+        assert!(!cfg.native_tool_types);
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![memory_def()];
+        let p = build_body(&cfg, &req).unwrap();
+        assert!(p.body["tools"][0].get("input_schema").is_some());
+        assert!(p.body["tools"][0].get("type").is_none());
+    }
+
+    #[test]
+    fn native_tool_types_defaults_to_true() {
+        assert!(cfg().native_tool_types);
+    }
 }

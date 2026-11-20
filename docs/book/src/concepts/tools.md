@@ -119,11 +119,11 @@ runner's persistence. It exposes:
 
 ## Provider tool types
 
-Some providers define their own tool types. The Anthropic memory tool is one example. The provider expects a typed entry, not a name, a description and a schema. A tool declares such a type with `Tool::provider_types`.
+Some providers define their own tool types. The Anthropic memory tool is one example. The provider expects a typed entry that has a type and a name. The entry has no description and no schema. A tool declares such a type with `Tool::provider_types`.
 
 ```rust,ignore
 use paigasus_helikon::core::ProviderToolType;
-use paigasus_helikon_providers_anthropic::PROVIDER_ID;
+use paigasus_helikon::anthropic::PROVIDER_ID;
 
 fn provider_types(&self) -> &[ProviderToolType] {
     &self.types // for example one entry: ProviderToolType::new(PROVIDER_ID, "memory_20250818")

@@ -33,6 +33,8 @@ let def = ToolDef::new("memory", "", serde_json::json!({"type": "object"}))
     .with_provider_types(vec![ProviderToolType::new(PROVIDER_ID, "memory_20250818")]);
 ```
 
+The adapter merges the `params` of the declared type into the typed entry. It removes `cache_control` and sets `type` and `name` itself. It passes other keys, for example `description`, through unchanged.
+
 To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic entry for every tool. A wrapper tool must forward `provider_types` from the tool it wraps, or the typed entry is lost.
 
 ## Links

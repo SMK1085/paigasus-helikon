@@ -116,6 +116,7 @@ pub struct ProviderToolType {
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub params: serde_json::Map<String, serde_json::Value>,
 }
+```
 
 Each provider uses only the first entry with its own id. The `///` comment
 says: declare at most one entry per provider.
