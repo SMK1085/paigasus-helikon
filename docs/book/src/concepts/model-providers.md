@@ -182,10 +182,15 @@ is the user-supplied JSON Schema, and the result is returned as a structured
 JSON response. For other families (`AmazonTitan`, `Llama`, `Cohere`, `Unknown`)
 a `JsonSchema` format degrades silently to a text response.
 
-Cross-region inference profile prefixes (`us.`, `eu.`, `ap.`, `apac.`) are
-stripped before family detection, so model IDs such as
-`us.anthropic.claude-3-7-sonnet-20250219-v1:0` are correctly identified as
-`Anthropic`.
+Family detection reads the first segment of the model ID. If the first segment
+is not a provider name, detection reads the second segment. This skips a
+geographic prefix. The known prefixes are `us.`, `eu.`, `apac.`, `jp.`, `au.`,
+`ca.`, `in.` and `global.`. A future prefix works too. For example,
+`global.anthropic.claude-sonnet-5-5` is identified as `Anthropic`.
+
+For an ARN, detection uses the resource ID, which is the text after the last
+`/`. An opaque ARN, such as an application inference profile ARN, gives
+`Unknown`.
 
 Reasoning content surfaced by the model (e.g. extended-thinking responses from
 Claude) is delivered as `ModelEvent::ReasoningDelta` in the stream — no extra
