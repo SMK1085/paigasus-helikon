@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "a51b8db5b8fa",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-832-bedrock-detects-global-inference-profile-ids",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-bedrock/README.md",
+    "docs/book/src/concepts/model-providers.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a5/1b8db5b8fa/0/metadata.json",
+      "transcript": "/a5/1b8db5b8fa/0/full.jsonl",
+      "compact_transcript": "/a5/1b8db5b8fa/0/transcript.jsonl",
+      "content_hash": "/a5/1b8db5b8fa/0/content_hash.txt",
+      "prompt": "/a5/1b8db5b8fa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 9545,
+    "cache_read_tokens": 1315286,
+    "output_tokens": 5040,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 14,
+      "cache_creation_tokens": 56609,
+      "cache_read_tokens": 439714,
+      "output_tokens": 3051,
+      "api_call_count": 7
+    }
+  },
+  "redaction": {
+    "replacements": 25,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 25,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
