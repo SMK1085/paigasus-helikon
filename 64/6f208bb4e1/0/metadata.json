@@ -183,6 +183,37 @@
         "label": "Skill: feature-factory:open-pr",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_0188MFbkuWFFpFA2NmB612Ki",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ff7d44ec9377",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 320,
+        "end": 321,
+        "entry_ids": [
+          "419ed642-ddcf-4b24-821d-c1e4e51e8bc7"
+        ],
+        "tool_use_id": "toolu_0188MFbkuWFFpFA2NmB612Ki"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0188MFbkuWFFpFA2NmB612Ki"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
