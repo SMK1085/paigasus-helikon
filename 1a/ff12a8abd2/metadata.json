@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "1aff12a8abd2",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-826-move-the-shared-core-test-helpers-into",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "crates/paigasus-helikon-core/tests/common/mod.rs",
+    "crates/paigasus-helikon-core/tests/deferred_resume.rs",
+    "crates/paigasus-helikon-core/tests/handoff_transfer_result.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1a/ff12a8abd2/0/metadata.json",
+      "transcript": "/1a/ff12a8abd2/0/full.jsonl",
+      "compact_transcript": "/1a/ff12a8abd2/0/transcript.jsonl",
+      "content_hash": "/1a/ff12a8abd2/0/content_hash.txt",
+      "prompt": "/1a/ff12a8abd2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 13967,
+    "cache_read_tokens": 1220416,
+    "output_tokens": 4046,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 70864,
+      "cache_read_tokens": 59925,
+      "output_tokens": 595,
+      "api_call_count": 2
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
