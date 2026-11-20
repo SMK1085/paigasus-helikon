@@ -141,17 +141,17 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
     }
 }
 
-/// `true` when every `tool_use` id in the last assistant message has a
-/// matching `tool_result` in `results`. Also `true` when there is nothing to
-/// compare (no assistant message last), so the results then flush as before.
+/// `true` when every `tool_use` id in the trailing run of assistant messages
+/// has a matching `tool_result` in `results`. The API joins adjacent
+/// assistant messages into one turn, so the whole run is one round. Also
+/// `true` when there is nothing to compare (no assistant message last), so
+/// the results then flush as before.
 fn round_is_answered(messages: &[Value], results: &[Value]) -> bool {
-    let Some(last) = messages.last().filter(|m| m["role"] == "assistant") else {
-        return true;
-    };
-    last["content"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    messages
+        .iter()
+        .rev()
+        .take_while(|m| m["role"] == "assistant")
+        .flat_map(|m| m["content"].as_array().into_iter().flatten())
         .filter(|b| b["type"] == "tool_use")
         .all(|b| results.iter().any(|r| r["tool_use_id"] == b["id"]))
 }
@@ -777,6 +777,38 @@ mod tests {
 
     fn tr(id: &str) -> Value {
         json!({"type": "tool_result", "tool_use_id": id, "content": "pong"})
+    }
+
+    /// Adjacent assistant messages are one API turn, so a round counts as
+    /// answered only when every call in all of them has a result.
+    #[test]
+    fn round_spanning_adjacent_assistant_messages_is_not_split() {
+        let nested = |id: &str| Item::AssistantMessage {
+            content: vec![ContentPart::ToolUse {
+                call_id: id.to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            }],
+            agent: None,
+        };
+        let items = vec![
+            user("q"),
+            nested("t1"),
+            nested("t2"),
+            result("t2"),
+            call("t3"),
+            result("t1"),
+            result("t3"),
+        ];
+        assert_eq!(
+            translate_messages(&items).messages,
+            json!([
+                utext("q"),
+                {"role": "assistant", "content": [tu("t1")]},
+                {"role": "assistant", "content": [tu("t2"), tu("t3")]},
+                {"role": "user", "content": [tr("t2"), tr("t1"), tr("t3")]},
+            ])
+        );
     }
 
     #[test]
