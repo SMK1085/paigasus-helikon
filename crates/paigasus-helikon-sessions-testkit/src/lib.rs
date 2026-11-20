@@ -483,6 +483,11 @@ where
         "run_tool_deferred: events(Some(SequenceId(4))): event kinds"
     );
     assert_deferral(&after4[1], &log[6], "d3 after SequenceId(4)");
+    assert_eq!(
+        serde_json::to_value(&after4).unwrap(),
+        serde_json::to_value(&log[5..8]).unwrap(),
+        "run_tool_deferred: events(Some(SequenceId(4))): JSON"
+    );
     let after5 = s
         .events(Some(SequenceId(5)))
         .await
@@ -493,6 +498,11 @@ where
         "run_tool_deferred: events(Some(SequenceId(5))): event kinds"
     );
     assert_deferral(&after5[0], &log[6], "d3 after SequenceId(5)");
+    assert_eq!(
+        serde_json::to_value(&after5).unwrap(),
+        serde_json::to_value(&log[6..8]).unwrap(),
+        "run_tool_deferred: events(Some(SequenceId(5))): JSON"
+    );
 }
 
 /// Run the full conformance suite against `make`. `make` is invoked once per
