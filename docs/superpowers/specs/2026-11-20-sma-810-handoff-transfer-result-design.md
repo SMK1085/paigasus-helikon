@@ -221,12 +221,20 @@ Properties:
 - A log that has no `HandoffOccurred`, and a sequential new-layout log, project exactly
   as today. This includes `ParallelAgent` logs with repeated ids and no handoff.
 - Final-review hardening (2026-11-20): a `ToolReturned` in the run directly after a
-  `HandoffOccurred` closes a transfer call of that response first. A result with a
-  transfer text (`transferred to `, `transfer not performed: `, `transfer failed: `)
-  closes an open transfer call with its id before any non-transfer call. So in a
-  new-layout `ParallelAgent` log where a sibling call with the same id comes between the
-  handoff and its result, the repair moves the transfer result next to its call instead
-  of swapping two results.
+  `HandoffOccurred` closes a transfer call of that response first. A result whose text
+  is **exactly** one of the three transfer texts for that handoff's target closes an open
+  transfer call with its id before any non-transfer call (a prefix match was replaced at
+  the local review, so a child tool output such as `transferred to archive` keeps its
+  own call). So in a new-layout `ParallelAgent` log where a sibling call with the same id
+  comes between the handoff and its result, the repair moves the transfer result next to
+  its call instead of swapping two results.
+- Local-review hardening (2026-11-20): in a new-layout response (a run of `ToolReturned`
+  events directly after the `HandoffOccurred`), the transfer calls are only the scanned
+  calls that a result in that run closes. Another `ToolCalled` in the scanned run (a
+  `ParallelAgent` sibling's open call) is a non-transfer call, and its result never
+  moves. Known limit: `transfer_calls_before` (`deferral.rs`, used by `ResumePlan`) still
+  counts every scanned call as a transfer call. The two rules differ only for such a
+  `ParallelAgent` sibling call, which is outside the G4 scope.
 - The repair adds and removes no message, so the message count stays the same.
   (`CompactingSession` checks `len()`, which does not change. Step 5 changes the text
   length, so its token estimate can change slightly. Tests must not assert equal token
@@ -274,6 +282,18 @@ A new occurrence of provider id `x` starts when:
 2. a `ToolCallItem` for `x` arrives, and the current occurrence of `x` already had its
    `ToolCallItem` (a non-streamed call that reuses the id);
 3. there is no current occurrence of `x`.
+
+Local-review changes (2026-11-20):
+
+- Rule 1 also fires for **any** `ToolCallDelta` for `x` (named or not) when the current
+  occurrence of `x` already had its `ToolCallItem`. The core contract lets the name
+  arrive on a later delta than the first argument chunk, so an unnamed first delta of a
+  reused id belongs to the new call. Unnamed deltas before the item stay on the existing
+  occurrence (a revisit of a closed span).
+- For such a new occurrence of a **reused** id, the mapper holds back the arguments
+  until the name arrives, then opens the span with the right name and sends the held
+  arguments. A first-use id streams exactly as before (the span opens on the first
+  delta).
 
 The AG-UI id of a new occurrence is `x` when `x` is not in `used_ids`. Otherwise it is
 `x~n` with the smallest `n` ≥ 2 such that `x~n` is not in `used_ids` (so an alias never
@@ -531,4 +551,9 @@ Runtime-tokio (`crates/paigasus-helikon-runtime-tokio/tests/deferred.rs`):
     found by call id, and the last call with that id wins. With a repeated `fc_0`, an
     earlier result gets a later call's tool name.
     **Decision (Sven, 2026-11-20):** added to SMA-820 as part 2 (same Gemini file).
-    SMA-810 needs no change for this.
+    SMA-810 needs no change for this. Release note: until SMA-820 part 2 ships, a Gemini
+    request whose history holds two calls with one id (for example a transfer call and a
+    deferred child call, both `fc_0`) still sends the earlier result with the later
+    call's tool name. SMA-810 does not make this worse: before SMA-810 the same two calls
+    were in the history (the child call was denied, not deferred, but it was still
+    recorded). So SMA-810 does not wait for SMA-820.
