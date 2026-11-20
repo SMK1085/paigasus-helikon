@@ -209,3 +209,122 @@ async fn live_vertex_text_turn() {
     }
     assert!(got_text);
 }
+
+// ---- LlmAgent end-to-end (SMA-827) ----
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use paigasus_helikon_core::{
+    Agent, AgentInput, LlmAgent, RunContext, RunResultStreaming, StopReason, Tool, ToolContext,
+    ToolError, ToolOutput,
+};
+
+/// A tool that counts its calls and returns the step it got.
+struct StepTool {
+    calls: Arc<AtomicUsize>,
+    schema: serde_json::Value,
+}
+
+impl StepTool {
+    fn new() -> (Self, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = Self {
+            calls: Arc::clone(&calls),
+            schema: serde_json::json!({
+                "type":"object","properties":{"n":{"type":"integer"}},"required":["n"]
+            }),
+        };
+        (tool, calls)
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool<()> for StepTool {
+    fn name(&self) -> &str {
+        "step"
+    }
+    fn description(&self) -> &str {
+        "Run step n. Returns the step number."
+    }
+    fn schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+    async fn invoke(
+        &self,
+        _ctx: &ToolContext<()>,
+        args: serde_json::Value,
+    ) -> Result<ToolOutput, ToolError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolOutput::new(serde_json::json!({ "done": args["n"] })))
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn live_agent_two_sequential_tool_rounds() {
+    let Some(model) = dev_model() else {
+        eprintln!("skipped: set GEMINI_API_KEY or GOOGLE_API_KEY");
+        return;
+    };
+    let (tool, calls) = StepTool::new();
+    let agent = LlmAgent::builder::<()>()
+        .name("root")
+        .instructions(
+            "Call the step tool with n=1. Wait for the result. Then call it with n=2. \
+             Then answer with the word done.",
+        )
+        .model(model)
+        .tool(tool)
+        .build();
+    let stream = agent
+        .run(
+            RunContext::ephemeral(()),
+            AgentInput::from_user_text("Start."),
+        )
+        .await
+        .unwrap();
+    let result = RunResultStreaming::new(stream).collect().await.unwrap();
+    assert!(
+        matches!(result.stop_reason, StopReason::Completed),
+        "{:?}",
+        result.stop_reason
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "the tool must run twice");
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct Answer {
+    /// The number the `step` tool returned.
+    step: i64,
+}
+
+#[tokio::test]
+#[ignore]
+async fn live_agent_structured_output_with_tool() {
+    let Some(model) = dev_model() else {
+        eprintln!("skipped: set GEMINI_API_KEY or GOOGLE_API_KEY");
+        return;
+    };
+    let (tool, calls) = StepTool::new();
+    let agent = LlmAgent::builder::<()>()
+        .name("root")
+        .instructions("Call the step tool with n=7. Then report the step number it returned.")
+        .model(model)
+        .tool(tool)
+        .output_type::<Answer>()
+        .build();
+    let stream = agent
+        .run(
+            RunContext::ephemeral(()),
+            AgentInput::from_user_text("Start."),
+        )
+        .await
+        .unwrap();
+    let result = RunResultStreaming::new(stream)
+        .collect_typed::<Answer>()
+        .await
+        .unwrap();
+    assert!(calls.load(Ordering::SeqCst) >= 1, "the tool must run");
+    assert_eq!(result.final_output.step, 7);
+}

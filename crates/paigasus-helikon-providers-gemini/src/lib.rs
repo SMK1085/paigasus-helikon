@@ -72,6 +72,9 @@ mod stream;
 mod translate;
 mod transport;
 
+#[cfg(test)]
+mod live_round_trip;
+
 #[cfg(feature = "vertex-adc")]
 pub use auth::AdcTokenProvider;
 pub use auth::TokenProvider;
