@@ -221,17 +221,19 @@ mod snap {
             },
         ];
         let b = body(r);
-        // Both responses carry the real name "search" but distinct ids.
+        // The two parallel calls merge into one model content; the two
+        // responses merge into one user content (SMA-820). Both carry the
+        // real name "search" but distinct ids.
         assert_eq!(
-            b["contents"][3]["parts"][0]["functionResponse"]["name"],
+            b["contents"][2]["parts"][0]["functionResponse"]["name"],
             "search"
         );
         assert_eq!(
-            b["contents"][3]["parts"][0]["functionResponse"]["id"],
+            b["contents"][2]["parts"][0]["functionResponse"]["id"],
             "fc_0"
         );
         assert_eq!(
-            b["contents"][4]["parts"][0]["functionResponse"]["id"],
+            b["contents"][2]["parts"][1]["functionResponse"]["id"],
             "fc_1"
         );
         insta::assert_json_snapshot!(b);

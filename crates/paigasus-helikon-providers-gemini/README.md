@@ -88,11 +88,12 @@ let model = GeminiModel::vertex_from_env("gemini-2.5-flash").await?;
 
 ## Limitations
 
-The following content types are silently dropped during request translation:
+Request translation drops the following content (some drops log a `tracing` warning):
 
 - **Remote-URL images** — only inline base64-encoded images are forwarded; `ContentPart::ImageUrl` variants with remote URLs are omitted.
 - **Audio parts** — audio `ContentPart` variants are not supported by this provider and are dropped.
 - **Non-text tool-result parts** — only the text content of tool results is forwarded; image or structured-data parts in tool results are omitted.
+- **Duplicate tool results and empty text** — a second tool result for one call is dropped, with a `tracing` warning on target `paigasus::gemini::translate`. Empty text parts are dropped too.
 
 The following feature is not yet implemented:
 
