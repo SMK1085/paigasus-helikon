@@ -109,6 +109,8 @@ let model = OpenAiModel::chat("gpt-5-mini").build()?;
 `OpenAiModel::chat(id)` returns an `OpenAiModelBuilder`; `build()` yields a
 `Result<OpenAiModel, BuildError>`.
 
+OpenAI does not use provider tool types. It sends the generic schema for every tool. See [Provider tool types](./tools.md#provider-tool-types).
+
 ### Anthropic — `paigasus-helikon-providers-anthropic`
 
 Reached as `paigasus_helikon::anthropic::AnthropicModel` behind the `anthropic`
@@ -124,6 +126,8 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 
 `AnthropicModel::messages(id)` returns an `AnthropicModelBuilder`; `build()`
 yields a `Result<AnthropicModel, BuildError>`.
+
+Anthropic uses provider tool types. If a tool declares an `anthropic` type, the adapter sends the typed entry, for example `{"type": "memory_20250818", "name": "memory"}`, with no description and no input schema. To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic schema. See [Provider tool types](./tools.md#provider-tool-types).
 
 ### Bedrock — `paigasus-helikon-providers-bedrock`
 
@@ -224,6 +228,8 @@ alongside this crate; a second `CryptoProvider` panics.
 > Model ids are illustrative — swap them for any model your account can reach
 > if the provider rejects the id.
 
+Bedrock does not use provider tool types. It sends the generic schema for every tool. See [Provider tool types](./tools.md#provider-tool-types).
+
 ### Gemini — `paigasus-helikon-providers-gemini`
 
 Reached as `paigasus_helikon::gemini::GeminiModel` behind the `gemini` feature.
@@ -306,6 +312,8 @@ is not yet emitted by this provider.
 
 > Model ids are illustrative — swap them for any model your account can reach.
 
+Gemini does not use provider tool types. It sends the generic schema for every tool. See [Provider tool types](./tools.md#provider-tool-types).
+
 ### LiteLLM — `paigasus-helikon-providers-litellm`
 
 Reached as `paigasus_helikon::litellm::LiteLlmModel` behind the `litellm`
@@ -358,6 +366,8 @@ let model = LiteLlmModel::chat("prod-fast")
 
 > Model ids are illustrative — swap them for whatever alias your proxy operator
 > configured.
+
+LiteLLM does not use provider tool types. It sends the generic schema for every tool. See [Provider tool types](./tools.md#provider-tool-types).
 
 ## Switching providers is one line
 

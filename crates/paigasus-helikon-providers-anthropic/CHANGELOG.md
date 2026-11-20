@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Requires `paigasus-helikon-core` 0.8 (`ToolDef` is now `#[non_exhaustive]`; see the core CHANGELOG).
+- If a tool declares an `anthropic` provider tool type, the adapter now sends the typed entry, for example `{"type": "memory_20250818", "name": "memory"}`, with no description and no input schema. To send the generic schema instead, call `native_tool_types(false)` on the builder.
+
 ## [0.2.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.1.30...paigasus-helikon-providers-anthropic-v0.2.0) - 2026-11-21
 
 ### Breaking changes

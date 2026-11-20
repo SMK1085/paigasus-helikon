@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Build a `ToolDef` with `ToolDef::new` or `ToolDef::from_tool`. A struct literal and exhaustive destructuring no longer compile, because `ToolDef` is now `#[non_exhaustive]`.
+- Upgrade `paigasus-helikon-core`, `paigasus-helikon` and the direct sibling dependencies together. Run `cargo tree -d` to check that the build has one copy of core.
+- A tool wrapper must forward `Tool::provider_types`.
+- The JSON of a `ToolDef` with no provider types does not change.
+
 ## [0.7.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.6.0...paigasus-helikon-core-v0.7.0) - 2026-11-20
 
 ### Fixed
