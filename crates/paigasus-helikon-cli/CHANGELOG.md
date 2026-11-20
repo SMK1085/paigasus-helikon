@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.46](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-cli-v0.1.45...paigasus-helikon-cli-v0.1.46) - 2026-11-20
+## [0.1.46](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-cli-v0.1.45...paigasus-helikon-cli-v0.1.46) - 2026-11-21
 
 ### Other
 
