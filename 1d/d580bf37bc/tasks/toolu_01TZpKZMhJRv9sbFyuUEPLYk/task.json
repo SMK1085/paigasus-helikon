@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01TZpKZMhJRv9sbFyuUEPLYk",
+  "agent_id": "acf169df710767961",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix local review findings",
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 153883,
+    "cache_read_tokens": 4237655,
+    "output_tokens": 30092,
+    "api_call_count": 36
+  },
+  "started_at": "2026-11-20T17:36:58.464966+01:00",
+  "completed_at": "2026-11-20T17:43:56.787712+01:00"
+}
