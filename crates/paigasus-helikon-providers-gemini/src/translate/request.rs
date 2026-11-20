@@ -143,15 +143,35 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
 
 /// Merge adjacent entries of the same role into one content, in order.
 ///
-/// Two `user` entries do not merge when exactly one side of the joint is a
-/// `functionResponse`. Gemini 3 starts the current turn at the last `user`
+/// Two `user` entries merge only when both hold only `functionResponse` parts
+/// or both hold none. Gemini 3 starts the current turn at the last `user`
 /// content that is not a tool result, and it checks thought signatures only in
 /// that turn. The SDK sends no signatures yet (SMA-827). A text and a
 /// `functionResponse` in one content would keep the unsigned `functionCall` in
-/// the current turn, and Gemini would return HTTP 400.
+/// the current turn, and Gemini would return HTTP 400. A content that mixes
+/// results and other parts merges with nothing, so a later text never joins a
+/// tool result.
 /// An entry with no parts is dropped first, so it never emits `"parts": []`.
 fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
-    let is_response = |p: Option<&Value>| p.is_some_and(|p| p.get("functionResponse").is_some());
+    #[derive(PartialEq, Clone, Copy)]
+    enum Class {
+        AllResponses,
+        NoResponses,
+        Mixed,
+    }
+    let class = |parts: &[Value]| {
+        let n = parts
+            .iter()
+            .filter(|p| p.get("functionResponse").is_some())
+            .count();
+        if n == parts.len() {
+            Class::AllResponses
+        } else if n == 0 {
+            Class::NoResponses
+        } else {
+            Class::Mixed
+        }
+    };
     let mut merged: Vec<(&'static str, Vec<Value>)> = Vec::new();
     for (role, parts) in entries {
         if parts.is_empty() {
@@ -160,8 +180,10 @@ fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
         match merged.last_mut() {
             Some((last_role, last_parts))
                 if *last_role == role
-                    && !(role == "user"
-                        && is_response(last_parts.last()) != is_response(parts.first())) =>
+                    && (role != "user" || {
+                        let c = class(last_parts);
+                        c != Class::Mixed && c == class(&parts)
+                    }) =>
             {
                 last_parts.extend(parts)
             }
@@ -809,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_result_and_text_merge_with_preceding_tool_result() {
+    fn mixed_nested_result_message_does_not_merge_with_a_preceding_tool_result() {
         let items = vec![
             user("x"),
             call("fc_0", "search"),
@@ -829,12 +851,41 @@ mod tests {
         ];
         let t = items_to_contents(&items).unwrap();
         assert_eq!(
-            t.contents.last().unwrap(),
-            &json!({"role": "user", "parts": [
-                fr("fc_0", "search", json!({})),
-                fr("fc_1", "pay", json!({})),
-                {"text": "next"}
-            ]})
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "x"}]},
+                {"role": "model", "parts": [fc("fc_0", "search"), fc("fc_1", "pay")]},
+                {"role": "user", "parts": [fr("fc_0", "search", json!({}))]},
+                {"role": "user", "parts": [fr("fc_1", "pay", json!({})), {"text": "next"}]},
+            ])
+        );
+    }
+
+    #[test]
+    fn user_text_after_a_mixed_tool_result_message_stays_separate() {
+        let items = vec![
+            user("x"),
+            call("fc_0", "search"),
+            Item::UserMessage {
+                content: vec![
+                    ContentPart::ToolResult {
+                        call_id: "fc_0".into(),
+                        content: vec![ContentPart::Text { text: "{}".into() }],
+                    },
+                    ContentPart::Text { text: "a".into() },
+                ],
+            },
+            user("b"),
+        ];
+        let t = items_to_contents(&items).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "x"}]},
+                {"role": "model", "parts": [fc("fc_0", "search")]},
+                {"role": "user", "parts": [fr("fc_0", "search", json!({})), {"text": "a"}]},
+                {"role": "user", "parts": [{"text": "b"}]},
+            ])
         );
     }
 

@@ -61,12 +61,14 @@ Sven approved approach 1 on 2026-11-20, and approved this spec at GATE 1 on 2026
 - Build a `Vec<(role, Vec<Value>)>` in item order, then fold it: when the role of an entry equals
   the role of the last merged entry, append its parts; else start a new content.
 - **Exception, the tool-result boundary** (added 2026-11-20 after the live run, Sven's decision):
-  two `user` entries do not merge when exactly one side of the joint is a `functionResponse`. That
-  is, `is_fr(last part of the previous content) != is_fr(first part of the new entry)`. The new
-  entry starts a new `user` content. So a user text after a tool result, and a tool result after a
-  user text, each stay a separate content. A result after a result and a text after a text still
-  merge. The symmetric form was added after the final review; the first form covered only a text
-  after a result.
+  a `user` content is `AllResponses` (every part is a `functionResponse`), `NoResponses` (no part
+  is), or `Mixed`. Two adjacent `user` entries merge only when both have the same class and that
+  class is not `Mixed`. So a user text after a tool result stays separate, and a tool result after
+  a user text stays separate. A result after a result and a text after a text still merge. A
+  merged content keeps its class. A content that mixes results and text, such as a nested
+  `UserMessage[ToolResult, Text]`, merges with nothing, so a later text never joins a tool result.
+  The class rule was added after the local CodeRabbit review. The earlier form compared only the
+  joint parts, and it let a text join a mixed content.
   - Reason: Gemini 3 checks thought signatures only in the current turn, and the current turn
     starts at the last `user` content that is not a tool result. With the merge, `user[fr, text]`
     keeps the call in the current turn, and the translator sends no signature (SMA-827): HTTP 400
@@ -166,7 +168,8 @@ Unit tests in `request.rs` assert the full `contents` array, as
 - A second result for one call is dropped.
 - A result before its call gives the new error.
 - A nested `ContentPart::ToolResult` mixed with `Text` in a `UserMessage`, directly after an
-  `Item::ToolResult`: one merged `user` content with correct names.
+  `Item::ToolResult`: the mixed content does not merge with the preceding result (two `user`
+  contents), and both results have correct names.
 - An `Item::System` between two user messages: one merged `user` content.
 - A reasoning-only assistant message is dropped and its neighbours merge.
 - An empty `Text` part is dropped.
@@ -202,7 +205,12 @@ body. Shapes:
 14. parallel merged, one call has no response, then text
 
 Pass rule for a target shape (3, 6, 8, 10, 11): HTTP 200, `finishReason: STOP`, and an answer that
-uses the tool result.
+uses the tool result, with the documented dummy `thoughtSignature` on each `functionCall` part.
+Without a signature, Gemini 3 rejects every shape whose current turn holds a call (see the results).
+
+How the stop condition was resolved: shapes 3 and 6 pass with a signature, so the merge is valid
+for the API. They fail without one, because the SDK sends no signatures yet (SMA-827). Sven chose
+the tool-result boundary on 2026-11-20 after the first live run (see "Merge").
 
 Order: run the probe **before** any code. If Gemini rejects shape 3 or 6, stop and bring it back to
 Sven before implementation (fallback: keep the merge for `model` contents only, or put the text in a
