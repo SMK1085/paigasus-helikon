@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "bd489c41fbfa",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-819-anthropic-translator-sends-an-empty-text",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-20-sma-819-anthropic-empty-text-block-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/489c41fbfa/0/metadata.json",
+      "transcript": "/bd/489c41fbfa/0/full.jsonl",
+      "compact_transcript": "/bd/489c41fbfa/0/transcript.jsonl",
+      "content_hash": "/bd/489c41fbfa/0/content_hash.txt",
+      "prompt": "/bd/489c41fbfa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 108351,
+    "cache_read_tokens": 2412867,
+    "output_tokens": 21037,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 56,
+      "cache_creation_tokens": 121987,
+      "cache_read_tokens": 2249762,
+      "output_tokens": 54193,
+      "api_call_count": 28
+    }
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
