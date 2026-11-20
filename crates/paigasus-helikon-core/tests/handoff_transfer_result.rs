@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::{assert_tool_calls_paired, DeferB, MockModel, MockTool, RequestLog};
+use common::{DeferB, MockModel, MockTool};
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt as _;
 use paigasus_helikon_core::{
@@ -18,6 +18,7 @@ use paigasus_helikon_core::{
     RunConfig, RunContext, Session, SessionEvent, SessionRecorder, SwarmAgent, Tool,
     ToolResolution, TracerHandle,
 };
+use paigasus_helikon_deferral_testkit::{assert_tool_calls_paired, RequestLog};
 
 const CANCEL: &str = "tool call did not complete (run cancelled/timed out)";
 

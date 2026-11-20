@@ -6,7 +6,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use common::{assert_tool_calls_paired, DeferB, MockModel, MockTool, RequestLog};
+use common::{DeferB, MockModel, MockTool};
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt as _;
 use paigasus_helikon_core::{
@@ -15,6 +15,9 @@ use paigasus_helikon_core::{
     HookDecision, HookEvent, HookRegistry, Item, LlmAgent, MemorySession, ModelEvent, ModelRequest,
     PermissionDecision, PermissionPolicy, ResumePlan, RunContext, Session, SessionEvent,
     SessionRecorder, Tool, ToolResolution, TracerHandle,
+};
+use paigasus_helikon_deferral_testkit::{
+    assert_tool_calls_paired, with_late_transfer_results, RequestLog, LEGACY_CANCEL_TEXT,
 };
 
 const SECRET: &str = "sk-test-SECRET-1234";
@@ -640,61 +643,6 @@ async fn scripted_handoff_session(
 /// after the handoff; a log from another writer can leave them open.
 async fn open_transfer_session(path: &[&str]) -> Arc<MemorySession> {
     without_transfer_results(&handoff_session(path).await).await
-}
-
-/// The synthetic cancel text of core 0.6.0. It must equal
-/// `CANCELLED_TOOL_CALL_TEXT` in `session.rs`, or `project()` does not
-/// rewrite it.
-const CANCELLED: &str = "tool call did not complete (run cancelled/timed out)";
-
-/// A copy of `session` in the layout of core 0.6.0 (before SMA-810).
-///
-/// `session` must hold one handoff run in the current layout. This removes
-/// each `ToolReturned` directly after a `HandoffOccurred` (the transfer
-/// results of that handoff response) and appends a cancel result for each
-/// removed one at the end of the run's events, in call order. The run's
-/// events end with its `ToolDeferred` events, so the cancels come after
-/// them, where the core 0.6.0 recorder put them.
-async fn with_late_transfer_results(session: &Arc<MemorySession>) -> Arc<MemorySession> {
-    let recorded = session.events(None).await.unwrap();
-    let mut events = Vec::with_capacity(recorded.len());
-    let mut late = Vec::new();
-    let mut after_handoff = false;
-    for ev in recorded {
-        match &ev {
-            SessionEvent::HandoffOccurred { .. } => {
-                after_handoff = true;
-                events.push(ev);
-            }
-            SessionEvent::ToolReturned {
-                call_id, content, ..
-            } if after_handoff => {
-                let text = text_of(content);
-                assert!(
-                    text.starts_with("transferred to ")
-                        || text.starts_with("transfer not performed"),
-                    "{call_id} after a handoff is not a transfer result: {text}"
-                );
-                late.push(call_id.clone());
-            }
-            _ => {
-                after_handoff = false;
-                events.push(ev);
-            }
-        }
-    }
-    assert!(!late.is_empty(), "the log has no transfer result to move");
-    events.extend(late.into_iter().map(|id| {
-        SessionEvent::tool_returned(
-            id,
-            vec![ContentPart::Text {
-                text: CANCELLED.to_owned(),
-            }],
-        )
-    }));
-    let legacy = Arc::new(MemorySession::new());
-    legacy.append(&events).await.unwrap();
-    legacy
 }
 
 /// A copy of `session` without the results of the transfer calls (each call
@@ -1651,6 +1599,6 @@ async fn renamed_root_on_an_unrepaired_snapshot_moves_each_late_transfer_result_
     // rewrite the cancel text.
     assert_eq!(
         results_after_each_call(&requests[0].messages, "t", 2),
-        [CANCELLED, CANCELLED]
+        [LEGACY_CANCEL_TEXT, LEGACY_CANCEL_TEXT]
     );
 }
