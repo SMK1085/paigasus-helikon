@@ -36,7 +36,9 @@ pub(crate) struct TranslatedMessages {
 /// Translate the conversation into Bedrock Converse `Message`s.
 ///
 /// Returns an error when no message with content remains. Empty or
-/// whitespace-only text and unsupported parts are not sent.
+/// whitespace-only text and unsupported parts are not sent. Also returns an
+/// error when the last user message had only empty or whitespace-only text and
+/// the request would then end with an assistant message.
 pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, ModelError> {
     let mut system: Vec<SystemContentBlock> = Vec::new();
     let mut messages: Vec<Message> = Vec::new();
@@ -46,6 +48,9 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
     let mut pending_assistant: Vec<ContentBlock> = Vec::new();
     // Pending ToolResult blocks to prepend to the next user turn.
     let mut pending_tool_results: Vec<ContentBlock> = Vec::new();
+    // `true` when the latest user message had blank text and produced no
+    // block. Dropping it could leave the request ending with an assistant turn.
+    let mut last_user_dropped = false;
 
     /// Flush `pending_assistant` into an assistant Message on `messages`.
     ///
@@ -115,10 +120,13 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 flush_assistant(&mut messages, &mut pending_assistant);
                 // Pending tool results precede any user text in this turn.
                 let mut blocks: Vec<ContentBlock> = std::mem::take(&mut pending_tool_results);
+                let mut had_blank_text = false;
                 for part in content {
                     match part {
                         ContentPart::Text { text } => {
-                            if !is_blank(text) {
+                            if is_blank(text) {
+                                had_blank_text = true;
+                            } else {
                                 blocks.push(ContentBlock::Text(text.clone()));
                             }
                         }
@@ -135,6 +143,7 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                         }
                     }
                 }
+                last_user_dropped = had_blank_text && blocks.is_empty();
                 if !blocks.is_empty() {
                     if messages
                         .last()
@@ -194,6 +203,7 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 // An assistant item with no blocks acts as if it were absent:
                 // it flushes nothing, so an open tool round stays whole.
                 if !blocks.is_empty() {
+                    last_user_dropped = false;
                     // Queued calls go first, then the results that answer them.
                     flush_assistant(&mut messages, &mut pending_assistant);
                     flush_user_results(&mut messages, &mut pending_tool_results);
@@ -221,6 +231,7 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                 name,
                 args,
             } => {
+                last_user_dropped = false;
                 // A new call follows results already seen. Close that user
                 // turn only when the last assistant round is fully answered;
                 // otherwise the call joins that round.
@@ -241,6 +252,7 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
             }
 
             Item::ToolResult { call_id, content } => {
+                last_user_dropped = false;
                 // Flush the preceding assistant turn that requested this result.
                 flush_assistant(&mut messages, &mut pending_assistant);
                 // Queue onto pending user / tool-result turn.
@@ -265,6 +277,18 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
     if messages.is_empty() {
         return Err(ModelError::Other(anyhow::anyhow!(
             "no message with content to send (empty or whitespace-only text and unsupported parts are not sent)"
+        )));
+    }
+
+    // Guard: a dropped blank user message must not leave the request ending
+    // with an assistant turn. Converse would treat that as a prefill.
+    if last_user_dropped
+        && messages
+            .last()
+            .is_some_and(|m| m.role == ConversationRole::Assistant)
+    {
+        return Err(ModelError::Other(anyhow::anyhow!(
+            "the last user message had only empty or whitespace-only text, which is not sent; the request would end with an assistant message"
         )));
     }
 
@@ -1108,5 +1132,171 @@ mod tests {
                 msg("user", vec![tr("t2"), tr("t3")]),
             ])
         );
+    }
+
+    // ── Drop-induced final assistant message ──────────────────────────────
+
+    fn assert_ends_with_assistant_error(items: &[Item]) {
+        let err = items_to_messages(items).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(
+            err.to_string()
+                .contains("would end with an assistant message"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn trailing_blank_user_after_assistant_is_error() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+        ]);
+    }
+
+    #[test]
+    fn trailing_blank_user_then_blank_assistant_is_error() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            assistant(vec![text("")]),
+        ]);
+    }
+
+    #[test]
+    fn trailing_blank_user_then_reasoning_assistant_is_error() {
+        assert_ends_with_assistant_error(&[
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            assistant(vec![ContentPart::Reasoning {
+                text: "think".to_owned(),
+            }]),
+        ]);
+    }
+
+    #[test]
+    fn blank_user_then_kept_assistant_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            assistant(vec![text("b")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("a"), tx("b")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn trailing_blank_user_after_tool_result_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            call_item("t1"),
+            res("t1"),
+            user(vec![text("")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("a"), tu("t1")]),
+                msg("user", vec![tr("t1")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn caller_prefill_is_sent() {
+        let items = vec![user(vec![text("q")]), assistant(vec![text("a")])];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+        );
+    }
+
+    #[test]
+    fn caller_prefill_keeps_trailing_whitespace() {
+        let items = vec![user(vec![text("q")]), assistant(vec![text("Sure.\n")])];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tx("Sure.\n")])
+            ])
+        );
+    }
+
+    #[test]
+    fn trailing_blank_assistant_without_dropped_user_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            assistant(vec![text("")]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+        );
+    }
+
+    #[test]
+    fn trailing_reasoning_assistant_without_dropped_user_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            assistant(vec![ContentPart::Reasoning {
+                text: "think".to_owned(),
+            }]),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+        );
+    }
+
+    #[test]
+    fn trailing_empty_or_image_user_keeps_main_behavior() {
+        let image = ContentPart::Image {
+            source: paigasus_helikon_core::MediaSource::Url {
+                url: "https://example.com/a.png".to_owned(),
+            },
+        };
+        for last in [user(vec![]), user(vec![image])] {
+            let items = vec![user(vec![text("q")]), assistant(vec![text("a")]), last];
+            assert_eq!(
+                wire(&items).unwrap()["messages"],
+                json!([msg("user", vec![tx("q")]), msg("assistant", vec![tx("a")])])
+            );
+        }
+    }
+
+    #[test]
+    fn blank_user_with_nested_tool_result_is_sent() {
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![ContentPart::ToolUse {
+                call_id: "t1".to_owned(),
+                name: "ping".to_owned(),
+                args: json!({}),
+            }]),
+            user(vec![
+                ContentPart::ToolResult {
+                    call_id: "t1".to_owned(),
+                    content: vec![text("r1")],
+                },
+                text(""),
+            ]),
+        ];
+        let w = wire(&items).unwrap();
+        let msgs = w["messages"].as_array().unwrap();
+        assert_eq!(msgs.last().unwrap(), &msg("user", vec![tr("t1")]));
     }
 }

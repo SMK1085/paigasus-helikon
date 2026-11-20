@@ -87,6 +87,7 @@ fn build_inference_config(req: &ModelRequest, cfg: &Config) -> Option<InferenceC
 /// - `ResponseFormat::JsonSchema`/`JsonObject` combined with `ToolChoice::Tool` (conflict).
 /// - `ResponseFormat::JsonSchema`/`JsonObject` combined with `ToolChoice::None` (conflict).
 /// - No message with content after empty/whitespace-only text is dropped.
+/// - The last user message had only empty/whitespace-only text and the request would end with an assistant message.
 pub(crate) fn build_request(
     cfg: &Config,
     req: &ModelRequest,
@@ -484,6 +485,28 @@ mod tests {
     fn user_text(s: &str) -> Item {
         Item::UserMessage {
             content: vec![ContentPart::Text { text: s.to_owned() }],
+        }
+    }
+
+    #[test]
+    fn build_request_rejects_trailing_blank_user() {
+        for tool_choice in [None, Some(ToolChoice::None)] {
+            let mut req = ModelRequest::new();
+            req.messages = vec![
+                user_text("q"),
+                Item::AssistantMessage {
+                    content: vec![ContentPart::Text {
+                        text: "a".to_owned(),
+                    }],
+                    agent: None,
+                },
+                user_text(""),
+            ];
+            if let Some(tc) = tool_choice {
+                req.model_settings.tool_choice = Some(tc);
+            }
+            let err = build_request(&claude_cfg(), &req).unwrap_err();
+            assert!(matches!(err, ModelError::Other(_)));
         }
     }
 

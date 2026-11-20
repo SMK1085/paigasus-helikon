@@ -198,6 +198,25 @@ mod tests {
         })
     }
 
+    // `offline_model` blocks on its own runtime, so this test is a plain
+    // `#[test]` that drives `invoke` on a second runtime.
+    #[test]
+    fn invoke_rejects_blank_only_request_before_network() {
+        let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let mut req = ModelRequest::new();
+        req.messages = vec![paigasus_helikon_core::Item::UserMessage {
+            content: vec![paigasus_helikon_core::ContentPart::Text {
+                text: String::new(),
+            }],
+        }];
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let res = rt.block_on(m.invoke(req, CancellationToken::new()));
+        assert!(res.is_err());
+    }
+
     #[test]
     fn provider_returns_bedrock() {
         let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
