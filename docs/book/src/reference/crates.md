@@ -6,8 +6,8 @@ For orientation — how to pick crates and add them to your `Cargo.toml` — see
 
 ## Dependency direction
 
-- `paigasus-helikon-core` is the root: it owns the trait surface, the agent loop, the event stream, and the carrier types. It depends on no other workspace crate.
-- The provider, session, tool, MCP, and runtime crates each depend on `core` and on nothing else in the workspace (`-tools` carries a path-only dev-dep on `-providers-openai` for an example; it is stripped from the published manifest; `-core` and `-runtime-tokio` carry a path-only dev-dep on the internal `paigasus-helikon-deferral-testkit` for their tests, stripped the same way).
+- `paigasus-helikon-core` is the root: it owns the trait surface, the agent loop, the event stream, and the carrier types. It has no normal dependency on another workspace crate (it carries path-only dev-deps on `-macros` and on the internal `paigasus-helikon-deferral-testkit` for its tests; both are stripped from the published manifest).
+- The provider, session, tool, MCP, and runtime crates each depend on `core` and on nothing else in the workspace (`-tools` carries a path-only dev-dep on `-providers-openai` for an example; it is stripped from the published manifest; `-runtime-tokio` carries a path-only dev-dep on the internal `paigasus-helikon-deferral-testkit` for its tests, stripped the same way).
 - `paigasus-helikon-macros` is a proc-macro crate; its `#[tool]` expansion targets `core` types in the consumer's crate.
 - `paigasus-helikon` is the **facade**: it re-exports `core` unconditionally and the sibling crates behind Cargo features. Application crates normally depend on the facade alone and turn on the features they need.
 - `paigasus-helikon-cli` consumes `core` and the sibling crates it needs (`-evals`, `-runtime-tokio`, `-providers-openai`, `-providers-anthropic`, `-mcp`) directly — not the facade. It publishes to crates.io as a binary crate; its lib target is internal (`missing_docs` opted out) and carries no stability guarantee, publishing only so `cargo install paigasus-helikon-cli` resolves.

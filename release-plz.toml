@@ -26,7 +26,7 @@ pr_name = "chore: release"
 [changelog]
 sort_commits = "newest"
 
-# Internal test harnesses: these four workspace members never publish.
+# Internal test members (three harnesses and one helper library): these four workspace members never publish.
 # publish = false in each Cargo.toml and release = false here MUST move
 # together.
 
