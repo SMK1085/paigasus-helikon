@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01YAmsCXwiefCt5aBx8Lteih",
+  "agent_id": "a4ccc9187d87eeb93",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave SMA-820",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 85514,
+    "cache_read_tokens": 532461,
+    "output_tokens": 6171,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-20T20:58:15.885424+01:00",
+  "completed_at": "2026-11-20T20:59:04.033542+01:00"
+}
