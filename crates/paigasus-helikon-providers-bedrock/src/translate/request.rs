@@ -818,10 +818,22 @@ mod tests {
 
     #[test]
     fn replayed_blank_user_between_real_turns_is_dropped() {
-        let w = wire(&blank_between("")).unwrap();
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![text("a")]),
+            user(vec![text("")]),
+            user(vec![text("r")]),
+            assistant(vec![text("b")]),
+        ];
+        let w = wire(&items).unwrap();
         assert_eq!(
             w["messages"],
-            json!([t("user", "q"), t("assistant", "a"), t("user", "r")])
+            json!([
+                t("user", "q"),
+                t("assistant", "a"),
+                t("user", "r"),
+                t("assistant", "b")
+            ])
         );
     }
 
@@ -849,21 +861,23 @@ mod tests {
 
     #[test]
     fn blank_system_inside_open_round_still_flushes() {
-        let build = |sys: &str| {
-            vec![
-                user(vec![text("q")]),
-                assistant(vec![tool_use_item("tu_1")]),
-                result_item("tu_1", "r"),
-                system(sys),
-                user(vec![text("next")]),
-            ]
-        };
-        let blank = items_to_messages(&build(" ")).unwrap();
-        let real = items_to_messages(&build("s")).unwrap();
-        assert!(blank.system.is_empty());
+        let items = vec![
+            user(vec![text("q")]),
+            assistant(vec![tool_use_item("t1"), tool_use_item("t2")]),
+            res("t1"),
+            system(" "),
+            call_item("t3"),
+        ];
+        let tm = items_to_messages(&items).unwrap();
+        assert!(tm.system.is_empty());
         assert_eq!(
-            messages_to_wire_json(&blank)["messages"],
-            messages_to_wire_json(&real)["messages"]
+            messages_to_wire_json(&tm)["messages"],
+            json!([
+                msg("user", vec![tx("q")]),
+                msg("assistant", vec![tu("t1"), tu("t2")]),
+                msg("user", vec![tr("t1")]),
+                msg("assistant", vec![tu("t3")]),
+            ])
         );
     }
 
@@ -931,6 +945,28 @@ mod tests {
         let mut exp = two_rounds_expected();
         exp.push(msg("user", vec![tr("t2")]));
         assert_eq!(wire(&items).unwrap()["messages"], json!(exp));
+    }
+
+    #[test]
+    fn orphan_result_before_tool_call_flushes_as_before() {
+        let items = vec![
+            user(vec![text("q")]),
+            result_item("rX", "x"),
+            call_item("t1"),
+        ];
+        assert_eq!(
+            wire(&items).unwrap()["messages"],
+            json!([
+                msg(
+                    "user",
+                    vec![
+                        tx("q"),
+                        json!({"type": "tool_result", "toolUseId": "rX", "content": "x"})
+                    ]
+                ),
+                msg("assistant", vec![tu("t1")]),
+            ])
+        );
     }
 
     #[test]

@@ -298,7 +298,7 @@ async fn structured_output_synthesis() {
 /// sent as an empty text block.
 #[tokio::test]
 #[ignore]
-async fn blank_user_after_tool_result_is_sent() {
+async fn blank_user_after_tool_result_is_dropped() {
     let Some(model_id) = skip_if_missing_env() else {
         return;
     };

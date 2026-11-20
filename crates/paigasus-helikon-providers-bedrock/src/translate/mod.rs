@@ -507,6 +507,11 @@ mod tests {
             }
             let err = build_request(&claude_cfg(), &req).unwrap_err();
             assert!(matches!(err, ModelError::Other(_)));
+            assert!(
+                err.to_string()
+                    .contains("would end with an assistant message"),
+                "{err}"
+            );
         }
     }
 
