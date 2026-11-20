@@ -361,9 +361,11 @@ Every shipped `Session` backend passes the same conformance suite from the
 | `run_watermark_exclusive` | `events(Some(SequenceId(n)))` returns only positions strictly after `n` |
 | `run_projection` | `snapshot()` equals `project(&events(None))` |
 | `run_concurrent_writers` | 16 concurrent tasks × 10 appends each — every event present exactly once |
+| `run_tool_deferred` | A log with deferred tool calls: every field comes back unchanged, `snapshot()` adds no item for a deferral, `open_deferrals` finds the open deferrals, and a watermark inside an `append` batch reads correctly |
 
 `MemorySession`, `SqliteSession`, `PostgresSession`, and `RedisSession` all run
 `run_all`. Adding a new backend means passing this suite before it ships.
+The testkit also runs `run_tool_deferred` against `CompactingSession<MemorySession>` with `threshold(1)`. This proves that the wrapper stores deferrals exactly and does not compact over an open deferral.
 
 ### Run the suite against your own backend
 
