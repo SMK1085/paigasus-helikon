@@ -1,10 +1,35 @@
-: Provenance: captured 2026-08-16 from ghcr.io/berriai/litellm:main-stable
-: serving the OpenAI Chat Completions wire shape, keyless mock backend.
-: The finish chunk, the trailing usage chunk and [DONE] are transcribed
-: from that capture, with the response id shortened. The ten content
-: deltas are reconstructed in the same shape (the captured trace elided
-: them). This is a PROXY capture, not
-: api.openai.com -- see the empty-choices variant for the first-party shape.
+: Provenance: CAPTURED with named reconstructed parts. The capture is from
+: a LiteLLM proxy, image ghcr.io/berriai/litellm:main-stable. The image
+: digest and the LiteLLM version are not recorded. The proxy used a keyless
+: `mock_response` and the model name `mock-fast`. The proxy configured
+: `mock-fast` as `openai/gpt-4o-mini`. The record is SMA-522 (PR #197), its
+: design, Appendix A.1 and the Reproduction section. The `created` value
+: 1786898631 decodes to 2026-08-16, the date of that design.
+:
+: This is a PROXY capture, not api.openai.com. The usage chunk keeps the
+: proxy form `"choices":[{"index":0,"delta":{}}]`. See
+: chat_text_usage_trailing_empty_choices.txt for the `"choices":[]` form.
+:
+: What the record shows. Appendix A.1 shows the first content delta
+: ("Hel"), the last content delta ("."), the finish chunk, the usage chunk
+: and `[DONE]`. It elides the middle deltas and the end of the response id.
+: The trace shows only the id prefix `chatcmpl-1cc5e8c0-`.
+:
+: Reconstructed parts. The eight middle content deltas ("lo " to "end")
+: are reconstructed in the same shape. The number of elided deltas is not
+: recorded. The design (the Fixtures section) says that the ten content
+: deltas are reconstructed by hand and that the appendix elides them.
+:
+: Edits from the raw capture:
+:
+: Removed: not recorded. The trace in the appendix is abridged, and no raw
+: copy of the capture is kept in the repo.
+:
+: Added: the eight reconstructed middle content deltas.
+:
+: Changed: the response id. Every line of this file has the shortened id
+: `chatcmpl-1cc5e8c0`. The full id is not recorded. The key order of the
+: usage chunk (`created` before `object`) is as the trace shows.
 data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}
 
 data: {"id":"chatcmpl-1cc5e8c0","object":"chat.completion.chunk","created":1786898631,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"lo "}}]}

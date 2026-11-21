@@ -22,7 +22,9 @@ fn user(text: &str) -> Item {
 async fn cancellation_before_first_chunk_yields_no_events() {
     let server = MockServer::start().await;
 
-    // Delay the response so cancellation fires first.
+    // Delay the response so cancellation fires first. The body is only the
+    // `[DONE]` line, HAND-AUTHORED; the test never reads it, because the
+    // cancellation fires first. It is not a captured stream.
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(
@@ -94,6 +96,9 @@ async fn cancellation_before_first_chunk_yields_no_events() {
 #[tokio::test]
 async fn uncancelled_stream_emits_exactly_one_finish() {
     let server = MockServer::start().await;
+    // Provenance: HAND-AUTHORED, not captured (SMA-522, PR #197). The chunk
+    // order follows fixtures/chat_text_usage_trailing.txt. The envelope values
+    // (`id` "x", `created` 1, model "gpt-4o") are not from a capture.
     let body = concat!(
         "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
         "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",

@@ -1,8 +1,13 @@
-: Provenance: HAND-AUTHORED, not captured. Same trailing-usage envelope as
-: chat_text_usage_trailing.txt, but with "choices":[] on the usage chunk --
-: the shape api.openai.com emits. async-openai documents the field as "Can
-: also be empty for the last chunk if you set stream_options:
-: {"include_usage": true}". Both shapes must translate identically.
+: Provenance: HAND-AUTHORED under SMA-522 (PR #197), not captured from the
+: wire. The chunk sequence and `[DONE]` follow chat_text_usage_trailing.txt,
+: which is a LiteLLM proxy capture. The envelope values (`id` "x",
+: `created` 1, model "gpt-4o") are not from a capture.
+:
+: The usage chunk has `"choices":[]`. The source of that shape is the
+: async-openai field doc on the chat completion stream response. The doc
+: says that the list "Can also be empty for the last chunk if you set
+: stream_options: {"include_usage": true}". No capture of api.openai.com
+: with this shape is recorded. Both shapes must translate the same way.
 data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}
 
 data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}

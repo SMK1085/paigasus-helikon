@@ -143,6 +143,9 @@ async fn openai_and_litellm_translate_messages_identically() {
             .insert_header("content-type", "text/event-stream")
             .set_body_raw(body, "text/event-stream")
     };
+    // Provenance: HAND-AUTHORED, not captured. The body is one finish chunk and
+    // `[DONE]`. It has no `id`, `object`, `created` or `model` key, so it does
+    // not copy a capture. The test reads the request body, not the response.
     const DONE: &str =
         "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 

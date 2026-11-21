@@ -1,6 +1,18 @@
-: Provenance: HAND-AUTHORED. The trailing-usage envelope matches the live
-: capture in chat_text_usage_trailing.txt; the content_filter finish reason
-: is hand-built because it cannot be provoked on demand from any mock.
+: Provenance: HAND-AUTHORED under SMA-316 (PR #30), not captured from the
+: wire. SMA-522 (PR #197) changed it. The `content_filter` finish value has
+: no capture. The SMA-522 design says that no mock can provoke it.
+:
+: What follows the capture, and what does not. The chunk sequence (content
+: delta, finish chunk, a separate trailing usage chunk, `[DONE]`) follows the
+: LiteLLM capture in chat_text_usage_trailing.txt. The envelope does not
+: follow it. Here the usage chunk has the keys `id`, `object`, `created`,
+: `model`; the capture has `id`, `created`, `model`, `object`. This file has
+: no `completion_tokens_details`. The values `id` "x", `created` 1700000000
+: and model "gpt-4o" are not from a capture. The usage chunk keeps the proxy
+: form `"choices":[{"index":0,"delta":{}}]`, not `"choices":[]`.
+:
+: History. SMA-316 (PR #30) wrote this file with `usage` on the finish
+: chunk. SMA-522 (PR #197) moved `usage` to its own trailing chunk.
 data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"sorry, I can't"}}]}
 
 data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}
