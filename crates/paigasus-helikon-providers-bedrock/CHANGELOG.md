@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.3.1...paigasus-helikon-providers-bedrock-v0.3.2) - 2026-11-21
+
+### Fixed
+
+- *(providers)* SMA-839 send native structured output to bedrock models that reject a forced tool choice ([#379](https://github.com/SMK1085/paigasus-helikon/pull/379))
+
 ## [0.3.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.3.0...paigasus-helikon-providers-bedrock-v0.3.1) - 2026-11-21
 
 ### Other

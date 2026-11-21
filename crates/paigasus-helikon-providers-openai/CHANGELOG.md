@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.4.1...paigasus-helikon-providers-openai-v0.4.2) - 2026-11-21
+
+### Other
+
+- *(providers)* SMA-585 drop the done sentinel from responses fixtures ([#381](https://github.com/SMK1085/paigasus-helikon/pull/381))
+
 ## [0.4.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.4.0...paigasus-helikon-providers-openai-v0.4.1) - 2026-11-21
 
 ### Other
