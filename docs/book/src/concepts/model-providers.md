@@ -187,14 +187,15 @@ Claude Sonnet 5.5 and Opus 5.5 reject a forced tool choice. For these two
 models, the provider sends the `JsonSchema` as native output
 (`outputConfig.textFormat`). Another Anthropic model can also reject the forced
 choice. The provider then sends the request one more time on the native path.
-After that, the `BedrockModel` handle and its clones use native output. The
-provider rewrites the schema first. It adds `additionalProperties: false`,
+After that, the `BedrockModel` handle and its clones use native output.
+
+The provider rewrites the schema first. It adds `additionalProperties: false`,
 changes `oneOf` to `anyOf`, and removes keywords that Bedrock does not accept,
 such as numeric limits. Bedrock rejects maps, `patternProperties`,
 `propertyNames`, tuples, the schemas `true` and `{}`, and recursive types.
-`JsonObject` degrades to text on this path. The provider omits
-`ToolChoice::Required` and `ToolChoice::Tool` with a warning. For the full
-rules, see the crate README.
+
+`JsonObject` degrades to text on this path. The provider omits `ToolChoice::Required` and `ToolChoice::Tool` with a
+warning. For the full rules, see the crate README.
 
 Family detection reads the first segment of the model ID. If the first segment
 is not a provider name, detection reads the second segment. This skips a
@@ -212,9 +213,9 @@ configuration is required on this provider.
 
 #### Tool-input schema rewriter
 
-For tool input schemas, Bedrock's Converse API validator rejects JSON Schemas containing `$ref`/`$defs`,
-`oneOf`/`anyOf`/`allOf`, or meta-keywords such as `$schema`, `format`, and
-`examples`. The crate exposes `rewrite_tool_schema(schema, Ruleset::Strict)`,
+For tool input schemas, Bedrock's Converse API validator rejects JSON Schemas
+containing `$ref`/`$defs`, `oneOf`/`anyOf`/`allOf`, or meta-keywords such as
+`$schema`, `format`, and `examples`. The crate exposes `rewrite_tool_schema(schema, Ruleset::Strict)`,
 which runs automatically on every tool spec before the request is sent:
 
 - `$ref` references are inlined recursively (cycles and excessive depth are
