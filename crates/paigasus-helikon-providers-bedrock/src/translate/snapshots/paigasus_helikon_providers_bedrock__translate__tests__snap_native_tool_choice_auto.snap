@@ -1,0 +1,36 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
+expression: w
+---
+{
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "hi"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "global.anthropic.claude-sonnet-5-5",
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": {
+    "toolChoice": {
+      "auto": {}
+    },
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Search",
+          "inputSchema": {
+            "json": "<Document>"
+          },
+          "name": "search"
+        }
+      }
+    ]
+  }
+}

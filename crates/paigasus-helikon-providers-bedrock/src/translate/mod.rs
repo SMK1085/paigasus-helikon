@@ -2,19 +2,22 @@
 
 pub mod schema;
 
+mod native;
 pub(crate) mod native_schema;
 pub(crate) mod request;
 pub(crate) mod response_format;
 pub(crate) mod tools;
 
 use aws_sdk_bedrockruntime::types::{
-    AnyToolChoice, AutoToolChoice, InferenceConfiguration, Message, SpecificToolChoice,
-    SystemContentBlock, Tool, ToolChoice as BedrockToolChoice, ToolConfiguration,
+    AnyToolChoice, AutoToolChoice, InferenceConfiguration, Message, OutputConfig,
+    SpecificToolChoice, SystemContentBlock, Tool, ToolChoice as BedrockToolChoice,
+    ToolConfiguration,
 };
 use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
 
 use crate::builder::Config;
 use crate::family::ModelFamily; // used by translate_tool_choice
+use crate::policy::{NativeNotice, OutputPath};
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
@@ -40,6 +43,83 @@ pub(crate) struct PreparedConverse {
     /// Whether the stream translator should remap the synthesized tool's
     /// output to `TokenDelta`.
     pub(crate) synthesizing: bool,
+    /// Native structured-output configuration. Only the native path sets it.
+    pub(crate) output_config: Option<OutputConfig>,
+    /// The changes of meaning that the native path made to the request.
+    /// The forced-tool path always leaves this empty.
+    pub(crate) notices: Vec<NativeNotice>,
+}
+
+impl PreparedConverse {
+    /// Returns `true` when the tool configuration forces a tool call
+    /// (`toolChoice` is `any` or `tool`).
+    // Used from Task 5 (send fallback).
+    #[allow(dead_code)]
+    pub(crate) fn has_forced_tool_choice(&self) -> bool {
+        matches!(
+            self.tool_config
+                .as_ref()
+                .and_then(ToolConfiguration::tool_choice),
+            Some(BedrockToolChoice::Any(_) | BedrockToolChoice::Tool(_))
+        )
+    }
+}
+
+/// The error for `ToolChoice::Required` when the tool list is empty.
+fn required_without_tools_error() -> ModelError {
+    ModelError::Other(anyhow::anyhow!(
+        "ToolChoice::Required requires at least one tool to be defined",
+    ))
+}
+
+/// Make sure that `name` is the name of a tool in `tools`.
+///
+/// # Errors
+/// Returns [`ModelError::Other`] when no tool in `tools` has the name `name`.
+fn check_tool_name(tools: &[Tool], name: &str) -> Result<(), ModelError> {
+    let defined = tools
+        .iter()
+        .any(|t| matches!(t, Tool::ToolSpec(spec) if spec.name() == name));
+    if defined {
+        Ok(())
+    } else {
+        Err(ModelError::Other(anyhow::anyhow!(
+            "ToolChoice::Tool references tool {:?} which is not defined in the tool list",
+            name,
+        )))
+    }
+}
+
+/// Assemble the [`ToolConfiguration`] from the tool list and the optional tool choice.
+///
+/// Returns `None` when `tools` is empty. A `tool_choice` with no tools is then
+/// omitted, because a `ToolConfiguration` needs at least one tool.
+///
+/// # Errors
+/// Returns [`ModelError::Other`] when the SDK builder fails.
+fn assemble_tool_config(
+    tools: Vec<Tool>,
+    tool_choice: Option<BedrockToolChoice>,
+) -> Result<Option<ToolConfiguration>, ModelError> {
+    if tools.is_empty() {
+        if tool_choice.is_some() {
+            tracing::debug!(
+                target: "paigasus::bedrock::translate",
+                "tool_choice requested but no tools provided; omitting ToolConfiguration",
+            );
+        }
+        return Ok(None);
+    }
+    let mut builder = ToolConfiguration::builder();
+    for t in tools {
+        builder = builder.tools(t);
+    }
+    if let Some(tc) = tool_choice {
+        builder = builder.tool_choice(tc);
+    }
+    Ok(Some(builder.build().map_err(|e| {
+        ModelError::Other(anyhow::anyhow!("failed to build ToolConfiguration: {e}"))
+    })?))
 }
 
 /// Build an [`InferenceConfiguration`] from per-request settings and the builder config.
@@ -83,6 +163,11 @@ fn build_inference_config(req: &ModelRequest, cfg: &Config) -> Option<InferenceC
 
 /// Assemble a [`PreparedConverse`] from the builder `Config` and a [`ModelRequest`].
 ///
+/// `path` selects the wire path. On [`OutputPath::Native`] the request goes to
+/// the native builder, which sends structured output in `outputConfig` and
+/// never forces a tool choice. The errors below are for
+/// [`OutputPath::ForcedTool`].
+///
 /// # Errors
 /// - Reserved tool name (`__paigasus_structured_output__` used by the caller).
 /// - `ResponseFormat::JsonSchema`/`JsonObject` combined with `ToolChoice::Tool` (conflict).
@@ -92,7 +177,11 @@ fn build_inference_config(req: &ModelRequest, cfg: &Config) -> Option<InferenceC
 pub(crate) fn build_request(
     cfg: &Config,
     req: &ModelRequest,
+    path: OutputPath,
 ) -> Result<PreparedConverse, ModelError> {
+    if path == OutputPath::Native {
+        return native::build_native(cfg, req);
+    }
     let family = cfg.family;
     let ruleset = Ruleset::for_family(family);
 
@@ -138,6 +227,8 @@ pub(crate) fn build_request(
             tool_config: None,
             inference_config,
             synthesizing: false,
+            output_config: None,
+            notices: Vec::new(),
         });
     }
 
@@ -177,55 +268,15 @@ pub(crate) fn build_request(
         match req.model_settings.tool_choice.as_ref() {
             Some(ToolChoice::Required) if !synthesizing => {
                 if all_tools.is_empty() {
-                    return Err(ModelError::Other(anyhow::anyhow!(
-                        "ToolChoice::Required requires at least one tool to be defined",
-                    )));
+                    return Err(required_without_tools_error());
                 }
             }
-            Some(ToolChoice::Tool { name }) => {
-                let tool_names: Vec<&str> = all_tools
-                    .iter()
-                    .filter_map(|t| {
-                        if let Tool::ToolSpec(spec) = t {
-                            Some(spec.name())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !tool_names.contains(&name.as_str()) {
-                    return Err(ModelError::Other(anyhow::anyhow!(
-                        "ToolChoice::Tool references tool {:?} which is not defined in the tool list",
-                        name,
-                    )));
-                }
-            }
+            Some(ToolChoice::Tool { name }) => check_tool_name(&all_tools, name)?,
             _ => {}
         }
     }
 
-    let tool_config = if !all_tools.is_empty() {
-        let mut builder = ToolConfiguration::builder();
-        for t in all_tools {
-            builder = builder.tools(t);
-        }
-        if let Some(tc) = effective_tc {
-            builder = builder.tool_choice(tc);
-        }
-        Some(builder.build().map_err(|e| {
-            ModelError::Other(anyhow::anyhow!("failed to build ToolConfiguration: {e}"))
-        })?)
-    } else if effective_tc.is_some() {
-        // ToolConfiguration requires at least one tool — skip tool_choice when
-        // no tools are present to avoid a build error.
-        tracing::debug!(
-            target: "paigasus::bedrock::translate",
-            "tool_choice requested but no tools provided; omitting ToolConfiguration",
-        );
-        None
-    } else {
-        None
-    };
+    let tool_config = assemble_tool_config(all_tools, effective_tc)?;
 
     // Build InferenceConfiguration.
     let inference_config = build_inference_config(req, cfg);
@@ -237,6 +288,8 @@ pub(crate) fn build_request(
         tool_config,
         inference_config,
         synthesizing,
+        output_config: None,
+        notices: Vec::new(),
     })
 }
 
@@ -423,14 +476,32 @@ pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
         }
     };
 
-    json!({
+    let mut wire = json!({
         "modelId": p.model_id,
         "system": system,
         "messages": messages,
         "toolConfig": tool_config,
         "inferenceConfig": inference_config,
         "synthesizing": p.synthesizing,
-    })
+    });
+
+    // Output config: the key is present only on the native path, so the
+    // forced-tool snapshots do not change.
+    if let Some(oc) = &p.output_config {
+        let text_format = oc.text_format().map(|tf| {
+            let structure = tf
+                .structure()
+                .and_then(|s| s.as_json_schema().ok())
+                .map(|js| {
+                    let schema: Value = serde_json::from_str(js.schema())
+                        .expect("the native output schema is a JSON string");
+                    json!({"jsonSchema": {"name": js.name(), "schema": schema}})
+                });
+            json!({"type": tf.r#type().as_str(), "structure": structure})
+        });
+        wire["outputConfig"] = json!({"textFormat": text_format});
+    }
+    wire
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -447,6 +518,7 @@ mod tests {
 
     use crate::capabilities::caps_for;
     use crate::family::ModelFamily;
+    use crate::policy::{ForcedChoicePolicy, NativeNotice};
 
     fn make_cfg(model_id: &str) -> Config {
         let family = ModelFamily::from_model_id(model_id);
@@ -483,6 +555,27 @@ mod tests {
         make_cfg("meta.llama3-1-70b-instruct-v1:0")
     }
 
+    /// Build the request on the path that the policy of `cfg` selects.
+    fn build(cfg: &Config, req: &ModelRequest) -> Result<PreparedConverse, ModelError> {
+        build_request(
+            cfg,
+            req,
+            ForcedChoicePolicy::new(&cfg.model_id, cfg.family).path(),
+        )
+    }
+
+    /// A model that rejects a forced tool choice (the native path).
+    fn sonnet55_cfg() -> Config {
+        make_cfg("global.anthropic.claude-sonnet-5-5")
+    }
+
+    fn assert_no_forced_choice(p: &PreparedConverse) {
+        assert!(
+            !p.has_forced_tool_choice(),
+            "forced tool choice on the native path"
+        );
+    }
+
     fn user_text(s: &str) -> Item {
         Item::UserMessage {
             content: vec![ContentPart::Text { text: s.to_owned() }],
@@ -506,7 +599,7 @@ mod tests {
             if let Some(tc) = tool_choice {
                 req.model_settings.tool_choice = Some(tc);
             }
-            let err = build_request(&claude_cfg(), &req).unwrap_err();
+            let err = build(&claude_cfg(), &req).unwrap_err();
             assert!(matches!(err, ModelError::Other(_)));
             assert!(
                 err.to_string()
@@ -519,7 +612,7 @@ mod tests {
     #[test]
     fn empty_messages_returns_error() {
         let req = ModelRequest::new();
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -527,7 +620,7 @@ mod tests {
     fn plain_text_turn_no_tools() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_eq!(p.model_id, "anthropic.claude-3-5-sonnet-20241022-v2:0");
         assert_eq!(p.messages.len(), 1);
         assert!(p.tool_config.is_none());
@@ -541,7 +634,7 @@ mod tests {
         req.model_settings.temperature = Some(0.7);
         req.model_settings.top_p = Some(0.9);
         req.model_settings.max_output_tokens = Some(512);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         let ic = p.inference_config.as_ref().unwrap();
         assert!((ic.temperature().unwrap() - 0.7f32).abs() < 1e-5);
         assert!((ic.top_p().unwrap() - 0.9f32).abs() < 1e-5);
@@ -557,7 +650,7 @@ mod tests {
             schema: json!({"type": "object"}),
             strict: false,
         });
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert!(p.synthesizing);
         let tc = p.tool_config.as_ref().unwrap();
         assert_eq!(tc.tools().len(), 1);
@@ -572,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn json_schema_on_global_claude_profile_synthesizes() {
+    fn json_schema_on_global_sonnet_5_synthesizes() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("make a person")];
         req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
@@ -580,7 +673,7 @@ mod tests {
             schema: json!({"type": "object"}),
             strict: false,
         });
-        let p = build_request(&make_cfg("global.anthropic.claude-sonnet-5-5"), &req).unwrap();
+        let p = build(&make_cfg("global.anthropic.claude-sonnet-5"), &req).unwrap();
         assert!(p.synthesizing);
         let tc = p.tool_config.as_ref().unwrap();
         assert_eq!(tc.tools().len(), 1);
@@ -602,7 +695,7 @@ mod tests {
             schema: json!({"type": "object"}),
             strict: false,
         });
-        let p = build_request(&llama_cfg(), &req).unwrap();
+        let p = build(&llama_cfg(), &req).unwrap();
         assert!(!p.synthesizing);
         assert!(p.tool_config.is_none());
     }
@@ -619,7 +712,7 @@ mod tests {
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "search".to_owned(),
         });
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -633,7 +726,7 @@ mod tests {
             strict: false,
         });
         req.model_settings.tool_choice = Some(ToolChoice::None);
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -643,7 +736,7 @@ mod tests {
         req.messages = vec![user_text("hi")];
         req.model_settings.response_format = Some(ResponseFormat::JsonObject);
         req.model_settings.tool_choice = Some(ToolChoice::None);
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -657,7 +750,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::None);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         // toolConfig must be absent — None suppresses tool calls entirely.
         assert!(p.tool_config.is_none());
         assert!(!p.synthesizing);
@@ -673,7 +766,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::Auto);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         let tc = p.tool_config.as_ref().unwrap();
         assert!(tc.tool_choice().unwrap().is_auto());
     }
@@ -688,7 +781,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         let tc = p.tool_config.as_ref().unwrap();
         assert!(tc.tool_choice().unwrap().is_any());
     }
@@ -705,7 +798,7 @@ mod tests {
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "ping".to_owned(),
         });
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         let tc = p.tool_config.as_ref().unwrap();
         let choice = tc.tool_choice().unwrap();
         assert!(choice.is_tool());
@@ -721,7 +814,7 @@ mod tests {
             description: "bad".to_owned(),
             schema: json!({}),
         }];
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -729,7 +822,7 @@ mod tests {
     fn to_wire_json_projection_is_stable() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         let w = to_wire_json(&p);
         assert_eq!(w["modelId"], "anthropic.claude-3-5-sonnet-20241022-v2:0");
         assert_eq!(w["messages"][0]["role"], "user");
@@ -743,7 +836,7 @@ mod tests {
     fn snap_plain_text_turn() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
     }
 
@@ -772,7 +865,7 @@ mod tests {
                 }],
             },
         ];
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
     }
 
@@ -792,7 +885,7 @@ mod tests {
             }),
             strict: false,
         });
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
     }
 
@@ -806,7 +899,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::Auto);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
     }
 
@@ -820,7 +913,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
     }
 
@@ -836,7 +929,7 @@ mod tests {
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "ping".to_owned(),
         });
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
     }
 
@@ -847,7 +940,7 @@ mod tests {
         req.model_settings.temperature = Some(0.7);
         req.model_settings.top_p = Some(0.9);
         req.model_settings.max_output_tokens = Some(256);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
     }
 
@@ -860,7 +953,7 @@ mod tests {
             schema: json!({"type": "object", "properties": {"label": {"type": "string"}}}),
             strict: false,
         });
-        let p = build_request(&llama_cfg(), &req).unwrap();
+        let p = build(&llama_cfg(), &req).unwrap();
         let wire = to_wire_json(&p);
         assert_eq!(wire["synthesizing"], false);
         assert_json_snapshot!(wire);
@@ -878,7 +971,7 @@ mod tests {
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "some_tool".to_owned(),
         });
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -892,7 +985,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::None);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         // toolConfig must be null in wire representation
         assert_json_snapshot!(to_wire_json(&p));
     }
@@ -905,7 +998,7 @@ mod tests {
         // inferenceConfig must be absent (no maxTokens, no temperature, no topP).
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         // inferenceConfig should be None — no fields to populate.
         assert!(
             p.inference_config.is_none(),
@@ -926,7 +1019,7 @@ mod tests {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
         req.model_settings.max_output_tokens = Some(512);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         let ic = p
             .inference_config
             .as_ref()
@@ -965,7 +1058,7 @@ mod tests {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
         // No per-request max_output_tokens — builder default should apply.
-        let p = build_request(&cfg_with_default, &req).unwrap();
+        let p = build(&cfg_with_default, &req).unwrap();
         let ic = p
             .inference_config
             .as_ref()
@@ -997,7 +1090,7 @@ mod tests {
             name: "search".to_owned(),
         });
         // Must succeed: on Llama there's no synthesis, so no conflict
-        let p = build_request(&llama_cfg(), &req).unwrap();
+        let p = build(&llama_cfg(), &req).unwrap();
         assert!(!p.synthesizing);
     }
 
@@ -1012,7 +1105,7 @@ mod tests {
             strict: false,
         });
         req.model_settings.tool_choice = Some(ToolChoice::None);
-        let p = build_request(&llama_cfg(), &req).unwrap();
+        let p = build(&llama_cfg(), &req).unwrap();
         assert!(!p.synthesizing);
         assert!(p.tool_config.is_none()); // None suppresses tool_config
     }
@@ -1028,7 +1121,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
-        let p = build_request(&llama_cfg(), &req).unwrap();
+        let p = build(&llama_cfg(), &req).unwrap();
         // tool_config should still be present (tools exist) but toolChoice should be omitted
         let tc = p.tool_config.as_ref().unwrap();
         // toolChoice absent (None) because family doesn't support it
@@ -1046,7 +1139,7 @@ mod tests {
             schema: json!({"type": "object"}),
         }];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
-        let p = build_request(&claude_cfg(), &req).unwrap();
+        let p = build(&claude_cfg(), &req).unwrap();
         let tc = p.tool_config.as_ref().unwrap();
         assert!(tc.tool_choice().unwrap().is_any());
     }
@@ -1065,7 +1158,7 @@ mod tests {
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "nonexistent".to_owned(),
         });
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -1075,7 +1168,7 @@ mod tests {
         req.messages = vec![user_text("hi")];
         // No tools added, ToolChoice::Required on supported family
         req.model_settings.tool_choice = Some(ToolChoice::Required);
-        let err = build_request(&claude_cfg(), &req).unwrap_err();
+        let err = build(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
 
@@ -1107,11 +1200,387 @@ mod tests {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
         req.model_settings.max_output_tokens = Some(256);
-        let p = build_request(&cfg_with_default, &req).unwrap();
+        let p = build(&cfg_with_default, &req).unwrap();
         let ic = p
             .inference_config
             .as_ref()
             .expect("inferenceConfig present");
         assert_eq!(ic.max_tokens(), Some(256));
+    }
+
+    // ── Native path (SMA-839) ─────────────────────────────────────────────────
+
+    fn transaction_format() -> ResponseFormat {
+        ResponseFormat::JsonSchema {
+            name: "Transaction".to_owned(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "number"},
+                    "currency": {"type": "string"},
+                },
+                "required": ["amount", "currency"]
+            }),
+            strict: false,
+        }
+    }
+
+    fn search_tool() -> ToolDef {
+        ToolDef {
+            name: "search".to_owned(),
+            description: "Search".to_owned(),
+            schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+        }
+    }
+
+    fn get_balance_tool() -> ToolDef {
+        ToolDef {
+            name: "get_balance".to_owned(),
+            description: "Get account balance".to_owned(),
+            schema: json!({"type": "object", "properties": {"account_id": {"type": "string"}}}),
+        }
+    }
+
+    /// A user turn, one tool call and its result.
+    fn tool_round_history() -> Vec<Item> {
+        vec![
+            user_text("What's my balance?"),
+            Item::AssistantMessage {
+                content: vec![ContentPart::ToolUse {
+                    call_id: "tu_1".to_owned(),
+                    name: "get_balance".to_owned(),
+                    args: json!({"account_id": "acc_123"}),
+                }],
+                agent: None,
+            },
+            Item::ToolResult {
+                call_id: "tu_1".to_owned(),
+                content: vec![ContentPart::Text {
+                    text: "$1,234.56".to_owned(),
+                }],
+            },
+        ]
+    }
+
+    fn tool_names(w: &serde_json::Value) -> Vec<String> {
+        w["toolConfig"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["toolSpec"]["name"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn json_schema_on_global_sonnet_5_5_uses_native_output() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("make a person")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Person".to_owned(),
+            schema: json!({"type": "object"}),
+            strict: false,
+        });
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(p.tool_config.is_none());
+        assert!(!p.synthesizing);
+        let js = p
+            .output_config
+            .as_ref()
+            .unwrap()
+            .text_format()
+            .unwrap()
+            .structure()
+            .unwrap()
+            .as_json_schema()
+            .unwrap();
+        assert_eq!(js.name(), Some("Person"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(js.schema()).unwrap(),
+            json!({"type": "object", "additionalProperties": false})
+        );
+    }
+
+    #[test]
+    fn snap_native_json_schema() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Extract the transaction data.")];
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(!p.synthesizing);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"].is_null());
+        assert_eq!(w["outputConfig"]["textFormat"]["type"], "json_schema");
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_json_schema_finalizing_turn_anchor() {
+        let mut req = ModelRequest::new();
+        req.messages = tool_round_history();
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(p.synthesizing);
+        let w = to_wire_json(&p);
+        assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_eq!(w["outputConfig"]["textFormat"]["type"], "json_schema");
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_json_object_degrades_to_text() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Give me a JSON object.")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonObject);
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(!p.synthesizing);
+        assert_eq!(p.notices, vec![NativeNotice::JsonObjectAsText]);
+        let w = to_wire_json(&p);
+        assert!(w.get("outputConfig").is_none());
+        assert!(w["toolConfig"].is_null());
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_json_object_finalizing_turn_anchor() {
+        // Ruling P6: tool history + no user tools → the synthesized tool is the anchor.
+        let mut req = ModelRequest::new();
+        req.messages = tool_round_history();
+        req.model_settings.response_format = Some(ResponseFormat::JsonObject);
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(p.synthesizing);
+        assert_eq!(p.notices, vec![NativeNotice::JsonObjectAsText]);
+        let w = to_wire_json(&p);
+        assert!(w.get("outputConfig").is_none());
+        assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_tool_choice_required_omitted() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![search_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert_eq!(p.notices, vec![NativeNotice::RequiredOmitted]);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_tool_choice_tool_omitted() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![search_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "search".to_owned(),
+        });
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert_eq!(p.notices, vec![NativeNotice::ToolOmitted]);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_tool_choice_auto() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![search_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::Auto);
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(p.notices.is_empty());
+        let w = to_wire_json(&p);
+        assert_eq!(w["toolConfig"]["toolChoice"], json!({"auto": {}}));
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_tool_choice_none_with_json_schema() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Extract the transaction data.")];
+        req.tools = vec![search_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(!p.synthesizing);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"].is_null());
+        assert_eq!(w["outputConfig"]["textFormat"]["type"], "json_schema");
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_tool_choice_none_json_schema_finalizing_anchor() {
+        let mut req = ModelRequest::new();
+        req.messages = tool_round_history();
+        req.tools = vec![get_balance_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(p.synthesizing);
+        let w = to_wire_json(&p);
+        assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_eq!(w["outputConfig"]["textFormat"]["type"], "json_schema");
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_json_schema_plus_tool_choice_tool() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Extract the transaction data.")];
+        req.tools = vec![search_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "search".to_owned(),
+        });
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert_eq!(p.notices, vec![NativeNotice::ToolOmitted]);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_eq!(w["outputConfig"]["textFormat"]["type"], "json_schema");
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_json_schema_plus_required() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Extract the transaction data.")];
+        req.tools = vec![search_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert_eq!(p.notices, vec![NativeNotice::RequiredOmitted]);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_eq!(w["outputConfig"]["textFormat"]["type"], "json_schema");
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_native_user_tools_plus_json_schema() {
+        let mut req = ModelRequest::new();
+        req.messages = tool_round_history();
+        req.tools = vec![get_balance_tool()];
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(!p.synthesizing);
+        let w = to_wire_json(&p);
+        assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
+        assert_eq!(w["outputConfig"]["textFormat"]["type"], "json_schema");
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn native_tool_choice_required_no_tools_is_error() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        let err = build(&sonnet55_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(
+            err.to_string().contains("requires at least one tool"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn native_tool_choice_required_json_object_no_tools_is_omitted() {
+        // Ruling P7: no error; the choice is omitted with a notice.
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        req.model_settings.response_format = Some(ResponseFormat::JsonObject);
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_no_forced_choice(&p);
+        assert!(p.tool_config.is_none());
+        assert!(p.output_config.is_none());
+        assert!(!p.synthesizing);
+        assert_eq!(
+            p.notices,
+            vec![
+                NativeNotice::JsonObjectAsText,
+                NativeNotice::RequiredOmitted
+            ]
+        );
+    }
+
+    #[test]
+    fn native_tool_choice_tool_unknown_name_is_error() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![search_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "missing".to_owned(),
+        });
+        let err = build(&sonnet55_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(
+            err.to_string().contains("not defined in the tool list"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn native_path_reports_no_notices_for_plain_requests() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hello")];
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert!(p.notices.is_empty());
+        assert!(p.output_config.is_none());
+        assert!(p.tool_config.is_none());
+        assert!(!p.synthesizing);
+    }
+
+    #[test]
+    fn forced_path_reports_no_output_config_or_notices() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Extract the transaction data.")];
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&claude_cfg(), &req).unwrap();
+        assert!(p.output_config.is_none());
+        assert!(p.notices.is_empty());
+        assert!(p.has_forced_tool_choice());
+    }
+
+    fn assert_forced_path_kept(model_id: &str) -> serde_json::Value {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Extract the transaction data.")];
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&make_cfg(model_id), &req).unwrap();
+        let w = to_wire_json(&p);
+        assert_eq!(
+            w["toolConfig"]["toolChoice"],
+            json!({"tool": {"name": "__paigasus_structured_output__"}})
+        );
+        assert!(w.get("outputConfig").is_none());
+        w
+    }
+
+    #[test]
+    fn snap_forced_path_kept_on_sonnet_5() {
+        assert_json_snapshot!(assert_forced_path_kept("global.anthropic.claude-sonnet-5"));
+    }
+
+    #[test]
+    fn snap_forced_path_kept_on_haiku_5_5() {
+        assert_json_snapshot!(assert_forced_path_kept("global.anthropic.claude-haiku-5-5"));
     }
 }
