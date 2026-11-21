@@ -155,6 +155,46 @@ case_versions zero_zero_to_minor 1 "dep-a" \
 # Dev-only and unpublished dependents are ignored.
 case_versions dev_and_unpublished_ignored 0 "" "${B[@]}" 0.8.0 0.3.0 0.8.0 0.1.0 0.1.1 0.1.1
 
+# no_base_match_fails: the base lists only names that are absent at the head.
+d="${tmp}/no_base_match_fails"; mkdir -p "${d}"
+printf 'other-a 0.1.0\nother-b 0.2.0\n' > "${d}/base.txt"
+make_metadata "${d}/meta.json" 0.7.0 0.2.0 0.7.0 0.1.0 0.1.0 0.1.0
+run_case no_base_match_fails 1 "no crate at the base matches" CASCADE_EVENT=pull_request \
+  CASCADE_METADATA="${d}/meta.json" CASCADE_BASE_VERSIONS="${d}/base.txt"
+
+# Cases with the default base reader. They use a small local git repository.
+# make_repo <dir> <dep-a manifest body>: commit a core and a dep-a manifest.
+make_repo() {
+  local dir="$1" depa_body="$2"
+  mkdir -p "${dir}/crates/core" "${dir}/crates/dep-a"
+  printf '[package]\nname = "core"\nversion = "0.7.0"\n' > "${dir}/crates/core/Cargo.toml"
+  printf '%s\n' "${depa_body}" > "${dir}/crates/dep-a/Cargo.toml"
+  printf '[workspace]\nmembers = ["crates/*"]\n' > "${dir}/Cargo.toml"
+  git -C "${dir}" init -q
+  git -C "${dir}" add -A
+  git -C "${dir}" -c user.name=x -c user.email=x@x -c commit.gpgsign=false commit -q -m base
+}
+
+# Head: core is 0.8.0 (breaking), dep-a is 0.2.1 (patch).
+d="${tmp}/gitcases"; mkdir -p "${d}"
+make_metadata "${d}/meta.json" 0.8.0 0.2.1 0.8.0 0.1.0 0.1.0 0.1.0
+
+make_repo "${d}/ws" '[package]
+name = "dep-a"
+version.workspace = true'
+rev="$(git -C "${d}/ws" rev-parse HEAD)"
+run_case base_version_workspace_fails 1 "crates/dep-a/Cargo.toml" CASCADE_EVENT=pull_request \
+  CASCADE_METADATA="${d}/meta.json" CASCADE_BASE_REV="${rev}" \
+  GIT_DIR="${d}/ws/.git" GIT_WORK_TREE="${d}/ws"
+
+make_repo "${d}/ws2" "[package]
+name = 'dep-a'
+version = '0.2.0'"
+rev="$(git -C "${d}/ws2" rev-parse HEAD)"
+run_case base_single_quotes_read 1 "dep-a" CASCADE_EVENT=pull_request \
+  CASCADE_METADATA="${d}/meta.json" CASCADE_BASE_REV="${rev}" \
+  GIT_DIR="${d}/ws2/.git" GIT_WORK_TREE="${d}/ws2"
+
 if [[ "${failures}" -ne 0 ]]; then
   echo "check-breaking-cascade-selftest: ${failures} case(s) failed" >&2
   exit 1

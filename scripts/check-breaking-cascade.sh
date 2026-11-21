@@ -116,21 +116,44 @@ else
     || die "cannot list the files at '${base}'"
   : > "${tmp}/base.txt"
   # Skip build output and test fixtures. The head set decides which names
-  # count, so a base entry for another name is ignored later.
+  # count, so a base entry for another name is ignored later. Limit: a
+  # publishable crate under such a path would read as new and be skipped.
   grep -E '(^|/)Cargo\.toml$' "${tmp}/tree.txt" \
     | grep -Ev '(^|/)(target|tests|fixtures)/' > "${tmp}/manifests.txt" || true
+  cut -d' ' -f1 "${tmp}/head.txt" > "${tmp}/head_names.txt"
   while IFS= read -r path; do
     content="$(git -C "${repo_root}" show "${base}:${path}")" \
       || die "cannot read '${path}' at '${base}'"
     # Take name and version from the [package] table only. A manifest without
-    # [package] (the virtual workspace root) gives no output.
-    printf '%s\n' "${content}" | awk '
-      /^[[:space:]]*\[/ { in_pkg = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*(#.*)?$/); next }
-      in_pkg && /^[[:space:]]*name[[:space:]]*=/ {
-        s = $0; sub(/^[^"]*"/, "", s); sub(/".*$/, "", s); name = s }
-      in_pkg && /^[[:space:]]*version[[:space:]]*=[[:space:]]*"/ {
-        s = $0; sub(/^[^"]*"/, "", s); sub(/".*$/, "", s); ver = s }
-      END { if (name != "" && ver != "") print name, ver }' >> "${tmp}/base.txt"
+    # [package] (the virtual workspace root) gives no output. Otherwise the
+    # output is "<name>|<version>". A part that is not a literal string
+    # (for example version.workspace = true) is empty. Both quote styles work.
+    parsed="$(printf '%s\n' "${content}" | awk '
+      function val(line,   s, q, i) {
+        s = line; sub(/^[^=]*=[[:space:]]*/, "", s); q = substr(s, 1, 1)
+        if (q != "\"" && q != "\047") return ""
+        s = substr(s, 2); i = index(s, q)
+        if (i == 0) return ""
+        return substr(s, 1, i - 1)
+      }
+      /^[[:space:]]*\[/ { in_pkg = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*(#.*)?$/); if (in_pkg) seen = 1; next }
+      in_pkg && /^[[:space:]]*name[[:space:]]*=/ { name = val($0) }
+      in_pkg && /^[[:space:]]*version[[:space:]]*=/ { ver = val($0) }
+      END { if (seen) print name "|" ver }')"
+    [[ -n "${parsed}" ]] || continue
+    pkg_name="${parsed%%|*}"
+    pkg_ver="${parsed#*|}"
+    if [[ -z "${pkg_name}" ]]; then
+      case "${path}" in
+        tests/* | */tests/* | fixtures/* | */fixtures/*) continue ;;
+      esac
+      die "cannot read the package name of '${path}' at '${base}'"
+    fi
+    if [[ -z "${pkg_ver}" ]]; then
+      grep -qxF -- "${pkg_name}" "${tmp}/head_names.txt" || continue
+      die "cannot read the version of '${pkg_name}' in '${path}' at '${base}' (it needs a literal version = \"x.y.z\")"
+    fi
+    echo "${pkg_name} ${pkg_ver}" >> "${tmp}/base.txt"
   done < "${tmp}/manifests.txt"
 fi
 
@@ -215,6 +238,9 @@ while read -r name head_ver; do
   fi
   echo "${name} ${base_ver} ${head_ver} ${class}" >> "${tmp}/status.txt"
 done < "${tmp}/head.txt"
+
+[[ -s "${tmp}/status.txt" || ${errors} -gt 0 ]] \
+  || die "no crate at the base matches a crate at the head"
 
 # --- rule -------------------------------------------------------------------
 violations=0
