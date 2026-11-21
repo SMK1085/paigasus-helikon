@@ -1,4 +1,8 @@
-data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_04","object":"response","created_at":1,"model":"gpt-5","output":[],"status":"failed","error":{"code":"server_error","message":"upstream model unavailable"}}}
+: Provenance: HAND-AUTHORED under SMA-316, not captured from the wire.
+: The event shapes follow the async-openai `ResponseStreamEvent` types.
+:
+: No capture of this terminal event exists. The sentinel is omitted because
+: no capture on record ends with it. See SMA-585.
 
-data: [DONE]
+data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_04","object":"response","created_at":1,"model":"gpt-5","output":[],"status":"failed","error":{"code":"server_error","message":"upstream model unavailable"}}}
 

@@ -43,7 +43,8 @@ fn completed_event(seq: u64, input_tokens: u32, output_tokens: u32) -> String {
     )
 }
 
-/// SSE wire representation of a single data event followed by `[DONE]`.
+/// SSE wire representation of the given data events; no `[DONE]` sentinel,
+/// because the Responses API ends the stream on the terminal event (SMA-585).
 fn sse(events: &[String]) -> String {
     let mut out = String::new();
     for event in events {
@@ -51,8 +52,30 @@ fn sse(events: &[String]) -> String {
         out.push_str(event);
         out.push_str("\n\n");
     }
-    out.push_str("data: [DONE]\n\n");
     out
+}
+
+/// Serve `body` as the SSE response of a fresh mock server and collect the
+/// whole event stream, errors included.
+async fn collect_served(body: &str) -> Vec<Result<ModelEvent, paigasus_helikon_core::ModelError>> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.as_bytes(), "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let model = OpenAiModel::responses("gpt-5")
+        .api_key("sk-test")
+        .base_url(server.uri())
+        .build()
+        .unwrap();
+
+    let mut req = ModelRequest::new();
+    req.messages = vec![user("hi")];
+
+    let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
+    stream.collect::<Vec<_>>().await
 }
 
 #[tokio::test]
@@ -147,4 +170,25 @@ async fn previous_response_id_passes_through_to_request_body() {
     // Drain the stream to ensure the request is sent and wiremock's `.expect(1)`
     // assertion fires on drop.
     let _: Vec<_> = stream.collect().await;
+}
+
+/// Compatibility check for OpenAI-compatible servers reached through
+/// `base_url` that append a `data: [DONE]` sentinel after the terminal event.
+///
+/// This is NOT a claim that OpenAI sends `[DONE]` on the Responses API. It
+/// does not (SMA-585). The test pins that a trailing sentinel is tolerated and
+/// does not change the event stream.
+#[tokio::test]
+async fn trailing_done_sentinel_is_tolerated() {
+    let plain = sse(&[text_delta_event(1, "hi"), completed_event(2, 5, 1)]);
+    let with_done = format!("{plain}data: [DONE]\n\n");
+
+    let plain_events = collect_served(&plain).await;
+    let with_done_events = collect_served(&with_done).await;
+
+    assert!(
+        with_done_events.iter().all(Result::is_ok),
+        "{with_done_events:?}"
+    );
+    assert_eq!(format!("{plain_events:?}"), format!("{with_done_events:?}"));
 }

@@ -22,17 +22,21 @@
 : module, and `tool_call_turn_finishes_with_tool_calls` in
 : `responses_streaming.rs`, which exercises this exact fixture end to end).
 :
-: `event:` lines are kept, unlike this directory's other `responses_*.txt`
-: fixtures. Those omit them; async-openai's `ResponseStreamEvent` is
-: `#[serde(tag = "type")]`, so the parser dispatches purely off the JSON
-: `type` key inside `data:` and the `event:` line is cosmetic to it -- but
-: this fixture is a literal transcription of a real capture that DID send
+: `event:` lines are kept, unlike this directory's hand-authored
+: `responses_*.txt` fixtures. Those omit them;
+: `responses_tool_call_zero_args.txt` keeps `event:` lines too.
+: async-openai's `ResponseStreamEvent` is `#[serde(tag = "type")]`, so the
+: parser dispatches purely off the JSON `type` key inside `data:` and the
+: `event:` line is cosmetic to it -- but
+: this fixture is a transcription of a real capture that DID send
 : them, and (per this crate's `anthropic`-sibling module's own reasoning
 : for the same choice in the stream conformance suite) a fixture claiming
 : to be CAPTURED should stay faithful to what the wire actually sent, not
 : just to what the parser happens to need.
 :
-: Three kinds of trimming from the raw capture, all deliberate:
+: Edits from the raw capture:
+:
+: Removed (three items, all deliberate):
 :
 : 1. `response.created` and `response.in_progress` are dropped.
 :    `ResponsesTranslator::consume` has no arm for either (both fall through
@@ -73,6 +77,27 @@
 :    it just is not consumed by the translator, so it is not reproduced
 :    here. Don't read its absence from this file as evidence OpenAI omits
 :    it.
+:
+: Added: nothing.
+:
+: Changed: the JSON key order of this file differs from the later
+: captures. This file puts `type` and `sequence_number` first, and
+: `item.type` before `item.id`, also in `response.output[]`. Its `response`
+: keys follow the layout of the hand-authored sibling fixtures. The
+: captures of 2026-08-22 and 2026-11-21 put `type` first and the other
+: event keys in alphabetical order, and `item.id` before `item.type`. The
+: key order of the 2026-08-20 capture is not on record. So this is a
+: difference from the later captures, not a proven edit. It is listed
+: under Changed because the order matches the hand-authored siblings
+: exactly. This points to an edit made to match them. The parser does not
+: depend on key order.
+:
+: CORRECTION (2026-11-21, SMA-585): until this date the file ended with a
+: sentinel line (a `[DONE]` data line). This header did not record the
+: sentinel or the key-order difference. The key order still differs (see
+: Changed). No capture on record (2026-08-22, 2026-11-21) contains the
+: sentinel. No raw copy of the 2026-08-20 capture exists. See
+: docs/superpowers/specs/2026-11-21-sma-585-responses-done-sentinel-design.md
 
 event: response.output_item.added
 data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"function_call","id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","status":"in_progress","arguments":"","call_id":"call_D3Tp4UJ6scmDWx6jmfvy2LQo","name":"get_weather"}}
@@ -100,6 +125,4 @@ data: {"type":"response.output_item.done","sequence_number":9,"output_index":0,"
 
 event: response.completed
 data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_0bb8bdbb23a3677a006a871dee88d087d2b7be34f6f6026eb3","object":"response","created_at":1787239918,"model":"gpt-4o-mini-2024-07-18","output":[{"type":"function_call","id":"fc_0bb8bdbb23a3677a006a871df0764887d2b2baece884cff355","status":"completed","arguments":"{\"city\":\"Berlin\"}","call_id":"call_D3Tp4UJ6scmDWx6jmfvy2LQo","name":"get_weather"}],"status":"completed","incomplete_details":null,"usage":{"input_tokens":51,"input_tokens_details":{"cached_tokens":0},"output_tokens":15,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":66}}}
-
-data: [DONE]
 

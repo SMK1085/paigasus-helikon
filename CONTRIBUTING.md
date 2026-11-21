@@ -197,6 +197,18 @@ DOC_COVERAGE_THRESHOLD=80 NIGHTLY_CHANNEL=nightly-2026-05-01 \
 
 The CI job posts a per-crate breakdown to the PR's Checks tab via `$GITHUB_STEP_SUMMARY`.
 
+## Wire-format fixtures
+
+A wire-format fixture is a file or test script that stands in for the bytes a provider sends. A reader must know which bytes are real and which bytes are not. Five rules apply.
+
+SMA-585 shows the risk. `responses_tool_call.txt` is a CAPTURED fixture, but the file ended with a `[DONE]` line that the Responses endpoint does not send. The header did not record the line.
+
+1. **Label.** Each fixture states its provenance. Use one of three labels: CAPTURED (name the endpoint, the model and the date), HAND-AUTHORED, or CAPTURED with named reconstructed parts.
+2. **Edits.** A CAPTURED fixture lists every edit from the raw capture in three parts: Removed, Added and Changed. Changed covers reorders, reformats and value edits. Write "nothing" for an empty part. The header of `crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt` is the worked example.
+3. **Hand-authored shapes.** A HAND-AUTHORED fixture names the source of each shape. The source is a capture or a vendored type. Do not copy framing from a different endpoint or API.
+4. **No conformity edits.** Do not add, remove or reorder a line to make a fixture match a sibling fixture. If you must, record the edit under Changed.
+5. **Where the header goes.** An SSE fixture or other text fixture carries a `:` comment header. A format with no comment syntax records its provenance in the doc comment of the test that loads it. An inline wire helper in test code cites its source in the same way. A synthetic addition in a test script is allowed if its doc comment says that it is not captured. The Gemini `done()` in `tests/provider-stream-conformance/tests/conformance.rs` is an example.
+
 ## Documentation site
 
 The public docs site is built from `docs/book/`.
