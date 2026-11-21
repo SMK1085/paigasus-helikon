@@ -328,7 +328,9 @@ fn merge_same_role(entries: Vec<(&'static str, Vec<Part>)>) -> Vec<(&'static str
 /// Sort the `functionCall` parts of one `model` content by their stream index,
 /// when every call has one. The sort is stable, and the other parts keep their
 /// positions. This restores the order that Gemini sent. Returns `true` when
-/// the order changed.
+/// every call has an index, whether or not the order changed. The caller then
+/// orders the responses to match. Returns `false` when there is no call or a
+/// call has no index.
 fn restore_call_order(parts: &mut [Part]) -> bool {
     let slots: Vec<usize> = (0..parts.len()).filter(|&i| parts[i].is_call()).collect();
     if slots.is_empty() || slots.iter().any(|&i| parts[i].index.is_none()) {
@@ -338,7 +340,7 @@ fn restore_call_order(parts: &mut [Part]) -> bool {
         .windows(2)
         .all(|w| parts[w[0]].index <= parts[w[1]].index)
     {
-        return false;
+        return true;
     }
     let mut calls: Vec<Part> = slots
         .iter()
@@ -1644,6 +1646,26 @@ mod tests {
                 fr("call_m", "search", json!({})),
             ]})
         );
+    }
+
+    #[test]
+    fn responses_are_ordered_when_calls_are_already_in_stream_order() {
+        let items = vec![
+            user("q"),
+            assistant(vec![unsigned("a", 0), unsigned("b", 1)]),
+            call("a", "search"),
+            call("b", "search"),
+            result("b", "{}"),
+            result("a", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        let ids: Vec<&str> = t.contents[2]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["functionResponse"]["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
     }
 
     #[test]

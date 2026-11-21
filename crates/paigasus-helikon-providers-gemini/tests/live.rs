@@ -213,7 +213,7 @@ async fn live_vertex_text_turn() {
 // ---- LlmAgent end-to-end (SMA-827) ----
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use paigasus_helikon_core::{
     Agent, AgentInput, LlmAgent, RunContext, RunResultStreaming, StopReason, Tool, ToolContext,
@@ -223,6 +223,8 @@ use paigasus_helikon_core::{
 /// A tool that counts its calls and returns the step it got.
 struct StepTool {
     calls: Arc<AtomicUsize>,
+    /// The `n` of each invocation, in order.
+    seen: Arc<Mutex<Vec<i64>>>,
     schema: serde_json::Value,
 }
 
@@ -231,6 +233,7 @@ impl StepTool {
         let calls = Arc::new(AtomicUsize::new(0));
         let tool = Self {
             calls: Arc::clone(&calls),
+            seen: Arc::new(Mutex::new(Vec::new())),
             schema: serde_json::json!({
                 "type":"object","properties":{"n":{"type":"integer"}},"required":["n"]
             }),
@@ -256,6 +259,15 @@ impl Tool<()> for StepTool {
         args: serde_json::Value,
     ) -> Result<ToolOutput, ToolError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(n) = args["n"].as_i64() {
+            self.seen.lock().unwrap().push(n);
+        }
+        // For n=1 the result holds a value the model cannot guess.
+        if args["n"] == 1 {
+            return Ok(ToolOutput::new(
+                serde_json::json!({ "step": 1, "next": 7351 }),
+            ));
+        }
         Ok(ToolOutput::new(serde_json::json!({ "step": args["n"] })))
     }
 }
@@ -268,10 +280,12 @@ async fn live_agent_two_sequential_tool_rounds() {
         return;
     };
     let (tool, calls) = StepTool::new();
+    let seen = Arc::clone(&tool.seen);
     let agent = LlmAgent::builder::<()>()
         .name("root")
         .instructions(
-            "Call the step tool with n=1. Wait for the result. Then call it with n=2. \
+            "Call the step tool with n=1. Wait for the result. Then call the step tool \
+             again with n set to the `next` value that the first result returned. \
              Then answer with the word done.",
         )
         .model(model)
@@ -293,6 +307,14 @@ async fn live_agent_two_sequential_tool_rounds() {
     assert!(
         calls.load(Ordering::SeqCst) >= 2,
         "the tool must run at least twice"
+    );
+    // The second n comes from the first result, so it needs a later model round.
+    let seen = seen.lock().unwrap().clone();
+    let first = seen.iter().position(|&n| n == 1);
+    let second = seen.iter().position(|&n| n == 7351);
+    assert!(
+        matches!((first, second), (Some(a), Some(b)) if a < b),
+        "expected n=1 and then n=7351, got {seen:?}"
     );
 }
 
