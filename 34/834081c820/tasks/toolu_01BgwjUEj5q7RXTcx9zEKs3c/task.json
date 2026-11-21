@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BgwjUEj5q7RXTcx9zEKs3c",
+  "agent_id": "a5a6afc4beae9237f",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 3: native schema",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 69996,
+    "cache_read_tokens": 902540,
+    "output_tokens": 11523,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-21T14:20:10.322239+01:00",
+  "completed_at": "2026-11-21T14:21:00.812328+01:00"
+}
