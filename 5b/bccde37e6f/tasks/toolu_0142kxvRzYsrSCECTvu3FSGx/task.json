@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0142kxvRzYsrSCECTvu3FSGx",
+  "agent_id": "ad0246a668b13a828",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 5: CI wiring + docs",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 64516,
+    "cache_read_tokens": 699783,
+    "output_tokens": 5629,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-21T10:05:33.657469+01:00",
+  "completed_at": "2026-11-21T10:06:23.082691+01:00"
+}
