@@ -29,14 +29,14 @@
     }
   },
   "redaction": {
-    "replacements": 32,
+    "replacements": 36,
     "layers": {
       "betterleaks": 0,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 0,
       "credentialed_uri": 0,
-      "entropy": 32,
+      "entropy": 36,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
@@ -94,6 +94,68 @@
       "collapse": {
         "target": "tool_pair",
         "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01J9EwQp1BrPMpD9Zmib3X5W",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5ab4de87d359",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 598,
+        "end": 599,
+        "entry_ids": [
+          "e579730e-7a83-4bdf-9550-3bca1ff6946b"
+        ],
+        "tool_use_id": "toolu_01J9EwQp1BrPMpD9Zmib3X5W"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01J9EwQp1BrPMpD9Zmib3X5W"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01DNuowhmkadBobxDu7FK9XV",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5ab4de87d359",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 663,
+        "end": 664,
+        "entry_ids": [
+          "317f0fe6-6069-48a5-b158-dec744ad703d"
+        ],
+        "tool_use_id": "toolu_01DNuowhmkadBobxDu7FK9XV"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DNuowhmkadBobxDu7FK9XV"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
         "default_collapsed": true
       }
     }
