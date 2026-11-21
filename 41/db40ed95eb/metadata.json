@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "41db40ed95eb",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-837-bedrock-builder-add-a-family-override-for",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-bedrock/src/builder.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/policy.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/41/db40ed95eb/0/metadata.json",
+      "transcript": "/41/db40ed95eb/0/full.jsonl",
+      "compact_transcript": "/41/db40ed95eb/0/transcript.jsonl",
+      "content_hash": "/41/db40ed95eb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 15059,
+    "cache_read_tokens": 1006225,
+    "output_tokens": 3989,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 81128,
+      "cache_read_tokens": 60527,
+      "output_tokens": 665,
+      "api_call_count": 2
+    }
+  },
+  "redaction": {
+    "replacements": 14,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 14,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
