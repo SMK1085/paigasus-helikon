@@ -24,6 +24,7 @@ mod capabilities;
 mod error;
 mod http;
 mod model;
+mod provider_data;
 mod settings;
 mod sse;
 mod stream;
@@ -36,5 +37,12 @@ pub use model::AnthropicModel;
 /// Use it to declare an Anthropic tool type on a tool, for example
 /// `ProviderToolType::new(PROVIDER_ID, "memory_20250818")`.
 pub const PROVIDER_ID: &str = "anthropic";
+
+/// The key of the `ProviderData` parts and events that this crate writes.
+///
+/// A host can filter or remove these parts by this key. The shape of the
+/// `data` is private to this crate and can change. This key is separate from
+/// [`PROVIDER_ID`], although both have the same value today.
+pub const PROVIDER_DATA_KEY: &str = "anthropic";
 
 pub use settings::{CacheStrategy, ExtendedThinking};

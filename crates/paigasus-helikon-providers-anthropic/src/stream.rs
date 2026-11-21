@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use paigasus_helikon_core::{FinishReason, ModelError, ModelEvent};
 
 use crate::error::map_error_type;
+use crate::provider_data::{AnthropicData, ThinkingBlock};
 use crate::sse::{
     AnthropicEvent, ContentBlockDelta, ContentBlockHead, MessageDeltaUsage, MessageStartUsage,
 };
@@ -13,7 +14,13 @@ use crate::translate::response_format::SYNTHESIZED_TOOL_NAME;
 #[derive(Debug)]
 enum BlockState {
     Text,
-    Thinking,
+    Thinking {
+        text: String,
+        signature: String,
+    },
+    RedactedThinking {
+        data: String,
+    },
     ToolUse {
         call_id: String,
         name: String,
@@ -36,6 +43,12 @@ pub(crate) struct MessageTranslator {
     synthesized_tool_index: Option<u32>,
     other_tool_fired: bool,
     terminal_emitted: bool,
+    /// The first text block of the response has stopped.
+    text_position_recorded: bool,
+    /// The stream has emitted a `block` part of this response.
+    block_emitted: bool,
+    /// Position records that wait for the first `block` part.
+    waiting_positions: Vec<ModelEvent>,
 }
 
 impl MessageTranslator {
@@ -49,6 +62,9 @@ impl MessageTranslator {
             synthesized_tool_index: None,
             other_tool_fired: false,
             terminal_emitted: false,
+            text_position_recorded: false,
+            block_emitted: false,
+            waiting_positions: Vec::new(),
         }
     }
 
@@ -90,8 +106,21 @@ impl MessageTranslator {
                 ContentBlockHead::Text => {
                     self.blocks.insert(index, BlockState::Text);
                 }
-                ContentBlockHead::Thinking => {
-                    self.blocks.insert(index, BlockState::Thinking);
+                ContentBlockHead::Thinking {
+                    thinking,
+                    signature,
+                } => {
+                    self.blocks.insert(
+                        index,
+                        BlockState::Thinking {
+                            text: thinking,
+                            signature,
+                        },
+                    );
+                }
+                ContentBlockHead::RedactedThinking { data } => {
+                    self.blocks
+                        .insert(index, BlockState::RedactedThinking { data });
                 }
                 ContentBlockHead::ToolUse { id, name, .. } => {
                     if self.synthesizing_output && name == SYNTHESIZED_TOOL_NAME {
@@ -114,13 +143,24 @@ impl MessageTranslator {
                     out.push(Ok(ModelEvent::TokenDelta { text }));
                 }
                 ContentBlockDelta::ThinkingDelta { thinking } => {
+                    if let Some(BlockState::Thinking { text, .. }) = self.blocks.get_mut(&index) {
+                        text.push_str(&thinking);
+                    }
                     out.push(Ok(ModelEvent::ReasoningDelta { text: thinking }));
                 }
-                ContentBlockDelta::SignatureDelta { .. } => {
-                    tracing::debug!(
-                        target: "paigasus::anthropic::stream",
-                        "signature_delta dropped (round-trip not yet supported)",
-                    );
+                ContentBlockDelta::SignatureDelta { signature } => {
+                    if let Some(BlockState::Thinking {
+                        signature: joined, ..
+                    }) = self.blocks.get_mut(&index)
+                    {
+                        joined.push_str(&signature);
+                    } else {
+                        tracing::debug!(
+                            target: "paigasus::anthropic::stream",
+                            index,
+                            "signature_delta for a block that is not open; dropped",
+                        );
+                    }
                 }
                 ContentBlockDelta::InputJsonDelta { partial_json } => {
                     let is_synth = Some(index) == self.synthesized_tool_index;
@@ -155,8 +195,8 @@ impl MessageTranslator {
                     }
                 }
             },
-            AnthropicEvent::ContentBlockStop { .. } => {
-                tracing::debug!(target: "paigasus::anthropic::stream", "content_block_stop");
+            AnthropicEvent::ContentBlockStop { index } => {
+                self.stop_block(index, &mut out);
             }
             AnthropicEvent::MessageDelta { delta, usage } => {
                 // A `message_delta` after the terminal event is a protocol
@@ -193,6 +233,87 @@ impl MessageTranslator {
             }
         }
         Ok(out)
+    }
+
+    /// Close the block at `index`: keep a valid thinking block and record the
+    /// positions of the text and `tool_use` blocks.
+    fn stop_block(&mut self, index: u32, out: &mut Vec<Result<ModelEvent, ModelError>>) {
+        let Some(state) = self.blocks.remove(&index) else {
+            tracing::debug!(
+                target: "paigasus::anthropic::stream",
+                index,
+                "content_block_stop for a block that is not open",
+            );
+            return;
+        };
+        match state {
+            BlockState::Thinking { text, signature } => self.keep_block(
+                index,
+                "thinking",
+                ThinkingBlock::Thinking {
+                    thinking: text,
+                    signature,
+                },
+                out,
+            ),
+            BlockState::RedactedThinking { data } => self.keep_block(
+                index,
+                "redacted_thinking",
+                ThinkingBlock::RedactedThinking { data },
+                out,
+            ),
+            BlockState::Text => {
+                if !self.text_position_recorded {
+                    self.text_position_recorded = true;
+                    self.position(AnthropicData::Text { index }.into_event(None), out);
+                }
+            }
+            BlockState::ToolUse {
+                call_id,
+                name_emitted,
+                ..
+            } => {
+                if name_emitted && Some(index) != self.synthesized_tool_index {
+                    self.position(
+                        AnthropicData::ToolUse { index }.into_event(Some(call_id)),
+                        out,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Emit a valid thinking block, then every position that waits for it.
+    fn keep_block(
+        &mut self,
+        index: u32,
+        kind: &str,
+        block: ThinkingBlock,
+        out: &mut Vec<Result<ModelEvent, ModelError>>,
+    ) {
+        if !block.is_valid() {
+            tracing::debug!(
+                target: "paigasus::anthropic::stream",
+                index,
+                kind,
+                "thinking block without signature or data is not kept",
+            );
+            return;
+        }
+        out.push(Ok(AnthropicData::Block { index, block }.into_event(None)));
+        if !self.block_emitted {
+            self.block_emitted = true;
+            out.extend(self.waiting_positions.drain(..).map(Ok));
+        }
+    }
+
+    /// Emit a position record now, or hold it until the first `block` part.
+    fn position(&mut self, event: ModelEvent, out: &mut Vec<Result<ModelEvent, ModelError>>) {
+        if self.block_emitted {
+            out.push(Ok(event));
+        } else {
+            self.waiting_positions.push(event);
+        }
     }
 
     /// Flush a stop reason buffered from `message_delta` when the response
@@ -326,7 +447,10 @@ mod tests {
         let _ = t.consume(message_start(10, None)).unwrap();
         let _ = t.consume(AnthropicEvent::ContentBlockStart {
             index: 0,
-            content_block: ContentBlockHead::Thinking,
+            content_block: ContentBlockHead::Thinking {
+                thinking: String::new(),
+                signature: String::new(),
+            },
         });
         let out = t
             .consume(AnthropicEvent::ContentBlockDelta {
@@ -739,5 +863,399 @@ mod tests {
             Err(ModelError::Other(_)) => {}
             other => panic!("expected Err(Other), got {other:?}"),
         }
+    }
+
+    // --- SMA-840: thinking blocks and position records ---
+
+    use crate::provider_data::{AnthropicData, ThinkingBlock};
+
+    fn translate_fixture(raw: &str, synthesizing: bool) -> Vec<ModelEvent> {
+        let mut t = MessageTranslator::new(synthesizing);
+        let mut out = Vec::new();
+        for line in raw.lines() {
+            let Some(json) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            let event: AnthropicEvent = serde_json::from_str(json).unwrap();
+            for item in t.consume(event).unwrap() {
+                out.push(item.unwrap());
+            }
+        }
+        if let Some(last) = t.finish() {
+            out.push(last.unwrap());
+        }
+        out
+    }
+
+    fn provider_data(events: &[ModelEvent]) -> Vec<(AnthropicData, Option<String>)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ProviderData {
+                    provider,
+                    call_id,
+                    data,
+                } => {
+                    assert_eq!(provider, crate::PROVIDER_DATA_KEY);
+                    Some((
+                        serde_json::from_value(data.clone()).unwrap(),
+                        call_id.clone(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn reasoning_text(events: &[ModelEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ReasoningDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn block(index: u32, thinking: &str, signature: &str) -> AnthropicData {
+        AnthropicData::Block {
+            index,
+            block: ThinkingBlock::Thinking {
+                thinking: thinking.to_owned(),
+                signature: signature.to_owned(),
+            },
+        }
+    }
+
+    fn redacted(index: u32, data: &str) -> AnthropicData {
+        AnthropicData::Block {
+            index,
+            block: ThinkingBlock::RedactedThinking {
+                data: data.to_owned(),
+            },
+        }
+    }
+
+    fn start(index: u32, content_block: ContentBlockHead) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockStart {
+            index,
+            content_block,
+        }
+    }
+
+    fn thinking_head() -> ContentBlockHead {
+        ContentBlockHead::Thinking {
+            thinking: String::new(),
+            signature: String::new(),
+        }
+    }
+
+    fn tool_head(id: &str, name: &str) -> ContentBlockHead {
+        ContentBlockHead::ToolUse {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            input: serde_json::json!({}),
+        }
+    }
+
+    fn thinking_delta(index: u32, text: &str) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockDelta {
+            index,
+            delta: ContentBlockDelta::ThinkingDelta {
+                thinking: text.to_owned(),
+            },
+        }
+    }
+
+    fn signature_delta(index: u32, signature: &str) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockDelta {
+            index,
+            delta: ContentBlockDelta::SignatureDelta {
+                signature: signature.to_owned(),
+            },
+        }
+    }
+
+    fn json_delta(index: u32, partial: &str) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockDelta {
+            index,
+            delta: ContentBlockDelta::InputJsonDelta {
+                partial_json: partial.to_owned(),
+            },
+        }
+    }
+
+    fn stop(index: u32) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockStop { index }
+    }
+
+    /// Feed events to a translator and collect every emitted event.
+    fn run(t: &mut MessageTranslator, events: Vec<AnthropicEvent>) -> Vec<ModelEvent> {
+        let mut out = Vec::new();
+        for e in events {
+            for item in t.consume(e).unwrap() {
+                out.push(item.unwrap());
+            }
+        }
+        out
+    }
+
+    /// Join the `thinking_delta` texts of a fixture in stream order.
+    fn fixture_thinking_text(raw: &str) -> String {
+        let mut text = String::new();
+        for line in raw.lines() {
+            let Some(json) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            if let AnthropicEvent::ContentBlockDelta {
+                delta: ContentBlockDelta::ThinkingDelta { thinking },
+                ..
+            } = serde_json::from_str(json).unwrap()
+            {
+                text.push_str(&thinking);
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn thinking_text_tool_use_emits_block_and_positions() {
+        let raw = include_str!("../tests/fixtures/thinking_text_tool_use.txt");
+        let events = translate_fixture(raw, false);
+        let joined = fixture_thinking_text(raw);
+        assert!(!joined.is_empty());
+        assert_eq!(reasoning_text(&events), joined);
+        assert_eq!(
+            provider_data(&events),
+            vec![
+                (block(0, &joined, "SIG_FAKE_1"), None),
+                (AnthropicData::Text { index: 1 }, None),
+                (
+                    AnthropicData::ToolUse { index: 2 },
+                    Some("toolu_017EB2o3zrXW8R73aqBPNiZi".to_owned())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn redacted_fixture_emits_two_blocks() {
+        let events = translate_fixture(
+            include_str!("../tests/fixtures/redacted_thinking_tool_use.txt"),
+            false,
+        );
+        assert_eq!(
+            provider_data(&events),
+            vec![
+                (redacted(0, "REDACTED_FAKE_1"), None),
+                (redacted(1, "REDACTED_FAKE_2"), None),
+                (AnthropicData::Text { index: 2 }, None),
+                (
+                    AnthropicData::ToolUse { index: 3 },
+                    Some("toolu_01TUKF2PUduQbRPsN2DaUV1u".to_owned())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_thinking_fixture_emits_block_with_empty_text() {
+        let events = translate_fixture(
+            include_str!("../tests/fixtures/empty_thinking_tool_use.txt"),
+            false,
+        );
+        assert_eq!(provider_data(&events)[0].0, block(0, "", "SIG_FAKE_1"));
+    }
+
+    #[test]
+    fn interleaved_fixture_emits_each_block() {
+        let events = translate_fixture(
+            include_str!("../tests/fixtures/interleaved_thinking.txt"),
+            false,
+        );
+        let data = provider_data(&events);
+        let expected = vec![
+            (block(0, "Need the code.", "SIG_FAKE_1"), None),
+            (
+                AnthropicData::ToolUse { index: 1 },
+                Some("toolu_fake_b".to_owned()),
+            ),
+            (block(2, "Now the weather.", "SIG_FAKE_2"), None),
+            (
+                AnthropicData::ToolUse { index: 3 },
+                Some("toolu_fake_a".to_owned()),
+            ),
+        ];
+        assert_eq!(data.len(), expected.len(), "got {data:?}");
+        for entry in &expected {
+            assert!(data.contains(entry), "missing {entry:?} in {data:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_thinking_emits_no_provider_data() {
+        let events = translate_fixture(
+            include_str!("../tests/fixtures/unsigned_thinking_tool_use.txt"),
+            false,
+        );
+        assert!(provider_data(&events).is_empty());
+        assert!(!reasoning_text(&events).is_empty());
+    }
+
+    #[test]
+    fn fixtures_without_thinking_emit_no_provider_data() {
+        let turns = include_str!("../tests/fixtures/tool_use_then_continuation.txt");
+        let mut raws = vec![
+            include_str!("../tests/fixtures/text_only.txt"),
+            include_str!("../tests/fixtures/parallel_tool_use.txt"),
+        ];
+        raws.extend(turns.split("# --- turn 2 ---\n"));
+        assert_eq!(raws.len(), 4);
+        for raw in raws {
+            let events = translate_fixture(raw, false);
+            assert!(provider_data(&events).is_empty(), "got {events:?}");
+        }
+    }
+
+    #[test]
+    fn thinking_then_text_emits_block_and_text_position() {
+        let events = translate_fixture(
+            include_str!("../tests/fixtures/thinking_then_text.txt"),
+            false,
+        );
+        assert_eq!(
+            provider_data(&events),
+            vec![
+                (block(0, "Let me think...", "abc123"), None),
+                (AnthropicData::Text { index: 1 }, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_use_without_input_json_delta_gets_no_position() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                signature_delta(0, "SIG_FAKE_1"),
+                stop(0),
+                start(1, tool_head("tu_1", "search")),
+                stop(1),
+            ],
+        );
+        assert_eq!(
+            provider_data(&events),
+            vec![(block(0, "", "SIG_FAKE_1"), None)]
+        );
+    }
+
+    #[test]
+    fn repeated_content_block_stop_emits_nothing_new() {
+        let mut t = MessageTranslator::new(false);
+        let first = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                signature_delta(0, "SIG_FAKE_1"),
+                stop(0),
+            ],
+        );
+        assert_eq!(provider_data(&first).len(), 1);
+        assert_eq!(t.consume(stop(0)).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn synthesized_tool_gets_no_position() {
+        let mut t = MessageTranslator::new(true);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                signature_delta(0, "SIG_FAKE_1"),
+                stop(0),
+                start(1, tool_head("tu_synth", SYNTHESIZED_TOOL_NAME)),
+                json_delta(1, "{\"x\":1}"),
+                stop(1),
+            ],
+        );
+        assert_eq!(
+            provider_data(&events),
+            vec![(block(0, "", "SIG_FAKE_1"), None)]
+        );
+    }
+
+    #[test]
+    fn positions_wait_for_first_block() {
+        let mut t = MessageTranslator::new(false);
+        let before = run(
+            &mut t,
+            vec![
+                start(0, ContentBlockHead::Text),
+                AnthropicEvent::ContentBlockDelta {
+                    index: 0,
+                    delta: ContentBlockDelta::TextDelta {
+                        text: "hi".to_owned(),
+                    },
+                },
+                stop(0),
+                start(1, thinking_head()),
+                signature_delta(1, "SIG_FAKE_1"),
+            ],
+        );
+        assert!(provider_data(&before).is_empty());
+        let at_stop = t.consume(stop(1)).unwrap();
+        let events: Vec<ModelEvent> = at_stop.into_iter().map(|r| r.unwrap()).collect();
+        assert_eq!(
+            provider_data(&events),
+            vec![
+                (block(1, "", "SIG_FAKE_1"), None),
+                (AnthropicData::Text { index: 0 }, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn signature_from_split_deltas_is_joined() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                thinking_delta(0, "a\n"),
+                thinking_delta(0, "\"b\""),
+                signature_delta(0, "SIG_"),
+                signature_delta(0, "FAKE_9"),
+                stop(0),
+            ],
+        );
+        assert_eq!(
+            provider_data(&events),
+            vec![(block(0, "a\n\"b\"", "SIG_FAKE_9"), None)]
+        );
+    }
+
+    #[test]
+    fn eof_after_thinking_block_keeps_only_the_block() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                signature_delta(0, "SIG_FAKE_1"),
+                stop(0),
+                start(1, tool_head("tu_1", "search")),
+                json_delta(1, "{\"q\":1}"),
+            ],
+        );
+        assert!(t.finish().is_none());
+        assert_eq!(
+            provider_data(&events),
+            vec![(block(0, "", "SIG_FAKE_1"), None)]
+        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ModelEvent::ToolCallDelta { .. })));
     }
 }
