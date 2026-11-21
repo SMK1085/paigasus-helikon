@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01M68HDxMo4w3SkNKfwNp4nw",
+  "agent_id": "a649ac18b0b24caf9",
+  "subagent_type": "general-purpose",
+  "task_description": "Scoped re-review of fix wave",
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 54466,
+    "cache_read_tokens": 77966,
+    "output_tokens": 2023,
+    "api_call_count": 2
+  },
+  "started_at": "2026-11-20T23:36:01.868404+01:00",
+  "completed_at": "2026-11-20T23:36:13.141897+01:00"
+}
