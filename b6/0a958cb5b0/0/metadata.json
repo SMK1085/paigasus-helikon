@@ -1,0 +1,263 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "b60a958cb5b0",
+  "session_id": "1a7da3de-ed67-4ac5-af48-724cfa7f4e22",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-21T13:24:30.683032Z",
+  "branch": "feature/sma-621-modelturnaccumulator-merges-parallel-blank",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".gitattributes",
+    ".github/workflows/ci.yml",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "Cargo.lock",
+    "crates/paigasus-helikon-cli/src/repl.rs",
+    "crates/paigasus-helikon-core/CHANGELOG.md",
+    "crates/paigasus-helikon-core/src/agent.rs",
+    "crates/paigasus-helikon-core/src/item.rs",
+    "crates/paigasus-helikon-core/src/loop_state.rs",
+    "crates/paigasus-helikon-core/src/model.rs",
+    "crates/paigasus-helikon-core/src/runner.rs",
+    "crates/paigasus-helikon-core/src/token_counter.rs",
+    "crates/paigasus-helikon-core/src/tool.rs",
+    "crates/paigasus-helikon-core/src/workflow.rs",
+    "crates/paigasus-helikon-core/tests/provider_data_text_guard.rs",
+    "crates/paigasus-helikon-core/tests/serde_roundtrip.rs",
+    "crates/paigasus-helikon-core/tests/snapshots/serde_roundtrip__content_part_provider_data_roundtrip.snap",
+    "crates/paigasus-helikon-core/tests/wire_serde.rs",
+    "crates/paigasus-helikon-evals/CHANGELOG.md",
+    "crates/paigasus-helikon-mcp/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-anthropic/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-anthropic/README.md",
+    "crates/paigasus-helikon-providers-anthropic/src/builder.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/lib.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/model.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/translate/mod.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/translate/response_format.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/translate/tools.rs",
+    "crates/paigasus-helikon-providers-anthropic/tests/live.rs",
+    "crates/paigasus-helikon-providers-anthropic/tests/messages_wire.rs",
+    "crates/paigasus-helikon-providers-anthropic/tests/prompt_caching.rs",
+    "crates/paigasus-helikon-providers-anthropic/tests/structured_output.rs",
+    "crates/paigasus-helikon-providers-bedrock/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/translate/tools.rs",
+    "crates/paigasus-helikon-providers-bedrock/tests/live.rs",
+    "crates/paigasus-helikon-providers-gemini/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-gemini/Cargo.toml",
+    "crates/paigasus-helikon-providers-gemini/README.md",
+    "crates/paigasus-helikon-providers-gemini/src/builder.rs",
+    "crates/paigasus-helikon-providers-gemini/src/lib.rs",
+    "crates/paigasus-helikon-providers-gemini/src/live_round_trip.rs",
+    "crates/paigasus-helikon-providers-gemini/src/model.rs",
+    "crates/paigasus-helikon-providers-gemini/src/sse.rs",
+    "crates/paigasus-helikon-providers-gemini/src/stream.rs",
+    "crates/paigasus-helikon-providers-gemini/src/translate/mod.rs",
+    "crates/paigasus-helikon-providers-gemini/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-gemini/src/translate/response_format.rs",
+    "crates/paigasus-helikon-providers-gemini/src/translate/tools.rs",
+    "crates/paigasus-helikon-providers-gemini/tests/fixtures/parallel_signed.sse",
+    "crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs",
+    "crates/paigasus-helikon-providers-gemini/tests/live.rs",
+    "crates/paigasus-helikon-providers-litellm/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-litellm/src/translate/mod.rs",
+    "crates/paigasus-helikon-providers-litellm/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-litellm/src/translate/tools.rs",
+    "crates/paigasus-helikon-providers-openai/CHANGELOG.md",
+    "crates/paigasus-helikon-providers-openai/src/backend/chat.rs",
+    "crates/paigasus-helikon-providers-openai/src/backend/responses.rs",
+    "crates/paigasus-helikon-providers-openai/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-openai/tests/live.rs",
+    "crates/paigasus-helikon-runtime-actix/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-actix/src/dto.rs",
+    "crates/paigasus-helikon-runtime-agentcore/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-agentcore/src/agui/map.rs",
+    "crates/paigasus-helikon-runtime-axum/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-axum/src/dto.rs",
+    "crates/paigasus-helikon-runtime-temporal/CHANGELOG.md",
+    "crates/paigasus-helikon-runtime-temporal/src/activity_input.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/worker.rs",
+    "crates/paigasus-helikon-runtime-tokio/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-postgres/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-redis/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-sqlite/CHANGELOG.md",
+    "crates/paigasus-helikon-sessions-testkit/CHANGELOG.md",
+    "crates/paigasus-helikon-tools/CHANGELOG.md",
+    "crates/paigasus-helikon/CHANGELOG.md",
+    "docs/book/src/concepts/agent-loop.md",
+    "docs/book/src/concepts/core-primitives.md",
+    "docs/book/src/concepts/model-providers.md",
+    "docs/book/src/concepts/sessions.md",
+    "docs/book/src/concepts/tools.md",
+    "docs/runbooks/ci-architecture.md",
+    "docs/runbooks/release-ascend.md",
+    "docs/superpowers/plans/2026-11-20-sma-827-gemini-thought-signatures.md",
+    "docs/superpowers/plans/2026-11-20-sma-830-provider-tool-type.md",
+    "docs/superpowers/specs/2026-11-20-sma-827-gemini-thought-signatures-design.md",
+    "docs/superpowers/specs/2026-11-20-sma-830-provider-tool-type-design.md",
+    "release-plz.toml",
+    "scripts/check-breaking-cascade-selftest.sh",
+    "scripts/check-breaking-cascade.sh",
+    "tests/provider-stream-conformance/src/check.rs",
+    "tests/provider-stream-conformance/src/lib.rs",
+    "tests/provider-stream-conformance/tests/conformance.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "fc266f4d23c2",
+  "checkpoint_transcript_start": 710,
+  "transcript_lines_at_start": 710,
+  "compact_transcript_start": 74,
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 33301,
+    "cache_read_tokens": 5992926,
+    "output_tokens": 14689,
+    "api_call_count": 28,
+    "subagent_tokens": {
+      "input_tokens": 38,
+      "cache_creation_tokens": 177149,
+      "cache_read_tokens": 1489806,
+      "output_tokens": 12546,
+      "api_call_count": 19
+    }
+  },
+  "redaction": {
+    "replacements": 53,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 53,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-feature-pipeline-2026-11-21T10:01:34.891454Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "feature-pipeline"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "9fbc117d60ef",
+      "timestamp": "2026-11-21T10:01:34.891454Z",
+      "native": {
+        "command": "/feature-pipeline"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/feature-pipeline",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SwE1cqiUESMYi5Yi5ZSapv",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1ff59c1493ab",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 118,
+        "end": 119,
+        "entry_ids": [
+          "215074f2-dd3e-4829-99be-798d66999298"
+        ],
+        "tool_use_id": "toolu_01SwE1cqiUESMYi5Yi5ZSapv"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SwE1cqiUESMYi5Yi5ZSapv"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01KH5U6LVqCPezHu32vvbUDm",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1ff59c1493ab",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 362,
+        "end": 363,
+        "entry_ids": [
+          "e6d04212-6dd8-4ab0-a924-fe59d417b1c0"
+        ],
+        "tool_use_id": "toolu_01KH5U6LVqCPezHu32vvbUDm"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01KH5U6LVqCPezHu32vvbUDm"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LdTBedA92S3xMrmN7zLnNY",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1ff59c1493ab",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 442,
+        "end": 443,
+        "entry_ids": [
+          "2c2c13ad-7a16-4be4-a328-e2fc1e63d91c"
+        ],
+        "tool_use_id": "toolu_01LdTBedA92S3xMrmN7zLnNY"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LdTBedA92S3xMrmN7zLnNY"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 15
+  }
+}
