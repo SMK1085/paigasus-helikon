@@ -1,6 +1,6 @@
 # paigasus-helikon-providers-bedrock
 
-The Amazon Bedrock **Converse API** model provider for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `BedrockModel` implements [`paigasus-helikon-core`](https://crates.io/crates/paigasus-helikon-core)'s `Model` trait against the Bedrock Converse streaming API, with support for tool use, streaming, structured output (family-gated via forced-tool synthesis), and a tool-input schema rewriter that makes serde/schemars schemas acceptable to Bedrock's validator.
+The Amazon Bedrock **Converse API** model provider for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `BedrockModel` implements [`paigasus-helikon-core`](https://crates.io/crates/paigasus-helikon-core)'s `Model` trait against the Bedrock Converse streaming API, with support for tool use, streaming, structured output (forced-tool synthesis, or native output on Claude Sonnet 5.5 and Opus 5.5), and a tool-input schema rewriter that makes serde/schemars schemas acceptable to Bedrock's validator.
 
 > **Disambiguation:** this crate is the **Converse model provider** — it lets you invoke Bedrock-hosted LLMs as a drop-in `Model`. It is distinct from [`paigasus-helikon-runtime-agentcore`](https://crates.io/crates/paigasus-helikon-runtime-agentcore), which is the **Bedrock AgentCore runtime** host.
 
@@ -60,7 +60,7 @@ The crate detects the model family from the Bedrock model ID and routes capabili
 
 | Family | Examples | Structured output | Forced tool choice |
 | --- | --- | --- | --- |
-| `Anthropic` | `anthropic.claude-*`, `us.anthropic.*`, `global.anthropic.*` | yes (forced-tool synthesis) | yes |
+| `Anthropic` | `anthropic.claude-*`, `us.anthropic.*`, `global.anthropic.*` | yes (forced-tool synthesis; native output on Sonnet 5.5 and Opus 5.5) | yes, except Sonnet 5.5 and Opus 5.5 |
 | `AmazonNova` | `amazon.nova-*` | yes (forced-tool synthesis) | yes |
 | `Mistral` | `mistral.mistral-*` | yes (forced-tool synthesis) | yes |
 | `AmazonTitan` | `amazon.titan-*` | no (degrades to text) | no |
@@ -72,9 +72,27 @@ Detection reads the first segment of the model ID. If the first segment is not a
 
 ## Structured output and the schema rewriter
 
-For families that support forced-tool-choice (`Anthropic`, `AmazonNova`, `Mistral`), structured output (`ResponseFormat::JsonSchema`) is synthesized as a hidden tool call — the model is forced to call a reserved internal tool whose input schema is the user-supplied JSON Schema. This approach works without Bedrock native structured-output support.
+For families that support forced-tool-choice (`Anthropic`, `AmazonNova`, `Mistral`), structured output (`ResponseFormat::JsonSchema`) is synthesized as a hidden tool call — the model is forced to call a reserved internal tool whose input schema is the user-supplied JSON Schema. Claude Sonnet 5.5 and Opus 5.5 reject a forced tool choice. These models use native output instead (see the next section).
 
-Bedrock's Converse API validator rejects JSON Schemas that use `$ref`/`$defs`, `oneOf`/`anyOf`/`allOf`, or certain other keywords (such as `$schema`, `format`, `examples`). The `rewrite_tool_schema` function (exposed publicly for testing and advanced use) rewrites schemas inline: inlining `$ref` references, collapsing combinators into a flat object, and stripping unsupported keywords — so schemars-generated schemas for tagged enums and generic structs pass validation.
+For tool input schemas, Bedrock's Converse validator rejects JSON Schemas that use `$ref`/`$defs`, `oneOf`/`anyOf`/`allOf`, or certain other keywords (such as `$schema`, `format`, `examples`). The `rewrite_tool_schema` function (exposed publicly for testing and advanced use) rewrites schemas inline: inlining `$ref` references, collapsing combinators into a flat object, and stripping unsupported keywords — so schemars-generated schemas for tagged enums and generic structs pass validation.
+
+### Native structured output (Claude Sonnet 5.5 and Opus 5.5)
+
+These models reject a forced `toolChoice`. For these models, the crate puts the `JsonSchema` in `outputConfig.textFormat`. The native output schema accepts `$ref`/`$defs` and `anyOf`.
+
+A model ID that is not on the list can also reject the forced choice. This costs one rejected request for each `BedrockModel` handle. After that, the handle and its clones use native output. The crate logs one warning.
+
+The crate rewrites the schema before it sends the schema:
+
+- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, or to a node in an `allOf` composition.
+- It changes `oneOf` to `anyOf`.
+- It removes `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `maxItems`, `uniqueItems`, `minItems` above 1, and `not`, `if`, `then` and `else`.
+
+The server does not enforce the removed limits. The agent loop checks the result against the original schema and asks for a repair.
+
+Bedrock rejects these shapes with its own error: maps (`HashMap`, or `additionalProperties` that is `true` or a schema), `patternProperties`, `propertyNames`, tuples (`prefixItems`), the schemas `true` and `{}`, and recursive types. The crate does not rewrite them.
+
+On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Required` with no tools is still an error. When `JsonObject` is set and no tools exist, `ToolChoice::Required` is omitted with a warning.
 
 When a model's family does not support forced-tool-choice, a `JsonSchema` response format degrades silently to a text response; no error is returned.
 
