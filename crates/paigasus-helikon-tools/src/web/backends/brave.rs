@@ -115,7 +115,7 @@ mod tests {
     ///
     /// Provenance: HAND-AUTHORED under SMA-412 (PR #76). The plan
     /// `docs/superpowers/plans/2026-06-13-tools-web-network.md` (line 1187)
-    /// creates the file by hand. The file is not a capture. No capture of a
+    /// holds the file contents. No capture of a
     /// live Brave response is recorded. No vendor documentation is recorded as
     /// a source. The SMA-412 design
     /// (`docs/superpowers/specs/2026-06-13-tools-web-network-design.md`, line
@@ -124,8 +124,9 @@ mod tests {
     ///
     /// Shape: the file holds only the subset that the mapping reads,
     /// `web.results[].{title,url,description}` (design lines 307-310). The
-    /// values are test text. A real response can hold more fields. Their
-    /// absence here does not mean they are absent on the wire.
+    /// values are not tied to a recorded source. The record does not show the full
+    /// response shape. Absence of a field here does not mean absence on the
+    /// wire.
     #[test]
     fn parses_brave_fixture() {
         let body: Value = serde_json::from_str(include_str!(concat!(
