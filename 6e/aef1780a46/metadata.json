@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "6eaef1780a46",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-827-gemini-provider-drops-thoughtsignature-so",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-gemini/src/translate/request.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6e/aef1780a46/0/metadata.json",
+      "transcript": "/6e/aef1780a46/0/full.jsonl",
+      "compact_transcript": "/6e/aef1780a46/0/transcript.jsonl",
+      "content_hash": "/6e/aef1780a46/0/content_hash.txt",
+      "prompt": "/6e/aef1780a46/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 24316,
+    "cache_read_tokens": 7834877,
+    "output_tokens": 10787,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 46,
+      "cache_creation_tokens": 152846,
+      "cache_read_tokens": 2007318,
+      "output_tokens": 16040,
+      "api_call_count": 23
+    }
+  },
+  "redaction": {
+    "replacements": 196,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 24,
+      "credentialed_uri": 0,
+      "entropy": 168,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
