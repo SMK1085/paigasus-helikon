@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01EjE9LkrozrLDH7tdQxRCUA",
+  "agent_id": "a01e217e573c46be7",
+  "subagent_type": "Explore",
+  "task_description": "Inventory inline wire bytes in tests",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 62715,
+    "cache_read_tokens": 322254,
+    "output_tokens": 7382,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-21T23:32:19.671254+01:00",
+  "completed_at": "2026-11-21T23:33:16.381844+01:00"
+}

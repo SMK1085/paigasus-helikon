@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01ByL6b42rJn2oVD9M5vQCL8",
+  "agent_id": "ae77164bf4d3b404d",
+  "subagent_type": "general-purpose",
+  "task_description": "Provenance: litellm + openai chat",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 113803,
+    "cache_read_tokens": 865264,
+    "output_tokens": 12176,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-21T23:32:19.663462+01:00",
+  "completed_at": "2026-11-21T23:33:53.372295+01:00"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019H6Kp6msQtJGQ4zhqNb83g",
+  "agent_id": "aa8820ef2db85a2ad",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit conformance.rs inline helpers",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 114229,
+    "cache_read_tokens": 686574,
+    "output_tokens": 12013,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-21T23:32:19.664184+01:00",
+  "completed_at": "2026-11-21T23:33:44.912887+01:00"
+}

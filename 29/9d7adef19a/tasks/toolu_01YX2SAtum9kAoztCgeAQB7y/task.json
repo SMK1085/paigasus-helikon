@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01YX2SAtum9kAoztCgeAQB7y",
+  "agent_id": "a951d12096b2f98ad",
+  "subagent_type": "general-purpose",
+  "task_description": "Provenance: cli + tools fixtures",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 82725,
+    "cache_read_tokens": 290813,
+    "output_tokens": 5009,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-21T23:32:19.677738+01:00",
+  "completed_at": "2026-11-21T23:32:56.421263+01:00"
+}

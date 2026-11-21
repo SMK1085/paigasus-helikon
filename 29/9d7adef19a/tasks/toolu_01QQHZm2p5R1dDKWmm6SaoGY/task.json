@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01QQHZm2p5R1dDKWmm6SaoGY",
+  "agent_id": "a844662921aa7e0b4",
+  "subagent_type": "general-purpose",
+  "task_description": "Provenance: anthropic + gemini fixtures",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 110588,
+    "cache_read_tokens": 1153242,
+    "output_tokens": 13733,
+    "api_call_count": 14
+  },
+  "started_at": "2026-11-21T23:32:19.644706+01:00",
+  "completed_at": "2026-11-21T23:34:04.408226+01:00"
+}
