@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GLdWcqDQaeu4oWFibVx3A6",
+  "agent_id": "a0d9dc56e721e0faa",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix wave for PR 2 final review",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 86693,
+    "cache_read_tokens": 939572,
+    "output_tokens": 6680,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-21T10:12:21.37138+01:00",
+  "completed_at": "2026-11-21T10:13:19.606361+01:00"
+}
