@@ -224,7 +224,7 @@ async fn parse_error_after_finish_chunk_yields_err_and_no_finish() {
     // Provenance: HAND-AUTHORED, not captured (SMA-522, PR #197). The chunk
     // order follows fixtures/chat_text_usage_trailing.txt. The envelope values
     // are not from a capture. The last chunk lacks `object` on purpose, so the
-    // stream fails to parse; no wire sends that.
+    // stream fails to parse; no recorded capture sends that.
     let body = concat!(
         "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
         "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
