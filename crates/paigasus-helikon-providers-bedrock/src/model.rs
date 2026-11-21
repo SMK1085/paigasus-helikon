@@ -14,6 +14,7 @@ use paigasus_helikon_core::{
 
 use crate::builder::Config;
 use crate::error::{map_sdk_error, map_sdk_http_error};
+use crate::policy::ForcedChoicePolicy;
 use crate::stream::StreamTranslator;
 use crate::translate::build_request;
 
@@ -24,9 +25,15 @@ use crate::translate::build_request;
 /// Construct via [`BedrockModel::converse`] (sync builder) or
 /// [`BedrockModel::from_env`] (async, loads AWS config from the environment).
 ///
-/// The handle is `Clone + Send + Sync` because it holds only an `Arc<Config>`.
+/// The handle is `Clone + Send + Sync` because it holds only `Arc` values.
+/// Clones share the state that the handle learns at run time.
 #[derive(Debug, Clone)]
-pub struct BedrockModel(pub(crate) Arc<Config>);
+pub struct BedrockModel {
+    pub(crate) config: Arc<Config>,
+    // Read from Task 4 (build_request) and Task 5 (send fallback).
+    #[allow(dead_code)]
+    pub(crate) policy: Arc<ForcedChoicePolicy>,
+}
 
 // ── Model impl ────────────────────────────────────────────────────────────────
 
@@ -46,10 +53,10 @@ impl Model for BedrockModel {
     ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
         // Translate the core request into Bedrock wire format (early error on
         // translation failure — before we open any network connection).
-        let prepared = build_request(&self.0, &request)?;
+        let prepared = build_request(&self.config, &request)?;
 
         let synthesizing = prepared.synthesizing;
-        let client = self.0.client.clone();
+        let client = self.config.client.clone();
 
         // Build the fluent ConverseStream request from the prepared parts.
         let fluent = client
@@ -129,7 +136,7 @@ impl Model for BedrockModel {
     }
 
     fn capabilities(&self) -> ModelCapabilities {
-        self.0.capabilities
+        self.config.capabilities
     }
 
     fn provider(&self) -> &str {
@@ -137,7 +144,7 @@ impl Model for BedrockModel {
     }
 
     fn model(&self) -> &str {
-        &self.0.model_id
+        &self.config.model_id
     }
 }
 
@@ -196,6 +203,16 @@ mod tests {
                 .build()
                 .expect("build offline model")
         })
+    }
+
+    #[test]
+    fn clones_share_the_policy() {
+        let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let m2 = m.clone();
+        assert!(m.policy.record_rejection());
+        assert_eq!(m2.policy.path(), crate::policy::OutputPath::Native);
+        let fresh = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        assert_eq!(fresh.policy.path(), crate::policy::OutputPath::ForcedTool);
     }
 
     // `offline_model` blocks on its own runtime, so this test is a plain
