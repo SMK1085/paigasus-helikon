@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.8.0...paigasus-helikon-v0.9.0) - 2026-11-21
+
+### Added
+
+- *(core)* [**breaking**] SMA-830 let a tool declare a provider tool type ([#374](https://github.com/SMK1085/paigasus-helikon/pull/374))
+
 ### Upgrade notes
 
 - Build a `ToolDef` with `ToolDef::new` or `ToolDef::from_tool`. A struct literal and exhaustive destructuring no longer compile, because `ToolDef` is now `#[non_exhaustive]`.
