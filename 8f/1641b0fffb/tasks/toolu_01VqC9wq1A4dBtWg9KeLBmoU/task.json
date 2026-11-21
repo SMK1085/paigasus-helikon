@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01VqC9wq1A4dBtWg9KeLBmoU",
+  "agent_id": "ae2140492236b7ed0",
+  "task_description": "Builder check SMA-840 spec",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 67684,
+    "cache_read_tokens": 481926,
+    "output_tokens": 4452,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-21T19:00:08.356695+01:00",
+  "completed_at": "2026-11-21T19:00:49.014662+01:00"
+}

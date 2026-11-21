@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01FNC5vW7hGVWsm6SwXujTRp",
+  "agent_id": "a0a3bbe03fefeafdd",
+  "task_description": "Gemini trailing model turn fix",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 88452,
+    "cache_read_tokens": 878114,
+    "output_tokens": 6324,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-21T09:58:39.395981+01:00",
+  "completed_at": "2026-11-21T10:01:39.855335+01:00"
+}
