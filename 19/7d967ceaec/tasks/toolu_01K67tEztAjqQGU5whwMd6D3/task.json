@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01K67tEztAjqQGU5whwMd6D3",
+  "agent_id": "a8751513506d2599e",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave SMA-839",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 86180,
+    "cache_read_tokens": 547215,
+    "output_tokens": 5125,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-21T14:47:32.019599+01:00",
+  "completed_at": "2026-11-21T14:48:23.804305+01:00"
+}
