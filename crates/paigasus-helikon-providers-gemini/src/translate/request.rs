@@ -249,7 +249,7 @@ pub(crate) fn items_to_contents(
             }
         }
     }
-    if uses_dummy_signature(model_id) {
+    if is_gemini_3_or_later(model_id) {
         add_dummy_signatures(&mut merged);
     }
     let contents: Vec<Value> = merged
@@ -259,6 +259,13 @@ pub(crate) fn items_to_contents(
             json!({ "role": role, "parts": parts })
         })
         .collect();
+    let mut contents = contents;
+    if is_gemini_3_or_later(model_id) && contents.last().is_some_and(|c| c["role"] == "model") {
+        contents.push(json!({
+            "role": "user",
+            "parts": [{ "text": TRAILING_MODEL_TURN_PROMPT }],
+        }));
+    }
     if contents.is_empty() {
         return Err(ModelError::Other(anyhow::anyhow!(
             "gemini request has no user/model turns (empty or system-only conversation)"
@@ -386,16 +393,24 @@ fn order_responses(parts: &mut [Part], ids: &[String]) {
     }
 }
 
-/// Say whether a request for `model_id` may carry [`DUMMY_THOUGHT_SIGNATURE`].
+/// Say whether `model_id` is Gemini 3 or later. Such a request may carry
+/// [`DUMMY_THOUGHT_SIGNATURE`] and may get a [`TRAILING_MODEL_TURN_PROMPT`] turn.
 ///
 /// The dummy is live-tested only on Gemini 3. Requests for a Gemini 1.x or
 /// 2.x id stay as they were before SMA-827 and get no dummy. Every other id
 /// (Gemini 3 and later, unknown ids) gets it. The check uses the part of the id
 /// after the last `/`, so `models/gemini-2.5-flash` and Vertex resource paths work.
-fn uses_dummy_signature(model_id: &str) -> bool {
+fn is_gemini_3_or_later(model_id: &str) -> bool {
     let name = model_id.rsplit('/').next().unwrap_or(model_id);
     !(name.starts_with("gemini-1") || name.starts_with("gemini-2"))
 }
+
+/// Text of the `user` turn that follows a trailing `model` turn.
+///
+/// Gemini rejects a request whose last turn is a model turn. The core
+/// structured-output finalizing request ends with the model's own answer, so
+/// the translator appends this turn for Gemini 3 and later.
+pub(crate) const TRAILING_MODEL_TURN_PROMPT: &str = "Continue.";
 
 /// Put [`DUMMY_THOUGHT_SIGNATURE`] on each `functionCall` part of a `model`
 /// content in the current turn when none of its calls has a signature.
@@ -1183,11 +1198,12 @@ mod tests {
             call("fc_1", "pay"),
         ];
         let t = items_to_contents(&items, M, A).unwrap();
-        assert_eq!(t.contents.len(), 2);
+        assert_eq!(t.contents.len(), 3);
         assert_eq!(
             t.contents[1],
             json!({"role": "model", "parts": [{"text": "t"}, fc_dummy("fc_0", "search"), fc_dummy("fc_1", "pay")]})
         );
+        assert_eq!(t.contents[2], continue_turn());
     }
 
     #[test]
@@ -1401,6 +1417,7 @@ mod tests {
                 {"role": "model", "parts": [fc_sig("a", "search", "SIG_A")]},
                 {"role": "user", "parts": [fr("a", "search", json!({}))]},
                 {"role": "model", "parts": [fc_sig("b", "pay", "SIG_B")]},
+                continue_turn(),
             ])
         );
     }
@@ -1560,6 +1577,7 @@ mod tests {
             json!([
                 {"role": "user", "parts": [{"text": "q"}]},
                 {"role": "model", "parts": [{"text": "t"}, fc_dummy("call_1", "search")]},
+                continue_turn(),
             ])
         );
     }
@@ -1691,5 +1709,66 @@ mod tests {
             .map(|p| p["functionResponse"]["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["b", "a", "x"]);
+    }
+
+    fn continue_turn() -> Value {
+        json!({"role": "user", "parts": [{"text": TRAILING_MODEL_TURN_PROMPT}]})
+    }
+
+    #[test]
+    fn gemini_3_trailing_model_turn_gets_a_user_turn() {
+        let items = vec![user("q"), assistant_text("answer")];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [{"text": "answer"}]},
+                continue_turn(),
+            ])
+        );
+        assert_eq!(TRAILING_MODEL_TURN_PROMPT, "Continue.");
+    }
+
+    #[test]
+    fn finalizing_shape_ends_with_user_turn_and_keeps_signature() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("call_1", 0, "SIG_A")]),
+            call("call_1", "search"),
+            result("call_1", "{}"),
+            assistant_text("answer"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [fc_sig("call_1", "search", "SIG_A")]},
+                {"role": "user", "parts": [fr("call_1", "search", json!({}))]},
+                {"role": "model", "parts": [{"text": "answer"}]},
+                continue_turn(),
+            ])
+        );
+    }
+
+    #[test]
+    fn gemini_2_trailing_model_turn_is_unchanged() {
+        for model in ["gemini-2.5-flash", "models/gemini-1.5-pro"] {
+            let items = vec![user("q"), assistant_text("answer")];
+            let t = items_to_contents(&items, model, A).unwrap();
+            assert_eq!(t.contents.len(), 2, "{model}");
+            assert_eq!(t.contents[1]["role"], "model", "{model}");
+        }
+    }
+
+    #[test]
+    fn history_ending_with_user_or_tool_result_gets_no_extra_turn() {
+        let t = items_to_contents(&[user("q")], M, A).unwrap();
+        assert_eq!(t.contents.len(), 1);
+        let items = vec![user("q"), call("c", "search"), result("c", "{}")];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(t.contents.len(), 3);
+        assert_eq!(t.contents[2]["role"], "user");
     }
 }

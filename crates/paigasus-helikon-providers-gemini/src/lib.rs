@@ -65,6 +65,8 @@
 //! dummy only for Gemini 3 and later ids, and it is live-tested only on
 //! `gemini-3.8-flash` (Developer API). Vertex signatures are not live-tested.
 //! Text-level signatures are not sent back.
+//!
+//! For Gemini 3 and later, a request that ends with a model turn gets a `user` text turn "Continue." appended, because Gemini rejects such a request.
 
 /// Key under which this crate stores its data in `ProviderData` parts and events.
 pub const PROVIDER_DATA_KEY: &str = "gemini";

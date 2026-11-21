@@ -315,6 +315,7 @@ turn that has no valid signature, it sends the documented dummy value
 `skip_thought_signature_validator`. A signature from another model id or
 another API counts as not valid. The dummy is sent only for Gemini 3 and later
 ids. Gemini 1.x and 2.x requests keep their earlier shape and get no dummy.
+For Gemini 3 and later, a request that ends with a model turn gets a `user` text turn "Continue." appended, because Gemini rejects such a request.
 These limits apply:
 
 - Vertex signatures are not live-tested.
