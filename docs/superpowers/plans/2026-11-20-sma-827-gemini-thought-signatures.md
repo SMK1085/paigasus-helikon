@@ -55,6 +55,8 @@ for the probe.
 
 ### Task 1: Core variants, helper and serde
 
+> **Superseded (2026-11-20):** after probe capture 6, Sven decided that `part_chars` counts the serialized length of `data`, not 0.
+
 **Files:**
 - Modify: `crates/paigasus-helikon-core/src/item.rs` (enum `ContentPart`, `impl Item`)
 - Modify: `crates/paigasus-helikon-core/src/model.rs` (enum `ModelEvent`, around line 172)
@@ -417,6 +419,8 @@ Rules (from the spec, section "Gemini request translator"):
 - [ ] **Step 5: Commit** `test(providers): SMA-827 cover the gemini signature round trip end to end`
 
 ### Task 11: Docs
+
+> **Superseded (2026-11-20):** after probe capture 6, Sven decided that `part_chars` counts the serialized length of `data`, not 0.
 
 **Files:**
 - Modify: `docs/book/src/concepts/core-primitives.md` (around line 35: `ContentPart::ProviderData`

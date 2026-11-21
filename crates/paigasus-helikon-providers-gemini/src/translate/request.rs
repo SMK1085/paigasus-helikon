@@ -158,11 +158,12 @@ impl<'a> Pending<'a> {
         }
     }
 
-    /// The signature in `data` when it is a string and `data` names this
-    /// model and this API. Anything else is no signature, never an error.
+    /// The signature in `data` when it is a non-empty string and `data` names
+    /// this model and this API. Anything else is no signature, never an error.
     fn valid_signature<'d>(&self, data: &'d Value) -> Option<&'d str> {
         let sig = data.get("thoughtSignature")?.as_str()?;
-        (data.get("model").and_then(Value::as_str) == Some(self.model_id)
+        (!sig.is_empty()
+            && data.get("model").and_then(Value::as_str) == Some(self.model_id)
             && data.get("api").and_then(Value::as_str) == Some(self.api))
         .then_some(sig)
     }
@@ -193,15 +194,13 @@ pub(crate) fn items_to_contents(
                 system_parts.extend(text_parts(content));
             }
             Item::UserMessage { content } => {
-                // A tool result does not end the model response, so a message
-                // of only tool results keeps the pending list.
-                if content
-                    .iter()
-                    .any(|p| !matches!(p, ContentPart::ToolResult { .. }))
-                {
+                let parts = user_parts(content, &mut calls)?;
+                // Only a wire part that is not a tool result ends the model
+                // response. Tool results and parts that emit nothing keep the
+                // pending list.
+                if parts.iter().any(|p| p.get("functionResponse").is_none()) {
                     pending.clear();
                 }
-                let parts = user_parts(content, &mut calls)?;
                 entries.push(("user", parts.into_iter().map(Part::plain).collect()));
             }
             Item::AssistantMessage { content, .. } => {
@@ -240,9 +239,14 @@ pub(crate) fn items_to_contents(
     }
 
     let mut merged = merge_same_role(entries);
-    for (role, parts) in &mut merged {
-        if *role == "model" {
-            restore_call_order(parts);
+    for i in 0..merged.len() {
+        if merged[i].0 == "model" && restore_call_order(&mut merged[i].1) {
+            let ids = call_ids(&merged[i].1);
+            if let Some((role, next)) = merged.get_mut(i + 1) {
+                if *role == "user" {
+                    order_responses(next, &ids);
+                }
+            }
         }
     }
     if uses_dummy_signature(model_id) {
@@ -323,11 +327,18 @@ fn merge_same_role(entries: Vec<(&'static str, Vec<Part>)>) -> Vec<(&'static str
 
 /// Sort the `functionCall` parts of one `model` content by their stream index,
 /// when every call has one. The sort is stable, and the other parts keep their
-/// positions. This restores the order that Gemini sent.
-fn restore_call_order(parts: &mut [Part]) {
+/// positions. This restores the order that Gemini sent. Returns `true` when
+/// the order changed.
+fn restore_call_order(parts: &mut [Part]) -> bool {
     let slots: Vec<usize> = (0..parts.len()).filter(|&i| parts[i].is_call()).collect();
     if slots.is_empty() || slots.iter().any(|&i| parts[i].index.is_none()) {
-        return;
+        return false;
+    }
+    if slots
+        .windows(2)
+        .all(|w| parts[w[0]].index <= parts[w[1]].index)
+    {
+        return false;
     }
     let mut calls: Vec<Part> = slots
         .iter()
@@ -335,6 +346,40 @@ fn restore_call_order(parts: &mut [Part]) {
         .collect();
     calls.sort_by_key(|p| p.index);
     for (slot, part) in slots.into_iter().zip(calls) {
+        parts[slot] = part;
+    }
+    true
+}
+
+/// The `functionCall` ids of one content, in order.
+fn call_ids(parts: &[Part]) -> Vec<String> {
+    parts
+        .iter()
+        .filter_map(|p| p.json["functionCall"]["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Sort the `functionResponse` parts of one `user` content into the order of
+/// `ids`, so the responses follow the calls. The sort is stable. A response
+/// whose id is not in `ids` goes after the matched ones. The other parts keep
+/// their positions.
+fn order_responses(parts: &mut [Part], ids: &[String]) {
+    let slots: Vec<usize> = (0..parts.len())
+        .filter(|&i| parts[i].is_response())
+        .collect();
+    let mut responses: Vec<Part> = slots
+        .iter()
+        .map(|&i| std::mem::replace(&mut parts[i], Part::plain(Value::Null)))
+        .collect();
+    // A repeated id in `ids` matches its first position; the stable sort keeps
+    // the history order of such responses.
+    responses.sort_by_key(|p| {
+        let id = p.json["functionResponse"]["id"].as_str();
+        ids.iter()
+            .position(|c| Some(c.as_str()) == id)
+            .unwrap_or(ids.len())
+    });
+    for (slot, part) in slots.into_iter().zip(responses) {
         parts[slot] = part;
     }
 }
@@ -1264,13 +1309,13 @@ mod tests {
                 fc("call_m", "search"),
             ]})
         );
-        // The results keep the history order.
+        // The results follow the restored call order.
         assert_eq!(
             responses(&t),
             pairs(&[
+                ("call_z", "search"),
                 ("call_a", "search"),
-                ("call_m", "search"),
-                ("call_z", "search")
+                ("call_m", "search")
             ])
         );
     }
@@ -1552,5 +1597,77 @@ mod tests {
         let body = serde_json::to_string(&Value::Array(t.contents)).unwrap();
         assert!(!body.contains("\"index\""), "{body}");
         assert!(!body.contains("provider"), "{body}");
+    }
+    #[test]
+    fn empty_signature_is_absent() {
+        let items = vec![
+            user("q"),
+            assistant(vec![pd(
+                "call_1",
+                json!({"index": 0, "thoughtSignature": "", "model": M, "api": A}),
+            )]),
+            call("call_1", "search"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [fc_dummy("call_1", "search")]})
+        );
+    }
+
+    #[test]
+    fn user_message_with_no_wire_part_keeps_pending() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("a", 0, "SIG_A")]),
+            Item::UserMessage {
+                content: vec![ContentPart::Text { text: "".into() }],
+            },
+            call("a", "search"),
+            result("a", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [fc_sig("a", "search", "SIG_A")]})
+        );
+    }
+
+    #[test]
+    fn responses_follow_the_restored_call_order() {
+        let t = items_to_contents(&parallel_items(), M, A).unwrap();
+        assert_eq!(
+            t.contents[2],
+            json!({"role": "user", "parts": [
+                fr("call_z", "search", json!({})),
+                fr("call_a", "search", json!({})),
+                fr("call_m", "search", json!({})),
+            ]})
+        );
+    }
+
+    #[test]
+    fn unknown_response_stays_after_the_matched_ones() {
+        // `x` is a call of an earlier model content, so its result is not
+        // among the calls of the content just before it.
+        let items = vec![
+            user("q"),
+            call("x", "other"),
+            user("mid"),
+            assistant(vec![unsigned("b", 0), unsigned("a", 1)]),
+            call("a", "search"),
+            call("b", "search"),
+            result("x", "{}"),
+            result("a", "{}"),
+            result("b", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        let ids: Vec<&str> = t.contents[4]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["functionResponse"]["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["b", "a", "x"]);
     }
 }

@@ -180,8 +180,9 @@ Each translator already drops an unknown part with a wildcard arm. The changes:
 - **OpenAI Chat and LiteLLM.** Today they emit `{"role":"assistant","content":""}` for an
   `AssistantMessage` with only unknown parts. When `Item::ToolCall` items follow, they merge into
   that message, and the result is valid. Alone, it is an empty assistant message. Change: an
-  assistant message with no text and no tool calls is not emitted, and the following tool calls
-  still form one assistant message. A `UserMessage` with only provider data must not emit
+  assistant message for which `item.is_provider_data_only()` is true (it holds only provider data)
+  is not emitted, and the following tool calls still form one assistant message. A message with
+  `Reasoning` parts behaves as today. A `UserMessage` with only provider data must not emit
   `{"role":"user","content":[]}`.
 - **Bedrock.** Add an explicit silent arm for `ProviderData`, so it does not warn on each request.
 - **Anthropic, OpenAI Responses.** They already send nothing for an empty message. Add an explicit
@@ -195,7 +196,8 @@ A capture in the repo (`tests/provider-stream-conformance/tests/conformance.rs:2
 `thoughtSignature` is a sibling of `functionCall` in the same part (about 700 characters), and the
 `STOP` chunk carries `{"text":""}` with no signature. The probe checks this again on 3.8.
 
-- `sse.rs` `Part` gets `thought_signature: Option<String>` (`thoughtSignature` on the wire).
+- `sse.rs` `Part` gets `thought_signature: Option<serde_json::Value>` (`thoughtSignature` on the
+  wire). A value that is not a string is treated as absent, so it never rejects the chunk.
 - For each `functionCall` part, the translator emits the `ToolCallDelta`, then
   `ProviderData { provider: "gemini", call_id: Some(<the same call_id>), data }`, where `data` is:
 
@@ -221,7 +223,8 @@ A capture in the repo (`tests/provider-stream-conformance/tests/conformance.rs:2
 parts into a pending list of `(call_id, data)`. Then each `functionCall` (from a `ToolUse` part in
 the same message, or from the `Item::ToolCall` items that follow) takes the first pending entry with
 the same `call_id` and removes it. The pending list is cleared at the next `AssistantMessage` and at
-the next `UserMessage` that is not only tool results. A `ToolResult` does not clear it, because
+the next `UserMessage` that emits a wire part that is not a `functionResponse` (a non-empty text or
+a translated image). A `ToolResult` does not clear it, because
 `close_open_transfers` can put a result between two calls of one response
 (`resume_exec.rs:185,194`). The `ProviderData` part itself never becomes a wire part.
 
@@ -231,11 +234,15 @@ shape. The result is at worst an HTTP 400 for a history that is already damaged.
 
 **Valid signature.** A signature is valid for this request when `data.model` equals the configured
 model id and `data.api` equals the configured transport. A signature that is missing, malformed (not
-a string) or not valid is treated as absent. A malformed part never causes an error.
+a string), empty or not valid is treated as absent. A malformed part never causes an error.
 
 **Order.** In each merged `model` content, when every `functionCall` part has an `index`, the
 translator sorts the `functionCall` parts by `index` and keeps the other parts where they are. This
-restores the order that Gemini sent. Otherwise the order stays as in the history.
+restores the order that Gemini sent. Otherwise the order stays as in the history. When the sort
+changes the order, the `functionResponse` parts of the next `user` content are sorted (stable) into
+the order of the call ids, because Google asks for responses in the order of the calls. A response
+whose id is not among those calls goes after the matched ones. With no reorder, the request is the
+same as before SMA-827.
 
 **Signature on the part.** A valid signature goes on the same part:
 `{"functionCall": {...}, "thoughtSignature": "..."}`.

@@ -5,8 +5,8 @@
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ModelTurnAccumulator,
-    ToolChoice, ToolDef,
+    CancellationToken, ContentPart, FinishReason, Item, Model, ModelEvent, ModelRequest,
+    ModelTurnAccumulator, ToolChoice, ToolDef,
 };
 
 use crate::translate::build_request;
@@ -55,7 +55,7 @@ async fn live_signature_round_trip() {
     }
     let items = acc.finish().unwrap().items;
 
-    let signature = items
+    let (signed_call, signature) = items
         .iter()
         .find_map(|item| {
             let Item::AssistantMessage { content, .. } = item else {
@@ -64,13 +64,13 @@ async fn live_signature_round_trip() {
             content.iter().find_map(|part| match part {
                 ContentPart::ProviderData {
                     provider,
-                    call_id: Some(_),
+                    call_id: Some(call_id),
                     data,
                 } if provider == PROVIDER_DATA_KEY => data
                     .get("thoughtSignature")
                     .and_then(|s| s.as_str())
                     .filter(|s| !s.is_empty())
-                    .map(str::to_owned),
+                    .map(|s| (call_id.clone(), s.to_owned())),
                 _ => None,
             })
         })
@@ -93,17 +93,18 @@ async fn live_signature_round_trip() {
     request.model_settings.tool_choice = None;
 
     let body = build_request(&model.0, &request).unwrap().body;
-    let signatures: Vec<&serde_json::Value> = body["contents"]
+    // The call with the captured id must carry exactly that signature.
+    let part = body["contents"]
         .as_array()
         .expect("contents array")
         .iter()
         .flat_map(|c| c["parts"].as_array().into_iter().flatten())
-        .filter(|p| p.get("functionCall").is_some())
-        .map(|p| &p["thoughtSignature"])
-        .collect();
-    assert!(
-        signatures.iter().any(|s| s.as_str() == Some(&signature)),
-        "no functionCall part carries the captured signature: {body}"
+        .find(|p| p["functionCall"]["id"].as_str() == Some(signed_call.as_str()))
+        .unwrap_or_else(|| panic!("no functionCall part has id {signed_call}: {body}"));
+    assert_eq!(
+        part["thoughtSignature"].as_str(),
+        Some(signature.as_str()),
+        "the functionCall part {signed_call} does not carry its signature"
     );
     assert!(
         !body
@@ -116,11 +117,16 @@ async fn live_signature_round_trip() {
         .invoke(request, CancellationToken::new())
         .await
         .unwrap();
-    let mut finished = false;
+    let mut reason = None;
     while let Some(ev) = stream.next().await {
-        if let ModelEvent::Finish { .. } = ev.expect("turn 2 stream error") {
-            finished = true;
+        if let ModelEvent::Finish { reason: r } = ev.expect("turn 2 stream error") {
+            reason = Some(r);
         }
     }
-    assert!(finished, "turn 2 has no Finish event");
+    // `Other` (for example MALFORMED_FUNCTION_CALL), `ContentFilter` and
+    // `Length` are failures.
+    match reason {
+        Some(FinishReason::Stop | FinishReason::ToolCalls) => {}
+        other => panic!("turn 2 finish is not Stop or ToolCalls: {other:?}"),
+    }
 }

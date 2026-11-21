@@ -58,7 +58,8 @@ impl StreamTranslator {
                         }));
                         let index = self.call_index;
                         self.call_index += 1;
-                        let data = match part.thought_signature {
+                        let sig = part.thought_signature.as_ref().and_then(|v| v.as_str());
+                        let data = match sig {
                             Some(sig) => serde_json::json!({
                                 "index": index,
                                 "thoughtSignature": sig,
@@ -337,5 +338,17 @@ mod tests {
         })));
         assert_eq!(evs.len(), 1);
         assert!(matches!(&evs[0], Ok(ModelEvent::TokenDelta { text }) if text == "hi"));
+    }
+    #[test]
+    fn non_string_signature_keeps_the_call() {
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+        let evs = t.consume(chunk(serde_json::json!({
+            "candidates": [ { "content": { "parts": [
+                { "functionCall": { "id": "a", "name": "x", "args": {} }, "thoughtSignature": 5 }
+            ] } } ]
+        })));
+        assert_eq!(evs.len(), 2);
+        assert!(matches!(&evs[0], Ok(ModelEvent::ToolCallDelta { call_id, .. }) if call_id == "a"));
+        assert_eq!(*data_of(&evs[1]).1, serde_json::json!({"index":0}));
     }
 }
