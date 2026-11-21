@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "0d07a12d4755",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-840-anthropic-provider-drops-thinking-signatures",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/README.md",
+    "crates/paigasus-helikon-providers-anthropic/src/lib.rs",
+    "crates/paigasus-helikon-providers-anthropic/src/translate/request.rs",
+    "docs/book/src/concepts/model-providers.md",
+    "docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0d/07a12d4755/0/metadata.json",
+      "transcript": "/0d/07a12d4755/0/full.jsonl",
+      "compact_transcript": "/0d/07a12d4755/0/transcript.jsonl",
+      "content_hash": "/0d/07a12d4755/0/content_hash.txt",
+      "prompt": "/0d/07a12d4755/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 94,
+    "cache_creation_tokens": 226619,
+    "cache_read_tokens": 13919001,
+    "output_tokens": 43538,
+    "api_call_count": 39,
+    "subagent_tokens": {
+      "input_tokens": 190,
+      "cache_creation_tokens": 861155,
+      "cache_read_tokens": 15681462,
+      "output_tokens": 86327,
+      "api_call_count": 93
+    }
+  },
+  "redaction": {
+    "replacements": 379,
+    "layers": {
+      "betterleaks": 8,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 24,
+      "credentialed_uri": 0,
+      "entropy": 347,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
