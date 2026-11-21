@@ -2,11 +2,11 @@
 # Reference: https://release-plz.dev/docs/config
 
 [workspace]
-# Bump dependent crates whenever a dep's version changes. The facade
-# (paigasus-helikon) depends on every sibling via `[workspace.dependencies]`,
-# so a `feat(core):` commit triggers: paigasus-helikon-core bumped →
-# facade's `[workspace.dependencies].paigasus-helikon-core` line updated →
-# facade itself gets a patch bump.
+# Makes the release PR run `cargo update` on `Cargo.lock`. It does not cascade
+# version bumps. release-plz gives a dependent crate that has no commits of its
+# own a patch bump only (release-plz#1599). For a breaking bump, see
+# docs/runbooks/release-ascend.md, section "A breaking change in a crate with
+# dependents" (SMA-838).
 dependencies_update = true
 
 # Force the scopeless release-PR title + commit (`chore: release`). release-plz's

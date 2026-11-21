@@ -219,6 +219,8 @@ same cost as `audit` and `deny`.
 
 **A second `fmt` step runs `scripts/check-release-gaps-selftest.sh` (SMA-745).** The self-test runs `scripts/check-release-gaps.sh` with fake `curl` and `gh` commands. It also checks that `release-plz.yml` keeps `permission-workflows: write`, `environment: release`, `id: release` and the gap report step. No PR runs `release-plz.yml`. These checks are the only protection before the merge.
 
+**Two more `fmt` steps run the breaking-cascade guard (SMA-838).** `scripts/check-breaking-cascade-selftest.sh` checks the guard against fake metadata. `scripts/check-breaking-cascade.sh` then runs on the real workspace. The `fmt` checkout uses `fetch-depth: 2` so the guard can read the base versions at `HEAD^1`. On a push event the guard prints a notice and exits 0. For the rule and the repair steps, read "A breaking change in a crate with dependents" in `docs/runbooks/release-ascend.md`.
+
 **`cache-budget.yml` is the daily monitor.** It runs on a `schedule` (06:43
 UTC daily) plus `workflow_dispatch`, never on `push` or `pull_request`, and it
 warns, it never fails — a budget drifting toward the limit is something to fix
