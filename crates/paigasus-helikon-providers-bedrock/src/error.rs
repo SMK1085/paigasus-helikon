@@ -5,8 +5,8 @@
 //!
 //! One send fallback exists, and it is not a retry in the ADR-10 sense:
 //! when an Anthropic model rejects a forced tool choice before the stream
-//! starts, the provider sends the request one more time on the native
-//! structured-output path. Four facts make this different from a retry.
+//! starts, the provider sends one native request, which is a different request,
+//! on the structured-output path. Four facts make this different from a retry.
 //! The fallback sends a *different* request, not the same request again.
 //! It occurs at most once for each request. It is logged. It never follows
 //! a transient error (throttling, a 5xx error or a transport error).

@@ -6,12 +6,16 @@
 //! schema of the caller.
 //!
 //! The rewrite does not visit `contains`, `dependentSchemas`, the tuple form of
-//! `items`, or the sub-schemas under `additionalProperties`, `patternProperties`
-//! and `prefixItems`. Bedrock decides on these.
+//! `items`, or the sub-schemas under `additionalProperties`, `patternProperties`,
+//! `prefixItems`, `unevaluatedProperties` and `propertyNames`. The rewrite
+//! passes these through, and Bedrock decides on them. The rewrite removes `not`.
 //!
 //! An object node under an `allOf` composition stays open (no added
 //! `additionalProperties: false`), because the closed members would reject the
-//! properties of the other members.
+//! properties of the other members. The same rule applies to a node that has
+//! `properties` next to `oneOf` or `anyOf` (the schemars output for a flattened
+//! tagged enum), and to the object nodes in the branches of such a node. A
+//! `$defs` entry that a `$ref` inside an `allOf` points to is still closed.
 
 use serde_json::{Map, Value};
 
@@ -80,7 +84,10 @@ fn rewrite(v: &Value, open: bool) -> Value {
         .iter()
         .any(|k| m.contains_key(*k));
     let has_all_of = m.contains_key("allOf");
-    let child_open = open || has_all_of;
+    // A node with `properties` next to `anyOf` is a flattened composition. The
+    // parent and the branches each hold a part of the properties.
+    let is_flattened = m.contains_key("properties") && m.contains_key("anyOf");
+    let child_open = open || has_all_of || is_flattened;
     if is_object && !is_map && !child_open {
         m.insert("additionalProperties".to_owned(), Value::Bool(false));
     }
@@ -145,6 +152,22 @@ mod tests {
             native_output_schema(&json!({"type":"string"})),
             json!({"type":"string"})
         );
+    }
+
+    #[test]
+    fn native_schema_properties_next_to_one_of_stay_open() {
+        let out = native_output_schema(
+            &json!({"type":"object","properties":{"amount":{"type":"number","format":"double"}},"required":["amount"],"oneOf":[{"type":"object","properties":{"kind":{"type":"string","const":"card"},"last4":{"type":"string"}},"required":["kind","last4"]},{"type":"object","properties":{"kind":{"type":"string","const":"cash"}},"required":["kind"]}]}),
+        );
+        assert!(out.get("oneOf").is_none());
+        assert_eq!(out["required"], json!(["amount"]));
+        assert!(out.get("additionalProperties").is_none());
+        let branches = out["anyOf"].as_array().expect("anyOf array");
+        assert_eq!(branches.len(), 2);
+        for branch in branches {
+            assert!(branch.get("additionalProperties").is_none());
+            assert!(branch.get("required").is_some());
+        }
     }
 
     #[test]
