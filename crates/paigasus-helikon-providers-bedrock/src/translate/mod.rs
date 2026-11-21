@@ -2,6 +2,7 @@
 
 pub mod schema;
 
+pub(crate) mod native_schema;
 pub(crate) mod request;
 pub(crate) mod response_format;
 pub(crate) mod tools;
