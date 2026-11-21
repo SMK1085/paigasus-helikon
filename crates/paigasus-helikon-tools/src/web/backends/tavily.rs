@@ -118,6 +118,23 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Parses `tests/fixtures/tavily_search.json`.
+    ///
+    /// Provenance: HAND-AUTHORED under SMA-412 (PR #76). The plan
+    /// `docs/superpowers/plans/2026-06-13-tools-web-network.md` (line 1441)
+    /// creates the file by hand. The file is not a capture. No capture of a
+    /// live Tavily response is recorded. No vendor documentation is recorded as
+    /// a source. The SMA-412 design
+    /// (`docs/superpowers/specs/2026-06-13-tools-web-network-design.md`, line
+    /// 406) calls such fixtures "captured". The plan and the PR record no
+    /// capture, so this label stands.
+    ///
+    /// Shape: the file holds the subset that the mapping reads,
+    /// `results[].{title,url,content}` (design lines 312-318). The values are
+    /// test text. The URLs use `example.com`. The top-level `query` key is not
+    /// read by the mapping. The source of that key is not recorded. A real
+    /// response can hold more fields. Their absence here does not mean they
+    /// are absent on the wire.
     #[test]
     fn parses_tavily_fixture() {
         let body: Value = serde_json::from_str(include_str!(concat!(

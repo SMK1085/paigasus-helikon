@@ -111,6 +111,21 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Parses `tests/fixtures/brave_search.json`.
+    ///
+    /// Provenance: HAND-AUTHORED under SMA-412 (PR #76). The plan
+    /// `docs/superpowers/plans/2026-06-13-tools-web-network.md` (line 1187)
+    /// creates the file by hand. The file is not a capture. No capture of a
+    /// live Brave response is recorded. No vendor documentation is recorded as
+    /// a source. The SMA-412 design
+    /// (`docs/superpowers/specs/2026-06-13-tools-web-network-design.md`, line
+    /// 406) calls such fixtures "captured". The plan and the PR record no
+    /// capture, so this label stands.
+    ///
+    /// Shape: the file holds only the subset that the mapping reads,
+    /// `web.results[].{title,url,description}` (design lines 307-310). The
+    /// values are test text. A real response can hold more fields. Their
+    /// absence here does not mean they are absent on the wire.
     #[test]
     fn parses_brave_fixture() {
         let body: Value = serde_json::from_str(include_str!(concat!(
@@ -132,6 +147,8 @@ mod tests {
         assert!(results[0].content.is_none());
     }
 
+    /// Uses the same fixture as `parses_brave_fixture`. See that test for the
+    /// provenance of `tests/fixtures/brave_search.json`.
     #[test]
     fn parse_brave_respects_limit() {
         let body: Value = serde_json::from_str(include_str!(concat!(
