@@ -183,7 +183,7 @@ fn clones_share_the_policy() {
 
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `cargo test -p paigasus-helikon-providers-bedrock --lib policy:: model::tests::clones_share_the_policy`
+Run: `cargo test -p paigasus-helikon-providers-bedrock --lib policy::` and then `cargo test -p paigasus-helikon-providers-bedrock --lib model::tests::clones_share_the_policy` (Cargo accepts one test filter for each command)
 Expected: compile errors (module `policy` and field `policy` do not exist).
 
 - [ ] **Step 3: Implement** the items in the Interfaces block. `build()` creates `Arc::new(ForcedChoicePolicy::new(&model_id, family))` and logs one `debug!` (target `paigasus::bedrock::builder`) when the static rule selects native output. The `BedrockModel` doc keeps "`Clone + Send + Sync`" and says that clones share learned state; it does not link to `ForcedChoicePolicy`.
@@ -523,7 +523,7 @@ fn forced_choice_rejection_ignores_near_misses() {
 
 - [ ] **Step 3: Run them and see them fail**
 
-Run: `cargo test -p paigasus-helikon-providers-bedrock --lib error::tests fallback::`
+Run: `cargo test -p paigasus-helikon-providers-bedrock --lib error::tests` and then `cargo test -p paigasus-helikon-providers-bedrock --lib fallback::` (Cargo accepts one test filter for each command)
 Expected: compile errors (`is_forced_choice_rejection`, `SendFailure`, `send_with_fallback` do not exist).
 
 - [ ] **Step 4: Implement** the classifier, `SendFailure`, `send_failure`, `offline_config` and `send_with_fallback` per the Interfaces block.
