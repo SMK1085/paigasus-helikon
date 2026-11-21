@@ -13,13 +13,13 @@ use crate::translate::build_request;
 use crate::{GeminiModel, PROVIDER_DATA_KEY};
 
 fn search_tool() -> ToolDef {
-    ToolDef {
-        name: "search".into(),
-        description: "Search for a query.".into(),
-        schema: serde_json::json!({
+    ToolDef::new(
+        "search",
+        "Search for a query.",
+        serde_json::json!({
             "type":"object","properties":{"q":{"type":"string"}},"required":["q"]
         }),
-    }
+    )
 }
 
 #[tokio::test]
