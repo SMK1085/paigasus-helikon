@@ -89,8 +89,11 @@ pub(crate) fn offline_client() -> Client {
 }
 
 /// The effective family: the override when set, else the family from the model id.
-pub(crate) fn resolve_family(model_id: &str, family_override: Option<ModelFamily>) -> ModelFamily {
-    family_override.unwrap_or_else(|| ModelFamily::from_model_id(model_id))
+pub(crate) fn resolve_family(
+    detected: ModelFamily,
+    family_override: Option<ModelFamily>,
+) -> ModelFamily {
+    family_override.unwrap_or(detected)
 }
 
 /// Make an offline [`Config`] for unit tests. The client makes no AWS call.
@@ -99,22 +102,10 @@ pub(crate) fn resolve_family(model_id: &str, family_override: Option<ModelFamily
 /// a runtime.
 #[cfg(test)]
 pub(crate) fn offline_config(model_id: &str) -> Config {
-    let family = resolve_family(model_id, None);
+    let family = resolve_family(ModelFamily::from_model_id(model_id), None);
     let capabilities = caps_for(family);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio rt");
-    let client = rt.block_on(async {
-        let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_17())
-            .region(aws_config::Region::new("us-east-1"))
-            .test_credentials()
-            .load()
-            .await;
-        Client::new(&sdk_cfg)
-    });
     Config {
-        client,
+        client: offline_client(),
         model_id: model_id.to_owned(),
         family,
         capabilities,
@@ -215,14 +206,18 @@ impl BedrockModelBuilder {
     /// provisioned-throughput ARNs and custom-model ARNs. These IDs do not
     /// name the family, so detection gives `ModelFamily::Unknown`.
     ///
-    /// With `Anthropic`, `Mistral` or `AmazonNova`, the model sends
-    /// `ToolChoice::Required` and `ToolChoice::Tool`. Some requests then
-    /// become local errors:
+    /// With `Anthropic`, `Mistral` or `AmazonNova`, the provider sends
+    /// `ToolChoice::Required` and `ToolChoice::Tool` on the forced-tool path.
+    /// Some requests then fail locally:
     ///
     /// - `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::Tool`.
     /// - `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::None`.
     /// - `ToolChoice::Required` with no tools.
     /// - `ToolChoice::Tool` with a name that no tool defines.
+    ///
+    /// On the native path, the provider omits these choices and logs a
+    /// warning. The native path applies to Claude Sonnet 5.5 and Opus 5.5,
+    /// and to a handle after one rejection.
     ///
     /// A profile on Claude Sonnet 5.5 or Opus 5.5 costs one rejected request
     /// for each handle. Build one handle and clone it.
@@ -293,7 +288,7 @@ impl BedrockModelBuilder {
 
         // 3. Detect family and resolve capabilities.
         let detected = ModelFamily::from_model_id(&self.model_id);
-        let family = resolve_family(&self.model_id, self.family_override);
+        let family = resolve_family(detected, self.family_override);
         match self.family_override {
             None if family == ModelFamily::Unknown => {
                 tracing::debug!(
@@ -652,6 +647,7 @@ mod tests {
     #[test]
     fn family_override_maps_required_tool_choice_to_any() {
         let model = build_with(ARN, Some(ModelFamily::Anthropic));
+        assert_one_family(&model, ModelFamily::Anthropic);
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
         req.tools = vec![ToolDef::new("ping", "Ping", json!({"type": "object"}))];
@@ -698,6 +694,7 @@ mod tests {
     #[test]
     fn unknown_override_on_sonnet55_sends_no_output_config() {
         let model = build_with(SONNET55, Some(ModelFamily::Unknown));
+        assert_one_family(&model, ModelFamily::Unknown);
         assert_eq!(model.policy.path(), OutputPath::ForcedTool);
         let w = wire(&model, &json_schema_request());
         assert!(w["toolConfig"].is_null());
@@ -708,6 +705,7 @@ mod tests {
     #[test]
     fn anthropic_override_on_sonnet55_keeps_native_path() {
         let model = build_with(SONNET55, Some(ModelFamily::Anthropic));
+        assert_one_family(&model, ModelFamily::Anthropic);
         assert_eq!(model.policy.path(), OutputPath::Native);
         let w = wire(&model, &json_schema_request());
         assert!(w.get("outputConfig").is_some());
@@ -716,18 +714,22 @@ mod tests {
     #[test]
     fn mistral_override_on_sonnet55_selects_native_path() {
         let model = build_with(SONNET55, Some(ModelFamily::Mistral));
+        assert_one_family(&model, ModelFamily::Mistral);
         assert_eq!(model.policy.path(), OutputPath::Native);
+        let w = wire(&model, &json_schema_request());
+        assert!(w.get("outputConfig").is_some());
     }
 
     #[test]
     fn resolve_family_prefers_override() {
-        assert_eq!(resolve_family(ARN, None), ModelFamily::Unknown);
+        let unknown = ModelFamily::Unknown;
+        assert_eq!(resolve_family(unknown, None), ModelFamily::Unknown);
         assert_eq!(
-            resolve_family(ARN, Some(ModelFamily::Anthropic)),
+            resolve_family(unknown, Some(ModelFamily::Anthropic)),
             ModelFamily::Anthropic
         );
         assert_eq!(
-            resolve_family("anthropic.claude-x", Some(ModelFamily::Unknown)),
+            resolve_family(ModelFamily::Anthropic, Some(ModelFamily::Unknown)),
             ModelFamily::Unknown
         );
     }
