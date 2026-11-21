@@ -1,0 +1,66 @@
+---
+source: crates/paigasus-helikon-providers-anthropic/src/translate/mod.rs
+expression: "baseline_body(&default_cfg(), items)"
+---
+{
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "q",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "t",
+          "type": "text"
+        },
+        {
+          "id": "a",
+          "input": {},
+          "name": "ping",
+          "type": "tool_use"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "content": "pong",
+          "tool_use_id": "a",
+          "type": "tool_result"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "id": "b",
+          "input": {},
+          "name": "ping",
+          "type": "tool_use"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "content": "pong",
+          "tool_use_id": "b",
+          "type": "tool_result"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-6",
+  "stream": true
+}

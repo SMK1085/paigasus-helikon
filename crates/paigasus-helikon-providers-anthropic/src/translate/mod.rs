@@ -484,3 +484,191 @@ mod tests {
         assert!(cfg().native_tool_types);
     }
 }
+
+/// Request bodies recorded from the code before SMA-840.
+/// Each history has no Anthropic provider data, so its body must not change.
+#[cfg(test)]
+mod baseline {
+    use super::*;
+    use crate::builder::AnthropicModelBuilder;
+    use crate::settings::CacheStrategy;
+    use paigasus_helikon_core::{ContentPart, Item, ModelRequest};
+
+    fn builder() -> AnthropicModelBuilder {
+        AnthropicModelBuilder::new("claude-sonnet-4-6").api_key("sk-test")
+    }
+
+    fn default_cfg() -> Config {
+        builder().build_config().unwrap()
+    }
+
+    /// Build the request body for `items` and return it as JSON.
+    fn baseline_body(cfg: &Config, items: Vec<Item>) -> serde_json::Value {
+        let mut req = ModelRequest::new();
+        req.messages = items;
+        build_body(cfg, &req).unwrap().body
+    }
+
+    fn text(t: &str) -> ContentPart {
+        ContentPart::Text { text: t.to_owned() }
+    }
+
+    fn reasoning(t: &str) -> ContentPart {
+        ContentPart::Reasoning { text: t.to_owned() }
+    }
+
+    fn user(t: &str) -> Item {
+        Item::UserMessage {
+            content: vec![text(t)],
+        }
+    }
+
+    fn asst(t: &str) -> Item {
+        asst_parts(vec![text(t)])
+    }
+
+    fn asst_parts(content: Vec<ContentPart>) -> Item {
+        Item::AssistantMessage {
+            content,
+            agent: None,
+        }
+    }
+
+    fn call(id: &str) -> Item {
+        Item::ToolCall {
+            call_id: id.into(),
+            name: "ping".into(),
+            args: json!({}),
+        }
+    }
+
+    fn result(id: &str) -> Item {
+        Item::ToolResult {
+            call_id: id.into(),
+            content: vec![text("pong")],
+        }
+    }
+
+    fn use_part(id: &str) -> ContentPart {
+        ContentPart::ToolUse {
+            call_id: id.into(),
+            name: "ping".into(),
+            args: json!({}),
+        }
+    }
+
+    fn tool_loop_items() -> Vec<Item> {
+        vec![
+            user("q"),
+            asst_parts(vec![reasoning("r"), text("t")]),
+            call("tu_1"),
+            result("tu_1"),
+            asst("done"),
+        ]
+    }
+
+    #[test]
+    fn baseline_text_turns() {
+        let items = vec![user("q"), asst("a"), user("r")];
+        insta::assert_json_snapshot!("baseline_text_turns", baseline_body(&default_cfg(), items));
+    }
+
+    #[test]
+    fn baseline_accumulator_tool_loop() {
+        insta::assert_json_snapshot!(
+            "baseline_accumulator_tool_loop",
+            baseline_body(&default_cfg(), tool_loop_items())
+        );
+    }
+
+    #[test]
+    fn baseline_nested_open_round() {
+        let items = vec![
+            user("q"),
+            asst_parts(vec![use_part("t1"), use_part("t2")]),
+            result("t1"),
+            asst_parts(vec![text("b"), use_part("t3")]),
+            result("t2"),
+            result("t3"),
+        ];
+        insta::assert_json_snapshot!(
+            "baseline_nested_open_round",
+            baseline_body(&default_cfg(), items)
+        );
+    }
+
+    #[test]
+    fn baseline_handoff_transcript() {
+        let items = vec![
+            user("q"),
+            asst_parts(vec![reasoning("r")]),
+            user("You are now handling a transferred conversation. Continue assisting the user."),
+        ];
+        insta::assert_json_snapshot!(
+            "baseline_handoff_transcript",
+            baseline_body(&default_cfg(), items)
+        );
+    }
+
+    #[test]
+    fn baseline_transfer_split() {
+        let items = vec![
+            user("q"),
+            asst_parts(vec![text("t")]),
+            call("a"),
+            result("a"),
+            call("b"),
+            result("b"),
+        ];
+        insta::assert_json_snapshot!(
+            "baseline_transfer_split",
+            baseline_body(&default_cfg(), items)
+        );
+    }
+
+    #[test]
+    fn baseline_foreign_provider_data() {
+        let pd = || ContentPart::ProviderData {
+            provider: "gemini".to_owned(),
+            call_id: None,
+            data: json!({"sig": "SIG_A"}),
+        };
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("q"), pd()],
+            },
+            asst_parts(vec![pd()]),
+            asst_parts(vec![text("a"), pd()]),
+        ];
+        insta::assert_json_snapshot!(
+            "baseline_foreign_provider_data",
+            baseline_body(&default_cfg(), items)
+        );
+    }
+
+    #[test]
+    fn baseline_last_turn_cache() {
+        let cfg = builder()
+            .cache_strategy(CacheStrategy::LastTurn)
+            .build_config()
+            .unwrap();
+        insta::assert_json_snapshot!(
+            "baseline_last_turn_cache",
+            baseline_body(&cfg, tool_loop_items())
+        );
+    }
+
+    #[test]
+    fn baseline_thinking_enabled() {
+        let cfg = builder()
+            .extended_thinking(ExtendedThinking::Enabled {
+                budget_tokens: 2048,
+            })
+            .build_config()
+            .unwrap();
+        insta::assert_json_snapshot!(
+            "baseline_thinking_enabled",
+            baseline_body(&cfg, tool_loop_items())
+        );
+    }
+}
