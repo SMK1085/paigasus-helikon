@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.6.0...paigasus-helikon-runtime-temporal-v0.7.0) - 2026-11-21
+
+### Added
+
+- *(core)* [**breaking**] SMA-830 let a tool declare a provider tool type ([#374](https://github.com/SMK1085/paigasus-helikon/pull/374))
+
 ### Upgrade notes
 
 - Requires `paigasus-helikon-core` 0.8 (`ToolDef` is now `#[non_exhaustive]`; see the core CHANGELOG).

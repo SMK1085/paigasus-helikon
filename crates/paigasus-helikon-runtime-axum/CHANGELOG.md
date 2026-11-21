@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-axum-v0.3.0...paigasus-helikon-runtime-axum-v0.4.0) - 2026-11-21
+
+### Added
+
+- *(core)* [**breaking**] SMA-830 let a tool declare a provider tool type ([#374](https://github.com/SMK1085/paigasus-helikon/pull/374))
+
+### Fixed
+
+- *(providers)* SMA-827 round trip gemini thought signatures through a provider data part ([#373](https://github.com/SMK1085/paigasus-helikon/pull/373))
+
 ### Upgrade notes
 
 - Requires `paigasus-helikon-core` 0.8 (`ToolDef` is now `#[non_exhaustive]`; see the core CHANGELOG).
