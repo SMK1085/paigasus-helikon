@@ -77,6 +77,12 @@ pub(crate) fn build_native(
             .collect()
     };
 
+    // Check a caller-selected tool name against the user tools only. The anchor
+    // below must not make an undefined name valid.
+    if let Some(ToolChoice::Tool { name }) = tool_choice {
+        check_tool_name(&all_tools, name)?;
+    }
+
     // Anchor: a structured format, no user tools and a tool round in the history.
     let mut synthesizing = false;
     if structured && all_tools.is_empty() && has_tool_round(&translated.messages) {
@@ -97,8 +103,7 @@ pub(crate) fn build_native(
             notices.push(NativeNotice::RequiredOmitted);
             None
         }
-        Some(ToolChoice::Tool { name }) => {
-            check_tool_name(&all_tools, name)?;
+        Some(ToolChoice::Tool { .. }) => {
             notices.push(NativeNotice::ToolOmitted);
             None
         }

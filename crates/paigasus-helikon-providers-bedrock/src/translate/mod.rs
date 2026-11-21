@@ -1464,6 +1464,24 @@ mod tests {
     }
 
     #[test]
+    fn native_tool_choice_tool_cannot_select_the_anchor() {
+        // The anchor is not a user tool. Selecting it by name is an error, also
+        // when the history has a tool round and the anchor is sent.
+        let mut req = ModelRequest::new();
+        req.messages = tool_round_history();
+        req.model_settings.response_format = Some(transaction_format());
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: SYNTHESIZED_TOOL_NAME.to_owned(),
+        });
+        let err = build(&sonnet55_cfg(), &req).unwrap_err();
+        assert!(matches!(err, ModelError::Other(_)));
+        assert!(
+            err.to_string().contains("not defined in the tool list"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn native_path_reports_no_notices_for_plain_requests() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hello")];
