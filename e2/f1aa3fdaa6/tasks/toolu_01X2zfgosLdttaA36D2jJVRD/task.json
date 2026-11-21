@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01X2zfgosLdttaA36D2jJVRD",
+  "agent_id": "a49ca78a45344fa11",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix final-review findings SMA-585",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 85993,
+    "cache_read_tokens": 696546,
+    "output_tokens": 6648,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-21T19:10:36.802223+01:00",
+  "completed_at": "2026-11-21T19:11:34.813204+01:00"
+}

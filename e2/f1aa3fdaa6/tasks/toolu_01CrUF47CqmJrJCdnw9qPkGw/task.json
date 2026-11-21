@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01CrUF47CqmJrJCdnw9qPkGw",
+  "agent_id": "add856fb9378bd4a1",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-review final fix wave SMA-585",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 63324,
+    "cache_read_tokens": 239777,
+    "output_tokens": 2901,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-21T19:11:51.957785+01:00",
+  "completed_at": "2026-11-21T19:12:07.139736+01:00"
+}
