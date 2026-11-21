@@ -390,6 +390,42 @@ mod tests {
     }
 
     #[test]
+    fn history_does_not_change_thinking_setting() {
+        use crate::provider_data::{part, AnthropicData, ThinkingBlock};
+        let mut cfg = cfg();
+        cfg.extended_thinking = ExtendedThinking::Enabled {
+            budget_tokens: 2048,
+        };
+        let with_thinking = Item::AssistantMessage {
+            content: vec![
+                part(
+                    AnthropicData::Block {
+                        index: 0,
+                        block: ThinkingBlock::Thinking {
+                            thinking: "t".to_owned(),
+                            signature: "SIG_FAKE_1".to_owned(),
+                        },
+                    },
+                    None,
+                ),
+                ContentPart::Text {
+                    text: "hi".to_owned(),
+                },
+            ],
+            agent: None,
+        };
+        let expected = serde_json::json!({"type": "enabled", "budget_tokens": 2048});
+        for history in [
+            vec![user_text("q"), with_thinking],
+            vec![user_text("q"), asst_text("hi")],
+        ] {
+            let mut req = ModelRequest::new();
+            req.messages = history;
+            assert_eq!(build_body(&cfg, &req).unwrap().body["thinking"], expected);
+        }
+    }
+
+    #[test]
     fn extended_thinking_adaptive_emits_adaptive_payload() {
         let mut cfg = cfg();
         cfg.extended_thinking = ExtendedThinking::Adaptive;
@@ -670,5 +706,403 @@ mod baseline {
             "baseline_thinking_enabled",
             baseline_body(&cfg, tool_loop_items())
         );
+    }
+}
+
+#[cfg(test)]
+mod round_trip {
+    use super::*;
+    use crate::builder::AnthropicModelBuilder;
+    use crate::sse::{AnthropicEvent, ContentBlockDelta, ContentBlockHead};
+    use crate::stream::MessageTranslator;
+    use paigasus_helikon_core::{
+        AgentEvent, ContentPart, Item, ModelEvent, ModelRequest, ModelTurnAccumulator,
+        SessionRecorder,
+    };
+
+    fn cfg() -> Config {
+        AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-test")
+            .build_config()
+            .unwrap()
+    }
+
+    fn translate_events(events: Vec<AnthropicEvent>) -> Vec<ModelEvent> {
+        let mut t = MessageTranslator::new(false);
+        let mut out = Vec::new();
+        for e in events {
+            for item in t.consume(e).unwrap() {
+                out.push(item.unwrap());
+            }
+        }
+        if let Some(last) = t.finish() {
+            out.push(last.unwrap());
+        }
+        out
+    }
+
+    fn fixture_events(fixture: &str) -> Vec<ModelEvent> {
+        let events = fixture
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .map(|j| serde_json::from_str(j).unwrap())
+            .collect();
+        translate_events(events)
+    }
+
+    fn items_of(events: &[ModelEvent]) -> Vec<Item> {
+        let mut acc = ModelTurnAccumulator::new("root");
+        for e in events {
+            acc.observe(e);
+        }
+        acc.finish().unwrap().items
+    }
+
+    /// The items of one fixture turn, and the events they came from.
+    fn turn_items(fixture: &str) -> (Vec<Item>, Vec<ModelEvent>) {
+        let events = fixture_events(fixture);
+        (items_of(&events), events)
+    }
+
+    fn joined(events: &[ModelEvent], reasoning: bool) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ReasoningDelta { text } if reasoning => Some(text.as_str()),
+                ModelEvent::TokenDelta { text } if !reasoning => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn user_q() -> Item {
+        Item::UserMessage {
+            content: vec![ContentPart::Text { text: "q".into() }],
+        }
+    }
+
+    fn results_for(items: &[Item]) -> Vec<Item> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                Item::ToolCall { call_id, .. } => Some(Item::ToolResult {
+                    call_id: call_id.clone(),
+                    content: vec![ContentPart::Text {
+                        text: "{\"ok\":true}".into(),
+                    }],
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn body_of(messages: Vec<Item>) -> Value {
+        let mut req = ModelRequest::new();
+        req.messages = messages;
+        build_body(&cfg(), &req).unwrap().body
+    }
+
+    fn turn2_body(items: &[Item]) -> Value {
+        let mut messages = vec![user_q()];
+        messages.extend(items.iter().cloned());
+        messages.extend(results_for(items));
+        body_of(messages)
+    }
+
+    /// The content of the first assistant message of a body.
+    fn assistant_content(body: &Value) -> Value {
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .unwrap_or_else(|| panic!("no assistant message in {body}"))["content"]
+            .clone()
+    }
+
+    fn has_provider_data(items: &[Item]) -> bool {
+        items.iter().any(|i| match i {
+            Item::AssistantMessage { content, .. } => content
+                .iter()
+                .any(|p| matches!(p, ContentPart::ProviderData { .. })),
+            _ => false,
+        })
+    }
+
+    fn thinking(text: &str, sig: &str) -> Value {
+        json!({"type": "thinking", "thinking": text, "signature": sig})
+    }
+
+    fn tool_use(id: &str, input: Value) -> Value {
+        json!({"type": "tool_use", "id": id, "name": "lookup_city_code", "input": input})
+    }
+
+    fn call_id(items: &[Item]) -> String {
+        items
+            .iter()
+            .find_map(|i| match i {
+                Item::ToolCall { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn thinking_text_tool_use_round_trip() {
+        let (items, events) = turn_items(include_str!(
+            "../../tests/fixtures/thinking_text_tool_use.txt"
+        ));
+        let body = turn2_body(&items);
+        assert_eq!(
+            assistant_content(&body),
+            json!([
+                thinking(&joined(&events, true), "SIG_FAKE_1"),
+                {"type": "text", "text": joined(&events, false)},
+                tool_use(&call_id(&items), json!({"city": "Paris"})),
+            ]),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn redacted_round_trip() {
+        let (items, events) = turn_items(include_str!(
+            "../../tests/fixtures/redacted_thinking_tool_use.txt"
+        ));
+        let body = turn2_body(&items);
+        assert_eq!(
+            assistant_content(&body),
+            json!([
+                {"type": "redacted_thinking", "data": "REDACTED_FAKE_1"},
+                {"type": "redacted_thinking", "data": "REDACTED_FAKE_2"},
+                {"type": "text", "text": joined(&events, false)},
+                tool_use(&call_id(&items), json!({"city": "Paris"})),
+            ]),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn empty_thinking_round_trip() {
+        let (items, events) = turn_items(include_str!(
+            "../../tests/fixtures/empty_thinking_tool_use.txt"
+        ));
+        let body = turn2_body(&items);
+        assert_eq!(
+            assistant_content(&body),
+            json!([
+                thinking("", "SIG_FAKE_1"),
+                {"type": "text", "text": joined(&events, false)},
+                tool_use(&call_id(&items), json!({"city": "Paris"})),
+            ]),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn interleaved_round_trip() {
+        let (items, _events) = turn_items(include_str!(
+            "../../tests/fixtures/interleaved_thinking.txt"
+        ));
+        let body = turn2_body(&items);
+        let content = assistant_content(&body);
+        let blocks = content.as_array().unwrap();
+        assert_eq!(blocks.len(), 4, "{body}");
+        assert_eq!(blocks[0]["type"], "thinking", "{body}");
+        assert_eq!(blocks[0]["signature"], "SIG_FAKE_1", "{body}");
+        assert_eq!(blocks[1]["type"], "tool_use", "{body}");
+        assert_eq!(blocks[1]["id"], "toolu_fake_b", "{body}");
+        assert_eq!(blocks[2]["type"], "thinking", "{body}");
+        assert_eq!(blocks[2]["signature"], "SIG_FAKE_2", "{body}");
+        assert_eq!(blocks[3]["type"], "tool_use", "{body}");
+        assert_eq!(blocks[3]["id"], "toolu_fake_a", "{body}");
+    }
+
+    #[test]
+    fn unsigned_round_trip() {
+        let (items, _events) = turn_items(include_str!(
+            "../../tests/fixtures/unsigned_thinking_tool_use.txt"
+        ));
+        assert!(!has_provider_data(&items), "{items:?}");
+        let body = turn2_body(&items);
+        assert!(!body.to_string().contains("\"thinking\":"), "{body}");
+        assert!(
+            !assistant_content(&body)
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["type"] == "thinking"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn no_thinking_turn_writes_no_provider_data() {
+        let continuation = include_str!("../../tests/fixtures/tool_use_then_continuation.txt");
+        // The fixture holds two messages; split it at each `message_start`.
+        let mut parts: Vec<String> = Vec::new();
+        for line in continuation.lines() {
+            if line == "event: message_start" || parts.is_empty() {
+                parts.push(String::new());
+            }
+            let last = parts.last_mut().unwrap();
+            last.push_str(line);
+            last.push('\n');
+        }
+        assert_eq!(parts.len(), 2, "two messages in the fixture");
+        for part in &parts {
+            let (items, _) = turn_items(part);
+            assert!(!has_provider_data(&items), "{items:?}");
+        }
+        let (items, _) = turn_items(include_str!("../../tests/fixtures/parallel_tool_use.txt"));
+        assert!(!has_provider_data(&items), "{items:?}");
+    }
+
+    fn start(index: u32, head: ContentBlockHead) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockStart {
+            index,
+            content_block: head,
+        }
+    }
+
+    fn delta(index: u32, d: ContentBlockDelta) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockDelta { index, delta: d }
+    }
+
+    fn stop(index: u32) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockStop { index }
+    }
+
+    fn thinking_block(index: u32, sig: &str) -> Vec<AnthropicEvent> {
+        vec![
+            start(
+                index,
+                ContentBlockHead::Thinking {
+                    thinking: String::new(),
+                    signature: String::new(),
+                },
+            ),
+            delta(
+                index,
+                ContentBlockDelta::SignatureDelta {
+                    signature: sig.to_owned(),
+                },
+            ),
+            stop(index),
+        ]
+    }
+
+    fn text_block(index: u32, text: &str) -> Vec<AnthropicEvent> {
+        vec![
+            start(index, ContentBlockHead::Text),
+            delta(
+                index,
+                ContentBlockDelta::TextDelta {
+                    text: text.to_owned(),
+                },
+            ),
+            stop(index),
+        ]
+    }
+
+    fn tool_block(index: u32, id: &str) -> Vec<AnthropicEvent> {
+        vec![
+            start(
+                index,
+                ContentBlockHead::ToolUse {
+                    id: id.to_owned(),
+                    name: "lookup_city_code".to_owned(),
+                    input: json!({}),
+                },
+            ),
+            delta(
+                index,
+                ContentBlockDelta::InputJsonDelta {
+                    partial_json: "{}".to_owned(),
+                },
+            ),
+            stop(index),
+        ]
+    }
+
+    #[test]
+    fn two_text_blocks_join_at_first_text_position() {
+        let mut events = Vec::new();
+        events.extend(thinking_block(0, "SIG_FAKE_1"));
+        events.extend(text_block(1, "A"));
+        events.extend(tool_block(2, "tu_x"));
+        events.extend(thinking_block(3, "SIG_FAKE_2"));
+        events.extend(text_block(4, "B"));
+        events.extend(tool_block(5, "tu_y"));
+        events.push(AnthropicEvent::MessageStop);
+        let items = items_of(&translate_events(events));
+        let body = turn2_body(&items);
+        let content = assistant_content(&body);
+        let blocks = content.as_array().unwrap();
+        let shape: Vec<(String, String)> = blocks
+            .iter()
+            .map(|b| {
+                let kind = b["type"].as_str().unwrap().to_owned();
+                let key = match kind.as_str() {
+                    "thinking" => b["signature"].as_str().unwrap().to_owned(),
+                    "text" => b["text"].as_str().unwrap().to_owned(),
+                    _ => b["id"].as_str().unwrap().to_owned(),
+                };
+                (kind, key)
+            })
+            .collect();
+        let want: Vec<(String, String)> = [
+            ("thinking", "SIG_FAKE_1"),
+            ("text", "AB"),
+            ("tool_use", "tu_x"),
+            ("thinking", "SIG_FAKE_2"),
+            ("tool_use", "tu_y"),
+        ]
+        .iter()
+        .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+        .collect();
+        assert_eq!(shape, want, "{body}");
+    }
+
+    /// Record a user turn and the items through a session, then project.
+    fn session_messages(items: &[Item]) -> Vec<Item> {
+        let mut recorder = SessionRecorder::new("root");
+        recorder.record_input(&[user_q()]);
+        for item in items {
+            match item {
+                Item::AssistantMessage { .. } => {
+                    recorder.observe(&AgentEvent::MessageOutput { item: item.clone() })
+                }
+                Item::ToolCall { .. } => {
+                    recorder.observe(&AgentEvent::ToolCallItem { item: item.clone() })
+                }
+                _ => {}
+            }
+        }
+        for result in results_for(items) {
+            recorder.observe(&AgentEvent::ToolOutputItem { item: result });
+        }
+        paigasus_helikon_core::project(&recorder.drain()).messages
+    }
+
+    #[test]
+    fn session_projection_round_trip() {
+        for fixture in [
+            include_str!("../../tests/fixtures/thinking_text_tool_use.txt"),
+            include_str!("../../tests/fixtures/interleaved_thinking.txt"),
+        ] {
+            let (items, _) = turn_items(fixture);
+            let direct = assistant_content(&turn2_body(&items));
+            assert!(
+                direct
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|b| b["type"] == "thinking"),
+                "direct body must carry thinking: {direct}"
+            );
+            let projected = body_of(session_messages(&items));
+            assert_eq!(assistant_content(&projected), direct, "{projected}");
+        }
     }
 }
