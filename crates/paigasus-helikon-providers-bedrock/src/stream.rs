@@ -76,6 +76,8 @@ pub struct StreamTranslator {
     blocks: HashMap<i32, BlockState>,
     /// Whether we are in structured-output synthesis mode.
     synthesizing: bool,
+    /// Whether the request used native structured output (`outputConfig`).
+    native: bool,
     /// The content-block index of the synthesized tool's block (if any).
     synthesized_block_index: Option<i32>,
     /// `true` if at least one *real* (non-synthesized) tool block started.
@@ -100,6 +102,14 @@ impl StreamTranslator {
         }
     }
 
+    /// Tell the translator that the request used native structured output.
+    /// An anchor call then logs one warning, because `outputConfig` did not
+    /// constrain the text that the anchor carries.
+    pub(crate) fn native(mut self, native: bool) -> Self {
+        self.native = native;
+        self
+    }
+
     /// Consume one `ConverseStreamOutput` event and return zero or more
     /// `ModelEvent`s (or `ModelError`s) produced by it.
     pub fn consume(&mut self, ev: ConverseStreamOutput) -> Vec<Result<ModelEvent, ModelError>> {
@@ -119,6 +129,12 @@ impl StreamTranslator {
                         let name = tu.name().to_owned();
 
                         if self.synthesizing && name == SYNTHESIZED_TOOL_NAME {
+                            if self.native && self.synthesized_block_index.is_none() {
+                                tracing::warn!(
+                                    target: "paigasus::bedrock::stream",
+                                    "the model called the structured-output anchor on the native path; outputConfig did not constrain this text"
+                                );
+                            }
                             self.synthesized_block_index = Some(idx);
                         } else {
                             self.real_tool_fired = true;
@@ -723,6 +739,82 @@ mod tests {
             out.last().unwrap().as_ref().unwrap(),
             ModelEvent::Finish { reason } if *reason == FinishReason::Stop
         ));
+    }
+
+    /// A writer that collects the formatted tracing output of a test.
+    #[derive(Clone, Default)]
+    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Capture;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run the anchor events through a translator and return the text deltas
+    /// and the captured log output.
+    fn run_anchor_captured(native: bool) -> (Vec<String>, String) {
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, || {
+            let mut t = StreamTranslator::new(true);
+            if native {
+                t = t.native(true);
+            }
+            let mut out = Vec::new();
+            for ev in [
+                tool_use_start(0, "tu_synth", SYNTHESIZED_TOOL_NAME),
+                tool_delta(0, "{\"answer\":"),
+                tool_delta(0, "42}"),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ] {
+                out.extend(t.consume(ev));
+            }
+            out
+        });
+        let texts = out
+            .into_iter()
+            .filter_map(|r| match r {
+                Ok(ModelEvent::TokenDelta { text }) => Some(text),
+                _ => None,
+            })
+            .collect();
+        let log = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        (texts, log)
+    }
+
+    /// Native path: the anchor call logs one warning and still emits the text.
+    #[test]
+    fn native_anchor_call_warns_once_and_still_emits_text() {
+        let (texts, log) = run_anchor_captured(true);
+        assert_eq!(texts, vec!["{\"answer\":", "42}"]);
+        assert_eq!(log.matches("WARN").count(), 1, "log: {log}");
+        assert!(log.contains("paigasus::bedrock::stream"), "log: {log}");
+        assert!(log.contains("structured-output anchor"), "log: {log}");
+    }
+
+    /// Forced path: the same events log no warning.
+    #[test]
+    fn forced_anchor_call_does_not_warn() {
+        let (texts, log) = run_anchor_captured(false);
+        assert_eq!(texts, vec!["{\"answer\":", "42}"]);
+        assert!(!log.contains("WARN"), "log: {log}");
     }
 
     /// synthesizing=true: synthesized tool + a real tool → ModelError::Other.

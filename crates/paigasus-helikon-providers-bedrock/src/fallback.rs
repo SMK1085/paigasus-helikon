@@ -35,6 +35,8 @@ pub(crate) struct Sent<T> {
     pub(crate) output: T,
     /// `synthesizing` of the request that was sent.
     pub(crate) synthesizing: bool,
+    /// `true` when the request that was sent used native structured output.
+    pub(crate) native: bool,
 }
 
 /// Send `first`. If the service rejects its forced tool choice, send the
@@ -61,6 +63,7 @@ where
         policy.note(*n, model_id);
     }
     let synthesizing = first.synthesizing;
+    let native = first.output_config.is_some();
     let first_was_forced = first.has_forced_tool_choice();
 
     let failure = match send(first).await {
@@ -68,6 +71,7 @@ where
             return Ok(Sent {
                 output,
                 synthesizing,
+                native,
             })
         }
         Err(f) => f,
@@ -93,10 +97,12 @@ where
         policy.note(*n, model_id);
     }
     let synthesizing = second.synthesizing;
+    let native = second.output_config.is_some();
     match send(second).await {
         Ok(output) => Ok(Sent {
             output,
             synthesizing,
+            native,
         }),
         Err(f) => Err(f.error),
     }

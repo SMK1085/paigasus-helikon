@@ -199,6 +199,10 @@ that sent a forced choice, changes the handle. A request that fails locally does
 not reach Bedrock and does not change the handle. For example, `JsonSchema`
 together with `ToolChoice::Tool` fails locally on a forced-choice handle.
 
+On a finalizing turn, the provider can add a hidden anchor tool with no
+`toolChoice`. If the model calls this anchor, the provider logs a warning.
+`outputConfig` does not constrain the text of that call.
+
 The provider rewrites the schema first. It adds `additionalProperties: false`,
 changes `oneOf` to `anyOf`, and removes keywords that Bedrock does not accept,
 such as numeric limits. It does not add `additionalProperties` to a node in an

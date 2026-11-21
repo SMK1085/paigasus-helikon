@@ -80,6 +80,8 @@ For tool input schemas, Bedrock's Converse validator rejects JSON Schemas that u
 
 These models reject a forced `toolChoice`. For these models, the crate puts the `JsonSchema` in `outputConfig.textFormat`. The native output schema accepts `$ref`/`$defs` and `anyOf`.
 
+On a finalizing turn, the crate can add a hidden anchor tool with no `toolChoice`. If the model calls this anchor, the provider logs a warning. `outputConfig` does not constrain the text of that call.
+
 An Anthropic model ID that is not on the list can also reject the forced choice. This costs one rejected request for each `BedrockModel` handle. After that, the handle and its clones use native output. The crate logs one warning. Only a `ValidationException` with one of the two known rejection texts changes the handle. The request must also send a forced choice. Other errors go to the caller and do not change the handle. A request that fails locally does not reach Bedrock, so it cannot change the handle. For example, `JsonSchema` together with `ToolChoice::Tool` fails locally on a forced-choice handle.
 
 The crate rewrites the schema before it sends the schema:

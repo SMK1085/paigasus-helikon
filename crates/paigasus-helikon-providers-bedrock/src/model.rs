@@ -111,7 +111,11 @@ impl Model for BedrockModel {
                     |p| send_converse_stream(&client, p),
                 ) => result,
             };
-            let Sent { output, synthesizing } = match sent {
+            let Sent {
+                output,
+                synthesizing,
+                native,
+            } = match sent {
                 Ok(sent) => sent,
                 Err(e) => {
                     yield Err(e);
@@ -120,7 +124,7 @@ impl Model for BedrockModel {
             };
 
             let mut receiver = output.stream;
-            let mut translator = StreamTranslator::new(synthesizing);
+            let mut translator = StreamTranslator::new(synthesizing).native(native);
 
             loop {
                 let next = tokio::select! {
