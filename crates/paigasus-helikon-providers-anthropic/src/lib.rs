@@ -23,6 +23,8 @@ mod builder;
 mod capabilities;
 mod error;
 mod http;
+#[cfg(test)]
+mod live_round_trip;
 mod model;
 mod provider_data;
 mod settings;
