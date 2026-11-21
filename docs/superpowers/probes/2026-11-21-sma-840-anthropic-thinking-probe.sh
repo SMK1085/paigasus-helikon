@@ -2,18 +2,25 @@
 # SMA-840 live probe: Anthropic extended thinking + tool loop wire format and round trip.
 # Reads ANTHROPIC_API_KEY from the environment. Never prints headers, the key or signature values.
 # Usage: bash 2026-11-21-sma-840-anthropic-thinking-probe.sh
-#   The default model is claude-sonnet-4-5, which accepts the default enabled thinking.
-#   Optional: MODEL=..., MODEL_2=..., THINKING='{"type":"enabled","budget_tokens":2048}',
-#   BETA=interleaved-thinking-2025-05-14.
-#   claude-sonnet-5-5 rejects enabled thinking with HTTP 400. For that model, set
-#   MODEL=claude-sonnet-5-5 THINKING='{"type":"adaptive"}'.
+#   The default model is claude-sonnet-5-5 with adaptive thinking. The request sends
+#   block_binding drop_block and the beta header thinking-binding-controls-2026-08-01.
+#   To run the enabled path on a model before 4.6, set ENABLED_PATH=1. That uses
+#   claude-haiku-4-5, enabled thinking and the interleaved thinking beta.
+#   Optional: MODEL=..., MODEL_2=..., THINKING='{...}', BETA=..., NOTHINK_MODEL=...
 set -uo pipefail
 
 : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}"
-MODEL="${MODEL:-claude-sonnet-4-5}"
-DEFAULT_THINKING='{"type":"enabled","budget_tokens":2048}'
+if [ "${ENABLED_PATH:-0}" = 1 ]; then
+  MODEL="${MODEL:-claude-haiku-4-5}"
+  DEFAULT_THINKING='{"type":"enabled","budget_tokens":2048}'
+  DEFAULT_BETA="interleaved-thinking-2025-05-14"
+else
+  MODEL="${MODEL:-claude-sonnet-5-5}"
+  DEFAULT_THINKING='{"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"drop_block"}}'
+  DEFAULT_BETA="thinking-binding-controls-2026-08-01"
+fi
 THINKING="${THINKING:-$DEFAULT_THINKING}"
-BETA="${BETA-interleaved-thinking-2025-05-14}"
+BETA="${BETA-$DEFAULT_BETA}"
 EXTRA="${EXTRA:-{\}}"
 OUT="${OUT:-$(cd "$(dirname "$0")" && pwd)/probe-840-out}"
 mkdir -p "$OUT"

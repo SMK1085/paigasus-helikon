@@ -135,6 +135,8 @@ Anthropic thinking blocks round trip through provider data. The stream keeps eac
 
 - For a 4.x model with `ExtendedThinking::Enabled`, add `.beta("interleaved-thinking-2025-05-14")` to let the model think again after a tool result.
 - `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.
+- With `ExtendedThinking::Adaptive`, the provider sends `block_binding.prefix_mismatch_behavior = "drop_block"` and the beta header `thinking-binding-controls-2026-08-01`. If the history before a thinking block changed, the API drops that block and every later thinking block. The model loses that reasoning. The request does not fail. Examples are a hand-off with other `system` text or tools, and an edit of an earlier message.
+- With `ExtendedThinking::Enabled`, the provider sends no binding. Use `Enabled` only on models that do not run the prefix check, for example `claude-haiku-4-5`. Claude Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and Fable reject `Enabled`.
 - Measured on Claude Sonnet 4.5 and Opus 4.5 with `Enabled { budget_tokens: 2048 }`, each round sent about 100 more input tokens without the beta header, and about 250 to 300 with it.
 - If Anthropic rejects one block, each later request of the session fails. To recover, remove every part with `provider == PROVIDER_DATA_KEY` from the stored history.
 - The thinking text is stored two times. A host that removes `Reasoning` must also remove these parts. If a host removes these parts, the SDK cannot send the thinking blocks back.
