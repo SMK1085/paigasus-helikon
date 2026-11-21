@@ -110,6 +110,11 @@ case_versions major_scheme_min 1 "2.0.0" \
 
 case_versions version_down 1 "goes down" "${B[@]}" 0.7.0 0.1.9 0.7.0 0.1.0 0.1.0 0.1.0
 
+# A pre-release or build version is not supported. It must fail, not pass.
+case_versions prerelease_head_fails 1 "not supported" "${B[@]}" 0.7.0 0.2.1-rc.1 0.7.0 0.1.0 0.1.0 0.1.0
+case_versions prerelease_base_fails 1 "not supported" 0.7.0-rc.1 0.2.0 0.7.0 0.1.0 0.1.0 0.1.0 \
+  0.7.0 0.2.0 0.7.0 0.1.0 0.1.0 0.1.0
+
 # new_crate_skipped: dep-a is absent at the base. Core breaks, dep-a is new.
 d="${tmp}/new_crate_skipped"; mkdir -p "${d}"
 printf 'core 0.7.0\nfacade 0.7.0\npaigasus-helikon-cli 0.1.0\ndev-only 0.1.0\nunpub 0.1.0\n' > "${d}/base.txt"

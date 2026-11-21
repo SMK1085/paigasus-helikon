@@ -162,8 +162,9 @@ else
 fi
 
 # --- version helpers --------------------------------------------------------
-# split_version <version>: set V_MAJ, V_MIN, V_PAT as numbers. A pre-release or
-# build suffix is dropped. A non-numeric part is an error.
+# split_version <version>: set V_MAJ, V_MIN, V_PAT as numbers. A non-numeric
+# part is an error. The status loop rejects a pre-release or build suffix
+# before it calls this function, so the suffix strip below never drops data.
 split_version() {
   local core="${1%%[-+]*}"
   local IFS=.
@@ -235,6 +236,11 @@ while read -r name head_ver; do
     echo "notice: ${name} is new at the head; skipped" >&2
     continue
   fi
+  for v in "${base_ver}" "${head_ver}"; do
+    case "${v}" in
+      *[-+]*) die "${name}: pre-release or build version '${v}' is not supported by this guard" ;;
+    esac
+  done
   class="$(classify "${base_ver}" "${head_ver}")"
   if [[ "${class}" == "down" ]]; then
     echo "error: the version of ${name} goes down: ${base_ver} -> ${head_ver}" >&2
