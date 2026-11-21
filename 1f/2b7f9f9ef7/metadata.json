@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "1f2b7f9f9ef7",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-845-audit-wire-format-fixture-headers-in-other",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-litellm/tests/cancellation.rs",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/text_then_trailing_usage.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/tool_call_stream.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/tool_call_stream_fragmented_name.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/truncated_no_finish.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/unknown_finish_reason.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/fixtures/unparseable_frame.txt",
+    "crates/paigasus-helikon-providers-litellm/tests/litellm_wire.rs",
+    "crates/paigasus-helikon-providers-litellm/tests/streaming.rs",
+    "tests/workspace-lints/tests/fixture_provenance_header.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1f/2b7f9f9ef7/0/metadata.json",
+      "transcript": "/1f/2b7f9f9ef7/0/full.jsonl",
+      "compact_transcript": "/1f/2b7f9f9ef7/0/transcript.jsonl",
+      "content_hash": "/1f/2b7f9f9ef7/0/content_hash.txt",
+      "prompt": "/1f/2b7f9f9ef7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 5957,
+    "cache_read_tokens": 1715538,
+    "output_tokens": 2701,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 18,
+      "cache_creation_tokens": 143821,
+      "cache_read_tokens": 464385,
+      "output_tokens": 6172,
+      "api_call_count": 8
+    }
+  },
+  "redaction": {
+    "replacements": 54,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 54,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
