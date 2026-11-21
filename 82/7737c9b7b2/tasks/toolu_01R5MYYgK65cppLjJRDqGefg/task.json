@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01R5MYYgK65cppLjJRDqGefg",
+  "agent_id": "a845759b4d718bf93",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 4: native request",
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 140576,
+    "cache_read_tokens": 3310208,
+    "output_tokens": 30424,
+    "api_call_count": 27
+  },
+  "started_at": "2026-11-21T14:24:31.008183+01:00",
+  "completed_at": "2026-11-21T14:29:35.758892+01:00"
+}
