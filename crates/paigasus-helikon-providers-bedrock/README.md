@@ -84,7 +84,7 @@ An Anthropic model ID that is not on the list can also reject the forced choice.
 
 The crate rewrites the schema before it sends the schema:
 
-- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, or to a node in an `allOf` composition. It also does not add the keyword to a node that has `properties` next to `oneOf` or `anyOf`.
+- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, or to a node in an `allOf` composition. It also does not add the keyword to an object node next to `oneOf` or `anyOf`. The branches of such a node stay open too.
 - It changes `oneOf` to `anyOf`.
 - It removes `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `maxItems`, `uniqueItems`, `minItems` above 1, and `not`, `if`, `then` and `else`.
 
