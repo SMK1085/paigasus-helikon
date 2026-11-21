@@ -78,7 +78,8 @@ pub(crate) struct DurableAgentDef<Ctx> {
 /// [`paigasus_helikon_core::ModelError`] from either [`Model::invoke`]
 /// itself or a stream-level event degrades to [`ErrorKindPayload::Model`]; a
 /// successfully-drained stream that fails to reassemble (invalid
-/// tool-call-argument JSON) degrades to [`ErrorKindPayload::Other`].
+/// tool-call-argument JSON, or parallel tool calls under a blank `call_id`)
+/// degrades to [`ErrorKindPayload::Other`].
 pub(crate) async fn call_model_inner(
     model: &dyn Model,
     agent_name: &str,
