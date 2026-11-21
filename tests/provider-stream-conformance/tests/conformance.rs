@@ -2811,8 +2811,8 @@ mod gemini {
 /// event this module's [`text_delta`] matches field-for-field.
 /// `responses_reasoning_then_text.txt` is HAND-AUTHORED (SMA-316), not a
 /// capture. The Responses wire has no `[DONE]` sentinel (SMA-585), so no
-/// script below sends one. [`completed`]
-/// matches that fixture's `response.completed` event too, with one addition:
+/// script below sends one. [`completed`] matches that fixture's
+/// `response.completed` event too, with one addition:
 /// `incomplete_details: null`, which `responses_reasoning_then_text.txt`
 /// predates and does not carry. That field is grounded in the newer
 /// `responses_tool_call.txt` capture instead (see its own provenance
@@ -2836,8 +2836,7 @@ mod gemini {
 /// rather than the capture's literal `fc_0bb8...`/`call_D3Tp...` values (see
 /// those constants' own docs for why), and every helper that builds a
 /// tool-call frame cites the `sequence_number` of the fixture frame it
-/// matches. The same
-/// capture also grounds a
+/// matches. The same capture also grounds a
 /// crate-level regression test,
 /// `tool_call_turn_finishes_with_tool_calls` in
 /// `crates/paigasus-helikon-providers-openai/tests/responses_streaming.rs`,
@@ -2894,8 +2893,9 @@ mod openai_responses {
     /// One SSE frame: `data: {payload}\n\n`. Matches four of the six
     /// `responses_*.txt` fixtures already committed under
     /// `crates/paigasus-helikon-providers-openai/tests/fixtures/`. The other
-    /// two, `responses_tool_call.txt` and `responses_tool_call_zero_args.txt`,
-    /// keep their `event:` lines (see their own provenance headers). async-openai's
+    /// two, `responses_tool_call.txt` and
+    /// `responses_tool_call_zero_args.txt`, keep their `event:` lines (see
+    /// their own provenance headers). async-openai's
     /// `ResponseStreamEvent` is `#[serde(tag = "type")]`, so the parser
     /// dispatches off the JSON `type` key inside `data:` alone either way,
     /// which is why this helper omits the `event:` line even when building
@@ -2950,8 +2950,8 @@ mod openai_responses {
     /// `response.output_item.added` for a function-call item: `item.id`,
     /// `item.call_id` and the whole `name`, all present together. Matches
     /// `responses_tool_call.txt`'s `sequence_number: 2` frame (the
-    /// `event: response.output_item.added` frame) field-for-field — this is what registers
-    /// `ResponsesTranslator::item_to_call`.
+    /// `event: response.output_item.added` frame) field-for-field — this is
+    /// what registers `ResponsesTranslator::item_to_call`.
     fn output_item_added(item_id: &str, call_id: &str, name: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.output_item.added",
@@ -2969,10 +2969,11 @@ mod openai_responses {
     }
 
     /// One `response.function_call_arguments.delta`, carrying `item_id` —
-    /// never `call_id` — per `responses_tool_call.txt`'s `sequence_number: 3` to `7` frames (the
-    /// five `event: response.function_call_arguments.delta` frames). `delta` is a
-    /// small fragment, matching the capture's `{"`, `city`, `":"`, `Berlin`,
-    /// `"}` split rather than one whole-argument frame.
+    /// never `call_id` — per `responses_tool_call.txt`'s `sequence_number: 3`
+    /// to `7` frames (the five `event: response.function_call_arguments.delta`
+    /// frames). `delta` is a small fragment, matching the capture's `{"`,
+    /// `city`, `":"`, `Berlin`, `"}` split rather than one whole-argument
+    /// frame.
     fn function_call_arguments_delta(item_id: &str, delta: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.function_call_arguments.delta",
@@ -2984,10 +2985,10 @@ mod openai_responses {
     }
 
     /// `response.function_call_arguments.done`, carrying the reassembled
-    /// whole argument string. Matches `responses_tool_call.txt`'s `sequence_number: 8` frame —
-    /// present on the real wire but a no-op to the translator (`consume`'s
-    /// `other` arm), included here purely so the script is the stream the
-    /// capture claims it is.
+    /// whole argument string. Matches `responses_tool_call.txt`'s
+    /// `sequence_number: 8` frame — present on the real wire but a no-op to
+    /// the translator (`consume`'s `other` arm), included here purely so the
+    /// script is the stream the capture claims it is.
     fn function_call_arguments_done(item_id: &str, arguments: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.function_call_arguments.done",
@@ -2999,7 +3000,8 @@ mod openai_responses {
     }
 
     /// `response.output_item.done`, the completed mirror of
-    /// [`output_item_added`]. Matches `responses_tool_call.txt`'s `sequence_number: 9` frame.
+    /// [`output_item_added`]. Matches `responses_tool_call.txt`'s
+    /// `sequence_number: 9` frame.
     ///
     /// No longer a no-op to the translator: since SMA-562 this event emits a
     /// `ToolCallDelta` carrying the item's complete `arguments` when no
