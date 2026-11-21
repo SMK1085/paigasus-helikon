@@ -80,7 +80,7 @@ For tool input schemas, Bedrock's Converse validator rejects JSON Schemas that u
 
 These models reject a forced `toolChoice`. For these models, the crate puts the `JsonSchema` in `outputConfig.textFormat`. The native output schema accepts `$ref`/`$defs` and `anyOf`.
 
-A model ID that is not on the list can also reject the forced choice. This costs one rejected request for each `BedrockModel` handle. After that, the handle and its clones use native output. The crate logs one warning.
+An Anthropic model ID that is not on the list can also reject the forced choice. This costs one rejected request for each `BedrockModel` handle. After that, the handle and its clones use native output. The crate logs one warning.
 
 The crate rewrites the schema before it sends the schema:
 
@@ -92,7 +92,7 @@ The server does not enforce the removed limits. The agent loop checks the result
 
 Bedrock rejects these shapes with its own error: maps (`HashMap`, or `additionalProperties` that is `true` or a schema), `patternProperties`, `propertyNames`, tuples (`prefixItems`), the schemas `true` and `{}`, and recursive types. The crate does not rewrite them.
 
-On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Required` with no tools is still an error. When `JsonObject` is set and no tools exist, `ToolChoice::Required` is omitted with a warning.
+On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Required` with no tools and no response format is still an error. With a structured response format, the crate omits it with a warning.
 
 When a model's family does not support forced-tool-choice, a `JsonSchema` response format degrades silently to a text response; no error is returned.
 
