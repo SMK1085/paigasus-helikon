@@ -58,18 +58,23 @@ struct Slot {
     group: usize,
     key: SortKey,
     /// `true` when the source message has `tool_use` positions. Then its
-    /// thinking blocks need a `tool_use` block of the group beside them.
+    /// thinking blocks need a `tool_use` block of the group beside them that
+    /// took one of these positions.
     needs_tool_use: bool,
 }
 
 impl Slot {
     /// `true` when `block` lets the thinking blocks of this group stay: a
-    /// `text` or `tool_use` block of the same group, or only a `tool_use`
-    /// block when the group needs one.
+    /// `text` or `tool_use` block of the same group. When the group needs a
+    /// `tool_use` block, only a `tool_use` block that took a position of the
+    /// group counts. A call with no position did not come with the thinking
+    /// block, so it does not count.
     fn is_kept_by(&self, block: &WireBlock) -> bool {
-        !block.is_thinking()
-            && block.slot.is_some_and(|s| s.group == self.group)
-            && (!self.needs_tool_use || block.is_tool_use())
+        let Some(slot) = block.slot.filter(|s| s.group == self.group) else {
+            return false;
+        };
+        let took_position = matches!(slot.key, SortKey::At(index, _) if index != u64::MAX);
+        !block.is_thinking() && (!self.needs_tool_use || (block.is_tool_use() && took_position))
     }
 }
 
@@ -200,6 +205,10 @@ struct Translator {
     next_group: usize,
     source: Option<Source>,
     tentative: Option<Tentative>,
+    /// Tentative messages that a later push kept, in push order. A restore
+    /// can make one of them the last message again. Then it is tentative
+    /// again, because the end of the history can still drop its thinking.
+    kept: Vec<Tentative>,
 }
 
 /// Translate the conversation into Anthropic's request shape.
@@ -418,7 +427,7 @@ impl Translator {
             if !self.messages[t.msg].keeps_thinking_of(t.slot) {
                 return Err(Rollback);
             }
-            self.tentative = None;
+            self.kept.extend(self.tentative.take());
         }
         self.messages.push(WireMessage { role, content });
         Ok(())
@@ -478,15 +487,15 @@ impl Translator {
     /// change after the save: only the last message gets new blocks, and the
     /// tentative message and all later ones are at or after that length.
     ///
-    /// `saved` does not hold a tentative message, and the state after the
-    /// restore has none. This is correct: a tentative message that was active
-    /// when `saved` was taken was resolved by a later push in the same step.
-    /// That push is a flush of the pending blocks or the push of the new
-    /// tentative message. If the older message was not kept, that push
-    /// rolled back to the older save, and this `saved` was discarded. A kept
-    /// message has a block that keeps its thinking. It is before
-    /// `saved.messages_len`, so the restore does not change it, and it stays
-    /// kept.
+    /// `saved` does not hold a tentative message. A tentative message that
+    /// was active when `saved` was taken was resolved by a later push in the
+    /// same step. That push is a flush of the pending blocks or the push of
+    /// the new tentative message. If the older message was not kept, that
+    /// push rolled back to the older save, and this `saved` was discarded.
+    /// If it was kept, it is in `kept`. It is the last message at
+    /// `saved.messages_len`, so the restore makes it tentative again. Its
+    /// own save is still correct, because no message before its own saved
+    /// length changed.
     fn restore(&mut self, saved: Saved) {
         self.messages.truncate(saved.messages_len);
         self.system_text.truncate(saved.system_len);
@@ -495,7 +504,12 @@ impl Translator {
         self.last_item_dropped = saved.last_item_dropped;
         self.next_group = saved.next_group;
         self.source = saved.source;
-        self.tentative = None;
+        let len = self.messages.len();
+        self.kept.retain(|t| t.msg < len);
+        self.tentative = match self.kept.last() {
+            Some(t) if t.msg + 1 == len => self.kept.pop(),
+            _ => None,
+        };
     }
 
     fn into_output(self) -> TranslatedMessages {
@@ -2806,6 +2820,105 @@ mod thinking_round_trip_tests {
         let out = messages(&items);
         assert_eq!(out, messages(&without_anthropic(&items)));
         assert_eq!(out, json!([utext("q"), amsg(vec![wtext("a"), tu("t1")])]));
+    }
+
+    /// Stage 5 review: thinking-only item A gets its call, then thinking-only
+    /// item B ends the history. B goes back, so A is the last assistant
+    /// message again. A must then count as empty too, so that its call joins
+    /// the text before it, as on `main`.
+    #[test]
+    fn rollback_at_the_end_reopens_the_message_before_it() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            asst(vec![
+                reasoning("r1"),
+                thinking(0, "r1", "SIG_FAKE_1"),
+                tool_pos(1, "t1"),
+            ]),
+            call("t1"),
+            asst(vec![reasoning("r2"), thinking(0, "r2", "SIG_FAKE_2")]),
+        ];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(
+            out.messages,
+            json!([utext("q"), amsg(vec![wtext("a"), tu("t1")])])
+        );
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+    }
+
+    /// The variant: a tool result follows A, so its user message closes the
+    /// round of A. A is not the last message, and its block stays.
+    #[test]
+    fn rollback_at_the_end_keeps_a_closed_round() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            asst(vec![
+                reasoning("r1"),
+                thinking(0, "r1", "SIG_FAKE_1"),
+                tool_pos(1, "t1"),
+            ]),
+            call("t1"),
+            result("t1"),
+            asst(vec![reasoning("r2"), thinking(0, "r2", "SIG_FAKE_2")]),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wtext("a")]),
+                amsg(vec![wthinking("r1", "SIG_FAKE_1"), tu("t1")]),
+                umsg(vec![tr("t1")]),
+            ])
+        );
+    }
+
+    /// Stage 5 review: the call of the position part is gone, and a call
+    /// with no position follows. That call did not come with the thinking
+    /// block, so it does not keep the block. The call itself stays.
+    #[test]
+    fn call_without_position_does_not_keep_thinking() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("r"),
+                text("t"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                text_pos(1),
+                tool_pos(2, "gone"),
+            ]),
+            call("replacement"),
+            result("replacement"),
+            user("next"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        // The same with a thinking-only item: it counts as empty.
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            asst(vec![
+                reasoning("r"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(1, "gone"),
+            ]),
+            call("replacement"),
+            result("replacement"),
+            user("next"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![wtext("a"), tu("replacement")]),
+                umsg(vec![tr("replacement"), wtext("next")]),
+            ])
+        );
     }
 
     /// A dropped thinking-only message does not change the system text or

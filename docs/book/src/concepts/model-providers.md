@@ -137,7 +137,7 @@ Anthropic thinking blocks round trip through provider data. The stream keeps eac
 - `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.
 - Measured on Claude Sonnet 4.5 and Opus 4.5 with `Enabled { budget_tokens: 2048 }`, each round sent about 100 more input tokens without the beta header, and about 250 to 300 with it.
 - If Anthropic rejects one block, each later request of the session fails. To recover, remove every part with `provider == PROVIDER_DATA_KEY` from the stored history.
-- The thinking text is stored two times. A host that removes `Reasoning` must also remove these parts.
+- The thinking text is stored two times. A host that removes `Reasoning` must also remove these parts. If a host removes these parts, the SDK cannot send the thinking blocks back.
 
 ### Bedrock — `paigasus-helikon-providers-bedrock`
 

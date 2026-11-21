@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # SMA-840 live probe: Anthropic extended thinking + tool loop wire format and round trip.
 # Reads ANTHROPIC_API_KEY from the environment. Never prints headers, the key or signature values.
-# Usage: bash probe-840.sh   (optional: MODEL=..., MODEL_2=..., THINKING='{"type":"enabled","budget_tokens":2048}', BETA=interleaved-thinking-2025-05-14)
+# Usage: bash 2026-11-21-sma-840-anthropic-thinking-probe.sh
+#   The default model is claude-sonnet-4-5, which accepts the default enabled thinking.
+#   Optional: MODEL=..., MODEL_2=..., THINKING='{"type":"enabled","budget_tokens":2048}',
+#   BETA=interleaved-thinking-2025-05-14.
+#   claude-sonnet-5-5 rejects enabled thinking with HTTP 400. For that model, set
+#   MODEL=claude-sonnet-5-5 THINKING='{"type":"adaptive"}'.
 set -uo pipefail
 
 : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}"
-MODEL="${MODEL:-claude-sonnet-5-5}"
+MODEL="${MODEL:-claude-sonnet-4-5}"
 DEFAULT_THINKING='{"type":"enabled","budget_tokens":2048}'
 THINKING="${THINKING:-$DEFAULT_THINKING}"
 BETA="${BETA-interleaved-thinking-2025-05-14}"

@@ -41,7 +41,7 @@ To turn this off, call `native_tool_types(false)` on the builder. The adapter th
 
 The stream keeps each `thinking` and `redacted_thinking` block as a `ContentPart::ProviderData` part with the key `PROVIDER_DATA_KEY`. The next request sends the blocks back unchanged for every assistant message in the history. The shape of the `data` is private to this crate.
 
-A thinking block is sent back only in the same assistant message as a text block or a `tool_use` block of its own response. If its response had `tool_use` blocks, one of them must be in that message. So after a hand-off, or when the history lost the tool calls of a response, the SDK sends no thinking block of that response. At the end of a history, the SDK sends no thinking block in a last assistant message. The cache never marks a thinking block as a breakpoint. A response with no kept thinking block writes no provider data.
+A thinking block is sent back only in the same assistant message as a text block or a `tool_use` block of its own response. If its response had `tool_use` blocks, one of them must be in that message. So after a hand-off that removed the tool calls of a response, or when the history lost those calls, the SDK sends no thinking block of that response. At the end of a history, the SDK sends no thinking block in a last assistant message. The cache never marks a thinking block as a breakpoint. A response with no kept thinking block writes no provider data.
 
 - For a 4.x model with `ExtendedThinking::Enabled`, add `.beta("interleaved-thinking-2025-05-14")` to the builder. Then the model can think again after a tool result.
 - `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.

@@ -27,8 +27,8 @@
 //! A thinking block is sent back only in the same assistant message as a text
 //! block or a `tool_use` block of its own response. If its response had
 //! `tool_use` blocks, one of them must be in that message. So after a
-//! hand-off, or when the history lost the tool calls of a response, the SDK
-//! sends no thinking block of that response. At the end of a history, the SDK
+//! hand-off that removed the tool calls of a response, or when the history
+//! lost those calls, the SDK sends no thinking block of that response. At the end of a history, the SDK
 //! sends no thinking block in a last assistant message. The cache never marks
 //! a thinking block as a breakpoint. A response with no kept thinking block
 //! writes no provider data.
