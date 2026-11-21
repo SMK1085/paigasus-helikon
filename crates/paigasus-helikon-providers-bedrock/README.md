@@ -83,7 +83,7 @@ let model = BedrockModel::converse(arn)
     .build()?;
 ```
 
-The override has the full effect of a detected family. It sets the default capabilities and the request translation. It also controls how the provider sends `ToolChoice`, and which requests fail locally. These local failures apply to `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::Tool` or `ToolChoice::None`. They also apply to `ToolChoice::Required` with no tools, and to `ToolChoice::Tool` with an undefined name. The `from_env` constructor cannot take the override. Use the builder.
+The override has the full effect of a detected family. It sets the default capabilities and the request translation. It also controls how the provider sends `ToolChoice`, and which requests fail locally. These local failures apply to `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::Tool` or `ToolChoice::None`. They also apply to `ToolChoice::Tool` with an undefined name. `ToolChoice::Required` fails locally when the request has no tools and no `JsonSchema` or `JsonObject` format. Each of these formats adds a synthesized tool. The `from_env` constructor cannot take the override. Use the builder.
 
 The `.capabilities(...)` method changes only the flags that `capabilities()` reports. It does not change the request. The `.capabilities(...)` value wins over the defaults of the family.
 

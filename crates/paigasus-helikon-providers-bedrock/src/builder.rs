@@ -212,7 +212,8 @@ impl BedrockModelBuilder {
     ///
     /// - `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::Tool`.
     /// - `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::None`.
-    /// - `ToolChoice::Required` with no tools.
+    /// - `ToolChoice::Required` with no tools and no `ResponseFormat::JsonSchema`
+    ///   or `JsonObject`. Each of these formats adds a synthesized tool.
     /// - `ToolChoice::Tool` with a name that no tool defines.
     ///
     /// On the native path, the provider omits these choices and logs a
