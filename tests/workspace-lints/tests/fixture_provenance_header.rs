@@ -19,7 +19,6 @@ const ALLOWLIST: &[&str] = &[
     "crates/paigasus-helikon-providers-anthropic/tests/fixtures/text_only.txt",
     "crates/paigasus-helikon-providers-anthropic/tests/fixtures/thinking_then_text.txt",
     "crates/paigasus-helikon-providers-anthropic/tests/fixtures/tool_use_then_continuation.txt",
-    "crates/paigasus-helikon-providers-gemini/tests/fixtures/parallel_signed.sse",
 ];
 
 /// Repo root, derived from this crate's manifest directory.

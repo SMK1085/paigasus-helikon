@@ -8,6 +8,10 @@ use paigasus_helikon_providers_gemini::GeminiModel;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// HAND-AUTHORED, not captured. The SSE body is one text chunk with a STOP
+/// `finishReason` and `usageMetadata`. Added by SMA-449 (PR #122). The source
+/// of the shape is not recorded. The tests that use it check the URL and the
+/// headers, not the body.
 fn sse_ok() -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
@@ -90,6 +94,9 @@ async fn vertex_url_and_bearer_header() {
 #[tokio::test]
 async fn http_429_maps_to_rate_limited() {
     let server = MockServer::start().await;
+    // HAND-AUTHORED, not captured. Added by SMA-449 (PR #122). The source of
+    // the shape is not recorded. The test checks only the status, the
+    // `retry-after` header and the `RESOURCE_EXHAUSTED` status string.
     let body = serde_json::json!({"error": {"status": "RESOURCE_EXHAUSTED", "message": "quota"}});
     Mock::given(method("POST"))
         .respond_with(

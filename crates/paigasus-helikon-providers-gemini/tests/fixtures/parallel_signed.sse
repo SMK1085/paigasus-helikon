@@ -1,3 +1,31 @@
+: Provenance: CAPTURED from the Gemini Developer API, streamed, model
+: gemini-3.8-flash, on 2026-11-20, under SMA-827 (PR #373). This is capture 1
+: of that probe: one turn that asks for three parallel calls. The exact URL is
+: not recorded. Sven ran the probe. The SMA-827 design records the results.
+:
+: Removed: not recorded. The SMA-827 design says the stream has four SSE
+: chunks (probe results, capture 1). This file has four chunks. So the record
+: shows that no whole chunk is missing. It does not show what each chunk lost.
+: Added: not recorded.
+: Changed: the real 1140-character thoughtSignature is replaced with SIG_A.
+: The SMA-827 design (line 290) says each real signature is replaced by a
+: placeholder. The key "thoughtSignature":"SIG_A" has no space after its colon.
+: Every other key in the file has a space after its colon. The record does not
+: say why. The same edit may have reformatted this key.
+:
+: One sign is unexplained. The value candidatesTokenCount rises in equal steps
+: (14, 28, 42) and the last chunk repeats 42. The record does not say whether
+: the wire sent these values or an edit made them. Do not read them as proof of
+: wire behaviour.
+:
+: The file ends after the fourth chunk. It has no [DONE] line. The record does
+: not say whether the wire sent one.
+:
+: This is not the capture in the Live capture section of
+: tests/provider-stream-conformance/tests/conformance.rs. That capture used
+: gemini-3.6-flash on 2026-08-20. Do not cite one capture as the source of the
+: other.
+
 data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "search","args": {"q": "cats"},"id": "call_16945647804962170957"},"thoughtSignature":"SIG_A"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 109,"candidatesTokenCount": 14,"totalTokenCount": 291,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 109}],"thoughtsTokenCount": 168,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "YM4Aa9-2PNSckdUP3pjG4AY"}
 
 data: {"candidates": [{"content": {"parts": [{"functionCall": {"name": "weather","args": {"city": "Paris"},"id": "call_16945647804962169654"}}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 109,"candidatesTokenCount": 28,"totalTokenCount": 305,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 109}],"thoughtsTokenCount": 168,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "YM4Aa9-2PNSckdUP3pjG4AY"}
