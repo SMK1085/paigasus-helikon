@@ -284,7 +284,7 @@ Enable the `vertex-adc` feature for Application Default Credentials via `gcp_aut
 
 ```toml
 [dependencies]
-paigasus-helikon-providers-gemini = { version = "0.1", features = ["vertex-adc"] }
+paigasus-helikon-providers-gemini = { version = "0.2", features = ["vertex-adc"] }
 ```
 
 #### JSON-Schema sanitizer
@@ -404,15 +404,15 @@ loop will drive it.
 
 ```toml
 [dependencies]
-paigasus-helikon = { version = "0.5", features = ["openai", "macros"] }
+paigasus-helikon = { version = "0.8", features = ["openai", "macros"] }
 # or, for Anthropic:
-# paigasus-helikon = { version = "0.5", features = ["anthropic", "macros"] }
+# paigasus-helikon = { version = "0.8", features = ["anthropic", "macros"] }
 # or, for Bedrock:
-# paigasus-helikon = { version = "0.5", features = ["bedrock", "macros"] }
+# paigasus-helikon = { version = "0.8", features = ["bedrock", "macros"] }
 # or, for Gemini:
-# paigasus-helikon = { version = "0.5", features = ["gemini", "macros"] }
+# paigasus-helikon = { version = "0.8", features = ["gemini", "macros"] }
 # or, for LiteLLM:
-# paigasus-helikon = { version = "0.5", features = ["litellm", "macros"] }
+# paigasus-helikon = { version = "0.8", features = ["litellm", "macros"] }
 ```
 
 Feature names are kebab-case (`openai`, `anthropic`); the `pub use` aliases are

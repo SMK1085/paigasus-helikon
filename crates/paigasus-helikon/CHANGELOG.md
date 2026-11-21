@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.7.1...paigasus-helikon-v0.8.0) - 2026-11-21
+
+### Other
+
+- Moves to the new breaking versions of the other `paigasus-helikon-*` crates, which replace the patch versions that releases 0.7.0 and 0.7.1 used. Versions 0.7.0 and 0.7.1 are yanked.
+- [**breaking**] Each re-exported crate is a new major version (for example `paigasus-helikon-providers-openai` 0.2 → 0.3), so its types are different types. For this reason the facade also gets a breaking version. The facade's own API is the same as in 0.7.1.
+
+### Upgrade notes
+
+- Change your `paigasus-helikon` requirement to `0.8`. Use it with `paigasus-helikon-core` 0.7.
+- If your `Cargo.toml` also requires other `paigasus-helikon-*` crates directly, move them to the new versions that this release uses. Run `cargo tree -d` to find two copies of one crate.
+
 ## [0.7.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.7.0...paigasus-helikon-v0.7.1) - 2026-11-20
 
 ### Other
@@ -24,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This release requires `jiff` 1. The `ts` fields of `SessionEvent` and the return value of `SessionEvent::ts()` now have the type `jiff::Timestamp` from jiff 1. A `Timestamp` from jiff 0.2 is a different type.
 - If your code passes a `Timestamp` into a `SessionEvent`, or uses the value from `ts()` with jiff code, change your `jiff` requirement to `1`. Read the [jiff 1.0 changelog](https://github.com/BurntSushi/jiff/blob/master/CHANGELOG.md) for the APIs that jiff renamed.
 - If your code uses only the constructors that set `ts` to the current time (for example `SessionEvent::user_message`) and does not read `ts`, it needs no change.
-- Upgrade `paigasus-helikon-core` and `paigasus-helikon` to 0.7 together.
-- The next patch release of each other `paigasus-helikon-*` crate requires core 0.7. If your `Cargo.toml` requires `paigasus-helikon-core` 0.6 directly, change it to `0.7` before you run `cargo update`. If you cannot upgrade core yet, keep the other `paigasus-helikon-*` crates at their current versions with `cargo update --precise`. Two copies of core in one build cause errors such as "trait not implemented". Run `cargo tree -d` to find the copies.
+- Upgrade `paigasus-helikon-core` to 0.7 and `paigasus-helikon` to 0.8 together (0.7.0 is yanked; see 0.8.0).
+- Each other `paigasus-helikon-*` library crate has a new breaking version that requires core 0.7 (see 0.8.0). If your `Cargo.toml` requires `paigasus-helikon-core` 0.6 directly, change it to `0.7`, and move the other crates to their new versions. Two copies of core in one build cause errors such as "trait not implemented". Run `cargo tree -d` to find the copies.
 - The JSON format of a stored `SessionEvent` does not change. Session rows that an earlier version wrote stay readable.
 
 ## [0.6.14](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.6.13...paigasus-helikon-v0.6.14) - 2026-11-20

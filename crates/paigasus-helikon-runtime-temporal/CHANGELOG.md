@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.5.5...paigasus-helikon-runtime-temporal-v0.6.0) - 2026-11-21
+
+### Breaking changes
+
+- This version replaces `0.5.5`. Version `0.5.5` requires `paigasus-helikon-core` 0.7, but it was released as a patch, so `cargo update` gave it to users who stay on core 0.6. Version `0.5.5` is yanked. The content of this version is the same as `0.5.5`.
+- This version requires `paigasus-helikon-core` 0.7. If you stay on core 0.6, use `0.5.4`, the last version for core 0.6. A requirement cannot select a version below its minimum, so if your requirement is higher than `0.5.4` (for example a requirement that `cargo add` wrote for a yanked version), change it to `"0.5.4"` first, then run `cargo update`.
+- If you already use core 0.7, change your requirement on `paigasus-helikon-runtime-temporal` to `"0.6"`. If you do not, and your requirement allows the core 0.6 versions (for example `"0.5"`), `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
+
 ## [0.5.5](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.5.4...paigasus-helikon-runtime-temporal-v0.5.5) - 2026-11-20
 
 ### Other

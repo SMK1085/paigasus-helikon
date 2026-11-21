@@ -4098,7 +4098,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "paigasus-helikon"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4140,7 +4140,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-cli"
-version = "0.1.45"
+version = "0.1.46"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4202,7 +4202,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-evals"
-version = "0.1.22"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -4244,7 +4244,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-mcp"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4287,7 +4287,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-anthropic"
-version = "0.1.30"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4309,7 +4309,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-bedrock"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4332,7 +4332,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-gemini"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4355,7 +4355,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-litellm"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4377,7 +4377,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-providers-openai"
-version = "0.2.34"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -4400,7 +4400,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-actix"
-version = "0.2.11"
+version = "0.3.0"
 dependencies = [
  "actix-web",
  "actix-ws",
@@ -4422,7 +4422,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-agentcore"
-version = "0.2.17"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4449,7 +4449,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-axum"
-version = "0.2.11"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4487,7 +4487,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-temporal"
-version = "0.5.5"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4513,7 +4513,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-runtime-tokio"
-version = "0.1.27"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4531,7 +4531,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-postgres"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "paigasus-helikon-core",
@@ -4543,7 +4543,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-redis"
-version = "0.1.10"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "paigasus-helikon-core",
@@ -4556,7 +4556,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-sqlite"
-version = "0.1.30"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "jiff",
@@ -4571,7 +4571,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-sessions-testkit"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -4583,7 +4583,7 @@ dependencies = [
 
 [[package]]
 name = "paigasus-helikon-tools"
-version = "0.2.26"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
