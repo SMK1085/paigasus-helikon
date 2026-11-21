@@ -79,15 +79,16 @@ pub fn classify(
     // catch. Groups are built preserving first-seen `call_id` order so the
     // reported violation is deterministic.
     //
-    // Known, deliberate exception: a blank `call_id`. An empty id cannot
-    // identify a call, so both first-party chat translators and the OpenAI
-    // Responses translator refuse to merge parallel blank-id calls, and each
-    // such call carries its own name under "" (SMA-566, SMA-616, SMA-617).
-    // Two of them therefore report `count: 2` here.
-    // The assertion is deliberately NOT scoped to non-blank ids: no fixture
-    // exercises the shape today, and narrowing a shared cross-provider gate
-    // deserves its own decision rather than a drive-by. If you are adding the
-    // first blank-id capture and this fires, that is the decision to make.
+    // A blank `call_id` is graded differently: it needs at least one name,
+    // not exactly one. An empty id cannot identify a call, so translators
+    // refuse to merge parallel blank-id calls, and each such call carries
+    // its own name under "" (SMA-566, SMA-616, SMA-617). Two names under ""
+    // are therefore what the `ModelEvent::ToolCallDelta` contract requires
+    // for two blank-id calls, and this assertion must not reject them.
+    // A blank-id group with no name at all is still a translator defect.
+    // Whether to refuse the resulting ambiguous turn is a consumer
+    // decision, not a translator one: `ModelTurnAccumulator::finish()` in
+    // `core` makes it, and core's `model_turn_tests` pin it (SMA-621).
     let mut name_counts: Vec<(String, usize)> = Vec::new();
     for event in events {
         if let Ok(ModelEvent::ToolCallDelta { call_id, name, .. }) = event {
@@ -102,7 +103,16 @@ pub fn classify(
         }
     }
     for (call_id, count) in &name_counts {
-        if *count != 1 {
+        let conforms = if call_id.is_empty() {
+            // The "at least one" rule cannot detect a translator that
+            // emits the name twice for ONE blank-id call.
+            // `ModelTurnAccumulator::finish()` refuses that stream loudly
+            // at runtime, so no call is lost silently.
+            *count >= 1
+        } else {
+            *count == 1
+        };
+        if !conforms {
             return Some(Violation::ToolNameNotExactlyOnce {
                 call_id: call_id.clone(),
                 count: *count,
@@ -296,6 +306,20 @@ mod tests {
         assert_eq!(classify(&evs, Scenario::CancelAfterStopReason, true), None);
     }
 
+    /// Two blank-id calls each carry their own name, as the contract requires.
+    /// Confirmed to FAIL against `main` (reported count: 2).
+    #[test]
+    fn two_blank_id_calls_with_one_name_each_conform() {
+        let evs = vec![
+            tool("", Some("alpha"), "{}"),
+            tool("", Some("beta"), "{}"),
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            }),
+        ];
+        assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
     fn provider_data(call_id: Option<&str>) -> Result<ModelEvent, ModelError> {
         Ok(ModelEvent::ProviderData {
             provider: "test".into(),
@@ -333,6 +357,24 @@ mod tests {
             }),
         ];
         assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
+    /// A blank-id group with no name is still a translator defect.
+    #[test]
+    fn blank_id_with_no_name_is_a_violation() {
+        let evs = vec![
+            tool("", None, "{}"),
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            }),
+        ];
+        assert_eq!(
+            classify(&evs, Scenario::ToolCallCleanStop, false),
+            Some(Violation::ToolNameNotExactlyOnce {
+                call_id: String::new(),
+                count: 0
+            })
+        );
     }
 
     /// Provider data without a call id is not call-scoped.

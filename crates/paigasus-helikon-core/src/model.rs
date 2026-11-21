@@ -262,25 +262,27 @@ pub enum ModelEvent {
         /// The text fragment.
         text: String,
     },
-    /// A partial tool call. `name` is `Some` exactly once per non-blank
-    /// `call_id`, on the first delta for which the provider can establish the
-    /// name is complete, and `None` on every other delta. When `Some`, the
+    /// A partial tool call. `name` is `Some` exactly once per call, on the
+    /// first delta for which the provider can establish the name is
+    /// complete, and `None` on every other delta. When `Some`, the
     /// value is the whole name so far as the provider can determine — a
     /// provider receiving the name in fragments MUST buffer and concatenate
     /// them, and MUST NOT emit a name it can detect is still incomplete.
     ///
-    /// The non-blank qualifier is deliberate. A backend may send `"id": ""`,
-    /// and an empty id cannot identify a call — so a provider MUST NOT merge
-    /// two parallel blank-id calls, and two such calls therefore each carry a
-    /// name under `""`. Consumers that need one entry per call should key on
-    /// a non-blank `call_id` and treat `""` as "unidentified". This crate's
-    /// own `ModelTurnAccumulator` does not follow that advice: it deliberately
-    /// merges blank-id calls together, first-name-wins, the same as any other
-    /// `call_id`.
+    /// A backend may send `"id": ""`, and an empty id cannot identify a
+    /// call. A provider MUST NOT merge two parallel blank-id calls, so two
+    /// such calls each carry a name under `""`. Each blank-id call carries
+    /// **exactly one** name-carrying delta under `""`. Consumers that need
+    /// one entry per call should key on a non-blank `call_id` and treat `""`
+    /// as "unidentified". This crate's own
+    /// `ModelTurnAccumulator` merges the deltas of a single blank-id call.
+    /// It refuses the turn (`finish()` returns an `ambiguous tool calls:`
+    /// error) when two or more name-carrying deltas arrive under `""`,
+    /// because it cannot attribute the arguments to a call.
     ToolCallDelta {
         /// Provider-assigned identifier for the call.
         call_id: String,
-        /// `Some` exactly once per non-blank `call_id`, on the first delta
+        /// `Some` exactly once per call, on the first delta
         /// for which the provider can establish the name is complete, and
         /// `None` on every other delta. When `Some`, the value is the whole
         /// name so far as the provider can determine — a provider receiving
@@ -563,6 +565,8 @@ pub enum ModelError {
 /// message. Each distinct `ToolCallDelta` `call_id` becomes one
 /// [`crate::Item::ToolCall`], `usage` is the last `Usage` snapshot observed,
 /// and `finish_reason` is the terminal `Finish` reason.
+/// Two or more blank-id calls make [`ModelTurnAccumulator::finish`] fail
+/// instead of producing items.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ModelTurn {
@@ -668,6 +672,8 @@ pub struct ModelTurnAccumulator {
     reasoning: String,
     provider_data: Vec<crate::ContentPart>,
     tool_accum: std::collections::BTreeMap<String, ToolCallAccum>,
+    /// Names carried by deltas under a blank `call_id`, in arrival order.
+    blank_names: Vec<String>,
     finish_reason: FinishReason,
     latest_usage: Option<crate::TokenUsage>,
 }
@@ -682,6 +688,7 @@ impl ModelTurnAccumulator {
             reasoning: String::new(),
             provider_data: Vec::new(),
             tool_accum: std::collections::BTreeMap::new(),
+            blank_names: Vec::new(),
             finish_reason: FinishReason::Stop,
             latest_usage: None,
         }
@@ -698,6 +705,11 @@ impl ModelTurnAccumulator {
                 name,
                 args_delta,
             } => {
+                if call_id.is_empty() {
+                    if let Some(n) = name {
+                        self.blank_names.push(n.clone());
+                    }
+                }
                 let a = self.tool_accum.entry(call_id.clone()).or_default();
                 if a.name.is_none() {
                     if let Some(n) = name.as_deref() {
@@ -736,8 +748,22 @@ impl ModelTurnAccumulator {
     }
 
     /// Reassemble. `Err(String)` = invalid JSON in accumulated tool-call
-    /// args.
+    /// args, **or** an ambiguous blank-id bucket (two or more name-carrying
+    /// deltas under `""`), which is checked first, before any parse.
     pub fn finish(self) -> Result<ModelTurn, String> {
+        if self.blank_names.len() >= 2 {
+            let count = self.blank_names.len();
+            let list = format_blank_names(&self.blank_names);
+            tracing::warn!(
+                target: "paigasus::core::model",
+                count,
+                names = %list,
+                "refusing a model turn with parallel tool calls under a blank call_id"
+            );
+            return Err(format!(
+                "ambiguous tool calls: {count} parallel tool calls arrived under a blank call_id (names: {list}); their arguments cannot be attributed to a call"
+            ));
+        }
         let items = build_items(
             &self.agent_name,
             self.text,
@@ -751,6 +777,22 @@ impl ModelTurnAccumulator {
             finish_reason: self.finish_reason,
         })
     }
+}
+
+/// Format at most 8 names, each cut to 64 chars and Debug-escaped.
+fn format_blank_names(names: &[String]) -> String {
+    const MAX_NAMES: usize = 8;
+    const MAX_CHARS: usize = 64;
+    let mut out = names
+        .iter()
+        .take(MAX_NAMES)
+        .map(|n| format!("{:?}", n.chars().take(MAX_CHARS).collect::<String>()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > MAX_NAMES {
+        out.push_str(&format!(", and {} more", names.len() - MAX_NAMES));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -910,6 +952,152 @@ mod model_turn_tests {
             }
             other => panic!("expected ToolCall, got {other:?}"),
         }
+    }
+
+    fn tc(id: &str, name: Option<&str>, args: &str) -> ModelEvent {
+        ModelEvent::ToolCallDelta {
+            call_id: id.into(),
+            name: name.map(Into::into),
+            args_delta: args.into(),
+        }
+    }
+
+    fn run(evs: &[ModelEvent]) -> Result<ModelTurn, String> {
+        let mut acc = ModelTurnAccumulator::new("a1");
+        for e in evs {
+            acc.observe(e);
+        }
+        acc.finish()
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns a serde_json trailing-characters error.
+    #[test]
+    fn parallel_blank_calls_with_args_fail_as_ambiguous() {
+        let e = run(&[
+            tc("", Some("alpha"), ""),
+            tc("", Some("beta"), ""),
+            tc("", None, "{\"p\":1}"),
+            tc("", None, "{\"q\":2}"),
+        ])
+        .unwrap_err();
+        assert!(e.starts_with("ambiguous tool calls:"), "{e}");
+        assert!(e.contains("2 parallel tool calls"), "{e}");
+        assert!(e.contains("\"alpha\"") && e.contains("\"beta\""), "{e}");
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns `Ok` with one call.
+    #[test]
+    fn parallel_blank_calls_without_args_fail_as_ambiguous() {
+        let e = run(&[tc("", Some("alpha"), ""), tc("", Some("beta"), "")]).unwrap_err();
+        assert!(e.starts_with("ambiguous tool calls:"), "{e}");
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns `Ok`, and `delete_all` runs with the arguments of `search`.
+    #[test]
+    fn blank_call_misattribution_fails_as_ambiguous() {
+        let e = run(&[
+            tc("", Some("delete_all"), ""),
+            tc("", Some("search"), "{\"q\":1}"),
+        ])
+        .unwrap_err();
+        assert!(e.starts_with("ambiguous tool calls:"), "{e}");
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns a serde_json trailing-characters error (args `{}{}`).
+    #[test]
+    fn equal_blank_names_count_as_two_calls() {
+        let e = run(&[tc("", Some("alpha"), "{}"), tc("", Some("alpha"), "{}")]).unwrap_err();
+        assert!(e.contains("2 parallel tool calls"), "{e}");
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns `Ok` with one call.
+    #[test]
+    fn empty_name_counts_as_a_name() {
+        assert!(run(&[tc("", Some(""), ""), tc("", Some("beta"), "")])
+            .unwrap_err()
+            .starts_with("ambiguous tool calls:"));
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns `Ok` with three items (AssistantMessage, `c1`, `""`).
+    #[test]
+    fn ambiguous_blank_bucket_fails_the_whole_turn() {
+        let e = run(&[
+            ModelEvent::TokenDelta { text: "hi".into() },
+            tc("c1", Some("ok_tool"), "{}"),
+            tc("", Some("alpha"), ""),
+            tc("", Some("beta"), ""),
+        ])
+        .unwrap_err();
+        assert!(e.starts_with("ambiguous tool calls:"), "{e}");
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns the serde_json error of `c1`.
+    #[test]
+    fn ambiguity_is_reported_before_any_argument_parse() {
+        let e = run(&[
+            tc("c1", Some("t"), "{not json"),
+            tc("", Some("alpha"), ""),
+            tc("", Some("beta"), ""),
+        ])
+        .unwrap_err();
+        assert!(e.starts_with("ambiguous tool calls:"), "{e}");
+    }
+
+    /// Passes on `main` too, because the serde_json error has no argument
+    /// text. It pins the rule against a later change.
+    #[test]
+    fn ambiguity_message_omits_argument_text() {
+        let e = run(&[
+            tc("", Some("a"), "{\"token\":\"SECRET-123\"}"),
+            tc("", Some("b"), "{}"),
+        ])
+        .unwrap_err();
+        assert!(!e.contains("SECRET-123"), "{e}");
+    }
+
+    /// Confirmed to FAIL against `main`.
+    /// `main` returns `Ok`.
+    #[test]
+    fn ambiguity_message_bounds_and_escapes_names() {
+        let long = "x".repeat(200);
+        let mut evs = vec![tc("", Some("bad\nname"), ""), tc("", Some(&long), "")];
+        for i in 0..7 {
+            evs.push(tc("", Some(&format!("t{i}")), ""));
+        }
+        let e = run(&evs).unwrap_err();
+        assert!(e.contains("9 parallel tool calls"), "{e}");
+        assert!(e.contains("\"bad\\nname\""), "{e}"); // escaped, no raw newline
+        assert!(!e.contains('\n'), "{e}");
+        assert!(!e.contains(&"x".repeat(65)), "{e}"); // cut to 64 chars
+        assert!(e.contains("and 1 more"), "{e}"); // 8 listed of 9
+    }
+
+    #[test]
+    fn one_blank_call_is_accumulated() {
+        let t = run(&[tc("", Some("alpha"), "{\"p\""), tc("", None, ":1}")]).unwrap();
+        assert!(
+            matches!(&t.items[..], [crate::Item::ToolCall { call_id, name, args }]
+            if call_id.is_empty() && name == "alpha" && *args == serde_json::json!({"p":1}))
+        );
+    }
+
+    #[test]
+    fn one_blank_call_with_args_before_name_is_ok() {
+        let t = run(&[tc("", None, "{\"p\":"), tc("", Some("alpha"), "1}")]).unwrap();
+        assert_eq!(t.items.len(), 1);
+    }
+
+    #[test]
+    fn two_non_blank_calls_give_two_items() {
+        let t = run(&[tc("c1", Some("a"), "{}"), tc("c2", Some("b"), "{}")]).unwrap();
+        assert_eq!(t.items.len(), 2);
     }
 }
 
