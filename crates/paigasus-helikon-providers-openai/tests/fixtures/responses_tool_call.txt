@@ -25,8 +25,9 @@
 : `event:` lines are kept, unlike this directory's hand-authored
 : `responses_*.txt` fixtures. Those omit them;
 : `responses_tool_call_zero_args.txt` keeps `event:` lines too.
-: async-openai's `ResponseStreamEvent` is `#[serde(tag = "type")]`, so the parser dispatches purely off the JSON
-: `type` key inside `data:` and the `event:` line is cosmetic to it -- but
+: async-openai's `ResponseStreamEvent` is `#[serde(tag = "type")]`, so the
+: parser dispatches purely off the JSON `type` key inside `data:` and the
+: `event:` line is cosmetic to it -- but
 : this fixture is a transcription of a real capture that DID send
 : them, and (per this crate's `anthropic`-sibling module's own reasoning
 : for the same choice in the stream conformance suite) a fixture claiming
@@ -80,16 +81,18 @@
 : Added: nothing.
 :
 : Changed: the JSON key order. This file puts `type` and `sequence_number`
-: first, and `item.type` before `item.id`. Its `response` keys follow the
-: layout of the hand-authored sibling fixtures. The captures of 2026-08-22
-: and 2026-11-21 put `type` first and the other event keys in alphabetical
-: order, and `item.id` before `item.type`. The key order of the 2026-08-20
-: capture is not on record. The parser does not depend on key order.
+: first, and `item.type` before `item.id`, also in `response.output[]`.
+: Its `response` keys follow the layout of the hand-authored sibling
+: fixtures. The captures of 2026-08-22 and 2026-11-21 put `type` first and
+: the other event keys in alphabetical order, and `item.id` before
+: `item.type`. The key order of the 2026-08-20 capture is not on record.
+: The parser does not depend on key order.
 :
 : CORRECTION (2026-11-21, SMA-585): until this date the file ended with a
-: sentinel line (a `[DONE]` data line) and had the changed key order,
-: and this header recorded neither. No capture of this endpoint contains
-: the sentinel. The Responses API does not send it. See
+: sentinel line (a `[DONE]` data line). This header did not record the
+: sentinel or the changed key order. The key order is still changed (see
+: Changed). No capture on record (2026-08-22, 2026-11-21) contains the
+: sentinel. No raw copy of the 2026-08-20 capture exists. See
 : docs/superpowers/specs/2026-11-21-sma-585-responses-done-sentinel-design.md
 
 event: response.output_item.added

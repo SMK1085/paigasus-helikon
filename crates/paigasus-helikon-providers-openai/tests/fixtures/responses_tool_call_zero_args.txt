@@ -42,8 +42,8 @@
 : Edits from the raw capture:
 :
 : Removed: `response.created` and `response.in_progress` are dropped,
-: matching every other fixture in this directory -- `ResponsesTranslator::
-: consume` has no arm for either.
+: matching every other fixture in this directory -- the
+: translator method `ResponsesTranslator::consume` has no arm for either.
 :
 : Added: nothing. The file does NOT end with `data: [DONE]`, because the
 : endpoint did not send one -- none of the four 2026-08-22 captures
@@ -56,9 +56,10 @@
 : Changed: nothing.
 :
 : `responses_tool_call.txt` also ended with a `[DONE]` line until SMA-585
-: removed it (2026-11-21). No fixture in this directory carries the
-: sentinel now, and the guard test `no_responses_fixture_carries_a_done_
-: sentinel` in `responses_streaming.rs` keeps it that way.
+: removed it (2026-11-21). No `responses_*.txt` fixture in this
+: directory carries the sentinel now. The guard test
+: `no_responses_fixture_carries_a_done_sentinel` in `responses_streaming.rs`
+: keeps it that way.
 :
 : `event:` lines are kept, as in `responses_tool_call.txt` and for the same
 : reason -- async-openai dispatches purely off the `type` key inside `data:`,
