@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LeudvRrXG19EoX34KzgBTb",
+  "agent_id": "a5a3d17f4b60e52a4",
+  "subagent_type": "feature-factory:spec-challenger",
+  "task_description": "Re-challenge SMA-565 spec",
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 201245,
+    "cache_read_tokens": 7201945,
+    "output_tokens": 46483,
+    "api_call_count": 53
+  },
+  "started_at": "2026-11-22T00:21:52.651867+01:00",
+  "completed_at": "2026-11-22T00:30:29.983459+01:00"
+}
