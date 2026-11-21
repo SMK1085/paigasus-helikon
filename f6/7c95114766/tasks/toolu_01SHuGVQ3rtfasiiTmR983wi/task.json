@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SHuGVQ3rtfasiiTmR983wi",
+  "agent_id": "ab3c1a1c8a2a6e991",
+  "task_description": "Triage RUSTSEC GitHub issues vs main lockfile",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 84286,
+    "cache_read_tokens": 616428,
+    "output_tokens": 6828,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-20T15:09:53.728738+01:00",
+  "completed_at": "2026-11-20T15:10:45.896653+01:00",
+  "transcript_unavailable_reason": "transcript unreadable"
+}

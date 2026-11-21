@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "f67c95114766",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "docs/superpowers/plans/2026-11-19-sma-803-deferred-tool-calls.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f6/7c95114766/0/metadata.json",
+      "transcript": "/f6/7c95114766/0/full.jsonl",
+      "compact_transcript": "/f6/7c95114766/0/transcript.jsonl",
+      "content_hash": "/f6/7c95114766/0/content_hash.txt",
+      "prompt": "/f6/7c95114766/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 156,
+    "cache_creation_tokens": 201022,
+    "cache_read_tokens": 11271528,
+    "output_tokens": 27751,
+    "api_call_count": 60,
+    "subagent_tokens": {
+      "input_tokens": 34,
+      "cache_creation_tokens": 88834,
+      "cache_read_tokens": 1197638,
+      "output_tokens": 9648,
+      "api_call_count": 17
+    }
+  },
+  "redaction": {
+    "replacements": 6,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 2,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

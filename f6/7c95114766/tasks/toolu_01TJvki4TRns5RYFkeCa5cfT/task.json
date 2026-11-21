@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01TJvki4TRns5RYFkeCa5cfT",
+  "agent_id": "a774841c2fc33e05f",
+  "task_description": "Implement SMA-817 bedrock BehaviorVersion bump",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 74908,
+    "cache_read_tokens": 641253,
+    "output_tokens": 3216,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-20T08:39:02.665309+01:00",
+  "completed_at": "2026-11-20T08:41:15.936339+01:00",
+  "transcript_unavailable_reason": "transcript unreadable"
+}
