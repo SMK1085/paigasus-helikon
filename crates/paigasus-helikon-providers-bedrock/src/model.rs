@@ -3,6 +3,7 @@
 //! Wraps an `Arc<Config>` so that the model handle is `Clone + Send + Sync`
 //! and the `BoxStream` returned by `invoke` can be `'static + Send`.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use async_stream::stream;
@@ -12,11 +13,15 @@ use paigasus_helikon_core::{
     CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
 };
 
+use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamOutput;
+use aws_sdk_bedrockruntime::Client;
+
 use crate::builder::Config;
-use crate::error::{map_sdk_error, map_sdk_http_error};
+use crate::error::{map_sdk_error, send_failure, SendFailure};
+use crate::fallback::{send_with_fallback, Sent};
 use crate::policy::ForcedChoicePolicy;
 use crate::stream::StreamTranslator;
-use crate::translate::build_request;
+use crate::translate::{build_request, PreparedConverse};
 
 // ── BedrockModel ──────────────────────────────────────────────────────────────
 
@@ -31,6 +36,31 @@ use crate::translate::build_request;
 pub struct BedrockModel {
     pub(crate) config: Arc<Config>,
     pub(crate) policy: Arc<ForcedChoicePolicy>,
+}
+
+/// Send one `ConverseStream` request.
+///
+/// The error keeps the flag that tells the fallback whether the service
+/// rejected a forced tool choice.
+fn send_converse_stream(
+    client: &Client,
+    p: PreparedConverse,
+) -> impl Future<Output = Result<ConverseStreamOutput, SendFailure>> {
+    let fluent = client
+        .converse_stream()
+        .model_id(&p.model_id)
+        .set_messages(Some(p.messages))
+        .set_system(if p.system.is_empty() {
+            None
+        } else {
+            Some(p.system)
+        })
+        .set_tool_config(p.tool_config)
+        .set_inference_config(p.inference_config)
+        .set_output_config(p.output_config);
+    // fluent.send() returns SdkError<_, HttpResponse>, so send_failure can
+    // read the Retry-After header.
+    async move { fluent.send().await.map_err(send_failure) }
 }
 
 // ── Model impl ────────────────────────────────────────────────────────────────
@@ -51,47 +81,41 @@ impl Model for BedrockModel {
     ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
         // Translate the core request into Bedrock wire format (early error on
         // translation failure — before we open any network connection).
-        let prepared = build_request(&self.config, &request, self.policy.path())?;
-        for n in &prepared.notices {
-            self.policy.note(*n, &self.config.model_id);
-        }
+        let first = build_request(&self.config, &request, self.policy.path())?;
 
-        let synthesizing = prepared.synthesizing;
+        let config = Arc::clone(&self.config);
+        let policy = Arc::clone(&self.policy);
         let client = self.config.client.clone();
 
-        // Build the fluent ConverseStream request from the prepared parts.
-        let fluent = client
-            .converse_stream()
-            .model_id(&prepared.model_id)
-            .set_messages(Some(prepared.messages))
-            .set_system(if prepared.system.is_empty() {
-                None
-            } else {
-                Some(prepared.system)
-            })
-            .set_tool_config(prepared.tool_config)
-            .set_inference_config(prepared.inference_config)
-            .set_output_config(prepared.output_config);
-
         let s = stream! {
-            // Send the ConverseStream request and obtain the event receiver.
-            // Guard with a cancellation check (biased: cancel arm wins) so that
-            // a token already fired — or one that fires during the HTTP send —
-            // aborts cleanly without opening a dangling Bedrock stream and
-            // without emitting Finish (per the Model::invoke cancellation contract).
-            let output = tokio::select! {
+            // The rebuild closure owns the request. It makes the native
+            // request if the service rejects the forced tool choice of the
+            // first request.
+            let rebuild_cfg = Arc::clone(&config);
+            let rebuild = move |path| build_request(&rebuild_cfg, &request, path);
+
+            // Send the request (and the one fallback request, if any) and
+            // obtain the event receiver. Guard with a cancellation check
+            // (biased: cancel arm wins) so that a token already fired — or one
+            // that fires during either HTTP send — aborts cleanly without
+            // opening a dangling Bedrock stream and without emitting Finish
+            // (per the Model::invoke cancellation contract).
+            let sent = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => { return; }
-                result = fluent.send() => {
-                    // map_sdk_http_error: fluent.send() returns
-                    // SdkError<_, HttpResponse>, so we can extract Retry-After headers.
-                    match result {
-                        Ok(o) => o,
-                        Err(e) => {
-                            yield Err(map_sdk_http_error(e));
-                            return;
-                        }
-                    }
+                result = send_with_fallback(
+                    &policy,
+                    &config.model_id,
+                    first,
+                    rebuild,
+                    |p| send_converse_stream(&client, p),
+                ) => result,
+            };
+            let Sent { output, synthesizing } = match sent {
+                Ok(sent) => sent,
+                Err(e) => {
+                    yield Err(e);
+                    return;
                 }
             };
 

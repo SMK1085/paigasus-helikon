@@ -15,6 +15,7 @@ mod builder;
 mod capabilities;
 mod document;
 mod error;
+mod fallback;
 mod family;
 mod model;
 mod policy;
