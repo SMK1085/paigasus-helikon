@@ -4,6 +4,14 @@
 //! and keeps all other keywords. Bedrock does not enforce the removed limits.
 //! The core function `validate_terminal` checks the result against the original
 //! schema of the caller.
+//!
+//! The rewrite does not visit `contains`, `dependentSchemas`, the tuple form of
+//! `items`, or the sub-schemas under `additionalProperties`, `patternProperties`
+//! and `prefixItems`. Bedrock decides on these.
+//!
+//! An object node under an `allOf` composition stays open (no added
+//! `additionalProperties: false`), because the closed members would reject the
+//! properties of the other members.
 
 use serde_json::{Map, Value};
 
@@ -27,10 +35,10 @@ const REMOVED_KEYWORDS: [&str; 11] = [
 /// The function never fails and does not read the `Ruleset`.
 #[allow(dead_code)] // Used from Task 4 (build_native).
 pub(crate) fn native_output_schema(schema: &Value) -> Value {
-    rewrite(schema)
+    rewrite(schema, false)
 }
 
-fn rewrite(v: &Value) -> Value {
+fn rewrite(v: &Value, open: bool) -> Value {
     let Some(obj) = v.as_object() else {
         return v.clone();
     };
@@ -53,6 +61,7 @@ fn rewrite(v: &Value) -> Value {
             let entry = serde_json::json!({ "anyOf": one });
             match m.get_mut("allOf") {
                 Some(Value::Array(all)) => all.push(entry),
+                // A missing or malformed (non-array) `allOf` is replaced by the new one.
                 _ => {
                     m.insert("allOf".to_owned(), Value::Array(vec![entry]));
                 }
@@ -71,7 +80,9 @@ fn rewrite(v: &Value) -> Value {
     let is_map = ["additionalProperties", "patternProperties", "propertyNames"]
         .iter()
         .any(|k| m.contains_key(*k));
-    if is_object && !is_map {
+    let has_all_of = m.contains_key("allOf");
+    let child_open = open || has_all_of;
+    if is_object && !is_map && !child_open {
         m.insert("additionalProperties".to_owned(), Value::Bool(false));
     }
 
@@ -79,19 +90,19 @@ fn rewrite(v: &Value) -> Value {
     for key in ["properties", "$defs", "definitions"] {
         if let Some(Value::Object(map)) = m.get_mut(key) {
             for child in map.values_mut() {
-                *child = rewrite(child);
+                *child = rewrite(child, false);
             }
         }
     }
     for key in ["anyOf", "allOf"] {
         if let Some(Value::Array(arr)) = m.get_mut(key) {
             for child in arr.iter_mut() {
-                *child = rewrite(child);
+                *child = rewrite(child, child_open);
             }
         }
     }
     if let Some(items @ Value::Object(_)) = m.get_mut("items") {
-        *items = rewrite(items);
+        *items = rewrite(items, false);
     }
     Value::Object(m)
 }
@@ -210,6 +221,7 @@ mod tests {
             "allOf":[{"type":"object","properties":{"n":{"type":"number","minimum":1}}}]
         });
         let nested = json!({"type":"object","properties":{"n":{"type":"number"}},"additionalProperties":false});
+        let open = json!({"type":"object","properties":{"n":{"type":"number"}}});
         let expected = json!({
             "type":"object",
             "properties":{
@@ -218,9 +230,8 @@ mod tests {
             },
             "$defs":{"D":nested.clone()},
             "definitions":{"E":nested.clone()},
-            "anyOf":[nested.clone()],
-            "allOf":[nested],
-            "additionalProperties":false
+            "anyOf":[open.clone()],
+            "allOf":[open]
         });
         assert_eq!(native_output_schema(&input), expected);
     }
@@ -308,5 +319,44 @@ mod tests {
         let out = native_output_schema(&node());
         assert_eq!(out["properties"]["children"]["items"], json!({"$ref":"#"}));
         assert_eq!(out["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn native_schema_all_of_members_stay_open() {
+        let input = json!({"allOf":[{"type":"object","properties":{"a":{}}},{"type":"object","properties":{"b":{}}}]});
+        assert_eq!(native_output_schema(&input), input);
+    }
+
+    #[test]
+    fn native_schema_merged_one_of_branches_stay_open() {
+        let input = json!({"anyOf":[{"type":"object","properties":{"a":{}}}],"oneOf":[{"type":"object","properties":{"b":{},"n":{"type":"number"}},"minimum":3}]});
+        let out = native_output_schema(&input);
+        assert_eq!(
+            out,
+            json!({"anyOf":[{"type":"object","properties":{"a":{}}}],"allOf":[{"anyOf":[{"type":"object","properties":{"b":{},"n":{"type":"number"}}}]}]})
+        );
+    }
+
+    #[test]
+    fn native_schema_nested_property_under_all_of_is_closed() {
+        let input = json!({"allOf":[{"type":"object","properties":{"p":{"type":"object","properties":{"x":{"type":"string"}}}}}]});
+        let out = native_output_schema(&input);
+        assert!(out["allOf"][0].get("additionalProperties").is_none());
+        assert_eq!(
+            out["allOf"][0]["properties"]["p"]["additionalProperties"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn native_schema_tuple_items_array_is_kept() {
+        let s = json!({"type":"array","items":[{"type":"object","properties":{"a":{}}},{"type":"number","minimum":1}]});
+        assert_eq!(native_output_schema(&s), s);
+    }
+
+    #[test]
+    fn native_schema_properties_with_pattern_properties_not_closed() {
+        let s = json!({"type":"object","properties":{"a":{"type":"string"}},"patternProperties":{"^b":{"type":"string"}}});
+        assert_eq!(native_output_schema(&s), s);
     }
 }
