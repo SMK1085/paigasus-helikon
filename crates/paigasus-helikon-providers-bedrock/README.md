@@ -83,13 +83,15 @@ let model = BedrockModel::converse(arn)
     .build()?;
 ```
 
-The override has the full effect of a detected family. It sets the default capabilities and the request translation. It also sets the `ToolChoice` policy and the local errors. These errors apply to `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::Tool` or `ToolChoice::None`. They also apply to `ToolChoice::Required` with no tools, and to `ToolChoice::Tool` with an undefined name. The `from_env` constructor cannot take the override. Use the builder.
+The override has the full effect of a detected family. It sets the default capabilities and the request translation. It also controls how the provider sends `ToolChoice`, and which requests fail locally. These local failures apply to `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::Tool` or `ToolChoice::None`. They also apply to `ToolChoice::Required` with no tools, and to `ToolChoice::Tool` with an undefined name. The `from_env` constructor cannot take the override. Use the builder.
 
 The `.capabilities(...)` method changes only the flags that `capabilities()` reports. It does not change the request. The `.capabilities(...)` value wins over the defaults of the family.
 
-With `.family(ModelFamily::Anthropic)` on an opaque ARN, the static rule for Claude Sonnet 5.5 and Opus 5.5 is off. The ARN does not name the model. A profile on one of these models recovers at run time. The first structured-output request sends a forced tool choice. Bedrock rejects it once. Then the handle uses native output.
+Set the family of the model that the profile uses.
 
-Some requests fail locally before they reach Bedrock. These requests cannot teach the handle. Parallel first requests each get the rejection. A new handle pays the rejection again. Build one handle and clone it. This recovery is not verified live for application inference profiles.
+The static rule for Claude Sonnet 5.5 and Opus 5.5 reads the model ID. An opaque ARN does not contain the model name, so the rule does not apply. A profile on one of these models works as follows. The first structured-output request sends a forced tool choice. Bedrock rejects it once. After one rejection, the handle uses native output. On the native path, the provider omits `ToolChoice::Required` and `ToolChoice::Tool` and logs a warning.
+
+A request that fails locally does not change the handle. If several first requests run at the same time on one handle, Bedrock rejects each of them. A new handle sends the rejected request again. Build one handle and clone it. This recovery is not verified live for application inference profiles.
 
 ## Structured output and the schema rewriter
 
