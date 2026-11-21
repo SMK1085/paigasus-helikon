@@ -198,8 +198,8 @@ After that, the `BedrockModel` handle and its clones use native output.
 The provider rewrites the schema first. It adds `additionalProperties: false`,
 changes `oneOf` to `anyOf`, and removes keywords that Bedrock does not accept,
 such as numeric limits. It does not add `additionalProperties` to a node in an
-`allOf` composition, or to a node that has `properties` next to `oneOf` or
-`anyOf`. Bedrock rejects maps, `patternProperties`,
+`allOf` composition, or to an object node next to `oneOf` or `anyOf`. The
+branches of such a node stay open too. Bedrock rejects maps, `patternProperties`,
 `propertyNames`, tuples, the schemas `true` and `{}`, and recursive types.
 
 `JsonObject` degrades to text on this path. The provider omits `ToolChoice::Required` and `ToolChoice::Tool` with a
