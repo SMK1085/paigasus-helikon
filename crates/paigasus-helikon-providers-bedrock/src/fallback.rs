@@ -3,8 +3,8 @@
 //! An Anthropic model on Bedrock can reject a forced tool choice
 //! (`toolChoice` `any` or `tool`) with a `ValidationException`. When the
 //! first request carried a forced choice and the service rejects it before
-//! the stream starts, the provider sends the request one more time on the
-//! native structured-output path. The handle then records the rejection, and
+//! the stream starts, the provider sends one native request, which is a
+//! different request, on the structured-output path. The handle then records the rejection, and
 //! all later requests on the handle use the native path at once.
 //!
 //! This fallback does not break ADR-10 (*No silent auto-retry inside the
@@ -292,6 +292,7 @@ mod tests {
         );
         assert_eq!(wires.len(), 2);
         assert!(matches!(res, Err(ModelError::Other(_))));
+        assert_eq!(policy.path(), OutputPath::Native);
     }
 
     #[test]
