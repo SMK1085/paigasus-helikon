@@ -186,16 +186,18 @@ a `JsonSchema` format degrades silently to a text response.
 Claude Sonnet 5.5 and Opus 5.5 reject a forced tool choice. For these two
 models, the provider sends the `JsonSchema` as native output
 (`outputConfig.textFormat`). Another Anthropic model can also reject the forced
-choice. The provider then sends the request one more time on the native path.
+choice. The provider then sends one native request, which is a different request.
 After that, the `BedrockModel` handle and its clones use native output.
 
 The provider rewrites the schema first. It adds `additionalProperties: false`,
 changes `oneOf` to `anyOf`, and removes keywords that Bedrock does not accept,
-such as numeric limits. Bedrock rejects maps, `patternProperties`,
+such as numeric limits. It does not add `additionalProperties` to a node in an
+`allOf` composition, or to a node that has `properties` next to `oneOf` or
+`anyOf`. Bedrock rejects maps, `patternProperties`,
 `propertyNames`, tuples, the schemas `true` and `{}`, and recursive types.
 
 `JsonObject` degrades to text on this path. The provider omits `ToolChoice::Required` and `ToolChoice::Tool` with a
-warning. For the full rules, see the crate README.
+warning. `ToolChoice::Tool` with an undefined name is still an error. For the full rules, see the crate README.
 
 Family detection reads the first segment of the model ID. If the first segment
 is not a provider name, detection reads the second segment. This skips a
