@@ -131,6 +131,14 @@ yields a `Result<AnthropicModel, BuildError>`.
 
 Anthropic uses provider tool types. If a tool declares an `anthropic` type, the adapter sends the typed entry, for example `{"type": "memory_20250818", "name": "memory"}`, with no description and no input schema. To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic schema. See [Provider tool types](./tools.md#provider-tool-types).
 
+Anthropic thinking blocks round trip through provider data. The stream keeps each `thinking` and `redacted_thinking` block as a `ContentPart::ProviderData` part with the key `PROVIDER_DATA_KEY` (`"anthropic"`). The next request sends the blocks back unchanged. The shape of the `data` is private.
+
+- For a 4.x model with `ExtendedThinking::Enabled`, add `.beta("interleaved-thinking-2025-05-14")` to let the model think again after a tool result.
+- `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.
+- Each round sends about 100 more input tokens without the beta header, and about 250 to 300 with it.
+- If Anthropic rejects one block, each later request of the session fails. To recover, remove every part with `provider == PROVIDER_DATA_KEY` from the stored history.
+- The thinking text is stored two times. A host that removes `Reasoning` must also remove these parts.
+
 ### Bedrock — `paigasus-helikon-providers-bedrock`
 
 Reached as `paigasus_helikon::bedrock::BedrockModel` behind the `bedrock`

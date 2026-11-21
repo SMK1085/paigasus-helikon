@@ -37,6 +37,21 @@ The adapter merges the `params` of the declared type into the typed entry. It re
 
 To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic entry for every tool. A wrapper tool must forward `provider_types` from the tool it wraps, or the typed entry is lost.
 
+## Extended thinking in a tool loop
+
+The stream keeps each `thinking` and `redacted_thinking` block as a `ContentPart::ProviderData` part with the key `PROVIDER_DATA_KEY`. The next request sends the blocks back unchanged for every assistant message in the history. The shape of the `data` is private to this crate.
+
+A source message keeps its thinking blocks only if they land beside a text block or a `tool_use` block of the same response. The cache never marks a thinking block as a breakpoint. A response with no kept thinking block writes no provider data.
+
+- For a 4.x model with `ExtendedThinking::Enabled`, add `.beta("interleaved-thinking-2025-05-14")` to the builder. Then the model can think again after a tool result.
+- `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.
+
+**Cost.** Each request sends the thinking blocks of the history again. This adds about 100 input tokens to each round without the beta header. It adds about 250 to 300 input tokens with the header.
+
+**Recovery.** Anthropic checks each signature. If it rejects one block, each later request of the session fails. To recover, remove every part with `provider == PROVIDER_DATA_KEY` from the stored history.
+
+**Privacy.** The thinking text is stored two times: as a `Reasoning` part and inside the provider data. A host that removes `Reasoning` must also remove the parts with this key.
+
 ## Links
 
 - [API reference (docs.rs)](https://docs.rs/paigasus-helikon-providers-anthropic)

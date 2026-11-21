@@ -26,6 +26,7 @@ pub enum CacheStrategy {
 ///
 /// **Model compatibility:**
 /// - Claude Opus 4.7 rejects `Enabled { .. }` (400). Use `Adaptive`.
+/// - Claude Sonnet 5.5 rejects `Enabled { .. }` (400). Use `Adaptive`.
 /// - Sonnet/Opus 4.6 accept both but recommend `Adaptive`.
 /// - Older Claude 4 (4.5, 4.1) accept `Enabled` and recommend it.
 ///
