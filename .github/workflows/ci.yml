@@ -44,6 +44,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # SMA-838: the breaking-cascade guard reads HEAD^1, the base side of
+          # the PR merge commit. Depth 2 includes it.
+          fetch-depth: 2
       # dtolnay/rust-toolchain: SHA-pinned to master; the `toolchain:` input
       # below is mandatory, not stylistic -- see CLAUDE.md.
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
@@ -65,6 +68,14 @@ jobs:
       # are the only pre-merge check of the gap report (SMA-745).
       - name: Self-test the release gap report
         run: bash scripts/check-release-gaps-selftest.sh
+      # SMA-838: this self-test proves that the guard below finds a breaking
+      # bump that has a dependent with no breaking bump.
+      - name: Self-test the breaking-cascade guard
+        run: bash scripts/check-breaking-cascade-selftest.sh
+      # SMA-838: release-plz gives a dependent only a patch bump when a crate
+      # gets a breaking bump. This guard fails the PR before the merge.
+      - name: Check that a breaking bump reaches every dependent
+        run: bash scripts/check-breaking-cascade.sh
 
   clippy:
     runs-on: ubuntu-latest

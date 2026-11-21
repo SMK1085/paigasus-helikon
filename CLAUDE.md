@@ -47,7 +47,8 @@ Workspace inheritance is **mandatory**: per-crate `Cargo.toml`s only set `name`,
 **Per-crate version is the one exception.** No stubs remain, so the 4-step ascend recipe is now historical — but two caveats still bite any PR that hand-bumps a version:
 
 - **If a crate uses `paigasus-helikon-core` API added in the *same* PR, bump `core` too**, along with its `[workspace.dependencies]` pin and CHANGELOG. `cargo publish --verify` builds the tarball against the **registry** core, so otherwise the publish fails and release-plz deadlocks.
-- **Any PR that hand-bumps a sibling must ALSO bump the facade** (`crates/paigasus-helikon/Cargo.toml` version + its self-pin + CHANGELOG). release-plz's `dependencies_update` cascade only runs when release-plz itself performs the sibling bump, so a manual bump silently leaves the facade advertising stale dep reqs.
+- **Any PR that hand-bumps a sibling must ALSO bump the facade** (`crates/paigasus-helikon/Cargo.toml` version + its self-pin + CHANGELOG). release-plz does not bump the facade for a sibling version that is already at target when the PR merges, so a manual bump silently leaves the facade advertising stale dep reqs. (`dependencies_update = true` only makes the release PR run `cargo update` on `Cargo.lock`; it does not cascade version bumps.)
+- **A breaking bump of a crate needs a breaking bump of each crate that depends on it.** release-plz gives a dependent without its own commits only a patch bump (release-plz#1599), and users then get two copies of the crate. The `fmt` job runs `scripts/check-breaking-cascade.sh` to enforce this. See `docs/runbooks/release-ascend.md` → "A breaking change in a crate with dependents".
 - Feature branches must match the `branch-names` ruleset (`feature/**` or `hotfix/**`); a `chore/**` branch is rejected at push with `GH013 … creations being restricted`.
 
 Full lifecycle, the 4-step recipe, and the SMA-321/SMA-346 postmortems: `docs/runbooks/release-ascend.md`.
