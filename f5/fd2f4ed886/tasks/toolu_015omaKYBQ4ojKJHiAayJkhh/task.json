@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015omaKYBQ4ojKJHiAayJkhh",
+  "agent_id": "ad560d6bdbc638a5a",
+  "subagent_type": "general-purpose",
+  "task_description": "Review Task 3 (spec + quality)",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 80276,
+    "cache_read_tokens": 438648,
+    "output_tokens": 10778,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-22T00:20:17.677238+01:00",
+  "completed_at": "2026-11-22T00:21:30.263848+01:00"
+}
