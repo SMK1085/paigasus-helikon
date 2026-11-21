@@ -193,7 +193,11 @@ Claude Sonnet 5.5 and Opus 5.5 reject a forced tool choice. For these two
 models, the provider sends the `JsonSchema` as native output
 (`outputConfig.textFormat`). Another Anthropic model can also reject the forced
 choice. The provider then sends one native request, which is a different request.
-After that, the `BedrockModel` handle and its clones use native output.
+After that, the `BedrockModel` handle and its clones use native output. Only a
+`ValidationException` with one of the two known rejection texts, from a request
+that sent a forced choice, changes the handle. A request that fails locally does
+not reach Bedrock and does not change the handle. For example, `JsonSchema`
+together with `ToolChoice::Tool` fails locally on a forced-choice handle.
 
 The provider rewrites the schema first. It adds `additionalProperties: false`,
 changes `oneOf` to `anyOf`, and removes keywords that Bedrock does not accept,
@@ -202,11 +206,16 @@ such as numeric limits. It does not add `additionalProperties` to a node in an
 it to an object node next to `oneOf` or `anyOf`. The
 branches of such a node stay open too. Bedrock rejects maps, `patternProperties`,
 `propertyNames`, tuples, the schemas `true` and `{}`, and recursive types.
+Bedrock can also reject an open object in an `allOf` composition. Closing each
+member does not help, because each closed member rejects the properties of the
+other members. Put the properties into one closed object instead.
 
 Bedrock does not enforce the removed limits. The agent loop does not evaluate
 the JSON schema. It checks that the result deserializes into the output type. A
 limit that only the schema states is not checked, so add your own validation for
-it.
+it. The change from `oneOf` to `anyOf` also accepts a value that matches more
+than one branch. If your code needs exactly one branch to match, validate the
+result against the original schema.
 
 `JsonObject` degrades to text on this path. The provider omits `ToolChoice::Required` and `ToolChoice::Tool` with a
 warning. `ToolChoice::Tool` with an undefined name is still an error. For the full rules, see the crate README.
