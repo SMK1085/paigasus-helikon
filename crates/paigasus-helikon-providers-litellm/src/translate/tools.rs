@@ -42,14 +42,14 @@ mod tests {
     use super::*;
 
     fn def() -> ToolDef {
-        ToolDef {
-            name: "get_weather".into(),
-            description: "Look up weather".into(),
-            schema: json!({
+        ToolDef::new(
+            "get_weather",
+            "Look up weather",
+            json!({
                 "type": "object",
                 "properties": {"city": {"type": "string"}}
             }),
-        }
+        )
     }
 
     #[test]
@@ -82,5 +82,18 @@ mod tests {
             to_tool_choice(&ToolChoice::Tool { name: "f".into() }),
             json!({"type": "function", "function": {"name": "f"}})
         );
+    }
+
+    #[test]
+    fn provider_type_is_ignored() {
+        let plain = ToolDef::new("memory", "d", json!({"type": "object"}));
+        let typed =
+            plain
+                .clone()
+                .with_provider_types(vec![paigasus_helikon_core::ProviderToolType::new(
+                    "anthropic",
+                    "memory_20250818",
+                )]);
+        assert_eq!(to_tools(&[typed]), to_tools(&[plain]));
     }
 }

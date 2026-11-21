@@ -790,6 +790,34 @@ mod tests {
         });
     }
 
+    /// Frozen literal: a tool def without `provider_types` (the pre-SMA-830
+    /// shape) and one with it must both decode.
+    #[test]
+    fn call_model_decodes_tool_defs_old_and_new_shape() {
+        const FROZEN: &str = r#"{"agent_name":"agent-1","request":{"messages":[],"tools":[{"name":"a","description":"d","schema":{"type":"object"}},{"name":"memory","description":"d","schema":{"type":"object"},"provider_types":[{"provider":"anthropic","type":"memory_20250818"}]}],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}}}"#;
+        with_ctx(|ctx| {
+            let value: serde_json::Value = serde_json::from_str(FROZEN).expect("literal parses");
+            let payload = ctx
+                .converter
+                .to_payload(ctx, &value)
+                .expect("encode literal");
+            let decoded: CallModelInput = ctx
+                .converter
+                .from_payloads(ctx, vec![payload])
+                .expect("decode");
+            let tools = &decoded.0.request.tools;
+            assert_eq!(tools.len(), 2);
+            assert!(tools[0].provider_types.is_empty());
+            assert_eq!(
+                tools[1].provider_types,
+                vec![paigasus_helikon_core::ProviderToolType::new(
+                    "anthropic",
+                    "memory_20250818"
+                )]
+            );
+        });
+    }
+
     #[test]
     fn call_model_envelope_ignores_unknown_fields() {
         const FROZEN_FUTURE: &str = r#"{"agent_name":"agent-1","request":{"messages":[],"tools":[],"model_settings":{"temperature":null,"top_p":null,"max_output_tokens":null,"tool_choice":null,"response_format":null,"previous_response_id":null}},"added_in_a_later_release":42}"#;

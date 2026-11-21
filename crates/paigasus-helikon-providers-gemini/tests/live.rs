@@ -97,20 +97,20 @@ async fn assert_finishes(model: &GeminiModel, messages: Vec<Item>) {
     let mut r = ModelRequest::new();
     r.messages = messages;
     r.tools = vec![
-        ToolDef {
-            name: "search".into(),
-            description: "Search for a query.".into(),
-            schema: serde_json::json!({
+        ToolDef::new(
+            "search",
+            "Search for a query.",
+            serde_json::json!({
                 "type":"object","properties":{"q":{"type":"string"}},"required":["q"]
             }),
-        },
-        ToolDef {
-            name: "pay".into(),
-            description: "Pay an amount.".into(),
-            schema: serde_json::json!({
+        ),
+        ToolDef::new(
+            "pay",
+            "Pay an amount.",
+            serde_json::json!({
                 "type":"object","properties":{"amount":{"type":"number"}},"required":["amount"]
             }),
-        },
+        ),
     ];
     let mut s = model.invoke(r, CancellationToken::new()).await.unwrap();
     let mut finished = false;

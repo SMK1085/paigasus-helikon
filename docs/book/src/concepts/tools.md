@@ -26,6 +26,7 @@ where
     fn schema(&self) -> &serde_json::Value;
     fn output_schema(&self) -> Option<&serde_json::Value> { None }
     fn effect(&self) -> ToolEffect { ToolEffect::SideEffect }
+    fn provider_types(&self) -> &[ProviderToolType] { &[] }
 
     async fn invoke(
         &self,
@@ -115,6 +116,27 @@ runner's persistence. It exposes:
   outside the sandbox, or an unsatisfiable precondition). Not recoverable.
 - `Other(anyhow::Error)` — escape hatch for arbitrary failures (`#[from]`, so `?` on
   an `anyhow::Error` works).
+
+## Provider tool types
+
+Some providers define their own tool types. The Anthropic memory tool is one example. The provider expects a typed entry that has a type and a name. The entry has no description and no schema. A tool declares such a type with `Tool::provider_types`.
+
+```rust,ignore
+use paigasus_helikon::core::ProviderToolType;
+use paigasus_helikon::anthropic::PROVIDER_ID;
+
+fn provider_types(&self) -> &[ProviderToolType] {
+    &self.types // for example one entry: ProviderToolType::new(PROVIDER_ID, "memory_20250818")
+}
+```
+
+`ProviderToolType::new(provider, type_name)` names the provider and the type. Call `with_params` to add extra fields for the typed entry.
+
+A tool can declare at most one entry for each provider. The default is an empty slice, so an existing tool does not change.
+
+A tool wrapper must forward `provider_types` from the tool that it wraps. If the wrapper does not forward it, the typed entry is lost and the provider gets the generic schema.
+
+Anthropic is the only provider that uses this declaration now. It sends `{"type": "memory_20250818", "name": "memory"}` for the memory tool. OpenAI, Gemini, Bedrock and LiteLLM send the generic schema. See [Model Providers](./model-providers.md).
 
 ## Registering tools with `tools!`
 

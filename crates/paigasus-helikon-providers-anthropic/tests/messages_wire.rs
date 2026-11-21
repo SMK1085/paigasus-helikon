@@ -184,3 +184,41 @@ async fn blank_only_request_fails_without_http_call() {
         .await;
     assert!(matches!(res, Err(ModelError::Other(_))));
 }
+
+#[tokio::test]
+async fn typed_tool_entry_is_sent_in_request_body() {
+    use paigasus_helikon_core::{ProviderToolType, ToolDef};
+    use paigasus_helikon_providers_anthropic::PROVIDER_ID;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(empty_stream_response())
+        .mount(&server)
+        .await;
+
+    let model = AnthropicModel::messages("claude-sonnet-4-6")
+        .api_key("sk-test")
+        .base_url(server.uri())
+        .build()
+        .unwrap();
+    let def = ToolDef::new(
+        "memory",
+        "custom description",
+        serde_json::json!({"type": "object"}),
+    )
+    .with_provider_types(vec![ProviderToolType::new(PROVIDER_ID, "memory_20250818")]);
+    let mut req = req_with(vec![user("hi")]);
+    req.tools = vec![def];
+    let mut s = model.invoke(req, CancellationToken::new()).await.unwrap();
+    while s.next().await.is_some() {}
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(
+        body["tools"][0],
+        serde_json::json!({"type": "memory_20250818", "name": "memory"})
+    );
+    assert!(received[0].headers.get("anthropic-beta").is_none());
+}

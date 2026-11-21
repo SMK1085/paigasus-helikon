@@ -45,11 +45,11 @@ mod tests {
     use super::*;
 
     fn defs() -> Vec<ToolDef> {
-        vec![ToolDef {
-            name: "search".into(),
-            description: "search the web".into(),
-            schema: json!({ "type": "object", "properties": { "q": { "type": "string" } }, "additionalProperties": false }),
-        }]
+        vec![ToolDef::new(
+            "search",
+            "search the web",
+            json!({ "type": "object", "properties": { "q": { "type": "string" } }, "additionalProperties": false }),
+        )]
     }
 
     #[test]
@@ -96,5 +96,21 @@ mod tests {
     #[test]
     fn no_choice_is_none() {
         assert!(function_calling_config(None, &[]).is_none());
+    }
+
+    #[test]
+    fn provider_type_is_ignored() {
+        let plain = ToolDef::new("memory", "d", json!({"type": "object"}));
+        let typed =
+            plain
+                .clone()
+                .with_provider_types(vec![paigasus_helikon_core::ProviderToolType::new(
+                    "anthropic",
+                    "memory_20250818",
+                )]);
+        assert_eq!(
+            function_declarations(&[typed]),
+            function_declarations(&[plain])
+        );
     }
 }

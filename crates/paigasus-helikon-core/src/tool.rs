@@ -84,6 +84,15 @@ where
         ToolEffect::SideEffect
     }
 
+    /// Provider-defined tool types this tool can map to.
+    ///
+    /// A provider that knows one of these types sends it in place of a plain
+    /// function tool. Declare at most one entry per provider. A wrapper tool
+    /// must forward this method to the tool it wraps. Default is empty.
+    fn provider_types(&self) -> &[crate::ProviderToolType] {
+        &[]
+    }
+
     /// Execute the tool with `args` (a JSON value matching [`Tool::schema`]).
     async fn invoke(
         &self,
@@ -395,6 +404,93 @@ mod effect_tests {
     #[test]
     fn tool_effect_default_is_side_effect() {
         assert_eq!(ToolEffect::default(), ToolEffect::SideEffect);
+    }
+}
+
+#[cfg(test)]
+mod tool_def_tests {
+    use super::*;
+    use crate::{ProviderToolType, ToolDef};
+    use std::sync::Arc;
+
+    struct Plain;
+    struct Typed {
+        types: Vec<ProviderToolType>,
+    }
+
+    fn test_schema() -> &'static serde_json::Value {
+        static S: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+        S.get_or_init(|| serde_json::json!({"type":"object"}))
+    }
+
+    #[async_trait]
+    impl<Ctx> Tool<Ctx> for Plain
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        fn name(&self) -> &str {
+            "memory"
+        }
+        fn description(&self) -> &str {
+            "a tool"
+        }
+        fn schema(&self) -> &serde_json::Value {
+            test_schema()
+        }
+        async fn invoke(
+            &self,
+            _c: &ToolContext<Ctx>,
+            _a: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::new(serde_json::Value::Null))
+        }
+    }
+
+    #[async_trait]
+    impl<Ctx> Tool<Ctx> for Typed
+    where
+        Ctx: Send + Sync + 'static,
+    {
+        fn name(&self) -> &str {
+            "memory"
+        }
+        fn description(&self) -> &str {
+            "a tool"
+        }
+        fn schema(&self) -> &serde_json::Value {
+            test_schema()
+        }
+        fn provider_types(&self) -> &[ProviderToolType] {
+            &self.types
+        }
+        async fn invoke(
+            &self,
+            _c: &ToolContext<Ctx>,
+            _a: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::new(serde_json::Value::Null))
+        }
+    }
+
+    #[test]
+    fn from_tool_copies_all_fields() {
+        let entry = ProviderToolType::new("anthropic", "memory_20250818");
+        let tool = Typed {
+            types: vec![entry.clone()],
+        };
+        let expected = ToolDef::new("memory", "a tool", serde_json::json!({"type":"object"}))
+            .with_provider_types(vec![entry]);
+        assert_eq!(ToolDef::from_tool::<(), _>(&tool), expected);
+        let dyn_ref: &dyn Tool<()> = &tool;
+        assert_eq!(ToolDef::from_tool(dyn_ref), expected);
+        let arc: Arc<dyn Tool<()>> = Arc::new(tool);
+        assert_eq!(ToolDef::from_tool(arc.as_ref()), expected);
+    }
+
+    #[test]
+    fn from_tool_without_override_has_no_provider_types() {
+        let def = ToolDef::from_tool::<(), _>(&Plain);
+        assert!(def.provider_types.is_empty());
     }
 }
 

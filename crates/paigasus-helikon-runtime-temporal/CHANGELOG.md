@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Requires `paigasus-helikon-core` 0.8 (`ToolDef` is now `#[non_exhaustive]`; see the core CHANGELOG).
+- A `call_model` activity input now can carry `provider_types`. A worker older than this version decodes it but drops the field, so that turn sends the generic tool entry.
+
 ## [0.6.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-runtime-temporal-v0.5.5...paigasus-helikon-runtime-temporal-v0.6.0) - 2026-11-21
 
 ### Breaking changes

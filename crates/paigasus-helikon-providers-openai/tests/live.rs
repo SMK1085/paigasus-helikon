@@ -91,11 +91,11 @@ async fn responses_zero_arg_tool_streams_a_delta() {
     let model = OpenAiModel::responses("gpt-4o-mini").build().unwrap();
     let mut req = ModelRequest::new();
     req.messages = vec![user("What time is it right now? Use the tool.")];
-    req.tools = vec![ToolDef {
-        name: "get_current_time".to_owned(),
-        description: "Return the current server time. Takes no arguments.".to_owned(),
-        schema: serde_json::json!({"type": "object", "properties": {}}),
-    }];
+    req.tools = vec![ToolDef::new(
+        "get_current_time",
+        "Return the current server time. Takes no arguments.",
+        serde_json::json!({"type": "object", "properties": {}}),
+    )];
     // Force the call rather than relying on the prompt to persuade the model.
     // Without this the model may answer in prose and the assertions below fail
     // as a flake rather than as a real signal — and the 2026-08-22 capture this
@@ -149,11 +149,11 @@ async fn chat_tool_call_round_trip() {
     let model = OpenAiModel::chat("gpt-4o-mini").build().unwrap();
     let mut req = ModelRequest::new();
     req.messages = vec![user("Call the `ping` tool with no arguments.")];
-    req.tools = vec![ToolDef {
-        name: "ping".to_owned(),
-        description: "Returns pong.".to_owned(),
-        schema: serde_json::json!({"type": "object", "properties": {}}),
-    }];
+    req.tools = vec![ToolDef::new(
+        "ping",
+        "Returns pong.",
+        serde_json::json!({"type": "object", "properties": {}}),
+    )];
     let stream = model.invoke(req, CancellationToken::new()).await.unwrap();
     let events: Vec<_> = stream.collect().await;
     let has_tool_call = events

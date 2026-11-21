@@ -166,7 +166,7 @@ impl Model for AnthropicModel {
     }
 
     fn provider(&self) -> &str {
-        "anthropic"
+        crate::PROVIDER_ID
     }
 
     fn model(&self) -> &str {
@@ -203,6 +203,7 @@ mod tests {
             .api_key("sk-test")
             .build()
             .unwrap();
+        assert_eq!(m.provider(), crate::PROVIDER_ID);
         assert_eq!(m.provider(), "anthropic");
         assert_eq!(m.model(), "claude-sonnet-4-6");
     }

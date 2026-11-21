@@ -288,15 +288,15 @@ mod bedrock {
         // `ToolCallCleanStop` only: `FragmentedToolName` is the subject's other
         // tool scenario, but it is declined and so never reaches this function.
         if matches!(scenario, Scenario::ToolCallCleanStop) {
-            req.tools = vec![ToolDef {
-                name: TOOL_NAME.to_owned(),
-                description: "Look up the current weather for a city.".to_owned(),
-                schema: json!({
+            req.tools = vec![ToolDef::new(
+                TOOL_NAME,
+                "Look up the current weather for a city.",
+                json!({
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
                 }),
-            }];
+            )];
         }
         req
     }
@@ -887,15 +887,15 @@ mod openai_chat {
             scenario,
             Scenario::ToolCallCleanStop | Scenario::FragmentedToolName
         ) {
-            req.tools = vec![ToolDef {
-                name: TOOL_NAME.to_owned(),
-                description: "Look up the current weather for a city.".to_owned(),
-                schema: json!({
+            req.tools = vec![ToolDef::new(
+                TOOL_NAME,
+                "Look up the current weather for a city.",
+                json!({
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
                 }),
-            }];
+            )];
         }
         req
     }
@@ -1411,15 +1411,15 @@ mod litellm {
             scenario,
             Scenario::ToolCallCleanStop | Scenario::FragmentedToolName
         ) {
-            req.tools = vec![ToolDef {
-                name: TOOL_NAME.to_owned(),
-                description: "Look up the current weather for a city.".to_owned(),
-                schema: json!({
+            req.tools = vec![ToolDef::new(
+                TOOL_NAME,
+                "Look up the current weather for a city.",
+                json!({
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
                 }),
-            }];
+            )];
         }
         req
     }
@@ -2018,15 +2018,15 @@ mod anthropic {
             }],
         }];
         if matches!(scenario, Scenario::ToolCallCleanStop) {
-            req.tools = vec![ToolDef {
-                name: TOOL_NAME.to_owned(),
-                description: "Look up the current weather for a city.".to_owned(),
-                schema: json!({
+            req.tools = vec![ToolDef::new(
+                TOOL_NAME,
+                "Look up the current weather for a city.",
+                json!({
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
                 }),
-            }];
+            )];
         }
         req
     }
@@ -2612,15 +2612,15 @@ mod gemini {
             }],
         }];
         if matches!(scenario, Scenario::ToolCallCleanStop) {
-            req.tools = vec![ToolDef {
-                name: TOOL_NAME.to_owned(),
-                description: "Look up the current weather for a city.".to_owned(),
-                schema: json!({
+            req.tools = vec![ToolDef::new(
+                TOOL_NAME,
+                "Look up the current weather for a city.",
+                json!({
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
                 }),
-            }];
+            )];
         }
         req
     }
@@ -3138,15 +3138,15 @@ mod openai_responses {
             }],
         }];
         if matches!(scenario, Scenario::ToolCallCleanStop) {
-            req.tools = vec![ToolDef {
-                name: TOOL_NAME.to_owned(),
-                description: "Look up the current weather for a city.".to_owned(),
-                schema: json!({
+            req.tools = vec![ToolDef::new(
+                TOOL_NAME,
+                "Look up the current weather for a city.",
+                json!({
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
                 }),
-            }];
+            )];
         }
         req
     }

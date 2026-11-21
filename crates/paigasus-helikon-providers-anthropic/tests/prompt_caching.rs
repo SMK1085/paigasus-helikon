@@ -72,11 +72,11 @@ async fn second_turn_cached_input_tokens_reflects_prefix_reuse() {
         .mount(&server)
         .await;
 
-    let tool = ToolDef {
-        name: "search".to_owned(),
-        description: "Search the web.".to_owned(),
-        schema: serde_json::json!({"type": "object", "properties": {"q": {"type": "string"}}}),
-    };
+    let tool = ToolDef::new(
+        "search",
+        "Search the web.",
+        serde_json::json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+    );
 
     let model = AnthropicModel::messages("claude-sonnet-4-6")
         .api_key("sk-test")

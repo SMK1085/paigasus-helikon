@@ -43,7 +43,7 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
         )));
     }
 
-    let mut tools_array = tools::translate_tools(&req.tools);
+    let mut tools_array = tools::translate_tools(&req.tools, cfg.native_tool_types);
 
     let Synthesized {
         tool,
@@ -346,11 +346,7 @@ mod tests {
     fn tool_choice_none_emits_native_none() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "search".to_owned(),
-            description: "".to_owned(),
-            schema: serde_json::json!({}),
-        }];
+        req.tools = vec![ToolDef::new("search", "", serde_json::json!({}))];
         req.model_settings.tool_choice = Some(ToolChoice::None);
         let p = build_body(&cfg(), &req).unwrap();
         assert_eq!(p.body["tool_choice"], serde_json::json!({"type": "none"}));
@@ -384,11 +380,11 @@ mod tests {
     fn reserved_tool_name_rejected_synchronously() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "__paigasus_structured_output__".to_owned(),
-            description: "".to_owned(),
-            schema: serde_json::json!({}),
-        }];
+        req.tools = vec![ToolDef::new(
+            "__paigasus_structured_output__",
+            "",
+            serde_json::json!({}),
+        )];
         let err = build_body(&cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
@@ -401,5 +397,90 @@ mod tests {
         req.messages = vec![user_text("hi")];
         let p = build_body(&cfg, &req).unwrap();
         assert_eq!(p.body["thinking"], serde_json::json!({"type": "adaptive"}));
+    }
+
+    fn memory_def() -> ToolDef {
+        ToolDef::new(
+            "memory",
+            "custom description",
+            serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}}),
+        )
+        .with_provider_types(vec![paigasus_helikon_core::ProviderToolType::new(
+            crate::PROVIDER_ID,
+            "memory_20250818",
+        )])
+    }
+
+    #[test]
+    fn cache_marker_lands_on_typed_entry_when_last() {
+        let mut cfg = cfg();
+        cfg.cache_strategy = crate::settings::CacheStrategy::Tools;
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![memory_def()];
+        let p = build_body(&cfg, &req).unwrap();
+        assert_eq!(
+            p.body["tools"][0],
+            serde_json::json!({"type":"memory_20250818","name":"memory","cache_control":{"type":"ephemeral"}})
+        );
+    }
+
+    #[test]
+    fn structured_output_tool_takes_marker_and_typed_entry_unchanged() {
+        let mut cfg = cfg();
+        cfg.cache_strategy = crate::settings::CacheStrategy::Tools;
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![memory_def()];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Person".to_owned(),
+            schema: serde_json::json!({"type": "object"}),
+            strict: false,
+        });
+        let p = build_body(&cfg, &req).unwrap();
+        let tools = p.body["tools"].as_array().unwrap();
+        let last = tools.last().unwrap();
+        assert_eq!(last["name"], "__paigasus_structured_output__");
+        assert_eq!(
+            last["cache_control"],
+            serde_json::json!({"type":"ephemeral"})
+        );
+        assert_eq!(
+            tools[0],
+            serde_json::json!({"type":"memory_20250818","name":"memory"})
+        );
+    }
+
+    #[test]
+    fn builder_opt_out_reaches_body() {
+        let mut cfg = cfg();
+        cfg.native_tool_types = false;
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![memory_def()];
+        let p = build_body(&cfg, &req).unwrap();
+        assert!(p.body["tools"][0].get("input_schema").is_some());
+        assert!(p.body["tools"][0].get("type").is_none());
+    }
+
+    #[test]
+    fn public_setter_opt_out_reaches_body() {
+        let cfg = AnthropicModelBuilder::new("claude-sonnet-4-6")
+            .api_key("sk-test")
+            .native_tool_types(false)
+            .build_config()
+            .unwrap();
+        assert!(!cfg.native_tool_types);
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![memory_def()];
+        let p = build_body(&cfg, &req).unwrap();
+        assert!(p.body["tools"][0].get("input_schema").is_some());
+        assert!(p.body["tools"][0].get("type").is_none());
+    }
+
+    #[test]
+    fn native_tool_types_defaults_to_true() {
+        assert!(cfg().native_tool_types);
     }
 }

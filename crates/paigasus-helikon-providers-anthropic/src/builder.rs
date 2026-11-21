@@ -42,6 +42,7 @@ pub(crate) struct Config {
     pub(crate) anthropic_version: String,
     pub(crate) anthropic_beta: Option<String>,
     pub(crate) cache_strategy: CacheStrategy,
+    pub(crate) native_tool_types: bool,
     pub(crate) extended_thinking: ExtendedThinking,
     pub(crate) top_k: Option<u32>,
     pub(crate) max_output_default: u32,
@@ -66,6 +67,7 @@ pub struct AnthropicModelBuilder {
     beta_headers: Vec<String>,
     http_client: Option<reqwest::Client>,
     cache_strategy: CacheStrategy,
+    native_tool_types: bool,
     extended_thinking: ExtendedThinking,
     top_k: Option<u32>,
     capabilities_override: Option<ModelCapabilities>,
@@ -81,6 +83,7 @@ impl AnthropicModelBuilder {
             beta_headers: Vec::new(),
             http_client: None,
             cache_strategy: CacheStrategy::None,
+            native_tool_types: true,
             extended_thinking: ExtendedThinking::Disabled,
             top_k: None,
             capabilities_override: None,
@@ -127,6 +130,15 @@ impl AnthropicModelBuilder {
     /// Prompt-caching strategy. Default: [`CacheStrategy::None`].
     pub fn cache_strategy(mut self, s: CacheStrategy) -> Self {
         self.cache_strategy = s;
+        self
+    }
+
+    /// Send the Anthropic typed tool entry for a tool that declares a
+    /// provider tool type for [`PROVIDER_ID`](crate::PROVIDER_ID). Default:
+    /// `true`. Set `false` to always send the generic entry (name,
+    /// description and input schema) and ignore declared provider types.
+    pub fn native_tool_types(mut self, enabled: bool) -> Self {
+        self.native_tool_types = enabled;
         self
     }
 
@@ -199,6 +211,7 @@ impl AnthropicModelBuilder {
                 .unwrap_or_else(|| DEFAULT_ANTHROPIC_VERSION.to_owned()),
             anthropic_beta,
             cache_strategy: self.cache_strategy,
+            native_tool_types: self.native_tool_types,
             extended_thinking: self.extended_thinking,
             top_k: self.top_k,
             max_output_default: entry.max_output_default,

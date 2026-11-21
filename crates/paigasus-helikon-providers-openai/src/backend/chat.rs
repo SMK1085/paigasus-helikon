@@ -1925,4 +1925,23 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn provider_type_is_ignored() {
+        use paigasus_helikon_core::{ProviderToolType, ToolDef};
+        let model = OpenAiModel::chat("gpt-4o")
+            .api_key("sk-test")
+            .build()
+            .unwrap();
+        let plain = ToolDef::new("memory", "d", serde_json::json!({"type": "object"}));
+        let typed = plain
+            .clone()
+            .with_provider_types(vec![ProviderToolType::new("anthropic", "memory_20250818")]);
+        let body = |def: ToolDef| {
+            let mut req = ModelRequest::new();
+            req.tools = vec![def];
+            serde_json::to_value(build_request(&model, &req, true).unwrap()).unwrap()
+        };
+        assert_eq!(body(typed), body(plain));
+    }
 }

@@ -650,11 +650,7 @@ mod tests {
     fn tool_choice_none_with_user_tools_omits_tool_config() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "Ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "Ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::None);
         let p = build_request(&claude_cfg(), &req).unwrap();
         // toolConfig must be absent — None suppresses tool calls entirely.
@@ -666,11 +662,7 @@ mod tests {
     fn tool_choice_auto_maps_to_bedrock_auto() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Auto);
         let p = build_request(&claude_cfg(), &req).unwrap();
         let tc = p.tool_config.as_ref().unwrap();
@@ -681,11 +673,7 @@ mod tests {
     fn tool_choice_required_maps_to_bedrock_any() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
         let p = build_request(&claude_cfg(), &req).unwrap();
         let tc = p.tool_config.as_ref().unwrap();
@@ -696,11 +684,7 @@ mod tests {
     fn tool_choice_tool_maps_to_bedrock_specific_on_claude() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "ping".to_owned(),
         });
@@ -715,11 +699,7 @@ mod tests {
     fn reserved_tool_name_rejected() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: SYNTHESIZED_TOOL_NAME.to_owned(),
-            description: "bad".to_owned(),
-            schema: json!({}),
-        }];
+        req.tools = vec![ToolDef::new(SYNTHESIZED_TOOL_NAME, "bad", json!({}))];
         let err = build_request(&claude_cfg(), &req).unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
     }
@@ -749,11 +729,11 @@ mod tests {
     #[test]
     fn snap_tool_call_and_result() {
         let mut req = ModelRequest::new();
-        req.tools = vec![ToolDef {
-            name: "get_balance".to_owned(),
-            description: "Get account balance".to_owned(),
-            schema: json!({"type": "object", "properties": {"account_id": {"type": "string"}}}),
-        }];
+        req.tools = vec![ToolDef::new(
+            "get_balance",
+            "Get account balance",
+            json!({"type": "object", "properties": {"account_id": {"type": "string"}}}),
+        )];
         req.messages = vec![
             user_text("What's my balance?"),
             Item::AssistantMessage {
@@ -799,11 +779,7 @@ mod tests {
     fn snap_tool_choice_auto() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "Ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "Ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Auto);
         let p = build_request(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
@@ -813,11 +789,7 @@ mod tests {
     fn snap_tool_choice_required() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "Ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "Ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
         let p = build_request(&claude_cfg(), &req).unwrap();
         assert_json_snapshot!(to_wire_json(&p));
@@ -827,11 +799,7 @@ mod tests {
     fn snap_tool_choice_specific_tool() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "Ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "Ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "ping".to_owned(),
         });
@@ -885,11 +853,7 @@ mod tests {
     fn snap_tool_choice_none_with_user_tools_omits_tool_config() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "Ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "Ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::None);
         let p = build_request(&claude_cfg(), &req).unwrap();
         // toolConfig must be null in wire representation
@@ -987,11 +951,7 @@ mod tests {
             schema: json!({}),
             strict: false,
         });
-        req.tools = vec![ToolDef {
-            name: "search".to_owned(),
-            description: "search".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("search", "search", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "search".to_owned(),
         });
@@ -1021,11 +981,7 @@ mod tests {
         // ToolChoice::Required on Llama must NOT produce toolChoice: {any:{}}
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
         let p = build_request(&llama_cfg(), &req).unwrap();
         // tool_config should still be present (tools exist) but toolChoice should be omitted
@@ -1039,11 +995,7 @@ mod tests {
         // Sanity check: Required still works on Claude
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Required);
         let p = build_request(&claude_cfg(), &req).unwrap();
         let tc = p.tool_config.as_ref().unwrap();
@@ -1056,11 +1008,7 @@ mod tests {
     fn forced_tool_choice_tool_missing_tool_name_returns_error() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
-        req.tools = vec![ToolDef {
-            name: "ping".to_owned(),
-            description: "ping".to_owned(),
-            schema: json!({"type": "object"}),
-        }];
+        req.tools = vec![ToolDef::new("ping", "ping", json!({"type": "object"}))];
         req.model_settings.tool_choice = Some(ToolChoice::Tool {
             name: "nonexistent".to_owned(),
         });
