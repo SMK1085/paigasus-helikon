@@ -3,6 +3,7 @@
 //! Wraps an `Arc<Config>` so that the model handle is `Clone + Send + Sync`
 //! and the `BoxStream` returned by `invoke` can be `'static + Send`.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use async_stream::stream;
@@ -12,10 +13,15 @@ use paigasus_helikon_core::{
     CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
 };
 
+use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamOutput;
+use aws_sdk_bedrockruntime::Client;
+
 use crate::builder::Config;
-use crate::error::{map_sdk_error, map_sdk_http_error};
+use crate::error::{map_sdk_error, send_failure, SendFailure};
+use crate::fallback::{send_with_fallback, Sent};
+use crate::policy::ForcedChoicePolicy;
 use crate::stream::StreamTranslator;
-use crate::translate::build_request;
+use crate::translate::{build_request, PreparedConverse};
 
 // ── BedrockModel ──────────────────────────────────────────────────────────────
 
@@ -24,9 +30,38 @@ use crate::translate::build_request;
 /// Construct via [`BedrockModel::converse`] (sync builder) or
 /// [`BedrockModel::from_env`] (async, loads AWS config from the environment).
 ///
-/// The handle is `Clone + Send + Sync` because it holds only an `Arc<Config>`.
+/// The handle is `Clone + Send + Sync` because it holds only `Arc` values.
+/// Clones share the state that the handle learns at run time.
 #[derive(Debug, Clone)]
-pub struct BedrockModel(pub(crate) Arc<Config>);
+pub struct BedrockModel {
+    pub(crate) config: Arc<Config>,
+    pub(crate) policy: Arc<ForcedChoicePolicy>,
+}
+
+/// Send one `ConverseStream` request.
+///
+/// The error keeps the flag that tells the fallback whether the service
+/// rejected a forced tool choice.
+fn send_converse_stream(
+    client: &Client,
+    p: PreparedConverse,
+) -> impl Future<Output = Result<ConverseStreamOutput, SendFailure>> {
+    let fluent = client
+        .converse_stream()
+        .model_id(&p.model_id)
+        .set_messages(Some(p.messages))
+        .set_system(if p.system.is_empty() {
+            None
+        } else {
+            Some(p.system)
+        })
+        .set_tool_config(p.tool_config)
+        .set_inference_config(p.inference_config)
+        .set_output_config(p.output_config);
+    // fluent.send() returns SdkError<_, HttpResponse>, so send_failure can
+    // read the Retry-After header.
+    async move { fluent.send().await.map_err(send_failure) }
+}
 
 // ── Model impl ────────────────────────────────────────────────────────────────
 
@@ -46,48 +81,50 @@ impl Model for BedrockModel {
     ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
         // Translate the core request into Bedrock wire format (early error on
         // translation failure — before we open any network connection).
-        let prepared = build_request(&self.0, &request)?;
+        let first = build_request(&self.config, &request, self.policy.path())?;
 
-        let synthesizing = prepared.synthesizing;
-        let client = self.0.client.clone();
-
-        // Build the fluent ConverseStream request from the prepared parts.
-        let fluent = client
-            .converse_stream()
-            .model_id(&prepared.model_id)
-            .set_messages(Some(prepared.messages))
-            .set_system(if prepared.system.is_empty() {
-                None
-            } else {
-                Some(prepared.system)
-            })
-            .set_tool_config(prepared.tool_config)
-            .set_inference_config(prepared.inference_config);
+        let config = Arc::clone(&self.config);
+        let policy = Arc::clone(&self.policy);
+        let client = self.config.client.clone();
 
         let s = stream! {
-            // Send the ConverseStream request and obtain the event receiver.
-            // Guard with a cancellation check (biased: cancel arm wins) so that
-            // a token already fired — or one that fires during the HTTP send —
-            // aborts cleanly without opening a dangling Bedrock stream and
-            // without emitting Finish (per the Model::invoke cancellation contract).
-            let output = tokio::select! {
+            // The rebuild closure owns the request. It makes the native
+            // request if the service rejects the forced tool choice of the
+            // first request.
+            let rebuild_cfg = Arc::clone(&config);
+            let rebuild = move |path| build_request(&rebuild_cfg, &request, path);
+
+            // Send the request (and the one fallback request, if any) and
+            // obtain the event receiver. Guard with a cancellation check
+            // (biased: cancel arm wins) so that a token already fired — or one
+            // that fires during either HTTP send — aborts cleanly without
+            // opening a dangling Bedrock stream and without emitting Finish
+            // (per the Model::invoke cancellation contract).
+            let sent = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => { return; }
-                result = fluent.send() => {
-                    // map_sdk_http_error: fluent.send() returns
-                    // SdkError<_, HttpResponse>, so we can extract Retry-After headers.
-                    match result {
-                        Ok(o) => o,
-                        Err(e) => {
-                            yield Err(map_sdk_http_error(e));
-                            return;
-                        }
-                    }
+                result = send_with_fallback(
+                    &policy,
+                    &config.model_id,
+                    first,
+                    rebuild,
+                    |p| send_converse_stream(&client, p),
+                ) => result,
+            };
+            let Sent {
+                output,
+                synthesizing,
+                native,
+            } = match sent {
+                Ok(sent) => sent,
+                Err(e) => {
+                    yield Err(e);
+                    return;
                 }
             };
 
             let mut receiver = output.stream;
-            let mut translator = StreamTranslator::new(synthesizing);
+            let mut translator = StreamTranslator::new(synthesizing).native(native);
 
             loop {
                 let next = tokio::select! {
@@ -129,7 +166,7 @@ impl Model for BedrockModel {
     }
 
     fn capabilities(&self) -> ModelCapabilities {
-        self.0.capabilities
+        self.config.capabilities
     }
 
     fn provider(&self) -> &str {
@@ -137,7 +174,7 @@ impl Model for BedrockModel {
     }
 
     fn model(&self) -> &str {
-        &self.0.model_id
+        &self.config.model_id
     }
 }
 
@@ -196,6 +233,16 @@ mod tests {
                 .build()
                 .expect("build offline model")
         })
+    }
+
+    #[test]
+    fn clones_share_the_policy() {
+        let m = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        let m2 = m.clone();
+        assert!(m.policy.record_rejection());
+        assert_eq!(m2.policy.path(), crate::policy::OutputPath::Native);
+        let fresh = offline_model("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        assert_eq!(fresh.policy.path(), crate::policy::OutputPath::ForcedTool);
     }
 
     // `offline_model` blocks on its own runtime, so this test is a plain
@@ -366,5 +413,72 @@ mod tests {
         let source = token_stream(5);
         let events: Vec<_> = drive_stream_with_token(source, cancel).collect().await;
         assert_eq!(events.len(), 5, "all events must arrive when not cancelled");
+    }
+
+    /// Live test for the learned native path (rule B), with rule A off.
+    ///
+    /// Run it only with `BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-5-5`
+    /// and `cargo test -p paigasus-helikon-providers-bedrock
+    /// live_rule_b -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_rule_b_learns_native_output_after_rejection() {
+        use crate::policy::{ForcedChoicePolicy, OutputPath};
+        use paigasus_helikon_core::{ContentPart, Item, ResponseFormat};
+
+        let id = match std::env::var("BEDROCK_MODEL_ID") {
+            Ok(v) if !v.is_empty() => v,
+            _ => {
+                eprintln!("[live] BEDROCK_MODEL_ID not set - skipping rule B live test.");
+                return;
+            }
+        };
+        let family = crate::ModelFamily::from_model_id(&id);
+        if family != crate::ModelFamily::Anthropic {
+            eprintln!("[live] {id} is not an Anthropic model - skipping");
+            return;
+        }
+        let mut model = BedrockModel::from_env(&id).await.expect("from_env");
+        model.policy = Arc::new(ForcedChoicePolicy::without_static_rule(family));
+        assert_eq!(model.policy.path(), OutputPath::ForcedTool);
+
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "Give a transaction: deposit of 100 USD.".to_owned(),
+            }],
+        }];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Transaction".to_owned(),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "operation": { "type": "string" },
+                    "amount": { "type": "number" }
+                },
+                "required": ["operation", "amount"]
+            }),
+            strict: false,
+        });
+        req.model_settings.max_output_tokens = Some(256);
+
+        let mut s = model
+            .invoke(req, CancellationToken::new())
+            .await
+            .expect("invoke should succeed");
+        let mut text = String::new();
+        while let Some(ev) = s.next().await {
+            if let ModelEvent::TokenDelta { text: t } = ev.expect("no stream error") {
+                text.push_str(&t);
+            }
+        }
+        assert_eq!(
+            model.policy.path(),
+            OutputPath::Native,
+            "one classified rejection must set the learned flag"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("output must be valid JSON ({e}); got: {text}"));
+        assert!(v["operation"].is_string(), "operation: {v}");
     }
 }

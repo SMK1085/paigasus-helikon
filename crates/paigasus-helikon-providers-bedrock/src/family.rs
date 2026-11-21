@@ -49,13 +49,9 @@ impl ModelFamily {
     /// ```
     pub fn from_model_id(model_id: &str) -> Self {
         let lowered = model_id.to_ascii_lowercase();
-        let mut id = lowered.as_str();
-        if id.starts_with("arn:") {
-            match id.rsplit_once('/') {
-                Some((_, resource)) => id = resource,
-                None => return Self::Unknown,
-            }
-        }
+        let Some(id) = resource_id(&lowered) else {
+            return Self::Unknown;
+        };
 
         let (first, rest1) = id.split_once('.').unwrap_or((id, ""));
         let (second, rest2) = rest1.split_once('.').unwrap_or((rest1, ""));
@@ -93,9 +89,36 @@ impl ModelFamily {
     ///
     /// Families that do not support it will have the `tool_choice` field
     /// omitted and a `debug!` log emitted instead.
+    ///
+    /// Some Anthropic models reject it. See [`rejects_forced_tool_choice`].
     pub(crate) fn supports_forced_tool_choice(self) -> bool {
         matches!(self, Self::Anthropic | Self::Mistral | Self::AmazonNova)
     }
+}
+
+/// Returns the resource ID of a lowercased model ID.
+///
+/// For an ARN, this is the text after the last `/`, or `None` when the ARN has
+/// no `/`. Any other ID is returned unchanged.
+fn resource_id(lowered: &str) -> Option<&str> {
+    if lowered.starts_with("arn:") {
+        lowered.rsplit_once('/').map(|(_, resource)| resource)
+    } else {
+        Some(lowered)
+    }
+}
+
+/// Returns `true` when the model is known to reject a forced `toolChoice`.
+///
+/// The models in this list are Claude Sonnet 5.5 and Claude Opus 5.5. A stale
+/// list costs one rejected request, because rule B recovers from it.
+pub(crate) fn rejects_forced_tool_choice(model_id: &str) -> bool {
+    if ModelFamily::from_model_id(model_id) != ModelFamily::Anthropic {
+        return false;
+    }
+    let lowered = model_id.to_ascii_lowercase();
+    resource_id(&lowered)
+        .is_some_and(|id| id.contains("claude-sonnet-5-5") || id.contains("claude-opus-5-5"))
 }
 
 #[cfg(test)]
@@ -117,6 +140,36 @@ mod tests {
             ("some.future-model", Unknown),
         ] {
             assert_eq!(ModelFamily::from_model_id(id), want, "id={id}");
+        }
+    }
+
+    #[test]
+    fn rejects_forced_tool_choice_matches_only_sonnet_and_opus_5_5() {
+        for id in [
+            "anthropic.claude-sonnet-5-5",
+            "anthropic.claude-opus-5-5",
+            "us.anthropic.claude-sonnet-5-5",
+            "global.anthropic.claude-sonnet-5-5",
+            "eu.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-opus-5-5-20261101-v1:0",
+            "GLOBAL.Anthropic.Claude-Sonnet-5-5",
+            "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5-5",
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-opus-5-5",
+        ] {
+            assert!(rejects_forced_tool_choice(id), "id={id}");
+        }
+        for id in [
+            "global.anthropic.claude-sonnet-5",
+            "us.anthropic.claude-opus-5",
+            "global.anthropic.claude-haiku-5-5",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "amazon.nova-pro-v1:0",
+            "mistral.mistral-large-2407-v1:0",
+            "meta.claude-sonnet-5-5",
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6",
+            "",
+        ] {
+            assert!(!rejects_forced_tool_choice(id), "id={id}");
         }
     }
 

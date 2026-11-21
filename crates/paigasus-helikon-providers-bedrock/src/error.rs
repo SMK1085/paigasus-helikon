@@ -3,6 +3,19 @@
 //! Per ADR-10 (*No silent auto-retry inside the loop*), the runner never
 //! retries — retries are an application-layer concern via `RetryingModel`.
 //!
+//! One send fallback exists, and it is not a retry in the ADR-10 sense:
+//! when an Anthropic model rejects a forced tool choice before the stream
+//! starts, the provider sends one native request, which is a different request,
+//! on the structured-output path. Four facts make this different from a retry.
+//! The fallback sends a *different* request, not the same request again.
+//! It occurs at most once for each request. It is logged. It never follows
+//! a transient error (throttling, a 5xx error or a transport error).
+//!
+//! The match on the error text is a weak contract. If Bedrock changes the
+//! text, the result is the same `ValidationException` as before this
+//! fallback existed. The static model-id rule still sends the known models
+//! on the native path from the first request.
+//!
 //! The `classify` function is a pure, unit-testable classifier that operates
 //! on string error codes and optional HTTP status codes, mirroring the style
 //! of the Anthropic provider's `map_error_type`. `map_sdk_error` wraps it
@@ -57,6 +70,26 @@ pub(crate) fn classify(
             code.unwrap_or("unknown")
         )),
     }
+}
+
+/// Returns `true` when a Bedrock error says that the model rejects a forced
+/// tool choice (`toolChoice` `any` or `tool`).
+///
+/// The match is on the error code and on two exact texts: the text from the
+/// model layer and the text from the Bedrock layer.
+pub(crate) fn is_forced_choice_rejection(code: Option<&str>, message: &str) -> bool {
+    code == Some("ValidationException")
+        && (message.contains(r#"type "tool" and "any" are not supported"#)
+            || message.contains("doesn't support the toolConfig.toolChoice."))
+}
+
+/// A failed send, with the flag that the fallback reads.
+#[derive(Debug)]
+pub(crate) struct SendFailure {
+    /// `true` when the service rejected a forced tool choice.
+    pub(crate) forced_choice_rejected: bool,
+    /// The mapped error that goes to the caller when no fallback occurs.
+    pub(crate) error: ModelError,
 }
 
 /// Parse the `Retry-After` header (integer seconds) from Bedrock response headers into milliseconds.
@@ -130,6 +163,29 @@ where
         | SdkError::ResponseError(_) => ModelError::Transport(format!("{err:?}")),
         // Non-exhaustive: treat any future variant as transport.
         _ => ModelError::Transport(format!("{err:?}")),
+    }
+}
+
+/// Map a failed send to a [`SendFailure`].
+///
+/// The raw code and message of a `ServiceError` are read before the error is
+/// mapped by [`map_sdk_http_error`]. All other variants are not a rejection
+/// of a forced tool choice.
+pub(crate) fn send_failure<E>(
+    err: SdkError<E, aws_smithy_runtime_api::http::Response>,
+) -> SendFailure
+where
+    E: ProvideErrorMetadata + std::fmt::Debug,
+{
+    let forced_choice_rejected = match &err {
+        SdkError::ServiceError(svc) => {
+            is_forced_choice_rejection(svc.err().code(), svc.err().message().unwrap_or(""))
+        }
+        _ => false,
+    };
+    SendFailure {
+        forced_choice_rejected,
+        error: map_sdk_http_error(err),
     }
 }
 
@@ -305,5 +361,80 @@ mod tests {
             classify(None, None, "no code", None),
             ModelError::Other(_)
         ));
+    }
+
+    // ── forced-choice rejection classifier (SMA-839) ──────────────────────────
+
+    const MODEL_LAYER: &str = "The model returned the following errors: tool_choice: type \"tool\" and \"any\" are not supported for this model.";
+    const BEDROCK_LAYER: &str = "This model doesn't support the toolConfig.toolChoice.any field. Remove toolConfig.toolChoice.any and try again.";
+
+    #[test]
+    fn forced_choice_rejection_matches_both_patterns() {
+        assert!(is_forced_choice_rejection(
+            Some("ValidationException"),
+            MODEL_LAYER
+        ));
+        assert!(is_forced_choice_rejection(
+            Some("ValidationException"),
+            BEDROCK_LAYER
+        ));
+    }
+
+    #[test]
+    fn forced_choice_rejection_ignores_near_misses() {
+        for msg in [
+            "Input is too long for requested model.",
+            "output_config: Extra inputs are not permitted",
+            "This model doesn't support the outputConfig field.",
+            "The toolConfig field must be defined when using toolUse and toolResult content blocks.",
+        ] {
+            assert!(
+                !is_forced_choice_rejection(Some("ValidationException"), msg),
+                "{msg}"
+            );
+        }
+        assert!(!is_forced_choice_rejection(
+            Some("ThrottlingException"),
+            MODEL_LAYER
+        ));
+        assert!(!is_forced_choice_rejection(None, MODEL_LAYER));
+    }
+
+    fn service_error(
+        code: &str,
+        message: &str,
+        status: u16,
+    ) -> SdkError<aws_smithy_types::error::ErrorMetadata, aws_smithy_runtime_api::http::Response>
+    {
+        let meta = aws_smithy_types::error::ErrorMetadata::builder()
+            .code(code)
+            .message(message)
+            .build();
+        let raw = aws_smithy_runtime_api::http::Response::new(
+            aws_smithy_runtime_api::http::StatusCode::try_from(status).expect("status"),
+            aws_smithy_types::body::SdkBody::empty(),
+        );
+        SdkError::service_error(meta, raw)
+    }
+
+    #[test]
+    fn send_failure_flags_a_forced_choice_rejection() {
+        let f = send_failure(service_error("ValidationException", BEDROCK_LAYER, 400));
+        assert!(f.forced_choice_rejected);
+        assert!(matches!(f.error, ModelError::Other(_)));
+    }
+
+    #[test]
+    fn send_failure_keeps_other_errors_unflagged() {
+        let f = send_failure(service_error("ThrottlingException", "slow down", 429));
+        assert!(!f.forced_choice_rejected);
+        assert!(matches!(f.error, ModelError::RateLimited { .. }));
+        let f = send_failure(service_error(
+            "ValidationException",
+            "Input is too long for requested model.",
+            400,
+        ));
+        assert!(!f.forced_choice_rejected);
+        assert!(matches!(f.error, ModelError::ContextLengthExceeded));
     }
 }

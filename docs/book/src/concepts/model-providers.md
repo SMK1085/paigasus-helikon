@@ -137,8 +137,9 @@ Reached as `paigasus_helikon::bedrock::BedrockModel` behind the `bedrock`
 feature. Covers the **Converse streaming API** — tool use and multi-turn
 conversations across Anthropic Claude, Amazon Nova, Amazon Titan, Meta Llama,
 Mistral, and Cohere model families hosted on AWS Bedrock. Structured output
-(forced-tool synthesis) is supported on Anthropic Claude, Amazon Nova, and
-Mistral; Titan, Llama, and Cohere degrade to plain text responses.
+uses forced-tool synthesis on Anthropic Claude, Amazon Nova, and Mistral. It
+uses native output on Claude Sonnet 5.5 and Opus 5.5. Titan, Llama, and Cohere
+degrade to plain text responses.
 
 > **Disambiguation:** this is the Bedrock *Converse model provider*. It is
 > distinct from `paigasus-helikon-runtime-agentcore`, which is the Bedrock
@@ -188,6 +189,41 @@ is the user-supplied JSON Schema, and the result is returned as a structured
 JSON response. For other families (`AmazonTitan`, `Llama`, `Cohere`, `Unknown`)
 a `JsonSchema` format degrades silently to a text response.
 
+Claude Sonnet 5.5 and Opus 5.5 reject a forced tool choice. For these two
+models, the provider sends the `JsonSchema` as native output
+(`outputConfig.textFormat`). Another Anthropic model can also reject the forced
+choice. The provider then sends one native request, which is a different request.
+After that, the `BedrockModel` handle and its clones use native output. Only a
+`ValidationException` with one of the two known rejection texts, from a request
+that sent a forced choice, changes the handle. A request that fails locally does
+not reach Bedrock and does not change the handle. For example, `JsonSchema`
+together with `ToolChoice::Tool` fails locally on a forced-choice handle.
+
+On a finalizing turn, the provider can add a hidden anchor tool with no
+`toolChoice`. If the model calls this anchor, the provider logs a warning.
+`outputConfig` does not constrain the text of that call.
+
+The provider rewrites the schema first. It adds `additionalProperties: false`,
+changes `oneOf` to `anyOf`, and removes keywords that Bedrock does not accept,
+such as numeric limits. It does not add `additionalProperties` to a node in an
+`allOf` composition or to any node below an `allOf` member. It also does not add
+it to an object node next to `oneOf` or `anyOf`. The
+branches of such a node stay open too. Bedrock rejects maps, `patternProperties`,
+`propertyNames`, tuples, the schemas `true` and `{}`, and recursive types.
+Bedrock can also reject an open object in an `allOf` composition. Closing each
+member does not help, because each closed member rejects the properties of the
+other members. Put the properties into one closed object instead.
+
+Bedrock does not enforce the removed limits. The agent loop does not evaluate
+the JSON schema. It checks that the result deserializes into the output type. A
+limit that only the schema states is not checked, so add your own validation for
+it. The change from `oneOf` to `anyOf` also accepts a value that matches more
+than one branch. If your code needs exactly one branch to match, validate the
+result against the original schema.
+
+`JsonObject` degrades to text on this path. The provider omits `ToolChoice::Required` and `ToolChoice::Tool` with a
+warning. `ToolChoice::Tool` with an undefined name is still an error. For the full rules, see the crate README.
+
 Family detection reads the first segment of the model ID. If the first segment
 is not a provider name, detection reads the second segment. This skips a
 geographic prefix. The known prefixes are `us.`, `eu.`, `apac.`, `jp.`, `au.`,
@@ -204,9 +240,9 @@ configuration is required on this provider.
 
 #### Tool-input schema rewriter
 
-Bedrock's Converse API validator rejects JSON Schemas containing `$ref`/`$defs`,
-`oneOf`/`anyOf`/`allOf`, or meta-keywords such as `$schema`, `format`, and
-`examples`. The crate exposes `rewrite_tool_schema(schema, Ruleset::Strict)`,
+For tool input schemas, Bedrock's Converse API validator rejects JSON Schemas
+containing `$ref`/`$defs`, `oneOf`/`anyOf`/`allOf`, or meta-keywords such as
+`$schema`, `format`, and `examples`. The crate exposes `rewrite_tool_schema(schema, Ruleset::Strict)`,
 which runs automatically on every tool spec before the request is sent:
 
 - `$ref` references are inlined recursively (cycles and excessive depth are

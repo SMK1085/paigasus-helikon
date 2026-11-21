@@ -32,6 +32,7 @@ tracing                = { workspace = true }
 futures-util = { workspace = true }
 insta        = { workspace = true, features = ["json", "yaml"] }
 tokio        = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

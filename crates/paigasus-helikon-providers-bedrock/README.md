@@ -1,6 +1,6 @@
 # paigasus-helikon-providers-bedrock
 
-The Amazon Bedrock **Converse API** model provider for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `BedrockModel` implements [`paigasus-helikon-core`](https://crates.io/crates/paigasus-helikon-core)'s `Model` trait against the Bedrock Converse streaming API, with support for tool use, streaming, structured output (family-gated via forced-tool synthesis), and a tool-input schema rewriter that makes serde/schemars schemas acceptable to Bedrock's validator.
+The Amazon Bedrock **Converse API** model provider for the [Paigasus Helikon](https://github.com/SMK1085/paigasus-helikon) AI SDK — a Rust SDK for building AI agents. `BedrockModel` implements [`paigasus-helikon-core`](https://crates.io/crates/paigasus-helikon-core)'s `Model` trait against the Bedrock Converse streaming API, with support for tool use, streaming, structured output (forced-tool synthesis, or native output on Claude Sonnet 5.5 and Opus 5.5), and a tool-input schema rewriter that makes serde/schemars schemas acceptable to Bedrock's validator.
 
 > **Disambiguation:** this crate is the **Converse model provider** — it lets you invoke Bedrock-hosted LLMs as a drop-in `Model`. It is distinct from [`paigasus-helikon-runtime-agentcore`](https://crates.io/crates/paigasus-helikon-runtime-agentcore), which is the **Bedrock AgentCore runtime** host.
 
@@ -60,7 +60,7 @@ The crate detects the model family from the Bedrock model ID and routes capabili
 
 | Family | Examples | Structured output | Forced tool choice |
 | --- | --- | --- | --- |
-| `Anthropic` | `anthropic.claude-*`, `us.anthropic.*`, `global.anthropic.*` | yes (forced-tool synthesis) | yes |
+| `Anthropic` | `anthropic.claude-*`, `us.anthropic.*`, `global.anthropic.*` | yes (forced-tool synthesis; native output on Sonnet 5.5 and Opus 5.5) | yes, except Sonnet 5.5 and Opus 5.5 |
 | `AmazonNova` | `amazon.nova-*` | yes (forced-tool synthesis) | yes |
 | `Mistral` | `mistral.mistral-*` | yes (forced-tool synthesis) | yes |
 | `AmazonTitan` | `amazon.titan-*` | no (degrades to text) | no |
@@ -72,9 +72,31 @@ Detection reads the first segment of the model ID. If the first segment is not a
 
 ## Structured output and the schema rewriter
 
-For families that support forced-tool-choice (`Anthropic`, `AmazonNova`, `Mistral`), structured output (`ResponseFormat::JsonSchema`) is synthesized as a hidden tool call — the model is forced to call a reserved internal tool whose input schema is the user-supplied JSON Schema. This approach works without Bedrock native structured-output support.
+For families that support forced-tool-choice (`Anthropic`, `AmazonNova`, `Mistral`), structured output (`ResponseFormat::JsonSchema`) is synthesized as a hidden tool call — the model is forced to call a reserved internal tool whose input schema is the user-supplied JSON Schema. Claude Sonnet 5.5 and Opus 5.5 reject a forced tool choice. These models use native output instead (see the next section).
 
-Bedrock's Converse API validator rejects JSON Schemas that use `$ref`/`$defs`, `oneOf`/`anyOf`/`allOf`, or certain other keywords (such as `$schema`, `format`, `examples`). The `rewrite_tool_schema` function (exposed publicly for testing and advanced use) rewrites schemas inline: inlining `$ref` references, collapsing combinators into a flat object, and stripping unsupported keywords — so schemars-generated schemas for tagged enums and generic structs pass validation.
+For tool input schemas, Bedrock's Converse validator rejects JSON Schemas that use `$ref`/`$defs`, `oneOf`/`anyOf`/`allOf`, or certain other keywords (such as `$schema`, `format`, `examples`). The `rewrite_tool_schema` function (exposed publicly for testing and advanced use) rewrites schemas inline: inlining `$ref` references, collapsing combinators into a flat object, and stripping unsupported keywords — so schemars-generated schemas for tagged enums and generic structs pass validation.
+
+### Native structured output (Claude Sonnet 5.5 and Opus 5.5)
+
+These models reject a forced `toolChoice`. For these models, the crate puts the `JsonSchema` in `outputConfig.textFormat`. The native output schema accepts `$ref`/`$defs` and `anyOf`.
+
+On a finalizing turn, the crate can add a hidden anchor tool with no `toolChoice`. If the model calls this anchor, the provider logs a warning. `outputConfig` does not constrain the text of that call.
+
+An Anthropic model ID that is not on the list can also reject the forced choice. This costs one rejected request for each `BedrockModel` handle. After that, the handle and its clones use native output. The crate logs one warning. Only a `ValidationException` with one of the two known rejection texts changes the handle. The request must also send a forced choice. Other errors go to the caller and do not change the handle. A request that fails locally does not reach Bedrock, so it cannot change the handle. For example, `JsonSchema` together with `ToolChoice::Tool` fails locally on a forced-choice handle.
+
+The crate rewrites the schema before it sends the schema:
+
+- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, to a node in an `allOf` composition or to any node below an `allOf` member, to a `const` or `enum` node or any node below it, or to a node whose `required` names a property that `properties` does not declare. It also does not add the keyword to an object node next to `oneOf` or `anyOf`. The branches of such a node stay open too. Limit: a `$defs` entry outside an `allOf` member is still closed, also when a `$ref` in the member points to it. That closed entry can reject a property that another member declares. Do not use a `$ref` to an object in an `allOf` member if the other members add properties.
+- It changes `oneOf` to `anyOf`.
+- It removes `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `maxItems`, `uniqueItems`, `minItems` above 1, and `not`, `if`, `then` and `else`.
+
+An open object in an `allOf` composition can cause a `ValidationException` from Bedrock. You cannot close each member, because each closed member would reject the properties of the other members. Put the properties into one closed object instead.
+
+The server does not enforce the removed limits. The agent loop does not evaluate the JSON schema. It checks that the result deserializes into the output type, and asks for a repair when it does not. A removed limit that only the schema states (for example a `schemars` range attribute) is not checked. Add your own validation for such a limit. The change from `oneOf` to `anyOf` also accepts a value that matches more than one branch. If your code needs exactly one branch to match, validate the result against the original schema.
+
+Bedrock rejects these shapes with its own error: maps (`HashMap`, or `additionalProperties` that is `true` or a schema), `patternProperties`, `propertyNames`, tuples (`prefixItems`), the schemas `true` and `{}`, and recursive types. The crate does not rewrite them.
+
+On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Tool` with a name that is not a defined tool is still an error. `ToolChoice::Required` with no tools and no response format is still an error. With a structured response format, the crate omits it with a warning.
 
 When a model's family does not support forced-tool-choice, a `JsonSchema` response format degrades silently to a text response; no error is returned.
 

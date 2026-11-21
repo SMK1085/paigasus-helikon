@@ -21,6 +21,7 @@ use paigasus_helikon_core::ModelCapabilities;
 
 use crate::capabilities::caps_for;
 use crate::family::ModelFamily;
+use crate::policy::{ForcedChoicePolicy, OutputPath};
 
 // ── BuildError ────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,35 @@ pub(crate) struct Config {
     /// the Bedrock request so that each model applies its own correct limit.
     /// Set via [`BedrockModelBuilder::max_output_tokens_default`].
     pub(crate) max_output_default: Option<u32>,
+}
+
+/// Make an offline [`Config`] for unit tests. The client makes no AWS call.
+///
+/// This function starts its own Tokio runtime, so do not call it from inside
+/// a runtime.
+#[cfg(test)]
+pub(crate) fn offline_config(model_id: &str) -> Config {
+    let family = ModelFamily::from_model_id(model_id);
+    let capabilities = caps_for(family);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio rt");
+    let client = rt.block_on(async {
+        let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_17())
+            .region(aws_config::Region::new("us-east-1"))
+            .test_credentials()
+            .load()
+            .await;
+        Client::new(&sdk_cfg)
+    });
+    Config {
+        client,
+        model_id: model_id.to_owned(),
+        family,
+        capabilities,
+        max_output_default: None,
+    }
 }
 
 // ── BedrockModelBuilder ───────────────────────────────────────────────────────
@@ -205,13 +235,25 @@ impl BedrockModelBuilder {
         let capabilities = self.capabilities_override.unwrap_or(default_caps);
         let max_output_default = self.max_output_override;
 
-        Ok(crate::BedrockModel(Arc::new(Config {
-            client,
-            model_id: self.model_id,
-            family,
-            capabilities,
-            max_output_default,
-        })))
+        let policy = ForcedChoicePolicy::new(&self.model_id, family);
+        if policy.path() == OutputPath::Native {
+            tracing::debug!(
+                target: "paigasus::bedrock::builder",
+                model_id = %self.model_id,
+                "the static rule selects native structured output for this model",
+            );
+        }
+
+        Ok(crate::BedrockModel {
+            config: Arc::new(Config {
+                client,
+                model_id: self.model_id,
+                family,
+                capabilities,
+                max_output_default,
+            }),
+            policy: Arc::new(policy),
+        })
     }
 }
 
@@ -390,7 +432,7 @@ mod tests {
             .max_output_tokens_default(1234)
             .build()
             .expect("build");
-        assert_eq!(model.0.max_output_default, Some(1234));
+        assert_eq!(model.config.max_output_default, Some(1234));
     }
 
     #[test]
@@ -399,7 +441,7 @@ mod tests {
             .client(offline_client())
             .build()
             .expect("build");
-        assert_eq!(model.0.max_output_default, None);
+        assert_eq!(model.config.max_output_default, None);
     }
 
     #[test]

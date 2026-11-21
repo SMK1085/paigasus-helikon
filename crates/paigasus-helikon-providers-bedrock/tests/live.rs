@@ -8,6 +8,18 @@
 //! cargo test -p paigasus-helikon-providers-bedrock -- --ignored
 //! ```
 //!
+//! ## Native structured-output tests (SMA-839)
+//!
+//! Run only these against Claude Sonnet 5.5 with the dev profile:
+//! ```sh
+//! AWS_PROFILE=maip-dev-admin AWS_DEFAULT_REGION=us-east-1 \
+//! BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-5-5 \
+//! cargo test -p paigasus-helikon-providers-bedrock native_output_schemars_style_schema \
+//!   -- --ignored --nocapture
+//! # also: structured_output_finalizing_turn_after_tool_round
+//! # and, in the lib target: live_rule_b_learns_native_output_after_rejection
+//! ```
+//!
 //! ## Required environment variables
 //!
 //! | Variable | Description |
@@ -292,6 +304,123 @@ async fn structured_output_synthesis() {
         parsed["operation"].is_string(),
         "expected 'operation' string in response"
     );
+}
+
+/// Send `req`, collect the text deltas, assert no stream error, parse as JSON.
+async fn collect_json(model_id: &str, mut req: ModelRequest) -> serde_json::Value {
+    req.model_settings.max_output_tokens = Some(256);
+    let model = BedrockModel::from_env(model_id)
+        .await
+        .expect("from_env should succeed");
+    let mut s = model
+        .invoke(req, CancellationToken::new())
+        .await
+        .expect("invoke should succeed");
+    let mut text = String::new();
+    let mut had_error = false;
+    while let Some(ev) = s.next().await {
+        match ev {
+            Ok(ModelEvent::TokenDelta { text: t }) => text.push_str(&t),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("[live] stream error: {e:?}");
+                had_error = true;
+            }
+        }
+    }
+    assert!(!had_error, "stream must complete without error");
+    serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("output must be valid JSON ({e}); got: {text}"))
+}
+
+fn is_anthropic(model_id: &str) -> bool {
+    matches!(
+        paigasus_helikon_providers_bedrock::ModelFamily::from_model_id(model_id),
+        paigasus_helikon_providers_bedrock::ModelFamily::Anthropic
+    )
+}
+
+/// A schemars-style schema (`format`, `minimum`, `$defs`, `anyOf`, `oneOf`
+/// with `const`) must work on the native output path.
+#[tokio::test]
+#[ignore]
+async fn native_output_schemars_style_schema() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !is_anthropic(&model_id) {
+        eprintln!("[live] {model_id} is not an Anthropic model — skipping");
+        return;
+    }
+    let mut req = ModelRequest::new();
+    req.messages = vec![user("Give a transaction: deposit of 100 USD.")];
+    req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+        name: "Transaction".to_owned(),
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "format": "uint32", "minimum": 0},
+                "money": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number"},
+                        "currency": {"type": "string"}
+                    },
+                    "required": ["amount", "currency"]
+                },
+                "kind": {"anyOf": [{"$ref": "#/$defs/Kind"}, {"type": "null"}]}
+            },
+            "required": ["count", "money", "kind"],
+            "$defs": {
+                "Kind": {"oneOf": [
+                    {"type": "string", "const": "deposit"},
+                    {"type": "string", "const": "withdrawal"}
+                ]}
+            }
+        }),
+        strict: false,
+    });
+    let v = collect_json(&model_id, req).await;
+    assert!(v["money"]["amount"].is_number(), "money.amount: {v}");
+    assert!(
+        v["count"].is_u64(),
+        "count must be a non-negative integer: {v}"
+    );
+}
+
+/// A finalizing turn after a tool round, with no tools in the request, must
+/// return JSON that matches the schema.
+#[tokio::test]
+#[ignore]
+async fn structured_output_finalizing_turn_after_tool_round() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !is_anthropic(&model_id) {
+        eprintln!("[live] {model_id} is not an Anthropic model — skipping");
+        return;
+    }
+    let mut req = ModelRequest::new();
+    req.messages = vec![
+        user("What is my balance?"),
+        tool_call("tu_1", "get_balance"),
+        tool_result("tu_1", "1234.56 USD"),
+        user("Report the balance."),
+    ];
+    req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+        name: "Balance".to_owned(),
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "amount": {"type": "number"},
+                "currency": {"type": "string"}
+            },
+            "required": ["amount", "currency"]
+        }),
+        strict: false,
+    });
+    let v = collect_json(&model_id, req).await;
+    assert!(v["amount"].is_number(), "amount: {v}");
 }
 
 /// Spec case (a): a blank user turn after a tool result must be dropped, not
