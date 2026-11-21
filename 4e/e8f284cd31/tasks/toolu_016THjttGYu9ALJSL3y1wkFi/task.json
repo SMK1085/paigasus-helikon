@@ -1,0 +1,18 @@
+{
+  "tool_use_id": "toolu_016THjttGYu9ALJSL3y1wkFi",
+  "agent_id": "a7935fadb9a467f21",
+  "subagent_type": "general-purpose",
+  "task_description": "Write SMA-839 implementation plan",
+  "files": [
+    "docs/superpowers/plans/2026-11-21-sma-839-bedrock-native-structured-output.md"
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 205965,
+    "cache_read_tokens": 4355580,
+    "output_tokens": 61428,
+    "api_call_count": 33
+  },
+  "started_at": "2026-11-21T14:00:24.178998+01:00",
+  "completed_at": "2026-11-21T14:10:25.393443+01:00"
+}
