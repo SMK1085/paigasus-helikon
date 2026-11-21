@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "d1fa8e510f7b",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-839-bedrock-sends-a-forced-toolchoice-to-claude",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d1/fa8e510f7b/0/metadata.json",
+      "transcript": "/d1/fa8e510f7b/0/full.jsonl",
+      "compact_transcript": "/d1/fa8e510f7b/0/transcript.jsonl",
+      "content_hash": "/d1/fa8e510f7b/0/content_hash.txt",
+      "prompt": "/d1/fa8e510f7b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 6,
+      "cache_creation_tokens": 6250,
+      "cache_read_tokens": 231892,
+      "output_tokens": 2221,
+      "api_call_count": 3
+    }
+  },
+  "redaction": {
+    "replacements": 96,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 114,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
