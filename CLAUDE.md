@@ -143,6 +143,8 @@ Mechanics and the SMA-547 postmortem: `docs/runbooks/local-hooks.md`.
 
 `.gitattributes` pins `crates/paigasus-helikon-providers-anthropic/tests/fixtures/*.txt` to `text eol=lf`. The streaming tests `include_str!` the SSE fixtures and split them on literal `\n` delimiters; without this, Windows checkouts produce CRLF bytes and the literal-string splits return one part instead of two. When adding wire-format fixtures elsewhere that the test code parses byte-level, extend the rule.
 
+Provenance headers for wire-format fixtures follow `CONTRIBUTING.md` → "Wire-format fixtures".
+
 ## Cargo.lock
 
 Committed (workspace contains a binary).
