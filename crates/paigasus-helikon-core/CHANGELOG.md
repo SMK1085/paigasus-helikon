@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.0...paigasus-helikon-core-v0.8.1) - 2026-11-21
+
+### Fixed
+
+- *(core)* SMA-621 refuse a turn with parallel blank call_id tool calls ([#378](https://github.com/SMK1085/paigasus-helikon/pull/378))
+
 ## [0.8.0](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.7.0...paigasus-helikon-core-v0.8.0) - 2026-11-21
 
 ### Added
