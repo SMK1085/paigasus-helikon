@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01XvX4BSZsJPhdRkBvc7eR3w",
+  "agent_id": "ada6c49f3b029f435",
+  "task_description": "Review Task 2 stream change",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 84593,
+    "cache_read_tokens": 603699,
+    "output_tokens": 3251,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-21T20:08:54.400842+01:00",
+  "completed_at": "2026-11-21T20:09:22.871406+01:00"
+}
