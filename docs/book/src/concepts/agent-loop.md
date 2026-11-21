@@ -68,7 +68,7 @@ A typical run walks `CallingModel → ExecutingTools → CallingModel → … �
 
 The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them; the `MessageOutput` / `ToolCallItem` / `ToolOutputItem` events carry the same content re-aggregated into a complete `Item` once the turn settles.
 
-A Gemini 3 turn that has only tool calls also yields a `MessageOutput`. Its message holds only provider data (see `Item::is_provider_data_only()`). It has no text. The core runner, the workflow agents, the CLI, AG-UI and the HTTP DTO text output skip such a message. A custom consumer that prints text must skip it too. A tool-only turn on `claude-sonnet-5-5` gives the same kind of `MessageOutput`, because its thinking text is empty.
+A Gemini 3 turn that has only tool calls also yields a `MessageOutput`. Its message holds only provider data (see `Item::is_provider_data_only()`). It has no text. The core runner, the workflow agents, the CLI, AG-UI and the HTTP DTO text output skip such a message. A custom consumer that prints text must skip it too. A tool-only turn on `claude-sonnet-5-5` in which the model thinks gives the same kind of `MessageOutput`, because the thinking text of that model is empty. Adaptive thinking thinks only on some prompts.
 
 ## Driving a run to completion
 

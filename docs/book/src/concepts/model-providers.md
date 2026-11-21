@@ -135,7 +135,7 @@ Anthropic thinking blocks round trip through provider data. The stream keeps eac
 
 - For a 4.x model with `ExtendedThinking::Enabled`, add `.beta("interleaved-thinking-2025-05-14")` to let the model think again after a tool result.
 - `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.
-- Each round sends about 100 more input tokens without the beta header, and about 250 to 300 with it.
+- Measured on Claude Sonnet 4.5 and Opus 4.5 with `Enabled { budget_tokens: 2048 }`, each round sent about 100 more input tokens without the beta header, and about 250 to 300 with it.
 - If Anthropic rejects one block, each later request of the session fails. To recover, remove every part with `provider == PROVIDER_DATA_KEY` from the stored history.
 - The thinking text is stored two times. A host that removes `Reasoning` must also remove these parts.
 

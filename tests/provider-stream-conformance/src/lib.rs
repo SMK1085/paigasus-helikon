@@ -203,8 +203,9 @@ pub trait StreamUnderTest {
     ///
     /// Exactly four scenarios end with a `Finish`, and the floor checks this
     /// value for all four: `CleanStop`, `ToolCallCleanStop`,
-    /// `ThinkingToolCallCleanStop`, and `TruncatedAfterStopReason`, where assertion 3 requires the buffered stop
-    /// reason to be flushed at end-of-stream. Every other scenario must return
+    /// `ThinkingToolCallCleanStop`, and `TruncatedAfterStopReason`, where
+    /// assertion 3 requires the buffered stop reason to be flushed at
+    /// end-of-stream. Every other scenario must return
     /// `None` — a cancelled or errored stream withholds `Finish`, and a
     /// truncation with no stop reason observed never had one to emit.
     ///
