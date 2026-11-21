@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "5605b08be820",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-838-breaking-cascade-guard",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    "CLAUDE.md",
+    "docs/runbooks/release-ascend.md",
+    "release-plz.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/56/05b08be820/0/metadata.json",
+      "transcript": "/56/05b08be820/0/full.jsonl",
+      "compact_transcript": "/56/05b08be820/0/transcript.jsonl",
+      "content_hash": "/56/05b08be820/0/content_hash.txt",
+      "prompt": "/56/05b08be820/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 31674,
+    "cache_read_tokens": 3250117,
+    "output_tokens": 13632,
+    "api_call_count": 15,
+    "subagent_tokens": {
+      "input_tokens": 58,
+      "cache_creation_tokens": 225842,
+      "cache_read_tokens": 2097613,
+      "output_tokens": 28794,
+      "api_call_count": 28
+    }
+  },
+  "redaction": {
+    "replacements": 462,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 460,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
