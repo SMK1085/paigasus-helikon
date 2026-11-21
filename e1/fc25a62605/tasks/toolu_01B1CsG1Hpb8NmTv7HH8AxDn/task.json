@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01B1CsG1Hpb8NmTv7HH8AxDn",
+  "agent_id": "ae7c2c42f68c659e4",
+  "task_description": "Review Task 1 baseline snapshots",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 67557,
+    "cache_read_tokens": 236591,
+    "output_tokens": 1738,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-21T20:05:24.178082+01:00",
+  "completed_at": "2026-11-21T20:05:41.471469+01:00"
+}
