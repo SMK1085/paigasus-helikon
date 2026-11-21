@@ -24,6 +24,9 @@
 //! flattened tagged enum) stays open, also when it has no `properties`. The
 //! branches of such a node stay open too. Their `properties` are closed again.
 //!
+//! A `const` or `enum` node lists whole values, so the node and every node
+//! below it stay open.
+//!
 //! A `$defs` entry outside the `allOf` member that a `$ref` inside the member
 //! points to is still closed.
 
@@ -52,9 +55,10 @@ pub(crate) fn native_output_schema(schema: &Value) -> Value {
 }
 
 /// `open`: this node gets no added `additionalProperties`.
-/// `in_all_of`: this node is inside an `allOf` member. Every node below it
-/// stays open too, also through `properties`, `items` and `$defs`.
-fn rewrite(v: &Value, open: bool, in_all_of: bool) -> Value {
+/// `subtree_open`: this node is inside an `allOf` member or below a `const` or
+/// `enum` node. Every node below it stays open too, also through `properties`,
+/// `items` and `$defs`.
+fn rewrite(v: &Value, open: bool, subtree_open: bool) -> Value {
     let Some(obj) = v.as_object() else {
         return v.clone();
     };
@@ -109,8 +113,11 @@ fn rewrite(v: &Value, open: bool, in_all_of: bool) -> Value {
     // `properties` of its own. A root `anyOf` without an object type (the
     // schemars `Option<Struct>`) is not flattened.
     let is_flattened = is_object && m.contains_key("anyOf");
-    let open = open || in_all_of;
+    let open = open || subtree_open;
     let child_open = open || has_all_of || is_flattened;
+    // A `const` or `enum` node lists whole values. A closed object below it would
+    // reject the listed values.
+    let subtree_open = subtree_open || m.contains_key("const") || m.contains_key("enum");
     // `required` does not declare a property. A required name that `properties`
     // does not declare would be forbidden by `additionalProperties: false`.
     let requires_undeclared = m
@@ -131,13 +138,13 @@ fn rewrite(v: &Value, open: bool, in_all_of: bool) -> Value {
     for key in ["properties", "$defs", "definitions"] {
         if let Some(Value::Object(map)) = m.get_mut(key) {
             for child in map.values_mut() {
-                *child = rewrite(child, false, in_all_of);
+                *child = rewrite(child, false, subtree_open);
             }
         }
     }
     if let Some(Value::Array(arr)) = m.get_mut("anyOf") {
         for child in arr.iter_mut() {
-            *child = rewrite(child, child_open, in_all_of);
+            *child = rewrite(child, child_open, subtree_open);
         }
     }
     if let Some(Value::Array(arr)) = m.get_mut("allOf") {
@@ -146,7 +153,7 @@ fn rewrite(v: &Value, open: bool, in_all_of: bool) -> Value {
         }
     }
     if let Some(items @ Value::Object(_)) = m.get_mut("items") {
-        *items = rewrite(items, false, in_all_of);
+        *items = rewrite(items, false, subtree_open);
     }
     Value::Object(m)
 }
@@ -435,6 +442,27 @@ mod tests {
     fn native_schema_nested_property_under_all_of_stays_open() {
         let input = json!({"allOf":[{"type":"object","properties":{"p":{"type":"object","properties":{"x":{"type":"string"}},"$defs":{"D":{"type":"object"}}},"q":{"type":"array","items":{"type":"object"}}}}]});
         assert_eq!(native_output_schema(&input), input);
+    }
+
+    #[test]
+    fn native_schema_objects_below_const_and_enum_stay_open() {
+        // `const` and `enum` list whole values. A closed nested object would
+        // reject the listed values.
+        for s in [
+            json!({"type":"object","properties":{"p":{"type":"object"}},"const":{"p":{"a":1}}}),
+            json!({"type":"object","properties":{"p":{"type":"object"}},"enum":[{"p":{"a":1}}]}),
+            json!({"type":"array","items":{"type":"object"},"const":[{"a":1}]}),
+            json!({"type":"object","anyOf":[{"type":"object","properties":{"q":{"type":"object"}}}],"const":{"q":{"a":1}}}),
+        ] {
+            assert_eq!(native_output_schema(&s), s);
+        }
+        // A struct with a `const` leaf is still closed.
+        assert_eq!(
+            native_output_schema(
+                &json!({"type":"object","properties":{"kind":{"type":"string","const":"card"}}})
+            ),
+            json!({"type":"object","properties":{"kind":{"type":"string","const":"card"}},"additionalProperties":false})
+        );
     }
 
     #[test]
