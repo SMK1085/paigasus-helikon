@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "5931c853de51",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-585-responses_tool_calltxt-carries-a-trailing",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "docs/superpowers/plans/2026-11-21-sma-585-responses-done-sentinel.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/59/31c853de51/0/metadata.json",
+      "transcript": "/59/31c853de51/0/full.jsonl",
+      "compact_transcript": "/59/31c853de51/0/transcript.jsonl",
+      "content_hash": "/59/31c853de51/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 14616,
+    "cache_read_tokens": 659982,
+    "output_tokens": 9305,
+    "api_call_count": 4
+  },
+  "redaction": {
+    "replacements": 27,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 27,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
