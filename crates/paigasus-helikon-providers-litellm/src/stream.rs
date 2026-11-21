@@ -2350,26 +2350,28 @@ mod tests {
     }
 
     /// Two parallel blank-id calls whose real ids arrive after both emitted
-    /// stay merged at the accumulator. Accepted, not overlooked.
+    /// stay under `""` and the accumulator refuses the turn. Accepted, not
+    /// overlooked.
     ///
     /// The tie-break in SMA-619 is argued for one call: keeping the blank
     /// keeps the call whole. For two it cuts the other way — both upgrades
-    /// are withheld, so all four deltas carry `""` and `ModelTurnAccumulator`
-    /// folds them into a single item, where ungated they would have separated
-    /// into `c1` and `c2`.
+    /// are withheld, so all four deltas carry `""`. Ungated they would have
+    /// separated into `c1` and `c2`. Since SMA-621 `ModelTurnAccumulator`
+    /// refuses two name-carrying deltas under `""` with an
+    /// `ambiguous tool calls:` error, so the turn fails and the failure names
+    /// the cause.
     ///
     /// This is accepted for three reasons. The translator's obligation is at
     /// the event layer and is still met: two name-carrying deltas go out,
     /// `alpha` and `beta`, exactly as SMA-616 requires and as
-    /// `blank_ids_do_not_collapse_distinct_calls` asserts. The merge happens
-    /// in `ModelTurnAccumulator`, which core documents as deliberately
-    /// merging blank-id calls first-name-wins — behaviour this ticket does
-    /// not change, only reaches more often. And `openai/chat` has carried the
-    /// identical trade since SMA-566, so declining it here would reopen the
-    /// asymmetry SMA-619 exists to close.
+    /// `blank_ids_do_not_collapse_distinct_calls` asserts. The refusal
+    /// happens in `ModelTurnAccumulator` (SMA-621), which no longer merges
+    /// parallel blank-id calls first-name-wins. And `openai/chat` has carried
+    /// the identical trade since SMA-566, so declining it here would reopen
+    /// the asymmetry SMA-619 exists to close.
     ///
     /// The withheld-upgrade `warn!` fires twice here, once per key, which is
-    /// what makes the merge diagnosable at all.
+    /// what makes the failure diagnosable at all.
     ///
     /// The fixture is three chunks so that the trade is isolated rather than
     /// conflated. The two calls must emit *before* their real ids arrive, or
@@ -2380,15 +2382,18 @@ mod tests {
     /// `""` with no arguments at all, and only chunk 3 carries arguments.
     /// Pre-fix that yields three parsing items — `("", "alpha", {})` plus a
     /// nameless `c1` and `c2`; post-fix the gate keeps everything under `""`,
-    /// the two argument objects concatenate into `{"p":1}{"q":2}`, and the
-    /// turn fails.
+    /// the accumulator sees two name-carrying deltas under `""`, and the
+    /// turn fails with `ambiguous tool calls:`.
     ///
     /// That regression is accepted on the same grounds as
     /// `a_real_id_does_not_replace_a_blank_one_after_the_key_emitted`: the
     /// pre-fix `Ok` is three junk items, two of them nameless and one under
     /// an unsubmittable `""`, and a loud failure beats dispatching those.
+    ///
+    /// Confirmed to FAIL against `main` (serde_json error, not the ambiguity
+    /// error).
     #[test]
-    fn withheld_upgrades_keep_parallel_blank_calls_merged() {
+    fn withheld_upgrades_make_parallel_blank_calls_fail_loudly() {
         let mut t = ChatTranslator::new();
         let evs = drive(
             &mut t,
@@ -2421,11 +2426,11 @@ mod tests {
             "the withheld upgrade keeps every delta off the real id"
         );
         assert_eq!(args_of(&evs, "c2"), "", "and off the second real id");
+        let err = accumulated(&evs).expect_err("two blank-id calls must not reassemble");
         assert!(
-            accumulated(&evs).is_err(),
-            "the accumulator merges blank call_ids, so two parallel calls' \
-             arguments concatenate into invalid JSON and the turn fails — the \
-             accepted cost of the gate for N>1 (SMA-619 §2.2)"
+            err.starts_with("ambiguous tool calls:"),
+            "the accumulator refuses parallel blank call_ids by name, not by a \
+             serde_json trailing-characters error (SMA-621): {err}"
         );
     }
 
