@@ -28,12 +28,12 @@
 //!
 //! ## Key order
 //!
-//! Each wire helper builds its payload with `json!` and serializes the
-//! `serde_json::Value`. The `serde_json` 1.0.154 in `Cargo.lock` has no
-//! `preserve_order` feature, so the keys come out in alphabetical order. Each
-//! cited fixture has at least one object whose keys are in a different order.
-//! No translator depends on key order: each one decodes the payload as a JSON
-//! object.
+//! Each wire helper that builds a JSON payload uses `json!` and serializes the
+//! `serde_json::Value`. (The `done()` helpers are byte literals.) The
+//! `serde_json` 1.0.154 in `Cargo.lock` has no `preserve_order` feature, so
+//! the keys come out in alphabetical order. That order can differ from the
+//! order in the cited sources. No translator depends on key order: each one
+//! decodes the payload as a JSON object.
 
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, FinishReason, Item, Model, ModelRequest, ToolDef,
@@ -300,8 +300,8 @@ mod bedrock {
     /// The scripted response is fixed, so the request only has to be one the
     /// provider will translate and send. It carries a tool definition for the
     /// tool scenario so the exchange is coherent — a Converse stream returning
-    /// a `toolUse` block for a request that offered no tools is not a stream
-    /// Bedrock would ever produce.
+    /// a `toolUse` block for a request that offered no tools would not be a
+    /// coherent exchange.
     fn request(scenario: Scenario) -> ModelRequest {
         let mut req = ModelRequest::new();
         req.messages = vec![Item::UserMessage {
@@ -921,7 +921,7 @@ mod openai_chat {
     ///
     /// Carries a tool definition for both tool scenarios so the exchange is
     /// coherent — a response returning `tool_calls` for a request that
-    /// offered no tools is not a stream OpenAI would ever produce.
+    /// offered no tools would not be a coherent exchange.
     fn request(scenario: Scenario) -> ModelRequest {
         let mut req = ModelRequest::new();
         req.messages = vec![Item::UserMessage {
@@ -1473,7 +1473,7 @@ mod litellm {
     ///
     /// Carries a tool definition for both tool scenarios so the exchange is
     /// coherent — a response returning `tool_calls` for a request that
-    /// offered no tools is not a stream a real proxy would ever produce.
+    /// offered no tools would not be a coherent exchange.
     fn request(scenario: Scenario) -> ModelRequest {
         let mut req = ModelRequest::new();
         req.messages = vec![Item::UserMessage {
@@ -2813,7 +2813,7 @@ mod gemini {
     ///
     /// Carries a tool definition for `ToolCallCleanStop` so the exchange is
     /// coherent — a response returning a `functionCall` for a request that
-    /// offered no tools is not a stream Gemini would ever produce.
+    /// offered no tools would not be a coherent exchange.
     /// `FragmentedToolName` is this subject's other tool scenario, but it is
     /// declined and so never reaches this function.
     fn request(scenario: Scenario) -> ModelRequest {
@@ -3361,8 +3361,8 @@ mod openai_responses {
     ///
     /// Carries a tool definition for `ToolCallCleanStop` so the exchange is
     /// coherent — a response returning a function call for a request that
-    /// offered no tools is not a stream the Responses API would ever
-    /// produce. `FragmentedToolName` is this subject's other tool scenario,
+    /// offered no tools would not be a coherent exchange.
+    /// `FragmentedToolName` is this subject's other tool scenario,
     /// but it is declined and so never reaches this function.
     fn request(scenario: Scenario) -> ModelRequest {
         let mut req = ModelRequest::new();
