@@ -56,7 +56,7 @@ pub(crate) struct Config {
     pub(crate) client: Client,
     /// Bedrock model identifier (e.g. `anthropic.claude-3-5-sonnet-20241022-v2:0`).
     pub(crate) model_id: String,
-    /// Detected model family used for capability routing.
+    /// Effective model family: the builder override, else the family detected from the model id.
     pub(crate) family: ModelFamily,
     /// Resolved capability flags for this model instance.
     pub(crate) capabilities: ModelCapabilities,
@@ -68,13 +68,38 @@ pub(crate) struct Config {
     pub(crate) max_output_default: Option<u32>,
 }
 
+/// Build an offline [`Client`] for unit tests. The client makes no AWS call.
+///
+/// This function starts its own Tokio runtime, so do not call it from inside
+/// a runtime.
+#[cfg(test)]
+pub(crate) fn offline_client() -> Client {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async {
+        let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_17())
+            .region(Region::new("us-east-1"))
+            .test_credentials()
+            .load()
+            .await;
+        Client::new(&sdk_cfg)
+    })
+}
+
+/// The effective family: the override when set, else the family from the model id.
+pub(crate) fn resolve_family(model_id: &str, family_override: Option<ModelFamily>) -> ModelFamily {
+    family_override.unwrap_or_else(|| ModelFamily::from_model_id(model_id))
+}
+
 /// Make an offline [`Config`] for unit tests. The client makes no AWS call.
 ///
 /// This function starts its own Tokio runtime, so do not call it from inside
 /// a runtime.
 #[cfg(test)]
 pub(crate) fn offline_config(model_id: &str) -> Config {
-    let family = ModelFamily::from_model_id(model_id);
+    let family = resolve_family(model_id, None);
     let capabilities = caps_for(family);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -121,6 +146,8 @@ pub struct BedrockModelBuilder {
     capabilities_override: Option<ModelCapabilities>,
     /// Optional `max_output_tokens` override.
     max_output_override: Option<u32>,
+    /// Optional family override (wins over detection from the model id).
+    family_override: Option<ModelFamily>,
 }
 
 impl BedrockModelBuilder {
@@ -132,6 +159,7 @@ impl BedrockModelBuilder {
             region: None,
             capabilities_override: None,
             max_output_override: None,
+            family_override: None,
         }
     }
 
@@ -167,8 +195,49 @@ impl BedrockModelBuilder {
     /// Override the capability flags for this model instance.
     ///
     /// Wins over the built-in `caps_for` lookup table.
+    ///
+    /// It changes only what `capabilities()` reports. It does not change the
+    /// request. To turn on the family-gated request behavior for an opaque
+    /// model ID, use [`BedrockModelBuilder::family`].
     pub fn capabilities(mut self, c: ModelCapabilities) -> Self {
         self.capabilities_override = Some(c);
+        self
+    }
+
+    /// Set the model family and turn off detection from the model id.
+    ///
+    /// The family controls the request translation, the default capabilities
+    /// and the forced-choice policy, like a detected family. The
+    /// [`capabilities`](Self::capabilities) override still wins for the
+    /// reported flags. A second call replaces the first.
+    ///
+    /// Use this for opaque model IDs: application inference profiles,
+    /// provisioned-throughput ARNs and custom-model ARNs. These IDs do not
+    /// name the family, so detection gives `ModelFamily::Unknown`.
+    ///
+    /// With `Anthropic`, `Mistral` or `AmazonNova`, the model sends
+    /// `ToolChoice::Required` and `ToolChoice::Tool`. Some requests then
+    /// become local errors:
+    ///
+    /// - `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::Tool`.
+    /// - `ResponseFormat::JsonSchema` or `JsonObject` with `ToolChoice::None`.
+    /// - `ToolChoice::Required` with no tools.
+    /// - `ToolChoice::Tool` with a name that no tool defines.
+    ///
+    /// A profile on Claude Sonnet 5.5 or Opus 5.5 costs one rejected request
+    /// for each handle. Build one handle and clone it.
+    ///
+    /// ```ignore
+    /// use paigasus_helikon_providers_bedrock::{BedrockModel, ModelFamily};
+    /// # fn f(arn: &str, cfg: &aws_config::SdkConfig) -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = BedrockModel::converse(arn)
+    ///     .sdk_config(cfg)
+    ///     .family(ModelFamily::Anthropic)
+    ///     .build()?;
+    /// # Ok(()) }
+    /// ```
+    pub fn family(mut self, f: ModelFamily) -> Self {
+        self.family_override = Some(f);
         self
     }
 
@@ -223,13 +292,38 @@ impl BedrockModelBuilder {
         };
 
         // 3. Detect family and resolve capabilities.
-        let family = ModelFamily::from_model_id(&self.model_id);
-        if family == ModelFamily::Unknown {
-            tracing::debug!(
-                target: "paigasus::bedrock::builder",
-                model_id = %self.model_id,
-                "model family not detected from the model id; structured-output synthesis and forced tool choice are off",
-            );
+        let detected = ModelFamily::from_model_id(&self.model_id);
+        let family = resolve_family(&self.model_id, self.family_override);
+        match self.family_override {
+            None if family == ModelFamily::Unknown => {
+                tracing::debug!(
+                    target: "paigasus::bedrock::builder",
+                    model_id = %self.model_id,
+                    "model family not detected from the model id; structured-output synthesis and forced tool choice are off; set BedrockModelBuilder::family to choose the family",
+                );
+            }
+            Some(f)
+                if detected != ModelFamily::Unknown
+                    && f != ModelFamily::Unknown
+                    && detected != f =>
+            {
+                tracing::warn!(
+                    target: "paigasus::bedrock::builder",
+                    model_id = %self.model_id,
+                    detected = ?detected,
+                    family = ?f,
+                    "the family override differs from the family that the model id names",
+                );
+            }
+            Some(f) => {
+                tracing::debug!(
+                    target: "paigasus::bedrock::builder",
+                    model_id = %self.model_id,
+                    family = ?f,
+                    "the model family comes from BedrockModelBuilder::family",
+                );
+            }
+            None => {}
         }
         let default_caps = caps_for(family);
         let capabilities = self.capabilities_override.unwrap_or(default_caps);
@@ -322,27 +416,13 @@ impl crate::BedrockModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_config::BehaviorVersion;
-    use paigasus_helikon_core::Model;
+    use paigasus_helikon_core::{
+        ContentPart, Item, Model, ModelRequest, ResponseFormat, ToolChoice, ToolDef,
+    };
+    use serde_json::json;
 
-    /// Build an offline [`Client`] suitable for unit tests (no real AWS calls).
-    fn offline_client() -> Client {
-        // Use aws_config::ConfigLoader::test_credentials() to inject static
-        // dummy credentials that satisfy the SDK's builder validation without
-        // hitting any AWS endpoint.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
-        rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(BehaviorVersion::v2026_11_17())
-                .region(Region::new("us-east-1"))
-                .test_credentials()
-                .load()
-                .await;
-            Client::new(&sdk_cfg)
-        })
-    }
+    use crate::translate::tools::SYNTHESIZED_TOOL_NAME;
+    use crate::translate::{build_request, to_wire_json};
 
     #[test]
     fn empty_model_id_returns_err_empty_model_id() {
@@ -498,5 +578,157 @@ mod tests {
             .expect("build");
         assert!(model.capabilities().structured_output);
         assert!(model.capabilities().parallel_tool_calls);
+    }
+
+    const ARN: &str =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6";
+    const SONNET55: &str = "global.anthropic.claude-sonnet-5-5";
+
+    fn user_text(text: &str) -> Item {
+        Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: text.to_owned(),
+            }],
+        }
+    }
+
+    fn json_schema_request() -> ModelRequest {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("Coffee, 4.50 EUR")];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Transaction".to_owned(),
+            schema: json!({"type": "object", "properties": {"amount": {"type": "number"}}}),
+            strict: false,
+        });
+        req
+    }
+
+    fn wire(model: &crate::BedrockModel, req: &ModelRequest) -> serde_json::Value {
+        to_wire_json(&build_request(&model.config, req, model.policy.path()).unwrap())
+    }
+
+    fn assert_one_family(model: &crate::BedrockModel, want: ModelFamily) {
+        assert_eq!(model.config.family, want);
+        assert_eq!(model.policy.family(), want);
+        assert_eq!(
+            model.capabilities().structured_output,
+            caps_for(want).structured_output
+        );
+    }
+
+    fn build_with(id: &str, f: Option<ModelFamily>) -> crate::BedrockModel {
+        let mut b = crate::BedrockModel::converse(id).client(offline_client());
+        if let Some(f) = f {
+            b = b.family(f);
+        }
+        b.build().expect("build")
+    }
+
+    #[test]
+    fn family_override_turns_on_synthesis_for_opaque_arn() {
+        let model = build_with(ARN, Some(ModelFamily::Anthropic));
+        assert_one_family(&model, ModelFamily::Anthropic);
+        let w = wire(&model, &json_schema_request());
+        assert_eq!(
+            w["toolConfig"]["toolChoice"],
+            json!({"tool": {"name": SYNTHESIZED_TOOL_NAME}})
+        );
+        let tools = w["toolConfig"]["tools"].as_array().unwrap();
+        assert!(tools
+            .iter()
+            .any(|t| t["toolSpec"]["name"] == SYNTHESIZED_TOOL_NAME));
+        assert!(w.get("outputConfig").is_none());
+    }
+
+    #[test]
+    fn opaque_arn_without_override_is_unchanged() {
+        let model = build_with(ARN, None);
+        assert_one_family(&model, ModelFamily::Unknown);
+        let w = wire(&model, &json_schema_request());
+        assert!(w["toolConfig"].is_null());
+        assert!(w.get("outputConfig").is_none());
+    }
+
+    #[test]
+    fn family_override_maps_required_tool_choice_to_any() {
+        let model = build_with(ARN, Some(ModelFamily::Anthropic));
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef::new("ping", "Ping", json!({"type": "object"}))];
+        req.model_settings.tool_choice = Some(ToolChoice::Required);
+        let w = wire(&model, &req);
+        assert_eq!(w["toolConfig"]["toolChoice"], json!({"any": {}}));
+    }
+
+    #[test]
+    fn capabilities_override_still_wins_over_family_override() {
+        let model = crate::BedrockModel::converse(ARN)
+            .client(offline_client())
+            .capabilities(ModelCapabilities::empty())
+            .family(ModelFamily::Anthropic)
+            .build()
+            .expect("build");
+        assert!(!model.capabilities().structured_output);
+        assert_eq!(model.config.family, ModelFamily::Anthropic);
+    }
+
+    #[test]
+    fn second_family_call_replaces_first() {
+        let model = crate::BedrockModel::converse(ARN)
+            .client(offline_client())
+            .family(ModelFamily::Mistral)
+            .family(ModelFamily::Anthropic)
+            .build()
+            .expect("build");
+        assert_one_family(&model, ModelFamily::Anthropic);
+    }
+
+    #[test]
+    fn unknown_override_turns_off_synthesis_on_anthropic_id() {
+        let model = build_with(
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            Some(ModelFamily::Unknown),
+        );
+        assert_one_family(&model, ModelFamily::Unknown);
+        let w = wire(&model, &json_schema_request());
+        assert!(w["toolConfig"].is_null());
+        assert!(w.get("outputConfig").is_none());
+    }
+
+    #[test]
+    fn unknown_override_on_sonnet55_sends_no_output_config() {
+        let model = build_with(SONNET55, Some(ModelFamily::Unknown));
+        assert_eq!(model.policy.path(), OutputPath::ForcedTool);
+        let w = wire(&model, &json_schema_request());
+        assert!(w["toolConfig"].is_null());
+        assert!(w.get("outputConfig").is_none());
+        assert!(!model.capabilities().structured_output);
+    }
+
+    #[test]
+    fn anthropic_override_on_sonnet55_keeps_native_path() {
+        let model = build_with(SONNET55, Some(ModelFamily::Anthropic));
+        assert_eq!(model.policy.path(), OutputPath::Native);
+        let w = wire(&model, &json_schema_request());
+        assert!(w.get("outputConfig").is_some());
+    }
+
+    #[test]
+    fn mistral_override_on_sonnet55_selects_native_path() {
+        let model = build_with(SONNET55, Some(ModelFamily::Mistral));
+        assert_eq!(model.policy.path(), OutputPath::Native);
+    }
+
+    #[test]
+    fn resolve_family_prefers_override() {
+        assert_eq!(resolve_family(ARN, None), ModelFamily::Unknown);
+        assert_eq!(
+            resolve_family(ARN, Some(ModelFamily::Anthropic)),
+            ModelFamily::Anthropic
+        );
+        assert_eq!(
+            resolve_family("anthropic.claude-x", Some(ModelFamily::Unknown)),
+            ModelFamily::Unknown
+        );
     }
 }
