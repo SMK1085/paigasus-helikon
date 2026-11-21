@@ -17,6 +17,7 @@ mod document;
 mod error;
 mod family;
 mod model;
+mod policy;
 mod stream;
 mod translate;
 

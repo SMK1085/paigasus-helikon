@@ -112,8 +112,6 @@ fn resource_id(lowered: &str) -> Option<&str> {
 ///
 /// The models in this list are Claude Sonnet 5.5 and Claude Opus 5.5. A stale
 /// list costs one rejected request, because rule B recovers from it.
-// Used from Task 4 (build_request path selection).
-#[allow(dead_code)]
 pub(crate) fn rejects_forced_tool_choice(model_id: &str) -> bool {
     if ModelFamily::from_model_id(model_id) != ModelFamily::Anthropic {
         return false;
