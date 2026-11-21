@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "227ad9c5f25d",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-838-breaking-cascade-guard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "scripts/check-breaking-cascade-selftest.sh",
+    "scripts/check-breaking-cascade.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/22/7ad9c5f25d/0/metadata.json",
+      "transcript": "/22/7ad9c5f25d/0/full.jsonl",
+      "compact_transcript": "/22/7ad9c5f25d/0/transcript.jsonl",
+      "content_hash": "/22/7ad9c5f25d/0/content_hash.txt",
+      "prompt": "/22/7ad9c5f25d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 4577,
+    "cache_read_tokens": 1334210,
+    "output_tokens": 2665,
+    "api_call_count": 5,
+    "subagent_tokens": {
+      "input_tokens": 8,
+      "cache_creation_tokens": 89326,
+      "cache_read_tokens": 195270,
+      "output_tokens": 2620,
+      "api_call_count": 4
+    }
+  },
+  "redaction": {
+    "replacements": 554,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 552,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
