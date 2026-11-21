@@ -5,11 +5,12 @@
 The OpenAI Responses fixtures must not claim more than the wire sent.
 `responses_tool_call.txt` is labelled CAPTURED and calls itself "a literal
 transcription of a real capture". Its header lists every trim, but the file
-has two edits that the header does not record:
+has one edit and one probable edit that the header does not record:
 
 1. It ends with `data: [DONE]`, which no capture of this endpoint contains.
-2. Its JSON keys are in a different order from the wire. The order matches
-   the hand-authored sibling fixtures (see Appendix A).
+2. Its JSON key order differs from the 2026-08-22 and 2026-11-21 captures
+   and matches the hand-authored sibling fixtures (see Appendix A). The
+   2026-08-20 order is not on record, so this is probable, not proven.
 
 The root cause is wider than "the header has no place for additions". The
 transcription was made to look like its siblings, and the header structure
@@ -115,7 +116,8 @@ stated otherwise.
     `sequence_number` first and `item.type` before `item.id`, to match the
     hand-authored siblings. The 2026-08-22 and 2026-11-21 captures put
     `type` first and the other event keys in alphabetical order, and
-    `item.id` before `item.type`. The 2026-08-20 order is not on record.
+    `item.id` before `item.type`. The 2026-08-20 order is not on record,
+    so this is a difference from the later captures, not a proven edit.
     The parser does not depend on key order.
 - Add a dated correction note: until 2026-11-21 this file ended with a
   `[DONE]` sentinel line and had a changed key order, and the header

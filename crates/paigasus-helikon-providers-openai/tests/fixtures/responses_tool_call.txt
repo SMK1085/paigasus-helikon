@@ -80,17 +80,21 @@
 :
 : Added: nothing.
 :
-: Changed: the JSON key order. This file puts `type` and `sequence_number`
-: first, and `item.type` before `item.id`, also in `response.output[]`.
-: Its `response` keys follow the layout of the hand-authored sibling
-: fixtures. The captures of 2026-08-22 and 2026-11-21 put `type` first and
-: the other event keys in alphabetical order, and `item.id` before
-: `item.type`. The key order of the 2026-08-20 capture is not on record.
-: The parser does not depend on key order.
+: Changed: the JSON key order of this file differs from the later
+: captures. This file puts `type` and `sequence_number` first, and
+: `item.type` before `item.id`, also in `response.output[]`. Its `response`
+: keys follow the layout of the hand-authored sibling fixtures. The
+: captures of 2026-08-22 and 2026-11-21 put `type` first and the other
+: event keys in alphabetical order, and `item.id` before `item.type`. The
+: key order of the 2026-08-20 capture is not on record. So this is a
+: difference from the later captures, not a proven edit. It is listed
+: under Changed because the order matches the hand-authored siblings
+: exactly. This points to an edit made to match them. The parser does not
+: depend on key order.
 :
 : CORRECTION (2026-11-21, SMA-585): until this date the file ended with a
 : sentinel line (a `[DONE]` data line). This header did not record the
-: sentinel or the changed key order. The key order is still changed (see
+: sentinel or the key-order difference. The key order still differs (see
 : Changed). No capture on record (2026-08-22, 2026-11-21) contains the
 : sentinel. No raw copy of the 2026-08-20 capture exists. See
 : docs/superpowers/specs/2026-11-21-sma-585-responses-done-sentinel-design.md
