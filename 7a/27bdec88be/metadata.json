@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "7a27bdec88be",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-585-responses_tool_calltxt-carries-a-trailing",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-openai/tests/fixtures/responses_failed.txt",
+    "crates/paigasus-helikon-providers-openai/tests/fixtures/responses_incomplete_filter.txt",
+    "crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call.txt",
+    "crates/paigasus-helikon-providers-openai/tests/fixtures/responses_tool_call_zero_args.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7a/27bdec88be/0/metadata.json",
+      "transcript": "/7a/27bdec88be/0/full.jsonl",
+      "compact_transcript": "/7a/27bdec88be/0/transcript.jsonl",
+      "content_hash": "/7a/27bdec88be/0/content_hash.txt",
+      "prompt": "/7a/27bdec88be/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 22522,
+    "cache_read_tokens": 3091738,
+    "output_tokens": 9752,
+    "api_call_count": 13,
+    "subagent_tokens": {
+      "input_tokens": 54,
+      "cache_creation_tokens": 281644,
+      "cache_read_tokens": 1985426,
+      "output_tokens": 21710,
+      "api_call_count": 27
+    }
+  },
+  "redaction": {
+    "replacements": 52,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 52,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
