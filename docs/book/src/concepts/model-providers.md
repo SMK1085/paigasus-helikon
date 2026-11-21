@@ -198,9 +198,15 @@ After that, the `BedrockModel` handle and its clones use native output.
 The provider rewrites the schema first. It adds `additionalProperties: false`,
 changes `oneOf` to `anyOf`, and removes keywords that Bedrock does not accept,
 such as numeric limits. It does not add `additionalProperties` to a node in an
-`allOf` composition, or to an object node next to `oneOf` or `anyOf`. The
+`allOf` composition or to any node below an `allOf` member. It also does not add
+it to an object node next to `oneOf` or `anyOf`. The
 branches of such a node stay open too. Bedrock rejects maps, `patternProperties`,
 `propertyNames`, tuples, the schemas `true` and `{}`, and recursive types.
+
+Bedrock does not enforce the removed limits. The agent loop does not evaluate
+the JSON schema. It checks that the result deserializes into the output type. A
+limit that only the schema states is not checked, so add your own validation for
+it.
 
 `JsonObject` degrades to text on this path. The provider omits `ToolChoice::Required` and `ToolChoice::Tool` with a
 warning. `ToolChoice::Tool` with an undefined name is still an error. For the full rules, see the crate README.
