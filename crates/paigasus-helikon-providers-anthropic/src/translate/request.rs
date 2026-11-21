@@ -180,12 +180,19 @@ struct Translator {
 /// is always an array. Text parts that are empty or whitespace only, and
 /// messages left with no blocks, are dropped because the API rejects them.
 ///
-/// A wire assistant message that has only thinking blocks after all its
-/// `tool_use` blocks join drops them, and then counts as empty. Decisions go
-/// in item order: each drop translates the items after it again.
+/// Two rules drop thinking blocks. Then the item can count as empty.
+///
+/// - A source message with no text and no `tool_use` of its own drops its
+///   thinking blocks, wherever they would land. A thinking block must not
+///   join a round that a different response made.
+/// - A wire assistant message that has only thinking blocks after all its
+///   `tool_use` blocks join drops them. Decisions go in item order: each drop
+///   translates the items after it again.
 pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
     let mut t = Translator::default();
-    let mut drop_thinking = vec![false; items.len()];
+    let mut drop_thinking: Vec<bool> = (0..items.len())
+        .map(|i| source_has_no_text_or_tool_use(items, i))
+        .collect();
     let mut i = 0;
     loop {
         let done = i == items.len();
@@ -210,6 +217,36 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
         }
     }
     t.into_output()
+}
+
+/// `true` when `items[i]` is an `AssistantMessage` whose source message has
+/// no text and no `tool_use` of its own: no non-blank `Text` part, no
+/// `ToolUse` part, and no `Item::ToolCall` before the next
+/// `AssistantMessage` or the next user message with a part that is not a
+/// tool result.
+fn source_has_no_text_or_tool_use(items: &[Item], i: usize) -> bool {
+    let Item::AssistantMessage { content, .. } = &items[i] else {
+        return false;
+    };
+    let own = content.iter().any(|p| match p {
+        ContentPart::Text { text } => !is_blank(text),
+        ContentPart::ToolUse { .. } => true,
+        _ => false,
+    });
+    if own {
+        return false;
+    }
+    let has_call = items[i + 1..]
+        .iter()
+        .take_while(|item| match item {
+            Item::AssistantMessage { .. } => false,
+            Item::UserMessage { content } => content
+                .iter()
+                .all(|p| matches!(p, ContentPart::ToolResult { .. })),
+            _ => true,
+        })
+        .any(|item| matches!(item, Item::ToolCall { .. }));
+    !has_call
 }
 
 impl Translator {
@@ -292,6 +329,8 @@ impl Translator {
                         source.wire = Some(msg);
                     }
                     if let Some(saved) = saved {
+                        // `push_message` cleared any older tentative message.
+                        debug_assert!(self.tentative.is_none());
                         self.tentative = Some(Tentative { msg, saved });
                     }
                 }
@@ -429,6 +468,14 @@ impl Translator {
     /// Go back to `saved`. The messages before `saved.messages_len` did not
     /// change after the save: only the last message gets new blocks, and the
     /// tentative message and all later ones are at or after that length.
+    ///
+    /// `saved` does not hold a tentative message, and the state after the
+    /// restore has none. This is correct: a tentative message that was active
+    /// when `saved` was taken was kept by the push of the new tentative
+    /// message (else that push rolled back to the older save, and this
+    /// `saved` was discarded). A kept message has a `text` or `tool_use`
+    /// block, and it is before `saved.messages_len` or at it, so the restore
+    /// does not change it, and it stays kept.
     fn restore(&mut self, saved: Saved) {
         self.messages.truncate(saved.messages_len);
         self.system_text.truncate(saved.system_len);
@@ -2487,11 +2534,12 @@ mod thinking_round_trip_tests {
         );
     }
 
-    /// Ruling F7, the other direction: the source message has no call, but a
-    /// later nested `tool_use` joins its wire message. The wire message then
-    /// has a `tool_use` block, so the thinking block stays.
+    /// The source message has no call, but a later nested `tool_use` joins
+    /// its wire message. The thinking block came from a different response
+    /// than the `tool_use`, so it is dropped (controller ruling, fix round 1
+    /// of Task 3).
     #[test]
-    fn thinking_only_message_joined_by_later_tool_use_is_kept() {
+    fn thinking_only_message_joined_by_later_tool_use_is_dropped() {
         let items = vec![
             user("q"),
             asst(vec![text("a")]),
@@ -2503,13 +2551,66 @@ mod thinking_round_trip_tests {
             result("t2"),
             result("t3"),
         ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
         assert_eq!(
-            messages(&items),
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![wtext("a"), tu("t1"), tu("t2"), tu("t3")]),
+                umsg(vec![tr("t1"), tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    /// A thinking-only item with no call of its own (for example a `Length`
+    /// finish) does not join an open round of an earlier response.
+    #[test]
+    fn thinking_only_item_with_no_call_does_not_join_open_round() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            call("t1"),
+            call("t2"),
+            result("t1"),
+            asst(vec![reasoning("r"), thinking(0, "r", "SIG_FAKE_1")]),
+            result("t2"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(
+            out,
             json!([
                 utext("q"),
                 amsg(vec![wtext("a"), tu("t1"), tu("t2")]),
-                amsg(vec![wthinking("r", "SIG_FAKE_1"), tu("t3")]),
-                umsg(vec![tr("t1"), tr("t2"), tr("t3")]),
+                umsg(vec![tr("t1"), tr("t2")]),
+            ])
+        );
+    }
+
+    /// The rollback variant: before fix round 1, item A became a tentative
+    /// message, item B joined it, and the rollback of A then let B join the
+    /// round of the earlier response. Neither item has a call, so both drop.
+    #[test]
+    fn thinking_only_item_after_rollback_does_not_join_open_round() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            call("t1"),
+            call("t2"),
+            asst(vec![reasoning("r1"), thinking(0, "r1", "SIG_FAKE_1")]),
+            result("t1"),
+            asst(vec![reasoning("r2"), thinking(0, "r2", "SIG_FAKE_2")]),
+            result("t2"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![wtext("a"), tu("t1"), tu("t2")]),
+                umsg(vec![tr("t1"), tr("t2")]),
             ])
         );
     }
