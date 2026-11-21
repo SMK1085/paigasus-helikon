@@ -68,6 +68,35 @@ pub(crate) struct Config {
     pub(crate) max_output_default: Option<u32>,
 }
 
+/// Make an offline [`Config`] for unit tests. The client makes no AWS call.
+///
+/// This function starts its own Tokio runtime, so do not call it from inside
+/// a runtime.
+#[cfg(test)]
+pub(crate) fn offline_config(model_id: &str) -> Config {
+    let family = ModelFamily::from_model_id(model_id);
+    let capabilities = caps_for(family);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio rt");
+    let client = rt.block_on(async {
+        let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_17())
+            .region(aws_config::Region::new("us-east-1"))
+            .test_credentials()
+            .load()
+            .await;
+        Client::new(&sdk_cfg)
+    });
+    Config {
+        client,
+        model_id: model_id.to_owned(),
+        family,
+        capabilities,
+        max_output_default: None,
+    }
+}
+
 // ── BedrockModelBuilder ───────────────────────────────────────────────────────
 
 /// Fluent builder for [`crate::BedrockModel`].

@@ -59,8 +59,6 @@ impl ForcedChoicePolicy {
     }
 
     /// The model family of this handle.
-    // Used from Task 4 (build_request path selection).
-    #[allow(dead_code)]
     pub(crate) fn family(&self) -> ModelFamily {
         self.family
     }
@@ -75,8 +73,6 @@ impl ForcedChoicePolicy {
     }
 
     /// Record that the service rejected a forced tool choice. Returns `true` only for the first call.
-    // Used from Task 5 (send fallback).
-    #[allow(dead_code)]
     pub(crate) fn record_rejection(&self) -> bool {
         !self.learned.swap(true, Ordering::SeqCst)
     }

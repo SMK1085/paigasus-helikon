@@ -53,8 +53,6 @@ pub(crate) struct PreparedConverse {
 impl PreparedConverse {
     /// Returns `true` when the tool configuration forces a tool call
     /// (`toolChoice` is `any` or `tool`).
-    // Used from Task 5 (send fallback).
-    #[allow(dead_code)]
     pub(crate) fn has_forced_tool_choice(&self) -> bool {
         matches!(
             self.tool_config
@@ -521,28 +519,7 @@ mod tests {
     use crate::policy::{ForcedChoicePolicy, NativeNotice};
 
     fn make_cfg(model_id: &str) -> Config {
-        let family = ModelFamily::from_model_id(model_id);
-        let capabilities = caps_for(family);
-        // Build an offline Bedrock client for test configs.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio rt");
-        let client = rt.block_on(async {
-            let sdk_cfg = aws_config::defaults(aws_config::BehaviorVersion::v2026_11_17())
-                .region(aws_config::Region::new("us-east-1"))
-                .test_credentials()
-                .load()
-                .await;
-            aws_sdk_bedrockruntime::Client::new(&sdk_cfg)
-        });
-        Config {
-            client,
-            model_id: model_id.to_owned(),
-            family,
-            capabilities,
-            max_output_default: None,
-        }
+        crate::builder::offline_config(model_id)
     }
 
     /// A minimal Config for tests — uses a Claude model so synthesis works.
