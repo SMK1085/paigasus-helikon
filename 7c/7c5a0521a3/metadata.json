@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "7c7c5a0521a3",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-839-bedrock-sends-a-forced-toolchoice-to-claude",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "Cargo.lock",
+    "crates/paigasus-helikon-providers-bedrock/Cargo.toml",
+    "crates/paigasus-helikon-providers-bedrock/README.md",
+    "crates/paigasus-helikon-providers-bedrock/src/fallback.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/model.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/stream.rs",
+    "docs/book/src/concepts/model-providers.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7c/7c5a0521a3/0/metadata.json",
+      "transcript": "/7c/7c5a0521a3/0/full.jsonl",
+      "compact_transcript": "/7c/7c5a0521a3/0/transcript.jsonl",
+      "content_hash": "/7c/7c5a0521a3/0/content_hash.txt",
+      "prompt": "/7c/7c5a0521a3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 32623,
+    "cache_read_tokens": 2563044,
+    "output_tokens": 13188,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 66,
+      "cache_creation_tokens": 445750,
+      "cache_read_tokens": 4155944,
+      "output_tokens": 17976,
+      "api_call_count": 29
+    }
+  },
+  "redaction": {
+    "replacements": 150,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 168,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
