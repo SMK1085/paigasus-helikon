@@ -1151,19 +1151,19 @@ mod tests {
     }
 
     fn search_tool() -> ToolDef {
-        ToolDef {
-            name: "search".to_owned(),
-            description: "Search".to_owned(),
-            schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
-        }
+        ToolDef::new(
+            "search",
+            "Search",
+            json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+        )
     }
 
     fn get_balance_tool() -> ToolDef {
-        ToolDef {
-            name: "get_balance".to_owned(),
-            description: "Get account balance".to_owned(),
-            schema: json!({"type": "object", "properties": {"account_id": {"type": "string"}}}),
-        }
+        ToolDef::new(
+            "get_balance",
+            "Get account balance",
+            json!({"type": "object", "properties": {"account_id": {"type": "string"}}}),
+        )
     }
 
     /// A user turn, one tool call and its result.
