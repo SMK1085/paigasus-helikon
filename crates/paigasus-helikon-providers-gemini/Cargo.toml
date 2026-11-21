@@ -36,6 +36,7 @@ wiremock = { workspace = true }
 insta    = { workspace = true, features = ["json", "yaml"] }
 tokio    = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 reqwest  = { workspace = true }
+schemars = { workspace = true }
 
 [lints]
 workspace = true

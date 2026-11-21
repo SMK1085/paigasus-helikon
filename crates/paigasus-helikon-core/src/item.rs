@@ -60,6 +60,24 @@ pub enum Item {
     },
 }
 
+impl Item {
+    /// True for an `AssistantMessage` whose content is not empty and holds only
+    /// [`ContentPart::ProviderData`] parts.
+    ///
+    /// Such a message carries no text for a reader. A text consumer can skip it.
+    pub fn is_provider_data_only(&self) -> bool {
+        match self {
+            Item::AssistantMessage { content, .. } => {
+                !content.is_empty()
+                    && content
+                        .iter()
+                        .all(|p| matches!(p, ContentPart::ProviderData { .. }))
+            }
+            _ => false,
+        }
+    }
+}
+
 /// One content block inside an [`Item`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -106,6 +124,40 @@ pub enum ContentPart {
         /// The reasoning text payload.
         text: String,
     },
+    /// Opaque data that one provider translator owns, for example a Gemini
+    /// `thoughtSignature`.
+    ///
+    /// - `provider` is a wire-format key that one translator owns. It is not
+    ///   the value of `Model::provider()`. Each provider crate that writes
+    ///   provider data exports its key as a `pub const`, so a host can filter
+    ///   or remove the data.
+    /// - A translator reads only the parts with its own key. It ignores every
+    ///   other part without a warning, and it never fails because of one.
+    /// - The part is valid only inside an [`Item::AssistantMessage`]. Every
+    ///   translator ignores it in any other item.
+    /// - `call_id: Some(id)` means the data belongs to the tool call with that
+    ///   id in the same model response. That call is an [`Item::ToolCall`]
+    ///   that follows the message, or a [`ContentPart::ToolUse`] in the same
+    ///   message. Call ids can repeat across responses.
+    /// - The position of the part in `content` has no meaning. `ProviderData`
+    ///   parts keep their arrival order among themselves. A provider that
+    ///   needs block structure stores the whole block in `data`.
+    /// - Rollback note: a reader on an earlier core version fails on
+    ///   `provider_data` with "unknown variant". After the first turn that
+    ///   stores this variant, a session store or a Temporal history holds it.
+    ///   Deploy readers and Temporal workflow workers before writers. Do not
+    ///   roll back core below this version on a deployment that stored such a
+    ///   turn.
+    ProviderData {
+        /// Wire-format key of the translator that owns `data`, for example
+        /// `"gemini"`.
+        provider: String,
+        /// The tool call that `data` belongs to, when it belongs to one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        /// Opaque payload. Only the owning translator reads it.
+        data: serde_json::Value,
+    },
 }
 
 /// Source of a multimedia content block.
@@ -125,4 +177,40 @@ pub enum MediaSource {
         /// Base64-encoded payload.
         data: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pd() -> ContentPart {
+        ContentPart::ProviderData {
+            provider: "gemini".into(),
+            call_id: None,
+            data: serde_json::json!({"k": 1}),
+        }
+    }
+
+    fn assistant(content: Vec<ContentPart>) -> Item {
+        Item::AssistantMessage {
+            content,
+            agent: None,
+        }
+    }
+
+    #[test]
+    fn is_provider_data_only_cases() {
+        assert!(!assistant(vec![]).is_provider_data_only());
+        assert!(assistant(vec![pd()]).is_provider_data_only());
+        assert!(
+            !assistant(vec![ContentPart::Text { text: "a".into() }, pd()]).is_provider_data_only()
+        );
+        assert!(
+            !assistant(vec![ContentPart::Reasoning { text: "r".into() }]).is_provider_data_only()
+        );
+        assert!(!Item::UserMessage {
+            content: vec![pd()]
+        }
+        .is_provider_data_only());
+    }
 }

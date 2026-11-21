@@ -101,9 +101,30 @@ pub fn classify(
             }
         }
     }
-    for (call_id, count) in name_counts {
-        if count != 1 {
-            return Some(Violation::ToolNameNotExactlyOnce { call_id, count });
+    for (call_id, count) in &name_counts {
+        if *count != 1 {
+            return Some(Violation::ToolNameNotExactlyOnce {
+                call_id: call_id.clone(),
+                count: *count,
+            });
+        }
+    }
+
+    // Assertion 8: call-scoped provider data must name a call that the stream
+    // streamed. A `ProviderData` event with `call_id: Some(id)` and no
+    // `ToolCallDelta` for `id` could never attach to a tool call on replay.
+    // Provider data without a `call_id` is not call-scoped and always passes.
+    for event in events {
+        if let Ok(ModelEvent::ProviderData {
+            call_id: Some(call_id),
+            ..
+        }) = event
+        {
+            if !name_counts.iter().any(|(id, _)| id == call_id) {
+                return Some(Violation::ProviderDataUnknownCall {
+                    call_id: call_id.clone(),
+                });
+            }
         }
     }
 
@@ -273,5 +294,51 @@ mod tests {
     fn cancelled_stream_without_finish_conforms() {
         let evs = vec![token("hi")];
         assert_eq!(classify(&evs, Scenario::CancelAfterStopReason, true), None);
+    }
+
+    fn provider_data(call_id: Option<&str>) -> Result<ModelEvent, ModelError> {
+        Ok(ModelEvent::ProviderData {
+            provider: "test".into(),
+            call_id: call_id.map(str::to_owned),
+            data: serde_json::json!({ "sig": "SIG_A" }),
+        })
+    }
+
+    /// Assertion 8: call-scoped data for a call that was never streamed.
+    #[test]
+    fn provider_data_with_unknown_call_id_is_a_violation() {
+        let evs = vec![
+            tool("c1", Some("get_weather"), "{}"),
+            provider_data(Some("x")),
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            }),
+        ];
+        assert_eq!(
+            classify(&evs, Scenario::ToolCallCleanStop, false),
+            Some(Violation::ProviderDataUnknownCall {
+                call_id: "x".into()
+            })
+        );
+    }
+
+    /// Call-scoped data that names a streamed call passes.
+    #[test]
+    fn provider_data_with_known_call_id_passes() {
+        let evs = vec![
+            tool("c1", Some("get_weather"), "{}"),
+            provider_data(Some("c1")),
+            Ok(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            }),
+        ];
+        assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
+    /// Provider data without a call id is not call-scoped.
+    #[test]
+    fn provider_data_without_call_id_passes() {
+        let evs = vec![token("hi"), provider_data(None), finish()];
+        assert_eq!(classify(&evs, Scenario::CleanStop, false), None);
     }
 }

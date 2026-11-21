@@ -138,7 +138,7 @@ impl Model for GeminiModel {
             }
 
             let mut event_stream = response.bytes_stream().eventsource();
-            let mut translator = StreamTranslator::new();
+            let mut translator = StreamTranslator::new(cfg.model_id.clone(), cfg.transport.api_name());
             loop {
                 let next = tokio::select! {
                     biased;

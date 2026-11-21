@@ -1,8 +1,19 @@
 //! Translate core `Item`s into Gemini `contents` + `systemInstruction`.
 
+use crate::PROVIDER_DATA_KEY;
 use paigasus_helikon_core::{ContentPart, Item, MediaSource, ModelError};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+
+/// The dummy thought signature for a `functionCall` part that has no valid
+/// signature in the current turn.
+///
+/// Source: this is the dummy value that Google documents for a history with
+/// no signature. The SMA-820 probe and the SMA-827 probe (capture 6) got
+/// HTTP 200 with it on `gemini-3.8-flash` (Developer API). Google warns that
+/// the dummy can make answers worse, so the translator uses it only as the
+/// fallback.
+pub(crate) const DUMMY_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
 /// `contents` + optional `systemInstruction`.
 pub(crate) struct TranslatedContents {
@@ -78,12 +89,104 @@ impl<'a> OpenCalls<'a> {
     }
 }
 
+/// One wire part, with side data that never goes on the wire.
+struct Part {
+    json: Value,
+    /// The position of a `functionCall` in the model response that the stream
+    /// recorded. `None` for every other part, and for a call with no data.
+    index: Option<u64>,
+}
+
+impl Part {
+    fn plain(json: Value) -> Self {
+        Self { json, index: None }
+    }
+
+    fn is_call(&self) -> bool {
+        self.json.get("functionCall").is_some()
+    }
+
+    fn is_response(&self) -> bool {
+        self.json.get("functionResponse").is_some()
+    }
+}
+
+/// The Gemini provider data of the latest `AssistantMessage`, as
+/// `(call_id, data)`. Each `functionCall` takes and removes the first entry
+/// with its id.
+struct Pending<'a> {
+    entries: Vec<(&'a str, &'a Value)>,
+    model_id: &'a str,
+    api: &'a str,
+}
+
+impl<'a> Pending<'a> {
+    /// Replace the list with the Gemini provider data of one message.
+    fn load(&mut self, content: &'a [ContentPart]) {
+        self.entries = content
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::ProviderData {
+                    provider,
+                    call_id: Some(call_id),
+                    data,
+                } if provider == PROVIDER_DATA_KEY => Some((call_id.as_str(), data)),
+                _ => None,
+            })
+            .collect();
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Build the `functionCall` part for one call. A valid signature goes on
+    /// the part. The stream index goes into the side data.
+    fn function_call(&mut self, call_id: &str, name: &str, args: &Value) -> Part {
+        let data = self
+            .entries
+            .iter()
+            .position(|(id, _)| *id == call_id)
+            .map(|pos| self.entries.remove(pos).1);
+        let mut json = json!({ "functionCall": { "id": call_id, "name": name, "args": args } });
+        if let Some(sig) = data.and_then(|d| self.valid_signature(d)) {
+            json["thoughtSignature"] = Value::String(sig.to_owned());
+        }
+        Part {
+            json,
+            index: data.and_then(|d| d.get("index")).and_then(Value::as_u64),
+        }
+    }
+
+    /// The signature in `data` when it is a non-empty string and `data` names
+    /// this model and this API. Anything else is no signature, never an error.
+    fn valid_signature<'d>(&self, data: &'d Value) -> Option<&'d str> {
+        let sig = data.get("thoughtSignature")?.as_str()?;
+        (!sig.is_empty()
+            && data.get("model").and_then(Value::as_str) == Some(self.model_id)
+            && data.get("api").and_then(Value::as_str) == Some(self.api))
+        .then_some(sig)
+    }
+}
+
 /// Translate core items into Gemini `contents`. Returns an error on an empty
 /// or system-only conversation (Gemini 400s on empty contents).
-pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, ModelError> {
+///
+/// `model_id` and `api` are the configured model and transport. A thought
+/// signature goes back only when its provider data names both.
+pub(crate) fn items_to_contents(
+    items: &[Item],
+    model_id: &str,
+    api: &str,
+) -> Result<TranslatedContents, ModelError> {
     let mut calls = OpenCalls::new(items);
+    let mut pending = Pending {
+        entries: Vec::new(),
+        model_id,
+        api,
+    };
     let mut system_parts: Vec<Value> = Vec::new();
-    let mut entries: Vec<(&'static str, Vec<Value>)> = Vec::new();
+    let mut entries: Vec<(&'static str, Vec<Part>)> = Vec::new();
 
     for it in items {
         match it {
@@ -91,15 +194,23 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
                 system_parts.extend(text_parts(content));
             }
             Item::UserMessage { content } => {
-                entries.push(("user", user_parts(content, &mut calls)?));
+                let parts = user_parts(content, &mut calls)?;
+                // Only a wire part that is not a tool result ends the model
+                // response. Tool results and parts that emit nothing keep the
+                // pending list.
+                if parts.iter().any(|p| p.get("functionResponse").is_none()) {
+                    pending.clear();
+                }
+                entries.push(("user", parts.into_iter().map(Part::plain).collect()));
             }
             Item::AssistantMessage { content, .. } => {
+                pending.load(content);
                 for p in content {
                     if let ContentPart::ToolUse { call_id, name, .. } = p {
                         calls.open(call_id, name);
                     }
                 }
-                entries.push(("model", assistant_parts(content)));
+                entries.push(("model", assistant_parts(content, &mut pending)));
             }
             Item::ToolCall {
                 call_id,
@@ -107,22 +218,19 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
                 args,
             } => {
                 calls.open(call_id, name);
-                entries.push((
-                    "model",
-                    vec![json!({ "functionCall": { "id": call_id, "name": name, "args": args } })],
-                ));
+                entries.push(("model", vec![pending.function_call(call_id, name, args)]));
             }
             Item::ToolResult { call_id, content } => {
                 if let Some(name) = calls.close(call_id)? {
                     entries.push((
                         "user",
-                        vec![json!({
+                        vec![Part::plain(json!({
                             "functionResponse": {
                                 "id": call_id,
                                 "name": name,
                                 "response": tool_response_object(content),
                             }
-                        })],
+                        }))],
                     ));
                 }
             }
@@ -130,7 +238,34 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
         }
     }
 
-    let contents = merge_same_role(entries);
+    let mut merged = merge_same_role(entries);
+    for i in 0..merged.len() {
+        if merged[i].0 == "model" && restore_call_order(&mut merged[i].1) {
+            let ids = call_ids(&merged[i].1);
+            if let Some((role, next)) = merged.get_mut(i + 1) {
+                if *role == "user" {
+                    order_responses(next, &ids);
+                }
+            }
+        }
+    }
+    if is_gemini_3_or_later(model_id) {
+        add_dummy_signatures(&mut merged);
+    }
+    let contents: Vec<Value> = merged
+        .into_iter()
+        .map(|(role, parts)| {
+            let parts: Vec<Value> = parts.into_iter().map(|p| p.json).collect();
+            json!({ "role": role, "parts": parts })
+        })
+        .collect();
+    let mut contents = contents;
+    if is_gemini_3_or_later(model_id) && contents.last().is_some_and(|c| c["role"] == "model") {
+        contents.push(json!({
+            "role": "user",
+            "parts": [{ "text": TRAILING_MODEL_TURN_PROMPT }],
+        }));
+    }
     if contents.is_empty() {
         return Err(ModelError::Other(anyhow::anyhow!(
             "gemini request has no user/model turns (empty or system-only conversation)"
@@ -146,24 +281,23 @@ pub(crate) fn items_to_contents(items: &[Item]) -> Result<TranslatedContents, Mo
 /// Two `user` entries merge only when both hold only `functionResponse` parts
 /// or both hold none. Gemini 3 starts the current turn at the last `user`
 /// content that is not a tool result, and it checks thought signatures only in
-/// that turn. The SDK sends no signatures yet (SMA-827). A text and a
-/// `functionResponse` in one content would keep the unsigned `functionCall` in
-/// the current turn, and Gemini would return HTTP 400. A content that mixes
-/// results and other parts merges with nothing, so a later text never joins a
-/// tool result.
+/// that turn. SMA-820 added this boundary because a text and a
+/// `functionResponse` in one content kept an unsigned `functionCall` in the
+/// current turn, and Gemini returned HTTP 400. The SMA-827 probe (capture 8)
+/// got HTTP 200 for the merged shape with the real signature, so the boundary
+/// is not needed when signatures are present. It stays until Sven decides; see
+/// the SMA-827 spec section "Left for Sven". A content that mixes results and
+/// other parts merges with nothing, so a later text never joins a tool result.
 /// An entry with no parts is dropped first, so it never emits `"parts": []`.
-fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
+fn merge_same_role(entries: Vec<(&'static str, Vec<Part>)>) -> Vec<(&'static str, Vec<Part>)> {
     #[derive(PartialEq, Clone, Copy)]
     enum Class {
         AllResponses,
         NoResponses,
         Mixed,
     }
-    let class = |parts: &[Value]| {
-        let n = parts
-            .iter()
-            .filter(|p| p.get("functionResponse").is_some())
-            .count();
+    let class = |parts: &[Part]| {
+        let n = parts.iter().filter(|p| p.is_response()).count();
         if n == parts.len() {
             Class::AllResponses
         } else if n == 0 {
@@ -173,7 +307,7 @@ fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
         }
     };
     // Each merged entry keeps its class, so a merge never rescans the parts.
-    let mut merged: Vec<(&'static str, Class, Vec<Value>)> = Vec::new();
+    let mut merged: Vec<(&'static str, Class, Vec<Part>)> = Vec::new();
     for (role, parts) in entries {
         if parts.is_empty() {
             continue;
@@ -194,8 +328,117 @@ fn merge_same_role(entries: Vec<(&'static str, Vec<Value>)>) -> Vec<Value> {
     }
     merged
         .into_iter()
-        .map(|(role, _, parts)| json!({ "role": role, "parts": parts }))
+        .map(|(role, _, parts)| (role, parts))
         .collect()
+}
+
+/// Sort the `functionCall` parts of one `model` content by their stream index,
+/// when every call has one. The sort is stable, and the other parts keep their
+/// positions. This restores the order that Gemini sent. Returns `true` when
+/// every call has an index, whether or not the order changed. The caller then
+/// orders the responses to match. Returns `false` when there is no call or a
+/// call has no index.
+fn restore_call_order(parts: &mut [Part]) -> bool {
+    let slots: Vec<usize> = (0..parts.len()).filter(|&i| parts[i].is_call()).collect();
+    if slots.is_empty() || slots.iter().any(|&i| parts[i].index.is_none()) {
+        return false;
+    }
+    if slots
+        .windows(2)
+        .all(|w| parts[w[0]].index <= parts[w[1]].index)
+    {
+        return true;
+    }
+    let mut calls: Vec<Part> = slots
+        .iter()
+        .map(|&i| std::mem::replace(&mut parts[i], Part::plain(Value::Null)))
+        .collect();
+    calls.sort_by_key(|p| p.index);
+    for (slot, part) in slots.into_iter().zip(calls) {
+        parts[slot] = part;
+    }
+    true
+}
+
+/// The `functionCall` ids of one content, in order.
+fn call_ids(parts: &[Part]) -> Vec<String> {
+    parts
+        .iter()
+        .filter_map(|p| p.json["functionCall"]["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Sort the `functionResponse` parts of one `user` content into the order of
+/// `ids`, so the responses follow the calls. The sort is stable. A response
+/// whose id is not in `ids` goes after the matched ones. The other parts keep
+/// their positions.
+fn order_responses(parts: &mut [Part], ids: &[String]) {
+    let slots: Vec<usize> = (0..parts.len())
+        .filter(|&i| parts[i].is_response())
+        .collect();
+    let mut responses: Vec<Part> = slots
+        .iter()
+        .map(|&i| std::mem::replace(&mut parts[i], Part::plain(Value::Null)))
+        .collect();
+    // A repeated id in `ids` matches its first position; the stable sort keeps
+    // the history order of such responses.
+    responses.sort_by_key(|p| {
+        let id = p.json["functionResponse"]["id"].as_str();
+        ids.iter()
+            .position(|c| Some(c.as_str()) == id)
+            .unwrap_or(ids.len())
+    });
+    for (slot, part) in slots.into_iter().zip(responses) {
+        parts[slot] = part;
+    }
+}
+
+/// Say whether `model_id` is Gemini 3 or later. Such a request may carry
+/// [`DUMMY_THOUGHT_SIGNATURE`] and may get a [`TRAILING_MODEL_TURN_PROMPT`] turn.
+///
+/// The dummy is live-tested only on Gemini 3. Requests for a Gemini 1.x or
+/// 2.x id stay as they were before SMA-827 and get no dummy. Every other id
+/// (Gemini 3 and later, unknown ids) gets it. The check uses the part of the id
+/// after the last `/`, so `models/gemini-2.5-flash` and Vertex resource paths work.
+fn is_gemini_3_or_later(model_id: &str) -> bool {
+    let name = model_id.rsplit('/').next().unwrap_or(model_id);
+    !(name.starts_with("gemini-1") || name.starts_with("gemini-2"))
+}
+
+/// Text of the `user` turn that follows a trailing `model` turn.
+///
+/// Gemini rejects a request whose last turn is a model turn. The core
+/// structured-output finalizing request ends with the model's own answer, so
+/// the translator appends this turn for Gemini 3 and later.
+pub(crate) const TRAILING_MODEL_TURN_PROMPT: &str = "Continue.";
+
+/// Put [`DUMMY_THOUGHT_SIGNATURE`] on each `functionCall` part of a `model`
+/// content in the current turn when none of its calls has a signature.
+///
+/// The current turn is every content after the last `user` content with no
+/// `functionResponse` part (all contents when there is no such content).
+/// Gemini checks signatures only in that turn. A content with at least one
+/// signature is sent as received.
+fn add_dummy_signatures(merged: &mut [(&'static str, Vec<Part>)]) {
+    let start = merged
+        .iter()
+        .rposition(|(role, parts)| *role == "user" && !parts.iter().any(Part::is_response))
+        .map_or(0, |i| i + 1);
+    for (role, parts) in &mut merged[start..] {
+        if *role != "model" {
+            continue;
+        }
+        let has_call = parts.iter().any(Part::is_call);
+        let has_signature = parts
+            .iter()
+            .any(|p| p.is_call() && p.json.get("thoughtSignature").is_some());
+        if !has_call || has_signature {
+            continue;
+        }
+        for p in parts.iter_mut().filter(|p| p.is_call()) {
+            p.json["thoughtSignature"] = Value::String(DUMMY_THOUGHT_SIGNATURE.to_owned());
+        }
+    }
 }
 
 fn text_parts(content: &[ContentPart]) -> Vec<Value> {
@@ -232,6 +475,8 @@ fn user_parts<'a>(
             } => {
                 out.push(json!({ "inlineData": { "mimeType": mime_type, "data": data } }));
             }
+            // Provider data is valid only in an assistant message.
+            ContentPart::ProviderData { .. } => {}
             ContentPart::ToolResult { call_id, content } => {
                 if let Some(name) = calls.close(call_id)? {
                     out.push(json!({
@@ -255,19 +500,24 @@ fn user_parts<'a>(
     Ok(out)
 }
 
-fn assistant_parts(content: &[ContentPart]) -> Vec<Value> {
+/// Translate the parts of an `Item::AssistantMessage`. A `ToolUse` part takes
+/// its provider data from `pending`. A `ProviderData` part is never a wire
+/// part: the caller read the Gemini ones into `pending`, and a foreign one is
+/// ignored with no warning.
+fn assistant_parts(content: &[ContentPart], pending: &mut Pending<'_>) -> Vec<Part> {
     let mut out = Vec::new();
     for p in content {
         match p {
             ContentPart::Text { text } if text.is_empty() => {}
-            ContentPart::Text { text } => out.push(json!({ "text": text })),
+            ContentPart::Text { text } => out.push(Part::plain(json!({ "text": text }))),
             ContentPart::ToolUse {
                 call_id,
                 name,
                 args,
             } => {
-                out.push(json!({ "functionCall": { "id": call_id, "name": name, "args": args } }));
+                out.push(pending.function_call(call_id, name, args));
             }
+            ContentPart::ProviderData { .. } => {}
             ContentPart::Reasoning { .. } => { /* deferred (D3) */ }
             other => {
                 tracing::warn!(
@@ -302,6 +552,9 @@ fn tool_response_object(content: &[ContentPart]) -> Value {
 mod tests {
     use super::*;
 
+    const M: &str = "gemini-3.8-flash";
+    const A: &str = "developer";
+
     fn user(s: &str) -> Item {
         Item::UserMessage {
             content: vec![ContentPart::Text { text: s.into() }],
@@ -318,7 +571,7 @@ mod tests {
             },
             user("hi"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(t.system.unwrap()["parts"][0]["text"], "be terse");
         assert_eq!(t.contents.len(), 1);
         assert_eq!(t.contents[0]["role"], "user");
@@ -327,11 +580,11 @@ mod tests {
 
     #[test]
     fn empty_and_system_only_error() {
-        assert!(items_to_contents(&[]).is_err());
+        assert!(items_to_contents(&[], M, A).is_err());
         let sys = vec![Item::System {
             content: vec![ContentPart::Text { text: "x".into() }],
         }];
-        assert!(items_to_contents(&sys).is_err());
+        assert!(items_to_contents(&sys, M, A).is_err());
     }
 
     #[test]
@@ -343,7 +596,7 @@ mod tests {
                 agent: None,
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(t.contents[1]["role"], "model");
     }
 
@@ -363,7 +616,7 @@ mod tests {
                 }],
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         let call = &t.contents[1];
         assert_eq!(call["role"], "model");
         assert_eq!(call["parts"][0]["functionCall"]["name"], "search");
@@ -402,7 +655,7 @@ mod tests {
             },
             user("news"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
@@ -430,7 +683,7 @@ mod tests {
                 }],
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             t.contents[2]["parts"][0]["functionResponse"]["response"]["result"],
             "plain text"
@@ -446,7 +699,7 @@ mod tests {
                 content: vec![ContentPart::Text { text: "{}".into() }],
             },
         ];
-        let err = items_to_contents(&items).err().expect("must error");
+        let err = items_to_contents(&items, M, A).err().expect("must error");
         assert!(err.to_string().contains("unknown call_id ghost"), "{err}");
     }
 
@@ -460,7 +713,7 @@ mod tests {
                 },
             }],
         }];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         let part = &t.contents[0]["parts"][0]["inlineData"];
         assert_eq!(part["mimeType"], "image/png");
         assert_eq!(part["data"], "AAAA");
@@ -486,7 +739,7 @@ mod tests {
                 }],
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         let fr = &t.contents[2]["parts"][0]["functionResponse"];
         assert_eq!(fr["id"], "fc_0");
         assert_eq!(fr["name"], "search"); // recovered from call_id->name map
@@ -508,7 +761,7 @@ mod tests {
                 }],
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         // The user turn must NOT degrade to "parts": []; it has one functionResponse.
         let user_turn = &t.contents[1];
         assert_eq!(user_turn["role"], "user");
@@ -529,7 +782,7 @@ mod tests {
                 },
             ],
         }];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         // Only the text part survives.
         assert_eq!(t.contents[0]["parts"].as_array().unwrap().len(), 1);
         assert_eq!(t.contents[0]["parts"][0]["text"], "see");
@@ -589,7 +842,7 @@ mod tests {
             call("fc_0", "pay"),
             result("fc_0", "{}"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(responses(&t), pairs(&[("fc_0", "search"), ("fc_0", "pay")]));
     }
 
@@ -602,7 +855,7 @@ mod tests {
             result("fc_0", "{}"),
             result("fc_0", "{}"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(responses(&t), pairs(&[("fc_0", "search"), ("fc_0", "pay")]));
     }
 
@@ -627,7 +880,7 @@ mod tests {
                 content: vec![tool_result(), tool_result()],
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(responses(&t), pairs(&[("fc_0", "search"), ("fc_0", "pay")]));
     }
 
@@ -640,7 +893,7 @@ mod tests {
             result("fc_1", "{}"),
             result("fc_0", "{}"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(responses(&t), pairs(&[("fc_1", "pay"), ("fc_0", "search")]));
     }
 
@@ -652,7 +905,7 @@ mod tests {
             result("fc_0", "{\"n\":1}"),
             result("fc_0", "{\"n\":2}"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(responses(&t), pairs(&[("fc_0", "search")]));
         let kept = t
             .contents
@@ -677,7 +930,7 @@ mod tests {
             },
             user("b"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(responses(&t), pairs(&[("fc_0", "search")]));
         assert_eq!(
             Value::Array(t.contents),
@@ -707,7 +960,7 @@ mod tests {
             user("one"),
             user("two"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
@@ -727,7 +980,7 @@ mod tests {
             user("note"),
             result("fc_0", "{}"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
@@ -750,12 +1003,12 @@ mod tests {
             result("fc_1", "{}"),
             result("fc_2", "{}"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
                 {"role": "user", "parts": [{"text": "x"}]},
-                {"role": "model", "parts": [fc("fc_0", "search"), fc("fc_1", "search"), fc("fc_2", "search")]},
+                {"role": "model", "parts": [fc_dummy("fc_0", "search"), fc_dummy("fc_1", "search"), fc_dummy("fc_2", "search")]},
                 {"role": "user", "parts": [
                     fr("fc_0", "search", json!({})),
                     fr("fc_1", "search", json!({})),
@@ -776,7 +1029,7 @@ mod tests {
             user("a"),
             user("b"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
@@ -802,7 +1055,7 @@ mod tests {
                 agent: None,
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             t.contents[1],
             json!({"role": "model", "parts": [{"text": "t"}]})
@@ -818,12 +1071,12 @@ mod tests {
             result("fc_0", "{\"n\":1}"),
             result("fc_1", "{\"n\":2}"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
                 {"role": "user", "parts": [{"text": "x"}]},
-                {"role": "model", "parts": [fc("fc_0", "search"), fc("fc_1", "search")]},
+                {"role": "model", "parts": [fc_dummy("fc_0", "search"), fc_dummy("fc_1", "search")]},
                 {"role": "user", "parts": [
                     fr("fc_0", "search", json!({"n": 1})),
                     fr("fc_1", "search", json!({"n": 2}))
@@ -851,12 +1104,12 @@ mod tests {
                 ],
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
                 {"role": "user", "parts": [{"text": "x"}]},
-                {"role": "model", "parts": [fc("fc_0", "search"), fc("fc_1", "pay")]},
+                {"role": "model", "parts": [fc_dummy("fc_0", "search"), fc_dummy("fc_1", "pay")]},
                 {"role": "user", "parts": [fr("fc_0", "search", json!({}))]},
                 {"role": "user", "parts": [fr("fc_1", "pay", json!({})), {"text": "next"}]},
             ])
@@ -879,7 +1132,7 @@ mod tests {
             },
             user("b"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([
@@ -902,7 +1155,7 @@ mod tests {
             },
             user("b"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([{"role": "user", "parts": [{"text": "a"}, {"text": "b"}]}])
@@ -920,7 +1173,7 @@ mod tests {
             },
             user("b"),
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             Value::Array(t.contents),
             json!([{"role": "user", "parts": [{"text": "a"}, {"text": "b"}]}])
@@ -944,12 +1197,13 @@ mod tests {
             },
             call("fc_1", "pay"),
         ];
-        let t = items_to_contents(&items).unwrap();
-        assert_eq!(t.contents.len(), 2);
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(t.contents.len(), 3);
         assert_eq!(
             t.contents[1],
-            json!({"role": "model", "parts": [{"text": "t"}, fc("fc_0", "search"), fc("fc_1", "pay")]})
+            json!({"role": "model", "parts": [{"text": "t"}, fc_dummy("fc_0", "search"), fc_dummy("fc_1", "pay")]})
         );
+        assert_eq!(t.contents[2], continue_turn());
     }
 
     #[test]
@@ -964,7 +1218,7 @@ mod tests {
                 }],
             },
         ];
-        let t = items_to_contents(&items).unwrap();
+        let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
             t.contents.last().unwrap(),
             &json!({"role": "user", "parts": [fr("fc_0", "search", json!({}))]})
@@ -973,13 +1227,548 @@ mod tests {
 
     #[test]
     fn only_empty_user_text_is_an_empty_conversation_error() {
-        assert!(items_to_contents(&[user("")]).is_err());
+        assert!(items_to_contents(&[user("")], M, A).is_err());
     }
 
     #[test]
     fn result_before_its_call_errors() {
         let items = vec![user("a"), result("fc_0", "{}"), call("fc_0", "search")];
-        let err = items_to_contents(&items).err().expect("must error");
+        let err = items_to_contents(&items, M, A).err().expect("must error");
         assert!(err.to_string().contains("comes before its call"), "{err}");
+    }
+
+    // SMA-827: thought signatures.
+
+    /// A Gemini `ProviderData` part as the stream writes it for a signed call.
+    fn signed(call_id: &str, index: u64, sig: &str) -> ContentPart {
+        pd(
+            call_id,
+            json!({"index": index, "thoughtSignature": sig, "model": M, "api": A}),
+        )
+    }
+
+    /// A Gemini `ProviderData` part as the stream writes it for an unsigned call.
+    fn unsigned(call_id: &str, index: u64) -> ContentPart {
+        pd(call_id, json!({"index": index}))
+    }
+
+    fn pd(call_id: &str, data: Value) -> ContentPart {
+        ContentPart::ProviderData {
+            provider: PROVIDER_DATA_KEY.into(),
+            call_id: Some(call_id.into()),
+            data,
+        }
+    }
+
+    fn assistant(content: Vec<ContentPart>) -> Item {
+        Item::AssistantMessage {
+            content,
+            agent: None,
+        }
+    }
+
+    fn fc_sig(id: &str, name: &str, sig: &str) -> Value {
+        json!({"functionCall": {"id": id, "name": name, "args": {}}, "thoughtSignature": sig})
+    }
+
+    fn fc_dummy(id: &str, name: &str) -> Value {
+        fc_sig(id, name, DUMMY_THOUGHT_SIGNATURE)
+    }
+
+    #[test]
+    fn dummy_thought_signature_value() {
+        assert_eq!(DUMMY_THOUGHT_SIGNATURE, "skip_thought_signature_validator");
+    }
+
+    #[test]
+    fn signature_goes_on_its_call() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("call_1", 0, "SIG_A")]),
+            call("call_1", "search"),
+            result("call_1", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [fc_sig("call_1", "search", "SIG_A")]},
+                {"role": "user", "parts": [fr("call_1", "search", json!({}))]},
+            ])
+        );
+    }
+
+    fn parallel_items() -> Vec<Item> {
+        vec![
+            user("q"),
+            assistant(vec![
+                signed("call_z", 0, "SIG_A"),
+                unsigned("call_a", 1),
+                unsigned("call_m", 2),
+            ]),
+            call("call_a", "search"),
+            call("call_m", "search"),
+            call("call_z", "search"),
+            result("call_a", "{}"),
+            result("call_m", "{}"),
+            result("call_z", "{}"),
+        ]
+    }
+
+    #[test]
+    fn parallel_calls_restore_stream_order() {
+        let t = items_to_contents(&parallel_items(), M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [
+                fc_sig("call_z", "search", "SIG_A"),
+                fc("call_a", "search"),
+                fc("call_m", "search"),
+            ]})
+        );
+        // The results follow the restored call order.
+        assert_eq!(
+            responses(&t),
+            pairs(&[
+                ("call_z", "search"),
+                ("call_a", "search"),
+                ("call_m", "search")
+            ])
+        );
+    }
+
+    #[test]
+    fn signature_pairs_with_tool_use_in_the_same_message() {
+        let tool_use = |id: &str| ContentPart::ToolUse {
+            call_id: id.into(),
+            name: "search".into(),
+            args: json!({}),
+        };
+        let items = vec![
+            user("q"),
+            assistant(vec![
+                tool_use("b"),
+                tool_use("a"),
+                signed("a", 0, "SIG_A"),
+                unsigned("b", 1),
+            ]),
+            Item::UserMessage {
+                content: vec![
+                    ContentPart::ToolResult {
+                        call_id: "a".into(),
+                        content: vec![ContentPart::Text { text: "{}".into() }],
+                    },
+                    ContentPart::ToolResult {
+                        call_id: "b".into(),
+                        content: vec![ContentPart::Text { text: "{}".into() }],
+                    },
+                ],
+            },
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [
+                fc_sig("a", "search", "SIG_A"),
+                fc("b", "search"),
+            ]})
+        );
+    }
+
+    #[test]
+    fn repeated_call_id_keeps_signature_per_round() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("fc_0", 0, "SIG_1")]),
+            call("fc_0", "search"),
+            result("fc_0", "{}"),
+            assistant(vec![signed("fc_0", 0, "SIG_2")]),
+            call("fc_0", "pay"),
+            result("fc_0", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [fc_sig("fc_0", "search", "SIG_1")]},
+                {"role": "user", "parts": [fr("fc_0", "search", json!({}))]},
+                {"role": "model", "parts": [fc_sig("fc_0", "pay", "SIG_2")]},
+                {"role": "user", "parts": [fr("fc_0", "pay", json!({}))]},
+            ])
+        );
+    }
+
+    #[test]
+    fn tool_result_between_calls_keeps_pending() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("a", 0, "SIG_A"), signed("b", 1, "SIG_B")]),
+            call("a", "search"),
+            result("a", "{}"),
+            call("b", "pay"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [fc_sig("a", "search", "SIG_A")]},
+                {"role": "user", "parts": [fr("a", "search", json!({}))]},
+                {"role": "model", "parts": [fc_sig("b", "pay", "SIG_B")]},
+                continue_turn(),
+            ])
+        );
+    }
+
+    #[test]
+    fn unsigned_history_gets_dummy_in_current_turn_only() {
+        let items = vec![
+            user("first"),
+            call("fc_0", "search"),
+            call("fc_1", "search"),
+            result("fc_0", "{}"),
+            result("fc_1", "{}"),
+            assistant_text("done"),
+            user("second"),
+            call("fc_0", "pay"),
+            call("fc_1", "pay"),
+            result("fc_0", "{}"),
+            result("fc_1", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "first"}]},
+                {"role": "model", "parts": [fc("fc_0", "search"), fc("fc_1", "search")]},
+                {"role": "user", "parts": [fr("fc_0", "search", json!({})), fr("fc_1", "search", json!({}))]},
+                {"role": "model", "parts": [{"text": "done"}]},
+                {"role": "user", "parts": [{"text": "second"}]},
+                {"role": "model", "parts": [fc_dummy("fc_0", "pay"), fc_dummy("fc_1", "pay")]},
+                {"role": "user", "parts": [fr("fc_0", "pay", json!({})), fr("fc_1", "pay", json!({}))]},
+            ])
+        );
+    }
+
+    #[test]
+    fn gemini_2_history_gets_no_dummy() {
+        for model in [
+            "gemini-2.5-flash",
+            "models/gemini-2.0-flash",
+            "projects/p/locations/l/publishers/google/models/gemini-2.5-pro",
+            "gemini-1.5-pro",
+        ] {
+            let items = vec![user("q"), call("call_1", "search")];
+            let t = items_to_contents(&items, model, A).unwrap();
+            assert_eq!(
+                t.contents[1],
+                json!({"role": "model", "parts": [fc("call_1", "search")]}),
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_3_and_unknown_ids_keep_the_dummy() {
+        for model in ["models/gemini-3.8-flash", "gemini-4-pro", "my-tuned-model"] {
+            let items = vec![user("q"), call("call_1", "search")];
+            let t = items_to_contents(&items, model, A).unwrap();
+            assert_eq!(
+                t.contents[1],
+                json!({"role": "model", "parts": [fc_dummy("call_1", "search")]}),
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_2_real_signature_is_still_sent_back() {
+        let model = "gemini-2.5-flash";
+        let items = vec![
+            user("q"),
+            assistant(vec![pd(
+                "call_1",
+                json!({"index": 0, "thoughtSignature": "SIG_A", "model": model, "api": A}),
+            )]),
+            call("call_1", "search"),
+        ];
+        let t = items_to_contents(&items, model, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [fc_sig("call_1", "search", "SIG_A")]})
+        );
+    }
+
+    #[test]
+    fn signature_from_other_model_or_api_gets_dummy() {
+        for data in [
+            json!({"index": 0, "thoughtSignature": "SIG_A", "model": "gemini-3.6-flash", "api": A}),
+            json!({"index": 0, "thoughtSignature": "SIG_A", "model": M, "api": "vertex"}),
+        ] {
+            let items = vec![
+                user("q"),
+                assistant(vec![pd("call_1", data.clone())]),
+                call("call_1", "search"),
+            ];
+            let t = items_to_contents(&items, M, A).unwrap();
+            assert_eq!(
+                t.contents[1],
+                json!({"role": "model", "parts": [fc_dummy("call_1", "search")]}),
+                "{data}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_signature_is_absent() {
+        let items = vec![
+            user("q"),
+            assistant(vec![pd(
+                "call_1",
+                json!({"index": 0, "thoughtSignature": 5, "model": M, "api": A}),
+            )]),
+            call("call_1", "search"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [fc_dummy("call_1", "search")]})
+        );
+    }
+
+    #[test]
+    fn mixed_content_is_sent_as_received() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("call_1", 0, "SIG_A"), unsigned("call_2", 1)]),
+            call("call_1", "search"),
+            call("call_2", "search"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [
+                fc_sig("call_1", "search", "SIG_A"),
+                fc("call_2", "search"),
+            ]})
+        );
+    }
+
+    #[test]
+    fn foreign_provider_data_is_ignored_silently() {
+        let items = vec![
+            user("q"),
+            assistant(vec![
+                ContentPart::ProviderData {
+                    provider: "anthropic".into(),
+                    call_id: Some("call_1".into()),
+                    data: json!({"index": 0, "thoughtSignature": "SIG_A", "model": M, "api": A}),
+                },
+                ContentPart::Text { text: "t".into() },
+            ]),
+            call("call_1", "search"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        // The foreign part is not a wire part and gives no signature.
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [{"text": "t"}, fc_dummy("call_1", "search")]},
+                continue_turn(),
+            ])
+        );
+    }
+
+    #[test]
+    fn provider_data_in_user_message_is_dropped() {
+        let items = vec![Item::UserMessage {
+            content: vec![
+                ContentPart::Text { text: "q".into() },
+                signed("call_1", 0, "SIG_A"),
+            ],
+        }];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([{"role": "user", "parts": [{"text": "q"}]}])
+        );
+    }
+
+    #[test]
+    fn provider_data_only_message_emits_no_content() {
+        let items = vec![
+            user("a"),
+            assistant(vec![signed("call_1", 0, "SIG_A")]),
+            user("b"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([{"role": "user", "parts": [{"text": "a"}, {"text": "b"}]}])
+        );
+    }
+
+    #[test]
+    fn no_side_data_reaches_the_wire() {
+        let t = items_to_contents(&parallel_items(), M, A).unwrap();
+        let body = serde_json::to_string(&Value::Array(t.contents)).unwrap();
+        assert!(!body.contains("\"index\""), "{body}");
+        assert!(!body.contains("provider"), "{body}");
+    }
+    #[test]
+    fn empty_signature_is_absent() {
+        let items = vec![
+            user("q"),
+            assistant(vec![pd(
+                "call_1",
+                json!({"index": 0, "thoughtSignature": "", "model": M, "api": A}),
+            )]),
+            call("call_1", "search"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [fc_dummy("call_1", "search")]})
+        );
+    }
+
+    #[test]
+    fn user_message_with_no_wire_part_keeps_pending() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("a", 0, "SIG_A")]),
+            Item::UserMessage {
+                content: vec![ContentPart::Text { text: "".into() }],
+            },
+            call("a", "search"),
+            result("a", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            t.contents[1],
+            json!({"role": "model", "parts": [fc_sig("a", "search", "SIG_A")]})
+        );
+    }
+
+    #[test]
+    fn responses_follow_the_restored_call_order() {
+        let t = items_to_contents(&parallel_items(), M, A).unwrap();
+        assert_eq!(
+            t.contents[2],
+            json!({"role": "user", "parts": [
+                fr("call_z", "search", json!({})),
+                fr("call_a", "search", json!({})),
+                fr("call_m", "search", json!({})),
+            ]})
+        );
+    }
+
+    #[test]
+    fn responses_are_ordered_when_calls_are_already_in_stream_order() {
+        let items = vec![
+            user("q"),
+            assistant(vec![unsigned("a", 0), unsigned("b", 1)]),
+            call("a", "search"),
+            call("b", "search"),
+            result("b", "{}"),
+            result("a", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        let ids: Vec<&str> = t.contents[2]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["functionResponse"]["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn unknown_response_stays_after_the_matched_ones() {
+        // `x` is a call of an earlier model content, so its result is not
+        // among the calls of the content just before it.
+        let items = vec![
+            user("q"),
+            call("x", "other"),
+            user("mid"),
+            assistant(vec![unsigned("b", 0), unsigned("a", 1)]),
+            call("a", "search"),
+            call("b", "search"),
+            result("x", "{}"),
+            result("a", "{}"),
+            result("b", "{}"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        let ids: Vec<&str> = t.contents[4]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["functionResponse"]["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["b", "a", "x"]);
+    }
+
+    fn continue_turn() -> Value {
+        json!({"role": "user", "parts": [{"text": TRAILING_MODEL_TURN_PROMPT}]})
+    }
+
+    #[test]
+    fn gemini_3_trailing_model_turn_gets_a_user_turn() {
+        let items = vec![user("q"), assistant_text("answer")];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [{"text": "answer"}]},
+                continue_turn(),
+            ])
+        );
+        assert_eq!(TRAILING_MODEL_TURN_PROMPT, "Continue.");
+    }
+
+    #[test]
+    fn finalizing_shape_ends_with_user_turn_and_keeps_signature() {
+        let items = vec![
+            user("q"),
+            assistant(vec![signed("call_1", 0, "SIG_A")]),
+            call("call_1", "search"),
+            result("call_1", "{}"),
+            assistant_text("answer"),
+        ];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(
+            Value::Array(t.contents),
+            json!([
+                {"role": "user", "parts": [{"text": "q"}]},
+                {"role": "model", "parts": [fc_sig("call_1", "search", "SIG_A")]},
+                {"role": "user", "parts": [fr("call_1", "search", json!({}))]},
+                {"role": "model", "parts": [{"text": "answer"}]},
+                continue_turn(),
+            ])
+        );
+    }
+
+    #[test]
+    fn gemini_2_trailing_model_turn_is_unchanged() {
+        for model in ["gemini-2.5-flash", "models/gemini-1.5-pro"] {
+            let items = vec![user("q"), assistant_text("answer")];
+            let t = items_to_contents(&items, model, A).unwrap();
+            assert_eq!(t.contents.len(), 2, "{model}");
+            assert_eq!(t.contents[1]["role"], "model", "{model}");
+        }
+    }
+
+    #[test]
+    fn history_ending_with_user_or_tool_result_gets_no_extra_turn() {
+        let t = items_to_contents(&[user("q")], M, A).unwrap();
+        assert_eq!(t.contents.len(), 1);
+        let items = vec![user("q"), call("c", "search"), result("c", "{}")];
+        let t = items_to_contents(&items, M, A).unwrap();
+        assert_eq!(t.contents.len(), 3);
+        assert_eq!(t.contents[2]["role"], "user");
     }
 }

@@ -364,6 +364,12 @@ impl EventMapper {
                 }
             }
             AgentEvent::MessageOutput { item } => {
+                // A message that carries only provider data has no text. Skip it
+                // before any other step, so the frames equal those of a stream
+                // without this event.
+                if item.is_provider_data_only() {
+                    return out;
+                }
                 // Take the single active span before emitting anything: a synthesized
                 // text triple nested inside an open `TOOL_CALL_START` would break
                 // AG-UI's one-active-span rule.
@@ -802,6 +808,32 @@ mod tests {
                 args: serde_json::json!({}),
             },
         }
+    }
+
+    #[test]
+    fn provider_data_only_message_emits_no_frames() {
+        let provider_data = AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: vec![ContentPart::ProviderData {
+                    provider: "gemini".to_owned(),
+                    call_id: None,
+                    data: serde_json::json!({"thoughtSignature": "SIG_A"}),
+                }],
+                agent: None,
+            },
+        };
+        let with = frames_of(&[
+            tc_delta("c1", Some("lookup"), "{\"q\":"),
+            provider_data,
+            tc_delta("c1", None, "1}"),
+            tc_item("c1", "lookup"),
+        ]);
+        let without = frames_of(&[
+            tc_delta("c1", Some("lookup"), "{\"q\":"),
+            tc_delta("c1", None, "1}"),
+            tc_item("c1", "lookup"),
+        ]);
+        assert_eq!(with, without);
     }
 
     /// Assert that `TOOL_CALL_*` frames in `frames` nest properly: at most one call

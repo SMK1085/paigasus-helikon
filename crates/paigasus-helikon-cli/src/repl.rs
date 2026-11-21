@@ -213,16 +213,75 @@ async fn run_turn(registry: &AgentRegistry, current: &str, session: Arc<dyn Sess
 
     let mut events = streaming.events;
     while let Some(event) = events.next().await {
-        match event {
-            AgentEvent::TokenDelta { text } => {
-                print!("{text}");
-                std::io::stdout().flush().ok();
-            }
-            AgentEvent::MessageOutput { .. } => println!(),
-            AgentEvent::UserMessageInjected { .. } => println!("[user message injected]"),
-            AgentEvent::RunStopped { reason, .. } => println!("stopped: {reason}"),
-            AgentEvent::RunFailed { error } => println!("error: {error}"),
-            _ => {}
+        let mut out = std::io::stdout();
+        render(&event, &mut out);
+        out.flush().ok();
+    }
+}
+
+/// Write one agent event to `out` in the REPL's plain-text form.
+///
+/// A message that carries only provider data has no text, so it writes nothing.
+fn render(event: &AgentEvent, out: &mut impl std::io::Write) {
+    match event {
+        AgentEvent::TokenDelta { text } => {
+            write!(out, "{text}").ok();
         }
+        AgentEvent::MessageOutput { item } => {
+            if !item.is_provider_data_only() {
+                writeln!(out).ok();
+            }
+        }
+        AgentEvent::UserMessageInjected { .. } => {
+            writeln!(out, "[user message injected]").ok();
+        }
+        AgentEvent::RunStopped { reason, .. } => {
+            writeln!(out, "stopped: {reason}").ok();
+        }
+        AgentEvent::RunFailed { error } => {
+            writeln!(out, "error: {error}").ok();
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use paigasus_helikon_core::{ContentPart, Item};
+
+    fn message(parts: Vec<ContentPart>) -> AgentEvent {
+        AgentEvent::MessageOutput {
+            item: Item::AssistantMessage {
+                content: parts,
+                agent: None,
+            },
+        }
+    }
+
+    #[test]
+    fn provider_data_only_message_writes_nothing() {
+        let mut out = Vec::new();
+        render(
+            &message(vec![ContentPart::ProviderData {
+                provider: "gemini".to_owned(),
+                call_id: None,
+                data: serde_json::json!({"thoughtSignature": "SIG_A"}),
+            }]),
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn text_message_writes_a_newline() {
+        let mut out = Vec::new();
+        render(
+            &message(vec![ContentPart::Text {
+                text: "hi".to_owned(),
+            }]),
+            &mut out,
+        );
+        assert_eq!(out, b"\n");
     }
 }

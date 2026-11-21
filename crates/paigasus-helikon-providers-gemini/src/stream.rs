@@ -3,18 +3,25 @@
 use paigasus_helikon_core::{FinishReason, ModelError, ModelEvent};
 
 use crate::sse::GeminiChunk;
+use crate::PROVIDER_DATA_KEY;
 
 /// Stateful translator from Gemini SSE chunks to core `ModelEvent`s.
 pub(crate) struct StreamTranslator {
     fn_index: usize,
+    call_index: usize,
+    model_id: String,
+    api: &'static str,
     saw_function_call: bool,
     finish_reason: Option<String>,
 }
 
 impl StreamTranslator {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(model_id: String, api: &'static str) -> Self {
         Self {
             fn_index: 0,
+            call_index: 0,
+            model_id,
+            api,
             saw_function_call: false,
             finish_reason: None,
         }
@@ -45,9 +52,26 @@ impl StreamTranslator {
                             id
                         });
                         out.push(Ok(ModelEvent::ToolCallDelta {
-                            call_id,
+                            call_id: call_id.clone(),
                             name: Some(fc.name),
                             args_delta: fc.args.to_string(),
+                        }));
+                        let index = self.call_index;
+                        self.call_index += 1;
+                        let sig = part.thought_signature.as_ref().and_then(|v| v.as_str());
+                        let data = match sig {
+                            Some(sig) => serde_json::json!({
+                                "index": index,
+                                "thoughtSignature": sig,
+                                "model": self.model_id,
+                                "api": self.api,
+                            }),
+                            None => serde_json::json!({ "index": index }),
+                        };
+                        out.push(Ok(ModelEvent::ProviderData {
+                            provider: PROVIDER_DATA_KEY.to_owned(),
+                            call_id: Some(call_id),
+                            data,
                         }));
                     }
                 }
@@ -97,7 +121,7 @@ mod tests {
 
     #[test]
     fn text_delta_emitted() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let evs = t.consume(chunk(serde_json::json!({
             "candidates": [ { "content": { "parts": [ { "text": "hello" } ] } } ]
         })));
@@ -106,7 +130,7 @@ mod tests {
 
     #[test]
     fn function_call_uses_native_id() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let evs = t.consume(chunk(serde_json::json!({
             "candidates": [ { "content": { "parts": [
                 { "functionCall": { "id": "fc_x", "name": "search", "args": {"q":"c"} } }
@@ -128,7 +152,7 @@ mod tests {
 
     #[test]
     fn function_call_without_id_synthesizes() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let evs = t.consume(chunk(serde_json::json!({
             "candidates": [ { "content": { "parts": [ { "functionCall": { "name": "x", "args": {} } } ] } } ]
         })));
@@ -140,7 +164,7 @@ mod tests {
 
     #[test]
     fn usage_maps_thoughts_to_reasoning_tokens() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let evs = t.consume(chunk(serde_json::json!({
             "usageMetadata": { "promptTokenCount": 10, "candidatesTokenCount": 5,
                 "cachedContentTokenCount": 2, "thoughtsTokenCount": 3 }
@@ -163,7 +187,7 @@ mod tests {
 
     #[test]
     fn finish_reason_stop_emitted_on_finish() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let _ = t.consume(chunk(serde_json::json!({
             "candidates": [ { "content": { "parts": [ { "text": "hi" } ] }, "finishReason": "STOP" } ]
         })));
@@ -178,7 +202,7 @@ mod tests {
 
     #[test]
     fn finish_with_function_call_is_tool_calls() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let _ = t.consume(chunk(serde_json::json!({
             "candidates": [ { "content": { "parts": [ { "functionCall": { "name": "x", "args": {} } } ] }, "finishReason": "STOP" } ]
         })));
@@ -193,7 +217,7 @@ mod tests {
 
     #[test]
     fn truncated_stream_emits_no_finish() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let _ = t.consume(chunk(serde_json::json!({
             "candidates": [ { "content": { "parts": [ { "text": "partial" } ] } } ]
         })));
@@ -202,7 +226,7 @@ mod tests {
 
     #[test]
     fn blocked_prompt_is_refused() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let evs = t.consume(chunk(
             serde_json::json!({ "promptFeedback": { "blockReason": "SAFETY" } }),
         ));
@@ -211,7 +235,7 @@ mod tests {
 
     #[test]
     fn safety_finish_maps_to_content_filter() {
-        let mut t = StreamTranslator::new();
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
         let _ = t.consume(chunk(
             serde_json::json!({ "candidates": [ { "finishReason": "SAFETY" } ] }),
         ));
@@ -222,5 +246,109 @@ mod tests {
                 reason: FinishReason::ContentFilter
             })
         ));
+    }
+
+    fn data_of(ev: &Result<ModelEvent, ModelError>) -> (&Option<String>, &serde_json::Value) {
+        match ev {
+            Ok(ModelEvent::ProviderData {
+                provider,
+                call_id,
+                data,
+            }) => {
+                assert_eq!(provider, "gemini");
+                (call_id, data)
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signed_function_call_emits_provider_data() {
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+        let evs = t.consume(chunk(serde_json::json!({
+            "candidates": [ { "content": { "parts": [
+                { "functionCall": { "id": "call_1", "name": "search", "args": {} },
+                  "thoughtSignature": "SIG_A" }
+            ] } } ]
+        })));
+        assert_eq!(evs.len(), 2);
+        assert!(
+            matches!(&evs[0], Ok(ModelEvent::ToolCallDelta { call_id, .. }) if call_id == "call_1")
+        );
+        let (call_id, data) = data_of(&evs[1]);
+        assert_eq!(call_id.as_deref(), Some("call_1"));
+        assert_eq!(
+            *data,
+            serde_json::json!({"index":0,"thoughtSignature":"SIG_A","model":"gemini-3.8-flash","api":"developer"})
+        );
+    }
+
+    #[test]
+    fn unsigned_call_gets_index_only() {
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+        let evs = t.consume(chunk(serde_json::json!({
+            "candidates": [ { "content": { "parts": [
+                { "functionCall": { "id": "a", "name": "x", "args": {} }, "thoughtSignature": "SIG_A" },
+                { "functionCall": { "id": "b", "name": "y", "args": {} } }
+            ] } } ]
+        })));
+        assert_eq!(evs.len(), 4);
+        let (call_id, data) = data_of(&evs[3]);
+        assert_eq!(call_id.as_deref(), Some("b"));
+        assert_eq!(*data, serde_json::json!({"index":1}));
+    }
+
+    #[test]
+    fn index_counts_across_chunks() {
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+        let one = |id: &str| {
+            chunk(serde_json::json!({
+                "candidates": [ { "content": { "parts": [
+                    { "functionCall": { "id": id, "name": "x", "args": {} } }
+                ] } } ]
+            }))
+        };
+        let first = t.consume(one("a"));
+        let second = t.consume(one("b"));
+        assert_eq!(*data_of(&first[1]).1, serde_json::json!({"index":0}));
+        assert_eq!(*data_of(&second[1]).1, serde_json::json!({"index":1}));
+    }
+
+    #[test]
+    fn synthesized_id_matches_provider_data() {
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+        let evs = t.consume(chunk(serde_json::json!({
+            "candidates": [ { "content": { "parts": [
+                { "functionCall": { "name": "x", "args": {} } }
+            ] } } ]
+        })));
+        assert!(
+            matches!(&evs[0], Ok(ModelEvent::ToolCallDelta { call_id, .. }) if call_id == "fc_0")
+        );
+        assert_eq!(data_of(&evs[1]).0.as_deref(), Some("fc_0"));
+    }
+
+    #[test]
+    fn text_signature_is_ignored() {
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+        let evs = t.consume(chunk(serde_json::json!({
+            "candidates": [ { "content": { "parts": [
+                { "text": "hi", "thoughtSignature": "SIG_T" }
+            ] } } ]
+        })));
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Ok(ModelEvent::TokenDelta { text }) if text == "hi"));
+    }
+    #[test]
+    fn non_string_signature_keeps_the_call() {
+        let mut t = StreamTranslator::new("gemini-3.8-flash".to_owned(), "developer");
+        let evs = t.consume(chunk(serde_json::json!({
+            "candidates": [ { "content": { "parts": [
+                { "functionCall": { "id": "a", "name": "x", "args": {} }, "thoughtSignature": 5 }
+            ] } } ]
+        })));
+        assert_eq!(evs.len(), 2);
+        assert!(matches!(&evs[0], Ok(ModelEvent::ToolCallDelta { call_id, .. }) if call_id == "a"));
+        assert_eq!(*data_of(&evs[1]).1, serde_json::json!({"index":0}));
     }
 }

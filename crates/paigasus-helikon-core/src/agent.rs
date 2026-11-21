@@ -1491,6 +1491,7 @@ where
                                             };
                                         }
                                         crate::ModelEvent::Usage { .. }
+                                        | crate::ModelEvent::ProviderData { .. }
                                         | crate::ModelEvent::Finish { .. } => {}
                                     }
                                 }

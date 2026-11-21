@@ -68,6 +68,8 @@ A typical run walks `CallingModel → ExecutingTools → CallingModel → … �
 
 The raw `TokenDelta` / `ToolCallDelta` events stream as the provider emits them; the `MessageOutput` / `ToolCallItem` / `ToolOutputItem` events carry the same content re-aggregated into a complete `Item` once the turn settles.
 
+A Gemini 3 turn that has only tool calls also yields a `MessageOutput`. Its message holds only provider data (see `Item::is_provider_data_only()`). It has no text. The core runner, the workflow agents, the CLI, AG-UI and the HTTP DTO text output skip such a message. A custom consumer that prints text must skip it too.
+
 ## Driving a run to completion
 
 The common case: call `run`, then drain the stream into a `RunResult` with `RunResultStreaming`.

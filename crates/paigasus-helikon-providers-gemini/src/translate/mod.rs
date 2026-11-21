@@ -53,7 +53,7 @@ pub(crate) fn build_request(
         }
     }
 
-    let translated = items_to_contents(&req.messages)?;
+    let translated = items_to_contents(&req.messages, &cfg.model_id, cfg.transport.api_name())?;
     let mut body = Map::new();
     body.insert("contents".into(), Value::Array(translated.contents));
     if let Some(sys) = translated.system {
@@ -92,9 +92,6 @@ pub(crate) fn build_request(
         body.insert("generationConfig".into(), Value::Object(gen));
     }
 
-    // model_id is carried by the URL, not the body (Developer/Vertex differ);
-    // reference it here so the orchestrator owns the full config surface.
-    let _ = &cfg.model_id;
     Ok(PreparedRequest {
         body: Value::Object(body),
     })
@@ -327,5 +324,142 @@ mod snap {
             name: "missing".into(),
         });
         assert!(build_request(&cfg(), &r).is_err());
+    }
+}
+
+#[cfg(test)]
+mod round_trip {
+    use super::*;
+    use crate::builder::{Config, Transport};
+    use crate::sse::GeminiChunk;
+    use crate::stream::StreamTranslator;
+    use paigasus_helikon_core::{
+        AgentEvent, ContentPart, Item, ModelCapabilities, ModelEvent, ModelRequest,
+        ModelTurnAccumulator, SessionRecorder,
+    };
+    use serde_json::{json, Value};
+
+    const MODEL: &str = "gemini-3.8-flash";
+    const FIXTURE: &str = include_str!("../../tests/fixtures/parallel_signed.sse");
+
+    fn cfg() -> Config {
+        Config {
+            http: reqwest::Client::new(),
+            base_url: None,
+            model_id: MODEL.into(),
+            transport: Transport::Developer,
+            auth: crate::auth::Auth::ApiKey("k".into()),
+            capabilities: ModelCapabilities::empty(),
+        }
+    }
+
+    /// Translate the signed fixture into core model events.
+    fn fixture_events() -> Vec<ModelEvent> {
+        let mut translator = StreamTranslator::new(MODEL.to_owned(), "developer");
+        let mut events = Vec::new();
+        for line in FIXTURE.lines() {
+            let Some(json) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            let chunk: GeminiChunk = serde_json::from_str(json).unwrap();
+            events.extend(translator.consume(chunk).into_iter().map(Result::unwrap));
+        }
+        events.extend(translator.finish().into_iter().map(Result::unwrap));
+        events
+    }
+
+    /// The turn's items, as the core accumulator builds them.
+    fn turn_items() -> Vec<Item> {
+        let mut acc = ModelTurnAccumulator::new("root");
+        for ev in &fixture_events() {
+            acc.observe(ev);
+        }
+        acc.finish().unwrap().items
+    }
+
+    fn results_for(items: &[Item]) -> Vec<Item> {
+        items
+            .iter()
+            .filter_map(|i| match i {
+                Item::ToolCall { call_id, .. } => Some(Item::ToolResult {
+                    call_id: call_id.clone(),
+                    content: vec![ContentPart::Text {
+                        text: "{\"ok\":true}".into(),
+                    }],
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn user_go() -> Item {
+        Item::UserMessage {
+            content: vec![ContentPart::Text { text: "go".into() }],
+        }
+    }
+
+    /// Assert the request carries `SIG_A` on the first call, calls in stream
+    /// order, and no dummy signature anywhere.
+    fn assert_request_is_faithful(messages: Vec<Item>) {
+        let mut req = ModelRequest::new();
+        req.messages = messages;
+        let body = build_request(&cfg(), &req).unwrap().body;
+        let text = body.to_string();
+        assert!(
+            !text.contains(request::DUMMY_THOUGHT_SIGNATURE),
+            "dummy signature in {text}"
+        );
+        let calls: Vec<&Value> = body["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|c| c["parts"].as_array().unwrap().iter())
+            .filter(|p| p.get("functionCall").is_some())
+            .collect();
+        let names: Vec<&str> = calls
+            .iter()
+            .map(|p| p["functionCall"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["search", "weather", "weather"], "{body}");
+        let cities: Vec<Value> = calls[1..]
+            .iter()
+            .map(|p| p["functionCall"]["args"]["city"].clone())
+            .collect();
+        assert_eq!(cities, [json!("Paris"), json!("Rome")], "{body}");
+        assert_eq!(calls[0]["thoughtSignature"], json!("SIG_A"), "{body}");
+        assert!(calls[1].get("thoughtSignature").is_none(), "{body}");
+        assert!(calls[2].get("thoughtSignature").is_none(), "{body}");
+    }
+
+    #[test]
+    fn stream_to_request_round_trip() {
+        let items = turn_items();
+        let mut messages = vec![user_go()];
+        messages.extend(items.iter().cloned());
+        messages.extend(results_for(&items));
+        assert_request_is_faithful(messages);
+    }
+
+    #[test]
+    fn session_projection_round_trip() {
+        let items = turn_items();
+        let mut recorder = SessionRecorder::new("root");
+        recorder.record_input(&[user_go()]);
+        for item in &items {
+            match item {
+                Item::AssistantMessage { .. } => {
+                    recorder.observe(&AgentEvent::MessageOutput { item: item.clone() })
+                }
+                Item::ToolCall { .. } => {
+                    recorder.observe(&AgentEvent::ToolCallItem { item: item.clone() })
+                }
+                _ => {}
+            }
+        }
+        for result in results_for(&items) {
+            recorder.observe(&AgentEvent::ToolOutputItem { item: result });
+        }
+        let snapshot = paigasus_helikon_core::project(&recorder.drain());
+        assert_request_is_faithful(snapshot.messages);
     }
 }

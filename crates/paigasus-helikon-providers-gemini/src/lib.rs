@@ -58,6 +58,18 @@
 //! Remote-URL images, audio parts, and non-text tool-result parts are silently
 //! dropped during request translation. Reasoning streaming (`ModelEvent::ReasoningDelta`)
 //! is not yet emitted by this provider.
+//!
+//! Tool loops on Gemini 3 work with thought signatures. The provider keeps each
+//! signature and sends it back on its own call. For a call of the current turn
+//! with no valid signature, it sends the documented dummy value. It sends the
+//! dummy only for Gemini 3 and later ids, and it is live-tested only on
+//! `gemini-3.8-flash` (Developer API). Vertex signatures are not live-tested.
+//! Text-level signatures are not sent back.
+//!
+//! For Gemini 3 and later, a request that ends with a model turn gets a `user` text turn "Continue." appended, because Gemini rejects such a request.
+
+/// Key under which this crate stores its data in `ProviderData` parts and events.
+pub const PROVIDER_DATA_KEY: &str = "gemini";
 
 mod auth;
 mod builder;
@@ -68,6 +80,9 @@ mod sse;
 mod stream;
 mod translate;
 mod transport;
+
+#[cfg(test)]
+mod live_round_trip;
 
 #[cfg(feature = "vertex-adc")]
 pub use auth::AdcTokenProvider;

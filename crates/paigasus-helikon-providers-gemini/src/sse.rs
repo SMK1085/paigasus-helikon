@@ -36,6 +36,10 @@ pub(crate) struct Part {
     pub(crate) text: Option<String>,
     #[serde(default)]
     pub(crate) function_call: Option<FunctionCall>,
+    /// Kept as raw JSON, so a value that is not a string never rejects the
+    /// chunk. The translator reads only a string.
+    #[serde(default)]
+    pub(crate) thought_signature: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]

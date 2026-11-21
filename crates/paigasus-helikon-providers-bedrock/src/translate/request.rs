@@ -135,6 +135,8 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                             let result_block = build_tool_result_block(call_id, content);
                             blocks.push(ContentBlock::ToolResult(result_block));
                         }
+                        // Provider data from another provider has no Bedrock form.
+                        ContentPart::ProviderData { .. } => {}
                         _ => {
                             tracing::warn!(
                                 target: "paigasus::bedrock::translate",
@@ -192,6 +194,8 @@ pub(crate) fn items_to_messages(items: &[Item]) -> Result<TranslatedMessages, Mo
                                 "dropping ContentPart::Reasoning — round-trip not supported on Bedrock",
                             );
                         }
+                        // Provider data from another provider has no Bedrock form.
+                        ContentPart::ProviderData { .. } => {}
                         _ => {
                             tracing::warn!(
                                 target: "paigasus::bedrock::translate",
@@ -1398,5 +1402,25 @@ mod tests {
         let w = wire(&items).unwrap();
         let msgs = w["messages"].as_array().unwrap();
         assert_eq!(msgs.last().unwrap(), &msg("user", vec![tr("t1")]));
+    }
+
+    #[test]
+    fn provider_data_dropped_without_warning() {
+        // This crate has no tracing capture helper, so the test asserts on
+        // the output only: the request equals the one without the parts.
+        let pd = || ContentPart::ProviderData {
+            provider: "gemini".to_owned(),
+            call_id: None,
+            data: json!({"sig": "SIG_A"}),
+        };
+        let with = vec![
+            user(vec![text("q"), pd()]),
+            assistant(vec![pd()]),
+            assistant(vec![text("a"), pd()]),
+        ];
+        let without = vec![user(vec![text("q")]), assistant(vec![text("a")])];
+        let out = wire(&with).unwrap();
+        assert_eq!(out, wire(&without).unwrap());
+        assert!(!out.to_string().contains("SIG_A"));
     }
 }

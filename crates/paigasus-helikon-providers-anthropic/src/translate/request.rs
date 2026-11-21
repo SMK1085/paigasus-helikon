@@ -239,6 +239,8 @@ fn user_blocks(content: &[ContentPart]) -> Value {
                     None
                 }
             },
+            // Provider data from another provider has no Anthropic form.
+            ContentPart::ProviderData { .. } => None,
             _ => None,
         })
         .collect();
@@ -264,6 +266,8 @@ fn assistant_blocks(content: &[ContentPart]) -> Value {
                 );
                 None
             }
+            // Provider data from another provider has no Anthropic form.
+            ContentPart::ProviderData { .. } => None,
             _ => None,
         })
         .collect();
@@ -1304,5 +1308,51 @@ mod tests {
         assert_eq!(block["source"]["type"], "base64");
         assert_eq!(block["source"]["media_type"], "image/png");
         assert_eq!(block["source"]["data"], "AAAA");
+    }
+}
+
+/// Provider data from another provider is dropped without a message
+/// (SMA-827). This crate has no tracing capture helper, so the tests assert
+/// on the output only.
+#[cfg(test)]
+mod provider_data_tests {
+    use super::*;
+
+    fn pd() -> ContentPart {
+        ContentPart::ProviderData {
+            provider: "gemini".to_owned(),
+            call_id: None,
+            data: json!({"sig": "SIG_A"}),
+        }
+    }
+
+    fn text(t: &str) -> ContentPart {
+        ContentPart::Text { text: t.to_owned() }
+    }
+
+    #[test]
+    fn provider_data_dropped_without_warning() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("q"), pd()],
+            },
+            Item::AssistantMessage {
+                content: vec![pd()],
+                agent: None,
+            },
+            Item::AssistantMessage {
+                content: vec![text("a"), pd()],
+                agent: None,
+            },
+        ];
+        let out = translate_messages(&items);
+        assert_eq!(
+            out.messages,
+            json!([
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "a"}]},
+            ]),
+        );
+        assert!(!out.messages.to_string().contains("SIG_A"));
     }
 }

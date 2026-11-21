@@ -48,6 +48,11 @@ pub(crate) fn to_chat_messages(items: &[Item]) -> Value {
                 emit_user_or_hoist(content, &mut out);
             }
             Item::AssistantMessage { content, agent: _ } => {
+                // Provider data from another provider carries no text for
+                // OpenAI. Skip the whole message so no empty one is sent.
+                if item.is_provider_data_only() {
+                    continue;
+                }
                 flush_pending(&mut out, &mut pending_tool_calls);
                 out.push(assistant_message(content));
             }
@@ -112,6 +117,8 @@ fn emit_user_or_hoist(content: &[ContentPart], out: &mut Vec<Value>) {
             ContentPart::ToolResult { call_id, content } => {
                 hoisted.push((call_id.clone(), text_of(content)));
             }
+            // Provider data from another provider has no OpenAI form.
+            ContentPart::ProviderData { .. } => {}
             other => user_parts.push(other),
         }
     }
@@ -200,6 +207,7 @@ fn assistant_message(content: &[ContentPart]) -> Value {
                 tool_calls.push(openai_tool_call(call_id, name, args));
             }
             ContentPart::Reasoning { .. } => { /* drop */ }
+            ContentPart::ProviderData { .. } => { /* foreign provider data: drop */ }
             ContentPart::Image { .. } | ContentPart::Audio { .. } => {
                 tracing::warn!(
                     target: "paigasus::openai::translate",
@@ -282,6 +290,8 @@ pub(crate) fn to_responses_input(items: &[Item]) -> Value {
                                 "output": text_of(content),
                             }));
                         }
+                        // Provider data from another provider has no OpenAI form.
+                        ContentPart::ProviderData { .. } => {}
                         _ => { /* drop reasoning/audio/future variants */ }
                     }
                 }
@@ -738,5 +748,116 @@ mod tracing_target_tests {
             vec!["paigasus::openai::translate".to_owned()],
             "the warn must land on its declared target, not on the module path"
         );
+    }
+}
+
+/// Provider data from another provider is dropped without a message and
+/// without a warning (SMA-827).
+#[cfg(test)]
+mod provider_data_tests {
+    use super::*;
+    use crate::test_tracing;
+
+    fn text(t: &str) -> ContentPart {
+        ContentPart::Text { text: t.to_owned() }
+    }
+
+    fn pd() -> ContentPart {
+        ContentPart::ProviderData {
+            provider: "gemini".to_owned(),
+            call_id: None,
+            data: json!({"sig": "SIG_A"}),
+        }
+    }
+
+    fn user(t: &str) -> Item {
+        Item::UserMessage {
+            content: vec![text(t)],
+        }
+    }
+
+    fn pd_assistant() -> Item {
+        Item::AssistantMessage {
+            content: vec![pd()],
+            agent: None,
+        }
+    }
+
+    fn call(id: &str) -> Item {
+        Item::ToolCall {
+            call_id: id.to_owned(),
+            name: "f".to_owned(),
+            args: json!({}),
+        }
+    }
+
+    fn result(id: &str) -> Item {
+        Item::ToolResult {
+            call_id: id.to_owned(),
+            content: vec![text("ok")],
+        }
+    }
+
+    #[test]
+    fn provider_data_only_assistant_alone_emits_nothing() {
+        test_tracing::start();
+        let out = to_chat_messages(&[user("q"), pd_assistant(), user("r")]);
+        assert_eq!(
+            out,
+            json!([{"role": "user", "content": "q"}, {"role": "user", "content": "r"}])
+        );
+        assert!(test_tracing::captured().is_empty());
+    }
+
+    #[test]
+    fn provider_data_only_assistant_then_calls_forms_one_message() {
+        test_tracing::start();
+        let tail = [call("a"), call("b"), result("a"), result("b")];
+        let mut with = vec![user("q"), pd_assistant()];
+        with.extend(tail.iter().cloned());
+        let mut without = vec![user("q")];
+        without.extend(tail.iter().cloned());
+        let out = to_chat_messages(&with);
+        assert_eq!(out, to_chat_messages(&without));
+        let arr = out.as_array().unwrap();
+        assert_eq!(arr.len(), 4);
+        assert_eq!(arr[1]["role"], "assistant");
+        assert_eq!(arr[1]["tool_calls"].as_array().unwrap().len(), 2);
+        assert_eq!(arr[2]["role"], "tool");
+        assert_eq!(arr[3]["role"], "tool");
+        assert!(test_tracing::captured().is_empty());
+    }
+
+    #[test]
+    fn provider_data_in_user_message_is_dropped() {
+        test_tracing::start();
+        let out = to_chat_messages(&[Item::UserMessage {
+            content: vec![text("q"), pd()],
+        }]);
+        assert_eq!(out, json!([{"role": "user", "content": "q"}]));
+        let out = to_chat_messages(&[Item::UserMessage {
+            content: vec![pd()],
+        }]);
+        assert_eq!(out, json!([]));
+        assert!(test_tracing::captured().is_empty());
+    }
+
+    #[test]
+    fn provider_data_dropped_without_warning() {
+        test_tracing::start();
+        let out = to_responses_input(&[
+            Item::UserMessage {
+                content: vec![text("q"), pd()],
+            },
+            Item::AssistantMessage {
+                content: vec![text("a"), pd()],
+                agent: None,
+            },
+            pd_assistant(),
+        ]);
+        let s = out.to_string();
+        assert!(!s.contains("SIG_A") && !s.contains("gemini"));
+        assert_eq!(out.as_array().unwrap().len(), 2);
+        assert!(test_tracing::captured().is_empty());
     }
 }

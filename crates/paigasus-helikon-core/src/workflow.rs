@@ -29,7 +29,13 @@ pub(crate) fn has_resume_input(input: &AgentInput) -> bool {
 }
 
 /// Concatenate the `ContentPart::Text` of an `Item::AssistantMessage`.
+///
+/// Returns `None` for a message that holds only provider data. It carries no
+/// text, so it must not replace the text of an earlier message.
 pub(crate) fn assistant_text(item: &Item) -> Option<String> {
+    if item.is_provider_data_only() {
+        return None;
+    }
     match item {
         Item::AssistantMessage { content, .. } => Some(
             content
@@ -631,5 +637,41 @@ where
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod assistant_text_tests {
+    use super::*;
+
+    fn message(content: Vec<ContentPart>) -> Item {
+        Item::AssistantMessage {
+            content,
+            agent: None,
+        }
+    }
+
+    fn data() -> ContentPart {
+        ContentPart::ProviderData {
+            provider: "gemini".to_owned(),
+            call_id: None,
+            data: serde_json::json!({ "thoughtSignature": "SIG_A" }),
+        }
+    }
+
+    #[test]
+    fn provider_data_only_message_has_no_text() {
+        assert_eq!(assistant_text(&message(vec![data()])), None);
+    }
+
+    #[test]
+    fn message_with_text_and_provider_data_keeps_the_text() {
+        let item = message(vec![ContentPart::Text { text: "hi".into() }, data()]);
+        assert_eq!(assistant_text(&item), Some("hi".to_owned()));
+    }
+
+    #[test]
+    fn empty_message_keeps_an_empty_text() {
+        assert_eq!(assistant_text(&message(vec![])), Some(String::new()));
     }
 }

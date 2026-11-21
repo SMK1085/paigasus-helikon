@@ -431,9 +431,11 @@ impl RunResultStreaming {
 
         while let Some(ev) = self.events.next().await {
             match &ev {
+                // A message with only provider data has no text. Skip it, so it
+                // does not clear the text of an earlier message.
                 crate::AgentEvent::MessageOutput {
-                    item: crate::Item::AssistantMessage { content, .. },
-                } => {
+                    item: item @ crate::Item::AssistantMessage { content, .. },
+                } if !item.is_provider_data_only() => {
                     final_output.clear();
                     for part in content {
                         if let crate::ContentPart::Text { text } = part {
@@ -510,9 +512,10 @@ impl RunResultStreaming {
 
         while let Some(ev) = self.events.next().await {
             match &ev {
+                // See `collect`: a provider-data-only message has no text.
                 AgentEvent::MessageOutput {
-                    item: Item::AssistantMessage { content, .. },
-                } => {
+                    item: item @ Item::AssistantMessage { content, .. },
+                } if !item.is_provider_data_only() => {
                     final_text.clear();
                     for part in content {
                         if let ContentPart::Text { text } = part {
@@ -1166,5 +1169,34 @@ mod deferral_result_tests {
             .await
             .expect("ok");
         assert_eq!(r.final_output, "hi");
+    }
+
+    #[tokio::test]
+    async fn collect_typed_skips_provider_data_only_message() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Out {
+            ok: bool,
+        }
+        let data = AgentEvent::MessageOutput {
+            item: crate::Item::AssistantMessage {
+                content: vec![crate::ContentPart::ProviderData {
+                    provider: "gemini".to_owned(),
+                    call_id: Some("call_1".to_owned()),
+                    data: serde_json::json!({ "index": 0 }),
+                }],
+                agent: None,
+            },
+        };
+        let r = streaming(vec![
+            assistant("{\"ok\":true}"),
+            data,
+            AgentEvent::RunCompleted {
+                usage: TokenUsage::default(),
+            },
+        ])
+        .collect_typed::<Out>()
+        .await
+        .expect("typed output parses");
+        assert!(r.final_output.ok);
     }
 }

@@ -24,6 +24,9 @@ crates/paigasus-helikon-providers-openai/tests/fixtures/*.txt text eol=lf
 # as the binary rule below.
 tests/provider-stream-conformance/fixtures/**/*.txt text eol=lf
 
+# Gemini SSE fixtures (SMA-827): split on literal newlines by tests, so pin LF.
+crates/paigasus-helikon-providers-gemini/tests/fixtures/*.sse text eol=lf
+
 # Markdown is linted and auto-fixed by markdownlint-cli2; a Windows --fix would
 # otherwise rewrite every file with CRLF and diverge from the ubuntu-only CI gate.
 # Listed BEFORE the bedrock `binary` rule below on purpose -- gitattributes is
