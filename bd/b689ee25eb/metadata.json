@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "bdb689ee25eb",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-830-fix-gemini-tooldef-literal",
+  "checkpoints_count": 23,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-gemini/src/live_round_trip.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/b689ee25eb/0/metadata.json",
+      "transcript": "/bd/b689ee25eb/0/full.jsonl",
+      "compact_transcript": "/bd/b689ee25eb/0/transcript.jsonl",
+      "content_hash": "/bd/b689ee25eb/0/content_hash.txt",
+      "prompt": "/bd/b689ee25eb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 266,
+    "cache_creation_tokens": 334207,
+    "cache_read_tokens": 17903859,
+    "output_tokens": 47139,
+    "api_call_count": 104,
+    "subagent_tokens": {
+      "input_tokens": 38,
+      "cache_creation_tokens": 118777,
+      "cache_read_tokens": 1052902,
+      "output_tokens": 8536,
+      "api_call_count": 19
+    }
+  },
+  "redaction": {
+    "replacements": 131,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 0,
+      "entropy": 126,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

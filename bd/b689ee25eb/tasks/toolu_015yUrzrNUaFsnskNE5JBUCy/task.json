@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015yUrzrNUaFsnskNE5JBUCy",
+  "agent_id": "a334fd7233403a6fe",
+  "subagent_type": "Explore",
+  "task_description": "Find tool wrappers in paigasus-core host",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 40284,
+    "cache_read_tokens": 174308,
+    "output_tokens": 2590,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-21T14:01:27.863524+01:00",
+  "completed_at": "2026-11-21T14:01:52.917765+01:00"
+}
