@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "d65cfcd3aa7b",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-621-modelturnaccumulator-merges-parallel-blank",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-litellm/src/stream.rs",
+    "crates/paigasus-helikon-runtime-temporal/src/activities.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d6/5cfcd3aa7b/0/metadata.json",
+      "transcript": "/d6/5cfcd3aa7b/0/full.jsonl",
+      "compact_transcript": "/d6/5cfcd3aa7b/0/transcript.jsonl",
+      "content_hash": "/d6/5cfcd3aa7b/0/content_hash.txt",
+      "prompt": "/d6/5cfcd3aa7b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 6765,
+    "cache_read_tokens": 1144678,
+    "output_tokens": 2409,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 16,
+      "cache_creation_tokens": 61681,
+      "cache_read_tokens": 533198,
+      "output_tokens": 5345,
+      "api_call_count": 8
+    }
+  },
+  "redaction": {
+    "replacements": 31,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 31,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
