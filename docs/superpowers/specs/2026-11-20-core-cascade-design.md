@@ -18,7 +18,7 @@ class happened before between siblings: on 2026-08-14 runtime-temporal went
 The work lands as two PRs, in this order:
 
 1. **PR 1, repair.** Publish the 17 dependents again as breaking versions, and
-   facade 0.7.2 and CLI 0.1.46 on top of them. Then Sven yanks the 19 patch
+   facade 0.8.0 and CLI 0.1.46 on top of them. Then Sven yanks the 19 patch
    versions, facade 0.7.0 and 0.7.1, and CLI 0.1.44 and 0.1.45.
 2. **PR 2, prevention.** A guard that fails a PR whose version changes give a
    crate a breaking bump without a breaking bump of each of its dependents,
@@ -29,7 +29,7 @@ The work lands as two PRs, in this order:
 
 - The 17 library dependents are on crates.io at their next breaking version
   (table below), each requiring core 0.7.
-- Facade 0.7.2 and CLI 0.1.46 are on crates.io and require the new versions.
+- Facade 0.8.0 and CLI 0.1.46 are on crates.io and require the new versions.
 - After that, Sven yanks the 19 patch versions, facade 0.7.0 and 0.7.1, and CLI 0.1.44 and 0.1.45.
 - `scripts/check-breaking-cascade.sh` fails when a publishable crate gets a
   breaking bump and a non-exempt dependent of it does not. A self-test pins
@@ -155,14 +155,14 @@ release-plz then only publishes them.
 | `paigasus-helikon-sessions-sqlite` | 0.1.30 | 0.2.0 |
 | `paigasus-helikon-sessions-testkit` | 0.1.3 | 0.2.0 |
 | `paigasus-helikon-tools` | 0.2.26 | 0.3.0 |
-| `paigasus-helikon` (facade) | 0.7.0, 0.7.1 | 0.7.2 |
+| `paigasus-helikon` (facade) | 0.7.0, 0.7.1 | 0.8.0 |
 | `paigasus-helikon-cli` | 0.1.44, 0.1.45 | 0.1.46 |
 
 Changes:
 
 1. Each crate's `Cargo.toml` `version` per the table.
 2. Root `Cargo.toml` `[workspace.dependencies]`: each sibling pin's `version`
-   per the table, and the facade self-pin to 0.7.2. Check for any other
+   per the table, and the facade self-pin to 0.8.0. Check for any other
    version-carrying reference to `sessions-testkit`.
 3. `Cargo.lock` via a normal build.
 4. A hand-written `## [<new>]` section with today's date under
@@ -179,13 +179,13 @@ Changes:
      build has two copies of core.
    The facade entry says it moves to the new sibling versions, so the type
    identity of each re-exported sibling changes (for example openai 0.2 → 0.3).
-   This is accepted as a patch only because facade 0.7.0 is yanked. The CLI
+   The facade gets a breaking version too (see the update note). The CLI
    entry says it moves to the new sibling versions.
 5. The facade CHANGELOG: correct the 0.7.0 upgrade note ("the next patch
    release of each other crate requires core 0.7") in place, because the
    facade republishes anyway.
 6. The book: `model-providers.md:282` → `version = "0.2"`, and `:402-410` →
-   `version = "0.7"`. `mdbook build docs/book` stays clean.
+   `version = "0.8"`. `mdbook build docs/book` stays clean.
 
 PR 1 does not include the guard, the runbook or the `CLAUDE.md` change.
 
@@ -277,7 +277,10 @@ CLI 0.1.45, providers-anthropic 0.1.30 (with the SMA-834 fix) and
 runtime-agentcore 0.2.17, all as patches that require core 0.7. PR #370 merged
 the SMA-832 bedrock fix, not yet released. PR 1 was rebased onto that `main`:
 
-- The facade moves to 0.7.2 and the CLI to 0.1.46 (the next free numbers).
+- The facade moves to 0.8.0 and the CLI to 0.1.46. At GATE 2, Sven chose a
+  breaking facade version (0.8.0) instead of the patch 0.7.2, because each
+  re-exported sibling is a new major version. A patch would also fail the
+  PR 2 guard.
 - providers-anthropic 0.2.0 and runtime-agentcore 0.3.0 replace two yanked
   versions each. providers-bedrock 0.2.0 also contains the SMA-832 fix.
 - The yank list is 23 versions (table above).

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Republish the 17 core-0.7 dependents as breaking versions (plus facade 0.7.2 and CLI 0.1.46), then add a CI guard that fails a release whose breaking bump is not cascaded to the dependents.
+**Goal:** Republish the 17 core-0.7 dependents as breaking versions (plus facade 0.8.0 and CLI 0.1.46), then add a CI guard that fails a release whose breaking bump is not cascaded to the dependents.
 
 **Architecture:** Part 1 (PR 1) is a hand bump: crate versions, root `[workspace.dependencies]` pins, `Cargo.lock`, hand-written CHANGELOG sections, two book pins. Its own merge publishes. Part 2 (PR 2, a new branch from `main` after PR 1 published and Sven yanked) adds `scripts/check-breaking-cascade.sh`, its self-test, two `fmt` steps, and the docs.
 
@@ -19,7 +19,7 @@ Work in the foreground until each command has a final status.
 ## Global Constraints
 
 - **No file in `crates/paigasus-helikon-core/` or `crates/paigasus-helikon-macros/` changes, in either part.** A change there releases core 0.7.1 and restarts the patch cascade.
-- Version table (Part 1), `old → new`: evals 0.1.22→0.2.0; mcp 0.1.26→0.2.0; providers-anthropic 0.1.30→0.2.0; providers-bedrock 0.1.11→0.2.0; providers-gemini 0.1.11→0.2.0; providers-litellm 0.1.11→0.2.0; providers-openai 0.2.34→0.3.0; runtime-actix 0.2.11→0.3.0; runtime-agentcore 0.2.17→0.3.0; runtime-axum 0.2.11→0.3.0; runtime-temporal 0.5.5→0.6.0; runtime-tokio 0.1.27→0.2.0; sessions-postgres 0.1.11→0.2.0; sessions-redis 0.1.10→0.2.0; sessions-sqlite 0.1.30→0.2.0; sessions-testkit 0.1.3→0.2.0; tools 0.2.26→0.3.0; `paigasus-helikon` (facade) 0.7.1→0.7.2; cli 0.1.45→0.1.46 (rebased after #369; see the spec's update note). All crate names carry the `paigasus-helikon-` prefix.
+- Version table (Part 1), `old → new`: evals 0.1.22→0.2.0; mcp 0.1.26→0.2.0; providers-anthropic 0.1.30→0.2.0; providers-bedrock 0.1.11→0.2.0; providers-gemini 0.1.11→0.2.0; providers-litellm 0.1.11→0.2.0; providers-openai 0.2.34→0.3.0; runtime-actix 0.2.11→0.3.0; runtime-agentcore 0.2.17→0.3.0; runtime-axum 0.2.11→0.3.0; runtime-temporal 0.5.5→0.6.0; runtime-tokio 0.1.27→0.2.0; sessions-postgres 0.1.11→0.2.0; sessions-redis 0.1.10→0.2.0; sessions-sqlite 0.1.30→0.2.0; sessions-testkit 0.1.3→0.2.0; tools 0.2.26→0.3.0; `paigasus-helikon` (facade) 0.7.1→0.8.0 (changed from 0.7.2 at GATE 2); cli 0.1.45→0.1.46 (rebased after #369; see the spec's update note). All crate names carry the `paigasus-helikon-` prefix.
 - PR 1 title: `chore(release): SMA-838 republish the core 0.7 dependents as breaking versions`.
 - PR 2 title: `ci(release): SMA-838 fail a release that breaks a crate without breaking its dependents`.
 - All prose (CHANGELOG, comments, docs) is ASD-STE100 Simplified Technical English.
@@ -50,10 +50,10 @@ Work in the foreground until each command has a final status.
 - Produces: the branch state that Tasks 2 and 3 use.
 
 - [ ] **Step 1: Set the 19 versions and the 18 workspace pins per the table.** `sessions-testkit` has no workspace pin (its users are path-only dev-dependencies); change only its own `version`.
-- [ ] **Step 2: Update the book.** Line 282: `version = "0.1"` → `version = "0.2"`. Lines 402-410: each `version = "0.5"` → `version = "0.7"`.
+- [ ] **Step 2: Update the book.** Line 282: `version = "0.1"` → `version = "0.2"`. Lines 402-410: each `version = "0.5"` → `version = "0.8"` (was `"0.7"` before the GATE 2 change to facade 0.8.0).
 - [ ] **Step 3: Check every internal requirement.**
 Run: `cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | .name as $p | .dependencies[] | select(.name|startswith("paigasus-helikon")) | select(.req != "*") | "\($p) -> \(.name) \(.req)"' | sort -u`
-Expected: every requirement on a table crate names its **new** version (`^0.2.0`, `^0.3.0`, `^0.6.0`, `^0.7.2`); core stays `^0.7.0`, macros `^0.2.6`.
+Expected: every requirement on a table crate names its **new** version (`^0.2.0`, `^0.3.0`, `^0.6.0`, `^0.8.0`); core stays `^0.7.0`, macros `^0.2.6`.
 - [ ] **Step 4: Build, update the lockfile, run the gates.**
 Run, each must exit 0: `cargo build --workspace --all-features`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-features --all-targets -- -D warnings`; `cargo build --workspace --no-default-features`; `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`; `mdbook build docs/book` (if `mdbook` is installed; otherwise record it as not run).
 Expected: `git diff --stat Cargo.lock` shows only `paigasus-helikon*` version lines.
@@ -83,7 +83,7 @@ For the 17 dependents, the body is (after the rebase: anthropic and agentcore na
 - If you already use core 0.7, change your requirement on `<crate>` to `"<req>"`. If you do not, `cargo update` moves you back to the core 0.6 build after the yank, and your build has two copies of core.
 ```
 
-For the facade (`paigasus-helikon`, 0.7.1 → 0.7.2; text adapted after the rebase to name 0.7.0 and 0.7.1):
+For the facade (`paigasus-helikon`, 0.7.1 → 0.8.0; text adapted after the rebase to name 0.7.0 and 0.7.1; at GATE 2 the version became 0.8.0, the second bullet became a `[**breaking**]` entry, and an "Upgrade notes" section was added — the CHANGELOG is the final text):
 
 ```markdown
 ### Other
@@ -101,7 +101,7 @@ For the CLI (0.1.45 → 0.1.46; text adapted after the rebase to name 0.1.44 and
 ```
 
 - [ ] **Step 2: Fix the facade 0.7.0 note.** In `crates/paigasus-helikon/CHANGELOG.md`, replace the bullet that starts with `- The next patch release of each other` (line 22 before Step 1) with:
-`- Each other \`paigasus-helikon-*\` library crate has a new breaking version that requires core 0.7 (see 0.7.2). If your \`Cargo.toml\` requires \`paigasus-helikon-core\` 0.6 directly, change it to \`0.7\`, and move the other crates to their new versions. Two copies of core in one build cause errors such as "trait not implemented". Run \`cargo tree -d\` to find the copies.`
+`- Each other \`paigasus-helikon-*\` library crate has a new breaking version that requires core 0.7 (see 0.8.0). If your \`Cargo.toml\` requires \`paigasus-helikon-core\` 0.6 directly, change it to \`0.7\`, and move the other crates to their new versions. Two copies of core in one build cause errors such as "trait not implemented". Run \`cargo tree -d\` to find the copies.`
 - [ ] **Step 3: Check.**
 Run: `npx markdownlint-cli2` (exit 0) and `git diff --name-only origin/main -- crates/paigasus-helikon-core crates/paigasus-helikon-macros` (no output). Then for each of the 19 crates confirm the new heading's version equals its `Cargo.toml` version: `for d in crates/*/; do v=$(grep -m1 '^version' $d/Cargo.toml | cut -d'"' -f2); h=$(grep -m1 '^## \[[0-9]' $d/CHANGELOG.md | sed 's/^## \[\([^]]*\)\].*/\1/'); [ "$v" = "$h" ] || echo "MISMATCH $d $v $h"; done`
 Expected: no `MISMATCH` line other than core and macros (which keep their 0.7.0 / 0.2.6 sections and match anyway).
