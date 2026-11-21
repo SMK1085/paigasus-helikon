@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SUHsP4CgZruUZLePNKjTZF",
+  "agent_id": "a2d114c62396b10db",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix local-review findings SMA-827",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 96629,
+    "cache_read_tokens": 1782645,
+    "output_tokens": 14876,
+    "api_call_count": 19
+  },
+  "started_at": "2026-11-21T01:08:15.244016+01:00",
+  "completed_at": "2026-11-21T01:11:57.991124+01:00"
+}
