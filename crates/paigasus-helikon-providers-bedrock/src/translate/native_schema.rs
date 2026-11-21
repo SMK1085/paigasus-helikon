@@ -12,9 +12,10 @@
 //!
 //! An object node under an `allOf` composition stays open (no added
 //! `additionalProperties: false`), because the closed members would reject the
-//! properties of the other members. The same rule applies to a node that has
-//! `properties` next to `oneOf` or `anyOf` (the schemars output for a flattened
-//! tagged enum), and to the object nodes in the branches of such a node. A
+//! properties of the other members. The same rule applies to an object node
+//! next to `oneOf` or `anyOf` (the schemars output for a flattened tagged
+//! enum), also when it has no `properties`. The branches of such a node stay
+//! open too. A
 //! `$defs` entry that a `$ref` inside an `allOf` points to is still closed.
 
 use serde_json::{Map, Value};
@@ -84,9 +85,11 @@ fn rewrite(v: &Value, open: bool) -> Value {
         .iter()
         .any(|k| m.contains_key(*k));
     let has_all_of = m.contains_key("allOf");
-    // A node with `properties` next to `anyOf` is a flattened composition. The
-    // parent and the branches each hold a part of the properties.
-    let is_flattened = m.contains_key("properties") && m.contains_key("anyOf");
+    // An object node next to `anyOf` is a flattened composition. The parent and
+    // the branches each hold a part of the properties. The parent can have no
+    // `properties` of its own. A root `anyOf` without an object type (the
+    // schemars `Option<Struct>`) is not flattened.
+    let is_flattened = is_object && m.contains_key("anyOf");
     let child_open = open || has_all_of || is_flattened;
     if is_object && !is_map && !child_open {
         m.insert("additionalProperties".to_owned(), Value::Bool(false));
@@ -167,6 +170,20 @@ mod tests {
         for branch in branches {
             assert!(branch.get("additionalProperties").is_none());
             assert!(branch.get("required").is_some());
+        }
+    }
+
+    #[test]
+    fn native_schema_object_next_to_one_of_without_properties_stays_open() {
+        let out = native_output_schema(
+            &json!({"type":"object","oneOf":[{"type":"object","properties":{"kind":{"const":"a"}},"required":["kind"]},{"type":"object","properties":{"kind":{"const":"b"}},"required":["kind"]}]}),
+        );
+        assert!(out.get("oneOf").is_none());
+        assert!(out.get("additionalProperties").is_none());
+        let branches = out["anyOf"].as_array().expect("anyOf array");
+        assert_eq!(branches.len(), 2);
+        for branch in branches {
+            assert!(branch.get("additionalProperties").is_none());
         }
     }
 
