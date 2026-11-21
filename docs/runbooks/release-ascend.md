@@ -1,8 +1,9 @@
 # Release & Stub-Ascend Reference
 
 > **Scope:** the crate version lifecycle, the stub-ascend recipe, the two
-> publish deadlocks it has caused (SMA-321, SMA-346), and the release-plz
-> `git/refs` 403 with the release gap report (SMA-745).
+> publish deadlocks it has caused (SMA-321, SMA-346), the breaking-cascade rule
+> and its guard (SMA-838), and the release-plz `git/refs` 403 with the release
+> gap report (SMA-745).
 > This runbook is **not** linked from the public mdBook — it lives standalone under
 > `docs/runbooks/` to avoid linkcheck coupling. It holds the *rationale and incident
 > history*; the operative rules stay in `CLAUDE.md`.
@@ -35,7 +36,7 @@
 
 **Caveat — when the ascending crate uses `paigasus-helikon-core` API added in the *same* PR, bump `core` too** (a 5th step). `cargo publish --verify` builds the ascending crate's tarball against the **registry** core (the `path` is stripped at publish), so if crates.io `core` lacks the new API the publish fails with `failed to verify package tarball`, and release-plz's combined job (SMA-351) aborts before its release-PR step — a deadlock, since `core` never gets its auto bump (a squashed `feat(<ascending-crate>)` commit attributes nothing to `core`). Fix: in the same PR, also bump `paigasus-helikon-core` (patch for additive/non-breaking-behind-`#[non_exhaustive]`, e.g. `0.2.0` → `0.2.1`) and its `[workspace.dependencies]` pin + CHANGELOG. release-plz then publishes `core` first, then the ascending crate verifies against the fresh `core` (dependency-ordered publish). Diagnosed in SMA-321: PR #45's release failed against the stale `core` `0.2.0`; PR #46 (`chore(release)` bumping `core` to `0.2.1`) cleared it.
 
-## Caveat 2 — the manual core bump defeats the facade cascade (SMA-346)
+## Caveat 2 — a manual sibling bump leaves the facade behind (SMA-346)
 
 **Second-order caveat — the manual core bump leaves the facade behind.** release-plz does not bump the facade for a sibling version that is already at target when the PR merges. Normally, release-plz gives the facade a patch bump when a local dependency changes. `dependencies_update = true` in `release-plz.toml` is not the cause of this. It only makes the release PR run `cargo update` on `Cargo.lock`. A manual bump means the sibling version is already at target at merge, so release-plz publishes it and does not run its dependent handling. The facade (`paigasus-helikon`) stays untouched and stops tracking. Consequence: the facade stays at its old version with stale published dep reqs (e.g. after SMA-346, facade `0.2.0` still requested `paigasus-helikon-runtime-tokio = ^0.0.0`, so the new runner-boundary surface was unreachable through the facade's `runtime-tokio` feature). **Fix: in any PR that uses the same-PR manual bump, ALSO bump the facade** (patch: `version` in `crates/paigasus-helikon/Cargo.toml` + its `[workspace.dependencies]` self-pin + CHANGELOG) so it republishes with current sibling reqs. Diagnosed after SMA-346: PRs #48/#49 shipped `core 0.2.3` + `runtime-tokio 0.1.1` but left facade `0.2.0`; PR #50 (`chore(release)` bumping facade to `0.2.1`) cleared it. NB: feature branches must match the `branch-names` ruleset (`feature/**` or `hotfix/**`); a `chore/**` branch is rejected at push with `GH013 … creations being restricted`.
 
@@ -53,14 +54,14 @@
 
 **The guard.** The `fmt` job runs `scripts/check-breaking-cascade.sh`. On a pull request, it compares each crate version at `HEAD^1` with the working tree. The checkout uses `fetch-depth: 2` for this. For each crate with a breaking bump, it checks each direct dependent. A dependent without a breaking bump is a violation. The check is per edge. The CLI is exempt. A new crate is skipped. A version that goes down is an error. On a push event, the script prints a notice and exits 0.
 
-The failure starts with "a crate has a breaking bump, but a dependent crate has none." Then it lists each dependent with its old and new version and the lowest version that is acceptable. Do the steps in the Procedure, or bump the listed crates by hand. If the guard cannot read a base version, it fails and it does not pass. Run it locally with `bash scripts/check-breaking-cascade.sh`. Run its self-test with `bash scripts/check-breaking-cascade-selftest.sh`.
+The failure starts with "a crate has a breaking bump, but a dependent crate has none." Then it lists each dependent with its old and new version and the lowest version that is acceptable. Do the steps in the Procedure. Do not bump the listed crates by hand on a release PR. The core version on `main` is still the old version, so a separate hand-bump PR publishes the dependent against the old core. Then release-plz gives it a patch bump again. A hand edit on the bot's release PR is lost when release-plz makes the PR again. Use a hand bump only for the repair after a bad release (see Repair below). After the `!` PR merges, the guard can list more crates on the new release PR. The guard checks each edge, so a second level of dependents shows only on the next version of the release PR. Repeat the Procedure for those crates. Do not admin-merge a release PR with a red guard. The next release PRs compare against that release and pass. If the guard cannot read a base version, it fails and it does not pass. Run it locally with `bash scripts/check-breaking-cascade.sh`. Run its self-test with `bash scripts/check-breaking-cascade-selftest.sh`.
 
 **Repair after a bad release (SMA-838).** Release PR #361 published core 0.7.0, a breaking bump from the jiff 1 upgrade in #367. release-plz gave each of the 17 library dependents only a patch bump, and those patches required core 0.7. A user on core 0.6 who ran `cargo update` got two copies of core. Release PR #369 then published four more such patches. PR #372 repaired this.
 
 1. Hand-bump each dependent to its next breaking version. For example, providers-openai went 0.2.34 to 0.3.0. Most other crates went 0.1.x to 0.2.0. The facade went 0.7.1 to 0.8.0. The CLI went 0.1.45 to 0.1.46, a patch bump, because it is a binary.
 2. Write a CHANGELOG section by hand in each crate.
 3. Merge. A hand bump publishes on its own merge.
-4. Yank the bad versions only after all 19 new versions are on crates.io. In SMA-838, 23 versions were yanked: the 19 patches, facade 0.7.0 and 0.7.1, and CLI 0.1.44 and 0.1.45.
+4. Yank the bad versions only after all 19 new versions are on crates.io. In SMA-838, 23 versions were yanked: the 19 patch versions that required core 0.7, facade 0.7.0 and 0.7.1, and CLI 0.1.44 and 0.1.45.
 5. Do not yank the last core 0.6 version of each crate. Users on core 0.6 keep a working version.
 
 **Never change a file of core or macros in a repair.** release-plz compares each package with its registry copy. A change in `crates/paigasus-helikon-core/` or `crates/paigasus-helikon-macros/` releases core 0.7.1 and starts the patch cascade again. PR #372 changed no file in these two crates.

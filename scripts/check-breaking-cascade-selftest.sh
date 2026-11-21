@@ -128,20 +128,20 @@ run_case moved_crate_checked 1 "dep-a" CASCADE_EVENT=pull_request \
 # unreadable_base: the base versions file does not exist.
 d="${tmp}/unreadable_base"; mkdir -p "${d}"
 make_metadata "${d}/meta.json" 0.7.0 0.2.0 0.7.0 0.1.0 0.1.0 0.1.0
-run_case unreadable_base 1 "" CASCADE_EVENT=pull_request \
+run_case unreadable_base 1 "not found" CASCADE_EVENT=pull_request \
   CASCADE_METADATA="${d}/meta.json" CASCADE_BASE_VERSIONS="${d}/missing.txt"
 
 # empty_package_list_fails: no publishable package.
 d="${tmp}/empty_package_list_fails"; mkdir -p "${d}"
 printf '{"packages":[{"name":"unpub","version":"0.1.0","publish":[],"manifest_path":"/ws/u/Cargo.toml","dependencies":[]}]}\n' > "${d}/meta.json"
 printf 'unpub 0.1.0\n' > "${d}/base.txt"
-run_case empty_package_list_fails 1 "" CASCADE_EVENT=pull_request \
+run_case empty_package_list_fails 1 "no publishable workspace crate" CASCADE_EVENT=pull_request \
   CASCADE_METADATA="${d}/meta.json" CASCADE_BASE_VERSIONS="${d}/base.txt"
 
 # The event check happens before any other input is read.
 run_case push_event_skips 0 "notice" CASCADE_EVENT=push \
   CASCADE_METADATA="${tmp}/none.json" CASCADE_BASE_VERSIONS="${tmp}/none.txt"
-run_case unknown_event_fails 1 "" CASCADE_EVENT=schedule \
+run_case unknown_event_fails 1 "unsupported event" CASCADE_EVENT=schedule \
   CASCADE_METADATA="${tmp}/none.json" CASCADE_BASE_VERSIONS="${tmp}/none.txt"
 
 # 0.0.z scheme: every change is breaking.
@@ -191,7 +191,7 @@ make_repo "${d}/ws2" "[package]
 name = 'dep-a'
 version = '0.2.0'"
 rev="$(git -C "${d}/ws2" rev-parse HEAD)"
-run_case base_single_quotes_read 1 "dep-a" CASCADE_EVENT=pull_request \
+run_case base_single_quotes_read 1 "dep-a: 0.2.0 -> 0.2.1" CASCADE_EVENT=pull_request \
   CASCADE_METADATA="${d}/meta.json" CASCADE_BASE_REV="${rev}" \
   GIT_DIR="${d}/ws2/.git" GIT_WORK_TREE="${d}/ws2"
 

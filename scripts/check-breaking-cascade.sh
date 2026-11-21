@@ -92,8 +92,10 @@ jq -r '[.packages[] | select(.publish != [] and .publish != false) | .name] as $
   | .name as $n
   | .dependencies[]
   | select(.kind == null and (.name as $d | $pub | index($d)))
-  | "\($n) \(.name)"' "${metadata_file}" > "${tmp}/edges.txt" \
+  | "\($n) \(.name)"' "${metadata_file}" > "${tmp}/edges.raw" \
   || die "cannot read the dependencies from the metadata file"
+# A crate can list one dependency twice (for example with two target tables).
+sort -u "${tmp}/edges.raw" > "${tmp}/edges.txt"
 
 # --- base versions ----------------------------------------------------------
 if [[ -n "${CASCADE_BASE_VERSIONS-}" ]]; then
@@ -144,6 +146,8 @@ else
     pkg_name="${parsed%%|*}"
     pkg_ver="${parsed#*|}"
     if [[ -z "${pkg_name}" ]]; then
+      # The grep -Ev filter above already removes these paths, so this case is
+      # unreachable today. It stays as a defence if that filter changes.
       case "${path}" in
         tests/* | */tests/* | fixtures/* | */fixtures/*) continue ;;
       esac

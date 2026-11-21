@@ -234,6 +234,8 @@ bash scripts/check-markdownlint-config.sh            # asserts that config is in
 bash scripts/check-cargo-profile-env-sync.sh         # cargo-visible workflow env is uniform
 bash scripts/check-cargo-profile-env-sync-selftest.sh # …and its parser still parses (fmt runs both)
 bash scripts/check-release-gaps-selftest.sh            # release gap report + release-plz.yml guards (fmt runs it)
+bash scripts/check-breaking-cascade-selftest.sh      # the cascade guard keeps its rule (fmt runs it)
+bash scripts/check-breaking-cascade.sh                 # breaking bump needs breaking dependents (PR only; fmt runs it)
 ```
 
 The Markdown gate needs Node (>= 22); everything else in that list needs only the
