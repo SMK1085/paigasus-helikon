@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014caA8EMteZ5ccqw52tCPyi",
+  "agent_id": "ae42b2b3ea3f6059f",
+  "subagent_type": "general-purpose",
+  "task_description": "Builder check on SMA-839 spec",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 68160,
+    "cache_read_tokens": 320016,
+    "output_tokens": 4185,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-21T11:02:28.914079+01:00",
+  "completed_at": "2026-11-21T11:03:04.96913+01:00"
+}
