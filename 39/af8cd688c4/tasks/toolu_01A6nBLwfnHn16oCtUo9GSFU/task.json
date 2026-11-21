@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01A6nBLwfnHn16oCtUo9GSFU",
+  "agent_id": "adebba52efa02e079",
+  "task_description": "Pre-flight scan SMA-840 plan",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 133325,
+    "cache_read_tokens": 869619,
+    "output_tokens": 21164,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-21T19:59:20.66835+01:00",
+  "completed_at": "2026-11-21T20:02:04.609877+01:00"
+}

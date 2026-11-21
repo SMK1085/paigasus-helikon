@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01T8B64MbgSkMxBajdRhePfz",
+  "agent_id": "ab6ee3d65112a841e",
+  "task_description": "Write SMA-840 implementation plan",
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 228807,
+    "cache_read_tokens": 6048526,
+    "output_tokens": 54830,
+    "api_call_count": 42
+  },
+  "started_at": "2026-11-21T19:48:46.857586+01:00",
+  "completed_at": "2026-11-21T19:58:43.959513+01:00"
+}
