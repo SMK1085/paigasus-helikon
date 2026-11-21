@@ -19,6 +19,12 @@ fn env_lock() -> &'static Mutex<()> {
 /// [`no_authorization_header_when_no_key_is_configured`].
 const AUTH_ENV_KEYS: [&str; 2] = ["LITELLM_API_KEY", "LITELLM_PROXY_API_KEY"];
 
+/// A minimal successful SSE reply. HAND-AUTHORED under SMA-451 (PR #199), not
+/// captured. The chunk order follows the captured P1 trace in the SMA-451
+/// design (Appendix B): a content delta, a finish chunk, then `[DONE]`. The
+/// body drops the `id`, `object`, `created` and `model` keys and has no usage
+/// chunk. The text "hi" is invented. Use
+/// `tests/fixtures/text_then_trailing_usage.txt` for a full captured tail.
 fn sse_ok() -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
@@ -200,6 +206,11 @@ async fn non_sse_error_response_yields_a_single_classified_error() {
         .respond_with(
             ResponseTemplate::new(500)
                 .insert_header("content-type", "application/json")
+                // HAND-AUTHORED under SMA-451 (PR #199), not captured. The
+                // fields follow the error probes P7, P10 and P11 in the
+                // SMA-451 design (Appendix B): `code` is the HTTP status as a
+                // string, and the message starts with the exception class
+                // name. The full captured bytes are not recorded.
                 .set_body_raw(
                     r#"{"error":{"message":"litellm.InternalServerError: mock","type":null,"param":null,"code":"500"}}"#,
                     "application/json",
@@ -243,6 +254,9 @@ async fn success_status_with_non_sse_content_type_yields_a_single_classified_err
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "application/json")
+                // HAND-AUTHORED under SMA-451 (PR #199), not captured. This
+                // is a non-streaming `chat.completion` shape with invented
+                // values. The source of the shape is not recorded.
                 .set_body_raw(
                     r#"{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}"#,
                     "application/json",
@@ -287,6 +301,10 @@ async fn unrelated_error_body_mentioning_context_window_is_not_misclassified() {
         .respond_with(
             ResponseTemplate::new(400)
                 .insert_header("content-type", "application/json")
+                // HAND-AUTHORED under SMA-451 (PR #199), not captured. The
+                // `prompt_echo` key is invented to hold the words "context
+                // window" in a body that is not a context-length error. No
+                // capture of this shape is recorded.
                 .set_body_raw(
                     r#"{"prompt_echo":"please discuss expanding the context window of the office"}"#,
                     "application/json",
@@ -323,6 +341,12 @@ async fn rate_limit_carries_retry_after() {
             ResponseTemplate::new(429)
                 .insert_header("content-type", "application/json")
                 .insert_header("retry-after", "2")
+                // HAND-AUTHORED under SMA-451 (PR #199), not captured. The
+                // fields follow the error probes P7, P10 and P11 in the
+                // SMA-451 design (Appendix B): `type` is `throttling_error`
+                // and `code` is the HTTP status as a string. The full
+                // captured bytes are not recorded. The `retry-after` header
+                // value 2 is invented.
                 .set_body_raw(
                     r#"{"error":{"message":"litellm.RateLimitError: mock","type":"throttling_error","code":"429"}}"#,
                     "application/json",

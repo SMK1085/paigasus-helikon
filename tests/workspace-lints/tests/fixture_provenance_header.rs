@@ -20,10 +20,6 @@ const ALLOWLIST: &[&str] = &[
     "crates/paigasus-helikon-providers-anthropic/tests/fixtures/thinking_then_text.txt",
     "crates/paigasus-helikon-providers-anthropic/tests/fixtures/tool_use_then_continuation.txt",
     "crates/paigasus-helikon-providers-gemini/tests/fixtures/parallel_signed.sse",
-    "crates/paigasus-helikon-providers-litellm/tests/fixtures/text_then_trailing_usage.txt",
-    "crates/paigasus-helikon-providers-litellm/tests/fixtures/truncated_no_finish.txt",
-    "crates/paigasus-helikon-providers-litellm/tests/fixtures/unknown_finish_reason.txt",
-    "crates/paigasus-helikon-providers-litellm/tests/fixtures/unparseable_frame.txt",
     "crates/paigasus-helikon-providers-openai/tests/fixtures/chat_text_usage_trailing.txt",
 ];
 

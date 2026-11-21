@@ -1,3 +1,10 @@
+: Provenance: HAND-AUTHORED under SMA-451 (PR #199), not captured from the
+: wire. The file is synthetic by design. The line `data: {this is not json`
+: is not wire bytes. It tests the handling of a frame that is not valid
+: JSON. The other lines have only `id`, `object` and `choices`. They use the
+: id `chatcmpl-4` and no `created` or `model` key. No capture of this case is
+: recorded.
+
 data: {"id":"chatcmpl-4","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"before"}}]}
 
 data: {this is not json

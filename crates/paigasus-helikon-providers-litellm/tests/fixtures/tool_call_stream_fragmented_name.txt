@@ -8,6 +8,27 @@
 : arrive after the id. This capture is what proves LiteLLM passes name
 : fragments through verbatim rather than reassembling them -- the defect is
 : reachable through a real proxy, not hypothetical.
+:
+: Record: SMA-547 (PR #204), design "Evidence" section. The capture date is
+: not recorded. The `created` value 1786999074 in this file decodes to
+: 2026-08-17, which is the date of the SMA-547 design. This is an inference.
+:
+: The fake upstream was an uncommitted, hand-written list of frames (SMA-547
+: design lines 105-107). So the ids, the split of the name and the split of
+: the arguments are authored input. Only the serialization by LiteLLM is
+: captured.
+:
+: Edits from the raw capture. The harness and the raw output are not kept.
+:
+: For the `tool_calls` arrays only (design lines 112-114 list them; the three
+: arrays in this file match those lines):
+: Removed: nothing.
+: Added: nothing.
+: Changed: nothing.
+: For the rest of each chunk (the envelope, the usage chunk and `[DONE]`):
+: Removed, Added and Changed are not recorded.
+: LiteLLM reordered keys and added `"type":"function"` to the continuation
+: deltas. The design calls this proxy output, not an edit (lines 129-131).
 
 data: {"id":"chatcmpl-fake","created":1786999074,"model":"shape-fragment","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_abc","function":{"arguments":"","name":"get_"},"type":"function","index":0}]}}]}
 

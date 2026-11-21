@@ -1,3 +1,11 @@
+: Provenance: HAND-AUTHORED under SMA-451 (PR #199), not captured from the
+: wire. The envelope (`id`, `object`, `created`, `model`) is copied from
+: `text_then_trailing_usage.txt` (the id is `chatcmpl-3`). A `mock_response`
+: proxy cannot produce the finish value `guardrail_intervened`, and no source
+: for that value is recorded. The test uses it as an unknown finish reason.
+: The final `[DONE]` follows the framing in `text_then_trailing_usage.txt`,
+: which is captured.
+
 data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"hi"}}]}
 
 data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{},"finish_reason":"guardrail_intervened"}]}

@@ -1,2 +1,8 @@
+: Provenance: HAND-AUTHORED under SMA-451 (PR #199), not captured from the
+: wire. The envelope (`id`, `object`, `created`, `model`) is copied from
+: `text_then_trailing_usage.txt` (the id is `chatcmpl-2`). The stream ends
+: with no finish chunk and no `[DONE]` on purpose. The test uses it as a
+: premature end of the stream. No capture of this case is recorded.
+
 data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"partial"}}]}
 

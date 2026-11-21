@@ -1,3 +1,38 @@
+: Provenance: CAPTURED with named reconstructed parts. The capture is from
+: LiteLLM 1.97.0 (ghcr.io/berriai/litellm:main-stable, digest
+: sha256:468c25f35f3e5ec4e414974f00deab93337b1b4d9953cabcfd3722e59415f834).
+: The proxy used a keyless `mock_response` and the model `mock-fast`. The
+: record is SMA-451 (PR #199), design Appendix B, probe P1. The capture date
+: is not recorded. The `created` value 1786867514 in this file decodes to
+: 2026-08-16, which is the date of the SMA-451 design. This is an inference.
+:
+: What the record shows. The P1 trace keeps each line only from `"choices"`
+: onward. It shows the first content delta (`"role":"assistant","content":
+: "Hel"`), the finish chunk, the usage chunk and `[DONE]`. The trace has an
+: elision mark between the first delta and the finish chunk. The `id`,
+: `object`, `created` and `model` values, and their order, are not recorded.
+:
+: Reconstructed part: the second delta (`"content":"lo"`). The mock text was
+: "Hello from the mock backend.", but this file spells only "Hello".
+:
+: Edits from the raw capture. No raw capture is available.
+:
+: Removed: not recorded. The trace elides lines after the first delta. The
+: record does not say how many lines were there.
+:
+: Added: the second delta (`"content":"lo"`), as above. The record does not
+: show that the capture had such a line.
+:
+: Changed: not recorded for the envelope values and the key order. The id
+: `chatcmpl-1` is a placeholder. The real id is not recorded. The sibling
+: files use `chatcmpl-2`, `chatcmpl-3` and `chatcmpl-4`. The usage
+: counts (6 completion tokens) were reported for the whole mock reply, not
+: for the text "Hello". They do not match this file's text.
+:
+: SMA-451 design line 783 says the streaming fixtures are "transcribed from
+: real captured traffic ... not hand-written". That is true for the trace
+: only. The envelope and the second delta are not recorded as captured.
+
 data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}
 
 data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1786867514,"model":"mock-fast","choices":[{"index":0,"delta":{"content":"lo"}}]}
