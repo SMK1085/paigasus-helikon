@@ -1,8 +1,15 @@
+: Provenance: HAND-AUTHORED under SMA-316, not captured from the wire.
+: The event shapes follow the async-openai `ResponseStreamEvent` types.
+:
+: The stream ends on the terminal event, with no `data: [DONE]` sentinel.
+: The Responses API does not send one, as the captures of 2026-11-21 show.
+: Those captures include `response.completed` from `gpt-5-mini` with a
+: reasoning summary, and `response.incomplete` with `max_output_tokens`. See
+: SMA-585.
+
 data: {"type":"response.reasoning_summary_text.delta","sequence_number":1,"item_id":"rs_01","output_index":0,"summary_index":0,"delta":"thinking..."}
 
 data: {"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_01","output_index":1,"content_index":0,"delta":"answer"}
 
 data: {"type":"response.completed","sequence_number":3,"response":{"id":"resp_01","object":"response","created_at":1,"model":"gpt-5","output":[],"status":"completed","usage":{"input_tokens":10,"output_tokens":3,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":2},"total_tokens":13}}}
-
-data: [DONE]
 

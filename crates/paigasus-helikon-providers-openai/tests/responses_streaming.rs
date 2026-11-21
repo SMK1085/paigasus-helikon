@@ -19,6 +19,30 @@ const FAILED: &str = include_str!("fixtures/responses_failed.txt");
 const TOOL_CALL: &str = include_str!("fixtures/responses_tool_call.txt");
 const ZERO_ARGS: &str = include_str!("fixtures/responses_tool_call_zero_args.txt");
 
+/// No Responses fixture may carry a `data: [DONE]` line: the OpenAI
+/// Responses API does not send one (SMA-585; captures on 2026-08-22 and
+/// 2026-11-21). Behaviour tests cannot notice a re-added sentinel, because
+/// async-openai ends the stream the same way on `[DONE]` and on end of body.
+/// `trim_end` keeps the check true on a CRLF checkout.
+#[test]
+fn no_responses_fixture_carries_a_done_sentinel() {
+    for (name, fixture) in [
+        ("responses_reasoning_then_text.txt", REASONING),
+        ("responses_incomplete_length.txt", LENGTH),
+        ("responses_incomplete_filter.txt", FILTER),
+        ("responses_failed.txt", FAILED),
+        ("responses_tool_call.txt", TOOL_CALL),
+        ("responses_tool_call_zero_args.txt", ZERO_ARGS),
+    ] {
+        assert!(
+            !fixture
+                .lines()
+                .any(|line| line.trim_end() == "data: [DONE]"),
+            "{name} carries a `data: [DONE]` line, which the Responses API does not send"
+        );
+    }
+}
+
 fn user(text: &str) -> Item {
     Item::UserMessage {
         content: vec![ContentPart::Text {
