@@ -84,7 +84,7 @@ An Anthropic model ID that is not on the list can also reject the forced choice.
 
 The crate rewrites the schema before it sends the schema:
 
-- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, or to a node in an `allOf` composition.
+- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, or to a node in an `allOf` composition. It also does not add the keyword to a node that has `properties` next to `oneOf` or `anyOf`.
 - It changes `oneOf` to `anyOf`.
 - It removes `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `maxItems`, `uniqueItems`, `minItems` above 1, and `not`, `if`, `then` and `else`.
 
@@ -92,7 +92,7 @@ The server does not enforce the removed limits. The agent loop checks the result
 
 Bedrock rejects these shapes with its own error: maps (`HashMap`, or `additionalProperties` that is `true` or a schema), `patternProperties`, `propertyNames`, tuples (`prefixItems`), the schemas `true` and `{}`, and recursive types. The crate does not rewrite them.
 
-On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Required` with no tools and no response format is still an error. With a structured response format, the crate omits it with a warning.
+On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Tool` with a name that is not a defined tool is still an error. `ToolChoice::Required` with no tools and no response format is still an error. With a structured response format, the crate omits it with a warning.
 
 When a model's family does not support forced-tool-choice, a `JsonSchema` response format degrades silently to a text response; no error is returned.
 
