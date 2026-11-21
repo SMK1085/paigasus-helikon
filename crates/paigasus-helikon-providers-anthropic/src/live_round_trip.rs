@@ -385,6 +385,11 @@ async fn live_redacted_round_trip() {
         "turn 1 has no redacted thinking block ({} items)",
         turn1.items.len()
     );
+    assert!(
+        !tool_calls(&turn1.items).is_empty(),
+        "turn 1 has no tool call ({} items); the model did not call a tool",
+        turn1.items.len()
+    );
 
     let second = second_request(&first, &turn1.items);
     let body = build_body(&model.cfg, &second)

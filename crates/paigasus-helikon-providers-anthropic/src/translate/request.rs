@@ -57,6 +57,20 @@ struct Slot {
     /// compared.
     group: usize,
     key: SortKey,
+    /// `true` when the source message has `tool_use` positions. Then its
+    /// thinking blocks need a `tool_use` block of the group beside them.
+    needs_tool_use: bool,
+}
+
+impl Slot {
+    /// `true` when `block` lets the thinking blocks of this group stay: a
+    /// `text` or `tool_use` block of the same group, or only a `tool_use`
+    /// block when the group needs one.
+    fn is_kept_by(&self, block: &WireBlock) -> bool {
+        !block.is_thinking()
+            && block.slot.is_some_and(|s| s.group == self.group)
+            && (!self.needs_tool_use || block.is_tool_use())
+    }
 }
 
 /// One content block of a wire message. Only `value` reaches the JSON.
@@ -93,12 +107,10 @@ struct WireMessage {
 }
 
 impl WireMessage {
-    /// `true` when the message holds a `text` or `tool_use` block of group
-    /// `group`.
-    fn has_own_block(&self, group: usize) -> bool {
-        self.content
-            .iter()
-            .any(|b| !b.is_thinking() && b.slot.is_some_and(|s| s.group == group))
+    /// `true` when the message holds a block that lets the thinking blocks
+    /// of the group of `slot` stay (see [`Slot::is_kept_by`]).
+    fn keeps_thinking_of(&self, slot: Slot) -> bool {
+        self.content.iter().any(|b| slot.is_kept_by(b))
     }
 
     fn into_value(mut self) -> Value {
@@ -121,11 +133,21 @@ struct Source {
     wire: Option<usize>,
     /// The `tool_use` positions by call id, in the order of the parts.
     tool_positions: HashMap<String, VecDeque<u64>>,
+    /// `true` when the message has at least one `tool_use` position.
+    needs_tool_use: bool,
 }
 
 impl Source {
     /// The key of the next `tool_use` block with `call_id`. Each position is
     /// used once, so a repeated id takes its positions in order.
+    fn slot(&self, key: SortKey) -> Slot {
+        Slot {
+            group: self.group,
+            key,
+            needs_tool_use: self.needs_tool_use,
+        }
+    }
+
     fn tool_key(&mut self, call_id: &str) -> SortKey {
         let index = self
             .tool_positions
@@ -150,15 +172,18 @@ struct Saved {
 
 /// A wire assistant message that an item with only thinking blocks made.
 ///
-/// It stays the last message until a message is pushed after it. If it then
-/// (or at the end) has no `text` and no `tool_use` block of group `group`,
-/// the translator goes back to `saved`, drops the thinking blocks of the
-/// item, and translates again from that item. The item then counts as empty,
-/// as it did before SMA-840: no flush, no message, and no change to the flag.
+/// It stays the last message until a message is pushed after it. If the
+/// keep rule then fails for it (see [`Slot::is_kept_by`]), the translator
+/// goes back to `saved`, drops the thinking blocks of the item, and
+/// translates again from that item. At the end, the translator always goes
+/// back, because the last assistant message sends no thinking block. The
+/// item then counts as empty, as it did before SMA-840: no flush, no
+/// message, and no change to the flag.
 #[derive(Debug)]
 struct Tentative {
     msg: usize,
-    group: usize,
+    /// The slot of the thinking blocks of the item.
+    slot: Slot,
     saved: Saved,
 }
 
@@ -184,8 +209,12 @@ struct Translator {
 /// messages left with no blocks, are dropped because the API rejects them.
 ///
 /// A source message keeps its thinking blocks only when their wire message
-/// also holds a `text` or `tool_use` block of the same source message. Else
-/// the thinking blocks are dropped, and the item builds as if it had no
+/// also holds a `text` or `tool_use` block of the same source message. When
+/// the source message has `tool_use` positions, that block must be one of
+/// its own `tool_use` blocks. (A hand-off transcript or a trimmed history can
+/// lose the calls of a response.) The last wire message, when it is an
+/// assistant message, sends no thinking block. When a rule fails, the
+/// thinking blocks are dropped, and the item builds as if it had no
 /// Anthropic part. A thinking block must not go into a round that a
 /// different response made.
 ///
@@ -307,12 +336,12 @@ impl Translator {
                     if let Some(saved) = saved {
                         // `push_message` cleared any older tentative message.
                         debug_assert!(self.tentative.is_none());
-                        let group = self
+                        let slot = self
                             .source
                             .as_ref()
-                            .map(|s| s.group)
+                            .map(|s| s.slot(SortKey::At(0, 1)))
                             .expect("a thinking block comes from a valid part");
-                        self.tentative = Some(Tentative { msg, group, saved });
+                        self.tentative = Some(Tentative { msg, slot, saved });
                     }
                 }
             }
@@ -333,10 +362,7 @@ impl Translator {
                 let target = self.tool_use_target();
                 let slot = self.source.as_mut().and_then(|source| {
                     let key = source.tool_key(call_id);
-                    (source.wire == Some(target)).then_some(Slot {
-                        group: source.group,
-                        key,
-                    })
+                    (source.wire == Some(target)).then(|| source.slot(key))
                 });
                 let value = json!({
                     "type": "tool_use",
@@ -368,15 +394,16 @@ impl Translator {
     fn finish(&mut self) -> Result<(), Rollback> {
         self.flush_pending_assistant()?;
         self.flush_pending_user()?;
-        match &self.tentative {
-            Some(t) if !self.messages[t.msg].has_own_block(t.group) => Err(Rollback),
-            _ => Ok(()),
+        // A tentative message at the end is the last assistant message. It
+        // sends no thinking block, so the item counts as empty.
+        match self.tentative {
+            Some(_) => Err(Rollback),
+            None => Ok(()),
         }
     }
 
     /// Push a message. A tentative message before it is then complete: keep
-    /// it when it has a `text` or `tool_use` block of its own group, else go
-    /// back.
+    /// it when the keep rule holds for it, else go back.
     fn push_message(
         &mut self,
         role: &'static str,
@@ -388,7 +415,7 @@ impl Translator {
                 self.messages.len(),
                 "a tentative message is last"
             );
-            if !self.messages[t.msg].has_own_block(t.group) {
+            if !self.messages[t.msg].keeps_thinking_of(t.slot) {
                 return Err(Rollback);
             }
             self.tentative = None;
@@ -453,11 +480,13 @@ impl Translator {
     ///
     /// `saved` does not hold a tentative message, and the state after the
     /// restore has none. This is correct: a tentative message that was active
-    /// when `saved` was taken was kept by the push of the new tentative
-    /// message (else that push rolled back to the older save, and this
-    /// `saved` was discarded). A kept message has a `text` or `tool_use`
-    /// block of its own group. It is before `saved.messages_len`, so the
-    /// restore does not change it, and it stays kept.
+    /// when `saved` was taken was resolved by a later push in the same step.
+    /// That push is a flush of the pending blocks or the push of the new
+    /// tentative message. If the older message was not kept, that push
+    /// rolled back to the older save, and this `saved` was discarded. A kept
+    /// message has a block that keeps its thinking. It is before
+    /// `saved.messages_len`, so the restore does not change it, and it stays
+    /// kept.
     fn restore(&mut self, saved: Saved) {
         self.messages.truncate(saved.messages_len);
         self.system_text.truncate(saved.system_len);
@@ -477,11 +506,17 @@ impl Translator {
         } else {
             Some(Value::String(self.system_text))
         };
-        let messages = self
-            .messages
-            .into_iter()
-            .map(WireMessage::into_value)
-            .collect();
+        let mut messages = self.messages;
+        // A caller prefill or a continuation ends with an assistant message.
+        // That message sends no thinking block, and its blocks keep the
+        // order of the parts.
+        if let Some(last) = messages.last_mut().filter(|m| m.role == "assistant") {
+            last.content.retain(|b| !b.is_thinking());
+            for block in &mut last.content {
+                block.slot = None;
+            }
+        }
+        let messages = messages.into_iter().map(WireMessage::into_value).collect();
         TranslatedMessages {
             system,
             messages: Value::Array(messages),
@@ -490,15 +525,18 @@ impl Translator {
     }
 }
 
-/// Remove each thinking block whose group has no `text` or `tool_use` block
-/// in this message.
+/// Remove each thinking block that the keep rule does not keep in this
+/// message (see [`Slot::is_kept_by`]).
 fn drop_thinking_without_own_block(content: &mut Vec<WireBlock>) {
-    let own: Vec<usize> = content
+    let keep: Vec<bool> = content
         .iter()
-        .filter(|b| !b.is_thinking())
-        .filter_map(|b| b.slot.map(|s| s.group))
+        .map(|b| match b.slot {
+            Some(slot) if b.is_thinking() => content.iter().any(|o| slot.is_kept_by(o)),
+            _ => true,
+        })
         .collect();
-    content.retain(|b| !b.is_thinking() || b.slot.is_some_and(|s| own.contains(&s.group)));
+    let mut keep = keep.into_iter();
+    content.retain(|_| keep.next().unwrap_or(true));
 }
 
 /// Put the blocks of each group back in response order.
@@ -626,6 +664,7 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
         group,
         wire: None,
         tool_positions: HashMap::new(),
+        needs_tool_use: false,
     });
     let mut text_key = SortKey::BeforeFirstToolUse;
     if let Some(source) = &mut source {
@@ -652,9 +691,10 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
                 _ => {}
             }
         }
+        source.needs_tool_use = !source.tool_positions.is_empty();
     }
-    let group = source.as_ref().map(|s| s.group);
-    let slot = |key| group.map(|group| Slot { group, key });
+    let base = source.as_ref().map(|s| s.slot(SortKey::BeforeFirstToolUse));
+    let slot = |key| base.map(|base| Slot { key, ..base });
     let mut blocks = Vec::new();
     for (part, data) in content.iter().zip(&data) {
         match part {
@@ -670,9 +710,9 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
                 name,
                 args,
             } => {
-                let slot = source.as_mut().map(|s| Slot {
-                    group: s.group,
-                    key: s.tool_key(call_id),
+                let slot = source.as_mut().map(|s| {
+                    let key = s.tool_key(call_id);
+                    s.slot(key)
                 });
                 blocks.push(WireBlock {
                     value: json!({
@@ -2017,6 +2057,7 @@ mod thinking_round_trip_tests {
             // The accumulator sorts calls by call id.
             call("tu_a"),
             call("tu_z"),
+            user("next"),
         ];
         assert_eq!(
             messages(&items),
@@ -2028,6 +2069,7 @@ mod thinking_round_trip_tests {
                     wthinking("B", "SIG_FAKE_2"),
                     tu("tu_a"),
                 ]),
+                utext("next"),
             ])
         );
     }
@@ -2042,12 +2084,14 @@ mod thinking_round_trip_tests {
                 tool_pos(2, "tu_1"),
             ]),
             call("tu_1"),
+            user("next"),
         ];
         assert_eq!(
             messages(&items),
             json!([
                 utext("q"),
                 amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("t"), tu("tu_1")]),
+                utext("next"),
             ])
         );
     }
@@ -2057,12 +2101,14 @@ mod thinking_round_trip_tests {
         let items = vec![
             user("q"),
             asst(vec![text("t"), thinking(5, "r", "SIG_FAKE_1")]),
+            user("next"),
         ];
         assert_eq!(
             messages(&items),
             json!([
                 utext("q"),
                 amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("t")]),
+                utext("next"),
             ])
         );
     }
@@ -2076,14 +2122,15 @@ mod thinking_round_trip_tests {
         let expected = json!([
             utext("q"),
             amsg(vec![wthinking("r", "SIG_FAKE_1"), tu("tu_1"), tu("tu_2")]),
+            utext("next"),
         ]);
         let mut items = head.clone();
-        items.extend([call("tu_1"), call("tu_2")]);
+        items.extend([call("tu_1"), call("tu_2"), user("next")]);
         assert_eq!(messages(&items), expected);
         // The call with no position also goes after a keyed call that
         // arrives later.
         let mut items = head;
-        items.extend([call("tu_2"), call("tu_1")]);
+        items.extend([call("tu_2"), call("tu_1"), user("next")]);
         assert_eq!(messages(&items), expected);
     }
 
@@ -2098,6 +2145,7 @@ mod thinking_round_trip_tests {
                 use_part_args("dup", json!({"n": 1})),
                 use_part_args("dup", json!({"n": 2})),
             ]),
+            user("next"),
         ];
         assert_eq!(
             messages(&items),
@@ -2108,10 +2156,14 @@ mod thinking_round_trip_tests {
                     wthinking("r", "SIG_FAKE_1"),
                     json!({"type": "tool_use", "id": "dup", "name": "ping", "input": {"n": 2}}),
                 ]),
+                utext("next"),
             ])
         );
     }
 
+    /// The call of the position part is gone (a trimmed history), so the
+    /// source message has no `tool_use` block of its own. The position part
+    /// gives no error, and the thinking block is dropped (final fix wave).
     #[test]
     fn orphan_position_part_is_ignored() {
         let items = vec![
@@ -2121,13 +2173,13 @@ mod thinking_round_trip_tests {
                 thinking(0, "r", "SIG_FAKE_1"),
                 tool_pos(1, "gone"),
             ]),
+            user("next"),
         ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
         assert_eq!(
-            messages(&items),
-            json!([
-                utext("q"),
-                amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("t")]),
-            ])
+            out,
+            json!([utext("q"), amsg(vec![wtext("t")]), utext("next")])
         );
     }
 
@@ -2141,6 +2193,7 @@ mod thinking_round_trip_tests {
                 redacted(2, "REDACTED_FAKE_2"),
                 text_pos(11),
             ]),
+            user("next"),
         ];
         assert_eq!(
             messages(&items),
@@ -2151,6 +2204,7 @@ mod thinking_round_trip_tests {
                     wredacted("REDACTED_FAKE_10"),
                     wtext("t"),
                 ]),
+                utext("next"),
             ])
         );
     }
@@ -2303,6 +2357,7 @@ mod thinking_round_trip_tests {
                 })),
                 text_pos(1),
             ]),
+            user("next"),
         ];
         let out = messages(&items);
         assert_eq!(
@@ -2310,6 +2365,7 @@ mod thinking_round_trip_tests {
             json!([
                 utext("q"),
                 amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("a")]),
+                utext("next"),
             ])
         );
         assert_eq!(
@@ -2642,6 +2698,114 @@ mod thinking_round_trip_tests {
                 umsg(vec![tr("t3")]),
             ])
         );
+    }
+
+    /// Final fix wave, item 1: a hand-off transcript removes the tool calls
+    /// and keeps the assistant messages. Response 1 had a `tool_use` block,
+    /// but its call is gone, so its thinking block is dropped. Response 2 had
+    /// no `tool_use` block, so its text keeps its thinking block.
+    #[test]
+    fn handoff_transcript_drops_thinking_of_a_response_that_lost_its_calls() {
+        let asst1 = asst(vec![
+            reasoning("r1"),
+            text("text1"),
+            thinking(0, "r1", "SIG_FAKE_1"),
+            text_pos(1),
+            tool_pos(2, "tu_1"),
+        ]);
+        let asst2 = asst(vec![
+            reasoning("r2"),
+            text("text2"),
+            thinking(0, "r2", "SIG_FAKE_2"),
+            text_pos(1),
+        ]);
+        let items = vec![user("q"), asst1.clone(), asst2, user(HANDOFF)];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wtext("text1")]),
+                amsg(vec![wthinking("r2", "SIG_FAKE_2"), wtext("text2")]),
+                utext(HANDOFF),
+            ])
+        );
+        // When both responses had tool_use blocks, the request is the same
+        // as with no Anthropic part.
+        let asst2 = asst(vec![
+            reasoning("r2"),
+            text("text2"),
+            thinking(0, "r2", "SIG_FAKE_2"),
+            text_pos(1),
+            tool_pos(2, "tu_2"),
+        ]);
+        let items = vec![user("q"), asst1, asst2, user(HANDOFF)];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+    }
+
+    /// Final fix wave, item 1: a trimmed history lost every call of a
+    /// response, so the thinking block of that response is dropped.
+    #[test]
+    fn trimmed_history_that_lost_all_calls_drops_thinking() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("r"),
+                text("t"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                text_pos(1),
+                tool_pos(2, "gone_a"),
+                tool_pos(3, "gone_b"),
+            ]),
+            user("q2"),
+            asst(vec![text("done")]),
+            user("q3"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![wtext("t")]),
+                utext("q2"),
+                amsg(vec![wtext("done")]),
+                utext("q3"),
+            ])
+        );
+    }
+
+    /// Final fix wave, item 2: a history that ends with an assistant message
+    /// (a caller prefill or a continuation) sends no thinking block in it.
+    #[test]
+    fn trailing_assistant_message_sends_no_thinking() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a"), thinking(0, "r", "SIG_FAKE_1"), text_pos(1)]),
+        ];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(out.messages, json!([utext("q"), amsg(vec![wtext("a")])]));
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+        // A thinking-only item whose call is in the last message: the item
+        // counts as empty, so the call joins the message before it, as on
+        // `main`.
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            asst(vec![
+                reasoning("r"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(1, "t1"),
+            ]),
+            call("t1"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(out, json!([utext("q"), amsg(vec![wtext("a"), tu("t1")])]));
     }
 
     /// A dropped thinking-only message does not change the system text or

@@ -238,6 +238,16 @@ impl MessageTranslator {
     /// Close the block at `index`: keep a valid thinking block and record the
     /// positions of the text and `tool_use` blocks.
     fn stop_block(&mut self, index: u32, out: &mut Vec<Result<ModelEvent, ModelError>>) {
+        // No event can follow `Finish`, so a block stop after the terminal
+        // event gives no provider data.
+        if self.terminal_emitted {
+            tracing::debug!(
+                target: "paigasus::anthropic::stream",
+                index,
+                "content_block_stop after the terminal event",
+            );
+            return;
+        }
         let Some(state) = self.blocks.remove(&index) else {
             tracing::debug!(
                 target: "paigasus::anthropic::stream",
@@ -1234,6 +1244,27 @@ mod tests {
             provider_data(&events),
             vec![(block(0, "a\n\"b\"", "SIG_FAKE_9"), None)]
         );
+    }
+
+    #[test]
+    fn block_stop_after_message_stop_emits_nothing() {
+        let mut t = MessageTranslator::new(false);
+        let _ = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                signature_delta(0, "SIG_FAKE_1"),
+                AnthropicEvent::MessageDelta {
+                    delta: MessageDeltaPayload {
+                        stop_reason: Some("end_turn".to_owned()),
+                    },
+                    usage: None,
+                },
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        let after = t.consume(stop(0)).unwrap();
+        assert!(after.is_empty(), "no event after Finish, got {after:?}");
     }
 
     #[test]

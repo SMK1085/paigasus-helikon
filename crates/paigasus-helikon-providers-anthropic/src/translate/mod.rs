@@ -934,6 +934,14 @@ mod round_trip {
                 .any(|b| b["type"] == "thinking"),
             "{body}"
         );
+        assert!(
+            assistant_content(&body)
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b["type"] == "tool_use" && b["id"] == "toolu_fake_c"),
+            "the tool_use block is still sent: {body}"
+        );
     }
 
     #[test]
