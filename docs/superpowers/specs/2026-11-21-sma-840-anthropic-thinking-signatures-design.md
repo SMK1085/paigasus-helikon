@@ -330,3 +330,36 @@ message.
 - Where the waiting position records live in `MessageTranslator`, and helper names.
 - The data structure for the groups in `translate_messages`.
 - The environment variable name for the live-test model id.
+
+## Prefix check (added after the local review)
+
+### Facts
+
+Two live probes on 2026-11-21 and the Claude API reference gave these facts.
+
+- Newer models run a history-editing check, also called the prefix check. These models are Sonnet 5.5, Opus 5.5, Haiku 5.5, and Fable 5.1 and 5.2.
+- A signature of a thinking block records the top-level `system` text, the `tools` set, and every message before the block. It also records a chain to the previous thinking block. A client can remove blocks from the front of the history. A client cannot remove blocks from the middle.
+- Accounts made on or after 2026-08-31 get an HTTP 400 when the prefix changed. The message is `messages.1.content.0: Invalid signature in thinking block. The block is bound to a different conversation.`
+- The request field `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` needs the beta header `thinking-binding-controls-2026-08-01`. The API then drops the first mismatched block and every later thinking block. The request proceeds. The response has a top-level `input_transformations` array.
+- The API accepts `block_binding` only with `thinking.type: "adaptive"`. No model accepts it with `"enabled"`. Models that do not run the check also accept the object. A request with `block_binding` and no beta header gets a 400.
+- `claude-sonnet-4-5` is deprecated and retires on 2026-11-30. `Enabled { budget_tokens }` works on models before 4.6, for example `claude-haiku-4-5`. It works, deprecated, on Opus 4.6 and Sonnet 4.6. Opus 4.7, 4.8, 5 and 5.5, Sonnet 5 and 5.5, Haiku 5.5 and Fable reject it with a 400.
+
+### Probe result (claude-sonnet-5-5, drop_block)
+
+| Change before the second request | Result |
+| --- | --- |
+| Changed `system` | thinking block dropped |
+| Added a tool | thinking block dropped |
+| Changed a tool description | thinking block dropped |
+| Changed the text of the first user message | thinking block dropped |
+| Inserted a text block before the thinking block in the same message | thinking block dropped |
+| Edited or removed text after the thinking block in the same message | thinking block kept |
+| Unchanged tool loop | thinking block kept |
+
+### Decision
+
+Sven chose Option A. With `ExtendedThinking::Adaptive`, the provider sends `block_binding` with `prefix_mismatch_behavior: "drop_block"` and the beta header `thinking-binding-controls-2026-08-01`. The provider adds the header once, also when the user added it with `.beta(...)`. The provider sets extended thinking on the builder only, so the header follows the builder value. `Enabled` and `Disabled` send no binding.
+
+Sven rejected two other options. A prefix hash is complex and needs a byte-exact copy of the request prefix. Documentation only leaves the 400 error in place for hand-offs.
+
+With `Adaptive`, a changed prefix costs the model its earlier reasoning. The request does not fail.
