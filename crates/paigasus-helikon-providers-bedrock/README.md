@@ -84,11 +84,11 @@ An Anthropic model ID that is not on the list can also reject the forced choice.
 
 The crate rewrites the schema before it sends the schema:
 
-- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, or to a node in an `allOf` composition. It also does not add the keyword to an object node next to `oneOf` or `anyOf`. The branches of such a node stay open too.
+- It adds `additionalProperties: false` to object nodes. It does not add the keyword to a node that has `patternProperties` or `propertyNames`, to a node in an `allOf` composition or to any node below an `allOf` member, or to a node whose `required` names a property that `properties` does not declare. It also does not add the keyword to an object node next to `oneOf` or `anyOf`. The branches of such a node stay open too.
 - It changes `oneOf` to `anyOf`.
 - It removes `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `maxItems`, `uniqueItems`, `minItems` above 1, and `not`, `if`, `then` and `else`.
 
-The server does not enforce the removed limits. The agent loop checks the result against the original schema and asks for a repair.
+The server does not enforce the removed limits. The agent loop does not evaluate the JSON schema. It checks that the result deserializes into the output type, and asks for a repair when it does not. A removed limit that only the schema states (for example a `schemars` range attribute) is not checked. Add your own validation for such a limit.
 
 Bedrock rejects these shapes with its own error: maps (`HashMap`, or `additionalProperties` that is `true` or a schema), `patternProperties`, `propertyNames`, tuples (`prefixItems`), the schemas `true` and `{}`, and recursive types. The crate does not rewrite them.
 

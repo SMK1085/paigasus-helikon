@@ -2,21 +2,30 @@
 //!
 //! The policy is a denylist. The rewrite removes the keywords that Bedrock rejects
 //! and keeps all other keywords. Bedrock does not enforce the removed limits.
-//! The core function `validate_terminal` checks the result against the original
-//! schema of the caller.
+//! The core function `validate_terminal` does not evaluate the JSON schema. It
+//! checks that the result deserializes into the output type. A removed limit
+//! that only the schema states (for example a `schemars` range) is not checked.
+//!
+//! An object node whose `required` names a property that `properties` does not
+//! declare stays open, because `additionalProperties: false` would forbid that
+//! required property.
 //!
 //! The rewrite does not visit `contains`, `dependentSchemas`, the tuple form of
 //! `items`, or the sub-schemas under `additionalProperties`, `patternProperties`,
 //! `prefixItems`, `unevaluatedProperties` and `propertyNames`. The rewrite
 //! passes these through, and Bedrock decides on them. The rewrite removes `not`.
 //!
-//! An object node under an `allOf` composition stays open (no added
-//! `additionalProperties: false`), because the closed members would reject the
-//! properties of the other members. The same rule applies to an object node
-//! next to `oneOf` or `anyOf` (the schemars output for a flattened tagged
-//! enum), also when it has no `properties`. The branches of such a node stay
-//! open too. A
-//! `$defs` entry that a `$ref` inside an `allOf` points to is still closed.
+//! A node with `allOf` gets no added `additionalProperties: false`. An `allOf`
+//! member and every node below it stay open too, also through `properties`,
+//! `items` and `$defs`. Closed members would reject the properties of the other
+//! members, also on a nested property that two members both declare.
+//!
+//! An object node next to `oneOf` or `anyOf` (the schemars output for a
+//! flattened tagged enum) stays open, also when it has no `properties`. The
+//! branches of such a node stay open too. Their `properties` are closed again.
+//!
+//! A `$defs` entry outside the `allOf` member that a `$ref` inside the member
+//! points to is still closed.
 
 use serde_json::{Map, Value};
 
@@ -39,10 +48,13 @@ const REMOVED_KEYWORDS: [&str; 11] = [
 ///
 /// The function never fails and does not read the `Ruleset`.
 pub(crate) fn native_output_schema(schema: &Value) -> Value {
-    rewrite(schema, false)
+    rewrite(schema, false, false)
 }
 
-fn rewrite(v: &Value, open: bool) -> Value {
+/// `open`: this node gets no added `additionalProperties`.
+/// `in_all_of`: this node is inside an `allOf` member. Every node below it
+/// stays open too, also through `properties`, `items` and `$defs`.
+fn rewrite(v: &Value, open: bool, in_all_of: bool) -> Value {
     let Some(obj) = v.as_object() else {
         return v.clone();
     };
@@ -97,8 +109,21 @@ fn rewrite(v: &Value, open: bool) -> Value {
     // `properties` of its own. A root `anyOf` without an object type (the
     // schemars `Option<Struct>`) is not flattened.
     let is_flattened = is_object && m.contains_key("anyOf");
+    let open = open || in_all_of;
     let child_open = open || has_all_of || is_flattened;
-    if is_object && !is_map && !child_open {
+    // `required` does not declare a property. A required name that `properties`
+    // does not declare would be forbidden by `additionalProperties: false`.
+    let requires_undeclared = m
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|req| {
+            let props = m.get("properties").and_then(Value::as_object);
+            req.iter().any(|n| {
+                n.as_str()
+                    .is_none_or(|n| !props.is_some_and(|p| p.contains_key(n)))
+            })
+        });
+    if is_object && !is_map && !child_open && !requires_undeclared {
         m.insert("additionalProperties".to_owned(), Value::Bool(false));
     }
 
@@ -106,19 +131,22 @@ fn rewrite(v: &Value, open: bool) -> Value {
     for key in ["properties", "$defs", "definitions"] {
         if let Some(Value::Object(map)) = m.get_mut(key) {
             for child in map.values_mut() {
-                *child = rewrite(child, false);
+                *child = rewrite(child, false, in_all_of);
             }
         }
     }
-    for key in ["anyOf", "allOf"] {
-        if let Some(Value::Array(arr)) = m.get_mut(key) {
-            for child in arr.iter_mut() {
-                *child = rewrite(child, child_open);
-            }
+    if let Some(Value::Array(arr)) = m.get_mut("anyOf") {
+        for child in arr.iter_mut() {
+            *child = rewrite(child, child_open, in_all_of);
+        }
+    }
+    if let Some(Value::Array(arr)) = m.get_mut("allOf") {
+        for child in arr.iter_mut() {
+            *child = rewrite(child, true, true);
         }
     }
     if let Some(items @ Value::Object(_)) = m.get_mut("items") {
-        *items = rewrite(items, false);
+        *items = rewrite(items, false, in_all_of);
     }
     Value::Object(m)
 }
@@ -247,9 +275,27 @@ mod tests {
     fn native_schema_keeps_other_keywords() {
         let s = json!({"$schema":"https://json-schema.org/draft/2020-12/schema","title":"T","description":"d","type":"string","enum":["a","b"],"const":"a","format":"date","pattern":"^a","minLength":1,"maxLength":5,"default":"a","examples":["a"]});
         assert_eq!(native_output_schema(&s), s);
+        // `required` names `a`, which `properties` does not declare. Closing the
+        // node would forbid `a`, so the node stays open.
         assert_eq!(
             native_output_schema(&json!({"type":"object","required":["a"]})),
-            json!({"type":"object","required":["a"],"additionalProperties":false})
+            json!({"type":"object","required":["a"]})
+        );
+    }
+
+    #[test]
+    fn native_schema_closes_object_when_required_names_are_declared() {
+        assert_eq!(
+            native_output_schema(
+                &json!({"type":"object","properties":{"a":{"type":"string"}},"required":["a"]})
+            ),
+            json!({"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false})
+        );
+        assert_eq!(
+            native_output_schema(
+                &json!({"type":"object","properties":{"a":{"type":"string"}},"required":["a","b"]})
+            ),
+            json!({"type":"object","properties":{"a":{"type":"string"}},"required":["a","b"]})
         );
     }
 
@@ -386,14 +432,20 @@ mod tests {
     }
 
     #[test]
-    fn native_schema_nested_property_under_all_of_is_closed() {
-        let input = json!({"allOf":[{"type":"object","properties":{"p":{"type":"object","properties":{"x":{"type":"string"}}}}}]});
-        let out = native_output_schema(&input);
-        assert!(out["allOf"][0].get("additionalProperties").is_none());
-        assert_eq!(
-            out["allOf"][0]["properties"]["p"]["additionalProperties"],
-            json!(false)
-        );
+    fn native_schema_nested_property_under_all_of_stays_open() {
+        let input = json!({"allOf":[{"type":"object","properties":{"p":{"type":"object","properties":{"x":{"type":"string"}},"$defs":{"D":{"type":"object"}}},"q":{"type":"array","items":{"type":"object"}}}}]});
+        assert_eq!(native_output_schema(&input), input);
+    }
+
+    #[test]
+    fn native_schema_shared_nested_property_under_all_of_stays_open() {
+        // Two members declare `p` with different fields. A closed `p` in each
+        // member would reject the field of the other member.
+        let input = json!({"allOf":[
+            {"type":"object","properties":{"p":{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}},"required":["p"]},
+            {"type":"object","properties":{"p":{"type":"object","properties":{"y":{"type":"string"}},"required":["y"]}},"required":["p"]}
+        ]});
+        assert_eq!(native_output_schema(&input), input);
     }
 
     #[test]
