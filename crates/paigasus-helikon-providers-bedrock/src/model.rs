@@ -410,4 +410,71 @@ mod tests {
         let events: Vec<_> = drive_stream_with_token(source, cancel).collect().await;
         assert_eq!(events.len(), 5, "all events must arrive when not cancelled");
     }
+
+    /// Live test for the learned native path (rule B), with rule A off.
+    ///
+    /// Run it only with `BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-5-5`
+    /// and `cargo test -p paigasus-helikon-providers-bedrock
+    /// live_rule_b -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_rule_b_learns_native_output_after_rejection() {
+        use crate::policy::{ForcedChoicePolicy, OutputPath};
+        use paigasus_helikon_core::{ContentPart, Item, ResponseFormat};
+
+        let id = match std::env::var("BEDROCK_MODEL_ID") {
+            Ok(v) if !v.is_empty() => v,
+            _ => {
+                eprintln!("[live] BEDROCK_MODEL_ID not set - skipping rule B live test.");
+                return;
+            }
+        };
+        let family = crate::ModelFamily::from_model_id(&id);
+        if family != crate::ModelFamily::Anthropic {
+            eprintln!("[live] {id} is not an Anthropic model - skipping");
+            return;
+        }
+        let mut model = BedrockModel::from_env(&id).await.expect("from_env");
+        model.policy = Arc::new(ForcedChoicePolicy::without_static_rule(family));
+        assert_eq!(model.policy.path(), OutputPath::ForcedTool);
+
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "Give a transaction: deposit of 100 USD.".to_owned(),
+            }],
+        }];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Transaction".to_owned(),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "operation": { "type": "string" },
+                    "amount": { "type": "number" }
+                },
+                "required": ["operation", "amount"]
+            }),
+            strict: false,
+        });
+        req.model_settings.max_output_tokens = Some(256);
+
+        let mut s = model
+            .invoke(req, CancellationToken::new())
+            .await
+            .expect("invoke should succeed");
+        let mut text = String::new();
+        while let Some(ev) = s.next().await {
+            if let ModelEvent::TokenDelta { text: t } = ev.expect("no stream error") {
+                text.push_str(&t);
+            }
+        }
+        assert_eq!(
+            model.policy.path(),
+            OutputPath::Native,
+            "one classified rejection must set the learned flag"
+        );
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("output must be valid JSON ({e}); got: {text}"));
+        assert!(v["operation"].is_string(), "operation: {v}");
+    }
 }
