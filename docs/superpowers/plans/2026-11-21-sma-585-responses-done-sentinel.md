@@ -27,7 +27,7 @@
 
 1. **A fixture with CRLF line endings** (Windows checkout; the OpenAI fixtures have no `.gitattributes` rule). The guard test must still find a `data: [DONE]\r` line: compare `line.trim_end()`. Owned by Task 1.
 2. **A header line that loses its `:`** becomes a real SSE data line. The guard test catches a sentinel line; the existing behaviour tests catch other damage. Owned by Task 1.
-3. **`response.failed` with no trailing sentinel.** The stream must still end with exactly one `Err` and nothing after it. `failed_event_terminates_stream_with_error` already pins this; it must pass unchanged. Owned by Task 1.
+3. **`response.failed` with no trailing sentinel.** The stream must still end with exactly one `Err` and nothing after it. `failed_event_terminates_stream_with_error` checks only that a failure signal occurs. `failed_event_is_the_last_stream_item` (added in review) pins one `Err` and nothing after it. Owned by Task 1.
 4. **A server that sends `[DONE]` after `response.completed`** (OpenAI-compatible proxies via `base_url`). Events must be identical to the stream without it. Owned by Task 2.
 5. **A conformance scenario whose bytes become identical to a declined scenario.** `CleanStop` must still differ from `TruncatedAfterStopReason` in its documentation: `response.completed` is the terminator. Owned by Task 3.
 

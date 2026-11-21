@@ -286,3 +286,20 @@ async fn failed_event_terminates_stream_with_error() {
         "expected a failure signal in: {events:#?}"
     );
 }
+
+/// `responses_failed.txt` has no trailing sentinel since SMA-585. The
+/// `response.failed` event alone must end the stream. This pins one `Err`
+/// and nothing after it.
+#[tokio::test]
+async fn failed_event_is_the_last_stream_item() {
+    let events = run(FAILED).await;
+
+    assert!(
+        events.iter().filter(|r| r.is_err()).count() == 1,
+        "expected exactly one Err in: {events:#?}"
+    );
+    assert!(
+        events.last().is_some_and(Result::is_err),
+        "expected the Err to be the last item in: {events:#?}"
+    );
+}
