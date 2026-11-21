@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Mj6i7xWZ7PYMkb16ddKmxN",
+  "agent_id": "ac3be8ba86f8bdc2a",
+  "subagent_type": "general-purpose",
+  "task_description": "Stage 7 CodeRabbit loop PR 379",
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 351287,
+    "cache_read_tokens": 4129560,
+    "output_tokens": 26727,
+    "api_call_count": 42
+  },
+  "started_at": "2026-11-21T15:13:31.648051+01:00",
+  "completed_at": "2026-11-21T15:14:38.055137+01:00"
+}
