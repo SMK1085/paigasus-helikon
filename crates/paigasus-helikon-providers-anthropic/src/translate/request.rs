@@ -3,9 +3,20 @@
 //! Rules per the SMA-317 spec § "Wire translation". The translator
 //! produces a `serde_json::Value` rather than typed structs to keep the
 //! wire-snapshot tests readable.
+//!
+//! SMA-840: an assistant message can hold `ProviderData` parts of this crate.
+//! They carry the `thinking` and `redacted_thinking` blocks of the response,
+//! and the positions of its first `text` block and its `tool_use` blocks. The
+//! translator sends the blocks back and puts the blocks of each source
+//! message in their response order. A history with no such part builds as
+//! before.
+
+use std::collections::{HashMap, VecDeque};
 
 use paigasus_helikon_core::{ContentPart, Item};
 use serde_json::{json, Value};
+
+use crate::provider_data::{self, AnthropicData};
 
 /// Output of [`translate_messages`]: the top-level `system` field (string
 /// or block-array form) and the `messages` array.
@@ -18,84 +29,235 @@ pub(crate) struct TranslatedMessages {
     pub(crate) trailing_message_dropped: bool,
 }
 
+/// The sort key of a block inside its group.
+#[derive(Debug, Clone, Copy)]
+enum SortKey {
+    /// `(index, 1)`, where `index` is the content-block index of the
+    /// response. A `tool_use` block with no position has `(u64::MAX, 1)`.
+    At(u64, u8),
+    /// A text block of a group with no `text` position. The key becomes
+    /// `(k, 0)`, where `k` is the smallest keyed `tool_use` index of the group
+    /// in the same wire message, or `u64::MAX` when there is none.
+    BeforeFirstToolUse,
+}
+
+impl SortKey {
+    fn resolve(self, first_tool_use: u64) -> (u64, u8) {
+        match self {
+            Self::At(index, rank) => (index, rank),
+            Self::BeforeFirstToolUse => (first_tool_use, 0),
+        }
+    }
+}
+
+/// The place of a block in the response order of its source message.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    /// The source message of the block. Keys of different groups are never
+    /// compared.
+    group: usize,
+    key: SortKey,
+}
+
+/// One content block of a wire message. Only `value` reaches the JSON.
+#[derive(Debug, Clone, Default)]
+struct WireBlock {
+    value: Value,
+    /// `None` for a block that does not move in the final sort.
+    slot: Option<Slot>,
+}
+
+impl WireBlock {
+    fn plain(value: Value) -> Self {
+        Self { value, slot: None }
+    }
+
+    fn kind(&self) -> &str {
+        self.value["type"].as_str().unwrap_or("")
+    }
+
+    fn is_tool_use(&self) -> bool {
+        self.kind() == "tool_use"
+    }
+
+    fn is_thinking(&self) -> bool {
+        matches!(self.kind(), "thinking" | "redacted_thinking")
+    }
+}
+
+/// One message of the `messages` array, before it becomes JSON.
+#[derive(Debug, Clone)]
+struct WireMessage {
+    role: &'static str,
+    content: Vec<WireBlock>,
+}
+
+impl WireMessage {
+    /// `true` when the message holds a `text` or a `tool_use` block.
+    fn has_text_or_tool_use(&self) -> bool {
+        self.content
+            .iter()
+            .any(|b| matches!(b.kind(), "text" | "tool_use"))
+    }
+
+    fn into_value(mut self) -> Value {
+        sort_groups(&mut self.content);
+        let content: Vec<Value> = self.content.into_iter().map(|b| b.value).collect();
+        json!({"role": self.role, "content": content})
+    }
+}
+
+/// The Anthropic positions of one source message: an `AssistantMessage`
+/// with at least one valid part of this crate, together with the
+/// `Item::ToolCall` items that follow it before the next `AssistantMessage`
+/// or the next user message with a part that is not a tool result.
+#[derive(Debug, Clone)]
+struct Source {
+    group: usize,
+    /// The wire message that holds the blocks of the `AssistantMessage`.
+    /// `None` when it gave no block.
+    wire: Option<usize>,
+    /// The `tool_use` positions by call id, in the order of the parts.
+    tool_positions: HashMap<String, VecDeque<u64>>,
+}
+
+impl Source {
+    /// The key of the next `tool_use` block with `call_id`. Each position is
+    /// used once, so a repeated id takes its positions in order.
+    fn tool_key(&mut self, call_id: &str) -> SortKey {
+        let index = self
+            .tool_positions
+            .get_mut(call_id)
+            .and_then(VecDeque::pop_front);
+        SortKey::At(index.unwrap_or(u64::MAX), 1)
+    }
+}
+
+/// The translator state before the item that made a tentative message.
+#[derive(Debug)]
+struct Saved {
+    item: usize,
+    messages_len: usize,
+    system_len: usize,
+    pending_tool_use: Vec<WireBlock>,
+    pending_tool_results: Vec<Value>,
+    last_item_dropped: bool,
+    next_group: usize,
+    source: Option<Source>,
+}
+
+/// A wire assistant message that holds only thinking blocks so far.
+///
+/// It stays the last message until a message is pushed after it. If it then
+/// (or at the end) still has no `text` and no `tool_use` block, the
+/// translator goes back to `saved`, drops the thinking blocks of the item,
+/// and translates again from that item. The item then counts as empty, as it
+/// did before SMA-840: no flush, no message, and no change to the flag.
+#[derive(Debug)]
+struct Tentative {
+    msg: usize,
+    saved: Saved,
+}
+
+/// The signal to go back to the saved state of the tentative message.
+struct Rollback;
+
+#[derive(Debug, Default)]
+struct Translator {
+    system_text: String,
+    messages: Vec<WireMessage>,
+    pending_tool_use: Vec<WireBlock>,
+    pending_tool_results: Vec<Value>,
+    last_item_dropped: bool,
+    next_group: usize,
+    source: Option<Source>,
+    tentative: Option<Tentative>,
+}
+
 /// Translate the conversation into Anthropic's request shape.
 ///
 /// `system` is `None` when no `Item::System` has non-blank text. `messages`
 /// is always an array. Text parts that are empty or whitespace only, and
 /// messages left with no blocks, are dropped because the API rejects them.
+///
+/// A wire assistant message that has only thinking blocks after all its
+/// `tool_use` blocks join drops them, and then counts as empty. Decisions go
+/// in item order: each drop translates the items after it again.
 pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
-    let mut system_text = String::new();
-    let mut messages: Vec<Value> = Vec::new();
-    let mut pending_tool_use: Vec<Value> = Vec::new();
-    let mut pending_tool_results: Vec<Value> = Vec::new();
-    let mut last_item_dropped = false;
-
-    fn flush_pending_assistant(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
-        if !pending.is_empty() {
-            messages.push(json!({
-                "role": "assistant",
-                "content": std::mem::take(pending),
-            }));
-        }
-    }
-
-    fn flush_pending_user(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
-        if !pending.is_empty() {
-            messages.push(json!({
-                "role": "user",
-                "content": std::mem::take(pending),
-            }));
-        }
-    }
-
-    /// Add `tool_use` blocks to the open assistant turn. When the last
-    /// message is an assistant message, extend it. Otherwise queue them.
-    fn push_tool_uses(
-        messages: &mut [Value],
-        pending_tool_use: &mut Vec<Value>,
-        blocks: Vec<Value>,
-    ) {
-        if let Some(last) = messages.last_mut().filter(|m| m["role"] == "assistant") {
-            last["content"].as_array_mut().unwrap().extend(blocks);
+    let mut t = Translator::default();
+    let mut drop_thinking = vec![false; items.len()];
+    let mut i = 0;
+    loop {
+        let done = i == items.len();
+        let step = if done {
+            t.finish()
         } else {
-            pending_tool_use.extend(blocks);
+            t.step(i, &items[i], drop_thinking[i])
+        };
+        match step {
+            Ok(()) if done => break,
+            Ok(()) => i += 1,
+            Err(Rollback) => {
+                let tentative = t
+                    .tentative
+                    .take()
+                    .expect("a rollback needs a tentative message");
+                i = tentative.saved.item;
+                // Each rollback drops one more item, so the loop ends.
+                drop_thinking[i] = true;
+                t.restore(tentative.saved);
+            }
         }
     }
+    t.into_output()
+}
 
-    for item in items {
+impl Translator {
+    fn step(&mut self, i: usize, item: &Item, drop_thinking: bool) -> Result<(), Rollback> {
         match item {
             Item::System { content } => {
-                flush_pending_assistant(&mut messages, &mut pending_tool_use);
-                flush_pending_user(&mut messages, &mut pending_tool_results);
-                if !system_text.is_empty() {
-                    system_text.push('\n');
+                self.flush_pending_assistant()?;
+                self.flush_pending_user()?;
+                if !self.system_text.is_empty() {
+                    self.system_text.push('\n');
                 }
-                system_text.push_str(&text_of(content));
+                self.system_text.push_str(&text_of(content));
             }
             Item::UserMessage { content } => {
-                flush_pending_assistant(&mut messages, &mut pending_tool_use);
+                // A user message with a part that is not a tool result ends
+                // the source message (the SMA-827 Gemini rule).
+                if content
+                    .iter()
+                    .any(|p| !matches!(p, ContentPart::ToolResult { .. }))
+                {
+                    self.source = None;
+                }
+                self.flush_pending_assistant()?;
                 // Pending tool_results go at the front of this user turn.
-                let mut blocks: Vec<Value> = std::mem::take(&mut pending_tool_results);
-                blocks.extend(user_blocks(content).as_array().unwrap().iter().cloned());
-                last_item_dropped = blocks.is_empty();
+                let mut blocks: Vec<Value> = std::mem::take(&mut self.pending_tool_results);
+                blocks.extend(user_blocks(content));
+                self.last_item_dropped = blocks.is_empty();
                 if !blocks.is_empty() {
-                    messages.push(json!({"role": "user", "content": blocks}));
+                    let blocks = blocks.into_iter().map(WireBlock::plain).collect();
+                    self.push_message("user", blocks)?;
                 }
             }
             Item::AssistantMessage { content, agent: _ } => {
-                let Value::Array(blocks) = assistant_blocks(content) else {
-                    unreachable!("assistant_blocks returns an array")
-                };
+                let (mut blocks, source) = assistant_blocks(content, self.next_group);
+                if drop_thinking {
+                    blocks.retain(|b| !b.is_thinking());
+                }
                 // An assistant item with no blocks acts as if it were absent:
                 // it flushes nothing (so an open tool round stays whole) and
                 // leaves the flag as it is (a drop of the user turn before
                 // it still counts). A kept assistant message ends the drop.
                 //
-                // A message of only tool uses is the nested form of
-                // `Item::ToolCall`. Inside an open round it joins that round,
-                // as a call does. A flush would put a user turn that lacks
-                // some results right after the open assistant turn.
-                // On this path the last message is an assistant message
+                // A message of only tool uses and thinking blocks is the
+                // nested form of `Item::ToolCall`, or the accumulator form of
+                // a thinking round (SMA-834, SMA-840). Inside an open round it
+                // joins that round, as a call does. A flush would put a user
+                // turn that lacks some results right after the open assistant
+                // turn. On this path the last message is an assistant message
                 // (`round_is_answered` is `true` for an empty trailing
                 // assistant run). `pending_tool_use` is empty, because each
                 // `ToolResult` flushes it. So the append keeps the order.
@@ -103,18 +265,35 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 // is already `false`, because a `ToolResult` came after any
                 // dropped user message.
                 let only_tool_uses =
-                    !blocks.is_empty() && blocks.iter().all(|b| b["type"] == "tool_use");
-                if only_tool_uses
-                    && !pending_tool_results.is_empty()
-                    && !round_is_answered(&messages, &pending_tool_results)
-                {
-                    last_item_dropped = false;
-                    push_tool_uses(&mut messages, &mut pending_tool_use, blocks);
+                    !blocks.is_empty() && blocks.iter().all(|b| b.is_tool_use() || b.is_thinking());
+                let joins = only_tool_uses
+                    && !self.pending_tool_results.is_empty()
+                    && !round_is_answered(&self.messages, &self.pending_tool_results);
+                let thinking_only = !blocks.is_empty() && blocks.iter().all(WireBlock::is_thinking);
+                let saved = (thinking_only && !joins).then(|| self.save(i));
+                if source.is_some() {
+                    self.next_group += 1;
+                }
+                self.source = source;
+                if joins {
+                    self.last_item_dropped = false;
+                    let target = self.tool_use_target();
+                    if let Some(source) = &mut self.source {
+                        source.wire = Some(target);
+                    }
+                    self.push_tool_uses(blocks);
                 } else if !blocks.is_empty() {
-                    flush_pending_assistant(&mut messages, &mut pending_tool_use);
-                    flush_pending_user(&mut messages, &mut pending_tool_results);
-                    last_item_dropped = false;
-                    messages.push(json!({"role": "assistant", "content": blocks}));
+                    self.flush_pending_assistant()?;
+                    self.flush_pending_user()?;
+                    self.last_item_dropped = false;
+                    let msg = self.messages.len();
+                    self.push_message("assistant", blocks)?;
+                    if let Some(source) = &mut self.source {
+                        source.wire = Some(msg);
+                    }
+                    if let Some(saved) = saved {
+                        self.tentative = Some(Tentative { msg, saved });
+                    }
                 }
             }
             Item::ToolCall {
@@ -122,25 +301,35 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 name,
                 args,
             } => {
-                last_item_dropped = false;
+                self.last_item_dropped = false;
                 // A new tool_use follows any results already seen. Close
                 // that user turn first only when the last assistant round is
                 // fully answered; otherwise the call joins that round.
-                if round_is_answered(&messages, &pending_tool_results) {
-                    flush_pending_user(&mut messages, &mut pending_tool_results);
+                if round_is_answered(&self.messages, &self.pending_tool_results) {
+                    self.flush_pending_user()?;
                 }
-                let block = json!({
+                // The call keeps its key only in the wire message that holds
+                // the blocks of its source message.
+                let target = self.tool_use_target();
+                let slot = self.source.as_mut().and_then(|source| {
+                    let key = source.tool_key(call_id);
+                    (source.wire == Some(target)).then_some(Slot {
+                        group: source.group,
+                        key,
+                    })
+                });
+                let value = json!({
                     "type": "tool_use",
                     "id": call_id,
                     "name": name,
                     "input": args,
                 });
-                push_tool_uses(&mut messages, &mut pending_tool_use, vec![block]);
+                self.push_tool_uses(vec![WireBlock { value, slot }]);
             }
             Item::ToolResult { call_id, content } => {
-                last_item_dropped = false;
-                flush_pending_assistant(&mut messages, &mut pending_tool_use);
-                pending_tool_results.push(json!({
+                self.last_item_dropped = false;
+                self.flush_pending_assistant()?;
+                self.pending_tool_results.push(json!({
                     "type": "tool_result",
                     "tool_use_id": call_id,
                     "content": text_of(content),
@@ -153,23 +342,161 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
                 );
             }
         }
+        Ok(())
     }
 
-    flush_pending_assistant(&mut messages, &mut pending_tool_use);
-    flush_pending_user(&mut messages, &mut pending_tool_results);
+    fn finish(&mut self) -> Result<(), Rollback> {
+        self.flush_pending_assistant()?;
+        self.flush_pending_user()?;
+        match &self.tentative {
+            Some(t) if !self.messages[t.msg].has_text_or_tool_use() => Err(Rollback),
+            _ => Ok(()),
+        }
+    }
 
-    let trailing_message_dropped =
-        last_item_dropped && messages.last().is_some_and(|m| m["role"] == "assistant");
+    /// Push a message. A tentative message before it is then complete: keep
+    /// it when it has a `text` or `tool_use` block, else go back.
+    fn push_message(
+        &mut self,
+        role: &'static str,
+        content: Vec<WireBlock>,
+    ) -> Result<(), Rollback> {
+        if let Some(t) = &self.tentative {
+            debug_assert_eq!(
+                t.msg + 1,
+                self.messages.len(),
+                "a tentative message is last"
+            );
+            if !self.messages[t.msg].has_text_or_tool_use() {
+                return Err(Rollback);
+            }
+            self.tentative = None;
+        }
+        self.messages.push(WireMessage { role, content });
+        Ok(())
+    }
 
-    let system = if system_text.trim().is_empty() {
-        None
-    } else {
-        Some(Value::String(system_text))
-    };
-    TranslatedMessages {
-        system,
-        messages: Value::Array(messages),
-        trailing_message_dropped,
+    fn flush_pending_assistant(&mut self) -> Result<(), Rollback> {
+        if self.pending_tool_use.is_empty() {
+            return Ok(());
+        }
+        let content = std::mem::take(&mut self.pending_tool_use);
+        self.push_message("assistant", content)
+    }
+
+    fn flush_pending_user(&mut self) -> Result<(), Rollback> {
+        if self.pending_tool_results.is_empty() {
+            return Ok(());
+        }
+        let content = std::mem::take(&mut self.pending_tool_results)
+            .into_iter()
+            .map(WireBlock::plain)
+            .collect();
+        self.push_message("user", content)
+    }
+
+    /// The index of the wire message that `push_tool_uses` adds to now.
+    fn tool_use_target(&self) -> usize {
+        match self.messages.last() {
+            Some(m) if m.role == "assistant" => self.messages.len() - 1,
+            // Queued blocks flush into the next message.
+            _ => self.messages.len(),
+        }
+    }
+
+    /// Add `tool_use` blocks to the open assistant turn. When the last
+    /// message is an assistant message, extend it. Otherwise queue them.
+    fn push_tool_uses(&mut self, blocks: Vec<WireBlock>) {
+        match self.messages.last_mut() {
+            Some(last) if last.role == "assistant" => last.content.extend(blocks),
+            _ => self.pending_tool_use.extend(blocks),
+        }
+    }
+
+    fn save(&self, item: usize) -> Saved {
+        Saved {
+            item,
+            messages_len: self.messages.len(),
+            system_len: self.system_text.len(),
+            pending_tool_use: self.pending_tool_use.clone(),
+            pending_tool_results: self.pending_tool_results.clone(),
+            last_item_dropped: self.last_item_dropped,
+            next_group: self.next_group,
+            source: self.source.clone(),
+        }
+    }
+
+    /// Go back to `saved`. The messages before `saved.messages_len` did not
+    /// change after the save: only the last message gets new blocks, and the
+    /// tentative message and all later ones are at or after that length.
+    fn restore(&mut self, saved: Saved) {
+        self.messages.truncate(saved.messages_len);
+        self.system_text.truncate(saved.system_len);
+        self.pending_tool_use = saved.pending_tool_use;
+        self.pending_tool_results = saved.pending_tool_results;
+        self.last_item_dropped = saved.last_item_dropped;
+        self.next_group = saved.next_group;
+        self.source = saved.source;
+        self.tentative = None;
+    }
+
+    fn into_output(self) -> TranslatedMessages {
+        let trailing_message_dropped =
+            self.last_item_dropped && self.messages.last().is_some_and(|m| m.role == "assistant");
+        let system = if self.system_text.trim().is_empty() {
+            None
+        } else {
+            Some(Value::String(self.system_text))
+        };
+        let messages = self
+            .messages
+            .into_iter()
+            .map(WireMessage::into_value)
+            .collect();
+        TranslatedMessages {
+            system,
+            messages: Value::Array(messages),
+            trailing_message_dropped,
+        }
+    }
+}
+
+/// Put the blocks of each group back in response order.
+///
+/// For each group, take the positions its blocks have in the message, sort
+/// those blocks by key (stable), and write them back into the same
+/// positions. Blocks of other groups and blocks with no slot do not move.
+fn sort_groups(content: &mut [WireBlock]) {
+    let mut groups: Vec<usize> = Vec::new();
+    for slot in content.iter().filter_map(|b| b.slot) {
+        if !groups.contains(&slot.group) {
+            groups.push(slot.group);
+        }
+    }
+    for group in groups {
+        let at: Vec<usize> = content
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.slot.is_some_and(|s| s.group == group))
+            .map(|(i, _)| i)
+            .collect();
+        let first_tool_use = at
+            .iter()
+            .filter(|&&i| content[i].is_tool_use())
+            .filter_map(|&i| match content[i].slot.map(|s| s.key) {
+                Some(SortKey::At(index, _)) if index != u64::MAX => Some(index),
+                _ => None,
+            })
+            .min()
+            .unwrap_or(u64::MAX);
+        let mut taken: Vec<WireBlock> = at
+            .iter()
+            .map(|&i| std::mem::take(&mut content[i]))
+            .collect();
+        taken.sort_by_key(|b| b.slot.map(|s| s.key.resolve(first_tool_use)));
+        for (i, block) in at.into_iter().zip(taken) {
+            content[i] = block;
+        }
     }
 }
 
@@ -178,14 +505,14 @@ pub(crate) fn translate_messages(items: &[Item]) -> TranslatedMessages {
 /// assistant messages into one turn, so the whole run is one round. Also
 /// `true` when there is nothing to compare (no assistant message last), so
 /// the results then flush as before.
-fn round_is_answered(messages: &[Value], results: &[Value]) -> bool {
+fn round_is_answered(messages: &[WireMessage], results: &[Value]) -> bool {
     messages
         .iter()
         .rev()
-        .take_while(|m| m["role"] == "assistant")
-        .flat_map(|m| m["content"].as_array().into_iter().flatten())
-        .filter(|b| b["type"] == "tool_use")
-        .all(|b| results.iter().any(|r| r["tool_use_id"] == b["id"]))
+        .take_while(|m| m.role == "assistant")
+        .flat_map(|m| &m.content)
+        .filter(|b| b.is_tool_use())
+        .all(|b| results.iter().any(|r| r["tool_use_id"] == b.value["id"]))
 }
 
 /// The API rejects empty and whitespace-only text blocks.
@@ -206,9 +533,9 @@ fn text_of(parts: &[ContentPart]) -> String {
     s
 }
 
-fn user_blocks(content: &[ContentPart]) -> Value {
+fn user_blocks(content: &[ContentPart]) -> Vec<Value> {
     use paigasus_helikon_core::MediaSource;
-    let blocks: Vec<Value> = content
+    content
         .iter()
         .filter_map(|p| match p {
             ContentPart::Text { text } if is_blank(text) => None,
@@ -243,35 +570,101 @@ fn user_blocks(content: &[ContentPart]) -> Value {
             ContentPart::ProviderData { .. } => None,
             _ => None,
         })
-        .collect();
-    Value::Array(blocks)
+        .collect()
 }
 
-fn assistant_blocks(content: &[ContentPart]) -> Value {
-    let blocks: Vec<Value> = content
-        .iter()
-        .filter_map(|p| match p {
-            ContentPart::Text { text } if is_blank(text) => None,
-            ContentPart::Text { text } => Some(json!({"type": "text", "text": text})),
-            ContentPart::ToolUse { call_id, name, args } => Some(json!({
-                "type": "tool_use",
-                "id": call_id,
-                "name": name,
-                "input": args,
-            })),
-            ContentPart::Reasoning { .. } => {
-                tracing::warn!(
-                    target: "paigasus::anthropic::translate",
-                    "dropping ContentPart::Reasoning on input — signature round-trip not yet supported",
-                );
-                None
+/// The blocks of one `AssistantMessage`, and its source state.
+///
+/// The source state is `Some` only when at least one part of this crate is
+/// valid. Then each block gets a slot in group `group`. Else no block gets a
+/// slot, and the message builds as before SMA-840.
+fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, Option<Source>) {
+    // Read each part once, so that a skipped part logs once.
+    let data: Vec<Option<(AnthropicData, Option<&str>)>> =
+        content.iter().map(provider_data::from_part).collect();
+    let mut source = data.iter().any(Option::is_some).then(|| Source {
+        group,
+        wire: None,
+        tool_positions: HashMap::new(),
+    });
+    let mut text_key = SortKey::BeforeFirstToolUse;
+    if let Some(source) = &mut source {
+        let mut text_seen = false;
+        for (d, call_id) in data.iter().flatten() {
+            match d {
+                // The stream writes a position for the first text block only.
+                AnthropicData::Text { index } if !text_seen => {
+                    text_seen = true;
+                    text_key = SortKey::At(u64::from(*index), 1);
+                }
+                AnthropicData::ToolUse { index } => match call_id {
+                    Some(id) => source
+                        .tool_positions
+                        .entry((*id).to_owned())
+                        .or_default()
+                        .push_back(u64::from(*index)),
+                    None => tracing::debug!(
+                        target: "paigasus::anthropic::translate",
+                        index = *index,
+                        "skipping anthropic tool_use position with no call id",
+                    ),
+                },
+                _ => {}
             }
-            // Provider data from another provider has no Anthropic form.
-            ContentPart::ProviderData { .. } => None,
-            _ => None,
-        })
-        .collect();
-    Value::Array(blocks)
+        }
+    }
+    let group = source.as_ref().map(|s| s.group);
+    let slot = |key| group.map(|group| Slot { group, key });
+    let mut blocks = Vec::new();
+    for (part, data) in content.iter().zip(&data) {
+        match part {
+            ContentPart::Text { text } if is_blank(text) => {}
+            // Core joins the text of a turn into one part. Each text block
+            // of the group gets the same key, so the blocks stay in order.
+            ContentPart::Text { text } => blocks.push(WireBlock {
+                value: json!({"type": "text", "text": text}),
+                slot: slot(text_key),
+            }),
+            ContentPart::ToolUse {
+                call_id,
+                name,
+                args,
+            } => {
+                let slot = source.as_mut().map(|s| Slot {
+                    group: s.group,
+                    key: s.tool_key(call_id),
+                });
+                blocks.push(WireBlock {
+                    value: json!({
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": name,
+                        "input": args,
+                    }),
+                    slot,
+                });
+            }
+            // The thinking text travels in the `ProviderData` block part.
+            ContentPart::Reasoning { .. } => {
+                tracing::debug!(
+                    target: "paigasus::anthropic::translate",
+                    "dropping ContentPart::Reasoning on input; provider data carries the block",
+                );
+            }
+            ContentPart::ProviderData { .. } => {
+                // Provider data from another provider, and position parts,
+                // give no block.
+                if let Some((AnthropicData::Block { index, block }, _)) = data {
+                    blocks.push(WireBlock {
+                        value: block.to_wire(),
+                        slot: slot(SortKey::At(u64::from(*index), 1)),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    (blocks, source)
 }
 
 #[cfg(test)]
@@ -1354,5 +1747,791 @@ mod provider_data_tests {
             ]),
         );
         assert!(!out.messages.to_string().contains("SIG_A"));
+    }
+}
+
+/// SMA-840: the thinking blocks of each assistant message go back in their
+/// original order.
+#[cfg(test)]
+mod thinking_round_trip_tests {
+    use super::*;
+    use crate::provider_data::{part, AnthropicData, ThinkingBlock};
+    use crate::PROVIDER_DATA_KEY;
+
+    const HANDOFF: &str =
+        "You are now handling a transferred conversation. Continue assisting the user.";
+
+    fn thinking(i: u32, text: &str, sig: &str) -> ContentPart {
+        part(
+            AnthropicData::Block {
+                index: i,
+                block: ThinkingBlock::Thinking {
+                    thinking: text.to_owned(),
+                    signature: sig.to_owned(),
+                },
+            },
+            None,
+        )
+    }
+
+    fn redacted(i: u32, data: &str) -> ContentPart {
+        part(
+            AnthropicData::Block {
+                index: i,
+                block: ThinkingBlock::RedactedThinking {
+                    data: data.to_owned(),
+                },
+            },
+            None,
+        )
+    }
+
+    fn text_pos(i: u32) -> ContentPart {
+        part(AnthropicData::Text { index: i }, None)
+    }
+
+    fn tool_pos(i: u32, id: &str) -> ContentPart {
+        part(AnthropicData::ToolUse { index: i }, Some(id))
+    }
+
+    /// A `ProviderData` part with this crate's key and any `data`.
+    fn raw(data: Value) -> ContentPart {
+        ContentPart::ProviderData {
+            provider: PROVIDER_DATA_KEY.to_owned(),
+            call_id: None,
+            data,
+        }
+    }
+
+    fn gemini() -> ContentPart {
+        ContentPart::ProviderData {
+            provider: "gemini".to_owned(),
+            call_id: None,
+            data: json!({"sig": "SIG_A"}),
+        }
+    }
+
+    fn wthinking(text: &str, sig: &str) -> Value {
+        json!({"type": "thinking", "thinking": text, "signature": sig})
+    }
+
+    fn wredacted(data: &str) -> Value {
+        json!({"type": "redacted_thinking", "data": data})
+    }
+
+    fn text(t: &str) -> ContentPart {
+        ContentPart::Text { text: t.to_owned() }
+    }
+
+    fn reasoning(t: &str) -> ContentPart {
+        ContentPart::Reasoning { text: t.to_owned() }
+    }
+
+    fn user(t: &str) -> Item {
+        Item::UserMessage {
+            content: vec![text(t)],
+        }
+    }
+
+    fn asst(parts: Vec<ContentPart>) -> Item {
+        Item::AssistantMessage {
+            content: parts,
+            agent: None,
+        }
+    }
+
+    fn call(id: &str) -> Item {
+        Item::ToolCall {
+            call_id: id.into(),
+            name: "ping".into(),
+            args: json!({}),
+        }
+    }
+
+    fn result(id: &str) -> Item {
+        Item::ToolResult {
+            call_id: id.into(),
+            content: vec![text("pong")],
+        }
+    }
+
+    fn use_part(id: &str) -> ContentPart {
+        use_part_args(id, json!({}))
+    }
+
+    fn use_part_args(id: &str, args: Value) -> ContentPart {
+        ContentPart::ToolUse {
+            call_id: id.to_owned(),
+            name: "ping".to_owned(),
+            args,
+        }
+    }
+
+    fn wtext(t: &str) -> Value {
+        json!({"type": "text", "text": t})
+    }
+
+    fn tu(id: &str) -> Value {
+        json!({"type": "tool_use", "id": id, "name": "ping", "input": {}})
+    }
+
+    fn tr(id: &str) -> Value {
+        json!({"type": "tool_result", "tool_use_id": id, "content": "pong"})
+    }
+
+    fn utext(t: &str) -> Value {
+        json!({"role": "user", "content": [wtext(t)]})
+    }
+
+    fn amsg(blocks: Vec<Value>) -> Value {
+        json!({"role": "assistant", "content": blocks})
+    }
+
+    fn umsg(blocks: Vec<Value>) -> Value {
+        json!({"role": "user", "content": blocks})
+    }
+
+    fn messages(items: &[Item]) -> Value {
+        translate_messages(items).messages
+    }
+
+    /// The same items with every part of this crate removed.
+    fn without_anthropic(items: &[Item]) -> Vec<Item> {
+        let keep = |p: &ContentPart| !matches!(p, ContentPart::ProviderData { provider, .. } if provider == PROVIDER_DATA_KEY);
+        items
+            .iter()
+            .map(|item| match item {
+                Item::AssistantMessage { content, agent } => Item::AssistantMessage {
+                    content: content.iter().filter(|p| keep(p)).cloned().collect(),
+                    agent: agent.clone(),
+                },
+                other => other.clone(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accumulator_form_restores_wire_order() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("r"),
+                text("t"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                text_pos(1),
+                tool_pos(2, "tu_1"),
+            ]),
+            call("tu_1"),
+            result("tu_1"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("t"), tu("tu_1")]),
+                umsg(vec![tr("tu_1")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn redacted_blocks_go_back_in_order() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("t"),
+                redacted(0, "REDACTED_FAKE_1"),
+                redacted(1, "REDACTED_FAKE_2"),
+                text_pos(2),
+                tool_pos(3, "tu_1"),
+            ]),
+            call("tu_1"),
+            result("tu_1"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![
+                    wredacted("REDACTED_FAKE_1"),
+                    wredacted("REDACTED_FAKE_2"),
+                    wtext("t"),
+                    tu("tu_1"),
+                ]),
+                umsg(vec![tr("tu_1")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn interleaved_thinking_keeps_order() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("AB"),
+                thinking(0, "A", "SIG_FAKE_1"),
+                tool_pos(1, "tu_z"),
+                thinking(2, "B", "SIG_FAKE_2"),
+                tool_pos(3, "tu_a"),
+            ]),
+            // The accumulator sorts calls by call id.
+            call("tu_a"),
+            call("tu_z"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![
+                    wthinking("A", "SIG_FAKE_1"),
+                    tu("tu_z"),
+                    wthinking("B", "SIG_FAKE_2"),
+                    tu("tu_a"),
+                ]),
+            ])
+        );
+    }
+
+    #[test]
+    fn text_without_position_goes_before_first_tool_use() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("t"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(2, "tu_1"),
+            ]),
+            call("tu_1"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("t"), tu("tu_1")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn text_without_position_and_no_tool_use_goes_last() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("t"), thinking(5, "r", "SIG_FAKE_1")]),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("t")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn tool_use_without_position_goes_after_keyed_blocks() {
+        let head = vec![
+            user("q"),
+            asst(vec![thinking(0, "r", "SIG_FAKE_1"), tool_pos(1, "tu_1")]),
+        ];
+        let expected = json!([
+            utext("q"),
+            amsg(vec![wthinking("r", "SIG_FAKE_1"), tu("tu_1"), tu("tu_2")]),
+        ]);
+        let mut items = head.clone();
+        items.extend([call("tu_1"), call("tu_2")]);
+        assert_eq!(messages(&items), expected);
+        // The call with no position also goes after a keyed call that
+        // arrives later.
+        let mut items = head;
+        items.extend([call("tu_2"), call("tu_1")]);
+        assert_eq!(messages(&items), expected);
+    }
+
+    #[test]
+    fn repeated_tool_use_id_takes_positions_in_order() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                thinking(2, "r", "SIG_FAKE_1"),
+                tool_pos(1, "dup"),
+                tool_pos(3, "dup"),
+                use_part_args("dup", json!({"n": 1})),
+                use_part_args("dup", json!({"n": 2})),
+            ]),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![
+                    json!({"type": "tool_use", "id": "dup", "name": "ping", "input": {"n": 1}}),
+                    wthinking("r", "SIG_FAKE_1"),
+                    json!({"type": "tool_use", "id": "dup", "name": "ping", "input": {"n": 2}}),
+                ]),
+            ])
+        );
+    }
+
+    #[test]
+    fn orphan_position_part_is_ignored() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("t"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(1, "gone"),
+            ]),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("t")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn two_digit_indexes_sort_numerically() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("t"),
+                redacted(10, "REDACTED_FAKE_10"),
+                redacted(2, "REDACTED_FAKE_2"),
+                text_pos(11),
+            ]),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![
+                    wredacted("REDACTED_FAKE_2"),
+                    wredacted("REDACTED_FAKE_10"),
+                    wtext("t"),
+                ]),
+            ])
+        );
+    }
+
+    #[test]
+    fn mixed_old_and_new_turns() {
+        // Turn 1 has the `baseline_accumulator_tool_loop` shape, from an
+        // older SDK with no Anthropic part.
+        let turn1 = vec![
+            user("q"),
+            asst(vec![reasoning("r"), text("t")]),
+            call("tu_1"),
+            result("tu_1"),
+            asst(vec![text("done")]),
+        ];
+        let mut items = turn1.clone();
+        items.push(user("q2"));
+        items.extend([
+            asst(vec![
+                reasoning("r2"),
+                text("t2"),
+                thinking(0, "r2", "SIG_FAKE_1"),
+                text_pos(1),
+                tool_pos(2, "tu_2"),
+            ]),
+            call("tu_2"),
+            result("tu_2"),
+        ]);
+        let out = messages(&items);
+        let baseline = messages(&turn1);
+        let baseline = baseline.as_array().unwrap();
+        assert_eq!(&out.as_array().unwrap()[..baseline.len()], &baseline[..]);
+        assert_eq!(
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![wtext("t"), tu("tu_1")]),
+                umsg(vec![tr("tu_1")]),
+                amsg(vec![wtext("done")]),
+                utext("q2"),
+                amsg(vec![wthinking("r2", "SIG_FAKE_1"), wtext("t2"), tu("tu_2")]),
+                umsg(vec![tr("tu_2")]),
+            ])
+        );
+    }
+
+    fn earlier_turn_items() -> Vec<Item> {
+        vec![
+            user("q1"),
+            asst(vec![
+                text("a1"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                text_pos(1),
+            ]),
+            user("q2"),
+        ]
+    }
+
+    fn earlier_turn_expected() -> Value {
+        json!([
+            utext("q1"),
+            amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("a1")]),
+            utext("q2"),
+        ])
+    }
+
+    #[test]
+    fn earlier_turn_blocks_are_sent_back() {
+        assert_eq!(messages(&earlier_turn_items()), earlier_turn_expected());
+    }
+
+    #[test]
+    fn foreign_provider_data_is_ignored() {
+        let items = vec![
+            Item::UserMessage {
+                content: vec![text("q1"), gemini()],
+            },
+            asst(vec![
+                gemini(),
+                text("a1"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                gemini(),
+                text_pos(1),
+            ]),
+            asst(vec![gemini()]),
+            Item::UserMessage {
+                content: vec![gemini(), text("q2")],
+            },
+        ];
+        assert_eq!(messages(&items), earlier_turn_expected());
+    }
+
+    #[test]
+    fn malformed_part_is_skipped() {
+        let items = vec![
+            user("q1"),
+            asst(vec![
+                text("a1"),
+                raw(json!({"kind": "nope"})),
+                raw(json!({"kind": "block", "index": 0})),
+                raw(json!({
+                    "kind": "block",
+                    "index": 1,
+                    "block": {"type": "thinking", "thinking": "r", "signature": 5},
+                })),
+            ]),
+            user("q2"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(
+            out,
+            json!([utext("q1"), amsg(vec![wtext("a1")]), utext("q2")])
+        );
+    }
+
+    #[test]
+    fn failed_block_check_is_skipped() {
+        let items = vec![
+            user("q1"),
+            asst(vec![
+                text("a1"),
+                thinking(0, "r", ""),
+                redacted(1, ""),
+                text_pos(2),
+            ]),
+            user("q2"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([utext("q1"), amsg(vec![wtext("a1")]), utext("q2")])
+        );
+    }
+
+    #[test]
+    fn block_is_rebuilt_from_known_fields() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("a"),
+                raw(json!({
+                    "kind": "block",
+                    "index": 0,
+                    "block": {
+                        "type": "thinking",
+                        "thinking": "r",
+                        "signature": "SIG_FAKE_1",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                })),
+                text_pos(1),
+            ]),
+        ];
+        let out = messages(&items);
+        assert_eq!(
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), wtext("a")]),
+            ])
+        );
+        assert_eq!(
+            out[1]["content"][0].as_object().unwrap().len(),
+            3,
+            "only type, thinking and signature",
+        );
+    }
+
+    #[test]
+    fn sma834_join_with_thinking_both_forms() {
+        let nested_form = vec![
+            user("q"),
+            asst(vec![
+                thinking(0, "T1", "SIG_FAKE_1"),
+                tool_pos(1, "t1"),
+                tool_pos(2, "t2"),
+                use_part("t1"),
+                use_part("t2"),
+            ]),
+            result("t1"),
+            asst(vec![
+                thinking(0, "T2", "SIG_FAKE_2"),
+                tool_pos(1, "t3"),
+                use_part("t3"),
+            ]),
+            result("t2"),
+            result("t3"),
+        ];
+        // The form that the accumulator writes (ledger ruling F4).
+        let accumulator_form = vec![
+            user("q"),
+            asst(vec![
+                reasoning("T1"),
+                thinking(0, "T1", "SIG_FAKE_1"),
+                tool_pos(1, "t1"),
+                tool_pos(2, "t2"),
+            ]),
+            call("t1"),
+            call("t2"),
+            result("t1"),
+            asst(vec![
+                reasoning("T2"),
+                thinking(0, "T2", "SIG_FAKE_2"),
+                tool_pos(1, "t3"),
+            ]),
+            call("t3"),
+            result("t2"),
+            result("t3"),
+        ];
+        let expected = json!([
+            utext("q"),
+            amsg(vec![
+                wthinking("T1", "SIG_FAKE_1"),
+                tu("t1"),
+                tu("t2"),
+                wthinking("T2", "SIG_FAKE_2"),
+                tu("t3"),
+            ]),
+            umsg(vec![tr("t1"), tr("t2"), tr("t3")]),
+        ]);
+        assert_eq!(messages(&nested_form), expected);
+        assert_eq!(messages(&accumulator_form), expected);
+    }
+
+    #[test]
+    fn handoff_transcript_thinking_only_message_is_dropped() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("r"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(1, "tu_1"),
+            ]),
+            user(HANDOFF),
+        ];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(out.messages, json!([utext("q"), utext(HANDOFF)]));
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+    }
+
+    #[test]
+    fn reasoning_only_assistant_is_not_sent_with_anthropic_blocks() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("scratch"),
+                thinking(0, "scratch", "SIG_FAKE_1"),
+            ]),
+            user("r"),
+        ];
+        assert_eq!(messages(&items), json!([utext("q"), utext("r")]));
+    }
+
+    #[test]
+    fn trailing_blank_user_then_reasoning_assistant_sets_flag_with_anthropic_blocks() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            user(""),
+            asst(vec![
+                reasoning("scratch"),
+                thinking(0, "scratch", "SIG_FAKE_1"),
+            ]),
+        ];
+        let out = translate_messages(&items);
+        assert_eq!(out.messages, json!([utext("q"), amsg(vec![wtext("a")])]));
+        assert!(out.trailing_message_dropped);
+    }
+
+    #[test]
+    fn length_finish_after_thinking_is_dropped() {
+        let items = vec![
+            user("q"),
+            asst(vec![reasoning("r"), thinking(0, "r", "SIG_FAKE_1")]),
+        ];
+        let out = translate_messages(&items);
+        assert_eq!(out.messages, json!([utext("q")]));
+        assert!(!out.trailing_message_dropped);
+    }
+
+    #[test]
+    fn transfer_split_moves_tool_use_unkeyed() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("r"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(1, "a"),
+                tool_pos(2, "b"),
+            ]),
+            call("a"),
+            result("a"),
+            call("b"),
+            result("b"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), tu("a")]),
+                umsg(vec![tr("a")]),
+                amsg(vec![tu("b")]),
+                umsg(vec![tr("b")]),
+            ])
+        );
+    }
+
+    /// Calls that a split moves into a later wire message lose their keys,
+    /// so they keep today's order there (here `b` before `c`, although the
+    /// positions put `c` first).
+    #[test]
+    fn moved_tool_uses_keep_todays_order() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("r"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(1, "a"),
+                tool_pos(3, "b"),
+                tool_pos(2, "c"),
+            ]),
+            call("a"),
+            result("a"),
+            call("b"),
+            call("c"),
+            result("b"),
+            result("c"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), tu("a")]),
+                umsg(vec![tr("a")]),
+                amsg(vec![tu("b"), tu("c")]),
+                umsg(vec![tr("b"), tr("c")]),
+            ])
+        );
+    }
+
+    /// Ruling F7: the thinking-only rule reads the wire message. Here the
+    /// call of the source message lands in a later wire message, so the wire
+    /// message of the thinking block has no `tool_use` block. The block is
+    /// dropped and the request is the same as with no Anthropic part. A
+    /// look-ahead over the source message only would keep the block.
+    #[test]
+    fn thinking_only_message_whose_call_lands_elsewhere_is_dropped() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            call("t1"),
+            asst(vec![
+                reasoning("r"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                tool_pos(1, "t2"),
+            ]),
+            result("t1"),
+            call("t2"),
+            result("t2"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![wtext("a"), tu("t1")]),
+                umsg(vec![tr("t1")]),
+                amsg(vec![tu("t2")]),
+                umsg(vec![tr("t2")]),
+            ])
+        );
+    }
+
+    /// Ruling F7, the other direction: the source message has no call, but a
+    /// later nested `tool_use` joins its wire message. The wire message then
+    /// has a `tool_use` block, so the thinking block stays.
+    #[test]
+    fn thinking_only_message_joined_by_later_tool_use_is_kept() {
+        let items = vec![
+            user("q"),
+            asst(vec![text("a")]),
+            call("t1"),
+            call("t2"),
+            asst(vec![reasoning("r"), thinking(0, "r", "SIG_FAKE_1")]),
+            result("t1"),
+            asst(vec![use_part("t3")]),
+            result("t2"),
+            result("t3"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                amsg(vec![wtext("a"), tu("t1"), tu("t2")]),
+                amsg(vec![wthinking("r", "SIG_FAKE_1"), tu("t3")]),
+                umsg(vec![tr("t1"), tr("t2"), tr("t3")]),
+            ])
+        );
+    }
+
+    /// A dropped thinking-only message does not change the system text or
+    /// the items around it.
+    #[test]
+    fn dropped_thinking_only_message_keeps_system_text_once() {
+        let items = vec![
+            Item::System {
+                content: vec![text("s1")],
+            },
+            user("q"),
+            asst(vec![reasoning("r"), thinking(0, "r", "SIG_FAKE_1")]),
+            Item::System {
+                content: vec![text("s2")],
+            },
+            user("r"),
+        ];
+        let out = translate_messages(&items);
+        assert_eq!(out.system, Some(Value::String("s1\ns2".to_owned())));
+        assert_eq!(out.messages, json!([utext("q"), utext("r")]));
+        assert!(!out.trailing_message_dropped);
     }
 }

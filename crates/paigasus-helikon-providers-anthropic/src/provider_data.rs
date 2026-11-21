@@ -3,8 +3,9 @@
 //! The stream writes these shapes under [`PROVIDER_DATA_KEY`]. The shapes are
 //! private to this crate and can change. A host must not parse them.
 
-use paigasus_helikon_core::ModelEvent;
+use paigasus_helikon_core::{ContentPart, ModelEvent};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::PROVIDER_DATA_KEY;
 
@@ -35,6 +36,35 @@ impl ThinkingBlock {
         match self {
             Self::Thinking { signature, .. } => !signature.is_empty(),
             Self::RedactedThinking { data } => !data.is_empty(),
+        }
+    }
+
+    /// The block in its request form.
+    ///
+    /// The form holds only `type` and the known fields of the block. A field
+    /// that the stored data has in addition is not sent.
+    pub(crate) fn to_wire(&self) -> Value {
+        match self {
+            Self::Thinking {
+                thinking,
+                signature,
+            } => json!({
+                "type": "thinking",
+                "thinking": thinking,
+                "signature": signature,
+            }),
+            Self::RedactedThinking { data } => json!({
+                "type": "redacted_thinking",
+                "data": data,
+            }),
+        }
+    }
+
+    /// The Anthropic block type, for log lines.
+    fn type_name(&self) -> &'static str {
+        match self {
+            Self::Thinking { .. } => "thinking",
+            Self::RedactedThinking { .. } => "redacted_thinking",
         }
     }
 }
@@ -72,6 +102,56 @@ impl AnthropicData {
             call_id,
             data: serde_json::to_value(self).expect("AnthropicData serializes"),
         }
+    }
+}
+
+/// Read the data of one part of this crate.
+///
+/// Returns `None` with no log for a part that is not `ProviderData` or that
+/// has the key of another provider. Returns `None` with a debug log for a part
+/// with this key that does not parse, or that holds a block that is not valid.
+/// The log never holds the content of the part.
+pub(crate) fn from_part(part: &ContentPart) -> Option<(AnthropicData, Option<&str>)> {
+    let ContentPart::ProviderData {
+        provider,
+        call_id,
+        data,
+    } = part
+    else {
+        return None;
+    };
+    if provider != PROVIDER_DATA_KEY {
+        return None;
+    }
+    // The parse error is not logged, because it can hold a value of the data.
+    let Ok(parsed) = AnthropicData::deserialize(data) else {
+        tracing::debug!(
+            target: "paigasus::anthropic::translate",
+            "skipping anthropic provider data that does not parse",
+        );
+        return None;
+    };
+    if let AnthropicData::Block { index, block } = &parsed {
+        if !block.is_valid() {
+            tracing::debug!(
+                target: "paigasus::anthropic::translate",
+                index = *index,
+                block_type = block.type_name(),
+                "skipping anthropic thinking block that is not valid",
+            );
+            return None;
+        }
+    }
+    Some((parsed, call_id.as_deref()))
+}
+
+/// Make a `ProviderData` part of this crate (test helper).
+#[cfg(test)]
+pub(crate) fn part(data: AnthropicData, call_id: Option<&str>) -> ContentPart {
+    ContentPart::ProviderData {
+        provider: PROVIDER_DATA_KEY.to_owned(),
+        call_id: call_id.map(str::to_owned),
+        data: serde_json::to_value(data).expect("AnthropicData serializes"),
     }
 }
 
