@@ -30,8 +30,6 @@ use crate::translate::build_request;
 #[derive(Debug, Clone)]
 pub struct BedrockModel {
     pub(crate) config: Arc<Config>,
-    // Read from Task 4 (build_request) and Task 5 (send fallback).
-    #[allow(dead_code)]
     pub(crate) policy: Arc<ForcedChoicePolicy>,
 }
 
@@ -53,7 +51,10 @@ impl Model for BedrockModel {
     ) -> Result<BoxStream<'static, Result<ModelEvent, ModelError>>, ModelError> {
         // Translate the core request into Bedrock wire format (early error on
         // translation failure — before we open any network connection).
-        let prepared = build_request(&self.config, &request)?;
+        let prepared = build_request(&self.config, &request, self.policy.path())?;
+        for n in &prepared.notices {
+            self.policy.note(*n, &self.config.model_id);
+        }
 
         let synthesizing = prepared.synthesizing;
         let client = self.config.client.clone();
@@ -69,7 +70,8 @@ impl Model for BedrockModel {
                 Some(prepared.system)
             })
             .set_tool_config(prepared.tool_config)
-            .set_inference_config(prepared.inference_config);
+            .set_inference_config(prepared.inference_config)
+            .set_output_config(prepared.output_config);
 
         let s = stream! {
             // Send the ConverseStream request and obtain the event receiver.

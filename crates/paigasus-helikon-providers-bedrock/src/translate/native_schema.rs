@@ -33,7 +33,6 @@ const REMOVED_KEYWORDS: [&str; 11] = [
 /// Rewrite a raw JSON schema into the form that Bedrock native output accepts.
 ///
 /// The function never fails and does not read the `Ruleset`.
-#[allow(dead_code)] // Used from Task 4 (build_native).
 pub(crate) fn native_output_schema(schema: &Value) -> Value {
     rewrite(schema, false)
 }

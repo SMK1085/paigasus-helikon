@@ -15,8 +15,6 @@ pub(crate) enum OutputPath {
 
 /// A notice that the native path changes the request. Each kind is logged once per handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Variants are built from Task 4 (build_request).
-#[allow(dead_code)]
 pub(crate) enum NativeNotice {
     /// `ToolChoice::Required` is omitted.
     RequiredOmitted,
@@ -89,8 +87,6 @@ impl ForcedChoicePolicy {
     }
 
     /// Log the notice once per handle.
-    // Used from Task 4 (build_request path selection).
-    #[allow(dead_code)]
     pub(crate) fn note(&self, n: NativeNotice, model_id: &str) {
         if !self.first_notice(n) {
             return;

@@ -1,5 +1,10 @@
 //! Model capability flags for Bedrock model families.
 //!
+//! The `structured_output` flag is set for the families that support a forced
+//! tool choice or native output. Claude Sonnet 5.5 and Claude Opus 5.5 reject a
+//! forced tool choice and use native output (`outputConfig`). On these models
+//! `ResponseFormat::JsonObject` degrades to text.
+//!
 //! Returns conservative defaults for unknown families; callers may override
 //! via [`crate::BedrockModelBuilder::capabilities`].
 
@@ -8,8 +13,11 @@ use paigasus_helikon_core::ModelCapabilities;
 
 /// Return the capability flags for a family.
 ///
-/// The `structured_output` flag is set for families that support forced
-/// tool-choice (the mechanism used to synthesize structured output on Bedrock).
+/// The `structured_output` flag is set for families that support a forced
+/// tool choice or native output. A forced tool choice synthesizes structured
+/// output on most models. Claude Sonnet 5.5 and Claude Opus 5.5 use native
+/// output (`outputConfig`) instead, and `ResponseFormat::JsonObject` degrades
+/// to text there.
 /// No per-family `max_output_tokens` default is returned; omitting
 /// `inferenceConfig.maxTokens` lets the model apply its own correct default,
 /// which avoids `ValidationException` on models whose limit is below any
@@ -102,7 +110,9 @@ mod tests {
 
     #[test]
     fn structured_output_matches_forced_tool_choice_support() {
-        // structured_output flag should align with supports_forced_tool_choice
+        // The structured_output flag must align with forced tool choice or native
+        // output. The native path is only for families that support a forced
+        // tool choice, so the family check is sufficient.
         for family in [
             ModelFamily::Anthropic,
             ModelFamily::AmazonNova,
@@ -116,7 +126,7 @@ mod tests {
             assert_eq!(
                 caps.structured_output,
                 family.supports_forced_tool_choice(),
-                "family {family:?}: structured_output != supports_forced_tool_choice"
+                "family {family:?}: structured_output != (forced tool choice or native output)"
             );
         }
     }
