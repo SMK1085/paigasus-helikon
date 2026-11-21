@@ -81,9 +81,16 @@ fn rewrite(v: &Value, open: bool) -> Value {
         Some(Value::Array(a)) => a.iter().any(|t| t == "object"),
         _ => false,
     } || m.contains_key("properties");
-    let is_map = ["additionalProperties", "patternProperties", "propertyNames"]
-        .iter()
-        .any(|k| m.contains_key(*k));
+    // A `const` or `enum` node lists whole values. Closing it would reject them.
+    let is_map = [
+        "additionalProperties",
+        "patternProperties",
+        "propertyNames",
+        "const",
+        "enum",
+    ]
+    .iter()
+    .any(|k| m.contains_key(*k));
     let has_all_of = m.contains_key("allOf");
     // An object node next to `anyOf` is a flattened composition. The parent and
     // the branches each hold a part of the properties. The parent can have no
@@ -282,6 +289,8 @@ mod tests {
             json!({"type":"object","additionalProperties":{"type":"string"}}),
             json!({"type":"object","patternProperties":{"^a":{"type":"string"}}}),
             json!({"type":"object","propertyNames":{"pattern":"^a"}}),
+            json!({"type":"object","const":{"kind":"deposit"}}),
+            json!({"type":"object","enum":[{"kind":"deposit"},{"kind":"withdrawal"}]}),
             json!({"type":"array","prefixItems":[{"type":"string"}]}),
             json!(true),
             json!({}),
