@@ -2,9 +2,11 @@
 
 /// Identifies the model family of a Bedrock Converse model ID.
 ///
-/// Used internally to select capability flags, schema rewriter rulesets, and
-/// tool-choice support. The `#[non_exhaustive]` attribute allows future
-/// additions without a breaking change.
+/// The model family selects the capability flags, the schema rewriter rulesets
+/// and the tool-choice support. The builder detects the family from the model
+/// ID, or takes it from [`crate::BedrockModelBuilder::family`]. The
+/// `#[non_exhaustive]` attribute allows future additions without a breaking
+/// change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ModelFamily {
@@ -32,7 +34,8 @@ impl ModelFamily {
     /// `apac.`, `jp.`, `au.`, `ca.`, `in.` or `global.` is skipped, and a
     /// future prefix is skipped too. An ARN is classified by its resource ID
     /// (the text after the last `/`). Opaque IDs, such as application
-    /// inference profile ARNs, give [`ModelFamily::Unknown`].
+    /// inference profile ARNs, give [`ModelFamily::Unknown`]. To set the family for
+    /// such an ID, use [`crate::BedrockModelBuilder::family`].
     ///
     /// # Examples
     ///
