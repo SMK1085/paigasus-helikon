@@ -119,7 +119,13 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
             );
         }
         ExtendedThinking::Adaptive => {
-            body.insert("thinking".into(), json!({"type": "adaptive"}));
+            body.insert(
+                "thinking".into(),
+                json!({
+                    "type": "adaptive",
+                    "block_binding": {"prefix_mismatch_behavior": "drop_block"}
+                }),
+            );
         }
     }
 
@@ -432,7 +438,25 @@ mod tests {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
         let p = build_body(&cfg, &req).unwrap();
-        assert_eq!(p.body["thinking"], serde_json::json!({"type": "adaptive"}));
+        assert_eq!(
+            p.body["thinking"],
+            serde_json::json!({
+                "type": "adaptive",
+                "block_binding": {"prefix_mismatch_behavior": "drop_block"}
+            })
+        );
+    }
+
+    #[test]
+    fn extended_thinking_enabled_has_no_block_binding() {
+        let mut cfg = cfg();
+        cfg.extended_thinking = ExtendedThinking::Enabled {
+            budget_tokens: 2048,
+        };
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        let p = build_body(&cfg, &req).unwrap();
+        assert!(p.body["thinking"].get("block_binding").is_none());
     }
 
     fn memory_def() -> ToolDef {

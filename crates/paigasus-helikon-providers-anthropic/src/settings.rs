@@ -25,10 +25,24 @@ pub enum CacheStrategy {
 /// Configuration for Anthropic extended/adaptive thinking.
 ///
 /// **Model compatibility:**
-/// - Claude Opus 4.7 rejects `Enabled { .. }` (400). Use `Adaptive`.
-/// - Claude Sonnet 5.5 rejects `Enabled { .. }` (400). Use `Adaptive`.
-/// - Sonnet/Opus 4.6 accept both but recommend `Adaptive`.
-/// - Older Claude 4 (4.5, 4.1) accept `Enabled` and recommend it.
+/// - `Enabled { .. }` works only on models before Claude 4.6, for example
+///   `claude-haiku-4-5`. It is deprecated on Opus 4.6 and Sonnet 4.6.
+/// - Claude Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and Fable
+///   reject `Enabled { .. }` with a 400 error. Use `Adaptive`.
+/// - Newer models run a prefix check on each thinking block. The signature
+///   records the `system` text, the tools, and all messages before the block.
+///
+/// **Prefix check.** With `Adaptive`, the provider sends
+/// `block_binding.prefix_mismatch_behavior = "drop_block"` and the
+/// `thinking-binding-controls-2026-08-01` beta header. Sometimes the history
+/// before a thinking block changed. An example is a hand-off with other
+/// `system` text or tools. Another example is an edit of an earlier message.
+/// Then the API drops that block and every later thinking block. The model
+/// loses that reasoning. The request does not fail.
+///
+/// With `Enabled`, the provider sends no binding. A changed prefix can then
+/// fail with a 400 error on a model that runs the check. Use `Enabled` only
+/// on models that do not run the check.
 ///
 /// Anthropic requires `budget_tokens < max_tokens` for `Enabled` but
 /// documents no absolute minimum; this crate does not enforce one.
@@ -43,7 +57,8 @@ pub enum ExtendedThinking {
         /// Maximum tokens the model may spend on internal reasoning.
         budget_tokens: u32,
     },
-    /// `thinking: { type: "adaptive" }`. Model picks the budget.
+    /// `thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } }`.
+    /// The model picks the budget. The provider adds the binding beta header.
     Adaptive,
 }
 

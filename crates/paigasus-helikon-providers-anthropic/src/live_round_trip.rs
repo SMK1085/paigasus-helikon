@@ -1,7 +1,12 @@
 //! Live round trip of thinking blocks. Ignored by default.
 //!
 //! Run: `ANTHROPIC_API_KEY=... cargo test -p paigasus-helikon-providers-anthropic -- --ignored live_`
-//! Optional: `ANTHROPIC_LIVE_MODEL_ID` (default `claude-sonnet-4-5`).
+//! Optional: `ANTHROPIC_LIVE_MODEL_ID` (default `claude-sonnet-5-5`, used with
+//! `ExtendedThinking::Adaptive`). Optional: `ANTHROPIC_LIVE_ENABLED_MODEL_ID`
+//! (default `claude-haiku-4-5`, used with `ExtendedThinking::Enabled`).
+//!
+//! Claude Sonnet 5.5 returns thinking blocks with empty text. No test here
+//! needs a non-empty thinking text.
 //!
 //! The tests live in `src/` so that they can call `build_body`. No assertion
 //! message holds a signature or a redacted value. A message holds lengths and
@@ -40,12 +45,29 @@ fn has_key() -> bool {
 }
 
 fn model_id() -> String {
-    std::env::var("ANTHROPIC_LIVE_MODEL_ID").unwrap_or_else(|_| "claude-sonnet-4-5".into())
+    std::env::var("ANTHROPIC_LIVE_MODEL_ID").unwrap_or_else(|_| "claude-sonnet-5-5".into())
 }
 
+fn enabled_model_id() -> String {
+    std::env::var("ANTHROPIC_LIVE_ENABLED_MODEL_ID").unwrap_or_else(|_| "claude-haiku-4-5".into())
+}
+
+/// The default model with adaptive thinking.
 fn make_model(beta: Option<&str>) -> AnthropicModel {
     let mut builder =
-        AnthropicModel::messages(model_id()).extended_thinking(ExtendedThinking::Enabled {
+        AnthropicModel::messages(model_id()).extended_thinking(ExtendedThinking::Adaptive);
+    if let Some(beta) = beta {
+        builder = builder.beta(beta);
+    }
+    builder.build().expect("the model builds from the env key")
+}
+
+/// A model from before 4.6 with enabled thinking. Adaptive thinking turns on
+/// interleaved thinking by itself on 4.6 and later, so the interleaved beta
+/// has a meaning only on this path.
+fn make_enabled_model(beta: Option<&str>) -> AnthropicModel {
+    let mut builder =
+        AnthropicModel::messages(enabled_model_id()).extended_thinking(ExtendedThinking::Enabled {
             budget_tokens: 2048,
         });
     if let Some(beta) = beta {
@@ -222,6 +244,45 @@ async fn live_thinking_round_trip() {
         return;
     }
     thinking_round_trip(&make_model(None)).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn live_thinking_round_trip_enabled() {
+    if !has_key() {
+        return;
+    }
+    thinking_round_trip(&make_enabled_model(None)).await;
+}
+
+/// A hand-off changes `system` between the two requests. The prefix check
+/// would reject the thinking block. With `drop_block` the API drops it and
+/// the request succeeds.
+#[tokio::test]
+#[ignore]
+async fn live_changed_system_drops_block_and_succeeds() {
+    if !has_key() {
+        return;
+    }
+    let model = make_model(None);
+    let system = |text: &str| Item::System {
+        content: vec![ContentPart::Text { text: text.into() }],
+    };
+    let mut first = first_request(BASE_PROMPT);
+    first
+        .messages
+        .insert(0, system("You are the first agent. Answer briefly."));
+    let turn1 = run_turn(&model, first.clone(), "turn 1").await;
+    assert!(
+        !tool_calls(&turn1.items).is_empty(),
+        "turn 1 has no tool call ({} items); the model did not call a tool",
+        turn1.items.len()
+    );
+
+    let mut second = second_request(&first, &turn1.items);
+    second.messages[0] = system("You are the second agent. Answer in one sentence.");
+    let turn2 = run_turn(&model, second, "turn 2 with a changed system").await;
+    assert_turn_ok(&turn2, "turn 2 with a changed system");
 }
 
 /// A model that records each request and delegates to Anthropic.
@@ -413,7 +474,7 @@ async fn live_interleaved_beta_thinks_again() {
     if !has_key() {
         return;
     }
-    let items = thinking_round_trip(&make_model(Some(INTERLEAVED_BETA))).await;
+    let items = thinking_round_trip(&make_enabled_model(Some(INTERLEAVED_BETA))).await;
     assert!(
         !blocks_of_items(&items).is_empty(),
         "turn 2 has no thinking Block part. Run B saw one in turn 2 once, \
