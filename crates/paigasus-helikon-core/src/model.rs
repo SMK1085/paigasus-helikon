@@ -61,6 +61,8 @@ pub trait Model: Send + Sync {
     ///   retain the last seen and never sum `Usage` events within a turn.
     ///   See [`ModelEvent::Usage`].
     /// - `Finish` is the terminal event; nothing follows it.
+    /// - An `Err` item is terminal for every event except `Usage`: implementations MUST NOT yield
+    ///   any item after an `Err` other than `Usage` snapshots for the same response.
     /// - Implementations MUST emit `Finish` at end-of-stream when a stop
     ///   reason was observed, and MUST NOT emit it on truncation with no stop
     ///   reason observed, on cancellation, or after a mid-stream error.

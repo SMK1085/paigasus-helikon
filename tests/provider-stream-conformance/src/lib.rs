@@ -8,6 +8,9 @@
 //! production translator together — not a reimplementation of either.
 //!
 //! See `docs/superpowers/specs/2026-08-19-sma-533-stream-conformance-design.md`.
+//! The SMA-567 design,
+//! `docs/superpowers/specs/2026-11-22-sma-567-stream-conformance-extensions-design.md`,
+//! records assertions 9 and 10, the added floors and the `UNCAPTURED` table.
 #![forbid(unsafe_code)]
 
 mod check;
@@ -18,7 +21,7 @@ mod fakes;
 mod server;
 
 pub use check::classify;
-pub use declines::DECLINED;
+pub use declines::{DECLINED, UNCAPTURED};
 pub use server::{Ending, PacedServer, Script};
 
 use std::time::Duration;
@@ -56,6 +59,14 @@ pub enum Scenario {
     /// A signed thinking block, then one complete tool call, then a tool-use
     /// stop reason.
     ThinkingToolCallCleanStop,
+    /// Reasoning, then text, then one complete tool call, then a tool-use
+    /// stop reason. Provider-neutral: any reasoning channel serves it.
+    ReasoningCleanStop,
+    /// Two or more complete tool calls, then a tool-use stop reason.
+    ParallelToolCallCleanStop,
+    /// One complete tool call with no arguments (a `{}` delta), then a
+    /// tool-use stop reason.
+    ZeroArgToolCallCleanStop,
 }
 
 impl Scenario {
@@ -71,6 +82,9 @@ impl Scenario {
         Scenario::FragmentedToolName,
         Scenario::ToolCallCleanStop,
         Scenario::ThinkingToolCallCleanStop,
+        Scenario::ReasoningCleanStop,
+        Scenario::ParallelToolCallCleanStop,
+        Scenario::ZeroArgToolCallCleanStop,
     ];
 
     /// Whether this scenario's script must let the translator observe a stop
@@ -85,8 +99,38 @@ impl Scenario {
                 | Scenario::CancelAfterStopReason
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop
         )
     }
+}
+
+/// One run of same-channel events, in wire order.
+///
+/// `ReasoningDelta`, `TokenDelta` and `ToolCallDelta` each map to one channel.
+/// Adjacent events of one channel merge into one run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    /// `ReasoningDelta` events.
+    Reasoning,
+    /// `TokenDelta` events.
+    Text,
+    /// `ToolCallDelta` events.
+    Tool,
+}
+
+/// A tool call that a fixture carries: its name and its complete arguments as
+/// JSON text.
+///
+/// `args` is text, not a parsed value, so that a table of calls can be a
+/// `const`. The floor parses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedCall {
+    /// The tool name of the call.
+    pub name: &'static str,
+    /// The complete arguments of the call, as JSON text.
+    pub args: &'static str,
 }
 
 /// A contract violation, classified. Ordering matters — see `classify`.
@@ -108,6 +152,8 @@ pub enum Violation {
     FinishOnCancel,
     /// A `Finish` was emitted after a mid-stream error (assertion 6).
     FinishAfterError,
+    /// An event other than `Usage` followed the first `Err` (assertion 9).
+    EventAfterError,
     /// A `call_id` carried a number of name-bearing deltas other than one, or
     /// the name did not match the fixture's declared tool name (assertion 7).
     ToolNameNotExactlyOnce {
@@ -122,6 +168,12 @@ pub enum Violation {
         /// The `call_id` that no streamed tool call used.
         call_id: String,
     },
+    /// A call's concatenated `args_delta` did not parse as JSON on a stream
+    /// that carried a `Finish` (assertion 10).
+    ToolArgsNotJson {
+        /// The call whose arguments did not parse.
+        call_id: String,
+    },
     /// The stream did not produce the minimum evidence its scenario requires,
     /// so the assertions would have passed vacuously.
     InsufficientEvidence(&'static str),
@@ -133,6 +185,25 @@ pub enum Violation {
         expected: FinishReason,
         /// What the stream actually emitted.
         observed: FinishReason,
+    },
+    /// The run order of the reasoning, text and tool channels differs from
+    /// the order that the subject's fixture declares. This is a check of
+    /// fidelity to the wire, not of the contract, which lets the channels
+    /// interleave freely.
+    ChannelOrderMismatch {
+        /// What the subject's `fixture_channel_order` declared.
+        expected: Vec<Channel>,
+        /// The runs the stream actually emitted.
+        observed: Vec<Channel>,
+    },
+    /// The observed tool calls, in first-seen `call_id` order, differ from
+    /// the calls that the subject's fixture declares, by name or by parsed
+    /// arguments. The match is by position, not by `call_id`.
+    ToolCallsMismatch {
+        /// What the subject's `fixture_calls` declared, as (name, arguments).
+        expected: Vec<(String, serde_json::Value)>,
+        /// The calls the stream actually emitted, as (name, arguments).
+        observed: Vec<(String, serde_json::Value)>,
     },
     /// The stream did not terminate within the per-scenario timeout.
     Timeout,
@@ -169,8 +240,11 @@ impl GateHandle {
 
 /// What a subject did with a scenario.
 ///
-/// Declining is a first-class outcome carrying a mandatory reason, not an
-/// `Option` a caller can silently treat as a skip.
+/// Declining and being uncaptured are first-class outcomes carrying a mandatory
+/// reason, not an `Option` a caller can silently treat as a skip. Neither is
+/// served, so no floor or assertion runs for them. The two are not
+/// interchangeable: [`Outcome::Declined`] must match [`DECLINED`], and
+/// [`Outcome::Uncaptured`] must match [`UNCAPTURED`].
 pub enum Outcome {
     /// The subject served the scenario.
     Served {
@@ -182,6 +256,10 @@ pub enum Outcome {
     /// The wire shape cannot physically occur for this provider. The reason is
     /// printed in the report and must match the pinned decline set.
     Declined(&'static str),
+    /// The wire shape can occur for this provider, and a capture alone would
+    /// let the subject serve it, but no fixture that meets the provenance rule
+    /// exists. The reason must match the pinned [`UNCAPTURED`] table.
+    Uncaptured(&'static str),
 }
 
 /// One provider backend under test.
@@ -201,15 +279,17 @@ pub trait StreamUnderTest {
     /// The `FinishReason` this subject's fixture for `scenario` declares, or
     /// `None` for scenarios that must not produce a `Finish` at all.
     ///
-    /// Exactly four scenarios end with a `Finish`, and the floor checks this
-    /// value for all four: `CleanStop`, `ToolCallCleanStop`,
-    /// `ThinkingToolCallCleanStop`, and `TruncatedAfterStopReason`, where
+    /// Exactly seven scenarios end with a `Finish`, and the floor checks this
+    /// value for all seven: `CleanStop`, `ToolCallCleanStop`,
+    /// `ThinkingToolCallCleanStop`, `ReasoningCleanStop`,
+    /// `ParallelToolCallCleanStop`, `ZeroArgToolCallCleanStop`, and
+    /// `TruncatedAfterStopReason`, where
     /// assertion 3 requires the buffered stop reason to be flushed at
-    /// end-of-stream. Every other scenario must return
-    /// `None` — a cancelled or errored stream withholds `Finish`, and a
-    /// truncation with no stop reason observed never had one to emit.
+    /// end-of-stream. Every other scenario must return `None` — a cancelled or
+    /// errored stream withholds `Finish`, and a truncation with no stop reason
+    /// observed never had one to emit.
     ///
-    /// The four differ in one way only: for the three clean stops a missing
+    /// The seven differ in one way only: for the six clean stops a missing
     /// `Finish` fails the floor, whereas for `TruncatedAfterStopReason` it is
     /// `classify`'s `MissingFinish` (the SMA-531 shape). Either way, a `Finish`
     /// that *is* emitted must carry what this method declares.
@@ -219,6 +299,24 @@ pub trait StreamUnderTest {
     /// `CleanStop` ⇒ `Stop` would silently accept a fixture that had been
     /// transcribed with the wrong stop reason.
     fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason>;
+
+    /// The run order of the reasoning, text and tool channels in this
+    /// subject's fixture for `scenario`, read from the capture. `None` means
+    /// that the subject makes no claim.
+    ///
+    /// `ReasoningCleanStop` requires `Some(..)`. For any scenario that returns
+    /// `Some(..)`, the floor compares the observed runs with it.
+    fn fixture_channel_order(&self, scenario: Scenario) -> Option<&'static [Channel]>;
+
+    /// The tool calls that this subject's fixture for `scenario` carries, in
+    /// wire order, read from the capture.
+    ///
+    /// `ReasoningCleanStop`, `ParallelToolCallCleanStop` and
+    /// `ZeroArgToolCallCleanStop` require a non-empty list. Every other
+    /// scenario returns `&[]`. For a scenario with a non-empty list, the floor reads the declared tool names from it instead
+    /// of from [`StreamUnderTest::fixture_tool_name`], and it compares the
+    /// observed calls with it by name and by parsed arguments.
+    fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall];
 
     /// Serve `scenario` and return the subject's `Model::invoke` stream.
     async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome;
@@ -285,17 +383,32 @@ const GATE_QUIESCENCE: Duration = Duration::from_millis(400);
 /// 3. **Then, and only then, the events are classified** by the crate's
 ///    `classify` function.
 ///
-/// Afterwards the observed declines are compared against the pinned
-/// [`DECLINED`] table in both directions.
+/// Afterwards the observed declines and uncaptured pairs are compared against
+/// the pinned [`DECLINED`] and [`UNCAPTURED`] tables in both directions.
 pub async fn assert_conforms(subject: &impl StreamUnderTest) {
+    assert_conforms_with(subject, DECLINED, UNCAPTURED).await;
+}
+
+/// [`assert_conforms`] against explicit pinned tables, so the unit tests can
+/// drive the stale-row direction without a real row.
+async fn assert_conforms_with(
+    subject: &impl StreamUnderTest,
+    pinned_declined: &[(&str, Scenario, &str)],
+    pinned_uncaptured: &[(&str, Scenario, &str, &str)],
+) {
     let name = subject.name();
     let mut declined: Vec<(Scenario, &'static str)> = Vec::new();
+    let mut uncaptured: Vec<(Scenario, &'static str)> = Vec::new();
 
     for &scenario in Scenario::ALL {
         let cancel = CancellationToken::new();
         let (stream, gate) = match subject.stream(scenario, cancel.clone()).await {
             Outcome::Declined(reason) => {
                 declined.push((scenario, reason));
+                continue;
+            }
+            Outcome::Uncaptured(reason) => {
+                uncaptured.push((scenario, reason));
                 continue;
             }
             Outcome::Served { stream, gate } => (stream, gate),
@@ -345,6 +458,8 @@ pub async fn assert_conforms(subject: &impl StreamUnderTest) {
             &drained.events,
             subject.fixture_tool_name(),
             subject.fixture_finish_reason(scenario),
+            subject.fixture_channel_order(scenario),
+            subject.fixture_calls(scenario),
         ) {
             fail(
                 name,
@@ -373,7 +488,29 @@ pub async fn assert_conforms(subject: &impl StreamUnderTest) {
         }
     }
 
-    assert_declines_match(name, &declined);
+    let expected_declined: Vec<(Scenario, &str)> = pinned_declined
+        .iter()
+        .filter(|(n, _, _)| *n == name)
+        .map(|(_, sc, r)| (*sc, *r))
+        .collect();
+    let expected_uncaptured: Vec<(Scenario, &str)> = pinned_uncaptured
+        .iter()
+        .filter(|(n, _, _, _)| *n == name)
+        .map(|(_, sc, r, _)| (*sc, *r))
+        .collect();
+
+    let mut problems = pinned_problems(PinnedKind::Declined, &declined, &expected_declined);
+    problems.extend(pinned_problems(
+        PinnedKind::Uncaptured,
+        &uncaptured,
+        &expected_uncaptured,
+    ));
+    assert!(
+        problems.is_empty(),
+        "conformance: {name} — the observed decline or uncaptured set does not match the \
+         pinned DECLINED or UNCAPTURED table (SMA-533 design §6.2, SMA-567 design §6.4):\n{}",
+        problems.join("\n")
+    );
 }
 
 /// Whether `scenario` cancels the stream part-way through.
@@ -514,8 +651,43 @@ async fn drain(
 /// `InsufficientEvidence`, which is the wrong diagnosis for a stream that
 /// emitted too much.
 ///
-/// The one exception is the `Err` count, because `classify` has no rule for a
-/// stream that errors twice and would otherwise let it through unremarked.
+/// The `Err` floor follows the same rule. It reports only a missing `Err` in
+/// an error scenario. A second `Err` is left to assertion 9
+/// (`EventAfterError`), which classifies it.
+///
+/// Two further floors report missing evidence only: no `Err` outside the two
+/// error scenarios (cancellation scenarios included), and a `Usage` in
+/// `CleanStop`.
+///
+/// `ReasoningCleanStop` has two more floors: at least one `ReasoningDelta`,
+/// and a declared channel order. When a subject declares a channel order
+/// (`channel_order`), the observed runs of `ReasoningDelta`, `TokenDelta` and
+/// `ToolCallDelta` must equal it, or the result is `ChannelOrderMismatch`.
+/// That check is about fidelity to the wire order, not about the contract: the
+/// contract lets the three channels interleave freely
+/// (`core/src/model.rs:56-57`). An empty delta still counts as a run, because a
+/// real wire can carry one and the translator passes it on.
+///
+/// Declared calls (`calls`, from `fixture_calls`). For a scenario with a
+/// non-empty list, the "declared name is present" floor requires every
+/// declared name instead of the one `tool_name`. The observed calls, in
+/// first-seen `call_id` order, must then equal the declared calls by name and
+/// by parsed arguments, or the result is `ToolCallsMismatch`. The match is by
+/// position, not by `call_id`, because a subject cannot always declare the ids
+/// that its translator makes. A call whose arguments do not parse is skipped,
+/// so that assertion 10 reports it under its exact `call_id`.
+/// `ReasoningCleanStop`, `ParallelToolCallCleanStop` and
+/// `ZeroArgToolCallCleanStop` must declare a non-empty list.
+/// `ParallelToolCallCleanStop` also requires two or more distinct non-blank
+/// `call_id`s.
+///
+/// The ticket proposed a floor that required `Usage` and `Finish` to be
+/// adjacent and terminal in `CleanStop`. That floor was replaced. It cannot see
+/// the Bedrock `metadata`/`messageStop` swap, because both orders give the same
+/// `Usage, Finish` event sequence. It cannot see the SMA-522 fixture mistake,
+/// because `openai/chat` and `litellm` buffer `Finish` to end-of-stream. All
+/// six subjects already passed it. The core contract also lets `Usage` appear
+/// anywhere (design spec section 3.2).
 ///
 /// The `FinishReason` check also lives here rather than in `classify`, and
 /// must: `classify` has no fixture knowledge and its signature is fixed, while
@@ -526,6 +698,8 @@ fn floor_violation(
     events: &[Result<ModelEvent, ModelError>],
     tool_name: &str,
     finish_reason: Option<FinishReason>,
+    channel_order: Option<&[Channel]>,
+    calls: &[ExpectedCall],
 ) -> Option<Violation> {
     match scenario {
         Scenario::CleanStop
@@ -547,7 +721,10 @@ fn floor_violation(
         }
         Scenario::FragmentedToolName
         | Scenario::ToolCallCleanStop
-        | Scenario::ThinkingToolCallCleanStop => {
+        | Scenario::ThinkingToolCallCleanStop
+        | Scenario::ReasoningCleanStop
+        | Scenario::ParallelToolCallCleanStop
+        | Scenario::ZeroArgToolCallCleanStop => {
             if !events
                 .iter()
                 .any(|e| matches!(e, Ok(ModelEvent::ToolCallDelta { .. })))
@@ -557,14 +734,60 @@ fn floor_violation(
                      assertion 7 vacuously",
                 ));
             }
-            if !events.iter().any(|e| {
-                matches!(e, Ok(ModelEvent::ToolCallDelta { name: Some(name), .. }) if name == tool_name)
-            }) {
+            // With declared calls, every declared name must be present.
+            // Without them, the one `fixture_tool_name` must be.
+            let declared_names: Vec<&str> = if calls.is_empty() {
+                vec![tool_name]
+            } else {
+                calls.iter().map(|call| call.name).collect()
+            };
+            let named = |wanted: &str| {
+                events.iter().any(|e| {
+                    matches!(e, Ok(ModelEvent::ToolCallDelta { name: Some(name), .. }) if name == wanted)
+                })
+            };
+            if !declared_names.into_iter().all(named) {
                 return Some(Violation::InsufficientEvidence(
                     "no ToolCallDelta carried the tool name this subject declares, so the \
                      fixture served is not the one the scenario describes",
                 ));
             }
+        }
+    }
+
+    if matches!(
+        scenario,
+        Scenario::ReasoningCleanStop
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop
+    ) && calls.is_empty()
+    {
+        return Some(Violation::InsufficientEvidence(
+            "the subject declares no calls for a scenario that compares its calls, so the \
+             call comparison would compare nothing",
+        ));
+    }
+
+    if matches!(scenario, Scenario::ParallelToolCallCleanStop) {
+        let mut ids: Vec<&str> = Vec::new();
+        for event in events {
+            if let Ok(ModelEvent::ToolCallDelta { call_id, .. }) = event {
+                if !call_id.trim().is_empty() && !ids.contains(&call_id.as_str()) {
+                    ids.push(call_id);
+                }
+            }
+        }
+        if ids.len() < 2 {
+            return Some(Violation::InsufficientEvidence(
+                "fewer than two distinct non-blank call_ids: a parallel scenario that \
+                 streamed one call did not serve parallel calls",
+            ));
+        }
+    }
+
+    if !calls.is_empty() {
+        if let Some(violation) = calls_mismatch(events, calls) {
+            return Some(violation);
         }
     }
 
@@ -585,6 +808,34 @@ fn floor_violation(
         return Some(Violation::InsufficientEvidence(
             "no call-scoped ProviderData: assertion 8 would pass vacuously",
         ));
+    }
+
+    if matches!(scenario, Scenario::ReasoningCleanStop) {
+        if !events
+            .iter()
+            .any(|e| matches!(e, Ok(ModelEvent::ReasoningDelta { .. })))
+        {
+            return Some(Violation::InsufficientEvidence(
+                "no ReasoningDelta: a reasoning scenario that emitted no reasoning passes the \
+                 channel-order check with no reasoning run in it",
+            ));
+        }
+        if channel_order.is_none() {
+            return Some(Violation::InsufficientEvidence(
+                "the subject declares no channel order for a reasoning scenario, so the \
+                 channel-order check would compare nothing",
+            ));
+        }
+    }
+
+    if let Some(expected) = channel_order {
+        let observed = channel_runs(events);
+        if observed != expected {
+            return Some(Violation::ChannelOrderMismatch {
+                expected: expected.to_vec(),
+                observed,
+            });
+        }
     }
 
     // `CancelAfterStopReason` is the one degradation with no other detector.
@@ -629,6 +880,9 @@ fn floor_violation(
             | Scenario::TruncatedAfterStopReason
             | Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop
     ) {
         // The first `Finish` on purpose: a second one is a `DuplicateFinish`,
         // which `classify` names precisely, and checking the reason on the
@@ -648,6 +902,9 @@ fn floor_violation(
                 Scenario::CleanStop
                     | Scenario::ToolCallCleanStop
                     | Scenario::ThinkingToolCallCleanStop
+                    | Scenario::ReasoningCleanStop
+                    | Scenario::ParallelToolCallCleanStop
+                    | Scenario::ZeroArgToolCallCleanStop
             ) =>
             {
                 return Some(Violation::InsufficientEvidence(
@@ -671,67 +928,224 @@ fn floor_violation(
         }
     }
 
+    // Outside the two error scenarios no `Err` is expected. This is a fidelity
+    // floor on the scripts, stricter than the contract: a translator may
+    // legally turn a truncated body into an `Err`, but the scripts of the
+    // clean scenarios do not do so. Without this, a
+    // script that errors in a clean scenario would reach `classify` looking
+    // like an error-scenario shape (the SMA-533 section 6 claim that a
+    // truncated body "will not be mis-reported as" an error depends on it).
+    // This also covers both cancellation scenarios.
+    if !matches!(
+        scenario,
+        Scenario::ErrorMidGeneration | Scenario::ErrorAfterStopReason
+    ) && events.iter().any(Result::is_err)
+    {
+        return Some(Violation::InsufficientEvidence(
+            "an Err outside an error scenario: this scenario's script is not an error \
+             script, so the stream did not serve the bytes the scenario describes",
+        ));
+    }
+
+    // Every `CleanStop` script carries usage. A stream without one did not
+    // serve the scenario's bytes.
+    if matches!(scenario, Scenario::CleanStop)
+        && !events
+            .iter()
+            .any(|e| matches!(e, Ok(ModelEvent::Usage { .. })))
+    {
+        return Some(Violation::InsufficientEvidence(
+            "no Usage in CleanStop: every CleanStop script carries usage, so a stream \
+             without one did not serve the scenario's bytes",
+        ));
+    }
+
     if matches!(
         scenario,
         Scenario::ErrorMidGeneration | Scenario::ErrorAfterStopReason
-    ) && events.iter().filter(|e| e.is_err()).count() != 1
+    ) && !events.iter().any(Result::is_err)
     {
         return Some(Violation::InsufficientEvidence(
-            "an error scenario must yield exactly one Err: none means the aborted body was \
-             read as a clean end-of-stream, more than one means the stream kept going after \
-             it failed",
+            "an error scenario must yield an Err: none means the aborted body was read as a \
+             clean end-of-stream",
         ));
     }
 
     None
 }
 
-/// Compare the declines this subject actually produced against [`DECLINED`],
-/// and panic on any difference in either direction.
+/// The `ToolCallsMismatch` check: the observed calls, in first-seen `call_id`
+/// order, against the declared `calls`, by position.
 ///
-/// Both directions matter. An unexpected decline is the escape hatch this
-/// pinning exists to close. An expected decline that stopped happening matters
-/// just as much: the subject now serves that scenario, so the table is lying
-/// about the provider — and the row would go on excusing a future regression
-/// that reintroduced the decline.
-fn assert_declines_match(subject: &str, observed: &[(Scenario, &'static str)]) {
-    let expected: Vec<(Scenario, &'static str)> = DECLINED
+/// Each observed call is its group's first name and its `args_delta`s
+/// concatenated in stream order, blank or whitespace-only read as `{}` (the
+/// accumulator's rule). A call whose arguments do not parse is skipped, so
+/// that assertion 10 in `classify` reports it under its exact `call_id`. When
+/// another position mismatches, the reported `observed` list shows such a
+/// call's arguments as `null`. A declared call whose `args` do not parse is a
+/// bug in the subject's table, so it panics.
+fn calls_mismatch(
+    events: &[Result<ModelEvent, ModelError>],
+    calls: &[ExpectedCall],
+) -> Option<Violation> {
+    // (call_id, first name, concatenated arguments), in first-seen order.
+    let mut groups: Vec<(&str, Option<&str>, String)> = Vec::new();
+    for event in events {
+        if let Ok(ModelEvent::ToolCallDelta {
+            call_id,
+            name,
+            args_delta,
+        }) = event
+        {
+            let at = match groups.iter().position(|(id, _, _)| id == call_id) {
+                Some(at) => at,
+                None => {
+                    groups.push((call_id, None, String::new()));
+                    groups.len() - 1
+                }
+            };
+            let group = &mut groups[at];
+            if group.1.is_none() {
+                group.1 = name.as_deref();
+            }
+            group.2.push_str(args_delta);
+        }
+    }
+
+    let expected: Vec<(String, serde_json::Value)> = calls
         .iter()
-        .filter(|(name, _, _)| *name == subject)
-        .map(|(_, scenario, reason)| (*scenario, *reason))
+        .map(|call| {
+            let args = serde_json::from_str(call.args).unwrap_or_else(|err| {
+                panic!(
+                    "the declared arguments of {:?} are not JSON ({err}): {:?}",
+                    call.name, call.args
+                )
+            });
+            (call.name.to_owned(), args)
+        })
         .collect();
 
+    // `None` marks a call whose arguments do not parse.
+    let observed: Vec<(String, Option<serde_json::Value>)> = groups
+        .into_iter()
+        .map(|(_, name, args)| {
+            let source = if args.trim().is_empty() {
+                "{}"
+            } else {
+                args.as_str()
+            };
+            (
+                name.unwrap_or_default().to_owned(),
+                serde_json::from_str(source).ok(),
+            )
+        })
+        .collect();
+
+    let matches = observed.len() == expected.len()
+        && observed.iter().zip(&expected).all(
+            |((name, args), (want_name, want_args))| match args {
+                // Left to assertion 10.
+                None => true,
+                Some(args) => name == want_name && args == want_args,
+            },
+        );
+    if matches {
+        return None;
+    }
+    Some(Violation::ToolCallsMismatch {
+        expected,
+        observed: observed
+            .into_iter()
+            .map(|(name, args)| (name, args.unwrap_or(serde_json::Value::Null)))
+            .collect(),
+    })
+}
+
+/// The runs of same-channel events in `events`, in stream order. Every event
+/// that is not a `ReasoningDelta`, `TokenDelta` or `ToolCallDelta` is ignored,
+/// and adjacent events of one channel merge into one run. An empty delta
+/// counts like any other.
+fn channel_runs(events: &[Result<ModelEvent, ModelError>]) -> Vec<Channel> {
+    let mut runs: Vec<Channel> = Vec::new();
+    for event in events {
+        let channel = match event {
+            Ok(ModelEvent::ReasoningDelta { .. }) => Channel::Reasoning,
+            Ok(ModelEvent::TokenDelta { .. }) => Channel::Text,
+            Ok(ModelEvent::ToolCallDelta { .. }) => Channel::Tool,
+            _ => continue,
+        };
+        if runs.last() != Some(&channel) {
+            runs.push(channel);
+        }
+    }
+    runs
+}
+
+/// Which pinned table a comparison concerns.
+#[derive(Debug, Clone, Copy)]
+enum PinnedKind {
+    /// The [`DECLINED`] table.
+    Declined,
+    /// The [`UNCAPTURED`] table.
+    Uncaptured,
+}
+
+/// Compare the pairs this subject actually produced against the pinned rows
+/// for it, and return one problem line per difference, in either direction.
+///
+/// Both directions matter. An unexpected pair is the escape hatch this pinning
+/// exists to close. A pinned pair that stopped happening matters just as much:
+/// the subject now serves that scenario, so the table is lying about the
+/// provider — and the row would go on excusing a future regression.
+fn pinned_problems(
+    kind: PinnedKind,
+    observed: &[(Scenario, &'static str)],
+    expected: &[(Scenario, &str)],
+) -> Vec<String> {
+    let (word, table) = match kind {
+        PinnedKind::Declined => ("decline", "DECLINED"),
+        PinnedKind::Uncaptured => ("uncaptured", "UNCAPTURED"),
+    };
     let mut problems: Vec<String> = Vec::new();
 
     for (scenario, reason) in observed {
         match expected.iter().find(|(s, _)| s == scenario) {
-            None => problems.push(format!(
-                "  unexpected decline of {scenario:?} ({reason:?}). Declining is for a wire \
-                 shape that cannot physically occur — if that is the case here, add a \
-                 reviewed row to DECLINED; otherwise serve the scenario."
-            )),
+            None => problems.push(match kind {
+                PinnedKind::Declined => format!(
+                    "  unexpected decline of {scenario:?} ({reason:?}). Declining is for a \
+                     wire shape that cannot physically occur — if that is the case here, add \
+                     a reviewed row to DECLINED; otherwise serve the scenario."
+                ),
+                PinnedKind::Uncaptured => format!(
+                    "  unexpected uncaptured of {scenario:?} ({reason:?}). Uncaptured is for a \
+                     wire shape that can occur but has no fixture with provenance yet — add a \
+                     reviewed row to UNCAPTURED with a follow-up issue; otherwise serve the \
+                     scenario."
+                ),
+            }),
             Some((_, pinned)) if pinned != reason => problems.push(format!(
-                "  decline reason for {scenario:?} drifted: DECLINED says {pinned:?}, the \
+                "  {word} reason for {scenario:?} drifted: {table} says {pinned:?}, the \
                  subject said {reason:?}"
             )),
             Some(_) => {}
         }
     }
 
-    for (scenario, reason) in &expected {
+    let past = match kind {
+        PinnedKind::Declined => "declined",
+        PinnedKind::Uncaptured => "uncaptured",
+    };
+    for (scenario, reason) in expected {
         if !observed.iter().any(|(s, _)| s == scenario) {
             problems.push(format!(
-                "  {scenario:?} is pinned as declined ({reason:?}) but the subject served it. \
-                 The row is stale: remove it, so it cannot excuse a future regression."
+                "  {scenario:?} is pinned as {past} ({reason:?}) but the subject did not \
+                 report it so. The row is stale: remove it, so it cannot excuse a future \
+                 regression."
             ));
         }
     }
 
-    assert!(
-        problems.is_empty(),
-        "conformance: {subject} — decline set does not match DECLINED (spec §6.2):\n{}",
-        problems.join("\n")
-    );
+    problems
 }
 
 /// Panic naming the subject, the scenario and the violation.
@@ -800,6 +1214,9 @@ mod tests {
             Scenario::FragmentedToolName,
             Scenario::ToolCallCleanStop,
             Scenario::ThinkingToolCallCleanStop,
+            Scenario::ReasoningCleanStop,
+            Scenario::ParallelToolCallCleanStop,
+            Scenario::ZeroArgToolCallCleanStop,
         ] {
             match variant {
                 Scenario::CleanStop
@@ -811,7 +1228,10 @@ mod tests {
                 | Scenario::CancelAfterStopReason
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
-                | Scenario::ThinkingToolCallCleanStop => assert!(
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => assert!(
                     Scenario::ALL.contains(&variant),
                     "{variant:?} is missing from Scenario::ALL"
                 ),
@@ -863,6 +1283,10 @@ mod tests {
     struct Subject {
         name: &'static str,
         declines: &'static [(Scenario, &'static str)],
+        /// Scenarios this subject reports as `Outcome::Uncaptured`.
+        uncaptured: &'static [(Scenario, &'static str)],
+        /// Rows for this subject in a test-only `UNCAPTURED` table.
+        pinned_uncaptured: &'static [(Scenario, &'static str)],
         gate: Gate,
         /// Whether a cancellation scenario's stream stays open until the token
         /// fires. `false` makes it end on its own, the way an ungated one does.
@@ -886,13 +1310,74 @@ mod tests {
         "the scenario serves an anthropic thinking block",
     );
 
+    /// The pinned decline `openai/chat` has for the reasoning scenario.
+    const CHAT_REASONING_DECLINE: (Scenario, &str) = (
+        Scenario::ReasoningCleanStop,
+        "the Chat Completions wire carries no reasoning text",
+    );
+
+    /// The pinned uncaptured pair every subject but `gemini` has for the
+    /// parallel scenario.
+    const PARALLEL_UNCAPTURED: (Scenario, &str) = (
+        Scenario::ParallelToolCallCleanStop,
+        "no captured parallel tool-call stream",
+    );
+
+    /// The pinned uncaptured pair every mock subject has for the zero-argument
+    /// scenario.
+    const ZERO_ARG_UNCAPTURED: (Scenario, &str) = (
+        Scenario::ZeroArgToolCallCleanStop,
+        "no captured zero-argument tool-call stream",
+    );
+
+    /// The declines `bedrock` has in the pinned table.
+    const BEDROCK_DECLINES: &[(Scenario, &str)] = &[
+        (
+            Scenario::FragmentedToolName,
+            "name arrives whole in toolUse start",
+        ),
+        (
+            Scenario::CancelAfterStopReason,
+            "no observable event between MessageStop and Metadata",
+        ),
+        THINKING_DECLINE,
+    ];
+
+    /// The uncaptured pairs `bedrock` has in the pinned table.
+    const BEDROCK_UNCAPTURED: &[(Scenario, &str)] = &[
+        (Scenario::ReasoningCleanStop, "no captured reasoning stream"),
+        PARALLEL_UNCAPTURED,
+        ZERO_ARG_UNCAPTURED,
+    ];
+
+    /// The pinned (scenario, reason) pairs of one subject in one table.
+    type Pinned = &'static [(Scenario, &'static str)];
+
     impl Subject {
-        /// A subject that conforms on every scenario it serves. Like every
-        /// subject but `anthropic`, it declines `ThinkingToolCallCleanStop`.
+        /// A subject that conforms on every scenario it serves, and declines
+        /// or reports uncaptured exactly the pairs that the pinned tables
+        /// give for `name`. Only the names the tests use are known.
         fn conforming(name: &'static str) -> Self {
+            let (declines, uncaptured): (Pinned, Pinned) = match name {
+                "openai/chat" => (
+                    &[THINKING_DECLINE, CHAT_REASONING_DECLINE],
+                    &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+                ),
+                "anthropic" => (
+                    &[(
+                        Scenario::FragmentedToolName,
+                        "name arrives whole in content_block_start",
+                    )],
+                    &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+                ),
+                "bedrock" => (BEDROCK_DECLINES, BEDROCK_UNCAPTURED),
+                other => panic!("the mock subject has no pinned rows for {other:?}"),
+            };
             Self {
                 name,
-                declines: &[THINKING_DECLINE],
+                declines,
+                uncaptured,
+                pinned_uncaptured: &[],
                 gate: Gate::Parked,
                 holds_open: true,
                 substitute: None,
@@ -960,16 +1445,49 @@ mod tests {
                     FinishDecl::WrongOnTruncation => Some(FinishReason::ToolCalls),
                     _ => Some(FinishReason::Stop),
                 },
-                Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
-                    Some(FinishReason::ToolCalls)
-                }
+                Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => Some(FinishReason::ToolCalls),
                 _ => None,
             }
+        }
+
+        /// Mirrors the calls that `fakes::conforming` emits.
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            match scenario {
+                Scenario::ReasoningCleanStop => REASONING_CALLS,
+                Scenario::ParallelToolCallCleanStop => PARALLEL_CALLS,
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                Scenario::CleanStop
+                | Scenario::TruncatedAfterStopReason
+                | Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop => &[],
+            }
+        }
+
+        fn fixture_channel_order(&self, scenario: Scenario) -> Option<&'static [Channel]> {
+            (scenario == Scenario::ReasoningCleanStop).then_some(&[
+                Channel::Reasoning,
+                Channel::Text,
+                Channel::Tool,
+            ]
+                as &'static [Channel])
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
             if let Some((_, reason)) = self.declines.iter().find(|(s, _)| *s == scenario) {
                 return Outcome::Declined(reason);
+            }
+            if let Some((_, reason)) = self.uncaptured.iter().find(|(s, _)| *s == scenario) {
+                return Outcome::Uncaptured(reason);
             }
 
             let events = self.events(scenario);
@@ -1232,6 +1750,7 @@ mod tests {
             declines: &[
                 (Scenario::CleanStop, "did not feel like it"),
                 THINKING_DECLINE,
+                CHAT_REASONING_DECLINE,
             ],
             ..Subject::conforming("openai/chat")
         };
@@ -1275,5 +1794,470 @@ mod tests {
             ..Subject::conforming("bedrock")
         };
         assert_conforms(&subject).await;
+    }
+
+    /// Run `assert_conforms_with` against the real `DECLINED` table and a
+    /// test-only `UNCAPTURED` table built from the subject's `pinned_uncaptured`.
+    async fn conforms_with_pinned(subject: &Subject) {
+        let rows: Vec<(&str, Scenario, &str, &str)> = subject
+            .pinned_uncaptured
+            .iter()
+            .map(|(sc, r)| (subject.name, *sc, *r, "SMA-1"))
+            .collect();
+        assert_conforms_with(subject, DECLINED, &rows).await;
+    }
+
+    /// An uncaptured pair that no row pins is an escape hatch.
+    #[tokio::test]
+    #[should_panic(expected = "unexpected uncaptured")]
+    async fn an_unpinned_uncaptured_pair_fails() {
+        let subject = Subject {
+            uncaptured: &[(Scenario::CleanStop, "no capture yet")],
+            ..Subject::conforming("openai/chat")
+        };
+        conforms_with_pinned(&subject).await;
+    }
+
+    /// A pinned uncaptured row that the subject now serves is stale.
+    #[tokio::test]
+    #[should_panic(expected = "is pinned as uncaptured")]
+    async fn a_pinned_uncaptured_pair_that_stopped_happening_fails() {
+        let subject = Subject {
+            pinned_uncaptured: &[
+                (Scenario::CleanStop, "no capture yet"),
+                PARALLEL_UNCAPTURED,
+                ZERO_ARG_UNCAPTURED,
+            ],
+            ..Subject::conforming("openai/chat")
+        };
+        conforms_with_pinned(&subject).await;
+    }
+
+    /// The uncaptured reason is pinned too.
+    #[tokio::test]
+    #[should_panic(expected = "drifted")]
+    async fn a_drifted_uncaptured_reason_fails() {
+        let subject = Subject {
+            uncaptured: &[(Scenario::CleanStop, "another reason")],
+            pinned_uncaptured: &[(Scenario::CleanStop, "no capture yet")],
+            ..Subject::conforming("openai/chat")
+        };
+        conforms_with_pinned(&subject).await;
+    }
+
+    /// The two outcomes are not interchangeable: a pair that `DECLINED` lists
+    /// cannot be reported as uncaptured.
+    #[tokio::test]
+    #[should_panic(expected = "unexpected uncaptured")]
+    async fn an_uncaptured_outcome_for_a_declined_pair_fails() {
+        let subject = Subject {
+            declines: &[CHAT_REASONING_DECLINE],
+            uncaptured: &[
+                (
+                    Scenario::ThinkingToolCallCleanStop,
+                    "the scenario serves an anthropic thinking block",
+                ),
+                PARALLEL_UNCAPTURED,
+                ZERO_ARG_UNCAPTURED,
+            ],
+            ..Subject::conforming("openai/chat")
+        };
+        assert_conforms(&subject).await;
+    }
+
+    /// A clean script that errors is not a clean script. Without this floor a
+    /// stray `Err` in a non-error scenario would be read by `classify` as an
+    /// error-scenario shape.
+    #[test]
+    fn an_err_outside_the_error_scenarios_fails_its_floor() {
+        let mut events = conforming(Scenario::CleanStop);
+        let at = events
+            .iter()
+            .position(|e| matches!(e, Ok(ModelEvent::Finish { .. })))
+            .expect("the conforming CleanStop ends with a Finish");
+        events.insert(at, Err(ModelError::Unavailable));
+        let violation = crate::floor_violation(
+            Scenario::CleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::Stop),
+            None,
+            &[],
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("an Err outside an error scenario"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// Every `CleanStop` script carries usage, so a stream without a `Usage`
+    /// did not serve the scenario's bytes.
+    #[test]
+    fn a_clean_stop_without_usage_fails_its_floor() {
+        let mut events = conforming(Scenario::CleanStop);
+        events.retain(|e| !matches!(e, Ok(ModelEvent::Usage { .. })));
+        let violation = crate::floor_violation(
+            Scenario::CleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::Stop),
+            None,
+            &[],
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("no Usage in CleanStop"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// The call that the conforming reasoning sequence carries.
+    const REASONING_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: TOOL_NAME,
+        args: "{\"city\":\"Berlin\"}",
+    }];
+
+    /// The declared run order of the conforming reasoning sequence.
+    const REASONING_ORDER: &[Channel] = &[Channel::Reasoning, Channel::Text, Channel::Tool];
+
+    /// A reasoning run that arrives after the text run is not the wire order
+    /// that the fixture declares.
+    #[test]
+    fn a_reasoning_run_after_the_text_run_fails() {
+        let mut events = conforming(Scenario::ReasoningCleanStop);
+        let reasoning = events
+            .iter()
+            .position(|e| matches!(e, Ok(ModelEvent::ReasoningDelta { .. })))
+            .expect("the conforming ReasoningCleanStop has a ReasoningDelta");
+        let moved = events.remove(reasoning);
+        let text = events
+            .iter()
+            .position(|e| matches!(e, Ok(ModelEvent::TokenDelta { .. })))
+            .expect("the conforming ReasoningCleanStop has a TokenDelta");
+        events.insert(text + 1, moved);
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            Some(REASONING_ORDER),
+            REASONING_CALLS,
+        );
+        assert_eq!(
+            violation,
+            Some(Violation::ChannelOrderMismatch {
+                expected: vec![Channel::Reasoning, Channel::Text, Channel::Tool],
+                observed: vec![Channel::Text, Channel::Reasoning, Channel::Tool],
+            })
+        );
+    }
+
+    /// A reasoning scenario without a `ReasoningDelta` did not serve
+    /// reasoning at all.
+    #[test]
+    fn a_reasoning_scenario_without_reasoning_fails() {
+        let mut events = conforming(Scenario::ReasoningCleanStop);
+        events.retain(|e| !matches!(e, Ok(ModelEvent::ReasoningDelta { .. })));
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            Some(REASONING_ORDER),
+            REASONING_CALLS,
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("no ReasoningDelta"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// Without a declared order the channel-order check has nothing to
+    /// compare, so it would pass with no evidence.
+    #[test]
+    fn a_reasoning_scenario_without_a_declared_order_fails() {
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &conforming(Scenario::ReasoningCleanStop),
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            REASONING_CALLS,
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("declares no channel order"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// A reasoning scenario without declared calls compares nothing.
+    #[test]
+    fn a_reasoning_scenario_without_declared_calls_fails() {
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &conforming(Scenario::ReasoningCleanStop),
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            Some(REASONING_ORDER),
+            &[],
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("declares no calls"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// The error floor reports only a missing `Err`. A second `Err` is left to
+    /// assertion 9, so the floor does not mask its `EventAfterError` diagnosis.
+    #[test]
+    fn a_second_err_in_an_error_scenario_passes_the_floor() {
+        let events = vec![
+            Ok(ModelEvent::TokenDelta {
+                text: "hi".to_owned(),
+            }),
+            Err(ModelError::Unavailable),
+            Err(ModelError::Unavailable),
+        ];
+        let violation = crate::floor_violation(
+            Scenario::ErrorMidGeneration,
+            &events,
+            TOOL_NAME,
+            None,
+            None,
+            &[],
+        );
+        assert_eq!(violation, None);
+    }
+
+    /// The calls that the conforming parallel sequence carries, in order.
+    const PARALLEL_CALLS: &[ExpectedCall] = &[
+        ExpectedCall {
+            name: TOOL_NAME,
+            args: "{\"city\":\"Berlin\"}",
+        },
+        ExpectedCall {
+            name: TOOL_NAME,
+            args: "{\"city\":\"Rome\"}",
+        },
+    ];
+
+    /// The one call that the conforming zero-argument sequence carries.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: crate::fakes::ZERO_ARG_TOOL_NAME,
+        args: "{}",
+    }];
+
+    /// The `args_delta` of the delta for `call_id`, replaced by `args`.
+    fn set_args(events: &mut [Result<ModelEvent, ModelError>], call_id: &str, args: &str) {
+        for event in events.iter_mut() {
+            if let Ok(ModelEvent::ToolCallDelta {
+                call_id: id,
+                args_delta,
+                ..
+            }) = event
+            {
+                if id == call_id {
+                    *args_delta = args.to_owned();
+                }
+            }
+        }
+    }
+
+    /// Two calls with the same name and swapped arguments are not the calls
+    /// that the fixture declares.
+    #[test]
+    fn swapped_parallel_arguments_fail() {
+        let mut events = conforming(Scenario::ParallelToolCallCleanStop);
+        set_args(&mut events, "c1", "{\"city\":\"Rome\"}");
+        set_args(&mut events, "c2", "{\"city\":\"Berlin\"}");
+        let violation = crate::floor_violation(
+            Scenario::ParallelToolCallCleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            PARALLEL_CALLS,
+        );
+        assert_eq!(
+            violation,
+            Some(Violation::ToolCallsMismatch {
+                expected: vec![
+                    (
+                        TOOL_NAME.to_owned(),
+                        serde_json::json!({ "city": "Berlin" })
+                    ),
+                    (TOOL_NAME.to_owned(), serde_json::json!({ "city": "Rome" })),
+                ],
+                observed: vec![
+                    (TOOL_NAME.to_owned(), serde_json::json!({ "city": "Rome" })),
+                    (
+                        TOOL_NAME.to_owned(),
+                        serde_json::json!({ "city": "Berlin" })
+                    ),
+                ],
+            })
+        );
+    }
+
+    /// A zero-argument fixture whose delta carries real arguments is not the
+    /// fixture that the scenario describes.
+    #[test]
+    fn a_zero_arg_fixture_with_real_arguments_fails() {
+        let mut events = conforming(Scenario::ZeroArgToolCallCleanStop);
+        set_args(&mut events, "c1", "{\"tz\":\"UTC\"}");
+        let violation = crate::floor_violation(
+            Scenario::ZeroArgToolCallCleanStop,
+            &events,
+            crate::fakes::ZERO_ARG_TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            ZERO_ARG_CALLS,
+        );
+        assert_eq!(
+            violation,
+            Some(Violation::ToolCallsMismatch {
+                expected: vec![(
+                    crate::fakes::ZERO_ARG_TOOL_NAME.to_owned(),
+                    serde_json::json!({})
+                )],
+                observed: vec![(
+                    crate::fakes::ZERO_ARG_TOOL_NAME.to_owned(),
+                    serde_json::json!({ "tz": "UTC" })
+                )],
+            })
+        );
+    }
+
+    /// A zero-argument scenario without declared calls compares nothing.
+    #[test]
+    fn a_zero_arg_scenario_without_declared_calls_fails() {
+        let violation = crate::floor_violation(
+            Scenario::ZeroArgToolCallCleanStop,
+            &conforming(Scenario::ZeroArgToolCallCleanStop),
+            crate::fakes::ZERO_ARG_TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            &[],
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("declares no calls"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// A parallel scenario with one call did not serve parallel calls.
+    #[test]
+    fn a_single_call_in_the_parallel_scenario_fails() {
+        let mut events = conforming(Scenario::ParallelToolCallCleanStop);
+        events.retain(
+            |e| !matches!(e, Ok(ModelEvent::ToolCallDelta { call_id, .. }) if call_id == "c2"),
+        );
+        let violation = crate::floor_violation(
+            Scenario::ParallelToolCallCleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            PARALLEL_CALLS,
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("fewer than two"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// Without declared calls the call comparison has nothing to compare, so
+    /// it would pass with no evidence.
+    #[test]
+    fn a_parallel_scenario_without_declared_calls_fails() {
+        let violation = crate::floor_violation(
+            Scenario::ParallelToolCallCleanStop,
+            &conforming(Scenario::ParallelToolCallCleanStop),
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            &[],
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("declares no calls"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// A call whose arguments do not parse is not the floor's business:
+    /// assertion 10 names it exactly.
+    #[test]
+    fn unparseable_arguments_are_left_to_classify() {
+        let mut events = conforming(Scenario::ParallelToolCallCleanStop);
+        set_args(&mut events, "c2", "{\"city\":");
+        let violation = crate::floor_violation(
+            Scenario::ParallelToolCallCleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+            PARALLEL_CALLS,
+        );
+        assert_eq!(violation, None);
+        assert_eq!(
+            classify(&events, Scenario::ParallelToolCallCleanStop, false),
+            Some(Violation::ToolArgsNotJson {
+                call_id: "c2".into()
+            })
+        );
+    }
+
+    /// A pair that only `UNCAPTURED` pins cannot be reported as declined. Both
+    /// pinned checks must report it: `DECLINED` sees an unexpected decline,
+    /// and `UNCAPTURED` sees a stale row.
+    #[tokio::test]
+    async fn a_declined_outcome_for_an_uncaptured_pair_fails() {
+        let subject = Subject {
+            declines: &[
+                (
+                    Scenario::FragmentedToolName,
+                    "name arrives whole in toolUse start",
+                ),
+                (
+                    Scenario::CancelAfterStopReason,
+                    "no observable event between MessageStop and Metadata",
+                ),
+                THINKING_DECLINE,
+                (Scenario::ReasoningCleanStop, "no captured reasoning stream"),
+            ],
+            uncaptured: &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+            ..Subject::conforming("bedrock")
+        };
+        let joined = tokio::spawn(async move { assert_conforms(&subject).await }).await;
+        let panic = joined
+            .expect_err("a declined outcome for an uncaptured pair must panic")
+            .into_panic();
+        let message = panic
+            .downcast_ref::<String>()
+            .cloned()
+            .expect("the panic carries a formatted message");
+        assert!(
+            message.contains("unexpected decline of ReasoningCleanStop"),
+            "{message}"
+        );
+        assert!(
+            message.contains("ReasoningCleanStop is pinned as uncaptured"),
+            "{message}"
+        );
     }
 }

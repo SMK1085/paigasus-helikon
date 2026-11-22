@@ -17,10 +17,11 @@
 //! Two rules apply to every subject, and both exist because breaking them makes
 //! a check pass without measuring anything:
 //!
-//! 1. **Decline reasons are literal strings**, copied by hand from
-//!    `src/declines.rs`. A subject that looked its reasons up from `DECLINED`
-//!    would satisfy that table's two-directional cross-check by construction,
-//!    which is exactly the drift the table exists to catch.
+//! 1. **Decline and uncaptured reasons are literal strings**, copied by hand
+//!    from `src/declines.rs`. A subject that looked its reasons up from
+//!    `DECLINED` or `UNCAPTURED` would satisfy that table's two-directional
+//!    cross-check by construction, which is exactly the drift the table exists
+//!    to catch.
 //! 2. **`encodes_stop_reason` is measured from the bytes about to be served**,
 //!    never restated from `Scenario::expects_stop_reason`. Restating it
 //!    compares the harness's expectation with itself. See the Bedrock impl for
@@ -39,8 +40,8 @@ use paigasus_helikon_core::{
     CancellationToken, ContentPart, FinishReason, Item, Model, ModelRequest, ToolDef,
 };
 use paigasus_helikon_provider_stream_conformance::{
-    assert_conforms, eventstream::frame, Ending, Outcome, PacedServer, Scenario, Script,
-    StreamUnderTest,
+    assert_conforms, eventstream::frame, Channel, Ending, ExpectedCall, Outcome, PacedServer,
+    Scenario, Script, StreamUnderTest,
 };
 use serde_json::json;
 
@@ -190,12 +191,13 @@ mod bedrock {
     /// capture records that a real Bedrock stream sends `metadata` after
     /// `messageStop`.
     ///
-    /// **This ordering is not self-enforcing, so do not reorder it casually.**
+    /// **This ordering is not self-enforced by the translator.**
+    /// `assert_message_stop_before_metadata` enforces it for every script.
     /// `stream.rs` deliberately handles the reversed order too (`Metadata`
     /// before `MessageStop` emits `Usage` at once and `Finish` on the stop), so
-    /// a fixture that put `metadata` first would still pass every assertion —
-    /// while no longer covering the buffering path, which exists for the
-    /// order `messageStop` then `metadata`. Verified by mutation while
+    /// a fixture that put `metadata` first would still pass every other
+    /// assertion — while no longer covering the buffering path, which exists
+    /// for the order `messageStop` then `metadata`. Verified by mutation while
     /// registering this subject: swapping the two left the suite green.
     ///
     /// The values (11/4/15 tokens, `latencyMs` 314) are arbitrary. No capture
@@ -215,14 +217,14 @@ mod bedrock {
     }
 
     /// The scripted response for one scenario, or `None` for a scenario this
-    /// subject declines.
+    /// subject declines or has no capture for (an uncaptured scenario).
     ///
     /// Each script is the same Converse stream cut at a different point, so the
     /// scenarios differ only in what the client gets to observe — which is
     /// exactly the distinction the suite is checking.
     ///
-    /// Returning an `Option` rather than panicking on the declined scenarios is
-    /// what lets [`Bedrock::encodes_stop_reason`] call this for *every*
+    /// Returning an `Option` rather than panicking on the declined or uncaptured
+    /// scenarios is what lets [`Bedrock::encodes_stop_reason`] call this for *every*
     /// scenario and measure the bytes.
     fn script(scenario: Scenario) -> Option<Script> {
         // The prefix every text script shares: the opening event and two
@@ -285,6 +287,12 @@ mod bedrock {
             Scenario::CancelAfterStopReason | Scenario::FragmentedToolName => return None,
             // Declined — the scenario serves an anthropic thinking block.
             Scenario::ThinkingToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ReasoningCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -442,8 +450,22 @@ mod bedrock {
                 // Declined; never reached.
                 Scenario::CancelAfterStopReason
                 | Scenario::FragmentedToolName
-                | Scenario::ThinkingToolCallCleanStop => None,
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
+        }
+
+        fn fixture_channel_order(&self, _scenario: Scenario) -> Option<&'static [Channel]> {
+            // This subject serves no scenario whose channel order the harness
+            // checks, so it makes no claim.
+            None
+        }
+
+        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
+            // This subject serves no scenario that declares calls.
+            &[]
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -467,6 +489,21 @@ mod bedrock {
                 Scenario::ThinkingToolCallCleanStop => {
                     return Outcome::Declined("the scenario serves an anthropic thinking block")
                 }
+                // A reasoning stream can occur on this wire, but no capture
+                // of one exists (SMA-858).
+                Scenario::ReasoningCleanStop => {
+                    return Outcome::Uncaptured("no captured reasoning stream")
+                }
+                // Parallel tool calls can occur on this wire, but no capture
+                // of them exists (SMA-859).
+                Scenario::ParallelToolCallCleanStop => {
+                    return Outcome::Uncaptured("no captured parallel tool-call stream")
+                }
+                // A zero-argument tool call can occur on this wire, but no
+                // capture of one exists (SMA-860).
+                Scenario::ZeroArgToolCallCleanStop => {
+                    return Outcome::Uncaptured("no captured zero-argument tool-call stream")
+                }
                 _ => {}
             }
 
@@ -482,6 +519,55 @@ mod bedrock {
                 .expect("bedrock invoke should reach the local paced server");
 
             Outcome::Served { stream, gate }
+        }
+    }
+
+    /// The `:event-type` of each frame, in order.
+    ///
+    /// Each chunk is decoded with the SDK's own frame decoder, so the check
+    /// reads what the client reads. A chunk that does not decode as one
+    /// complete frame panics.
+    fn event_types(chunks: &[Vec<u8>]) -> Vec<String> {
+        use aws_smithy_eventstream::frame::{DecodedFrame, MessageFrameDecoder};
+
+        chunks
+            .iter()
+            .map(|chunk| {
+                let mut decoder = MessageFrameDecoder::new();
+                let message = match decoder
+                    .decode_frame(chunk.as_slice())
+                    .expect("a frame this module wrote must decode")
+                {
+                    DecodedFrame::Complete(message) => message,
+                    DecodedFrame::Incomplete => panic!("each chunk must be one complete frame"),
+                };
+                message
+                    .headers()
+                    .iter()
+                    .find(|h| h.name().as_str() == ":event-type")
+                    .expect("every frame carries an :event-type header")
+                    .value()
+                    .as_string()
+                    .expect(":event-type is a string header")
+                    .as_str()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// Panic when a `metadata` frame comes before a `messageStop` frame.
+    ///
+    /// Bedrock sends `messageStop` first. `stream.rs` accepts both orders, so
+    /// no other assertion notices a fixture in the wrong order.
+    fn assert_message_stop_before_metadata(chunks: &[Vec<u8>]) {
+        let types = event_types(chunks);
+        let stop = types.iter().position(|t| t == MESSAGE_STOP_EVENT_TYPE);
+        let meta = types.iter().position(|t| t == "metadata");
+        if let (Some(stop), Some(meta)) = (stop, meta) {
+            assert!(
+                meta > stop,
+                "metadata before messageStop: metadata at {meta}, messageStop at {stop} in {types:?}"
+            );
         }
     }
 
@@ -524,6 +610,42 @@ mod bedrock {
                  reason for scripts that encode none"
             );
         }
+    }
+
+    /// The check must fail on the reversed order, or it guards nothing.
+    #[test]
+    #[should_panic(expected = "metadata before messageStop")]
+    fn a_swapped_metadata_and_message_stop_is_caught() {
+        let mut chunks = vec![message_stop("end_turn"), metadata()];
+        chunks.reverse();
+        assert_message_stop_before_metadata(&chunks);
+    }
+
+    /// No Bedrock script may put `metadata` before `messageStop`.
+    #[test]
+    fn every_bedrock_script_keeps_message_stop_before_metadata() {
+        let mut checked = Vec::new();
+        for &scenario in Scenario::ALL {
+            let Some(script) = script(scenario) else {
+                continue;
+            };
+            let types = event_types(&script.chunks);
+            if types.iter().any(|t| t == MESSAGE_STOP_EVENT_TYPE)
+                && types.iter().any(|t| t == "metadata")
+            {
+                assert_message_stop_before_metadata(&script.chunks);
+                checked.push(scenario);
+            }
+        }
+        assert!(
+            checked.len() >= 2,
+            "expected at least two scripts with both frames, checked {checked:?}"
+        );
+        assert!(checked.contains(&Scenario::CleanStop), "{checked:?}");
+        assert!(
+            checked.contains(&Scenario::ToolCallCleanStop),
+            "{checked:?}"
+        );
     }
 
     #[tokio::test]
@@ -809,7 +931,8 @@ mod openai_chat {
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
-    /// declines, like `bedrock::script`.
+    /// declines, like `bedrock::script`, and for the scenarios that it has no
+    /// capture for (uncaptured).
     fn script(scenario: Scenario) -> Option<Script> {
         // The two-delta opening every text scenario shares. The content is
         // arbitrary (as in `bedrock::opening`); the envelope is what is
@@ -907,6 +1030,12 @@ mod openai_chat {
             }
             // Declined — the scenario serves an anthropic thinking block.
             Scenario::ThinkingToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ReasoningCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -1004,13 +1133,41 @@ mod openai_chat {
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason
                 | Scenario::FragmentedToolName
-                | Scenario::ThinkingToolCallCleanStop => None,
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
+        }
+
+        fn fixture_channel_order(&self, _scenario: Scenario) -> Option<&'static [Channel]> {
+            // This subject serves no scenario whose channel order the harness
+            // checks, so it makes no claim.
+            None
+        }
+
+        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
+            // This subject serves no scenario that declares calls.
+            &[]
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
             if scenario == Scenario::ThinkingToolCallCleanStop {
                 return Outcome::Declined("the scenario serves an anthropic thinking block");
+            }
+            // Chat Completions has no field that carries reasoning text.
+            if scenario == Scenario::ReasoningCleanStop {
+                return Outcome::Declined("the Chat Completions wire carries no reasoning text");
+            }
+            // Parallel tool calls can occur on this wire, but the repo
+            // fixture of them is hand-authored, not captured (SMA-859).
+            if scenario == Scenario::ParallelToolCallCleanStop {
+                return Outcome::Uncaptured("no captured parallel tool-call stream");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture of
+            // one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -1359,7 +1516,7 @@ mod litellm {
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
-    /// declines.
+    /// declines, and for the scenarios that it has no capture for (uncaptured).
     fn script(scenario: Scenario) -> Option<Script> {
         // The two-delta opening every text scenario shares, matching
         // `text_then_trailing_usage.txt`'s two content chunks (the second
@@ -1459,6 +1616,12 @@ mod litellm {
             }
             // Declined — the scenario serves an anthropic thinking block.
             Scenario::ThinkingToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ReasoningCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -1552,13 +1715,42 @@ mod litellm {
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason
                 | Scenario::FragmentedToolName
-                | Scenario::ThinkingToolCallCleanStop => None,
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
+        }
+
+        fn fixture_channel_order(&self, _scenario: Scenario) -> Option<&'static [Channel]> {
+            // This subject serves no scenario whose channel order the harness
+            // checks, so it makes no claim.
+            None
+        }
+
+        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
+            // This subject serves no scenario that declares calls.
+            &[]
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
             if scenario == Scenario::ThinkingToolCallCleanStop {
                 return Outcome::Declined("the scenario serves an anthropic thinking block");
+            }
+            // A reasoning stream can occur on this wire, but no capture of one
+            // exists (SMA-858).
+            if scenario == Scenario::ReasoningCleanStop {
+                return Outcome::Uncaptured("no captured reasoning stream");
+            }
+            // Parallel tool calls can occur on this wire, but no capture of
+            // them exists (SMA-859).
+            if scenario == Scenario::ParallelToolCallCleanStop {
+                return Outcome::Uncaptured("no captured parallel tool-call stream");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture of
+            // one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -1729,11 +1921,17 @@ mod litellm {
 ///   [`signature_delta`] (fake value `SIG_FAKE_1`), [`CAPTURED_ARGS`] (lines
 ///   143-153) and `ThinkingToolCallCleanStop`'s script. The fixture holds a
 ///   text block
-///   between the thinking block and the tool call. The script leaves it out,
+///   between the thinking block and the tool call. That script leaves it out,
 ///   so the tool call sits at index 1. [`tool_use_start_at`],
 ///   [`input_json_delta_at`] and [`content_block_stop_at`] carry that index.
 ///   The script also leaves out other parts of the capture. See the
 ///   `ThinkingToolCallCleanStop` arm in [`script`] for the list.
+///   The same file, all of it (run C), is `ReasoningCleanStop`'s script: the
+///   thinking block at index 0, the text block at index 1 and the `tool_use`
+///   block at index 2. The script arm lists every edit. It also grounds
+///   [`message_start_run_c`], [`message_delta_run_c`],
+///   [`tool_use_start_with_caller_at`], [`content_block_start_text_at`] and
+///   [`text_delta_at`].
 /// - `empty_thinking_tool_use.txt` and `redacted_thinking_tool_use.txt` —
 ///   both CAPTURED (transcribed, SMA-840, PR #387). Each sends the same four
 ///   `input_json_delta` values as `thinking_text_tool_use.txt`
@@ -1747,9 +1945,9 @@ mod litellm {
 /// but contribute no shape this module needs: the former is `text_only.txt` cut
 /// inside `message_stop` (its header). The SSE parser discards the partial last
 /// event, so it parses to the same events as `eof_after_message_delta.txt`
-/// (already covered). For the latter, the one thinking scenario here,
-/// `ThinkingToolCallCleanStop`, uses the CAPTURED `thinking_text_tool_use.txt`
-/// instead.
+/// (already covered). For the latter, the two thinking scenarios here,
+/// `ThinkingToolCallCleanStop` and `ReasoningCleanStop`, use the CAPTURED
+/// `thinking_text_tool_use.txt` instead.
 ///
 /// SMA-840 (PR #387) also added two fixtures that no helper in this module
 /// copies a shape from: `interleaved_thinking.txt` and
@@ -1822,9 +2020,9 @@ mod litellm {
 /// 143-153, `empty_thinking_tool_use.txt` lines 94-104 and
 /// `redacted_thinking_tool_use.txt` lines 95-105.
 ///
-/// Both tool scripts (`ToolCallCleanStop` and `ThinkingToolCallCleanStop`)
-/// send the captured shape: the four [`CAPTURED_ARGS`] values, in order, one
-/// `input_json_delta` each. Like `bedrock`/`openai_chat`/`litellm`, this
+/// The three tool scripts (`ToolCallCleanStop`, `ThinkingToolCallCleanStop`
+/// and `ReasoningCleanStop`) send the captured shape: the four
+/// [`CAPTURED_ARGS`] values, in order, one `input_json_delta` each. Like `bedrock`/`openai_chat`/`litellm`, this
 /// module therefore sends more than one argument delta for one call.
 ///
 /// The translator gives the name to the first `input_json_delta` of a call,
@@ -1938,11 +2136,17 @@ mod anthropic {
     /// each `content_block_stop` follows a `content_block_start` for the
     /// same index.
     fn content_block_start_text() -> Vec<u8> {
+        content_block_start_text_at(0)
+    }
+
+    /// [`content_block_start_text`] for the block at `index`. In run C the
+    /// text block sits at index 1, after the thinking block.
+    fn content_block_start_text_at(index: u32) -> Vec<u8> {
         frame(
             "content_block_start",
             json!({
                 "type": "content_block_start",
-                "index": 0,
+                "index": index,
                 "content_block": { "type": "text", "text": "" }
             }),
         )
@@ -1951,11 +2155,16 @@ mod anthropic {
     /// One text delta. Envelope matches `text_only.txt`'s delta events; the
     /// content itself is arbitrary, as in every other subject in this file.
     fn text_delta(text: &str) -> Vec<u8> {
+        text_delta_at(0, text)
+    }
+
+    /// [`text_delta`] for the block at `index`.
+    fn text_delta_at(index: u32, text: &str) -> Vec<u8> {
         frame(
             "content_block_delta",
             json!({
                 "type": "content_block_delta",
-                "index": 0,
+                "index": index,
                 "delta": { "type": "text_delta", "text": text }
             }),
         )
@@ -1996,8 +2205,10 @@ mod anthropic {
     }
 
     /// One `thinking_delta`. Envelope matches `thinking_text_tool_use.txt`
-    /// (CAPTURED), for example line 48; the text itself is arbitrary. The
-    /// capture sends 15 `thinking_delta` events; the script sends one.
+    /// (CAPTURED), for example line 48. The `ReasoningCleanStop` script sends
+    /// the captured run C text, all 15 deltas. The text of
+    /// `ThinkingToolCallCleanStop` is arbitrary, and that script sends one
+    /// delta.
     fn thinking_delta(thinking: &str) -> Vec<u8> {
         frame(
             "content_block_delta",
@@ -2083,6 +2294,137 @@ mod anthropic {
         )
     }
 
+    /// The `content_block_start` of run C's `tool_use` block. It differs from
+    /// [`tool_use_start_at`] in one key: run C also sends
+    /// `"caller":{"type":"direct"}`.
+    fn tool_use_start_with_caller_at(index: u32, call_id: &str, name: &str) -> Vec<u8> {
+        frame(
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": call_id,
+                    "name": name,
+                    "input": {},
+                    "caller": { "type": "direct" }
+                }
+            }),
+        )
+    }
+
+    /// Run C's `message_start`, with every key and value of
+    /// `thinking_text_tool_use.txt` line 39. [`message_start`] is not reused,
+    /// because its `id`, `model` and `usage` are this module's own values.
+    fn message_start_run_c() -> Vec<u8> {
+        frame(
+            "message_start",
+            json!({
+                "type": "message_start",
+                "message": {
+                    "model": "claude-sonnet-4-5-20250929",
+                    "id": "msg_011ChGZ7F3NWW9KiPZPYPzWL",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "container": null,
+                    "stop_reason": null,
+                    "stop_sequence": null,
+                    "stop_details": null,
+                    "usage": {
+                        "input_tokens": 687,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 0,
+                            "ephemeral_1h_input_tokens": 0
+                        },
+                        "output_tokens": 3,
+                        "service_tier": "standard",
+                        "inference_geo": "not_available",
+                        "speed": "standard"
+                    },
+                    "diagnostics": null
+                }
+            }),
+        )
+    }
+
+    /// Run C's `message_delta`, with every key and value of
+    /// `thinking_text_tool_use.txt` line 159. [`message_delta`] is not
+    /// reused, because run C also sends `stop_details`, `container`, the
+    /// input and cache counts, and `output_tokens_details`.
+    fn message_delta_run_c() -> Vec<u8> {
+        frame(
+            "message_delta",
+            json!({
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "tool_use",
+                    "stop_sequence": null,
+                    "stop_details": null,
+                    "container": null
+                },
+                "usage": {
+                    "input_tokens": 687,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 182,
+                    "output_tokens_details": { "thinking_tokens": 68 }
+                }
+            }),
+        )
+    }
+
+    /// The fifteen `thinking_delta` texts of run C, lines 48-90, in order.
+    const RUN_C_THINKING: &[&str] = &[
+        "The user wants",
+        " to",
+        " know the weather in Paris.",
+        " They've",
+        " specifically",
+        " asked me to:\n1. First",
+        " look up the city code for Paris",
+        "\n2. Then get the weather using",
+        " that code",
+        "\n3. Think briefly before each step",
+        "\n\nLet me start",
+        " with",
+        " step",
+        " 1:",
+        " looking up the city code for Paris.",
+    ];
+
+    /// The twelve `text_delta` texts of run C, lines 102-135, in order.
+    const RUN_C_TEXT: &[&str] = &[
+        "I'll help you get the weather for",
+        " Paris. Let me start",
+        " by looking up the city code.",
+        "\n\n**",
+        "Step 1: Looking up the city",
+        " code for Paris**",
+        "\nI",
+        " need",
+        " to use",
+        " the lookup",
+        "_city_code function with \"",
+        "Paris\" as the city parameter.",
+    ];
+
+    /// The `tool_use` id of run C, line 141.
+    const RUN_C_TOOL_USE_ID: &str = "toolu_017EB2o3zrXW8R73aqBPNiZi";
+
+    /// The tool name of run C's call, line 141.
+    const RUN_C_TOOL_NAME: &str = "lookup_city_code";
+
+    /// Run C's one call: [`RUN_C_TOOL_NAME`] and the [`CAPTURED_ARGS`]
+    /// values (lines 143-153) concatenated.
+    const RUN_C_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: RUN_C_TOOL_NAME,
+        args: "{\"city\": \"Paris\"}",
+    }];
+
     /// One `input_json_delta`, carrying one fragment of a call's argument
     /// JSON. The tool scripts call it once for each [`CAPTURED_ARGS`] value,
     /// as the SMA-840 captures send them. See the module doc's "Tool scripts
@@ -2104,10 +2446,11 @@ mod anthropic {
     }
 
     /// The scripted response for one scenario, or `None` for
-    /// `FragmentedToolName`, which this subject declines.
+    /// `FragmentedToolName`, which this subject declines, or for a scenario
+    /// that it has no capture for (uncaptured).
     ///
-    /// Returning an `Option` rather than panicking on the declined scenario is
-    /// what lets [`Anthropic::encodes_stop_reason`] call this for *every*
+    /// Returning an `Option` rather than panicking on the declined or
+    /// uncaptured scenarios is what lets [`Anthropic::encodes_stop_reason`] call this for *every*
     /// scenario and measure the bytes — see `bedrock::script`'s doc for the
     /// same pattern.
     fn script(scenario: Scenario) -> Option<Script> {
@@ -2263,6 +2606,46 @@ mod anthropic {
                 ]);
                 (chunks, None, Ending::Clean)
             }
+            // All of run C, `thinking_text_tool_use.txt` (the SMA-840 probe,
+            // claude-sonnet-4-5; its signature is already replaced with
+            // `SIG_FAKE_1` in the file). In wire order: `message_start`, the
+            // thinking block at index 0 (start, 15 `thinking_delta`s, the
+            // `signature_delta`, stop), the text block at index 1 (start, 12
+            // `text_delta`s, stop), the `tool_use` block at index 2 (start, 4
+            // `input_json_delta`s, the `CAPTURED_ARGS` values of lines 143-153,
+            // stop), `message_delta` (`tool_use`),
+            // `message_stop`. No delta is merged. The edits, all of them:
+            //
+            // 1. The `ping` event (lines 44-45) is dropped. The translator
+            //    ignores it (`AnthropicEvent::Ping => {}`).
+            // 2. Each payload is built with `json!`, so its key order and
+            //    spacing can differ from the source. The keys and values are
+            //    unchanged.
+            // 3. The provenance header (lines 1-36) of the source file is not
+            //    sent.
+            Scenario::ReasoningCleanStop => {
+                let mut chunks = vec![message_start_run_c(), thinking_start()];
+                chunks.extend(RUN_C_THINKING.iter().map(|t| thinking_delta(t)));
+                chunks.push(signature_delta("SIG_FAKE_1"));
+                chunks.push(content_block_stop_at(0));
+                chunks.push(content_block_start_text_at(1));
+                chunks.extend(RUN_C_TEXT.iter().map(|t| text_delta_at(1, t)));
+                chunks.push(content_block_stop_at(1));
+                chunks.push(tool_use_start_with_caller_at(
+                    2,
+                    RUN_C_TOOL_USE_ID,
+                    RUN_C_TOOL_NAME,
+                ));
+                chunks.extend(CAPTURED_ARGS.iter().map(|a| input_json_delta_at(2, a)));
+                chunks.push(content_block_stop_at(2));
+                chunks.push(message_delta_run_c());
+                chunks.push(message_stop());
+                (chunks, None, Ending::Clean)
+            }
+            // Not served — see the reason in `Anthropic::stream`.
+            Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -2275,10 +2658,13 @@ mod anthropic {
 
     /// The request driven through `Model::invoke`.
     ///
-    /// Carries a tool definition for both served tool scenarios
-    /// (`ToolCallCleanStop` and `ThinkingToolCallCleanStop`) so the exchange
-    /// is coherent — a response returning `tool_use` for a request that
-    /// offered no tools would not be a coherent exchange.
+    /// Carries a tool definition for `ToolCallCleanStop`,
+    /// `ThinkingToolCallCleanStop` and `ReasoningCleanStop` so the exchange is
+    /// coherent — a response returning `tool_use` for a request that offered
+    /// no tools would not be a coherent exchange. For
+    /// `ReasoningCleanStop` the offered tool is the one that the script calls:
+    /// run C's `lookup_city_code`. The request of run C is not in the repo, so
+    /// only the tool name is taken from the capture.
     /// `FragmentedToolName` is this subject's other tool scenario, but it is
     /// declined and so never reaches this function.
     fn request(scenario: Scenario) -> ModelRequest {
@@ -2288,6 +2674,17 @@ mod anthropic {
                 text: "What is the weather in Paris?".into(),
             }],
         }];
+        if scenario == Scenario::ReasoningCleanStop {
+            req.tools = vec![ToolDef::new(
+                RUN_C_TOOL_NAME,
+                "Return the internal code for a city.",
+                json!({
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }),
+            )];
+        }
         if matches!(
             scenario,
             Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop
@@ -2357,9 +2754,10 @@ mod anthropic {
                 }
                 // `"tool_use"` maps to `FinishReason::ToolCalls` when no
                 // structured-output synthesis is in play.
-                Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
-                    Some(FinishReason::ToolCalls)
-                }
+                // Run C's `message_delta` carries `"tool_use"` too.
+                Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop => Some(FinishReason::ToolCalls),
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -2367,8 +2765,57 @@ mod anthropic {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason => None,
-                // Declined; never reached.
-                Scenario::FragmentedToolName => None,
+                // Declined or uncaptured; never reached.
+                Scenario::FragmentedToolName
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
+            }
+        }
+
+        fn fixture_channel_order(&self, scenario: Scenario) -> Option<&'static [Channel]> {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                // Read from run C (`thinking_text_tool_use.txt`): the thinking
+                // block at index 0, the text block at index 1, the `tool_use`
+                // block at index 2.
+                Scenario::ReasoningCleanStop => {
+                    Some(&[Channel::Reasoning, Channel::Text, Channel::Tool])
+                }
+                Scenario::CleanStop
+                | Scenario::TruncatedAfterStopReason
+                | Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
+            }
+        }
+
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                // Run C's one call (`thinking_text_tool_use.txt`, lines
+                // 106-118).
+                Scenario::ReasoningCleanStop => RUN_C_CALLS,
+                Scenario::CleanStop
+                | Scenario::TruncatedAfterStopReason
+                | Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => &[],
             }
         }
 
@@ -2379,6 +2826,16 @@ mod anthropic {
             // `ContentBlockDelta` variant (`sse.rs`) has a name field.
             if scenario == Scenario::FragmentedToolName {
                 return Outcome::Declined("name arrives whole in content_block_start");
+            }
+            // Parallel tool calls can occur on this wire, but
+            // `parallel_tool_use.txt` has no capture behind it (SMA-859).
+            if scenario == Scenario::ParallelToolCallCleanStop {
+                return Outcome::Uncaptured("no captured parallel tool-call stream");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture of
+            // one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -2428,6 +2885,10 @@ mod anthropic {
             contains(&message_delta("end_turn", 5), STOP_REASON_MARKER),
             "the message_delta frame must carry the marker, or the scan measures nothing"
         );
+        assert!(
+            contains(&message_delta_run_c(), STOP_REASON_MARKER),
+            "run C's message_delta frame must carry the marker, or the scan measures nothing"
+        );
 
         for (name, frame) in [
             ("message_start (stop_reason: null)", message_start()),
@@ -2440,6 +2901,16 @@ mod anthropic {
             ("thinking start", thinking_start()),
             ("thinking delta", thinking_delta("I need the weather.")),
             ("signature delta", signature_delta("SIG_FAKE_1")),
+            (
+                "run C message_start (stop_reason: null)",
+                message_start_run_c(),
+            ),
+            ("text block start at 1", content_block_start_text_at(1)),
+            ("text delta at 1", text_delta_at(1, "Paris")),
+            (
+                "run C tool_use start",
+                tool_use_start_with_caller_at(2, RUN_C_TOOL_USE_ID, RUN_C_TOOL_NAME),
+            ),
         ] {
             assert!(
                 !contains(&frame, STOP_REASON_MARKER),
@@ -2491,6 +2962,11 @@ mod anthropic {
 ///   Grounds [`text_delta`]'s per-chunk usage and, together with `:42`
 ///   (`text_then_finish`, also HAND-AUTHORED), [`stop_chunk`]'s combined
 ///   text+`finishReason`+`usageMetadata` event.
+/// - `crates/paigasus-helikon-providers-gemini/tests/fixtures/parallel_signed.sse`
+///   — "Capture 1" of the SMA-827 design
+///   (`docs/superpowers/specs/2026-11-20-sma-827-gemini-thought-signatures-design.md:299`).
+///   `ParallelToolCallCleanStop` sends all four of its payloads byte for byte
+///   ([`PARALLEL_SIGNED`]); the script arm lists the edits.
 ///
 /// # Live capture — `ToolCallCleanStop`
 ///
@@ -2629,8 +3105,11 @@ mod gemini {
     /// content is not.
     const THOUGHT_SIGNATURE: &str = "thoughtsig_conformance_0";
 
-    /// The substring that appears in a chunk if and only if it carries a
-    /// *populated* `finishReason`.
+    /// The substrings of which one appears in a chunk if and only if it
+    /// carries a *populated* `finishReason`. There are two forms: the compact
+    /// one that `json!` writes, and the spaced one that Capture 1 writes
+    /// (`"finishReason": "STOP"`), which `ParallelToolCallCleanStop` sends
+    /// byte for byte.
     ///
     /// Unlike `openai_chat`/`litellm`, Gemini has no explicit-`null` pitfall to
     /// exclude: `Candidate::finish_reason` (`sse.rs:23`) is `#[serde(default)]`
@@ -2644,7 +3123,48 @@ mod gemini {
     /// `stop_chunk` ever be dropped from its script; see that scenario's own
     /// comment in `script` for exactly how their observable events differ as
     /// currently scripted.
-    const FINISH_REASON_MARKER: &[u8] = b"\"finishReason\":\"";
+    const FINISH_REASON_MARKERS: [&[u8]; 2] = [b"\"finishReason\":\"", b"\"finishReason\": \""];
+
+    /// Whether `chunk` contains one of [`FINISH_REASON_MARKERS`].
+    fn has_finish_reason(chunk: &[u8]) -> bool {
+        FINISH_REASON_MARKERS
+            .iter()
+            .any(|marker| contains(chunk, marker))
+    }
+
+    /// The four `data:` payloads of `parallel_signed.sse`
+    /// (`crates/paigasus-helikon-providers-gemini/tests/fixtures/`, lines 1,
+    /// 3, 5 and 7), byte for byte. See the `ParallelToolCallCleanStop` arm of
+    /// [`script`] for the provenance and the edits.
+    const PARALLEL_SIGNED: [&str; 4] = [
+        r#"{"candidates": [{"content": {"parts": [{"functionCall": {"name": "search","args": {"q": "cats"},"id": "call_16945647804962170957"},"thoughtSignature":"SIG_A"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 109,"candidatesTokenCount": 14,"totalTokenCount": 291,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 109}],"thoughtsTokenCount": 168,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "YM4Aa9-2PNSckdUP3pjG4AY"}"#,
+        r#"{"candidates": [{"content": {"parts": [{"functionCall": {"name": "weather","args": {"city": "Paris"},"id": "call_16945647804962169654"}}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 109,"candidatesTokenCount": 28,"totalTokenCount": 305,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 109}],"thoughtsTokenCount": 168,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "YM4Aa9-2PNSckdUP3pjG4AY"}"#,
+        r#"{"candidates": [{"content": {"parts": [{"functionCall": {"name": "weather","args": {"city": "Rome"},"id": "call_16945647804962169841"}}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 109,"candidatesTokenCount": 42,"totalTokenCount": 319,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 109}],"thoughtsTokenCount": 168,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "YM4Aa9-2PNSckdUP3pjG4AY"}"#,
+        r#"{"candidates": [{"content": {"parts": [{"text": ""}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 109,"candidatesTokenCount": 42,"totalTokenCount": 319,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 109}],"thoughtsTokenCount": 168,"serviceTier": "standard"},"modelVersion": "gemini-3.8-flash","responseId": "YM4Aa9-2PNSckdUP3pjG4AY"}"#,
+    ];
+
+    /// The calls of [`PARALLEL_SIGNED`], in wire order, with the arguments
+    /// exactly as captured.
+    const PARALLEL_CALLS: &[ExpectedCall] = &[
+        ExpectedCall {
+            name: "search",
+            args: r#"{"q": "cats"}"#,
+        },
+        ExpectedCall {
+            name: "weather",
+            args: r#"{"city": "Paris"}"#,
+        },
+        ExpectedCall {
+            name: "weather",
+            args: r#"{"city": "Rome"}"#,
+        },
+    ];
+
+    /// One SSE frame around a captured payload, sent byte for byte:
+    /// `data: {payload}\n\n`.
+    fn captured_frame(payload: &str) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
 
     /// One SSE frame: `data: {payload}\n\n`. Both recorded Gemini captures
     /// (the module doc's "Live capture" and `parallel_signed.sse`) have bare
@@ -2769,10 +3289,11 @@ mod gemini {
     }
 
     /// The scripted response for one scenario, or `None` for
-    /// `FragmentedToolName`, which this subject declines.
+    /// `FragmentedToolName`, which this subject declines, or for a scenario
+    /// that it has no capture for (uncaptured).
     ///
-    /// Returning an `Option` rather than panicking on the declined scenario is
-    /// what lets [`Gemini::encodes_stop_reason`] call this for *every*
+    /// Returning an `Option` rather than panicking on the declined or
+    /// uncaptured scenarios is what lets [`Gemini::encodes_stop_reason`] call this for *every*
     /// scenario and measure the bytes — see `bedrock::script`'s doc for the
     /// same pattern.
     fn script(scenario: Scenario) -> Option<Script> {
@@ -2895,6 +3416,32 @@ mod gemini {
             ),
             // Declined — the scenario serves an anthropic thinking block.
             Scenario::ThinkingToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ReasoningCleanStop => return None,
+            // Three parallel calls, then the stop reason: all of
+            // `parallel_signed.sse`, which is "Capture 1" of the SMA-827
+            // design (`docs/superpowers/specs/2026-11-20-sma-827-gemini-
+            // thought-signatures-design.md:299`; the file has no provenance
+            // header of its own). Streamed against the Developer API on
+            // `gemini-3.8-flash`. Chunks 0 to 2 each hold one `functionCall`
+            // (`search`, `weather` Paris, `weather` Rome) with a native id;
+            // only chunk 0 carries a `thoughtSignature`. Chunk 3 holds an
+            // empty text part with `"finishReason": "STOP"`. The body ended at
+            // bare EOF, so no `[DONE]` is sent, and the buffered stop reason
+            // is flushed by the bare-EOF arm.
+            //
+            // No edits: the body is the file, byte for byte. The file already
+            // holds the placeholder `SIG_A`.
+            //
+            // The stop chunk writes `"finishReason": "STOP"` with a space, and
+            // `FINISH_REASON_MARKERS` accepts that form.
+            Scenario::ParallelToolCallCleanStop => (
+                PARALLEL_SIGNED.iter().map(|p| captured_frame(p)).collect(),
+                None,
+                Ending::Clean,
+            ),
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -2909,7 +3456,10 @@ mod gemini {
     ///
     /// Carries a tool definition for `ToolCallCleanStop` so the exchange is
     /// coherent — a response returning a `functionCall` for a request that
-    /// offered no tools would not be a coherent exchange.
+    /// offered no tools would not be a coherent exchange. For
+    /// `ParallelToolCallCleanStop` it offers the two tools that Capture 1
+    /// calls, `search` and `weather`. The SMA-827 probe request is not in the
+    /// repo, so only the names and argument keys are taken from the capture.
     /// `FragmentedToolName` is this subject's other tool scenario, but it is
     /// declined and so never reaches this function.
     fn request(scenario: Scenario) -> ModelRequest {
@@ -2929,6 +3479,28 @@ mod gemini {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ParallelToolCallCleanStop {
+            req.tools = vec![
+                ToolDef::new(
+                    "search",
+                    "Search the web.",
+                    json!({
+                        "type": "object",
+                        "properties": { "q": { "type": "string" } },
+                        "required": ["q"]
+                    }),
+                ),
+                ToolDef::new(
+                    "weather",
+                    "Look up the current weather for a city.",
+                    json!({
+                        "type": "object",
+                        "properties": { "city": { "type": "string" } },
+                        "required": ["city"]
+                    }),
+                ),
+            ];
         }
         req
     }
@@ -2959,12 +3531,7 @@ mod gemini {
             // module doc and `bedrock::encodes_stop_reason` for why that
             // restatement would make the harness's cross-check dead code.
             script(scenario)
-                .map(|script| {
-                    script
-                        .chunks
-                        .iter()
-                        .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
-                })
+                .map(|script| script.chunks.iter().any(|chunk| has_finish_reason(chunk)))
                 .unwrap_or(false)
         }
 
@@ -2991,7 +3558,11 @@ mod gemini {
                 // translator derives `ToolCalls` purely from having seen a
                 // `functionCall` part earlier in the stream, not from a
                 // distinct `finishReason` string.
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                // Capture 1's stop chunk carries the same `"STOP"` after three
+                // `functionCall` parts.
+                Scenario::ToolCallCleanStop | Scenario::ParallelToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -2999,8 +3570,39 @@ mod gemini {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason => None,
-                // Declined; never reached.
-                Scenario::FragmentedToolName | Scenario::ThinkingToolCallCleanStop => None,
+                // Declined or uncaptured; never reached.
+                Scenario::FragmentedToolName
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
+            }
+        }
+
+        fn fixture_channel_order(&self, _scenario: Scenario) -> Option<&'static [Channel]> {
+            // This subject serves no scenario whose channel order the harness
+            // checks, so it makes no claim.
+            None
+        }
+
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                // Capture 1's three calls, in wire order, with their captured
+                // arguments ([`PARALLEL_SIGNED`]).
+                Scenario::ParallelToolCallCleanStop => PARALLEL_CALLS,
+                Scenario::CleanStop
+                | Scenario::TruncatedAfterStopReason
+                | Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => &[],
             }
         }
 
@@ -3013,6 +3615,18 @@ mod gemini {
             }
             if scenario == Scenario::ThinkingToolCallCleanStop {
                 return Outcome::Declined("the scenario serves an anthropic thinking block");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture
+            // of one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
+            }
+            // `request` never sets a thinking configuration, so no thought
+            // parts arrive on the wire.
+            if scenario == Scenario::ReasoningCleanStop {
+                return Outcome::Declined(
+                    "the request never enables thought parts, so none arrive on the wire",
+                );
             }
 
             let script =
@@ -3037,7 +3651,7 @@ mod gemini {
     }
 
     /// The soundness claim behind [`Gemini::encodes_stop_reason`]'s substring
-    /// scan: [`FINISH_REASON_MARKER`] occurs in [`stop_chunk`]'s populated
+    /// scan: a [`FINISH_REASON_MARKERS`] form occurs in [`stop_chunk`]'s populated
     /// `finishReason` and in no other frame this subject builds — in
     /// particular, not in an ordinary content-only chunk, which has no
     /// `finishReason` key at all (see [`text_delta`]'s doc), and not in a
@@ -3045,8 +3659,12 @@ mod gemini {
     #[test]
     fn scan_finds_only_a_populated_finish_reason() {
         assert!(
-            contains(&stop_chunk("!", "STOP", 1, 3), FINISH_REASON_MARKER),
+            has_finish_reason(&stop_chunk("!", "STOP", 1, 3)),
             "stop_chunk must carry the marker, or the scan measures nothing"
+        );
+        assert!(
+            has_finish_reason(&captured_frame(PARALLEL_SIGNED[3])),
+            "Capture 1's stop chunk must carry the spaced marker, or the scan measures nothing"
         );
 
         for (name, frame) in [
@@ -3059,13 +3677,32 @@ mod gemini {
                 "functionCall chunk (no finishReason key)",
                 tool_call_chunk(TOOL_CALL_ID, TOOL_NAME, json!({ "city": "Berlin" }), 58, 16),
             ),
+            (
+                "Capture 1 signed functionCall chunk",
+                captured_frame(PARALLEL_SIGNED[0]),
+            ),
+            (
+                "Capture 1 unsigned functionCall chunk (Paris)",
+                captured_frame(PARALLEL_SIGNED[1]),
+            ),
+            (
+                "Capture 1 unsigned functionCall chunk (Rome)",
+                captured_frame(PARALLEL_SIGNED[2]),
+            ),
         ] {
             assert!(
-                !contains(&frame, FINISH_REASON_MARKER),
+                !has_finish_reason(&frame),
                 "{name} contains the populated-finishReason marker, so the scan would report a \
                  stop reason for scripts that encode none."
             );
         }
+    }
+
+    /// The parallel script is sent byte for byte, and its stop chunk writes
+    /// `"finishReason": "STOP"` with a space. The scan must still find it.
+    #[test]
+    fn gemini_parallel_script_encodes_its_stop_reason() {
+        assert!(Gemini.encodes_stop_reason(Scenario::ParallelToolCallCleanStop));
     }
 
     #[tokio::test]
@@ -3359,8 +3996,49 @@ mod openai_responses {
         }))
     }
 
+    /// The five events of `responses_tool_call_zero_args.txt`
+    /// (`crates/paigasus-helikon-providers-openai/tests/fixtures/`), as
+    /// `(event name, data payload)` pairs, byte for byte, in file order. See
+    /// the `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_EVENTS: [(&str, &str); 5] = [
+        (
+            "response.output_item.added",
+            r##"{"type":"response.output_item.added","item":{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"in_progress","arguments":"","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"},"output_index":0,"sequence_number":2}"##,
+        ),
+        (
+            "response.function_call_arguments.delta",
+            r##"{"type":"response.function_call_arguments.delta","delta":"{}","item_id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","obfuscation":"EzdgyuuAsmTPs2","output_index":0,"sequence_number":3}"##,
+        ),
+        (
+            "response.function_call_arguments.done",
+            r##"{"type":"response.function_call_arguments.done","arguments":"{}","item_id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","output_index":0,"sequence_number":4}"##,
+        ),
+        (
+            "response.output_item.done",
+            r##"{"type":"response.output_item.done","item":{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"completed","arguments":"{}","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"},"output_index":0,"sequence_number":5}"##,
+        ),
+        (
+            "response.completed",
+            r##"{"type":"response.completed","response":{"id":"resp_0ce0b75b3b84617f006a89d167d25487d28d2a332550e69d61","object":"response","created_at":1787416935,"status":"completed","background":false,"completed_at":1787416937,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-4o-mini-2024-07-18","moderation":null,"output":[{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"completed","arguments":"{}","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"}],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"in_memory","reasoning":{"context":null,"effort":null,"summary":null},"safety_identifier":null,"service_tier":"default","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"required","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[{"type":"function","description":"Return the current server time. Takes no arguments.","name":"get_current_time","output_schema":null,"parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false},"strict":true}],"top_logprobs":0,"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":57,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":59},"user":null,"metadata":{}},"sequence_number":6}"##,
+        ),
+    ];
+
+    /// The one call of [`ZERO_ARG_EVENTS`]: the tool name and the literal `{}`
+    /// that the API streams as its arguments.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// One captured SSE frame: `event: {event}\ndata: {payload}\n\n`. The
+    /// `event:` line is kept, as in the file.
+    fn captured_frame(event: &str, payload: &str) -> Vec<u8> {
+        format!("event: {event}\ndata: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario, or `None` for the four this
-    /// subject declines — see the module doc's "Why this subject declines
+    /// subject declines or for a scenario that it has no capture for
+    /// (uncaptured) — see the module doc's "Why this subject declines
     /// four scenarios" section. Returning an `Option` rather than panicking
     /// on a declined scenario is what lets
     /// [`OpenAiResponses::encodes_stop_reason`] call this for *every*
@@ -3449,6 +4127,34 @@ mod openai_responses {
             }
             // Declined — the scenario serves an anthropic thinking block.
             Scenario::ThinkingToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ReasoningCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ParallelToolCallCleanStop => return None,
+            // `responses_tool_call_zero_args.txt`, CAPTURED against the real
+            // OpenAI Responses API (`gpt-4o-mini-2024-07-18`, 2026-08-22) with
+            // one zero-argument strict tool and `tool_choice: "required"`.
+            // The file is a regression pin for SMA-562: the API streams exactly
+            // one `function_call_arguments.delta`, and it carries the literal
+            // `{}`. Five events: `output_item.added`, the `{}` delta,
+            // `function_call_arguments.done`, `output_item.done` and
+            // `response.completed`. The file's own edits from the raw capture
+            // were: it drops `response.created` and `response.in_progress`,
+            // and it adds no `data: [DONE]`.
+            //
+            // Edits made here: none to any payload. This script sends the five
+            // `event:` and `data:` payloads byte for byte
+            // ([`ZERO_ARG_EVENTS`]). The only change is the framing: the
+            // file's header comment lines are not sent, and each pair becomes
+            // one `event:`/`data:` frame that ends with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_EVENTS
+                    .iter()
+                    .map(|(event, payload)| captured_frame(event, payload))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -3481,6 +4187,19 @@ mod openai_responses {
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
+                }),
+            )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool of the capture: no arguments, as its schema says.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
                 }),
             )];
         }
@@ -3531,7 +4250,9 @@ mod openai_responses {
             // `bedrock::fixture_finish_reason` for why.
             match scenario {
                 Scenario::CleanStop => Some(FinishReason::Stop),
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 Scenario::TruncatedMidGeneration
                 | Scenario::ErrorMidGeneration
                 | Scenario::CancelMidGeneration => None,
@@ -3540,7 +4261,36 @@ mod openai_responses {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelAfterStopReason
                 | Scenario::FragmentedToolName
-                | Scenario::ThinkingToolCallCleanStop => None,
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop => None,
+            }
+        }
+
+        fn fixture_channel_order(&self, _scenario: Scenario) -> Option<&'static [Channel]> {
+            // This subject serves no scenario whose channel order the harness
+            // checks, so it makes no claim.
+            None
+        }
+
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                Scenario::CleanStop
+                | Scenario::TruncatedAfterStopReason
+                | Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop => &[],
             }
         }
 
@@ -3563,6 +4313,16 @@ mod openai_responses {
                 }
                 Scenario::ThinkingToolCallCleanStop => {
                     return Outcome::Declined("the scenario serves an anthropic thinking block")
+                }
+                // A reasoning stream can occur on this wire, but no capture
+                // of one exists (SMA-858).
+                Scenario::ReasoningCleanStop => {
+                    return Outcome::Uncaptured("no captured reasoning stream")
+                }
+                // Parallel tool calls can occur on this wire, but no capture
+                // of them exists (SMA-859).
+                Scenario::ParallelToolCallCleanStop => {
+                    return Outcome::Uncaptured("no captured parallel tool-call stream")
                 }
                 _ => {}
             }

@@ -7,7 +7,7 @@
 //!
 //! These fakes exercise the **checker**, not the HTTP path: `run` builds the
 //! event vector in memory and classifies it, so no server, no transport and no
-//! provider crate is involved. The floors and the decline cross-check in
+//! provider crate is involved. The floors and the decline and uncaptured cross-checks in
 //! `assert_conforms` are therefore not on this path — a fake can never be
 //! rejected by a floor instead of by the classification it is written to
 //! trigger.
@@ -18,9 +18,16 @@ use paigasus_helikon_core::{FinishReason, ModelError, ModelEvent};
 /// The tool name every tool-bearing fake declares.
 pub(crate) const TOOL_NAME: &str = "get_weather";
 
-/// The `call_id` every tool-bearing fake uses. The tests pin the reported
-/// violation against this exact string, so it is shared rather than repeated.
+/// The tool name of the zero-argument scenario's one call.
+pub(crate) const ZERO_ARG_TOOL_NAME: &str = "get_current_time";
+
+/// The first `call_id` of every tool-bearing fake; the parallel fake also uses
+/// `c2`. The tests pin the reported violation against this exact string, so it
+/// is shared rather than repeated.
 const CALL_ID: &str = "c1";
+
+/// The second `call_id` of the parallel fake.
+const SECOND_CALL_ID: &str = "c2";
 
 /// A stream shape that violates exactly one rule — plus [`Fake::Conforming`],
 /// which violates none.
@@ -43,12 +50,19 @@ pub enum Fake {
     FinishOnCancel,
     /// A `Finish` after a mid-stream error (assertion 6).
     FinishAfterError,
+    /// A `TokenDelta` after an `Err` (assertion 9).
+    TokenAfterError,
+    /// A call-scoped `ProviderData` for a `call_id` no tool call streamed
+    /// (assertion 8).
+    ProviderDataUnknownCall,
     /// Two name-bearing deltas for one `call_id` — the SMA-550 shape
     /// (assertion 7).
     TwoNamedDeltas,
     /// Tool-call deltas that never carry a name, which is what the "exactly
     /// one" tightening of assertion 7 exists to catch.
     NoNamedDelta,
+    /// Truncated tool arguments on a stream that finishes (assertion 10).
+    ArgsNotJson,
     /// A sequence that satisfies every assertion for the given scenario.
     Conforming,
 }
@@ -89,6 +103,22 @@ impl Fake {
             | Fake::FinishOnTruncation
             | Fake::FinishOnCancel
             | Fake::FinishAfterError => events.push(finish(scenario)),
+            Fake::TokenAfterError => events.push(token("trailing")),
+            Fake::ProviderDataUnknownCall => {
+                // Insert before the `Finish` so assertion 1 stays satisfied.
+                let at = events
+                    .iter()
+                    .position(|e| matches!(e, Ok(ModelEvent::Finish { .. })))
+                    .expect("this fake must be run under a scenario that finishes");
+                events.insert(
+                    at,
+                    Ok(ModelEvent::ProviderData {
+                        provider: "test".into(),
+                        call_id: Some("x".into()),
+                        data: serde_json::json!({ "kind": "tool_use" }),
+                    }),
+                );
+            }
             Fake::UsageAfterFinish => {
                 events.retain(|e| !matches!(e, Ok(ModelEvent::Usage { .. })));
                 events.push(usage());
@@ -107,6 +137,9 @@ impl Fake {
                     ],
                 );
             }
+            Fake::ArgsNotJson => {
+                replace_tool_deltas(&mut events, &[(Some(TOOL_NAME), "{\"city\":")]);
+            }
             Fake::NoNamedDelta => {
                 replace_tool_deltas(&mut events, &[(None, "{\"city\":\"Berlin\"}")]);
             }
@@ -121,16 +154,35 @@ impl Fake {
 /// observe a stop reason *and* the stream is neither cancelled nor errored —
 /// withholding `Finish` is what the contract requires in those two cases.
 pub(crate) fn conforming(scenario: Scenario) -> Vec<Result<ModelEvent, ModelError>> {
-    let mut events = vec![token("hi")];
+    let mut events = Vec::new();
+    if scenario == Scenario::ReasoningCleanStop {
+        // One reasoning run before the text run: the order the scenario
+        // declares (`Reasoning`, `Text`, `Tool`).
+        events.push(Ok(ModelEvent::ReasoningDelta {
+            text: "think".into(),
+        }));
+    }
+    events.push(token("hi"));
 
     if matches!(
         scenario,
         Scenario::FragmentedToolName
             | Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop
     ) {
-        events.push(tool(Some(TOOL_NAME), "{\"city\":"));
-        events.push(tool(None, "\"Berlin\"}"));
+        events.push(tool(CALL_ID, Some(TOOL_NAME), "{\"city\":"));
+        events.push(tool(CALL_ID, None, "\"Berlin\"}"));
+    }
+    if scenario == Scenario::ParallelToolCallCleanStop {
+        // Two complete calls with distinct ids. The order is the order that
+        // the scenario declares: `c1` Berlin, then `c2` Rome.
+        events.push(tool(CALL_ID, Some(TOOL_NAME), "{\"city\":\"Berlin\"}"));
+        events.push(tool(SECOND_CALL_ID, Some(TOOL_NAME), "{\"city\":\"Rome\"}"));
+    }
+    if scenario == Scenario::ZeroArgToolCallCleanStop {
+        // One call with the literal `{}` delta that the API streams.
+        events.push(tool(CALL_ID, Some(ZERO_ARG_TOOL_NAME), "{}"));
     }
     if scenario == Scenario::ThinkingToolCallCleanStop {
         // The position record of the tool call, scoped to the fake call.
@@ -186,7 +238,7 @@ fn replace_tool_deltas(
         .expect("a tool-call fake must be run under a tool-call scenario");
     events.retain(|e| !matches!(e, Ok(ModelEvent::ToolCallDelta { .. })));
     for (offset, (name, args)) in deltas.iter().enumerate() {
-        events.insert(at + offset, tool(*name, args));
+        events.insert(at + offset, tool(CALL_ID, *name, args));
     }
 }
 
@@ -211,16 +263,23 @@ fn finish(scenario: Scenario) -> Result<ModelEvent, ModelError> {
         reason: match scenario {
             Scenario::FragmentedToolName
             | Scenario::ToolCallCleanStop
-            | Scenario::ThinkingToolCallCleanStop => FinishReason::ToolCalls,
+            | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop => FinishReason::ToolCalls,
             _ => FinishReason::Stop,
         },
     })
 }
 
-/// One tool-call delta for [`CALL_ID`].
-fn tool(name: Option<&str>, args_delta: &str) -> Result<ModelEvent, ModelError> {
+/// One tool-call delta for `call_id`.
+pub(crate) fn tool(
+    call_id: &str,
+    name: Option<&str>,
+    args_delta: &str,
+) -> Result<ModelEvent, ModelError> {
     Ok(ModelEvent::ToolCallDelta {
-        call_id: CALL_ID.into(),
+        call_id: call_id.into(),
         name: name.map(str::to_owned),
         args_delta: args_delta.into(),
     })
@@ -229,6 +288,7 @@ fn tool(name: Option<&str>, args_delta: &str) -> Result<ModelEvent, ModelError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Channel, ExpectedCall};
 
     /// Every fake must be rejected with its own classification. A suite whose
     /// checker cannot fail is the exact failure mode that let the OpenAI bug
@@ -277,6 +337,25 @@ mod tests {
                 Violation::FinishAfterError,
             ),
             (
+                Fake::TokenAfterError,
+                Scenario::ErrorMidGeneration,
+                Violation::EventAfterError,
+            ),
+            (
+                Fake::ProviderDataUnknownCall,
+                Scenario::ToolCallCleanStop,
+                Violation::ProviderDataUnknownCall {
+                    call_id: "x".into(),
+                },
+            ),
+            (
+                Fake::ArgsNotJson,
+                Scenario::ToolCallCleanStop,
+                Violation::ToolArgsNotJson {
+                    call_id: "c1".into(),
+                },
+            ),
+            (
                 Fake::TwoNamedDeltas,
                 Scenario::ToolCallCleanStop,
                 Violation::ToolNameNotExactlyOnce {
@@ -321,10 +400,71 @@ mod tests {
     fn declared_finish_reason(scenario: Scenario) -> Option<FinishReason> {
         match scenario {
             Scenario::CleanStop | Scenario::TruncatedAfterStopReason => Some(FinishReason::Stop),
-            Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
-                Some(FinishReason::ToolCalls)
-            }
+            Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop => Some(FinishReason::ToolCalls),
             _ => None,
+        }
+    }
+
+    /// What a subject serving `conforming(scenario)` would declare as its
+    /// fixture's channel order. Written out by hand for the same reason as
+    /// [`declared_finish_reason`].
+    fn declared_channel_order(scenario: Scenario) -> Option<&'static [Channel]> {
+        match scenario {
+            Scenario::ReasoningCleanStop => {
+                Some(&[Channel::Reasoning, Channel::Text, Channel::Tool])
+            }
+            Scenario::CleanStop
+            | Scenario::TruncatedAfterStopReason
+            | Scenario::TruncatedMidGeneration
+            | Scenario::ErrorMidGeneration
+            | Scenario::ErrorAfterStopReason
+            | Scenario::CancelMidGeneration
+            | Scenario::CancelAfterStopReason
+            | Scenario::FragmentedToolName
+            | Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop => None,
+        }
+    }
+
+    /// What a subject serving `conforming(scenario)` would declare as its
+    /// fixture's calls. Written out by hand for the same reason as
+    /// [`declared_finish_reason`].
+    fn declared_calls(scenario: Scenario) -> &'static [ExpectedCall] {
+        match scenario {
+            Scenario::ReasoningCleanStop => &[ExpectedCall {
+                name: "get_weather",
+                args: "{\"city\":\"Berlin\"}",
+            }],
+            Scenario::ParallelToolCallCleanStop => &[
+                ExpectedCall {
+                    name: "get_weather",
+                    args: "{\"city\":\"Berlin\"}",
+                },
+                ExpectedCall {
+                    name: "get_weather",
+                    args: "{\"city\":\"Rome\"}",
+                },
+            ],
+            Scenario::ZeroArgToolCallCleanStop => &[ExpectedCall {
+                name: "get_current_time",
+                args: "{}",
+            }],
+            Scenario::CleanStop
+            | Scenario::TruncatedAfterStopReason
+            | Scenario::TruncatedMidGeneration
+            | Scenario::ErrorMidGeneration
+            | Scenario::ErrorAfterStopReason
+            | Scenario::CancelMidGeneration
+            | Scenario::CancelAfterStopReason
+            | Scenario::FragmentedToolName
+            | Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop => &[],
         }
     }
 
@@ -341,6 +481,8 @@ mod tests {
                     &conforming(*scenario),
                     TOOL_NAME,
                     declared_finish_reason(*scenario),
+                    declared_channel_order(*scenario),
+                    declared_calls(*scenario),
                 ),
                 None,
                 "{scenario:?}"

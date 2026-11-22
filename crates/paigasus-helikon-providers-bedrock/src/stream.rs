@@ -868,6 +868,31 @@ mod tests {
         )));
     }
 
+    /// Pins the `Model::invoke` contract: an `Err` is terminal for every event
+    /// except `Usage`. A refused tool call yields `[Err, Usage]` and nothing else,
+    /// and `finish()` adds no item.
+    #[test]
+    fn a_refused_tool_call_yields_err_then_usage_and_nothing_else() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_1", "get_balance"),
+            tool_delta(0, "{}"),
+            message_stop(StopReason::ToolUse),
+            metadata(3, 4, None),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert!(t.finish().is_none(), "finish() must add nothing");
+        assert_eq!(out.len(), 2, "got {out:?}");
+        assert!(out[0].is_err(), "expected Err first, got {:?}", out[0]);
+        assert!(
+            matches!(out[1], Ok(ModelEvent::Usage { .. })),
+            "expected Usage second, got {:?}",
+            out[1]
+        );
+    }
+
     #[test]
     fn forbid_tool_calls_finish_at_eof_emits_no_finish() {
         let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
