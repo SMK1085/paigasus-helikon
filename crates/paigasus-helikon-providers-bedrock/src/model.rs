@@ -3,7 +3,6 @@
 //! Wraps an `Arc<Config>` so that the model handle is `Clone + Send + Sync`
 //! and the `BoxStream` returned by `invoke` can be `'static + Send`.
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -19,6 +18,7 @@ use aws_sdk_bedrockruntime::Client;
 use aws_smithy_types::Document;
 
 use crate::builder::Config;
+use crate::document::value_to_document;
 use crate::error::{map_sdk_error, send_failure, SendFailure};
 use crate::fallback::{send_with_fallback, Sent};
 use crate::policy::ForcedChoicePolicy;
@@ -42,17 +42,7 @@ pub struct BedrockModel {
 
 /// The `additionalModelRequestFields` document of a request, if it needs one.
 fn additional_fields(p: &PreparedConverse) -> Option<Document> {
-    let mut fields: HashMap<String, Document> = HashMap::new();
-    if p.tool_choice_none {
-        fields.insert(
-            "tool_choice".to_owned(),
-            Document::Object(HashMap::from([(
-                "type".to_owned(),
-                Document::String("none".to_owned()),
-            )])),
-        );
-    }
-    (!fields.is_empty()).then_some(Document::Object(fields))
+    p.additional.to_value().map(|v| value_to_document(&v))
 }
 
 /// Send one `ConverseStream` request.
@@ -207,6 +197,7 @@ mod tests {
     use super::*;
     use aws_config::{BehaviorVersion, Region};
     use futures_core::stream::BoxStream;
+    use std::collections::HashMap;
 
     // ── Cancellation-wrapper helper (test-only) ───────────────────────────────
 
@@ -582,10 +573,10 @@ mod tests {
     }
 
     #[test]
-    fn additional_fields_carry_the_none_flag() {
+    fn additional_fields_carry_the_none_choice() {
         let mut p = plain_prepared();
         assert!(additional_fields(&p).is_none());
-        p.tool_choice_none = true;
+        p.additional.tool_choice = Some(crate::translate::additional::AdditionalToolChoice::None);
         assert_eq!(
             additional_fields(&p),
             Some(Document::Object(HashMap::from([(

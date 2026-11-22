@@ -2,6 +2,7 @@
 
 pub mod schema;
 
+pub(crate) mod additional;
 mod native;
 pub(crate) mod native_schema;
 pub(crate) mod request;
@@ -19,6 +20,7 @@ use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
 use crate::builder::Config;
 use crate::family::ModelFamily; // used by translate_tool_choice
 use crate::policy::{NativeNotice, OutputPath};
+use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
@@ -50,8 +52,8 @@ pub(crate) struct PreparedConverse {
     /// The changes of meaning that the native path made to the request.
     /// The forced-tool path always leaves this empty.
     pub(crate) notices: Vec<NativeNotice>,
-    /// Send the Anthropic `tool_choice: none` field in `additionalModelRequestFields`.
-    pub(crate) tool_choice_none: bool,
+    /// The fields for `additionalModelRequestFields`.
+    pub(crate) additional: AdditionalFields,
 }
 
 impl PreparedConverse {
@@ -63,7 +65,7 @@ impl PreparedConverse {
                 .as_ref()
                 .and_then(ToolConfiguration::tool_choice),
             Some(BedrockToolChoice::Any(_) | BedrockToolChoice::Tool(_))
-        )
+        ) || self.additional.is_forced()
     }
 }
 
@@ -236,7 +238,12 @@ pub(crate) fn build_request(
             synthesizing: false,
             output_config: None,
             notices: Vec::new(),
-            tool_choice_none: outcome.tool_choice_none,
+            additional: AdditionalFields {
+                tools: vec![],
+                tool_choice: outcome
+                    .tool_choice_none
+                    .then_some(AdditionalToolChoice::None),
+            },
         });
     }
 
@@ -298,7 +305,7 @@ pub(crate) fn build_request(
         synthesizing,
         output_config: None,
         notices: Vec::new(),
-        tool_choice_none: false,
+        additional: AdditionalFields::default(),
     })
 }
 
@@ -496,8 +503,8 @@ pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
 
     // Extra request fields: present only when set, so the other snapshots do
     // not change.
-    if p.tool_choice_none {
-        wire["additionalModelRequestFields"] = json!({"tool_choice": {"type": "none"}});
+    if let Some(v) = p.additional.to_value() {
+        wire["additionalModelRequestFields"] = v;
     }
 
     // Output config: the key is present only on the native path, so the
@@ -561,6 +568,10 @@ mod tests {
     /// A model that rejects a forced tool choice (the native path).
     fn sonnet55_cfg() -> Config {
         make_cfg("global.anthropic.claude-sonnet-5-5")
+    }
+
+    fn none_choice_of(p: &PreparedConverse) -> bool {
+        p.additional.tool_choice == Some(AdditionalToolChoice::None)
     }
 
     fn assert_no_forced_choice(p: &PreparedConverse) {
@@ -1011,6 +1022,7 @@ mod tests {
             family,
             capabilities,
             max_output_default: Some(2048),
+            native_tool_types: true,
         };
 
         let mut req = ModelRequest::new();
@@ -1137,6 +1149,7 @@ mod tests {
             family,
             capabilities,
             max_output_default: Some(2048),
+            native_tool_types: true,
         };
 
         let mut req = ModelRequest::new();
@@ -1374,7 +1387,7 @@ mod tests {
         let p = build(&sonnet55_cfg(), &req).unwrap();
         assert_no_forced_choice(&p);
         assert!(p.synthesizing);
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
         assert!(w["toolConfig"]["toolChoice"].is_null());
@@ -1566,7 +1579,7 @@ mod tests {
     #[test]
     fn snap_forced_path_tool_choice_none_after_tool_round_on_claude() {
         let p = build(&haiku55_cfg(), &none_after_tool_round()).unwrap();
-        assert!(p.tool_choice_none);
+        assert!(none_choice_of(&p));
         assert!(!p.synthesizing);
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
@@ -1581,7 +1594,7 @@ mod tests {
     #[test]
     fn snap_tool_choice_none_after_tool_round_on_nova() {
         let p = build(&nova_cfg(), &none_after_tool_round()).unwrap();
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert!(w["toolConfig"].is_null());
         assert!(w.get("additionalModelRequestFields").is_none());
@@ -1602,7 +1615,7 @@ mod tests {
     #[test]
     fn native_tool_choice_none_after_tool_round_on_claude() {
         let p = build(&sonnet55_cfg(), &none_after_tool_round()).unwrap();
-        assert!(p.tool_choice_none);
+        assert!(none_choice_of(&p));
         assert!(p.output_config.is_none());
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
@@ -1616,7 +1629,7 @@ mod tests {
         req.model_settings.response_format = Some(ResponseFormat::JsonObject);
         let p = build(&sonnet55_cfg(), &req).unwrap();
         assert!(p.synthesizing);
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
     }
@@ -1624,7 +1637,7 @@ mod tests {
     #[test]
     fn native_text_history_through_build_native_on_nova() {
         let p = native::build_native(&nova_cfg(), &none_after_tool_round()).unwrap();
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert!(w["toolConfig"].is_null());
         assert!(!crate::translate::tool_choice_none::has_tool_round(
@@ -1652,7 +1665,7 @@ mod tests {
         req.tools = vec![get_balance_tool()];
         req.model_settings.tool_choice = Some(ToolChoice::None);
         let p = build(&nova_cfg(), &req).unwrap();
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         assert!(to_wire_json(&p)["toolConfig"].is_null());
     }
 
@@ -1671,7 +1684,7 @@ mod tests {
                 let mut req = none_after_tool_round();
                 req.model_settings.tool_choice = tc.clone();
                 let p = build(&cfg, &req).unwrap();
-                assert!(!p.tool_choice_none, "{tc:?}");
+                assert!(!none_choice_of(&p), "{tc:?}");
             }
         }
     }

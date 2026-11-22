@@ -13,6 +13,7 @@ use paigasus_helikon_core::{ModelError, ModelRequest, ResponseFormat, ToolChoice
 
 use crate::builder::Config;
 use crate::policy::NativeNotice;
+use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
 use crate::translate::native_schema::native_output_schema;
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::synthesize;
@@ -147,7 +148,10 @@ pub(crate) fn build_native(
         synthesizing,
         output_config,
         notices,
-        tool_choice_none,
+        additional: AdditionalFields {
+            tools: vec![],
+            tool_choice: tool_choice_none.then_some(AdditionalToolChoice::None),
+        },
     })
 }
 
