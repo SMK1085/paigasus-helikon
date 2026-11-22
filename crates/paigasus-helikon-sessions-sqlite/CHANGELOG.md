@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-sqlite-v0.3.1...paigasus-helikon-sessions-sqlite-v0.3.2) - 2026-11-22
+
+### Fixed
+
+- *(sessions)* SMA-822 stop sessions-postgres from compiling sqlite ([#389](https://github.com/SMK1085/paigasus-helikon/pull/389))
+
 ## [0.3.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-sqlite-v0.3.0...paigasus-helikon-sessions-sqlite-v0.3.1) - 2026-11-21
 
 ### Other
