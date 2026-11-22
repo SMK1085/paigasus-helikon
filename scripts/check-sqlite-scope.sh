@@ -36,9 +36,31 @@ report_failure() {
   fail=1
 }
 
+# Confirm the package selection resolves. With `-i`, cargo ignores an unknown
+# `-p` and prints the whole workspace, so a renamed crate would fool both
+# assertions. Returns 1 (after reporting) when the selection does not resolve.
+package_resolves() {
+  local label="$1"
+  shift
+  local name="" prev=""
+  for arg in "$@"; do
+    [ "$prev" = "-p" ] && name="$arg"
+    prev="$arg"
+  done
+  out="$(cargo tree --color never --target all -e normal,build --depth 0 "$@" 2>"$err_file")"
+  code=$?
+  err="$(cat "$err_file")"
+  if [ "$code" -eq 0 ] && [[ "$out" == "$name v"* ]]; then
+    return 0
+  fi
+  report_failure "The guard's package selection $label does not resolve (renamed crate or feature?). Fix scripts/check-sqlite-scope.sh."
+  return 1
+}
+
 assert_absent() {
   local label="$1"
   shift
+  package_resolves "$label" "$@" || return 0
   run_tree "$@"
   if [ -z "$out" ] && {
     { [ "$code" -ne 0 ] && [[ "$err" == *"specification \`libsqlite3-sys\` did not match any packages"* ]]; } ||
@@ -53,6 +75,7 @@ assert_absent() {
 assert_present() {
   local label="$1"
   shift
+  package_resolves "$label" "$@" || return 0
   run_tree "$@"
   if [ "$code" -eq 0 ] && [[ "$out" == *"libsqlite3-sys v"* ]]; then
     echo "ok: SQLite is present in $label"
