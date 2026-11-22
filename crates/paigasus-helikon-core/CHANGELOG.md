@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.2...paigasus-helikon-core-v0.8.3) - 2026-11-22
+
+### Fixed
+
+- *(providers)* SMA-854 send each anthropic text block at its own position ([#393](https://github.com/SMK1085/paigasus-helikon/pull/393))
+
 ## [0.8.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.1...paigasus-helikon-core-v0.8.2) - 2026-11-22
 
 ### Other
