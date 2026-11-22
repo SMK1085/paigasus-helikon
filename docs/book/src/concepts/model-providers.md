@@ -65,6 +65,8 @@ These live in `paigasus_helikon::core` (re-exported from
   stream when the `CancellationToken` fires, ending it without emitting
   `Finish`. Both rules restate `Model::invoke`'s existing public contract
   here, where third-party implementors will look for them.
+  An `Err` item is also terminal: after an `Err`, implementations MUST NOT
+  yield any item other than `Usage` snapshots for the same response.
 - `ModelCapabilities` — the per-instance capability flags below.
 - `ModelError` — `Unavailable`, `RateLimited`, `ContextLengthExceeded`,
   `Refused`, `Transport`, `Other`. The loop does **not** auto-retry on these.
