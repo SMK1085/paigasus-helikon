@@ -52,12 +52,13 @@ fn enabled_model_id() -> String {
     std::env::var("ANTHROPIC_LIVE_ENABLED_MODEL_ID").unwrap_or_else(|_| "claude-haiku-4-5".into())
 }
 
-/// The default model with adaptive thinking and high effort. At the default
-/// effort `medium`, this model can skip thinking on a short task.
+/// The default model with adaptive thinking and the effort `max`. In a probe,
+/// `claude-sonnet-5-5` skipped thinking on this short task at `medium` and at
+/// `high`, and it thought at `max`.
 fn make_model(beta: Option<&str>) -> AnthropicModel {
     let mut builder = AnthropicModel::messages(model_id())
         .extended_thinking(ExtendedThinking::Adaptive)
-        .effort(Effort::High);
+        .effort(Effort::Max);
     if let Some(beta) = beta {
         builder = builder.beta(beta);
     }
@@ -66,7 +67,8 @@ fn make_model(beta: Option<&str>) -> AnthropicModel {
 
 /// A model from before 4.6 with enabled thinking. Adaptive thinking turns on
 /// interleaved thinking by itself on 4.6 and later, so the interleaved beta
-/// has a meaning only on this path.
+/// has a meaning only on this path. The redacted test also runs here, because
+/// on `claude-sonnet-5-5` the trigger string gives a normal thinking block.
 fn make_enabled_model(beta: Option<&str>) -> AnthropicModel {
     let mut builder =
         AnthropicModel::messages(enabled_model_id()).extended_thinking(ExtendedThinking::Enabled {
@@ -446,7 +448,7 @@ async fn live_redacted_round_trip() {
     if !has_key() {
         return;
     }
-    let model = make_model(None);
+    let model = make_enabled_model(None);
     let first = first_request(&format!("{REDACT_TRIGGER} {BASE_PROMPT}"));
     let turn1 = run_turn(&model, first.clone(), "turn 1").await;
     let redacted = redacted_data(&blocks_of_items(&turn1.items));
