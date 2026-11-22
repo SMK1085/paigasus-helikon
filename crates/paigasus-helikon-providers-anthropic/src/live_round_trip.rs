@@ -13,7 +13,8 @@
 //!
 //! `live_text_block_api_facts` checks the API facts of the SMA-854 design: a
 //! text block before a thinking block drops it, and a whitespace-only or split
-//! text block after it does not.
+//! text block after it does not, also directly after the thinking block and as
+//! the last block of the message.
 //!
 //! The tests live in `src/` so that they can call `build_body`. No assertion
 //! message holds a signature or a redacted value. A message holds lengths and
@@ -552,7 +553,8 @@ async fn count_dropped(model: &AnthropicModel, body: &serde_json::Value, name: &
 /// The API facts of the SMA-854 design. A text block before a thinking block
 /// drops the thinking block. A whitespace-only text block, or a split text
 /// block, after it does not. A whitespace-only text block as the last block
-/// of a non-last assistant message does not drop it either.
+/// of a non-last assistant message does not drop it either, and neither does a
+/// whitespace-only text block directly after the thinking block.
 #[tokio::test]
 #[ignore]
 async fn live_text_block_api_facts() {
@@ -644,6 +646,17 @@ async fn live_text_block_api_facts() {
     let whitespace_text_last = with_content(&|c| {
         c.push(json!({"type":"text","text":"\n"}));
     });
+    // The replay can send a whitespace-only piece directly after a thinking
+    // block, for example for `[thinking, "\n\n", thinking, "B"]`.
+    let thinking_idx = body["messages"][msg_idx]["content"]
+        .as_array()
+        .expect("content is an array")
+        .iter()
+        .position(|b| b["type"] == "thinking" || b["type"] == "redacted_thinking")
+        .expect("the assistant message has a thinking block");
+    let whitespace_after_thinking = with_content(&|c| {
+        c.insert(thinking_idx + 1, json!({"type":"text","text":"\n\n"}));
+    });
 
     let n = count_dropped(&model, &text_before_thinking, "text_before_thinking").await;
     assert!(
@@ -656,6 +669,16 @@ async fn live_text_block_api_facts() {
     assert_eq!(n, 0, "whitespace_text: {n} thinking_dropped entries");
     let n = count_dropped(&model, &whitespace_text_last, "whitespace_text_last").await;
     assert_eq!(n, 0, "whitespace_text_last: {n} thinking_dropped entries");
+    let n = count_dropped(
+        &model,
+        &whitespace_after_thinking,
+        "whitespace_after_thinking",
+    )
+    .await;
+    assert_eq!(
+        n, 0,
+        "whitespace_after_thinking: {n} thinking_dropped entries"
+    );
     if let Some(split_text) = split_text {
         let n = count_dropped(&model, &split_text, "split_text").await;
         assert_eq!(n, 0, "split_text: {n} thinking_dropped entries");
