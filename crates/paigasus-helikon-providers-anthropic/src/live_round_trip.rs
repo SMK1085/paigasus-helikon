@@ -25,7 +25,7 @@ use paigasus_helikon_core::{
 
 use crate::provider_data::{from_part, AnthropicData, ThinkingBlock};
 use crate::translate::build_body;
-use crate::{AnthropicModel, ExtendedThinking};
+use crate::{AnthropicModel, Effort, ExtendedThinking};
 
 /// The prompt of the probe script.
 const BASE_PROMPT: &str = "What is the weather in Paris? First look up the city code, then get \
@@ -52,10 +52,12 @@ fn enabled_model_id() -> String {
     std::env::var("ANTHROPIC_LIVE_ENABLED_MODEL_ID").unwrap_or_else(|_| "claude-haiku-4-5".into())
 }
 
-/// The default model with adaptive thinking.
+/// The default model with adaptive thinking and high effort. At the default
+/// effort `medium`, this model can skip thinking on a short task.
 fn make_model(beta: Option<&str>) -> AnthropicModel {
-    let mut builder =
-        AnthropicModel::messages(model_id()).extended_thinking(ExtendedThinking::Adaptive);
+    let mut builder = AnthropicModel::messages(model_id())
+        .extended_thinking(ExtendedThinking::Adaptive)
+        .effort(Effort::High);
     if let Some(beta) = beta {
         builder = builder.beta(beta);
     }
@@ -276,6 +278,13 @@ async fn live_changed_system_drops_block_and_succeeds() {
     assert!(
         !tool_calls(&turn1.items).is_empty(),
         "turn 1 has no tool call ({} items); the model did not call a tool",
+        turn1.items.len()
+    );
+
+    let sigs = signatures(&blocks_of_items(&turn1.items));
+    assert!(
+        !sigs.is_empty(),
+        "turn 1 has no thinking Block part with a signature ({} items)",
         turn1.items.len()
     );
 

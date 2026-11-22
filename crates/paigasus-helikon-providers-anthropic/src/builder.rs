@@ -4,7 +4,7 @@ use paigasus_helikon_core::ModelCapabilities;
 use reqwest::Url;
 
 use crate::capabilities::{self, ModelEntry};
-use crate::settings::{CacheStrategy, ExtendedThinking};
+use crate::settings::{CacheStrategy, Effort, ExtendedThinking};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -46,6 +46,7 @@ pub(crate) struct Config {
     pub(crate) cache_strategy: CacheStrategy,
     pub(crate) native_tool_types: bool,
     pub(crate) extended_thinking: ExtendedThinking,
+    pub(crate) effort: Option<Effort>,
     pub(crate) top_k: Option<u32>,
     pub(crate) max_output_default: u32,
     pub(crate) capabilities: ModelCapabilities,
@@ -71,6 +72,7 @@ pub struct AnthropicModelBuilder {
     cache_strategy: CacheStrategy,
     native_tool_types: bool,
     extended_thinking: ExtendedThinking,
+    effort: Option<Effort>,
     top_k: Option<u32>,
     capabilities_override: Option<ModelCapabilities>,
 }
@@ -87,6 +89,7 @@ impl AnthropicModelBuilder {
             cache_strategy: CacheStrategy::None,
             native_tool_types: true,
             extended_thinking: ExtendedThinking::Disabled,
+            effort: None,
             top_k: None,
             capabilities_override: None,
         }
@@ -147,6 +150,17 @@ impl AnthropicModelBuilder {
     /// Extended-thinking configuration. Default: [`ExtendedThinking::Disabled`].
     pub fn extended_thinking(mut self, t: ExtendedThinking) -> Self {
         self.extended_thinking = t;
+        self
+    }
+
+    /// Effort level. Default: none. The provider then sends no effort and the
+    /// model uses its own default.
+    ///
+    /// On some models, for example `claude-sonnet-5-5` with the default
+    /// `medium`, adaptive thinking can skip thinking on a short task. A higher
+    /// effort makes thinking more likely. Some models reject this field.
+    pub fn effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
         self
     }
 
@@ -227,6 +241,7 @@ impl AnthropicModelBuilder {
             cache_strategy: self.cache_strategy,
             native_tool_types: self.native_tool_types,
             extended_thinking: self.extended_thinking,
+            effort: self.effort,
             top_k: self.top_k,
             max_output_default: entry.max_output_default,
             capabilities,

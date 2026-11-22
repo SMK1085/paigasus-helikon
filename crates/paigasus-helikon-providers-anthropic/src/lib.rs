@@ -3,7 +3,7 @@
 //! See [SMA-317] for the design. The public surface is [`AnthropicModel`]
 //! (a [`paigasus_helikon_core::Model`] implementation), its
 //! [`AnthropicModelBuilder`], and the Anthropic-specific settings types
-//! [`CacheStrategy`] and [`ExtendedThinking`].
+//! [`CacheStrategy`], [`ExtendedThinking`] and [`Effort`].
 //!
 //! # Quick start
 //!
@@ -39,6 +39,7 @@
 //! - `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.
 //! - With `ExtendedThinking::Adaptive`, the provider sends `block_binding.prefix_mismatch_behavior = "drop_block"` and the beta header `thinking-binding-controls-2026-08-01`. If the history before a thinking block changed, the API drops that block and every later thinking block. The model loses that reasoning. The request does not fail. Examples are a hand-off with other `system` text or tools, and an edit of an earlier message.
 //! - With `ExtendedThinking::Enabled`, the provider sends no binding. Use `Enabled` only on models that do not run the prefix check, for example `claude-haiku-4-5`. Claude Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and Fable reject `Enabled`.
+//! - The default sends no effort, and the model uses its own default. On some models, for example `claude-sonnet-5-5` with the default `medium`, adaptive thinking can skip thinking on a short task. A higher effort makes thinking more likely. To set it, call `.effort(Effort::High)` on the builder. The provider then sends `output_config: { effort: "high" }`. Some models reject this field, so set it only for a model that supports effort.
 //!
 //! **Cost.** Each request sends the thinking blocks of the history again. We
 //! measured this on Claude Sonnet 4.5 and Opus 4.5 with
@@ -85,4 +86,4 @@ pub const PROVIDER_ID: &str = "anthropic";
 /// [`PROVIDER_ID`], although both have the same value today.
 pub const PROVIDER_DATA_KEY: &str = "anthropic";
 
-pub use settings::{CacheStrategy, ExtendedThinking};
+pub use settings::{CacheStrategy, Effort, ExtendedThinking};

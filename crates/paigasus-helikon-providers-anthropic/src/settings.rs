@@ -62,6 +62,42 @@ pub enum ExtendedThinking {
     Adaptive,
 }
 
+/// Effort level of the model. The provider sends it as
+/// `output_config: { effort: "<level>" }`.
+///
+/// The default of the builder sends no effort. The model then uses its own
+/// default. For example, `claude-sonnet-5-5` has the default `medium`. At a
+/// low effort, adaptive thinking can skip thinking on a short task. A higher
+/// effort makes thinking more likely. Some models reject the field. Set it
+/// only for a model that supports effort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Effort {
+    /// `"low"`. The model spends the least effort.
+    Low,
+    /// `"medium"`. This is the default of some models.
+    Medium,
+    /// `"high"`. The model thinks more often and more deeply.
+    High,
+    /// `"xhigh"`. A level above `High`.
+    XHigh,
+    /// `"max"`. The model spends the most effort.
+    Max,
+}
+
+impl Effort {
+    /// The wire string of the level.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

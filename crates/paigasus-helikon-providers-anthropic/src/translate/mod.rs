@@ -129,6 +129,15 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
         }
     }
 
+    if let Some(effort) = cfg.effort {
+        // No other code emits `output_config`; set the `effort` key in place.
+        body.entry("output_config")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("output_config is an object")
+            .insert("effort".into(), json!(effort.as_str()));
+    }
+
     if req.model_settings.previous_response_id.is_some() {
         tracing::debug!(
             target: "paigasus::anthropic::translate",
@@ -444,6 +453,72 @@ mod tests {
                 "type": "adaptive",
                 "block_binding": {"prefix_mismatch_behavior": "drop_block"}
             })
+        );
+    }
+
+    fn effort_body(effort: Option<crate::Effort>, t: ExtendedThinking) -> serde_json::Value {
+        let mut cfg = cfg();
+        cfg.effort = effort;
+        cfg.extended_thinking = t;
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        build_body(&cfg, &req).unwrap().body
+    }
+
+    #[test]
+    fn effort_unset_emits_no_output_config() {
+        let body = effort_body(None, ExtendedThinking::Adaptive);
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn effort_levels_emit_wire_strings() {
+        use crate::Effort;
+        for (e, s) in [
+            (Effort::Low, "low"),
+            (Effort::Medium, "medium"),
+            (Effort::High, "high"),
+            (Effort::XHigh, "xhigh"),
+            (Effort::Max, "max"),
+        ] {
+            let body = effort_body(Some(e), ExtendedThinking::Disabled);
+            assert_eq!(body["output_config"], serde_json::json!({"effort": s}));
+        }
+    }
+
+    #[test]
+    fn effort_works_with_adaptive_and_enabled() {
+        use crate::Effort;
+        let body = effort_body(Some(Effort::High), ExtendedThinking::Adaptive);
+        assert_eq!(body["output_config"], serde_json::json!({"effort": "high"}));
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        let body = effort_body(
+            Some(Effort::High),
+            ExtendedThinking::Enabled {
+                budget_tokens: 2048,
+            },
+        );
+        assert_eq!(body["output_config"], serde_json::json!({"effort": "high"}));
+        assert_eq!(body["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn effort_merges_into_existing_output_config() {
+        // The crate emits no other `output_config` today. This test checks the
+        // merge rule on the same map operation the code uses.
+        let mut body = serde_json::Map::new();
+        body.insert(
+            "output_config".into(),
+            serde_json::json!({"format": {"type": "json_schema"}}),
+        );
+        body.entry("output_config")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .unwrap()
+            .insert("effort".into(), serde_json::json!("high"));
+        assert_eq!(
+            body["output_config"],
+            serde_json::json!({"format": {"type": "json_schema"}, "effort": "high"})
         );
     }
 
