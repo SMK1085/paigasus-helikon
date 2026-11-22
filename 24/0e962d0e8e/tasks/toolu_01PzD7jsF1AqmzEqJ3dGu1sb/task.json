@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01PzD7jsF1AqmzEqJ3dGu1sb",
+  "agent_id": "a66f2872cdbe0859c",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix wave for final review minors",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 56667,
+    "cache_read_tokens": 294787,
+    "output_tokens": 2416,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-20T23:01:58.971196+01:00",
+  "completed_at": "2026-11-20T23:02:24.610719+01:00"
+}

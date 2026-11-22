@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "240e962d0e8e",
+  "strategy": "manual-commit",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/tests/live.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/24/0e962d0e8e/0/metadata.json",
+      "transcript": "/24/0e962d0e8e/0/full.jsonl",
+      "compact_transcript": "/24/0e962d0e8e/0/transcript.jsonl",
+      "content_hash": "/24/0e962d0e8e/0/content_hash.txt",
+      "prompt": "/24/0e962d0e8e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 116858,
+    "cache_read_tokens": 9140494,
+    "output_tokens": 17830,
+    "api_call_count": 45,
+    "subagent_tokens": {
+      "input_tokens": 6,
+      "cache_creation_tokens": 6423,
+      "cache_read_tokens": 216777,
+      "output_tokens": 1990,
+      "api_call_count": 3
+    }
+  },
+  "redaction": {
+    "replacements": 479,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 479,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
