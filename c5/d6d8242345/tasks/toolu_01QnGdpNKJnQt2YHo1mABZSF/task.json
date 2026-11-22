@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01QnGdpNKJnQt2YHo1mABZSF",
+  "agent_id": "a026b7f44a2391df4",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave SMA-844",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 59860,
+    "cache_read_tokens": 537295,
+    "output_tokens": 4390,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-22T17:08:50.432321+01:00",
+  "completed_at": "2026-11-22T17:09:40.243783+01:00"
+}
