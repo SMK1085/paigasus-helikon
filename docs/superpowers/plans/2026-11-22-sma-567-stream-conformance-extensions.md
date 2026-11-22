@@ -59,7 +59,7 @@ it before every task. Section numbers below (§) refer to it.
 
 ### Task 0: File the three follow-up Linear issues (coordinator, not a subagent)
 
-- [ ] **Step 1:** In the Linear project `Paigasus Helikon` (team `Sven Maschek`), check with
+- [x] **Step 1:** In the Linear project `Paigasus Helikon` (team `Sven Maschek`), check with
   `list_issues` that no matching issue exists. Then create three issues, related to SMA-567, with
   the labels `area:providers`, `area:testing` and `Improvement`:
   1. Capture a reasoning stream for `bedrock`, `litellm` and `openai/responses`. The SMA-585
@@ -71,8 +71,7 @@ it before every task. Section numbers below (§) refer to it.
 
   Each issue's acceptance criteria says that it closes only when its `UNCAPTURED` rows are removed,
   by a capture or by a reviewed move to `DECLINED`.
-- [x] **Step 2:** Recorded: reasoning `SMA-858`, parallel `SMA-859`, zero-arg `SMA-860`. Replaced
-  `SMA-860` below.
+- [x] **Step 2:** Recorded: reasoning `SMA-858`, parallel `SMA-859`, zero-arg `SMA-860`. The tasks below cite them.
 
 ### Task 1: `Outcome::Uncaptured` and the `UNCAPTURED` table
 
