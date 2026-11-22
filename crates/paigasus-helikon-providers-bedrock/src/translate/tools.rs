@@ -145,20 +145,6 @@ pub(crate) fn partition_tools(
     Ok(ToolSet { generic, typed })
 }
 
-/// Translate a slice of [`ToolDef`]s into Bedrock [`ToolSpecification`]s.
-///
-/// Every tool gets a generic spec. Native typed entries are not made here.
-///
-/// # Errors
-/// Returns [`ModelError::Other`] when any tool name equals
-/// [`SYNTHESIZED_TOOL_NAME`] (reserved for structured-output synthesis).
-pub(crate) fn tool_specs(
-    defs: &[ToolDef],
-    ruleset: Ruleset,
-) -> Result<Vec<ToolSpecification>, ModelError> {
-    Ok(partition_tools(defs, ruleset, false)?.generic)
-}
-
 /// Build the placeholder [`ToolSpecification`].
 ///
 /// It has the reserved name, a fixed description and the schema
@@ -200,14 +186,18 @@ mod tests {
 
     #[test]
     fn empty_defs_returns_empty_vec() {
-        let specs = tool_specs(&[], Ruleset::Strict).unwrap();
+        let specs = partition_tools(&[], Ruleset::Strict, false)
+            .map(|s| s.generic)
+            .unwrap();
         assert!(specs.is_empty());
     }
 
     #[test]
     fn translates_name_and_description() {
         let defs = vec![simple_def("search")];
-        let specs = tool_specs(&defs, Ruleset::Strict).unwrap();
+        let specs = partition_tools(&defs, Ruleset::Strict, false)
+            .map(|s| s.generic)
+            .unwrap();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name(), "search");
         assert_eq!(specs[0].description(), Some("a tool"));
@@ -216,7 +206,9 @@ mod tests {
     #[test]
     fn schema_becomes_json_input_schema() {
         let defs = vec![simple_def("ping")];
-        let specs = tool_specs(&defs, Ruleset::Strict).unwrap();
+        let specs = partition_tools(&defs, Ruleset::Strict, false)
+            .map(|s| s.generic)
+            .unwrap();
         assert!(specs[0].input_schema().is_some());
         assert!(specs[0].input_schema().unwrap().is_json());
     }
@@ -224,7 +216,9 @@ mod tests {
     #[test]
     fn reserved_name_returns_error() {
         let defs = vec![ToolDef::new(SYNTHESIZED_TOOL_NAME, "bad", json!({}))];
-        let err = tool_specs(&defs, Ruleset::Strict).unwrap_err();
+        let err = partition_tools(&defs, Ruleset::Strict, false)
+            .map(|s| s.generic)
+            .unwrap_err();
         assert!(matches!(err, ModelError::Other(_)));
         let msg = format!("{err}");
         assert!(msg.contains("reserved"));
@@ -242,7 +236,9 @@ mod tests {
                 "properties": {"n": {"type": "integer"}}
             }),
         )];
-        let specs = tool_specs(&defs, Ruleset::Strict).unwrap();
+        let specs = partition_tools(&defs, Ruleset::Strict, false)
+            .map(|s| s.generic)
+            .unwrap();
         // The Document should not contain "$schema" — we can only verify this
         // indirectly by confirming the spec was built successfully (the rewriter
         // is unit-tested in schema.rs).
