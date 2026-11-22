@@ -1020,4 +1020,64 @@ mod tests {
             "expected Err(Other) for both-tools-fired; got {terminal:?}"
         );
     }
+
+    /// Collect the tool-call names and the final event of a run.
+    fn tool_call_names(out: &[Result<ModelEvent, ModelError>]) -> Vec<String> {
+        out.iter()
+            .filter_map(|r| match r {
+                Ok(ModelEvent::ToolCallDelta {
+                    name: Some(name), ..
+                }) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A typed memory call on a native structured request is a normal tool
+    /// call. The stream translator needs no special case for it.
+    #[test]
+    fn typed_memory_call_with_structured_native_request_finishes_with_tool_calls() {
+        let mut t = StreamTranslator::new(false).native(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_1", "memory"),
+            tool_delta(0, "{\"command\":\"view\",\"path\":\"/memories\"}"),
+            content_block_stop(0),
+            message_stop(StopReason::ToolUse),
+            metadata(10, 5, None),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert!(out.iter().all(Result::is_ok), "{out:?}");
+        assert_eq!(tool_call_names(&out), vec!["memory".to_owned()]);
+        assert!(matches!(
+            out.last().unwrap().as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::ToolCalls
+        ));
+    }
+
+    /// With `synthesizing = false`, a call to the placeholder name is a
+    /// normal tool call. Only `synthesizing = true` remaps it.
+    #[test]
+    fn placeholder_call_without_synthesis_is_a_normal_tool_call() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_p", SYNTHESIZED_TOOL_NAME),
+                tool_delta(0, "{}"),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert!(out.iter().all(Result::is_ok), "{out:?}");
+        assert_eq!(
+            tool_call_names(&out),
+            vec![SYNTHESIZED_TOOL_NAME.to_owned()]
+        );
+        assert!(matches!(
+            out.last().unwrap().as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::ToolCalls
+        ));
+    }
 }

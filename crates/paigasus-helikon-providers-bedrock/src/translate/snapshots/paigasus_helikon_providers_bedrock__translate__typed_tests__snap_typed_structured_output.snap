@@ -1,0 +1,47 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/typed_tests.rs
+expression: w
+---
+{
+  "additionalModelRequestFields": {
+    "tool_choice": {
+      "disable_parallel_tool_use": true,
+      "name": "__paigasus_structured_output__",
+      "type": "tool"
+    },
+    "tools": [
+      {
+        "name": "memory",
+        "type": "memory_20250818"
+      }
+    ]
+  },
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Hello"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "us.anthropic.claude-sonnet-4-6",
+  "synthesizing": true,
+  "system": [],
+  "toolConfig": {
+    "toolChoice": null,
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Return data matching the Person schema.",
+          "inputSchema": {
+            "json": "<Document>"
+          },
+          "name": "__paigasus_structured_output__"
+        }
+      }
+    ]
+  }
+}

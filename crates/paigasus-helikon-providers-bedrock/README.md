@@ -127,11 +127,35 @@ Reasoning content surfaced by the model (e.g. Claude extended-thinking responses
 
 ### `ToolChoice::None` after a tool round
 
-A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. For Claude models, the provider sends tool specs for the tools that the history uses. It also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. For other model families, the provider sends the tool history as text and sends no tool configuration. If the model calls a tool, the stream gives an error.
+A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. For Claude models, the provider sends tool specs for the tools that the history uses. A typed tool goes to `additionalModelRequestFields.tools` and gets no derived spec (see [Provider tool types](#provider-tool-types)). The provider also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. For other model families, the provider sends the tool history as text and sends no tool configuration. If the model calls a tool, the stream gives an error.
 
 On families other than Claude, the model can write text that looks like a tool call, for example `[tool call ...]`. This is text, not a tool call. On Claude, a prompt that asks for a tool call can get an empty answer.
 
 If you set `JsonSchema` or `JsonObject` with `ToolChoice::None`, the result depends on the model. On the native path (Claude Sonnet 5.5 and Opus 5.5), the provider keeps the hidden anchor tool. For other Claude models, Mistral and Nova, the provider gives a conflict error. For Llama, Titan, Cohere and unknown models, the provider gives no error. It uses the `ToolChoice::None` handling above and sends no structured output, so the response is text.
+
+### Provider tool types
+
+A tool can declare a provider tool type for the `anthropic` provider. For Claude models, the provider sends a typed entry for such a tool. The typed entry replaces the generic tool spec. It has no description and no input schema.
+
+Only `memory_*` types use the typed entry. The provider sends `{"type": "memory_20250818", "name": "<tool name>"}`, with the extra fields from `with_params`. It removes `cache_control`. Only the first `anthropic` declaration of a tool counts. If it is not a `memory_*` type, the tool gets the generic schema. Other families also get the generic schema.
+
+Set `native_tool_types(false)` to send the generic schema for every tool:
+
+```rust,ignore
+// `sdk_cfg` is an `aws_config::SdkConfig`. See the explicit client example above.
+let model = BedrockModel::converse("us.anthropic.claude-sonnet-4-6")
+    .sdk_config(&sdk_cfg)
+    .native_tool_types(false)
+    .build()?;
+```
+
+Without a tool round in the history, the provider sends the typed entries in `additionalModelRequestFields`. It adds no placeholder.
+
+Bedrock needs a `toolConfig` with at least one tool when the history holds a tool call or a tool result. If the request then has only typed tools, the provider adds a placeholder tool to `toolConfig.tools`. The placeholder has the reserved name `__paigasus_structured_output__`. Its description tells the model to never call it.
+
+`ToolChoice::Required` after a tool round, with only typed tools, also allows a call to the placeholder. The agent answers such a call as an unknown tool.
+
+With typed tools, a forced structured-output request does not allow parallel tool calls in that turn. The provider sends `disable_parallel_tool_use: true` for that request.
 
 ## Credentials and TLS
 

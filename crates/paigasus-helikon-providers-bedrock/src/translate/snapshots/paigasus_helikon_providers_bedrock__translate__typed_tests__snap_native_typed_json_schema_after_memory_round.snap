@@ -1,0 +1,82 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/typed_tests.rs
+expression: w
+---
+{
+  "additionalModelRequestFields": {
+    "tools": [
+      {
+        "name": "memory",
+        "type": "memory_20250818"
+      }
+    ]
+  },
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Remember this."
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "toolUse": {
+            "name": "memory",
+            "toolUseId": "tu_1"
+          }
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "toolResult": {
+            "content": [
+              {
+                "text": "empty"
+              }
+            ],
+            "toolUseId": "tu_1"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "us.anthropic.claude-sonnet-5-5",
+  "outputConfig": {
+    "textFormat": {
+      "structure": {
+        "jsonSchema": {
+          "name": "Person",
+          "schema": {
+            "additionalProperties": false,
+            "type": "object"
+          }
+        }
+      },
+      "type": "json_schema"
+    }
+  },
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": {
+    "toolChoice": null,
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Placeholder. Never call this tool.",
+          "inputSchema": {
+            "json": "<Document>"
+          },
+          "name": "__paigasus_structured_output__"
+        }
+      }
+    ]
+  }
+}

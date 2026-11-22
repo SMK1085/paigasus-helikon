@@ -238,6 +238,41 @@ mod tests {
     }
 
     #[test]
+    fn rejected_additional_forced_choice_retries_on_native() {
+        use paigasus_helikon_core::{ProviderToolType, ToolChoice, ToolDef};
+
+        let cfg = offline_config("us.anthropic.claude-sonnet-4-6");
+        let policy = ForcedChoicePolicy::without_static_rule(ModelFamily::Anthropic);
+        let mut req = text_request();
+        req.tools = vec![ToolDef::new("memory", "Memory", json!({"type": "object"}))
+            .with_provider_types(vec![ProviderToolType::new("anthropic", "memory_20250818")])];
+        req.model_settings.tool_choice = Some(ToolChoice::Tool {
+            name: "memory".to_owned(),
+        });
+        let (res, wires) = drive(&policy, &cfg, &req, vec![Err(rejected()), Ok(())]);
+        assert_eq!(wires.len(), 2);
+        // The first request forces the typed tool in the additional fields only.
+        assert_eq!(
+            wires[0]["additionalModelRequestFields"]["tool_choice"],
+            json!({"type": "tool", "name": "memory"}),
+            "{:#}",
+            wires[0]
+        );
+        assert!(wires[0]["toolConfig"]["toolChoice"].is_null());
+        // The second request is on the native path.
+        assert!(wires[1]["additionalModelRequestFields"]["tool_choice"].is_null());
+        // The native retry still sends the typed tool entry.
+        assert_eq!(
+            wires[1]["additionalModelRequestFields"]["tools"],
+            json!([{"type": "memory_20250818", "name": "memory"}]),
+            "{:#}",
+            wires[1]
+        );
+        assert_eq!(policy.path(), OutputPath::Native);
+        assert!(res.is_ok());
+    }
+
+    #[test]
     fn second_request_on_same_handle_goes_native_at_once() {
         let cfg = offline_config(CLAUDE);
         let policy = ForcedChoicePolicy::without_static_rule(ModelFamily::Anthropic);

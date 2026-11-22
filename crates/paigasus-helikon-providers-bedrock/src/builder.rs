@@ -66,6 +66,19 @@ pub(crate) struct Config {
     /// the Bedrock request so that each model applies its own correct limit.
     /// Set via [`BedrockModelBuilder::max_output_tokens_default`].
     pub(crate) max_output_default: Option<u32>,
+    /// Send the typed `memory_*` tool entry for a tool that declares one.
+    /// Set via [`BedrockModelBuilder::native_tool_types`].
+    pub(crate) native_tool_types: bool,
+}
+
+impl Config {
+    /// `true` when the request may carry a typed tool entry.
+    ///
+    /// The gate needs `native_tool_types` and an Anthropic family. This is the
+    /// only place that decides it.
+    pub(crate) fn sends_typed_tools(&self) -> bool {
+        self.native_tool_types && self.family == ModelFamily::Anthropic
+    }
 }
 
 /// Build an offline [`Client`] for unit tests. The client makes no AWS call.
@@ -110,6 +123,7 @@ pub(crate) fn offline_config(model_id: &str) -> Config {
         family,
         capabilities,
         max_output_default: None,
+        native_tool_types: true,
     }
 }
 
@@ -139,6 +153,8 @@ pub struct BedrockModelBuilder {
     max_output_override: Option<u32>,
     /// Optional family override (wins over detection from the model id).
     family_override: Option<ModelFamily>,
+    /// Send the typed `memory_*` tool entry (default `true`).
+    native_tool_types: bool,
 }
 
 impl BedrockModelBuilder {
@@ -151,6 +167,7 @@ impl BedrockModelBuilder {
             capabilities_override: None,
             max_output_override: None,
             family_override: None,
+            native_tool_types: true,
         }
     }
 
@@ -241,6 +258,18 @@ impl BedrockModelBuilder {
     /// caller does not set `ModelSettings::max_output_tokens`.
     pub fn max_output_tokens_default(mut self, n: u32) -> Self {
         self.max_output_override = Some(n);
+        self
+    }
+
+    /// Send the Anthropic typed tool entry for a tool that declares a
+    /// provider tool type for the Anthropic provider. Default: `true`. Set
+    /// `false` to always send the generic entry (name, description and input
+    /// schema) and ignore declared provider types.
+    ///
+    /// Only Claude models are affected. Only `memory_*` types are affected.
+    /// Other model families and other tool types keep the generic entry.
+    pub fn native_tool_types(mut self, enabled: bool) -> Self {
+        self.native_tool_types = enabled;
         self
     }
 
@@ -341,6 +370,7 @@ impl BedrockModelBuilder {
                 family,
                 capabilities,
                 max_output_default,
+                native_tool_types: self.native_tool_types,
             }),
             policy: Arc::new(policy),
         })
@@ -719,6 +749,42 @@ mod tests {
         assert_eq!(model.policy.path(), OutputPath::Native);
         let w = wire(&model, &json_schema_request());
         assert!(w.get("outputConfig").is_some());
+    }
+
+    const CLAUDE: &str = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+
+    #[test]
+    fn native_tool_types_defaults_to_true() {
+        let model = build_with(CLAUDE, None);
+        assert!(model.config.native_tool_types);
+    }
+
+    #[test]
+    fn native_tool_types_false_closes_the_gate() {
+        let model = crate::BedrockModel::converse(CLAUDE)
+            .client(offline_client())
+            .native_tool_types(false)
+            .build()
+            .expect("build");
+        assert!(!model.config.native_tool_types);
+        assert!(!model.config.sends_typed_tools());
+    }
+
+    #[test]
+    fn gate_is_open_only_for_anthropic() {
+        assert!(build_with(CLAUDE, None).config.sends_typed_tools());
+        assert!(!build_with("us.amazon.nova-pro-v1:0", None)
+            .config
+            .sends_typed_tools());
+    }
+
+    #[test]
+    fn family_override_opens_the_gate() {
+        let arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123";
+        assert!(!build_with(arn, None).config.sends_typed_tools());
+        assert!(build_with(arn, Some(ModelFamily::Anthropic))
+            .config
+            .sends_typed_tools());
     }
 
     #[test]

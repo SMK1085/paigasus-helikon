@@ -1,0 +1,42 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/typed_tests.rs
+expression: w
+---
+{
+  "additionalModelRequestFields": {
+    "tools": [
+      {
+        "name": "memory",
+        "type": "memory_20250818"
+      }
+    ]
+  },
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Hello"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "us.anthropic.claude-sonnet-4-6",
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": {
+    "toolChoice": null,
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Get account balance",
+          "inputSchema": {
+            "json": "<Document>"
+          },
+          "name": "get_balance"
+        }
+      }
+    ]
+  }
+}

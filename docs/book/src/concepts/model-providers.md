@@ -321,7 +321,7 @@ alongside this crate; a second `CryptoProvider` panics.
 > Model ids are illustrative — swap them for any model your account can reach
 > if the provider rejects the id.
 
-Bedrock does not use provider tool types. It sends the generic schema for every tool. See [Provider tool types](./tools.md#provider-tool-types).
+Bedrock uses provider tool types for Claude models. It sends the typed entry for a tool that declares a `memory_*` type for the `anthropic` provider. Other models and other types get the generic schema. Call `native_tool_types(false)` on the builder to send the generic schema for every tool. See [Provider tool types](./tools.md#provider-tool-types).
 
 ### Gemini — `paigasus-helikon-providers-gemini`
 

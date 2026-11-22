@@ -2,6 +2,7 @@
 
 pub mod schema;
 
+pub(crate) mod additional;
 mod native;
 pub(crate) mod native_schema;
 pub(crate) mod request;
@@ -19,11 +20,12 @@ use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
 use crate::builder::Config;
 use crate::family::ModelFamily; // used by translate_tool_choice
 use crate::policy::{NativeNotice, OutputPath};
+use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
-use crate::translate::tool_choice_none::apply_tool_choice_none;
-use crate::translate::tools::tool_specs;
+use crate::translate::tool_choice_none::{apply_tool_choice_none, has_tool_round};
+use crate::translate::tools::{partition_tools, placeholder_spec, ToolSet, SYNTHESIZED_TOOL_NAME};
 
 /// A fully-assembled Bedrock Converse request, ready to send.
 ///
@@ -50,8 +52,8 @@ pub(crate) struct PreparedConverse {
     /// The changes of meaning that the native path made to the request.
     /// The forced-tool path always leaves this empty.
     pub(crate) notices: Vec<NativeNotice>,
-    /// Send the Anthropic `tool_choice: none` field in `additionalModelRequestFields`.
-    pub(crate) tool_choice_none: bool,
+    /// The fields for `additionalModelRequestFields`.
+    pub(crate) additional: AdditionalFields,
 }
 
 impl PreparedConverse {
@@ -63,7 +65,7 @@ impl PreparedConverse {
                 .as_ref()
                 .and_then(ToolConfiguration::tool_choice),
             Some(BedrockToolChoice::Any(_) | BedrockToolChoice::Tool(_))
-        )
+        ) || self.additional.is_forced()
     }
 }
 
@@ -76,12 +78,16 @@ fn required_without_tools_error() -> ModelError {
 
 /// Make sure that `name` is the name of a tool in `tools`.
 ///
+/// A name is valid when a generic tool in `tools` or a typed tool in `typed`
+/// has it.
+///
 /// # Errors
-/// Returns [`ModelError::Other`] when no tool in `tools` has the name `name`.
-fn check_tool_name(tools: &[Tool], name: &str) -> Result<(), ModelError> {
-    let defined = tools
-        .iter()
-        .any(|t| matches!(t, Tool::ToolSpec(spec) if spec.name() == name));
+/// Returns [`ModelError::Other`] when no tool has the name `name`.
+fn check_tool_name(tools: &[Tool], typed: &ToolSet, name: &str) -> Result<(), ModelError> {
+    let defined = typed.is_typed_name(name)
+        || tools
+            .iter()
+            .any(|t| matches!(t, Tool::ToolSpec(spec) if spec.name() == name));
     if defined {
         Ok(())
     } else {
@@ -224,7 +230,13 @@ pub(crate) fn build_request(
     // (a none field for Anthropic models, a text history for the others).
     if none_choice {
         let translated = items_to_messages(&req.messages)?;
-        let outcome = apply_tool_choice_none(translated.messages, &req.tools, family, ruleset)?;
+        let outcome = apply_tool_choice_none(
+            translated.messages,
+            &req.tools,
+            ruleset,
+            cfg.sends_typed_tools(),
+            family,
+        )?;
         let tool_config = assemble_tool_config(outcome.tools, None)?;
         let inference_config = build_inference_config(req, cfg);
         return Ok(PreparedConverse {
@@ -236,15 +248,15 @@ pub(crate) fn build_request(
             synthesizing: false,
             output_config: None,
             notices: Vec::new(),
-            tool_choice_none: outcome.tool_choice_none,
+            additional: outcome.additional,
         });
     }
 
     // Translate messages.
     let translated = items_to_messages(&req.messages)?;
 
-    // Translate user tool defs (also validates reserved name).
-    let user_specs = tool_specs(&req.tools, ruleset)?;
+    // Split the user tools (also validates the reserved name).
+    let set = partition_tools(&req.tools, ruleset, cfg.sends_typed_tools())?;
 
     // Synthesize structured output tool (if applicable).
     let Synthesized {
@@ -254,7 +266,7 @@ pub(crate) fn build_request(
     } = synthesize(req.model_settings.response_format.as_ref(), family, ruleset)?;
 
     // Merge tool lists: user tools first, synthesized appended.
-    let mut all_tools: Vec<Tool> = user_specs.into_iter().map(Tool::ToolSpec).collect();
+    let mut all_tools: Vec<Tool> = set.generic.iter().cloned().map(Tool::ToolSpec).collect();
     if let Some(st) = synth_tool {
         all_tools.push(Tool::ToolSpec(st));
     }
@@ -269,20 +281,49 @@ pub(crate) fn build_request(
     // Synthesis overrides caller tool_choice.
     // synth_tool.is_some() always pushes to all_tools above, so a synthesized tool_choice is never silently dropped here.
     let effective_tc = synth_tc.or(caller_tc);
+    let typed = set.has_typed();
 
     // Validate forced tool choices on supported families.
     // (On unsupported families, forced choices were already omitted by translate_tool_choice.)
     if family.supports_forced_tool_choice() {
         match req.model_settings.tool_choice.as_ref() {
             Some(ToolChoice::Required) if !synthesizing => {
-                if all_tools.is_empty() {
+                if !set.has_any() {
                     return Err(required_without_tools_error());
                 }
             }
-            Some(ToolChoice::Tool { name }) => check_tool_name(&all_tools, name)?,
+            Some(ToolChoice::Tool { name }) => check_tool_name(&all_tools, &set, name)?,
             _ => {}
         }
     }
+
+    // Typed tools: the tool choice moves to `additionalModelRequestFields`,
+    // because Converse `toolChoice` cannot name a typed tool. A request that
+    // sends only typed tools after a tool round gets a placeholder spec, so
+    // `toolConfig.tools` is not empty.
+    let mut additional = AdditionalFields::default();
+    let effective_tc = if typed {
+        additional.tool_choice = if synthesizing {
+            Some(AdditionalToolChoice::Synthesized(
+                SYNTHESIZED_TOOL_NAME.to_owned(),
+            ))
+        } else if family.supports_forced_tool_choice() {
+            match req.model_settings.tool_choice.as_ref() {
+                Some(ToolChoice::Required) => Some(AdditionalToolChoice::Any),
+                Some(ToolChoice::Tool { name }) => Some(AdditionalToolChoice::Tool(name.clone())),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        additional.tools = set.typed_entries();
+        if all_tools.is_empty() && has_tool_round(&translated.messages) {
+            all_tools.push(Tool::ToolSpec(placeholder_spec()?));
+        }
+        None
+    } else {
+        effective_tc
+    };
 
     let tool_config = assemble_tool_config(all_tools, effective_tc)?;
 
@@ -298,7 +339,7 @@ pub(crate) fn build_request(
         synthesizing,
         output_config: None,
         notices: Vec::new(),
-        tool_choice_none: false,
+        additional,
     })
 }
 
@@ -496,8 +537,8 @@ pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
 
     // Extra request fields: present only when set, so the other snapshots do
     // not change.
-    if p.tool_choice_none {
-        wire["additionalModelRequestFields"] = json!({"tool_choice": {"type": "none"}});
+    if let Some(v) = p.additional.to_value() {
+        wire["additionalModelRequestFields"] = v;
     }
 
     // Output config: the key is present only on the native path, so the
@@ -522,8 +563,12 @@ pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+mod typed_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::translate::additional::AdditionalToolChoice;
     use crate::translate::tools::SYNTHESIZED_TOOL_NAME;
     use insta::assert_json_snapshot;
     use paigasus_helikon_core::{
@@ -561,6 +606,10 @@ mod tests {
     /// A model that rejects a forced tool choice (the native path).
     fn sonnet55_cfg() -> Config {
         make_cfg("global.anthropic.claude-sonnet-5-5")
+    }
+
+    fn none_choice_of(p: &PreparedConverse) -> bool {
+        p.additional.tool_choice == Some(AdditionalToolChoice::None)
     }
 
     fn assert_no_forced_choice(p: &PreparedConverse) {
@@ -1011,6 +1060,7 @@ mod tests {
             family,
             capabilities,
             max_output_default: Some(2048),
+            native_tool_types: true,
         };
 
         let mut req = ModelRequest::new();
@@ -1137,6 +1187,7 @@ mod tests {
             family,
             capabilities,
             max_output_default: Some(2048),
+            native_tool_types: true,
         };
 
         let mut req = ModelRequest::new();
@@ -1374,7 +1425,7 @@ mod tests {
         let p = build(&sonnet55_cfg(), &req).unwrap();
         assert_no_forced_choice(&p);
         assert!(p.synthesizing);
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
         assert!(w["toolConfig"]["toolChoice"].is_null());
@@ -1566,7 +1617,7 @@ mod tests {
     #[test]
     fn snap_forced_path_tool_choice_none_after_tool_round_on_claude() {
         let p = build(&haiku55_cfg(), &none_after_tool_round()).unwrap();
-        assert!(p.tool_choice_none);
+        assert!(none_choice_of(&p));
         assert!(!p.synthesizing);
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
@@ -1581,7 +1632,7 @@ mod tests {
     #[test]
     fn snap_tool_choice_none_after_tool_round_on_nova() {
         let p = build(&nova_cfg(), &none_after_tool_round()).unwrap();
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert!(w["toolConfig"].is_null());
         assert!(w.get("additionalModelRequestFields").is_none());
@@ -1602,7 +1653,7 @@ mod tests {
     #[test]
     fn native_tool_choice_none_after_tool_round_on_claude() {
         let p = build(&sonnet55_cfg(), &none_after_tool_round()).unwrap();
-        assert!(p.tool_choice_none);
+        assert!(none_choice_of(&p));
         assert!(p.output_config.is_none());
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
@@ -1616,7 +1667,7 @@ mod tests {
         req.model_settings.response_format = Some(ResponseFormat::JsonObject);
         let p = build(&sonnet55_cfg(), &req).unwrap();
         assert!(p.synthesizing);
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
     }
@@ -1624,7 +1675,7 @@ mod tests {
     #[test]
     fn native_text_history_through_build_native_on_nova() {
         let p = native::build_native(&nova_cfg(), &none_after_tool_round()).unwrap();
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         let w = to_wire_json(&p);
         assert!(w["toolConfig"].is_null());
         assert!(!crate::translate::tool_choice_none::has_tool_round(
@@ -1646,13 +1697,91 @@ mod tests {
     }
 
     #[test]
+    fn none_shape_is_the_same_on_both_paths_with_typed_tool() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![
+            user_text("remember this"),
+            Item::AssistantMessage {
+                content: vec![ContentPart::ToolUse {
+                    call_id: "tu_1".to_owned(),
+                    name: "memory".to_owned(),
+                    args: json!({"command": "view", "path": "/memories"}),
+                }],
+                agent: None,
+            },
+            Item::ToolResult {
+                call_id: "tu_1".to_owned(),
+                content: vec![ContentPart::Text {
+                    text: "empty".to_owned(),
+                }],
+            },
+        ];
+        req.tools = vec![ToolDef::new("memory", "memory", json!({"type": "object"}))
+            .with_provider_types(vec![paigasus_helikon_core::ProviderToolType::new(
+                "anthropic",
+                "memory_20250818",
+            )])];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let cfg = haiku55_cfg();
+        let forced = to_wire_json(&build_request(&cfg, &req, OutputPath::ForcedTool).unwrap());
+        let native = to_wire_json(&build_request(&cfg, &req, OutputPath::Native).unwrap());
+        assert_eq!(forced["toolConfig"], native["toolConfig"]);
+        assert_eq!(
+            forced["additionalModelRequestFields"],
+            native["additionalModelRequestFields"]
+        );
+        assert_eq!(
+            tool_names(&forced),
+            vec!["__paigasus_structured_output__".to_owned()]
+        );
+        assert_eq!(
+            forced["additionalModelRequestFields"],
+            json!({
+                "tools": [{"type": "memory_20250818", "name": "memory"}],
+                "tool_choice": {"type": "none"}
+            })
+        );
+    }
+
+    #[test]
+    fn structured_native_none_accepts_a_reserved_name_tool() {
+        let mut req = none_after_tool_round();
+        req.tools = vec![ToolDef::new(
+            SYNTHESIZED_TOOL_NAME,
+            "reserved",
+            json!({"type": "object"}),
+        )];
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_eq!(p.additional, AdditionalFields::default());
+        let w = to_wire_json(&p);
+        // Only the anchor goes out. The user tool is not sent.
+        assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
+    }
+
+    #[test]
+    fn none_without_round_accepts_a_reserved_name_tool_on_the_forced_path() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef::new(
+            SYNTHESIZED_TOOL_NAME,
+            "reserved",
+            json!({"type": "object"}),
+        )];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let p = build(&haiku55_cfg(), &req).unwrap();
+        assert!(!none_choice_of(&p));
+        assert!(to_wire_json(&p)["toolConfig"].is_null());
+    }
+
+    #[test]
     fn none_without_tool_round_keeps_shape_on_nova() {
         let mut req = ModelRequest::new();
         req.messages = vec![user_text("hi")];
         req.tools = vec![get_balance_tool()];
         req.model_settings.tool_choice = Some(ToolChoice::None);
         let p = build(&nova_cfg(), &req).unwrap();
-        assert!(!p.tool_choice_none);
+        assert!(!none_choice_of(&p));
         assert!(to_wire_json(&p)["toolConfig"].is_null());
     }
 
@@ -1671,7 +1800,7 @@ mod tests {
                 let mut req = none_after_tool_round();
                 req.model_settings.tool_choice = tc.clone();
                 let p = build(&cfg, &req).unwrap();
-                assert!(!p.tool_choice_none, "{tc:?}");
+                assert!(!none_choice_of(&p), "{tc:?}");
             }
         }
     }

@@ -13,12 +13,13 @@ use paigasus_helikon_core::{ModelError, ModelRequest, ResponseFormat, ToolChoice
 
 use crate::builder::Config;
 use crate::policy::NativeNotice;
+use crate::translate::additional::AdditionalFields;
 use crate::translate::native_schema::native_output_schema;
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::synthesize;
 use crate::translate::schema::Ruleset;
 use crate::translate::tool_choice_none::{apply_tool_choice_none, has_tool_round};
-use crate::translate::tools::tool_specs;
+use crate::translate::tools::{partition_tools, placeholder_spec, ToolSet};
 use crate::translate::{
     assemble_tool_config, build_inference_config, check_tool_name, required_without_tools_error,
     PreparedConverse,
@@ -71,10 +72,17 @@ pub(crate) fn build_native(
         _ => None,
     };
 
-    // User tools. `ToolChoice::None` sends no user tools, unless the history
-    // holds a tool round and the request is not structured. Then the family
-    // strategy decides. A structured request keeps the anchor below.
-    let mut tool_choice_none = false;
+    // User tools. `ToolChoice::None` sends no typed tools. The family strategy
+    // of `apply_tool_choice_none` decides the tools and the history after a
+    // tool round without a structured format. A structured request keeps the
+    // anchor below and never splits the tools, so a reserved name cannot fail
+    // a path that sends no tools.
+    let mut additional = AdditionalFields::default();
+    let mut set = ToolSet {
+        generic: Vec::new(),
+        typed: Vec::new(),
+    };
+    let mut sent_typed = false;
     let mut all_tools: Vec<Tool> = if matches!(tool_choice, Some(ToolChoice::None)) {
         if structured {
             Vec::new()
@@ -82,41 +90,51 @@ pub(crate) fn build_native(
             let outcome = apply_tool_choice_none(
                 std::mem::take(&mut translated.messages),
                 &req.tools,
-                family,
                 ruleset,
+                cfg.sends_typed_tools(),
+                family,
             )?;
             translated.messages = outcome.messages;
-            tool_choice_none = outcome.tool_choice_none;
+            additional = outcome.additional;
             outcome.tools
         }
     } else {
-        tool_specs(&req.tools, ruleset)?
-            .into_iter()
-            .map(Tool::ToolSpec)
-            .collect()
+        set = partition_tools(&req.tools, ruleset, cfg.sends_typed_tools())?;
+        sent_typed = set.has_typed();
+        if sent_typed {
+            additional.tools = set.typed_entries();
+        }
+        set.generic.iter().cloned().map(Tool::ToolSpec).collect()
     };
 
     // Check a caller-selected tool name against the user tools only. The anchor
     // below must not make an undefined name valid.
     if let Some(ToolChoice::Tool { name }) = tool_choice {
-        check_tool_name(&all_tools, name)?;
+        check_tool_name(&all_tools, &set, name)?;
     }
 
-    // Anchor: a structured format, no user tools and a tool round in the history.
+    // Anchor: a structured format, no user tool of any kind and a tool round in
+    // the history. With a typed tool the placeholder fills `toolConfig`
+    // instead, and the request does not synthesize.
     let mut synthesizing = false;
-    if structured && all_tools.is_empty() && has_tool_round(&translated.messages) {
-        if let Some(anchor) = synthesize(rf, family, ruleset)?.tool {
-            all_tools.push(Tool::ToolSpec(anchor));
-            synthesizing = true;
+    if all_tools.is_empty() && has_tool_round(&translated.messages) {
+        if sent_typed {
+            all_tools.push(Tool::ToolSpec(placeholder_spec()?));
+        } else if structured {
+            if let Some(anchor) = synthesize(rf, family, ruleset)?.tool {
+                all_tools.push(Tool::ToolSpec(anchor));
+                synthesizing = true;
+            }
         }
     }
 
     // Tool choice. The native path never forces a tool call.
     let choice = match tool_choice {
         None | Some(ToolChoice::None) => None,
+        Some(ToolChoice::Auto) if sent_typed => None,
         Some(ToolChoice::Auto) => Some(BedrockToolChoice::Auto(AutoToolChoice::builder().build())),
         Some(ToolChoice::Required) => {
-            if all_tools.is_empty() && !structured {
+            if all_tools.is_empty() && !set.has_any() && !structured {
                 return Err(required_without_tools_error());
             }
             notices.push(NativeNotice::RequiredOmitted);
@@ -147,7 +165,7 @@ pub(crate) fn build_native(
         synthesizing,
         output_config,
         notices,
-        tool_choice_none,
+        additional,
     })
 }
 
