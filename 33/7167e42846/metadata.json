@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "337167e42846",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-861-script-the-captured-split-input_json_delta",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/33/7167e42846/0/metadata.json",
+      "transcript": "/33/7167e42846/0/full.jsonl",
+      "compact_transcript": "/33/7167e42846/0/transcript.jsonl",
+      "content_hash": "/33/7167e42846/0/content_hash.txt",
+      "prompt": "/33/7167e42846/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 8689,
+    "cache_read_tokens": 769084,
+    "output_tokens": 5812,
+    "api_call_count": 5,
+    "subagent_tokens": {
+      "input_tokens": 54,
+      "cache_creation_tokens": 118385,
+      "cache_read_tokens": 2776058,
+      "output_tokens": 28837,
+      "api_call_count": 27
+    }
+  },
+  "redaction": {
+    "replacements": 13,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 13,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
