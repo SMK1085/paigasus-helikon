@@ -3,7 +3,7 @@
 :
 : The body ends with no message_delta, so no stop reason arrives
 : (docs/superpowers/plans/2026-08-16-sma-531-anthropic-eof-finish-flush.md,
-: line 572). The plan does not name a source. The data bytes are a prefix of
+: line 573). The plan does not name a source. The data bytes are a prefix of
 : text_only.txt: its first three events.
 :
 : For the source of the shapes and the comparison with the SMA-840 captures,

@@ -3,7 +3,7 @@
 :
 : This file is its own file, not a cut copy
 : (docs/superpowers/plans/2026-08-16-sma-531-anthropic-eof-finish-flush.md,
-: lines 586-593). It has the id msg_06 and one "Hello" delta. Its error data
+: lines 587-593). It has the id msg_06 and one "Hello" delta. Its error data
 : line is byte-identical to the one in stream_error.txt. The record does not
 : name stream_error.txt as its source. The other event shapes are the same as
 : in text_only.txt.

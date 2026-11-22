@@ -1664,10 +1664,11 @@ mod litellm {
 /// Every envelope shape below is transcribed from a fixture committed in
 /// `crates/paigasus-helikon-providers-anthropic/tests/fixtures/`, cited on the
 /// helper or script arm that builds it. Each fixture header states its label.
-/// Only one cited fixture is CAPTURED: `thinking_text_tool_use.txt`. All the
-/// others are HAND-AUTHORED. The `message_start`, `message_delta` and
-/// `tool_use` helpers copy HAND-AUTHORED shapes. The header of `text_only.txt`
-/// lists the keys that the SMA-840 captures carry and those shapes do not.
+/// Only one fixture that a helper copies is CAPTURED:
+/// `thinking_text_tool_use.txt`. All the others are HAND-AUTHORED. The
+/// `message_start`, `message_delta` and `tool_use` helpers copy HAND-AUTHORED
+/// shapes. The header of `text_only.txt` lists the keys that the SMA-840
+/// captures carry and those shapes do not.
 ///
 /// - `text_only.txt` — HAND-AUTHORED (SMA-317, PR #33). The source of its
 ///   shapes is not recorded. The baseline: `message_start` (including its
@@ -1733,13 +1734,15 @@ mod litellm {
 ///
 /// `body_cut_inside_message_stop.txt` (HAND-AUTHORED, SMA-531, PR #200) and
 /// `thinking_then_text.txt` (HAND-AUTHORED, SMA-317, PR #33) were read
-/// but contribute no shape this module needs: the former is a byte-level cut
-/// of `eof_after_message_delta.txt` that the SSE parser discards down to the
-/// same events (already covered). For the latter, the one thinking scenario
-/// here, `ThinkingToolCallCleanStop`, uses the CAPTURED
-/// `thinking_text_tool_use.txt` instead.
+/// but contribute no shape this module needs: the former is `text_only.txt` cut
+/// inside `message_stop` (its header). The SSE parser discards the partial last
+/// event, so it parses to the same events as `eof_after_message_delta.txt`
+/// (already covered). For the latter, the one thinking scenario here,
+/// `ThinkingToolCallCleanStop`, uses the CAPTURED `thinking_text_tool_use.txt`
+/// instead.
 ///
-/// SMA-840 (PR #387) also added four fixtures that this module does not cite:
+/// SMA-840 (PR #387) also added four fixtures that no helper in this module
+/// copies a shape from:
 /// `empty_thinking_tool_use.txt` and `redacted_thinking_tool_use.txt` (both
 /// CAPTURED), and `interleaved_thinking.txt` and
 /// `unsigned_thinking_tool_use.txt` (both HAND-AUTHORED).
