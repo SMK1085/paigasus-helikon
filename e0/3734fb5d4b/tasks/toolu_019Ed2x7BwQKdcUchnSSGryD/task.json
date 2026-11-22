@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019Ed2x7BwQKdcUchnSSGryD",
+  "agent_id": "a58d88f141dea14f3",
+  "subagent_type": "general-purpose",
+  "task_description": "Review Task 8 (docs + drift test)",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 66323,
+    "cache_read_tokens": 392455,
+    "output_tokens": 2785,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-22T17:03:14.254088+01:00",
+  "completed_at": "2026-11-22T17:03:40.820702+01:00"
+}
