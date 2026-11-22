@@ -18,7 +18,7 @@ mod fakes;
 mod server;
 
 pub use check::classify;
-pub use declines::DECLINED;
+pub use declines::{DECLINED, UNCAPTURED};
 pub use server::{Ending, PacedServer, Script};
 
 use std::time::Duration;
@@ -169,8 +169,11 @@ impl GateHandle {
 
 /// What a subject did with a scenario.
 ///
-/// Declining is a first-class outcome carrying a mandatory reason, not an
-/// `Option` a caller can silently treat as a skip.
+/// Declining and being uncaptured are first-class outcomes carrying a mandatory
+/// reason, not an `Option` a caller can silently treat as a skip. Neither is
+/// served, so no floor or assertion runs for them. The two are not
+/// interchangeable: [`Outcome::Declined`] must match [`DECLINED`], and
+/// [`Outcome::Uncaptured`] must match [`UNCAPTURED`].
 pub enum Outcome {
     /// The subject served the scenario.
     Served {
@@ -182,6 +185,10 @@ pub enum Outcome {
     /// The wire shape cannot physically occur for this provider. The reason is
     /// printed in the report and must match the pinned decline set.
     Declined(&'static str),
+    /// The wire shape can occur for this provider, and a capture alone would
+    /// let the subject serve it, but no fixture that meets the provenance rule
+    /// exists. The reason must match the pinned [`UNCAPTURED`] table.
+    Uncaptured(&'static str),
 }
 
 /// One provider backend under test.
@@ -285,17 +292,32 @@ const GATE_QUIESCENCE: Duration = Duration::from_millis(400);
 /// 3. **Then, and only then, the events are classified** by the crate's
 ///    `classify` function.
 ///
-/// Afterwards the observed declines are compared against the pinned
-/// [`DECLINED`] table in both directions.
+/// Afterwards the observed declines and uncaptured pairs are compared against
+/// the pinned [`DECLINED`] and [`UNCAPTURED`] tables in both directions.
 pub async fn assert_conforms(subject: &impl StreamUnderTest) {
+    assert_conforms_with(subject, DECLINED, UNCAPTURED).await;
+}
+
+/// [`assert_conforms`] against explicit pinned tables, so the unit tests can
+/// drive the stale-row direction without a real row.
+async fn assert_conforms_with(
+    subject: &impl StreamUnderTest,
+    pinned_declined: &[(&str, Scenario, &str)],
+    pinned_uncaptured: &[(&str, Scenario, &str, &str)],
+) {
     let name = subject.name();
     let mut declined: Vec<(Scenario, &'static str)> = Vec::new();
+    let mut uncaptured: Vec<(Scenario, &'static str)> = Vec::new();
 
     for &scenario in Scenario::ALL {
         let cancel = CancellationToken::new();
         let (stream, gate) = match subject.stream(scenario, cancel.clone()).await {
             Outcome::Declined(reason) => {
                 declined.push((scenario, reason));
+                continue;
+            }
+            Outcome::Uncaptured(reason) => {
+                uncaptured.push((scenario, reason));
                 continue;
             }
             Outcome::Served { stream, gate } => (stream, gate),
@@ -373,7 +395,29 @@ pub async fn assert_conforms(subject: &impl StreamUnderTest) {
         }
     }
 
-    assert_declines_match(name, &declined);
+    let expected_declined: Vec<(Scenario, &str)> = pinned_declined
+        .iter()
+        .filter(|(n, _, _)| *n == name)
+        .map(|(_, sc, r)| (*sc, *r))
+        .collect();
+    let expected_uncaptured: Vec<(Scenario, &str)> = pinned_uncaptured
+        .iter()
+        .filter(|(n, _, _, _)| *n == name)
+        .map(|(_, sc, r, _)| (*sc, *r))
+        .collect();
+
+    let mut problems = pinned_problems(PinnedKind::Declined, &declined, &expected_declined);
+    problems.extend(pinned_problems(
+        PinnedKind::Uncaptured,
+        &uncaptured,
+        &expected_uncaptured,
+    ));
+    assert!(
+        problems.is_empty(),
+        "conformance: {name} — the observed decline or uncaptured set does not match the \
+         pinned DECLINED or UNCAPTURED table (spec §6.2, §6.4):\n{}",
+        problems.join("\n")
+    );
 }
 
 /// Whether `scenario` cancels the stream part-way through.
@@ -686,52 +730,71 @@ fn floor_violation(
     None
 }
 
-/// Compare the declines this subject actually produced against [`DECLINED`],
-/// and panic on any difference in either direction.
-///
-/// Both directions matter. An unexpected decline is the escape hatch this
-/// pinning exists to close. An expected decline that stopped happening matters
-/// just as much: the subject now serves that scenario, so the table is lying
-/// about the provider — and the row would go on excusing a future regression
-/// that reintroduced the decline.
-fn assert_declines_match(subject: &str, observed: &[(Scenario, &'static str)]) {
-    let expected: Vec<(Scenario, &'static str)> = DECLINED
-        .iter()
-        .filter(|(name, _, _)| *name == subject)
-        .map(|(_, scenario, reason)| (*scenario, *reason))
-        .collect();
+/// Which pinned table a comparison concerns.
+#[derive(Debug, Clone, Copy)]
+enum PinnedKind {
+    /// The [`DECLINED`] table.
+    Declined,
+    /// The [`UNCAPTURED`] table.
+    Uncaptured,
+}
 
+/// Compare the pairs this subject actually produced against the pinned rows
+/// for it, and return one problem line per difference, in either direction.
+///
+/// Both directions matter. An unexpected pair is the escape hatch this pinning
+/// exists to close. A pinned pair that stopped happening matters just as much:
+/// the subject now serves that scenario, so the table is lying about the
+/// provider — and the row would go on excusing a future regression.
+fn pinned_problems(
+    kind: PinnedKind,
+    observed: &[(Scenario, &'static str)],
+    expected: &[(Scenario, &str)],
+) -> Vec<String> {
+    let (word, table) = match kind {
+        PinnedKind::Declined => ("decline", "DECLINED"),
+        PinnedKind::Uncaptured => ("uncaptured", "UNCAPTURED"),
+    };
     let mut problems: Vec<String> = Vec::new();
 
     for (scenario, reason) in observed {
         match expected.iter().find(|(s, _)| s == scenario) {
-            None => problems.push(format!(
-                "  unexpected decline of {scenario:?} ({reason:?}). Declining is for a wire \
-                 shape that cannot physically occur — if that is the case here, add a \
-                 reviewed row to DECLINED; otherwise serve the scenario."
-            )),
+            None => problems.push(match kind {
+                PinnedKind::Declined => format!(
+                    "  unexpected decline of {scenario:?} ({reason:?}). Declining is for a \
+                     wire shape that cannot physically occur — if that is the case here, add \
+                     a reviewed row to DECLINED; otherwise serve the scenario."
+                ),
+                PinnedKind::Uncaptured => format!(
+                    "  unexpected uncaptured of {scenario:?} ({reason:?}). Uncaptured is for a \
+                     wire shape that can occur but has no fixture with provenance yet — add a \
+                     reviewed row to UNCAPTURED with a follow-up issue; otherwise serve the \
+                     scenario."
+                ),
+            }),
             Some((_, pinned)) if pinned != reason => problems.push(format!(
-                "  decline reason for {scenario:?} drifted: DECLINED says {pinned:?}, the \
+                "  {word} reason for {scenario:?} drifted: {table} says {pinned:?}, the \
                  subject said {reason:?}"
             )),
             Some(_) => {}
         }
     }
 
-    for (scenario, reason) in &expected {
+    let past = match kind {
+        PinnedKind::Declined => "declined",
+        PinnedKind::Uncaptured => "uncaptured",
+    };
+    for (scenario, reason) in expected {
         if !observed.iter().any(|(s, _)| s == scenario) {
             problems.push(format!(
-                "  {scenario:?} is pinned as declined ({reason:?}) but the subject served it. \
-                 The row is stale: remove it, so it cannot excuse a future regression."
+                "  {scenario:?} is pinned as {past} ({reason:?}) but the subject did not \
+                 report it so. The row is stale: remove it, so it cannot excuse a future \
+                 regression."
             ));
         }
     }
 
-    assert!(
-        problems.is_empty(),
-        "conformance: {subject} — decline set does not match DECLINED (spec §6.2):\n{}",
-        problems.join("\n")
-    );
+    problems
 }
 
 /// Panic naming the subject, the scenario and the violation.
@@ -863,6 +926,10 @@ mod tests {
     struct Subject {
         name: &'static str,
         declines: &'static [(Scenario, &'static str)],
+        /// Scenarios this subject reports as `Outcome::Uncaptured`.
+        uncaptured: &'static [(Scenario, &'static str)],
+        /// Rows for this subject in a test-only `UNCAPTURED` table.
+        pinned_uncaptured: &'static [(Scenario, &'static str)],
         gate: Gate,
         /// Whether a cancellation scenario's stream stays open until the token
         /// fires. `false` makes it end on its own, the way an ungated one does.
@@ -893,6 +960,8 @@ mod tests {
             Self {
                 name,
                 declines: &[THINKING_DECLINE],
+                uncaptured: &[],
+                pinned_uncaptured: &[],
                 gate: Gate::Parked,
                 holds_open: true,
                 substitute: None,
@@ -970,6 +1039,9 @@ mod tests {
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
             if let Some((_, reason)) = self.declines.iter().find(|(s, _)| *s == scenario) {
                 return Outcome::Declined(reason);
+            }
+            if let Some((_, reason)) = self.uncaptured.iter().find(|(s, _)| *s == scenario) {
+                return Outcome::Uncaptured(reason);
             }
 
             let events = self.events(scenario);
@@ -1273,6 +1345,67 @@ mod tests {
                 THINKING_DECLINE,
             ],
             ..Subject::conforming("bedrock")
+        };
+        assert_conforms(&subject).await;
+    }
+
+    /// Run `assert_conforms_with` against the real `DECLINED` table and a
+    /// test-only `UNCAPTURED` table built from the subject's `pinned_uncaptured`.
+    async fn conforms_with_pinned(subject: &Subject) {
+        let rows: Vec<(&str, Scenario, &str, &str)> = subject
+            .pinned_uncaptured
+            .iter()
+            .map(|(sc, r)| (subject.name, *sc, *r, "SMA-1"))
+            .collect();
+        assert_conforms_with(subject, DECLINED, &rows).await;
+    }
+
+    /// An uncaptured pair that no row pins is an escape hatch.
+    #[tokio::test]
+    #[should_panic(expected = "unexpected uncaptured")]
+    async fn an_unpinned_uncaptured_pair_fails() {
+        let subject = Subject {
+            uncaptured: &[(Scenario::CleanStop, "no capture yet")],
+            ..Subject::conforming("openai/chat")
+        };
+        conforms_with_pinned(&subject).await;
+    }
+
+    /// A pinned uncaptured row that the subject now serves is stale.
+    #[tokio::test]
+    #[should_panic(expected = "is pinned as uncaptured")]
+    async fn a_pinned_uncaptured_pair_that_stopped_happening_fails() {
+        let subject = Subject {
+            pinned_uncaptured: &[(Scenario::CleanStop, "no capture yet")],
+            ..Subject::conforming("openai/chat")
+        };
+        conforms_with_pinned(&subject).await;
+    }
+
+    /// The uncaptured reason is pinned too.
+    #[tokio::test]
+    #[should_panic(expected = "drifted")]
+    async fn a_drifted_uncaptured_reason_fails() {
+        let subject = Subject {
+            uncaptured: &[(Scenario::CleanStop, "another reason")],
+            pinned_uncaptured: &[(Scenario::CleanStop, "no capture yet")],
+            ..Subject::conforming("openai/chat")
+        };
+        conforms_with_pinned(&subject).await;
+    }
+
+    /// The two outcomes are not interchangeable: a pair that `DECLINED` lists
+    /// cannot be reported as uncaptured.
+    #[tokio::test]
+    #[should_panic(expected = "unexpected uncaptured")]
+    async fn an_uncaptured_outcome_for_a_declined_pair_fails() {
+        let subject = Subject {
+            declines: &[],
+            uncaptured: &[(
+                Scenario::ThinkingToolCallCleanStop,
+                "the scenario serves an anthropic thinking block",
+            )],
+            ..Subject::conforming("openai/chat")
         };
         assert_conforms(&subject).await;
     }

@@ -17,9 +17,10 @@
 //! Two rules apply to every subject, and both exist because breaking them makes
 //! a check pass without measuring anything:
 //!
-//! 1. **Decline reasons are literal strings**, copied by hand from
-//!    `src/declines.rs`. A subject that looked its reasons up from `DECLINED`
-//!    would satisfy that table's two-directional cross-check by construction,
+//! 1. **Decline and uncaptured reasons are literal strings**, copied by hand
+//!    from `src/declines.rs`. A subject that looked its reasons up from
+//!    `DECLINED` or `UNCAPTURED` would satisfy that table's two-directional
+//!    cross-check by construction,
 //!    which is exactly the drift the table exists to catch.
 //! 2. **`encodes_stop_reason` is measured from the bytes about to be served**,
 //!    never restated from `Scenario::expects_stop_reason`. Restating it
