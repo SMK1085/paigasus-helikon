@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "153035a9d3fc",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-833-bedrock-toolchoicenone-sends-no-toolconfig",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-bedrock/src/stream.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/15/3035a9d3fc/0/metadata.json",
+      "transcript": "/15/3035a9d3fc/0/full.jsonl",
+      "compact_transcript": "/15/3035a9d3fc/0/transcript.jsonl",
+      "content_hash": "/15/3035a9d3fc/0/content_hash.txt",
+      "prompt": "/15/3035a9d3fc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 8436,
+    "cache_read_tokens": 2105072,
+    "output_tokens": 2952,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 36,
+      "cache_creation_tokens": 111634,
+      "cache_read_tokens": 1343036,
+      "output_tokens": 10929,
+      "api_call_count": 16
+    }
+  },
+  "redaction": {
+    "replacements": 75,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 101,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
