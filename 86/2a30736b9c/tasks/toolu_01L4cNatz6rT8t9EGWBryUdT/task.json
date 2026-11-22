@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01L4cNatz6rT8t9EGWBryUdT",
+  "agent_id": "a46d42acca4cc4d17",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 6: fallback and stream tests",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 95937,
+    "cache_read_tokens": 1971876,
+    "output_tokens": 10381,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-22T16:53:24.168497+01:00",
+  "completed_at": "2026-11-22T16:55:05.612671+01:00"
+}
