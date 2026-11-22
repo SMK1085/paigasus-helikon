@@ -20,6 +20,20 @@
 //! # and, in the lib target: live_rule_b_learns_native_output_after_rejection
 //! ```
 //!
+//! ## Native memory tool (SMA-844)
+//!
+//! Run only these. Use Sonnet 4.6 (forced-choice path) and Sonnet 5.5 (native path):
+//! ```sh
+//! AWS_PROFILE=maip-dev-admin AWS_DEFAULT_REGION=us-east-1 \
+//! BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-6 \
+//! cargo test -p paigasus-helikon-providers-bedrock --test live live_typed_memory \
+//!   -- --ignored --nocapture
+//! AWS_PROFILE=maip-dev-admin AWS_DEFAULT_REGION=us-east-1 \
+//! BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-5-5 \
+//! cargo test -p paigasus-helikon-providers-bedrock --test live live_typed_memory \
+//!   -- --ignored --nocapture
+//! ```
+//!
 //! ## Required environment variables
 //!
 //! | Variable | Description |
@@ -34,7 +48,7 @@
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, FinishReason, Item, Model, ModelEvent, ModelRequest,
-    ResponseFormat, ToolChoice, ToolDef,
+    ProviderToolType, ResponseFormat, ToolChoice, ToolDef,
 };
 use paigasus_helikon_providers_bedrock::BedrockModel;
 
@@ -630,4 +644,177 @@ async fn tool_choice_none_after_tool_round_makes_no_tool_call() {
         "Now also check the weather in Berlin, then answer.",
     )
     .await;
+}
+
+// ── native memory tool (SMA-844) ──────────────────────────────────────────────
+
+const MEMORY_PROMPT: &str = "Before you answer, look in your memory directory for earlier notes. \
+Then tell me the capital of France.";
+
+fn memory_tool() -> ToolDef {
+    ToolDef::new(
+        "memory",
+        "Memory directory tool.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}, "path": {"type": "string"}},
+            "required": ["command"]
+        }),
+    )
+    .with_provider_types(vec![ProviderToolType::new("anthropic", "memory_20250818")])
+}
+
+/// Turn-2 history of spec section 3: the user message, a `memory` call and its result.
+fn memory_round() -> Vec<Item> {
+    vec![
+        user(MEMORY_PROMPT),
+        Item::ToolCall {
+            call_id: "tu_mem".to_owned(),
+            name: "memory".to_owned(),
+            args: serde_json::json!({"command": "view", "path": "/memories"}),
+        },
+        tool_result("tu_mem", "Directory: /memories\n(empty)"),
+    ]
+}
+
+fn capital_format() -> ResponseFormat {
+    ResponseFormat::JsonSchema {
+        name: "Capital".to_owned(),
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {"capital": {"type": "string"}},
+            "required": ["capital"]
+        }),
+        strict: false,
+    }
+}
+
+/// Collect text, tool-call names and the finish reason. Panic on an `Err`.
+async fn collect(
+    model_id: &str,
+    mut req: ModelRequest,
+) -> (String, Vec<String>, Option<FinishReason>) {
+    req.model_settings.max_output_tokens = Some(1024);
+    let model = BedrockModel::from_env(model_id)
+        .await
+        .expect("from_env should succeed");
+    let mut s = model
+        .invoke(req, CancellationToken::new())
+        .await
+        .expect("invoke should succeed");
+    let mut text = String::new();
+    let mut names = Vec::new();
+    let mut finish = None;
+    while let Some(ev) = s.next().await {
+        match ev.unwrap_or_else(|e| panic!("stream error: {e:?}")) {
+            ModelEvent::TokenDelta { text: t, .. } => text.push_str(&t),
+            ModelEvent::ToolCallDelta { name: Some(n), .. } => names.push(n),
+            ModelEvent::Finish { reason } => finish = Some(reason),
+            _ => {}
+        }
+    }
+    eprintln!("[live] text={text:?} tools={names:?} finish={finish:?}");
+    (text, names, finish)
+}
+
+fn memory_request(messages: Vec<Item>) -> ModelRequest {
+    let mut req = ModelRequest::new();
+    req.messages = messages;
+    req.tools = vec![memory_tool()];
+    req
+}
+
+/// Turn 1 (`Auto`) calls `memory`. Turn 2 answers in text.
+#[tokio::test]
+#[ignore]
+async fn live_typed_memory_two_turns() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !is_anthropic(&model_id) {
+        eprintln!("[live] {model_id} is not an Anthropic model — skipping");
+        return;
+    }
+    let mut req = memory_request(vec![user(MEMORY_PROMPT)]);
+    req.model_settings.tool_choice = Some(ToolChoice::Auto);
+    let (_, names, _) = collect(&model_id, req).await;
+    assert!(
+        names.iter().any(|n| n == "memory"),
+        "turn 1 names: {names:?}"
+    );
+
+    let (text, _, _) = collect(&model_id, memory_request(memory_round())).await;
+    assert!(!text.trim().is_empty(), "turn 2 text must not be empty");
+}
+
+/// A forced `memory` choice produces a `memory` call.
+#[tokio::test]
+#[ignore]
+async fn live_typed_memory_forced_choice() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !is_anthropic(&model_id) {
+        eprintln!("[live] {model_id} is not an Anthropic model — skipping");
+        return;
+    }
+    let mut req = memory_request(vec![user(MEMORY_PROMPT)]);
+    req.model_settings.tool_choice = Some(ToolChoice::Tool {
+        name: "memory".to_owned(),
+    });
+    let (_, names, _) = collect(&model_id, req).await;
+    assert!(names.iter().any(|n| n == "memory"), "names: {names:?}");
+}
+
+/// Structured output with a typed tool on the first turn: no error.
+#[tokio::test]
+#[ignore]
+async fn live_typed_memory_forced_structured_output() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !is_anthropic(&model_id) {
+        eprintln!("[live] {model_id} is not an Anthropic model — skipping");
+        return;
+    }
+    let mut req = memory_request(vec![user(MEMORY_PROMPT)]);
+    req.model_settings.response_format = Some(capital_format());
+    collect(&model_id, req).await;
+}
+
+/// Structured output after a memory round: valid JSON with a `capital` key.
+#[tokio::test]
+#[ignore]
+async fn live_typed_memory_native_structured_after_round() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !is_anthropic(&model_id) {
+        eprintln!("[live] {model_id} is not an Anthropic model — skipping");
+        return;
+    }
+    let mut req = memory_request(memory_round());
+    req.model_settings.response_format = Some(capital_format());
+    let (text, _, _) = collect(&model_id, req).await;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("output must be valid JSON ({e}); got: {text}"));
+    assert!(v.get("capital").is_some(), "capital key: {v}");
+}
+
+/// `ToolChoice::None` after a memory round: text answer, no tool call.
+#[tokio::test]
+#[ignore]
+async fn live_typed_memory_none_after_round() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    if !is_anthropic(&model_id) {
+        eprintln!("[live] {model_id} is not an Anthropic model — skipping");
+        return;
+    }
+    let mut req = memory_request(memory_round());
+    req.model_settings.tool_choice = Some(ToolChoice::None);
+    let (text, names, _) = collect(&model_id, req).await;
+    assert!(!text.trim().is_empty(), "text must not be empty");
+    assert!(names.is_empty(), "no tool call expected: {names:?}");
 }
