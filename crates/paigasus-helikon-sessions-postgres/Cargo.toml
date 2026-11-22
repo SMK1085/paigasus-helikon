@@ -15,7 +15,8 @@ categories.workspace   = true
 paigasus-helikon-core = { workspace = true }
 async-trait           = { workspace = true }
 serde_json            = { workspace = true }
-# adds postgres driver + aws-lc-rs rustls TLS on top of the workspace sqlx base.
+# adds postgres driver + aws-lc-rs rustls TLS on top of the workspace sqlx base
+# (`runtime-tokio`, `macros`, `migrate`), which has no `sqlite` (SMA-822).
 # `tls-rustls-aws-lc-rs` is the confirmed sqlx 0.9.0 feature name (not `ring`).
 # `json` is required for `serde_json::Value` binding to JSONB columns and for
 # `sqlx::types::Json<T>` decoding.
