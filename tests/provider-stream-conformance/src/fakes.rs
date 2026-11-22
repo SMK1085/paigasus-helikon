@@ -43,6 +43,11 @@ pub enum Fake {
     FinishOnCancel,
     /// A `Finish` after a mid-stream error (assertion 6).
     FinishAfterError,
+    /// A `TokenDelta` after an `Err` (assertion 9).
+    TokenAfterError,
+    /// A call-scoped `ProviderData` for a `call_id` no tool call streamed
+    /// (assertion 8).
+    ProviderDataUnknownCall,
     /// Two name-bearing deltas for one `call_id` — the SMA-550 shape
     /// (assertion 7).
     TwoNamedDeltas,
@@ -89,6 +94,22 @@ impl Fake {
             | Fake::FinishOnTruncation
             | Fake::FinishOnCancel
             | Fake::FinishAfterError => events.push(finish(scenario)),
+            Fake::TokenAfterError => events.push(token("trailing")),
+            Fake::ProviderDataUnknownCall => {
+                // Insert before the `Finish` so assertion 1 stays satisfied.
+                let at = events
+                    .iter()
+                    .position(|e| matches!(e, Ok(ModelEvent::Finish { .. })))
+                    .expect("this fake must be run under a scenario that finishes");
+                events.insert(
+                    at,
+                    Ok(ModelEvent::ProviderData {
+                        provider: "test".into(),
+                        call_id: Some("x".into()),
+                        data: serde_json::json!({ "kind": "tool_use" }),
+                    }),
+                );
+            }
             Fake::UsageAfterFinish => {
                 events.retain(|e| !matches!(e, Ok(ModelEvent::Usage { .. })));
                 events.push(usage());
@@ -275,6 +296,18 @@ mod tests {
                 Fake::FinishAfterError,
                 Scenario::ErrorAfterStopReason,
                 Violation::FinishAfterError,
+            ),
+            (
+                Fake::TokenAfterError,
+                Scenario::ErrorMidGeneration,
+                Violation::EventAfterError,
+            ),
+            (
+                Fake::ProviderDataUnknownCall,
+                Scenario::ToolCallCleanStop,
+                Violation::ProviderDataUnknownCall {
+                    call_id: "x".into(),
+                },
             ),
             (
                 Fake::TwoNamedDeltas,

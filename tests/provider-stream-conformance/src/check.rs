@@ -12,7 +12,9 @@ use paigasus_helikon_core::{ModelError, ModelEvent};
 /// an `Err` or a cancellation, because assertion 6 governs the former and
 /// assertion 5 governs the latter, and both demand the opposite outcome —
 /// withholding `Finish` is exactly what the contract requires of a cancelled
-/// stream.
+/// stream. Assertion 9 (nothing but `Usage` after an `Err`) runs directly
+/// after assertion 6, so a `Finish` after an `Err` keeps the name
+/// `FinishAfterError`.
 pub fn classify(
     events: &[Result<ModelEvent, ModelError>],
     scenario: Scenario,
@@ -54,6 +56,21 @@ pub fn classify(
     // Assertion 6: a mid-stream error must not be followed by a clean Finish.
     if finish_at.zip(err_at).is_some_and(|(f, e)| f > e) {
         return Some(Violation::FinishAfterError);
+    }
+
+    // Assertion 9: nothing follows the first `Err` except `Usage`. Checked
+    // after assertion 6 so a `Finish` after an `Err` keeps the more specific
+    // `FinishAfterError`. The `Usage` exemption is option B of the spec's
+    // section 6.6: the tokens were consumed, so a trailing `Usage` is real
+    // billing data. Any other event after it, including a later `Err`, is
+    // still a violation.
+    if let Some(e) = err_at {
+        if events[e + 1..]
+            .iter()
+            .any(|ev| !matches!(ev, Ok(ModelEvent::Usage { .. })))
+        {
+            return Some(Violation::EventAfterError);
+        }
     }
 
     // Assertion 4: a Finish must never appear when the scenario expects no
@@ -382,5 +399,48 @@ mod tests {
     fn provider_data_without_call_id_passes() {
         let evs = vec![token("hi"), provider_data(None), finish()];
         assert_eq!(classify(&evs, Scenario::CleanStop, false), None);
+    }
+
+    /// Assertion 9: a token after an `Err` is a violation.
+    #[test]
+    fn token_after_err_is_a_violation() {
+        let evs = vec![token("hi"), Err(ModelError::Unavailable), token("more")];
+        assert_eq!(
+            classify(&evs, Scenario::ErrorMidGeneration, false),
+            Some(Violation::EventAfterError)
+        );
+    }
+
+    /// Assertion 9, option B of the spec's section 6.6: a `Usage` after an
+    /// `Err` is allowed.
+    #[test]
+    fn usage_after_err_conforms() {
+        let evs = vec![token("hi"), Err(ModelError::Unavailable), usage()];
+        assert_eq!(classify(&evs, Scenario::ErrorMidGeneration, false), None);
+    }
+
+    /// The `Usage` exemption does not reopen the stream.
+    #[test]
+    fn token_after_usage_after_err_is_a_violation() {
+        let evs = vec![
+            token("hi"),
+            Err(ModelError::Unavailable),
+            usage(),
+            token("more"),
+        ];
+        assert_eq!(
+            classify(&evs, Scenario::ErrorMidGeneration, false),
+            Some(Violation::EventAfterError)
+        );
+    }
+
+    /// A `Finish` after an `Err` keeps the more specific name (assertion 6).
+    #[test]
+    fn finish_after_err_keeps_its_own_name() {
+        let evs = vec![token("hi"), Err(ModelError::Unavailable), finish()];
+        assert_eq!(
+            classify(&evs, Scenario::ErrorAfterStopReason, false),
+            Some(Violation::FinishAfterError)
+        );
     }
 }

@@ -108,6 +108,8 @@ pub enum Violation {
     FinishOnCancel,
     /// A `Finish` was emitted after a mid-stream error (assertion 6).
     FinishAfterError,
+    /// An event other than `Usage` followed the first `Err` (assertion 9).
+    EventAfterError,
     /// A `call_id` carried a number of name-bearing deltas other than one, or
     /// the name did not match the fixture's declared tool name (assertion 7).
     ToolNameNotExactlyOnce {
