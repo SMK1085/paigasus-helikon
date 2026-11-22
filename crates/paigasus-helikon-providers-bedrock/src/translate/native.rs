@@ -19,7 +19,7 @@ use crate::translate::request::items_to_messages;
 use crate::translate::response_format::synthesize;
 use crate::translate::schema::Ruleset;
 use crate::translate::tool_choice_none::{apply_tool_choice_none, has_tool_round};
-use crate::translate::tools::{partition_tools, tool_specs};
+use crate::translate::tools::tool_specs;
 use crate::translate::{
     assemble_tool_config, build_inference_config, check_tool_name, required_without_tools_error,
     PreparedConverse,
@@ -50,7 +50,6 @@ pub(crate) fn build_native(
 ) -> Result<PreparedConverse, ModelError> {
     let family = cfg.family;
     let ruleset = Ruleset::for_family(family);
-    let set = partition_tools(&req.tools, ruleset, cfg.sends_typed_tools())?;
     let rf = req.model_settings.response_format.as_ref();
     let tool_choice = req.model_settings.tool_choice.as_ref();
     let mut notices = Vec::new();
@@ -81,8 +80,13 @@ pub(crate) fn build_native(
         if structured {
             Vec::new()
         } else {
-            let outcome =
-                apply_tool_choice_none(std::mem::take(&mut translated.messages), &set, family)?;
+            let outcome = apply_tool_choice_none(
+                std::mem::take(&mut translated.messages),
+                &req.tools,
+                ruleset,
+                cfg.sends_typed_tools(),
+                family,
+            )?;
             translated.messages = outcome.messages;
             additional = outcome.additional;
             outcome.tools

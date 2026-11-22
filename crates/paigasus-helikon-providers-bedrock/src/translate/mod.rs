@@ -25,7 +25,7 @@ use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
 use crate::translate::tool_choice_none::apply_tool_choice_none;
-use crate::translate::tools::{partition_tools, tool_specs};
+use crate::translate::tools::tool_specs;
 
 /// A fully-assembled Bedrock Converse request, ready to send.
 ///
@@ -188,7 +188,6 @@ pub(crate) fn build_request(
     }
     let family = cfg.family;
     let ruleset = Ruleset::for_family(family);
-    let set = partition_tools(&req.tools, ruleset, cfg.sends_typed_tools())?;
 
     // Guard: ResponseFormat::JsonSchema / JsonObject + ToolChoice::Tool → conflict.
     let synthesizing_rf = matches!(
@@ -227,7 +226,13 @@ pub(crate) fn build_request(
     // (a none field for Anthropic models, a text history for the others).
     if none_choice {
         let translated = items_to_messages(&req.messages)?;
-        let outcome = apply_tool_choice_none(translated.messages, &set, family)?;
+        let outcome = apply_tool_choice_none(
+            translated.messages,
+            &req.tools,
+            ruleset,
+            cfg.sends_typed_tools(),
+            family,
+        )?;
         let tool_config = assemble_tool_config(outcome.tools, None)?;
         let inference_config = build_inference_config(req, cfg);
         return Ok(PreparedConverse {
@@ -527,6 +532,7 @@ pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::translate::additional::AdditionalToolChoice;
     use crate::translate::tools::SYNTHESIZED_TOOL_NAME;
     use insta::assert_json_snapshot;
     use paigasus_helikon_core::{
@@ -567,7 +573,7 @@ mod tests {
     }
 
     fn none_choice_of(p: &PreparedConverse) -> bool {
-        p.additional.tool_choice == Some(crate::translate::additional::AdditionalToolChoice::None)
+        p.additional.tool_choice == Some(AdditionalToolChoice::None)
     }
 
     fn assert_no_forced_choice(p: &PreparedConverse) {
@@ -1699,6 +1705,37 @@ mod tests {
                 "tool_choice": {"type": "none"}
             })
         );
+    }
+
+    #[test]
+    fn structured_native_none_accepts_a_reserved_name_tool() {
+        let mut req = none_after_tool_round();
+        req.tools = vec![ToolDef::new(
+            SYNTHESIZED_TOOL_NAME,
+            "reserved",
+            json!({"type": "object"}),
+        )];
+        req.model_settings.response_format = Some(transaction_format());
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert_eq!(p.additional, AdditionalFields::default());
+        let w = to_wire_json(&p);
+        // Only the anchor goes out. The user tool is not sent.
+        assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
+    }
+
+    #[test]
+    fn none_without_round_accepts_a_reserved_name_tool_on_the_forced_path() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![ToolDef::new(
+            SYNTHESIZED_TOOL_NAME,
+            "reserved",
+            json!({"type": "object"}),
+        )];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let p = build(&haiku55_cfg(), &req).unwrap();
+        assert!(!none_choice_of(&p));
+        assert!(to_wire_json(&p)["toolConfig"].is_null());
     }
 
     #[test]

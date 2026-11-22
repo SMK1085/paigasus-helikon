@@ -9,13 +9,14 @@ use std::collections::HashSet;
 use aws_sdk_bedrockruntime::types::{
     ContentBlock, Message, Tool, ToolInputSchema, ToolResultContentBlock, ToolSpecification,
 };
-use paigasus_helikon_core::ModelError;
+use paigasus_helikon_core::{ModelError, ToolDef};
 use serde_json::json;
 
 use crate::document::{document_to_value, value_to_document};
 use crate::family::{ModelFamily, ToolChoiceNoneStrategy};
 use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
-use crate::translate::tools::{placeholder_spec, ToolSet};
+use crate::translate::schema::Ruleset;
+use crate::translate::tools::{partition_tools, placeholder_spec};
 
 /// Description of a tool spec that is derived from the history.
 const DERIVED_DESCRIPTION: &str = "A tool that this conversation used earlier.";
@@ -61,10 +62,17 @@ fn unchanged(messages: Vec<Message>) -> NoneOutcome {
 /// - `TextHistory`: each tool block becomes a text block.
 ///
 /// # Errors
-/// The error of [`placeholder_spec`], when the request has only typed tools.
+/// The tools are split only when the strategy sends them. A request without a
+/// tool round, or a text-history family, never validates the tool names.
+///
+/// # Errors
+/// The errors of [`partition_tools`] and [`placeholder_spec`], when the
+/// strategy sends the tools.
 pub(crate) fn apply_tool_choice_none(
     messages: Vec<Message>,
-    tools: &ToolSet,
+    defs: &[ToolDef],
+    ruleset: Ruleset,
+    typed_enabled: bool,
     family: ModelFamily,
 ) -> Result<NoneOutcome, ModelError> {
     if !has_tool_round(&messages) {
@@ -72,6 +80,7 @@ pub(crate) fn apply_tool_choice_none(
     }
     match family.tool_choice_none_strategy() {
         ToolChoiceNoneStrategy::AnthropicNoneField => {
+            let tools = partition_tools(defs, ruleset, typed_enabled)?;
             let mut specs = tools.generic.clone();
             let mut seen: HashSet<String> = specs.iter().map(|s| s.name().to_owned()).collect();
             seen.extend(tools.typed.iter().map(|t| t.name.clone()));
@@ -194,7 +203,6 @@ mod tests {
     use super::*;
     use crate::translate::request::items_to_messages;
     use crate::translate::schema::Ruleset;
-    use crate::translate::tools::partition_tools;
     use paigasus_helikon_core::{ContentPart, Item, ProviderToolType, ToolDef};
 
     fn user_text(s: &str) -> Item {
@@ -263,8 +271,7 @@ mod tests {
         tools: &[ToolDef],
         family: ModelFamily,
     ) -> Result<NoneOutcome, ModelError> {
-        let set = partition_tools(tools, Ruleset::Strict, false)?;
-        apply_tool_choice_none(msgs, &set, family)
+        apply_tool_choice_none(msgs, tools, Ruleset::Strict, false, family)
     }
 
     fn none_set(out: &NoneOutcome) -> bool {
@@ -276,8 +283,8 @@ mod tests {
             .with_provider_types(vec![ProviderToolType::new("anthropic", "memory_20250818")])
     }
 
-    fn typed_set(tools: &[ToolDef]) -> ToolSet {
-        partition_tools(tools, Ruleset::Strict, true).unwrap()
+    fn apply_typed(msgs: Vec<Message>, tools: &[ToolDef]) -> NoneOutcome {
+        apply_tool_choice_none(msgs, tools, Ruleset::Strict, true, ModelFamily::Anthropic).unwrap()
     }
 
     fn memory_entry() -> serde_json::Value {
@@ -363,8 +370,7 @@ mod tests {
     #[test]
     fn typed_only_memory_history_gives_placeholder_and_none() {
         let msgs = history("memory", json!({"command": "view"}), "ok");
-        let set = typed_set(&[memory_def()]);
-        let out = apply_tool_choice_none(msgs, &set, ModelFamily::Anthropic).unwrap();
+        let out = apply_typed(msgs, &[memory_def()]);
         assert_eq!(names(&out.tools), ["__paigasus_structured_output__"]);
         assert_eq!(out.additional.tools, vec![memory_entry()]);
         assert_eq!(out.additional.tool_choice, Some(AdditionalToolChoice::None));
@@ -373,8 +379,7 @@ mod tests {
     #[test]
     fn typed_name_gets_no_derived_spec() {
         let msgs = history("memory", json!({"command": "view"}), "ok");
-        let set = typed_set(&[memory_def(), def("get_balance")]);
-        let out = apply_tool_choice_none(msgs, &set, ModelFamily::Anthropic).unwrap();
+        let out = apply_typed(msgs, &[memory_def(), def("get_balance")]);
         assert_eq!(names(&out.tools), ["get_balance"]);
         assert_eq!(out.additional.tools, vec![memory_entry()]);
         assert!(none_set(&out));
@@ -383,8 +388,7 @@ mod tests {
     #[test]
     fn typed_tools_without_tool_round_send_nothing() {
         let msgs = items_to_messages(&[user_text("hi")]).unwrap().messages;
-        let set = typed_set(&[memory_def()]);
-        let out = apply_tool_choice_none(msgs, &set, ModelFamily::Anthropic).unwrap();
+        let out = apply_typed(msgs, &[memory_def()]);
         assert!(out.tools.is_empty());
         assert_eq!(out.additional, AdditionalFields::default());
     }
@@ -392,8 +396,14 @@ mod tests {
     #[test]
     fn text_history_family_ignores_typed_set() {
         let msgs = history("get_balance", json!({}), "ok");
-        let set = partition_tools(&[memory_def()], Ruleset::Strict, false).unwrap();
-        let out = apply_tool_choice_none(msgs, &set, ModelFamily::AmazonNova).unwrap();
+        let out = apply_tool_choice_none(
+            msgs,
+            &[memory_def()],
+            Ruleset::Strict,
+            false,
+            ModelFamily::AmazonNova,
+        )
+        .unwrap();
         assert!(!none_set(&out));
         assert!(out.tools.is_empty());
         assert_eq!(out.additional, AdditionalFields::default());
@@ -435,7 +445,12 @@ mod tests {
     fn no_tool_round_is_unchanged() {
         for family in [ModelFamily::Anthropic, ModelFamily::AmazonNova] {
             let msgs = items_to_messages(&[user_text("hi")]).unwrap().messages;
-            let out = apply(msgs.clone(), &[def("get_balance")], family).unwrap();
+            let out = apply(
+                msgs.clone(),
+                &[def("__paigasus_structured_output__")],
+                family,
+            )
+            .unwrap();
             assert!(!none_set(&out));
             assert!(out.tools.is_empty());
             assert_eq!(out.messages, msgs);
