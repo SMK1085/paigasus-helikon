@@ -51,15 +51,11 @@ impl ToolSet {
     }
 
     /// Whether the request has at least one tool of any kind.
-    // remove in Task 4: no non-test caller yet.
-    #[allow(dead_code)]
     pub(crate) fn has_any(&self) -> bool {
         !self.generic.is_empty() || !self.typed.is_empty()
     }
 
     /// Whether `name` is the name of a typed tool.
-    // remove in Task 4: no non-test caller yet.
-    #[allow(dead_code)]
     pub(crate) fn is_typed_name(&self, name: &str) -> bool {
         self.typed.iter().any(|t| t.name == name)
     }

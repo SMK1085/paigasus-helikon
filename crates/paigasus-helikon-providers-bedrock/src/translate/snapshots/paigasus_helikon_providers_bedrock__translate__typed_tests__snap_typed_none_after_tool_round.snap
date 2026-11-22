@@ -1,0 +1,71 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/typed_tests.rs
+expression: w
+---
+{
+  "additionalModelRequestFields": {
+    "tool_choice": {
+      "type": "none"
+    },
+    "tools": [
+      {
+        "name": "memory",
+        "type": "memory_20250818"
+      }
+    ]
+  },
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Remember this."
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "toolUse": {
+            "name": "memory",
+            "toolUseId": "tu_1"
+          }
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "toolResult": {
+            "content": [
+              {
+                "text": "empty"
+              }
+            ],
+            "toolUseId": "tu_1"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "us.anthropic.claude-sonnet-4-6",
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": {
+    "toolChoice": null,
+    "tools": [
+      {
+        "toolSpec": {
+          "description": "Placeholder. Never call this tool.",
+          "inputSchema": {
+            "json": "<Document>"
+          },
+          "name": "__paigasus_structured_output__"
+        }
+      }
+    ]
+  }
+}

@@ -8,8 +8,6 @@ use serde_json::{json, Map, Value};
 
 /// A tool choice that the provider sends in `additionalModelRequestFields`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// `Any` and `Tool` are built from Task 3 on; remove the allow then.
-#[allow(dead_code)]
 pub(crate) enum AdditionalToolChoice {
     /// `{"type": "none"}`: the model must not call a tool.
     None,

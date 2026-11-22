@@ -20,12 +20,12 @@ use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
 use crate::builder::Config;
 use crate::family::ModelFamily; // used by translate_tool_choice
 use crate::policy::{NativeNotice, OutputPath};
-use crate::translate::additional::AdditionalFields;
+use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
-use crate::translate::tool_choice_none::apply_tool_choice_none;
-use crate::translate::tools::tool_specs;
+use crate::translate::tool_choice_none::{apply_tool_choice_none, has_tool_round};
+use crate::translate::tools::{partition_tools, placeholder_spec, ToolSet, SYNTHESIZED_TOOL_NAME};
 
 /// A fully-assembled Bedrock Converse request, ready to send.
 ///
@@ -78,12 +78,16 @@ fn required_without_tools_error() -> ModelError {
 
 /// Make sure that `name` is the name of a tool in `tools`.
 ///
+/// A name is valid when a generic tool in `tools` or a typed tool in `typed`
+/// has it.
+///
 /// # Errors
-/// Returns [`ModelError::Other`] when no tool in `tools` has the name `name`.
-fn check_tool_name(tools: &[Tool], name: &str) -> Result<(), ModelError> {
-    let defined = tools
-        .iter()
-        .any(|t| matches!(t, Tool::ToolSpec(spec) if spec.name() == name));
+/// Returns [`ModelError::Other`] when no tool has the name `name`.
+fn check_tool_name(tools: &[Tool], typed: &ToolSet, name: &str) -> Result<(), ModelError> {
+    let defined = typed.is_typed_name(name)
+        || tools
+            .iter()
+            .any(|t| matches!(t, Tool::ToolSpec(spec) if spec.name() == name));
     if defined {
         Ok(())
     } else {
@@ -251,8 +255,8 @@ pub(crate) fn build_request(
     // Translate messages.
     let translated = items_to_messages(&req.messages)?;
 
-    // Translate user tool defs (also validates reserved name).
-    let user_specs = tool_specs(&req.tools, ruleset)?;
+    // Split the user tools (also validates the reserved name).
+    let set = partition_tools(&req.tools, ruleset, cfg.sends_typed_tools())?;
 
     // Synthesize structured output tool (if applicable).
     let Synthesized {
@@ -262,7 +266,7 @@ pub(crate) fn build_request(
     } = synthesize(req.model_settings.response_format.as_ref(), family, ruleset)?;
 
     // Merge tool lists: user tools first, synthesized appended.
-    let mut all_tools: Vec<Tool> = user_specs.into_iter().map(Tool::ToolSpec).collect();
+    let mut all_tools: Vec<Tool> = set.generic.iter().cloned().map(Tool::ToolSpec).collect();
     if let Some(st) = synth_tool {
         all_tools.push(Tool::ToolSpec(st));
     }
@@ -277,20 +281,47 @@ pub(crate) fn build_request(
     // Synthesis overrides caller tool_choice.
     // synth_tool.is_some() always pushes to all_tools above, so a synthesized tool_choice is never silently dropped here.
     let effective_tc = synth_tc.or(caller_tc);
+    let typed = set.has_typed();
 
     // Validate forced tool choices on supported families.
     // (On unsupported families, forced choices were already omitted by translate_tool_choice.)
     if family.supports_forced_tool_choice() {
         match req.model_settings.tool_choice.as_ref() {
             Some(ToolChoice::Required) if !synthesizing => {
-                if all_tools.is_empty() {
+                if !set.has_any() {
                     return Err(required_without_tools_error());
                 }
             }
-            Some(ToolChoice::Tool { name }) => check_tool_name(&all_tools, name)?,
+            Some(ToolChoice::Tool { name }) => check_tool_name(&all_tools, &set, name)?,
             _ => {}
         }
     }
+
+    // Typed tools: the tool choice moves to `additionalModelRequestFields`,
+    // because Converse `toolChoice` cannot name a typed tool. A request that
+    // sends only typed tools after a tool round gets a placeholder spec, so
+    // `toolConfig.tools` is not empty.
+    let mut additional = AdditionalFields::default();
+    let effective_tc = if typed {
+        additional.tool_choice = if synthesizing {
+            Some(AdditionalToolChoice::Tool(SYNTHESIZED_TOOL_NAME.to_owned()))
+        } else if family.supports_forced_tool_choice() {
+            match req.model_settings.tool_choice.as_ref() {
+                Some(ToolChoice::Required) => Some(AdditionalToolChoice::Any),
+                Some(ToolChoice::Tool { name }) => Some(AdditionalToolChoice::Tool(name.clone())),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        additional.tools = set.typed_entries();
+        if all_tools.is_empty() && has_tool_round(&translated.messages) {
+            all_tools.push(Tool::ToolSpec(placeholder_spec()?));
+        }
+        None
+    } else {
+        effective_tc
+    };
 
     let tool_config = assemble_tool_config(all_tools, effective_tc)?;
 
@@ -306,7 +337,7 @@ pub(crate) fn build_request(
         synthesizing,
         output_config: None,
         notices: Vec::new(),
-        additional: AdditionalFields::default(),
+        additional,
     })
 }
 
@@ -528,6 +559,9 @@ pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod typed_tests;
 
 #[cfg(test)]
 mod tests {

@@ -19,7 +19,7 @@ use crate::translate::request::items_to_messages;
 use crate::translate::response_format::synthesize;
 use crate::translate::schema::Ruleset;
 use crate::translate::tool_choice_none::{apply_tool_choice_none, has_tool_round};
-use crate::translate::tools::tool_specs;
+use crate::translate::tools::{partition_tools, tool_specs};
 use crate::translate::{
     assemble_tool_config, build_inference_config, check_tool_name, required_without_tools_error,
     PreparedConverse,
@@ -101,7 +101,10 @@ pub(crate) fn build_native(
     // Check a caller-selected tool name against the user tools only. The anchor
     // below must not make an undefined name valid.
     if let Some(ToolChoice::Tool { name }) = tool_choice {
-        check_tool_name(&all_tools, name)?;
+        // Until Task 5 the native path sends no typed tools. The set is only
+        // for the name check, so the behaviour is unchanged.
+        let set = partition_tools(&req.tools, ruleset, false)?;
+        check_tool_name(&all_tools, &set, name)?;
     }
 
     // Anchor: a structured format, no user tools and a tool round in the history.
