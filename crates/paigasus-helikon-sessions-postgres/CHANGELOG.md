@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- The crate no longer enables the sqlx `sqlite` feature. Postgres-only users do not compile bundled SQLite (`libsqlite3-sys`). Future SQLite advisories no longer affect them. RUSTSEC-2026-0459 is an example of such an advisory. A crate that uses `sqlx::sqlite`, or `sqlx::AnyPool` with a `sqlite:` URL, and got the feature only through this crate must add `features = ["sqlite"]` to its own `sqlx` dependency. The `AnyPool` case compiles but fails at run time.
+
 ## [0.3.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-sessions-postgres-v0.3.0...paigasus-helikon-sessions-postgres-v0.3.1) - 2026-11-21
 
 ### Other
