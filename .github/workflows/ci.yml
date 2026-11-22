@@ -211,6 +211,10 @@ jobs:
             exit 1
           fi
           echo "vendored-protox is active"
+      # SMA-822: only sessions-sqlite and evals/trace-sqlite may enable the sqlx
+      # `sqlite` feature. Resolves the graph only (no build).
+      - name: Assert SQLite only where it is used
+        run: bash scripts/check-sqlite-scope.sh
 
   docs:
     runs-on: ubuntu-latest
