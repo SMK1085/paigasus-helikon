@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01PiLWffCVj3PZNt9uqe4wFr",
+  "agent_id": "aa2e9c50b1c56bb2a",
+  "task_description": "Review SMA-845 Task 11",
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 123413,
+    "cache_read_tokens": 2572201,
+    "output_tokens": 16487,
+    "api_call_count": 22
+  },
+  "started_at": "2026-11-22T16:14:40.748918+01:00",
+  "completed_at": "2026-11-22T16:17:49.219649+01:00"
+}
