@@ -470,20 +470,22 @@ mod tests {
         }
     }
 
-    /// A history with thinking blocks and position parts of this crate.
+    /// A history with thinking blocks and position parts of this crate. The
+    /// parts hold the tool call before the text, but the positions put the text
+    /// first. So only a replay that reads the positions moves the text first.
     fn history_with_blocks() -> Vec<Item> {
         use crate::provider_data::{part, AnthropicData, ThinkingBlock};
         vec![
             user_text("q"),
             Item::AssistantMessage {
                 content: vec![
-                    ContentPart::Text {
-                        text: "t".to_owned(),
-                    },
                     ContentPart::ToolUse {
                         call_id: "c1".to_owned(),
                         name: "ping".to_owned(),
                         args: serde_json::json!({}),
+                    },
+                    ContentPart::Text {
+                        text: "t".to_owned(),
                     },
                     part(
                         AnthropicData::Block {
@@ -542,6 +544,21 @@ mod tests {
         let out = messages_with(ExtendedThinking::Disabled, history);
         assert!(!has_thinking(&out), "{out}");
         assert_eq!(out, messages_with(ExtendedThinking::Disabled, plain));
+        let types: Vec<&str> = out[1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, ["tool_use", "text"], "{out}");
+        let adaptive = messages_with(ExtendedThinking::Adaptive, history_with_blocks());
+        let types: Vec<&str> = adaptive[1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, ["thinking", "text", "tool_use"], "{adaptive}");
     }
 
     #[test]
