@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01TZpLiPAdZh1ff7BoAs6r4k",
+  "agent_id": "ad9e6d0265e933e78",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-review SMA-854 final fix wave",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 70962,
+    "cache_read_tokens": 342032,
+    "output_tokens": 2135,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-22T17:43:52.167743+01:00",
+  "completed_at": "2026-11-22T17:44:17.492651+01:00"
+}

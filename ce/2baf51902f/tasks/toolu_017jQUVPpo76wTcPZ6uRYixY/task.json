@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017jQUVPpo76wTcPZ6uRYixY",
+  "agent_id": "a91a2155840f7ca94",
+  "subagent_type": "general-purpose",
+  "task_description": "Apply SMA-854 final review fixes",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 83177,
+    "cache_read_tokens": 1380924,
+    "output_tokens": 7196,
+    "api_call_count": 16
+  },
+  "started_at": "2026-11-22T17:42:03.112626+01:00",
+  "completed_at": "2026-11-22T17:43:30.122829+01:00"
+}
