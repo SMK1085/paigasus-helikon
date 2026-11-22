@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.9.3...paigasus-helikon-v0.9.4) - 2026-11-22
+
+### Added
+
+- *(providers)* SMA-844 send the native memory tool type through bedrock ([#390](https://github.com/SMK1085/paigasus-helikon/pull/390))
+
+### Other
+
+- *(providers)* SMA-845 state the provenance of wire-format fixtures ([#384](https://github.com/SMK1085/paigasus-helikon/pull/384))
+
 ## [0.9.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-v0.9.2...paigasus-helikon-v0.9.3) - 2026-11-22
 
 ### Other

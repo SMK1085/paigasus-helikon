@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.4.2...paigasus-helikon-providers-openai-v0.4.3) - 2026-11-22
+
+### Other
+
+- *(providers)* SMA-845 state the provenance of wire-format fixtures ([#384](https://github.com/SMK1085/paigasus-helikon/pull/384))
+
 ## [0.4.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-openai-v0.4.1...paigasus-helikon-providers-openai-v0.4.2) - 2026-11-21
 
 ### Other
