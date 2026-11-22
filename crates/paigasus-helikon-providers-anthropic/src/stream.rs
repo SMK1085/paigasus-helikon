@@ -13,7 +13,9 @@ use crate::translate::response_format::SYNTHESIZED_TOOL_NAME;
 
 #[derive(Debug)]
 enum BlockState {
-    Text,
+    Text {
+        bytes: u64,
+    },
     Thinking {
         text: String,
         signature: String,
@@ -43,8 +45,6 @@ pub(crate) struct MessageTranslator {
     synthesized_tool_index: Option<u32>,
     other_tool_fired: bool,
     terminal_emitted: bool,
-    /// The first text block of the response has stopped.
-    text_position_recorded: bool,
     /// The stream has emitted a `block` part of this response.
     block_emitted: bool,
     /// Position records that wait for the first `block` part.
@@ -62,7 +62,6 @@ impl MessageTranslator {
             synthesized_tool_index: None,
             other_tool_fired: false,
             terminal_emitted: false,
-            text_position_recorded: false,
             block_emitted: false,
             waiting_positions: Vec::new(),
         }
@@ -104,7 +103,7 @@ impl MessageTranslator {
                 content_block,
             } => match content_block {
                 ContentBlockHead::Text => {
-                    self.blocks.insert(index, BlockState::Text);
+                    self.blocks.insert(index, BlockState::Text { bytes: 0 });
                 }
                 ContentBlockHead::Thinking {
                     thinking,
@@ -140,6 +139,15 @@ impl MessageTranslator {
             },
             AnthropicEvent::ContentBlockDelta { index, delta } => match delta {
                 ContentBlockDelta::TextDelta { text } => {
+                    if let Some(BlockState::Text { bytes }) = self.blocks.get_mut(&index) {
+                        *bytes = bytes.saturating_add(text.len() as u64);
+                    } else {
+                        tracing::debug!(
+                            target: "paigasus::anthropic::stream",
+                            index,
+                            "text_delta for a block that is not an open text block",
+                        );
+                    }
                     out.push(Ok(ModelEvent::TokenDelta { text }));
                 }
                 ContentBlockDelta::ThinkingDelta { thinking } => {
@@ -236,7 +244,7 @@ impl MessageTranslator {
     }
 
     /// Close the block at `index`: keep a valid thinking block and record the
-    /// positions of the text and `tool_use` blocks.
+    /// positions of each text block and each `tool_use` block.
     fn stop_block(&mut self, index: u32, out: &mut Vec<Result<ModelEvent, ModelError>>) {
         // No event can follow `Finish`, so a block stop after the terminal
         // event gives no provider data.
@@ -272,12 +280,14 @@ impl MessageTranslator {
                 ThinkingBlock::RedactedThinking { data },
                 out,
             ),
-            BlockState::Text => {
-                if !self.text_position_recorded {
-                    self.text_position_recorded = true;
-                    self.position(AnthropicData::Text { index }.into_event(None), out);
+            BlockState::Text { bytes } => self.position(
+                AnthropicData::Text {
+                    index,
+                    bytes: Some(bytes),
                 }
-            }
+                .into_event(None),
+                out,
+            ),
             BlockState::ToolUse {
                 call_id,
                 name_emitted,
@@ -995,6 +1005,25 @@ mod tests {
         }
     }
 
+    fn text_delta(index: u32, text: &str) -> AnthropicEvent {
+        AnthropicEvent::ContentBlockDelta {
+            index,
+            delta: ContentBlockDelta::TextDelta {
+                text: text.to_owned(),
+            },
+        }
+    }
+
+    fn text_pos(index: u32, bytes: u64) -> (AnthropicData, Option<String>) {
+        (
+            AnthropicData::Text {
+                index,
+                bytes: Some(bytes),
+            },
+            None,
+        )
+    }
+
     fn stop(index: u32) -> AnthropicEvent {
         AnthropicEvent::ContentBlockStop { index }
     }
@@ -1039,7 +1068,13 @@ mod tests {
             provider_data(&events),
             vec![
                 (block(0, &joined, "SIG_FAKE_1"), None),
-                (AnthropicData::Text { index: 1 }, None),
+                (
+                    AnthropicData::Text {
+                        index: 1,
+                        bytes: Some(210)
+                    },
+                    None
+                ),
                 (
                     AnthropicData::ToolUse { index: 2 },
                     Some("toolu_017EB2o3zrXW8R73aqBPNiZi".to_owned())
@@ -1059,7 +1094,13 @@ mod tests {
             vec![
                 (redacted(0, "REDACTED_FAKE_1"), None),
                 (redacted(1, "REDACTED_FAKE_2"), None),
-                (AnthropicData::Text { index: 2 }, None),
+                (
+                    AnthropicData::Text {
+                        index: 2,
+                        bytes: Some(92)
+                    },
+                    None
+                ),
                 (
                     AnthropicData::ToolUse { index: 3 },
                     Some("toolu_01TUKF2PUduQbRPsN2DaUV1u".to_owned())
@@ -1137,7 +1178,13 @@ mod tests {
             provider_data(&events),
             vec![
                 (block(0, "Let me think...", "abc123"), None),
-                (AnthropicData::Text { index: 1 }, None),
+                (
+                    AnthropicData::Text {
+                        index: 1,
+                        bytes: Some(2)
+                    },
+                    None
+                ),
             ]
         );
     }
@@ -1221,9 +1268,104 @@ mod tests {
             provider_data(&events),
             vec![
                 (block(1, "", "SIG_FAKE_1"), None),
-                (AnthropicData::Text { index: 0 }, None),
+                (
+                    AnthropicData::Text {
+                        index: 0,
+                        bytes: Some(2)
+                    },
+                    None
+                ),
             ]
         );
+    }
+
+    #[test]
+    fn each_text_block_records_its_position_and_bytes() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                signature_delta(0, "SIG_FAKE_1"),
+                stop(0),
+                start(1, ContentBlockHead::Text),
+                text_delta(1, "A"),
+                stop(1),
+                start(2, thinking_head()),
+                signature_delta(2, "SIG_FAKE_2"),
+                stop(2),
+                start(3, ContentBlockHead::Text),
+                text_delta(3, "é ü"),
+                stop(3),
+                start(4, tool_head("tu_1", "search")),
+                json_delta(4, "{\"q\":1}"),
+                stop(4),
+            ],
+        );
+        assert_eq!(
+            provider_data(&events),
+            vec![
+                (block(0, "", "SIG_FAKE_1"), None),
+                text_pos(1, 1),
+                (block(2, "", "SIG_FAKE_2"), None),
+                text_pos(3, 5),
+                (AnthropicData::ToolUse { index: 4 }, Some("tu_1".to_owned())),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_before_first_kept_block_waits_then_flushes_in_order() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, ContentBlockHead::Text),
+                text_delta(0, "A"),
+                stop(0),
+                start(1, thinking_head()),
+                signature_delta(1, "SIG_FAKE_1"),
+                stop(1),
+                start(2, ContentBlockHead::Text),
+                text_delta(2, "B"),
+                stop(2),
+            ],
+        );
+        assert_eq!(
+            provider_data(&events),
+            vec![
+                (block(1, "", "SIG_FAKE_1"), None),
+                text_pos(0, 1),
+                text_pos(2, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_delta_for_a_block_that_is_not_open_counts_nowhere() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, thinking_head()),
+                signature_delta(0, "SIG_FAKE_1"),
+                stop(0),
+                start(1, ContentBlockHead::Text),
+                text_delta(9, "XX"),
+                text_delta(1, "A"),
+                stop(1),
+            ],
+        );
+        let data = provider_data(&events);
+        assert_eq!(data.last().unwrap(), &text_pos(1, 1));
+        let tokens: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::TokenDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tokens, vec!["XX", "A"]);
     }
 
     #[test]

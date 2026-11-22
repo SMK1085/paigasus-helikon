@@ -82,10 +82,14 @@ pub(crate) enum AnthropicData {
         /// The block itself.
         block: ThinkingBlock,
     },
-    /// The position of the first text block of the response.
+    /// The position of one text block of the response. `bytes` is the UTF-8
+    /// byte length of its text. Data from before SMA-854 has no `bytes`.
     Text {
         /// The content-block index of the text block.
         index: u32,
+        /// The UTF-8 byte length of the text of the block.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bytes: Option<u64>,
     },
     /// The position of a `tool_use` block.
     ToolUse {
@@ -184,12 +188,32 @@ mod tests {
             json!({"kind":"block","index":1,"block":{"type":"redacted_thinking","data":"REDACTED_FAKE_1"}})
         );
         assert_eq!(
-            serde_json::to_value(AnthropicData::Text { index: 2 }).unwrap(),
-            json!({"kind":"text","index":2})
+            serde_json::to_value(AnthropicData::Text {
+                index: 2,
+                bytes: Some(5)
+            })
+            .unwrap(),
+            json!({"kind":"text","index":2,"bytes":5})
         );
         assert_eq!(
             serde_json::to_value(AnthropicData::ToolUse { index: 3 }).unwrap(),
             json!({"kind":"tool_use","index":3})
+        );
+    }
+
+    #[test]
+    fn text_position_without_bytes_parses() {
+        let old = AnthropicData::deserialize(json!({"kind":"text","index":2})).unwrap();
+        assert_eq!(
+            old,
+            AnthropicData::Text {
+                index: 2,
+                bytes: None
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&old).unwrap(),
+            json!({"kind":"text","index":2})
         );
     }
 
