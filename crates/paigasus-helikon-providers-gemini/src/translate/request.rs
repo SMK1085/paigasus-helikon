@@ -249,9 +249,7 @@ pub(crate) fn items_to_contents(
             }
         }
     }
-    if is_gemini_3_or_later(model_id) {
-        add_dummy_signatures(&mut merged);
-    }
+    add_dummy_signatures(&mut merged);
     let contents: Vec<Value> = merged
         .into_iter()
         .map(|(role, parts)| {
@@ -260,7 +258,7 @@ pub(crate) fn items_to_contents(
         })
         .collect();
     let mut contents = contents;
-    if is_gemini_3_or_later(model_id) && contents.last().is_some_and(|c| c["role"] == "model") {
+    if contents.last().is_some_and(|c| c["role"] == "model") {
         contents.push(json!({
             "role": "user",
             "parts": [{ "text": TRAILING_MODEL_TURN_PROMPT }],
@@ -279,7 +277,7 @@ pub(crate) fn items_to_contents(
 /// Merge adjacent entries of the same role into one content, in order.
 ///
 /// Two `user` entries merge only when both hold only `functionResponse` parts
-/// or both hold none. Gemini 3 starts the current turn at the last `user`
+/// or both hold none. Gemini starts the current turn at the last `user`
 /// content that is not a tool result, and it checks thought signatures only in
 /// that turn. SMA-820 added this boundary because a text and a
 /// `functionResponse` in one content kept an unsigned `functionCall` in the
@@ -393,23 +391,11 @@ fn order_responses(parts: &mut [Part], ids: &[String]) {
     }
 }
 
-/// Say whether `model_id` is Gemini 3 or later. Such a request may carry
-/// [`DUMMY_THOUGHT_SIGNATURE`] and may get a [`TRAILING_MODEL_TURN_PROMPT`] turn.
-///
-/// The dummy is live-tested only on Gemini 3. Requests for a Gemini 1.x or
-/// 2.x id stay as they were before SMA-827 and get no dummy. Every other id
-/// (Gemini 3 and later, unknown ids) gets it. The check uses the part of the id
-/// after the last `/`, so `models/gemini-2.5-flash` and Vertex resource paths work.
-fn is_gemini_3_or_later(model_id: &str) -> bool {
-    let name = model_id.rsplit('/').next().unwrap_or(model_id);
-    !(name.starts_with("gemini-1") || name.starts_with("gemini-2"))
-}
-
 /// Text of the `user` turn that follows a trailing `model` turn.
 ///
 /// Gemini rejects a request whose last turn is a model turn. The core
 /// structured-output finalizing request ends with the model's own answer, so
-/// the translator appends this turn for Gemini 3 and later.
+/// the translator appends this turn.
 pub(crate) const TRAILING_MODEL_TURN_PROMPT: &str = "Continue.";
 
 /// Put [`DUMMY_THOUGHT_SIGNATURE`] on each `functionCall` part of a `model`
@@ -1453,25 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn gemini_2_history_gets_no_dummy() {
-        for model in [
-            "gemini-2.5-flash",
-            "models/gemini-2.0-flash",
-            "projects/p/locations/l/publishers/google/models/gemini-2.5-pro",
-            "gemini-1.5-pro",
-        ] {
-            let items = vec![user("q"), call("call_1", "search")];
-            let t = items_to_contents(&items, model, A).unwrap();
-            assert_eq!(
-                t.contents[1],
-                json!({"role": "model", "parts": [fc("call_1", "search")]}),
-                "{model}"
-            );
-        }
-    }
-
-    #[test]
-    fn gemini_3_and_unknown_ids_keep_the_dummy() {
+    fn every_model_id_gets_the_dummy() {
         for model in ["models/gemini-3.8-flash", "gemini-4-pro", "my-tuned-model"] {
             let items = vec![user("q"), call("call_1", "search")];
             let t = items_to_contents(&items, model, A).unwrap();
@@ -1481,24 +1449,6 @@ mod tests {
                 "{model}"
             );
         }
-    }
-
-    #[test]
-    fn gemini_2_real_signature_is_still_sent_back() {
-        let model = "gemini-2.5-flash";
-        let items = vec![
-            user("q"),
-            assistant(vec![pd(
-                "call_1",
-                json!({"index": 0, "thoughtSignature": "SIG_A", "model": model, "api": A}),
-            )]),
-            call("call_1", "search"),
-        ];
-        let t = items_to_contents(&items, model, A).unwrap();
-        assert_eq!(
-            t.contents[1],
-            json!({"role": "model", "parts": [fc_sig("call_1", "search", "SIG_A")]})
-        );
     }
 
     #[test]
@@ -1716,7 +1666,7 @@ mod tests {
     }
 
     #[test]
-    fn gemini_3_trailing_model_turn_gets_a_user_turn() {
+    fn trailing_model_turn_gets_a_user_turn() {
         let items = vec![user("q"), assistant_text("answer")];
         let t = items_to_contents(&items, M, A).unwrap();
         assert_eq!(
@@ -1750,16 +1700,6 @@ mod tests {
                 continue_turn(),
             ])
         );
-    }
-
-    #[test]
-    fn gemini_2_trailing_model_turn_is_unchanged() {
-        for model in ["gemini-2.5-flash", "models/gemini-1.5-pro"] {
-            let items = vec![user("q"), assistant_text("answer")];
-            let t = items_to_contents(&items, model, A).unwrap();
-            assert_eq!(t.contents.len(), 2, "{model}");
-            assert_eq!(t.contents[1]["role"], "model", "{model}");
-        }
     }
 
     #[test]

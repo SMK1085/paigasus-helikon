@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn vertex_auth_setters_are_last_call_wins() {
         // token_provider then bearer_token -> Bearer (bearer cleared the provider).
-        let cfg = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+        let cfg = GeminiModel::vertex("gemini-3.8-flash", "proj", "us-central1")
             .token_provider(DummyProvider)
             .bearer_token("ya29")
             .build_config()
@@ -265,7 +265,7 @@ mod tests {
         );
 
         // bearer_token then token_provider -> Token (provider cleared the bearer).
-        let cfg = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+        let cfg = GeminiModel::vertex("gemini-3.8-flash", "proj", "us-central1")
             .bearer_token("ya29")
             .token_provider(DummyProvider)
             .build_config()
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn developer_requires_api_key() {
-        let err = GeminiModel::developer("gemini-2.5-flash")
+        let err = GeminiModel::developer("gemini-3.8-flash")
             .build()
             .unwrap_err();
         assert!(matches!(err, crate::BuildError::MissingApiKey));
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn developer_rejects_empty_api_key() {
-        let err = GeminiModel::developer("gemini-2.5-flash")
+        let err = GeminiModel::developer("gemini-3.8-flash")
             .api_key("   ")
             .build()
             .unwrap_err();
@@ -295,17 +295,17 @@ mod tests {
 
     #[test]
     fn developer_with_key_builds() {
-        let m = GeminiModel::developer("gemini-2.5-flash")
+        let m = GeminiModel::developer("gemini-3.8-flash")
             .api_key("k")
             .build()
             .unwrap();
-        assert_eq!(m.model(), "gemini-2.5-flash");
+        assert_eq!(m.model(), "gemini-3.8-flash");
         assert_eq!(m.provider(), "gemini");
     }
 
     #[test]
     fn vertex_requires_auth() {
-        let err = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+        let err = GeminiModel::vertex("gemini-3.8-flash", "proj", "us-central1")
             .build()
             .unwrap_err();
         assert!(matches!(err, crate::BuildError::MissingVertexAuth));
@@ -313,16 +313,16 @@ mod tests {
 
     #[test]
     fn vertex_with_bearer_builds() {
-        let m = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+        let m = GeminiModel::vertex("gemini-3.8-flash", "proj", "us-central1")
             .bearer_token("ya29.token")
             .build()
             .unwrap();
-        assert_eq!(m.model(), "gemini-2.5-pro");
+        assert_eq!(m.model(), "gemini-3.8-flash");
     }
 
     #[test]
     fn api_key_in_vertex_mode_is_mismatch() {
-        let err = GeminiModel::vertex("gemini-2.5-pro", "p", "l")
+        let err = GeminiModel::vertex("gemini-3.8-flash", "p", "l")
             .api_key("k")
             .build()
             .unwrap_err();
@@ -331,20 +331,20 @@ mod tests {
 
     #[test]
     fn debug_masks_credentials() {
-        let dev = GeminiModel::developer("gemini-2.5-flash").api_key("super-secret-key");
+        let dev = GeminiModel::developer("gemini-3.8-flash").api_key("super-secret-key");
         let s = format!("{dev:?}");
         assert!(
             !s.contains("super-secret-key"),
             "api_key leaked into Debug: {s}"
         );
         assert!(s.contains("GeminiModelBuilder"));
-        assert!(s.contains("gemini-2.5-flash"));
+        assert!(s.contains("gemini-3.8-flash"));
 
-        let vtx = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+        let vtx = GeminiModel::vertex("gemini-3.8-flash", "proj", "us-central1")
             .bearer_token("ya29.secret");
         let s = format!("{vtx:?}");
         assert!(!s.contains("ya29.secret"), "bearer leaked into Debug: {s}");
         assert!(s.contains("GeminiModelBuilder"));
-        assert!(s.contains("gemini-2.5-pro"));
+        assert!(s.contains("gemini-3.8-flash"));
     }
 }

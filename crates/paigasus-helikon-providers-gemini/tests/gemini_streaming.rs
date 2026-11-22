@@ -18,7 +18,7 @@ async fn run(sse: &'static str) -> Vec<Result<ModelEvent, ModelError>> {
         )
         .mount(&server)
         .await;
-    let model = GeminiModel::developer("gemini-2.5-flash")
+    let model = GeminiModel::developer("gemini-3.8-flash")
         .api_key("k")
         .base_url(server.uri())
         .build()
@@ -132,7 +132,7 @@ async fn parallel_signed_fixture_emits_provider_data_per_call() {
         assert_eq!(d["index"], i);
     }
     assert_eq!(data[0].1["thoughtSignature"], "SIG_A");
-    assert_eq!(data[0].1["model"], "gemini-2.5-flash");
+    assert_eq!(data[0].1["model"], "gemini-3.8-flash");
     assert_eq!(data[0].1["api"], "developer");
     assert!(data[1].1.get("thoughtSignature").is_none());
     assert!(data[2].1.get("thoughtSignature").is_none());

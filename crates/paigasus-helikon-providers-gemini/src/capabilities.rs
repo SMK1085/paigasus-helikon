@@ -28,12 +28,7 @@ const fn full() -> ModelEntry {
 
 /// Capability snapshot keyed by exact model id. Cross-check against Google's
 /// published model docs at implementation time; divergences are bugs.
-pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[
-    ("gemini-2.5-pro", full()),
-    ("gemini-2.5-flash", full()),
-    ("gemini-2.0-flash", full()),
-    ("gemini-2.0-flash-lite", full()),
-];
+pub(crate) const KNOWN_MODELS: &[(&str, ModelEntry)] = &[("gemini-3.8-flash", full())];
 
 /// Look up capabilities for `model_id`, falling back to conservative defaults.
 pub(crate) fn lookup(model_id: &str) -> ModelEntry {
@@ -49,12 +44,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn known_25_flash_has_tools_and_structured_output() {
-        let e = lookup("gemini-2.5-flash");
-        assert!(e.caps.streaming && e.caps.tools && e.caps.structured_output && e.caps.vision);
-        assert!(e.caps.parallel_tool_calls);
-        // Reasoning streaming deferred (D3): flag stays false even for 2.5.
+    fn known_38_flash_has_full_capabilities() {
+        let e = lookup("gemini-3.8-flash");
+        assert!(e.caps.streaming && e.caps.tools && e.caps.parallel_tool_calls);
+        assert!(e.caps.structured_output && e.caps.vision);
+        // Reasoning streaming is deferred (D3).
         assert!(!e.caps.reasoning);
+    }
+
+    #[test]
+    fn known_models_have_no_duplicate_ids() {
+        let mut ids: Vec<&str> = KNOWN_MODELS.iter().map(|(id, _)| *id).collect();
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n);
     }
 
     #[test]

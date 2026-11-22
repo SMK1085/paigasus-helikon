@@ -59,7 +59,7 @@ mod tests {
         Config {
             http: reqwest::Client::new(),
             base_url: None,
-            model_id: "gemini-2.5-flash".into(),
+            model_id: "gemini-3.8-flash".into(),
             transport: Transport::Developer,
             auth: Auth::ApiKey("k".into()),
             capabilities: ModelCapabilities::empty(),
@@ -69,7 +69,7 @@ mod tests {
         Config {
             http: reqwest::Client::new(),
             base_url: None,
-            model_id: "gemini-2.5-pro".into(),
+            model_id: "gemini-3.8-flash".into(),
             transport: Transport::Vertex {
                 project: "proj".into(),
                 location: loc.into(),
@@ -82,13 +82,13 @@ mod tests {
     #[test]
     fn developer_stream_url() {
         let u = stream_url(&dev_cfg());
-        assert_eq!(u, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse");
+        assert_eq!(u, "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse");
     }
 
     #[test]
     fn vertex_regional_stream_url() {
         let u = stream_url(&vertex_cfg("us-central1"));
-        assert_eq!(u, "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse");
+        assert_eq!(u, "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse");
     }
 
     #[test]
@@ -105,7 +105,7 @@ mod tests {
         c.base_url = Some("http://localhost:8080".into());
         assert_eq!(
             stream_url(&c),
-            "http://localhost:8080/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+            "http://localhost:8080/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"
         );
     }
 

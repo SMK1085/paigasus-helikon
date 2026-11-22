@@ -110,7 +110,7 @@ mod snap {
         Config {
             http: reqwest::Client::new(),
             base_url: None,
-            model_id: "gemini-2.5-flash".into(),
+            model_id: "gemini-3.8-flash".into(),
             transport: Transport::Developer,
             auth: crate::auth::Auth::ApiKey("k".into()),
             capabilities: ModelCapabilities::empty(),

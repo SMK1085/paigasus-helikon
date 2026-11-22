@@ -2312,13 +2312,12 @@ mod gemini {
     use super::*;
     use paigasus_helikon_providers_gemini::GeminiModel;
 
-    /// The model id `build_model_against` requests. Matches the constructor
-    /// example in the task brief (`GeminiModel::developer("gemini-2.0-flash")`).
-    /// Independent of the model the live capture happened to be taken
-    /// against (`gemini-3.6-flash` — see the module doc's "Live capture"
-    /// section): `PacedServer` ignores the request entirely and always serves
-    /// the scripted bytes, so this id only has to be one the crate accepts.
-    const MODEL_ID: &str = "gemini-2.0-flash";
+    /// The model id `build_model_against` requests. Uses the id the crate
+    /// docs name. `PacedServer` ignores the request, so this id only has to be
+    /// one the crate accepts. It is independent of the model the live capture
+    /// happened to be taken against (`gemini-3.6-flash` — see the module doc's
+    /// "Live capture" section).
+    const MODEL_ID: &str = "gemini-3.8-flash";
 
     /// The tool name every tool-call fixture declares.
     const TOOL_NAME: &str = "get_weather";

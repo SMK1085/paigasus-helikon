@@ -30,7 +30,7 @@ async fn developer_url_and_api_key_header() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(
-            "/v1beta/models/gemini-2.5-flash:streamGenerateContent",
+            "/v1beta/models/gemini-3.8-flash:streamGenerateContent",
         ))
         .and(query_param("alt", "sse"))
         .and(header("x-goog-api-key", "sk-test"))
@@ -38,7 +38,7 @@ async fn developer_url_and_api_key_header() {
         .mount(&server)
         .await;
 
-    let model = GeminiModel::developer("gemini-2.5-flash")
+    let model = GeminiModel::developer("gemini-3.8-flash")
         .api_key("sk-test")
         .base_url(server.uri())
         .build()
@@ -60,24 +60,31 @@ async fn developer_url_and_api_key_header() {
 async fn vertex_url_and_bearer_header() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/projects/proj/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent"))
+        .and(path("/v1/projects/proj/locations/us-central1/publishers/google/models/gemini-3.8-flash:streamGenerateContent"))
         .and(query_param("alt", "sse"))
         .and(header("authorization", "Bearer ya29.token"))
         .respond_with(sse_ok())
         .mount(&server)
         .await;
 
-    let model = GeminiModel::vertex("gemini-2.5-pro", "proj", "us-central1")
+    let model = GeminiModel::vertex("gemini-3.8-flash", "proj", "us-central1")
         .bearer_token("ya29.token")
         .base_url(server.uri())
         .build()
         .unwrap();
-    let s = model
+    let mut s = model
         .invoke(user("hi"), CancellationToken::new())
         .await
         .unwrap();
-    let evs: Vec<_> = s.collect().await;
-    assert!(!evs.is_empty());
+    // Unwrap each event: a wrong URL makes wiremock return 404, which the
+    // stream yields as an `Err` event.
+    let mut texts = Vec::new();
+    while let Some(ev) = s.next().await {
+        if let paigasus_helikon_core::ModelEvent::TokenDelta { text } = ev.unwrap() {
+            texts.push(text);
+        }
+    }
+    assert_eq!(texts, vec!["hi"]);
 }
 
 #[tokio::test]
@@ -93,7 +100,7 @@ async fn http_429_maps_to_rate_limited() {
         .mount(&server)
         .await;
 
-    let model = GeminiModel::developer("gemini-2.5-flash")
+    let model = GeminiModel::developer("gemini-3.8-flash")
         .api_key("k")
         .base_url(server.uri())
         .build()

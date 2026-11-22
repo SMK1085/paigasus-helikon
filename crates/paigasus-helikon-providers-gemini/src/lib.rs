@@ -27,7 +27,7 @@
 //! use paigasus_helikon_providers_gemini::GeminiModel;
 //! # fn f() -> Result<(), Box<dyn std::error::Error>> {
 //! // Reads GEMINI_API_KEY or GOOGLE_API_KEY from the environment.
-//! let model = GeminiModel::from_env("gemini-2.5-flash")?;
+//! let model = GeminiModel::from_env("gemini-3.8-flash")?;
 //! # Ok(()) }
 //! ```
 //!
@@ -37,7 +37,7 @@
 //! use paigasus_helikon_providers_gemini::GeminiModel;
 //! # async fn f() -> Result<(), Box<dyn std::error::Error>> {
 //! // vertex-adc feature: reads GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION.
-//! let model = GeminiModel::vertex_from_env("gemini-2.5-flash").await?;
+//! let model = GeminiModel::vertex_from_env("gemini-3.8-flash").await?;
 //! # Ok(()) }
 //! ```
 //!
@@ -59,14 +59,19 @@
 //! dropped during request translation. Reasoning streaming (`ModelEvent::ReasoningDelta`)
 //! is not yet emitted by this provider.
 //!
-//! Tool loops on Gemini 3 work with thought signatures. The provider keeps each
-//! signature and sends it back on its own call. For a call of the current turn
-//! with no valid signature, it sends the documented dummy value. It sends the
-//! dummy only for Gemini 3 and later ids, and it is live-tested only on
+//! Tool loops work with thought signatures. The provider keeps each signature
+//! and sends it back on its own call. When no call in a model content of the
+//! current turn has a valid signature, it puts the documented dummy value on
+//! each call of that content. The dummy is live-tested only on
 //! `gemini-3.8-flash` (Developer API). Vertex signatures are not live-tested.
 //! Text-level signatures are not sent back.
 //!
-//! For Gemini 3 and later, a request that ends with a model turn gets a `user` text turn "Continue." appended, because Gemini rejects such a request.
+//! A request that ends with a model turn gets a `user` text turn "Continue."
+//! appended, because Gemini rejects such a request.
+//!
+//! Gemini 1.x and 2.x models are not supported. A model id that the crate does
+//! not know reports a conservative capability set (streaming and tools). Use
+//! `.with_capabilities()` on the builder to set other values.
 
 /// Key under which this crate stores its data in `ProviderData` parts and events.
 pub const PROVIDER_DATA_KEY: &str = "gemini";

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Gemini 1.x and 2.x models are not supported. The Developer API no longer serves them to new users.
+- A request for any model id now gets the Gemini 3 request shape. When no call in a model content of the current turn has a valid signature, the request carries the dummy thought signature. A request that ends with a model turn gets a "Continue." user turn.
+- `gemini-3.8-flash` reports the full capability set. `gemini-2.5-*` and `gemini-2.0-*` ids now report the conservative set.
+- If you still call a Gemini 2.x model, stay on 0.3.1.
+
 ## [0.3.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-gemini-v0.3.0...paigasus-helikon-providers-gemini-v0.3.1) - 2026-11-21
 
 ### Other
