@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "bca3b62a5761",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-833-bedrock-toolchoicenone-sends-no-toolconfig",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bc/a3b62a5761/0/metadata.json",
+      "transcript": "/bc/a3b62a5761/0/full.jsonl",
+      "compact_transcript": "/bc/a3b62a5761/0/transcript.jsonl",
+      "content_hash": "/bc/a3b62a5761/0/content_hash.txt",
+      "prompt": "/bc/a3b62a5761/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 14,
+      "cache_creation_tokens": 9906,
+      "cache_read_tokens": 553106,
+      "output_tokens": 3645,
+      "api_call_count": 7
+    }
+  },
+  "redaction": {
+    "replacements": 95,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 121,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
