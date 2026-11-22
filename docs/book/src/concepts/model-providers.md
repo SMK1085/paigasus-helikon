@@ -283,6 +283,8 @@ is **native** (`responseSchema`) — the provider does not use forced-tool synth
 
 #### Transports
 
+Gemini 1.x and 2.x models are not supported. A model id that the crate does not know reports a conservative capability set (streaming and tools). Use `.with_capabilities()` on the builder to set other values.
+
 Two transports are available:
 
 **Developer API** — authenticates with an API key from the environment:
@@ -291,7 +293,7 @@ Two transports are available:
 use paigasus_helikon::gemini::GeminiModel;
 
 // Reads GEMINI_API_KEY or GOOGLE_API_KEY.
-let model = GeminiModel::from_env("gemini-2.5-flash")?;
+let model = GeminiModel::from_env("gemini-3.8-flash")?;
 ```
 
 Or explicitly via the builder:
@@ -299,7 +301,7 @@ Or explicitly via the builder:
 ```rust
 use paigasus_helikon::gemini::GeminiModel;
 
-let model = GeminiModel::developer("gemini-2.5-flash")
+let model = GeminiModel::developer("gemini-3.8-flash")
     .api_key("your-api-key")
     .build()?;
 ```
@@ -311,7 +313,7 @@ use paigasus_helikon::gemini::GeminiModel;
 
 // vertex-adc feature: reads GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION (default: "global").
 // ADC credentials are discovered from the gcloud credential chain.
-let model = GeminiModel::vertex_from_env("gemini-2.5-flash").await?;
+let model = GeminiModel::vertex_from_env("gemini-3.8-flash").await?;
 ```
 
 Or with an explicit static bearer token:
@@ -319,7 +321,7 @@ Or with an explicit static bearer token:
 ```rust
 use paigasus_helikon::gemini::GeminiModel;
 
-let model = GeminiModel::vertex("gemini-2.5-flash", "my-project", "us-central1")
+let model = GeminiModel::vertex("gemini-3.8-flash", "my-project", "us-central1")
     .bearer_token("ya29.your-token")
     .build()?;
 ```
@@ -348,28 +350,27 @@ Remote-URL images, audio parts, and non-text tool-result parts are silently
 dropped during request translation. Reasoning streaming (`ModelEvent::ReasoningDelta`)
 is not yet emitted by this provider.
 
-Tool loops on Gemini 3 work. Gemini 3 returns a `thoughtSignature` with a
-tool call and rejects the next request if the signature is missing. The
-provider keeps each signature as `ContentPart::ProviderData` (key
-`PROVIDER_DATA_KEY`, value `"gemini"`) and sends it back on its own call. It
-also restores the call order that Gemini returned. For a call of the current
-turn that has no valid signature, it sends the documented dummy value
-`skip_thought_signature_validator`. A signature from another model id or
-another API counts as not valid. The dummy is sent only for Gemini 3 and later
-ids. Gemini 1.x and 2.x requests keep their earlier shape and get no dummy.
-For Gemini 3 and later, a request that ends with a model turn gets a `user` text turn "Continue." appended, because Gemini rejects such a request.
+Tool loops work. Gemini returns a `thoughtSignature` with a tool call and
+rejects the next request if the signature is missing. The provider keeps each
+signature as `ContentPart::ProviderData` (key `PROVIDER_DATA_KEY`, value
+`"gemini"`) and sends it back on its own call. It also restores the call order
+that Gemini returned. A signature from another model id or another API counts
+as not valid. When no call in a model content of the current turn has a valid
+signature, the provider puts the documented dummy value
+`skip_thought_signature_validator` on each call of that content. A request that
+ends with a model turn gets a `user` text turn "Continue." appended, because
+Gemini rejects such a request. Gemini 1.x and 2.x models are not supported.
 These limits apply:
 
 - Vertex signatures are not live-tested.
 - The dummy value is live-tested only on `gemini-3.8-flash` (Developer API).
-  It is not tested on Gemini 2.x (these ids return 404 for new users) or on
-  Vertex.
+  It is not tested on Vertex.
 - Text-level signatures are not sent back.
 
 Gemini bills signatures as input tokens, so provider data adds to the prompt
 size.
 
-> Model ids are illustrative — swap them for any model your account can reach.
+> Model ids are examples. Use any model that your account can reach. Vertex model availability differs by region.
 
 Gemini does not use provider tool types. It sends the generic schema for every tool. See [Provider tool types](./tools.md#provider-tool-types).
 
@@ -448,7 +449,7 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 let model = BedrockModel::from_env("anthropic.claude-3-5-sonnet-20241022-v2:0").await?;
 
 // Gemini Developer API
-let model = GeminiModel::from_env("gemini-2.5-flash")?;
+let model = GeminiModel::from_env("gemini-3.8-flash")?;
 
 // LiteLLM proxy — alias is whatever the proxy operator configured
 let model = LiteLlmModel::chat("claude-sonnet-4")

@@ -4,6 +4,8 @@ The Google Gemini model provider for the [Paigasus Helikon](https://github.com/S
 
 ## Transports
 
+Gemini 1.x and 2.x models are not supported. A model id that the crate does not know reports a conservative capability set (streaming and tools). Use `.with_capabilities()` on the builder to set other values.
+
 Two transports are available:
 
 - **Developer API** — authenticates with an API key (`GEMINI_API_KEY` or `GOOGLE_API_KEY`). Simplest path for personal projects and CI.
@@ -34,7 +36,7 @@ use paigasus_helikon_providers_gemini::GeminiModel;
 
 // Reads GEMINI_API_KEY or GOOGLE_API_KEY from the environment.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = GeminiModel::from_env("gemini-2.5-flash")?;
+    let model = GeminiModel::from_env("gemini-3.8-flash")?;
 
     // Pass `model` to LlmAgent::builder::<()>().model(model).
     // Everything downstream is provider-agnostic.
@@ -48,7 +50,7 @@ For explicit builder construction:
 use paigasus_helikon_providers_gemini::GeminiModel;
 
 fn build_model() -> Result<GeminiModel, paigasus_helikon_providers_gemini::BuildError> {
-    GeminiModel::developer("gemini-2.5-flash")
+    GeminiModel::developer("gemini-3.8-flash")
         .api_key("your-api-key")
         .build()
 }
@@ -64,13 +66,13 @@ A JSON-Schema sanitizer runs on every schema passed to `responseSchema`: it inli
 
 ## Vertex AI and `TokenProvider`
 
-For Vertex AI, supply a bearer token directly or implement the `TokenProvider` trait for per-request token refresh:
+For Vertex AI, supply a bearer token directly or implement the `TokenProvider` trait for per-request token refresh. Model ids are examples. Use any model that your account can reach. Vertex model availability differs by region.
 
 ```ignore
 use paigasus_helikon_providers_gemini::{GeminiModel, TokenProvider};
 
 // Static bearer token (for testing; tokens expire in ~1 hour)
-let model = GeminiModel::vertex("gemini-2.5-flash", "my-project", "us-central1")
+let model = GeminiModel::vertex("gemini-3.8-flash", "my-project", "us-central1")
     .bearer_token("ya29.your-token")
     .build()?;
 ```
@@ -83,7 +85,7 @@ use paigasus_helikon_providers_gemini::GeminiModel;
 // Reads GOOGLE_CLOUD_PROJECT (required) and GOOGLE_CLOUD_LOCATION (default: "global").
 // ADC credentials are discovered from GOOGLE_APPLICATION_CREDENTIALS, the gcloud
 // application_default_credentials.json, the GCE metadata server, or the gcloud CLI.
-let model = GeminiModel::vertex_from_env("gemini-2.5-flash").await?;
+let model = GeminiModel::vertex_from_env("gemini-3.8-flash").await?;
 ```
 
 ## Limitations
@@ -95,10 +97,10 @@ Request translation drops the following content (some drops log a `tracing` warn
 - **Non-text tool-result parts** — only the text content of tool results is forwarded; image or structured-data parts in tool results are omitted.
 - **Duplicate tool results and empty text** — a second tool result for one call is dropped, with a `tracing` warning on target `paigasus::gemini::translate`. Empty text parts are dropped too.
 
-Tool loops on Gemini 3 work. The provider keeps each `thoughtSignature` as `ContentPart::ProviderData` (key `PROVIDER_DATA_KEY`, value `"gemini"`) and sends it back on its own call. It restores the call order that Gemini returned. For a call of the current turn that has no valid signature, it sends the documented dummy value `skip_thought_signature_validator`. A signature from another model id or another API counts as not valid. The dummy is sent only for Gemini 3 and later ids. Gemini 1.x and 2.x requests keep their earlier shape and get no dummy. For Gemini 3 and later, a request that ends with a model turn gets a `user` text turn "Continue." appended, because Gemini rejects such a request. These limits apply:
+Tool loops work. The provider keeps each `thoughtSignature` as `ContentPart::ProviderData` (key `PROVIDER_DATA_KEY`, value `"gemini"`) and sends it back on its own call. It restores the call order that Gemini returned. A signature from another model id or another API counts as not valid. When no call in a model content of the current turn has a valid signature, the provider puts the documented dummy value `skip_thought_signature_validator` on each call of that content. A request that ends with a model turn gets a `user` text turn "Continue." appended, because Gemini rejects such a request. Gemini 1.x and 2.x models are not supported. These limits apply:
 
 - **Vertex** — Vertex signatures are not live-tested.
-- **Dummy value** — it is live-tested only on `gemini-3.8-flash` (Developer API). It is not tested on Gemini 2.x (these ids return 404 for new users) or on Vertex.
+- **Dummy value** — it is live-tested only on `gemini-3.8-flash` (Developer API). It is not tested on Vertex.
 - **Text-level signatures** — they are not sent back.
 
 The following feature is not yet implemented:
