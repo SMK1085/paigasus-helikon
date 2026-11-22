@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XVSzXH9j6w2Bs83KRVP5ag",
+  "agent_id": "abc278de8c6bfa41e",
+  "subagent_type": "general-purpose",
+  "task_description": "Research Bedrock typed Anthropic tools",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 115242,
+    "cache_read_tokens": 349883,
+    "output_tokens": 3106,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-22T15:50:47.420099+01:00",
+  "completed_at": "2026-11-22T15:51:28.54987+01:00"
+}

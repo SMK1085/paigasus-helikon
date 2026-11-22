@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KuBwKd8e8MkHwy5Auwv4P2",
+  "agent_id": "ab8d3a2aca786f0a1",
+  "subagent_type": "general-purpose",
+  "task_description": "Builder check on SMA-844 spec",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 95969,
+    "cache_read_tokens": 329306,
+    "output_tokens": 4018,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-22T16:07:56.695999+01:00",
+  "completed_at": "2026-11-22T16:08:31.86477+01:00"
+}
