@@ -20,6 +20,14 @@ pub enum HeaderError {
     },
 }
 
+/// True when `text` starts with `word` and the next character ends the word.
+///
+/// The next character is a space, `.`, `,` or `:`, or the text ends there.
+fn has_label(text: &str, word: &str) -> bool {
+    text.strip_prefix(word)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '.', ',', ':']))
+}
+
 /// Check the header of the fixture `text`.
 ///
 /// Only the lines before the first `event:` or `data:` line are checked.
@@ -29,7 +37,7 @@ pub fn check(text: &str) -> Result<(), HeaderError> {
     let Some(label) = first.strip_prefix(": Provenance: ") else {
         return Err(HeaderError::MissingProvenanceLine);
     };
-    if !(label.starts_with("CAPTURED") || label.starts_with("HAND-AUTHORED")) {
+    if !(has_label(label, "CAPTURED") || has_label(label, "HAND-AUTHORED")) {
         return Err(HeaderError::UnknownLabel);
     }
     for (index, line) in lines.enumerate() {
@@ -72,6 +80,14 @@ mod tests {
     fn lowercase_label_fails() {
         assert_eq!(
             check(": Provenance: captured 2026\ndata: {}\n"),
+            Err(HeaderError::UnknownLabel)
+        );
+    }
+
+    #[test]
+    fn label_needs_a_word_boundary() {
+        assert_eq!(
+            check(": Provenance: CAPTUREDX\ndata: {}\n"),
             Err(HeaderError::UnknownLabel)
         );
     }

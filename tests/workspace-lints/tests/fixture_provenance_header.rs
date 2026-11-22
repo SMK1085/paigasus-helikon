@@ -54,6 +54,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Find the fixture files. The walk covers only `crates/*/tests/fixtures/`.
 /// It does not cover the repo root, because `.claude/worktrees/` holds other checkouts.
+/// It does not cover `tests/provider-stream-conformance/fixtures/` (Q3 scopes the walk to `crates/*`).
 fn fixtures(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let crates = root.join("crates");
