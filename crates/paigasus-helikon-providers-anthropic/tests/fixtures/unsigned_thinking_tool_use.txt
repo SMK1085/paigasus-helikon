@@ -2,7 +2,8 @@
 : wire. It has a thinking block with no signature_delta. The probe saw exactly
 : one signature_delta in each thinking block (the SMA-840 design,
 : docs/superpowers/specs/2026-11-21-sma-840-anthropic-thinking-signatures-design.md,
-: lines 42-44). So no capture has this shape.
+: lines 42-44). So the SMA-840 record shows no capture with this shape. The
+: design calls the file synthetic (line 275).
 :
 : Sources of the shapes. The SMA-840 plan describes only the shape
 : (docs/superpowers/plans/2026-11-21-sma-840-anthropic-thinking-signatures.md,
@@ -20,8 +21,8 @@
 :   from the probe script
 :   (docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh,
 :   line 33).
-: - Tool input fragments: "", then {"city": and "Paris"}. The capture splits
-:   its input at other places. The record does not give a source for this
+: - Tool input fragments: "", then {"city": and "Paris"}. The captures split
+:   the city input at other places. The record does not give a source for this
 :   split.
 : - No ping event. The captures send one after the first content_block_start.
 :   The record does not say why this file has none.

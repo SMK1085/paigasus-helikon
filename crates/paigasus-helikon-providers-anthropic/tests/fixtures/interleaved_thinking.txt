@@ -17,13 +17,15 @@
 :   SIG_FAKE_2 come from the plan (lines 180 and 182).
 : - tool_use blocks: the event shapes of thinking_text_tool_use.txt, with
 :   caller. The ids toolu_fake_b and toolu_fake_a sort in the other order than
-:   the stream order on purpose (the plan, lines 183-184). The tool names come
-:   from the probe script
+:   the stream order on purpose (the plan, lines 183-184). The tool names and
+:   inputs come from the plan (lines 181-183). The names match the probe
+:   script
 :   (docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh,
 :   lines 33-34). PAR-7351 is the probe result of lookup_city_code (line 77).
-: - Tool input fragments: "", then {"city": and "Paris"}. The capture splits
-:   its input at other places. The record does not give a source for this
-:   split.
+: - Tool input fragments: "", then {"city": and "Paris"} for index 1, and "",
+:   then {"code": and "PAR-7351"} for index 3. The captures split the city
+:   input at other places. The captures have no weather_by_code call. The
+:   record does not give a source for these splits.
 : - No ping event. The captures send one after the first content_block_start.
 :   The record does not say why this file has none.
 

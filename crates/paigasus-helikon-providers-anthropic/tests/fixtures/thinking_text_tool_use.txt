@@ -13,7 +13,9 @@
 : docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh. It
 : posts to https://api.anthropic.com/v1/messages (line 42). The repo holds
 : only the version that PR #387 merged. The record does not say whether the
-: run used that exact version.
+: run used that exact version. The merged script's defaults (lines 19-24) are
+: not the run A or run C settings. So the run set environment overrides, or
+: used an earlier version. This is an inference.
 :
 : Edits from the raw capture. The raw capture is not kept in the repo, because
 : it holds real signatures (the SMA-840 design, lines 29-32).

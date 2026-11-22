@@ -10,7 +10,8 @@
 : newline on purpose (the plan, line 211). Do not add one.
 :
 : For the source of the shapes and the comparison with the SMA-840 captures,
-: see the header of text_only.txt. The cut does not change a shape.
+: see the header of text_only.txt. The cut does not change the shape of any
+: whole event.
 
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6","stop_reason":null,"usage":{"input_tokens":12,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0}}}

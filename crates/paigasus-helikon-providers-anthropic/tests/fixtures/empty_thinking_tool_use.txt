@@ -14,14 +14,19 @@
 : arrives (lines 45-46). The design addendum (line 369) says that the earlier
 : probes got thinking on this model because the prompt started with the
 : redacted-thinking trigger string. It says that this string gives a thinking
-: block with empty text on this model. The record does not name the prompt of
-: run A, turn 1.
+: block with empty text on this model. The record does not say which prompt
+: run A, turn 1 used. In the merged probe script, turn 1 sends $PROMPT (line
+: 100). $PROMPT defaults to a prompt with no trigger string (lines 36-37).
+: Only the 16-redacted request adds the trigger string (line 170). The run can
+: have set PROMPT, or used an earlier script version.
 :
 : The probe script is
 : docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh. It
 : posts to https://api.anthropic.com/v1/messages (line 42). The repo holds
 : only the version that PR #387 merged. The record does not say whether the
-: run used that exact version.
+: run used that exact version. The merged script's defaults (lines 19-24) are
+: not the run A or run C settings. So the run set environment overrides, or
+: used an earlier version. This is an inference.
 :
 : Edits from the raw capture. The raw capture is not kept in the repo, because
 : it holds real signatures (the SMA-840 design, lines 29-32).
