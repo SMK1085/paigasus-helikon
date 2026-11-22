@@ -28,15 +28,13 @@ pub enum ModelFamily {
 
 /// How a model family receives a `ToolChoice::None` request when the
 /// conversation already holds tool use or tool result blocks.
-// Used from Task 3 (translate::tool_choice_none); only tests call it until then.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolChoiceNoneStrategy {
     /// Send the Anthropic `tool_choice: {"type": "none"}` request field.
     AnthropicNoneField,
-    /// Replay the tool history as plain text, because the model rejects the
-    /// `tool_choice` field (probe P4 showed Nova rejects it; see the spec,
-    /// probe P9, section 3).
+    /// Replay the tool history as plain text. Nova rejects the field (P4).
+    /// The other families are not known to accept it, so they get the text
+    /// history as a conservative default.
     TextHistory,
 }
 
@@ -117,12 +115,15 @@ impl ModelFamily {
     ///
     /// Only Anthropic models accept the `tool_choice: {"type": "none"}` field.
     /// Other families get the history as text (probes P4 and P9, spec section 3).
-    // Used from Task 3 (translate::tool_choice_none); only tests call it until then.
-    #[allow(dead_code)]
     pub(crate) fn tool_choice_none_strategy(self) -> ToolChoiceNoneStrategy {
         match self {
             Self::Anthropic => ToolChoiceNoneStrategy::AnthropicNoneField,
-            _ => ToolChoiceNoneStrategy::TextHistory,
+            Self::AmazonNova
+            | Self::AmazonTitan
+            | Self::Llama
+            | Self::Mistral
+            | Self::Cohere
+            | Self::Unknown => ToolChoiceNoneStrategy::TextHistory,
         }
     }
 }

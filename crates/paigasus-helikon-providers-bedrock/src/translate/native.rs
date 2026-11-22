@@ -6,8 +6,8 @@
 //! meaning is recorded as a [`NativeNotice`] on the result.
 
 use aws_sdk_bedrockruntime::types::{
-    AutoToolChoice, ContentBlock, JsonSchemaDefinition, OutputConfig, OutputFormat,
-    OutputFormatStructure, OutputFormatType, Tool, ToolChoice as BedrockToolChoice,
+    AutoToolChoice, JsonSchemaDefinition, OutputConfig, OutputFormat, OutputFormatStructure,
+    OutputFormatType, Tool, ToolChoice as BedrockToolChoice,
 };
 use paigasus_helikon_core::{ModelError, ModelRequest, ResponseFormat, ToolChoice};
 
@@ -17,6 +17,7 @@ use crate::translate::native_schema::native_output_schema;
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::synthesize;
 use crate::translate::schema::Ruleset;
+use crate::translate::tool_choice_none::has_tool_round;
 use crate::translate::tools::tool_specs;
 use crate::translate::{
     assemble_tool_config, build_inference_config, check_tool_name, required_without_tools_error,
@@ -128,15 +129,6 @@ pub(crate) fn build_native(
         synthesizing,
         output_config,
         notices,
-    })
-}
-
-/// Returns `true` when a message holds a tool call or a tool result.
-fn has_tool_round(messages: &[aws_sdk_bedrockruntime::types::Message]) -> bool {
-    messages.iter().any(|m| {
-        m.content()
-            .iter()
-            .any(|b| matches!(b, ContentBlock::ToolUse(_) | ContentBlock::ToolResult(_)))
     })
 }
 

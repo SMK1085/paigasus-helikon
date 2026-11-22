@@ -52,8 +52,6 @@ pub(crate) fn value_to_document(v: &Value) -> Document {
 ///   no NaN or infinity.
 /// - Object keys come out sorted, because `serde_json`'s `preserve_order`
 ///   feature is off and its `Map` is a sorted `BTreeMap`.
-// Only tests call this until a later SMA-833 task renders tool-call inputs.
-#[allow(dead_code)]
 pub(crate) fn document_to_value(d: &Document) -> Value {
     match d {
         Document::Null => Value::Null,

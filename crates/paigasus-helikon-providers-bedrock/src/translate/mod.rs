@@ -6,6 +6,7 @@ mod native;
 pub(crate) mod native_schema;
 pub(crate) mod request;
 pub(crate) mod response_format;
+pub(crate) mod tool_choice_none;
 pub(crate) mod tools;
 
 use aws_sdk_bedrockruntime::types::{
