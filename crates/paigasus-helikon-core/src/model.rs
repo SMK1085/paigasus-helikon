@@ -570,8 +570,8 @@ pub enum ModelError {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ModelTurn {
-    /// Reconstructed items: an optional leading `AssistantMessage` (text,
-    /// reasoning and/or provider data content, in that order) followed by
+    /// Reconstructed items: an optional leading `AssistantMessage` (reasoning,
+    /// text and/or provider data content, in that order) followed by
     /// zero or more `ToolCall`s, in deterministic `call_id`-sorted order.
     pub items: Vec<crate::Item>,
     /// The last [`ModelEvent::Usage`] snapshot observed (last-wins; usage
