@@ -125,12 +125,49 @@ pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
         "no captured reasoning stream",
         "SMA-858",
     ),
+    // Parallel tool calls can occur for each of these subjects, but no
+    // capture of one exists yet. The repo fixtures for `anthropic` and
+    // `openai/chat` are hand-authored; the others have only inline or typed
+    // events.
+    (
+        "anthropic",
+        Scenario::ParallelToolCallCleanStop,
+        "no captured parallel tool-call stream",
+        "SMA-859",
+    ),
+    (
+        "bedrock",
+        Scenario::ParallelToolCallCleanStop,
+        "no captured parallel tool-call stream",
+        "SMA-859",
+    ),
+    (
+        "litellm",
+        Scenario::ParallelToolCallCleanStop,
+        "no captured parallel tool-call stream",
+        "SMA-859",
+    ),
+    (
+        "openai/chat",
+        Scenario::ParallelToolCallCleanStop,
+        "no captured parallel tool-call stream",
+        "SMA-859",
+    ),
+    (
+        "openai/responses",
+        Scenario::ParallelToolCallCleanStop,
+        "no captured parallel tool-call stream",
+        "SMA-859",
+    ),
 ];
 
 /// The scenarios that [`UNCAPTURED`] may name. Moving an older scenario into
 /// the table needs a reviewed edit to this list.
 #[cfg(test)]
-const UNCAPTURED_SCENARIOS: &[Scenario] = &[Scenario::ReasoningCleanStop];
+const UNCAPTURED_SCENARIOS: &[Scenario] = &[
+    Scenario::ReasoningCleanStop,
+    Scenario::ParallelToolCallCleanStop,
+];
 
 /// The subject names registered in `tests/conformance.rs` — one `mod` per
 /// subject, each holding a `StreamUnderTest` impl whose `name()` returns one

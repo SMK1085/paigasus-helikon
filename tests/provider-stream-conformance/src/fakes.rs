@@ -22,6 +22,9 @@ pub(crate) const TOOL_NAME: &str = "get_weather";
 /// violation against this exact string, so it is shared rather than repeated.
 const CALL_ID: &str = "c1";
 
+/// The second `call_id` of the parallel fake.
+const SECOND_CALL_ID: &str = "c2";
+
 /// A stream shape that violates exactly one rule — plus [`Fake::Conforming`],
 /// which violates none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,8 +167,14 @@ pub(crate) fn conforming(scenario: Scenario) -> Vec<Result<ModelEvent, ModelErro
             | Scenario::ThinkingToolCallCleanStop
             | Scenario::ReasoningCleanStop
     ) {
-        events.push(tool(Some(TOOL_NAME), "{\"city\":"));
-        events.push(tool(None, "\"Berlin\"}"));
+        events.push(tool(CALL_ID, Some(TOOL_NAME), "{\"city\":"));
+        events.push(tool(CALL_ID, None, "\"Berlin\"}"));
+    }
+    if scenario == Scenario::ParallelToolCallCleanStop {
+        // Two complete calls with distinct ids. The order is the order that
+        // the scenario declares: `c1` Berlin, then `c2` Rome.
+        events.push(tool(CALL_ID, Some(TOOL_NAME), "{\"city\":\"Berlin\"}"));
+        events.push(tool(SECOND_CALL_ID, Some(TOOL_NAME), "{\"city\":\"Rome\"}"));
     }
     if scenario == Scenario::ThinkingToolCallCleanStop {
         // The position record of the tool call, scoped to the fake call.
@@ -221,7 +230,7 @@ fn replace_tool_deltas(
         .expect("a tool-call fake must be run under a tool-call scenario");
     events.retain(|e| !matches!(e, Ok(ModelEvent::ToolCallDelta { .. })));
     for (offset, (name, args)) in deltas.iter().enumerate() {
-        events.insert(at + offset, tool(*name, args));
+        events.insert(at + offset, tool(CALL_ID, *name, args));
     }
 }
 
@@ -247,16 +256,21 @@ fn finish(scenario: Scenario) -> Result<ModelEvent, ModelError> {
             Scenario::FragmentedToolName
             | Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
-            | Scenario::ReasoningCleanStop => FinishReason::ToolCalls,
+            | Scenario::ReasoningCleanStop
+            | Scenario::ParallelToolCallCleanStop => FinishReason::ToolCalls,
             _ => FinishReason::Stop,
         },
     })
 }
 
-/// One tool-call delta for [`CALL_ID`].
-fn tool(name: Option<&str>, args_delta: &str) -> Result<ModelEvent, ModelError> {
+/// One tool-call delta for `call_id`.
+pub(crate) fn tool(
+    call_id: &str,
+    name: Option<&str>,
+    args_delta: &str,
+) -> Result<ModelEvent, ModelError> {
     Ok(ModelEvent::ToolCallDelta {
-        call_id: CALL_ID.into(),
+        call_id: call_id.into(),
         name: name.map(str::to_owned),
         args_delta: args_delta.into(),
     })
@@ -265,7 +279,7 @@ fn tool(name: Option<&str>, args_delta: &str) -> Result<ModelEvent, ModelError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Channel;
+    use crate::{Channel, ExpectedCall};
 
     /// Every fake must be rejected with its own classification. A suite whose
     /// checker cannot fail is the exact failure mode that let the OpenAI bug
@@ -379,7 +393,8 @@ mod tests {
             Scenario::CleanStop | Scenario::TruncatedAfterStopReason => Some(FinishReason::Stop),
             Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
-            | Scenario::ReasoningCleanStop => Some(FinishReason::ToolCalls),
+            | Scenario::ReasoningCleanStop
+            | Scenario::ParallelToolCallCleanStop => Some(FinishReason::ToolCalls),
             _ => None,
         }
     }
@@ -392,7 +407,49 @@ mod tests {
             Scenario::ReasoningCleanStop => {
                 Some(&[Channel::Reasoning, Channel::Text, Channel::Tool])
             }
-            _ => None,
+            Scenario::CleanStop
+            | Scenario::TruncatedAfterStopReason
+            | Scenario::TruncatedMidGeneration
+            | Scenario::ErrorMidGeneration
+            | Scenario::ErrorAfterStopReason
+            | Scenario::CancelMidGeneration
+            | Scenario::CancelAfterStopReason
+            | Scenario::FragmentedToolName
+            | Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ParallelToolCallCleanStop => None,
+        }
+    }
+
+    /// What a subject serving `conforming(scenario)` would declare as its
+    /// fixture's calls. Written out by hand for the same reason as
+    /// [`declared_finish_reason`].
+    fn declared_calls(scenario: Scenario) -> &'static [ExpectedCall] {
+        match scenario {
+            Scenario::ReasoningCleanStop => &[ExpectedCall {
+                name: "get_weather",
+                args: "{\"city\":\"Berlin\"}",
+            }],
+            Scenario::ParallelToolCallCleanStop => &[
+                ExpectedCall {
+                    name: "get_weather",
+                    args: "{\"city\":\"Berlin\"}",
+                },
+                ExpectedCall {
+                    name: "get_weather",
+                    args: "{\"city\":\"Rome\"}",
+                },
+            ],
+            Scenario::CleanStop
+            | Scenario::TruncatedAfterStopReason
+            | Scenario::TruncatedMidGeneration
+            | Scenario::ErrorMidGeneration
+            | Scenario::ErrorAfterStopReason
+            | Scenario::CancelMidGeneration
+            | Scenario::CancelAfterStopReason
+            | Scenario::FragmentedToolName
+            | Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop => &[],
         }
     }
 
@@ -410,6 +467,7 @@ mod tests {
                     TOOL_NAME,
                     declared_finish_reason(*scenario),
                     declared_channel_order(*scenario),
+                    declared_calls(*scenario),
                 ),
                 None,
                 "{scenario:?}"
