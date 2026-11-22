@@ -1847,6 +1847,16 @@ mod anthropic {
     /// `toolu_`.
     const TOOL_USE_ID: &str = "tu_conformance_0";
 
+    /// The four `input_json_delta` values that each of the three CAPTURED
+    /// SMA-840 fixtures sends for its tool call, in order. The first one is
+    /// empty. All three captures send the same bytes:
+    /// `thinking_text_tool_use.txt` lines 143-153,
+    /// `empty_thinking_tool_use.txt` lines 94-104 and
+    /// `redacted_thinking_tool_use.txt` lines 95-105. Joined, they are
+    /// `{"city": "Paris"}`. The two HAND-AUTHORED SMA-840 fixtures split the
+    /// arguments differently and are not a source.
+    const CAPTURED_ARGS: &[&str] = &["", "{\"city\"", ": \"Pari", "s\"}"];
+
     /// The substring that appears in a chunk if and only if it carries a
     /// *populated* `stop_reason`.
     ///
@@ -2199,18 +2209,16 @@ mod anthropic {
             // splits" section), then a `tool_use` stop reason and its usage,
             // then `message_stop`. Matches `parallel_tool_use.txt`'s
             // single-call shape.
-            Scenario::ToolCallCleanStop => (
-                vec![
-                    message_start(),
-                    tool_use_start(TOOL_USE_ID, TOOL_NAME),
-                    input_json_delta("{\"city\":\"Berlin\"}"),
+            Scenario::ToolCallCleanStop => {
+                let mut chunks = vec![message_start(), tool_use_start(TOOL_USE_ID, TOOL_NAME)];
+                chunks.extend(CAPTURED_ARGS.iter().map(|a| input_json_delta(a)));
+                chunks.extend([
                     content_block_stop(),
                     message_delta("tool_use", 18),
                     message_stop(),
-                ],
-                None,
-                Ending::Clean,
-            ),
+                ]);
+                (chunks, None, Ending::Clean)
+            }
             // A signed thinking block at index 0, then one whole tool call at
             // index 1, then a `tool_use` stop reason. Event shapes are
             // transcribed from `thinking_text_tool_use.txt`: the thinking
@@ -2228,22 +2236,23 @@ mod anthropic {
             // not the capture's. The translator then emits a call-scoped
             // `ProviderData` position for the tool call, and assertion 8
             // checks it against the streamed call.
-            Scenario::ThinkingToolCallCleanStop => (
-                vec![
+            Scenario::ThinkingToolCallCleanStop => {
+                let mut chunks = vec![
                     message_start(),
                     thinking_start(),
                     thinking_delta("I need the weather."),
                     signature_delta("SIG_FAKE_1"),
                     content_block_stop(),
                     tool_use_start_at(1, TOOL_USE_ID, TOOL_NAME),
-                    input_json_delta_at(1, "{\"city\":\"Berlin\"}"),
+                ];
+                chunks.extend(CAPTURED_ARGS.iter().map(|a| input_json_delta_at(1, a)));
+                chunks.extend([
                     content_block_stop_at(1),
                     message_delta("tool_use", 18),
                     message_stop(),
-                ],
-                None,
-                Ending::Clean,
-            ),
+                ]);
+                (chunks, None, Ending::Clean)
+            }
         };
 
         Some(Script {
@@ -2266,7 +2275,7 @@ mod anthropic {
         let mut req = ModelRequest::new();
         req.messages = vec![Item::UserMessage {
             content: vec![ContentPart::Text {
-                text: "What is the weather in Berlin?".into(),
+                text: "What is the weather in Paris?".into(),
             }],
         }];
         if matches!(
@@ -2417,10 +2426,7 @@ mod anthropic {
             ("content_block_stop", content_block_stop()),
             ("message_stop", message_stop()),
             ("tool_use start", tool_use_start(TOOL_USE_ID, TOOL_NAME)),
-            (
-                "input_json_delta",
-                input_json_delta("{\"city\":\"Berlin\"}"),
-            ),
+            ("input_json_delta", input_json_delta(CAPTURED_ARGS[1])),
             ("thinking start", thinking_start()),
             ("thinking delta", thinking_delta("I need the weather.")),
             ("signature delta", signature_delta("SIG_FAKE_1")),
