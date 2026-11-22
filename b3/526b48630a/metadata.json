@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "b3526b48630a",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-845-audit-wire-format-fixture-headers-in-other",
+  "checkpoints_count": 7,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/b3/526b48630a/0/metadata.json",
+      "transcript": "/b3/526b48630a/0/full.jsonl",
+      "compact_transcript": "/b3/526b48630a/0/transcript.jsonl",
+      "content_hash": "/b3/526b48630a/0/content_hash.txt",
+      "prompt": "/b3/526b48630a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 38,
+      "cache_creation_tokens": 30652,
+      "cache_read_tokens": 1637001,
+      "output_tokens": 10409,
+      "api_call_count": 19
+    }
+  },
+  "redaction": {
+    "replacements": 142,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 142,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
