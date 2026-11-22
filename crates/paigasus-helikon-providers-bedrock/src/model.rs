@@ -11,7 +11,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use paigasus_helikon_core::{
-    CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
+    CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, ToolChoice,
 };
 
 use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamOutput;
@@ -102,6 +102,7 @@ impl Model for BedrockModel {
         // translation failure — before we open any network connection).
         let first = build_request(&self.config, &request, self.policy.path())?;
 
+        let forbid = matches!(request.model_settings.tool_choice, Some(ToolChoice::None));
         let config = Arc::clone(&self.config);
         let policy = Arc::clone(&self.policy);
         let client = self.config.client.clone();
@@ -143,7 +144,9 @@ impl Model for BedrockModel {
             };
 
             let mut receiver = output.stream;
-            let mut translator = StreamTranslator::new(synthesizing).native(native);
+            let mut translator = StreamTranslator::new(synthesizing)
+                .native(native)
+                .forbid_tool_calls(forbid);
 
             loop {
                 let next = tokio::select! {
