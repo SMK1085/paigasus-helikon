@@ -149,6 +149,8 @@ impl StreamTranslator {
                             self.synthesized_block_index = Some(idx);
                         } else if self.forbid_tool_calls {
                             // Record no block: its deltas then emit nothing.
+                            // A second refused block at another index is
+                            // silent: the error is emitted once per stream.
                             if !self.refused_tool_call {
                                 self.refused_tool_call = true;
                                 out.push(Err(ModelError::Other(anyhow::anyhow!(
@@ -300,7 +302,7 @@ impl StreamTranslator {
     pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
         self.pending_stop_reason
             .take()
-            .map(|reason| self.finish_events(reason).remove(0))
+            .and_then(|reason| self.finish_events(reason).into_iter().next())
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
@@ -311,6 +313,11 @@ impl StreamTranslator {
     /// `Err(ModelError::Other)` when both a real and the synthesized tool
     /// fired in synthesis mode.
     fn finish_events(&self, reason: StopReason) -> Vec<Result<ModelEvent, ModelError>> {
+        // A refused tool call already ended the stream with an error. As on the
+        // both-tools-fired path, the error replaces the terminal `Finish`.
+        if self.refused_tool_call {
+            return Vec::new();
+        }
         let finish = match reason {
             StopReason::EndTurn | StopReason::StopSequence => Ok(ModelEvent::Finish {
                 reason: FinishReason::Stop,
@@ -845,15 +852,34 @@ mod tests {
             tool_use_start(0, "tu_1", "get_balance"),
             tool_delta(0, "{}"),
             message_stop(StopReason::ToolUse),
+            metadata(3, 4, None),
         ] {
             out.extend(t.consume(ev));
         }
-        let errs: Vec<_> = out.iter().filter_map(|r| r.as_ref().err()).collect();
-        assert_eq!(errs.len(), 1, "got {out:?}");
-        assert!(errs[0].to_string().contains("tool_choice is None"));
-        assert!(!out
-            .iter()
-            .any(|r| matches!(r, Ok(ModelEvent::ToolCallDelta { .. }))));
+        assert_eq!(out.len(), 2, "got {out:?}");
+        match &out[0] {
+            Err(e) => assert!(e.to_string().contains("tool_choice is None")),
+            other => panic!("expected Err first, got {other:?}"),
+        }
+        assert!(matches!(out[1], Ok(ModelEvent::Usage { .. })));
+        assert!(!out.iter().any(|r| matches!(
+            r,
+            Ok(ModelEvent::Finish { .. } | ModelEvent::ToolCallDelta { .. })
+        )));
+    }
+
+    #[test]
+    fn forbid_tool_calls_finish_at_eof_emits_no_finish() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_1", "get_balance"),
+            message_stop(StopReason::ToolUse),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert_eq!(out.len(), 1, "got {out:?}");
+        assert!(t.finish().is_none());
     }
 
     #[test]
