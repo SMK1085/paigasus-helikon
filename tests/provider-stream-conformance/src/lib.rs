@@ -569,6 +569,18 @@ async fn drain(
 /// The one exception is the `Err` count, because `classify` has no rule for a
 /// stream that errors twice and would otherwise let it through unremarked.
 ///
+/// Two further floors report missing evidence only: no `Err` outside the two
+/// error scenarios (cancellation scenarios included), and a `Usage` in
+/// `CleanStop`.
+///
+/// The ticket proposed a floor that required `Usage` and `Finish` to be
+/// adjacent and terminal in `CleanStop`. That floor was replaced. It cannot see
+/// the Bedrock `metadata`/`messageStop` swap, because both orders give the same
+/// `Usage, Finish` event sequence. It cannot see the SMA-522 fixture mistake,
+/// because `openai/chat` and `litellm` buffer `Finish` to end-of-stream. All
+/// six subjects already passed it. The core contract also lets `Usage` appear
+/// anywhere (design spec section 3.2).
+///
 /// The `FinishReason` check also lives here rather than in `classify`, and
 /// must: `classify` has no fixture knowledge and its signature is fixed, while
 /// the reason a `Finish` should carry is exactly a property of the bytes the
@@ -721,6 +733,35 @@ fn floor_violation(
                 }
             }
         }
+    }
+
+    // Outside the two error scenarios no `Err` is expected. Without this, a
+    // script that errors in a clean scenario would reach `classify` looking
+    // like an error-scenario shape (the SMA-533 section 6 claim that a
+    // truncated body "will not be mis-reported as" an error depends on it).
+    // This also covers both cancellation scenarios.
+    if !matches!(
+        scenario,
+        Scenario::ErrorMidGeneration | Scenario::ErrorAfterStopReason
+    ) && events.iter().any(Result::is_err)
+    {
+        return Some(Violation::InsufficientEvidence(
+            "an Err outside an error scenario: this scenario's script is not an error \
+             script, so the stream did not serve the bytes the scenario describes",
+        ));
+    }
+
+    // Every `CleanStop` script carries usage. A stream without one did not
+    // serve the scenario's bytes.
+    if matches!(scenario, Scenario::CleanStop)
+        && !events
+            .iter()
+            .any(|e| matches!(e, Ok(ModelEvent::Usage { .. })))
+    {
+        return Some(Violation::InsufficientEvidence(
+            "no Usage in CleanStop: every CleanStop script carries usage, so a stream \
+             without one did not serve the scenario's bytes",
+        ));
     }
 
     if matches!(
@@ -1416,5 +1457,50 @@ mod tests {
             ..Subject::conforming("openai/chat")
         };
         assert_conforms(&subject).await;
+    }
+
+    /// A clean script that errors is not a clean script. Without this floor a
+    /// stray `Err` in a non-error scenario would be read by `classify` as an
+    /// error-scenario shape.
+    #[test]
+    fn an_err_outside_the_error_scenarios_fails_its_floor() {
+        let mut events = conforming(Scenario::CleanStop);
+        let at = events
+            .iter()
+            .position(|e| matches!(e, Ok(ModelEvent::Finish { .. })))
+            .expect("the conforming CleanStop ends with a Finish");
+        events.insert(at, Err(ModelError::Unavailable));
+        let violation = crate::floor_violation(
+            Scenario::CleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::Stop),
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("an Err outside an error scenario"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// Every `CleanStop` script carries usage, so a stream without a `Usage`
+    /// did not serve the scenario's bytes.
+    #[test]
+    fn a_clean_stop_without_usage_fails_its_floor() {
+        let mut events = conforming(Scenario::CleanStop);
+        events.retain(|e| !matches!(e, Ok(ModelEvent::Usage { .. })));
+        let violation = crate::floor_violation(
+            Scenario::CleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::Stop),
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("no Usage in CleanStop"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
     }
 }
