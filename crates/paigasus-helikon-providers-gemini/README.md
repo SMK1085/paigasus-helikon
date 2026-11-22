@@ -72,7 +72,7 @@ For Vertex AI, supply a bearer token directly or implement the `TokenProvider` t
 use paigasus_helikon_providers_gemini::{GeminiModel, TokenProvider};
 
 // Static bearer token (for testing; tokens expire in ~1 hour)
-let model = GeminiModel::vertex("gemini-3.8-flash", "my-project", "us-central1")
+let model = GeminiModel::vertex("gemini-3.8-flash", "my-project", "global")
     .bearer_token("ya29.your-token")
     .build()?;
 ```

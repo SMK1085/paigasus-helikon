@@ -321,7 +321,7 @@ Or with an explicit static bearer token:
 ```rust
 use paigasus_helikon::gemini::GeminiModel;
 
-let model = GeminiModel::vertex("gemini-3.8-flash", "my-project", "us-central1")
+let model = GeminiModel::vertex("gemini-3.8-flash", "my-project", "global")
     .bearer_token("ya29.your-token")
     .build()?;
 ```
