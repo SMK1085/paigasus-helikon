@@ -124,11 +124,14 @@ The split happens late, so that the drop paths see one text block as today.
    An empty piece (`bytes: 0`) gives no block, because the API rejects an
    empty text block with HTTP 400 (probe). A block with no slot does not
    expand, so it stays one joined block.
-4. A joined text that is whitespace-only still gets a block with its split
-   plan when it is splittable. This block does not count in the keep rule
-   (`is_kept_by`), so the keep rule decides exactly as today. If the block
-   still has a slot after the drop pass, it expands. If not, it is removed,
-   as today. So a last assistant message never sends a whitespace-only text.
+4. A joined text that is whitespace-only gets no text block, as today. A blank
+   block in the content would change the `only_tool_uses`, `thinking_only` and
+   "no blocks" decisions of `Translator::step`. Instead, when it is
+   splittable, the first thinking block of the item carries its pieces. The
+   pieces expand beside that block only when the block survives with its slot.
+   When the thinking is dropped, the pieces go with it, as today. So the keep
+   rule decides exactly as today, and a last assistant message never sends a
+   whitespace-only text.
 
 So a hand-off transcript, a history that lost the tool calls, and a last
 assistant message all build as today, with one joined text block.
