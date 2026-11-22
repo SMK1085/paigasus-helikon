@@ -1607,6 +1607,7 @@ mod tests {
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
         assert!(w.get("outputConfig").is_none());
+        assert!(w["toolConfig"]["toolChoice"].is_null());
     }
 
     #[test]

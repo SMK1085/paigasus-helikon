@@ -566,4 +566,35 @@ mod tests {
         assert!(v["operation"].is_string(), "operation: {v}");
         eprintln!("[live] final output path: {:?}", model.policy.path());
     }
+
+    // ── additional_fields ─────────────────────────────────────────────────────
+
+    fn plain_prepared() -> crate::translate::PreparedConverse {
+        use paigasus_helikon_core::{ContentPart, Item};
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "hi".to_owned(),
+            }],
+        }];
+        let cfg = crate::builder::offline_config("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        crate::translate::build_request(&cfg, &req, crate::policy::OutputPath::ForcedTool).unwrap()
+    }
+
+    #[test]
+    fn additional_fields_carry_the_none_flag() {
+        let mut p = plain_prepared();
+        assert!(additional_fields(&p).is_none());
+        p.tool_choice_none = true;
+        assert_eq!(
+            additional_fields(&p),
+            Some(Document::Object(HashMap::from([(
+                "tool_choice".to_owned(),
+                Document::Object(HashMap::from([(
+                    "type".to_owned(),
+                    Document::String("none".to_owned()),
+                )])),
+            )])))
+        );
+    }
 }
