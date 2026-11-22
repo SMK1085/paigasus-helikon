@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01PjYEtpc4Qp4CMxY3yr1rBh",
+  "agent_id": "a82805d365403b460",
+  "task_description": "SMA-845 Task 10 anthropic headers",
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 196397,
+    "cache_read_tokens": 6188954,
+    "output_tokens": 48436,
+    "api_call_count": 41
+  },
+  "started_at": "2026-11-22T15:50:14.280776+01:00",
+  "completed_at": "2026-11-22T15:58:37.819568+01:00"
+}
