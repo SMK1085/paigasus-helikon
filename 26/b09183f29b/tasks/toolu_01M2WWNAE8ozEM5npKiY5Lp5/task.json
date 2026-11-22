@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01M2WWNAE8ozEM5npKiY5Lp5",
+  "agent_id": "a9f319921b6e8e9ef",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave, Phase A",
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 105884,
+    "cache_read_tokens": 1974207,
+    "output_tokens": 13234,
+    "api_call_count": 24
+  },
+  "started_at": "2026-11-22T01:01:42.632171+01:00",
+  "completed_at": "2026-11-22T01:04:12.996155+01:00"
+}
