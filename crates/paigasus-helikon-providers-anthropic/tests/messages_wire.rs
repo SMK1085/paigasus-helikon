@@ -8,6 +8,12 @@ use paigasus_helikon_providers_anthropic::AnthropicModel;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// HAND-AUTHORED, not captured. The SMA-317 plan (PR #33) contains this body
+/// (`docs/superpowers/plans/2026-05-26-sma-317-anthropic-provider.md`, line
+/// 4094). No source for its shape is recorded. It sends `message_start`,
+/// `message_delta` and `message_stop` only, with no content block. Its
+/// `message_start` carries only `usage.input_tokens`. The tests that use it
+/// check the request side, not the response.
 fn empty_stream_response() -> ResponseTemplate {
     // Minimal SSE that ends cleanly so the stream completes.
     ResponseTemplate::new(200)
@@ -62,6 +68,13 @@ async fn request_carries_required_headers() {
 #[tokio::test]
 async fn http_429_with_retry_after_maps_to_rate_limited() {
     let server = MockServer::start().await;
+    // HAND-AUTHORED, not captured. The SMA-317 plan (PR #33) contains this body
+    // (docs/superpowers/plans/2026-05-26-sma-317-anthropic-provider.md, line
+    // 4142). The SMA-317 design states the error envelope and the error types
+    // (docs/superpowers/specs/2026-05-26-sma-317-anthropic-provider-design.md,
+    // lines 327-338) but names no source. No fixture in tests/fixtures/ is an
+    // HTTP error body. The test checks the status, the `retry-after` header and
+    // the mapped error.
     let body = serde_json::json!({"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}});
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -94,6 +107,12 @@ async fn http_429_with_retry_after_maps_to_rate_limited() {
 #[tokio::test]
 async fn http_529_overloaded_maps_to_unavailable() {
     let server = MockServer::start().await;
+    // HAND-AUTHORED, not captured. The SMA-317 plan (PR #33) contains this body
+    // (docs/superpowers/plans/2026-05-26-sma-317-anthropic-provider.md, line
+    // 4176). The SMA-317 design states the error envelope and the error types
+    // (docs/superpowers/specs/2026-05-26-sma-317-anthropic-provider-design.md,
+    // lines 327-338) but names no source. No fixture in tests/fixtures/ is an
+    // HTTP error body. The test checks the status and the mapped error.
     let body =
         serde_json::json!({"type":"error","error":{"type":"overloaded_error","message":"busy"}});
     Mock::given(method("POST"))
@@ -118,6 +137,13 @@ async fn http_529_overloaded_maps_to_unavailable() {
 #[tokio::test]
 async fn http_400_prompt_too_long_maps_to_context_length_exceeded() {
     let server = MockServer::start().await;
+    // HAND-AUTHORED, not captured. The SMA-317 plan (PR #33) contains this body
+    // (docs/superpowers/plans/2026-05-26-sma-317-anthropic-provider.md, line
+    // 4201). The SMA-317 design states the error envelope and the error types
+    // (docs/superpowers/specs/2026-05-26-sma-317-anthropic-provider-design.md,
+    // lines 327-338) but names no source. No fixture in tests/fixtures/ is an
+    // HTTP error body. The test checks the mapped error, which depends on the
+    // message text.
     let body = serde_json::json!({"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 200k > 200k tokens"}});
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -141,6 +167,13 @@ async fn http_400_prompt_too_long_maps_to_context_length_exceeded() {
 #[tokio::test]
 async fn http_401_auth_maps_to_refused() {
     let server = MockServer::start().await;
+    // HAND-AUTHORED, not captured. The SMA-317 plan (PR #33) contains this body
+    // (docs/superpowers/plans/2026-05-26-sma-317-anthropic-provider.md, line
+    // 4226). The SMA-317 design states the error envelope and the error types
+    // (docs/superpowers/specs/2026-05-26-sma-317-anthropic-provider-design.md,
+    // lines 327-338) but names no source. No fixture in tests/fixtures/ is an
+    // HTTP error body. The test checks the mapped error and that its reason
+    // contains the message text.
     let body = serde_json::json!({"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}});
     Mock::given(method("POST"))
         .and(path("/v1/messages"))

@@ -569,7 +569,8 @@ mod bedrock {
 ///   (SMA-547, PR #204). Only the LiteLLM serialization is captured; the ids,
 ///   the name split and the argument split are authored input. It holds a
 ///   name split across two deltas that BOTH arrive after the `id`. Per the
-///   design spec's §6 provenance note, this is the capture `FragmentedToolName`'s shape must be drawn from — the note
+///   design spec's §6 provenance note, this is the capture
+///   `FragmentedToolName`'s shape must be drawn from — the note
 ///   requires the committed **shape**, not byte-identical values; see
 ///   "`FragmentedToolName` deliberately never completes" below for exactly
 ///   what this module substitutes (the "id resolves late" variant has no
@@ -578,7 +579,8 @@ mod bedrock {
 /// `chat_content_filter.txt` and `chat_text_usage_trailing_empty_choices.txt`
 /// (both HAND-AUTHORED) were read but contribute no shape this module needs:
 /// this subject serves only `Stop` and `ToolCalls` finish reasons, and the
-/// empty-`choices` usage variant is a second encoding of the same trailing-usage envelope already
+/// empty-`choices` usage variant is a second encoding of the same
+/// trailing-usage envelope already
 /// covered by `chat_text_usage_trailing.txt`.
 ///
 /// # `FragmentedToolName` deliberately never completes
@@ -1662,16 +1664,22 @@ mod litellm {
 ///
 /// Every envelope shape below is transcribed from a fixture committed in
 /// `crates/paigasus-helikon-providers-anthropic/tests/fixtures/`, cited on the
-/// helper or script arm that builds it:
+/// helper or script arm that builds it. Each fixture header states its label.
+/// Only one cited fixture is CAPTURED: `thinking_text_tool_use.txt`. All the
+/// others are HAND-AUTHORED. The `message_start`, `message_delta` and
+/// `tool_use` helpers copy HAND-AUTHORED shapes. The header of `text_only.txt`
+/// lists the keys that the SMA-840 captures carry and those shapes do not.
 ///
-/// - `text_only.txt` — the baseline: `message_start` (including its top-level
-///   `"stop_reason":null`), a text `content_block_start`, two
+/// - `text_only.txt` — HAND-AUTHORED (SMA-317, PR #33). The source of its
+///   shapes is not recorded. The baseline: `message_start` (including its
+///   top-level `"stop_reason":null`), a text `content_block_start`, two
 ///   `content_block_delta`s, `content_block_stop`, `message_delta`
 ///   (`stop_reason` + `usage` in one event), `message_stop`. Grounds
 ///   [`message_start`], [`content_block_start_text`], [`text_delta`],
 ///   [`content_block_stop`], [`message_delta`] and [`message_stop`], and
 ///   `CleanStop`'s full script.
-/// - `eof_after_message_delta.txt` — the exact SMA-531 shape and the fixture
+/// - `eof_after_message_delta.txt` — HAND-AUTHORED (SMA-531, PR #200), a
+///   prefix of `text_only.txt`. The exact SMA-531 shape and the fixture
 ///   the crate's own `clean_eof_after_message_delta_emits_finish` regression
 ///   test reads: `text_only.txt`'s prefix through `message_delta`, then the
 ///   body simply ends — no `message_stop`. `TruncatedAfterStopReason` draws
@@ -1680,49 +1688,71 @@ mod litellm {
 ///   appended); `message_start`'s `id`/`model` and the delta text are this
 ///   module's own constants, not the fixture's literal values (see
 ///   [`message_start`]'s doc).
-/// - `eof_mid_content_block.txt` — grounds `TruncatedMidGeneration`'s
+/// - `eof_mid_content_block.txt` — HAND-AUTHORED (SMA-531, PR #200), a
+///   prefix of `text_only.txt`. Grounds `TruncatedMidGeneration`'s
 ///   envelope shape (`message_start`, `content_block_start`, a
 ///   `content_block_delta`, then EOF with no `message_delta` at all). The
 ///   delta *count* is not grounded from this file — as with every other
 ///   subject in this module, `opening()`'s two deltas are arbitrary content
 ///   over a grounded envelope, not a literal transcription.
-/// - `stream_error.txt` — grounds `ErrorMidGeneration`'s prefix envelope
+/// - `stream_error.txt` — HAND-AUTHORED (SMA-317, PR #33). Grounds
+///   `ErrorMidGeneration`'s prefix envelope
 ///   (`message_start`, `content_block_start`, one `content_block_delta`)
 ///   *before* its own in-band `event: error` frame. See "Why `Ending::Abort`
 ///   and not the fixtures' own `error` event" below for why that frame itself
 ///   is not transcribed into this script.
-/// - `error_after_message_delta.txt` — grounds `ErrorAfterStopReason`'s
+/// - `error_after_message_delta.txt` — HAND-AUTHORED (SMA-531, PR #200).
+///   Grounds `ErrorAfterStopReason`'s
 ///   prefix envelope: the same event-sequence shape as
 ///   `eof_after_message_delta.txt`'s through `message_delta` (message_start,
 ///   content_block_start, delta(s), content_block_stop, message_delta),
 ///   though the two fixtures are not byte-identical to each other — this one
 ///   carries a different `message_start` id and one delta where the other
 ///   has two — again *before* its own in-band `error` frame.
-/// - `parallel_tool_use.txt` and `tool_use_then_continuation.txt` — the
-///   `tool_use` envelope: a `content_block_start` carrying the whole `id` and
-///   `name` together, followed by exactly one `input_json_delta` carrying the
-///   whole argument JSON. Grounds [`tool_use_start`], [`input_json_delta`],
-///   and `ToolCallCleanStop`'s script.
-/// - `thinking_text_tool_use.txt` — a signed thinking block before a
-///   `tool_use` block. Grounds [`thinking_start`] (`"thinking":"","signature":""`),
-///   [`thinking_delta`], [`signature_delta`] (fake value `SIG_FAKE_1`) and
+/// - `parallel_tool_use.txt` and `tool_use_then_continuation.txt` — both
+///   HAND-AUTHORED (SMA-317, PR #33). The `tool_use` envelope: a
+///   `content_block_start` carrying the whole `id` and `name` together,
+///   followed by exactly one `input_json_delta` carrying the whole argument
+///   JSON. Grounds [`tool_use_start`], [`input_json_delta`], and
+///   `ToolCallCleanStop`'s script. The SMA-840 captures differ in two ways
+///   (the headers of both files): their tool `content_block_start` also
+///   carries `"caller":{"type":"direct"}`, and they split the argument JSON
+///   (see "`ToolCallCleanStop` never splits `input_json_delta`" below).
+/// - `thinking_text_tool_use.txt` — CAPTURED (transcribed, SMA-840, PR #387):
+///   probe run C, turn 1, `claude-sonnet-4-5`, on 2026-11-21. Its header
+///   records one change: the real signature is replaced with `SIG_FAKE_1`. A
+///   signed thinking block before a `tool_use` block. Grounds
+///   [`thinking_start`] (`"thinking":"","signature":""`), [`thinking_delta`],
+///   [`signature_delta`] (fake value `SIG_FAKE_1`) and
 ///   `ThinkingToolCallCleanStop`'s script. The fixture holds a text block
 ///   between the thinking block and the tool call. The script leaves it out,
 ///   so the tool call sits at index 1. [`tool_use_start_at`],
 ///   [`input_json_delta_at`] and [`content_block_stop_at`] carry that index.
+///   The script also leaves out other parts of the capture. See the
+///   `ThinkingToolCallCleanStop` arm in [`script`] for the list.
 ///
-/// `body_cut_inside_message_stop.txt` and `thinking_then_text.txt` were read
+/// `body_cut_inside_message_stop.txt` (HAND-AUTHORED, SMA-531, PR #200) and
+/// `thinking_then_text.txt` (HAND-AUTHORED, SMA-317, PR #33) were read
 /// but contribute no shape this module needs: the former is a byte-level cut
 /// of `eof_after_message_delta.txt` that the SSE parser discards down to the
-/// same events (already covered), and this suite has no reasoning-delta
-/// scenario for any subject.
+/// same events (already covered). For the latter, the one thinking scenario
+/// here, `ThinkingToolCallCleanStop`, uses the CAPTURED
+/// `thinking_text_tool_use.txt` instead.
+///
+/// SMA-840 (PR #387) also added four fixtures that this module does not cite:
+/// `empty_thinking_tool_use.txt` and `redacted_thinking_tool_use.txt` (both
+/// CAPTURED), and `interleaved_thinking.txt` and
+/// `unsigned_thinking_tool_use.txt` (both HAND-AUTHORED).
 ///
 /// # Why `Ending::Abort` and not the fixtures' own `error` event
 ///
-/// `stream_error.txt` and `error_after_message_delta.txt` both encode
-/// Anthropic's real error mechanism: an in-band `event: error` SSE frame,
-/// parsed by `AnthropicEvent::Error` and turned into `Err(ModelError::…)` by
-/// `stream.rs`'s `consume`. That path is already exercised directly against
+/// `stream_error.txt` and `error_after_message_delta.txt` both encode an
+/// in-band `event: error` SSE frame. Both files are HAND-AUTHORED. None of
+/// the three SMA-840 captures has an `error` event, and the headers of both
+/// files say that no capture supports it. The translator parses that frame
+/// as `AnthropicEvent::Error`,
+/// and `stream.rs`'s `consume` turns it into `Err(ModelError::…)`. That
+/// path is already exercised directly against
 /// the translator by the crate's own
 /// `stream_error_overloaded_terminates_with_unavailable` and
 /// `error_after_buffered_stop_reason_emits_no_finish` tests.
@@ -1758,7 +1788,8 @@ mod litellm {
 /// its `script` match arm below, which states in prose where `gate_after`
 /// counts to and why — treat that comment as load-bearing, not decoration.
 ///
-/// **`message_start` contains a literal `"stop_reason":null`.** A naive scan
+/// **`message_start` contains a literal `"stop_reason":null`.** The CAPTURED
+/// `thinking_text_tool_use.txt` also sends it in `message_start`. A naive scan
 /// for the substring `stop_reason` would therefore match the very first event
 /// of every script, whether or not a stop reason was ever encoded.
 /// [`STOP_REASON_MARKER`] scans for the populated-string shape instead, pinned
@@ -1771,14 +1802,23 @@ mod litellm {
 ///
 /// # `ToolCallCleanStop` never splits `input_json_delta`
 ///
-/// Every committed tool-call fixture (`parallel_tool_use.txt`,
-/// `tool_use_then_continuation.txt`) carries one tool call's whole argument
-/// JSON in a single `input_json_delta`. Unlike `bedrock`/`openai_chat`/
-/// `litellm`, this module does not split the arguments across two calls to its
-/// delta helper to *additionally* prove "not more than one delta carries the
-/// name" — no committed capture grounds Anthropic ever doing that, and
-/// inventing the split would fabricate a shape per this file's provenance
-/// rule. A single `input_json_delta` still fully exercises assertion 7's
+/// The two HAND-AUTHORED SMA-317 tool-call fixtures (`parallel_tool_use.txt`,
+/// `tool_use_then_continuation.txt`) carry one tool call's whole argument
+/// JSON in a single `input_json_delta`. The three SMA-840 captures do not.
+/// Each sends an empty first `input_json_delta` (`"partial_json":""`), then
+/// the JSON in three fragments. See `thinking_text_tool_use.txt` lines
+/// 143-153, `empty_thinking_tool_use.txt` lines 94-104 and
+/// `redacted_thinking_tool_use.txt` lines 95-105.
+///
+/// Unlike `bedrock`/`openai_chat`/`litellm`, this module does not split the
+/// arguments across two calls to its delta helper to *additionally* prove
+/// "not more than one delta carries the name". It sends one whole
+/// `input_json_delta`, the shape of the HAND-AUTHORED files. So its tool
+/// scripts do not show the captured split. The SMA-845 audit labels sources
+/// and does not change this test data
+/// (`docs/superpowers/specs/2026-11-21-sma-845-fixture-provenance-audit-design.md`,
+/// lines 339 and 412).
+/// A single `input_json_delta` still fully exercises assertion 7's
 /// "exactly one, not zero" on this shape: the translator's `name_emitted` flag
 /// starts `false`, so the one delta this script sends is the one that must
 /// carry the name.
@@ -1795,9 +1835,11 @@ mod anthropic {
 
     /// `id` for the single tool call in the tool fixture. Not claimed to match
     /// any real Anthropic id format (`tu_weather`/`tu_a`/`tu_b` is the shape
-    /// `parallel_tool_use.txt` and `tool_use_then_continuation.txt` use, but
-    /// nothing under test inspects it) — fixed purely so failure output is
-    /// stable and greppable.
+    /// the HAND-AUTHORED `parallel_tool_use.txt` and
+    /// `tool_use_then_continuation.txt` use, but nothing under test inspects
+    /// it) — fixed purely so failure output is stable and greppable. The
+    /// CAPTURED `thinking_text_tool_use.txt` has an id with the prefix
+    /// `toolu_`.
     const TOOL_USE_ID: &str = "tu_conformance_0";
 
     /// The substring that appears in a chunk if and only if it carries a
@@ -1816,15 +1858,15 @@ mod anthropic {
     const STOP_REASON_MARKER: &[u8] = b"\"stop_reason\":\"";
 
     /// One SSE frame: `event: {event}\ndata: {payload}\n\n`. Anthropic frames
-    /// carry an explicit event name — unlike the bare `data:` frames OpenAI
-    /// and LiteLLM send — matching every fixture in this crate's own
-    /// `tests/fixtures/`.
+    /// carry an explicit event name — unlike the bare `data:` frames in the
+    /// `openai_chat` and `litellm` sources — matching every fixture in the
+    /// Anthropic crate's own `tests/fixtures/`.
     ///
     /// The `event:` line is cosmetic to the translator: `model.rs` parses
     /// `event.data` alone via `AnthropicEvent`'s `#[serde(tag = "type")]`,
-    /// never `event.event`. It is still written here because every real
-    /// Anthropic response sends it, and a fixture that omitted it would not be
-    /// the stream it claims to be.
+    /// never `event.event`. It is still written here because each fixture
+    /// sends it. That includes the three SMA-840 captures, which have an
+    /// `event:` line before each `data:` line.
     fn frame(event: &str, payload: serde_json::Value) -> Vec<u8> {
         format!("event: {event}\ndata: {payload}\n\n").into_bytes()
     }
@@ -1833,9 +1875,12 @@ mod anthropic {
     /// the translator reads its initial `Usage` from
     /// (`stream.rs`'s `MessageStart` arm).
     ///
-    /// Matches `text_only.txt`'s opening event, including the top-level
-    /// `"stop_reason":null` on the `message` object — the shape
-    /// [`STOP_REASON_MARKER`] must not match.
+    /// Matches `text_only.txt`'s opening event (HAND-AUTHORED), including the
+    /// top-level `"stop_reason":null` on the `message` object — the shape
+    /// [`STOP_REASON_MARKER`] must not match. The CAPTURED
+    /// `thinking_text_tool_use.txt` also sends that null. Its `message_start`
+    /// carries more keys than this one; the header of `text_only.txt` lists
+    /// them. The token counts are this module's own values.
     fn message_start() -> Vec<u8> {
         frame(
             "message_start",
@@ -1861,8 +1906,10 @@ mod anthropic {
 
     /// `content_block_start` opening a text block. Matches `text_only.txt`'s
     /// second event. The translator's `ContentBlockStart`/`Text` arm records
-    /// no `ModelEvent` for this; it is included because a real stream opens
-    /// every block it later closes.
+    /// no `ModelEvent` for this; it is included so that the script opens each
+    /// block it later closes. In the CAPTURED `thinking_text_tool_use.txt`,
+    /// each `content_block_stop` follows a `content_block_start` for the
+    /// same index.
     fn content_block_start_text() -> Vec<u8> {
         frame(
             "content_block_start",
@@ -1889,8 +1936,9 @@ mod anthropic {
 
     /// `content_block_stop`, closing the block opened above. Matches
     /// `text_only.txt`. Ignored by the translator
-    /// (`AnthropicEvent::ContentBlockStop { .. }` only logs); included because
-    /// a real stream closes every block it opens.
+    /// (`AnthropicEvent::ContentBlockStop { .. }` only logs); included so
+    /// that the script closes each block it opens, as the CAPTURED
+    /// `thinking_text_tool_use.txt` does for each of its three blocks.
     fn content_block_stop() -> Vec<u8> {
         content_block_stop_at(0)
     }
@@ -1906,8 +1954,9 @@ mod anthropic {
 
     /// `content_block_start` opening a thinking block, with the empty
     /// `thinking` and empty `signature` the fixture
-    /// `thinking_text_tool_use.txt` sends. The signature arrives later, in a
-    /// `signature_delta`.
+    /// `thinking_text_tool_use.txt` (CAPTURED) sends at line 42. The keys
+    /// and the values are the same as in that line. The signature arrives
+    /// later, in a `signature_delta`.
     fn thinking_start() -> Vec<u8> {
         frame(
             "content_block_start",
@@ -1919,8 +1968,9 @@ mod anthropic {
         )
     }
 
-    /// One `thinking_delta`. Envelope matches `thinking_text_tool_use.txt`;
-    /// the text itself is arbitrary.
+    /// One `thinking_delta`. Envelope matches `thinking_text_tool_use.txt`
+    /// (CAPTURED), for example line 48; the text itself is arbitrary. The
+    /// capture sends 15 `thinking_delta` events; the script sends one.
     fn thinking_delta(thinking: &str) -> Vec<u8> {
         frame(
             "content_block_delta",
@@ -1932,8 +1982,11 @@ mod anthropic {
         )
     }
 
-    /// The `signature_delta` that closes a thinking block's content. The
-    /// fixture carries the fake value `SIG_FAKE_1`; so does this script.
+    /// The `signature_delta` that closes a thinking block's content. Envelope
+    /// matches `thinking_text_tool_use.txt` (CAPTURED), line 93. The fixture
+    /// carries the fake value `SIG_FAKE_1`; so does this script. That value
+    /// is not wire bytes: the fixture header records that it replaces the
+    /// real signature.
     fn signature_delta(signature: &str) -> Vec<u8> {
         frame(
             "content_block_delta",
@@ -1947,7 +2000,9 @@ mod anthropic {
 
     /// `message_delta` — the one event that carries BOTH the stop reason and
     /// usage in a single frame. Matches `text_only.txt`'s and
-    /// `eof_after_message_delta.txt`'s shared shape.
+    /// `eof_after_message_delta.txt`'s shared shape (both HAND-AUTHORED).
+    /// The CAPTURED `message_delta` carries more keys; the header of
+    /// `text_only.txt` lists them.
     ///
     /// This is the load-bearing difference from every other subject in this
     /// file: `stream.rs`'s `MessageDelta` arm emits `Usage` from the same
@@ -1974,7 +2029,10 @@ mod anthropic {
 
     /// `content_block_start` opening a `tool_use` block. Matches
     /// `parallel_tool_use.txt`'s and `tool_use_then_continuation.txt`'s
-    /// tool-call events. The translator records `call_id`/`name` here but
+    /// tool-call events (both HAND-AUTHORED). The CAPTURED
+    /// `thinking_text_tool_use.txt` (line 141) also carries
+    /// `"caller":{"type":"direct"}`; this helper does not send it. The
+    /// translator records `call_id`/`name` here but
     /// emits nothing — the name-carrying `ToolCallDelta` comes with the first
     /// `input_json_delta` — which is why `FragmentedToolName` is declined for
     /// this subject: the name arrives whole, in this one event.
@@ -1984,6 +2042,9 @@ mod anthropic {
 
     /// [`tool_use_start`] for the block at `index`. In the thinking scenario
     /// the thinking block holds index 0, so the tool call sits at index 1.
+    /// In the capture the tool call sits at index 2, after a text block
+    /// (`thinking_text_tool_use.txt`, line 141). The keys are those of
+    /// [`tool_use_start`], so this helper also drops `caller`.
     fn tool_use_start_at(index: u32, call_id: &str, name: &str) -> Vec<u8> {
         frame(
             "content_block_start",
@@ -1995,7 +2056,9 @@ mod anthropic {
         )
     }
 
-    /// One `input_json_delta`, carrying a whole argument JSON. See the module
+    /// One `input_json_delta`, carrying a whole argument JSON, as the
+    /// HAND-AUTHORED SMA-317 fixtures do. The SMA-840 captures split it.
+    /// See the module
     /// doc's "`ToolCallCleanStop` never splits `input_json_delta`" section for
     /// why this is never called twice for one call in this module, unlike its
     /// siblings' tool-argument helpers.
@@ -2124,11 +2187,12 @@ mod anthropic {
             // Declined — see `Anthropic::stream`.
             Scenario::FragmentedToolName => return None,
             // A whole tool call: the name arrives with the block start
-            // (`tool_use_start`), the whole argument JSON arrives on the one
-            // `input_json_delta` Anthropic is ever observed to send per call
-            // (see the module doc's "never splits" section), then a
-            // `tool_use` stop reason and its usage, then `message_stop`.
-            // Matches `parallel_tool_use.txt`'s single-call shape.
+            // (`tool_use_start`), the whole argument JSON arrives on one
+            // `input_json_delta`, as in the HAND-AUTHORED SMA-317 fixtures
+            // (the SMA-840 captures split it; see the module doc's "never
+            // splits" section), then a `tool_use` stop reason and its usage,
+            // then `message_stop`. Matches `parallel_tool_use.txt`'s
+            // single-call shape.
             Scenario::ToolCallCleanStop => (
                 vec![
                     message_start(),
@@ -2150,7 +2214,12 @@ mod anthropic {
             // holds a text block between the thinking block and the tool call.
             // This script leaves that block out, so the tool call takes the
             // next index (1). The `tool_use` events are the same as in
-            // `ToolCallCleanStop`. The translator then emits a call-scoped
+            // `ToolCallCleanStop`. The script also differs from the capture
+            // in these ways: no `ping` event; one `thinking_delta`, not 15;
+            // no `caller` key on the tool block; one whole `input_json_delta`,
+            // not an empty one and three fragments. `message_start` and
+            // `message_delta` use the HAND-AUTHORED `text_only.txt` keys,
+            // not the capture's. The translator then emits a call-scoped
             // `ProviderData` position for the tool call, and assertion 8
             // checks it against the streamed call.
             Scenario::ThinkingToolCallCleanStop => (
@@ -2181,9 +2250,10 @@ mod anthropic {
 
     /// The request driven through `Model::invoke`.
     ///
-    /// Carries a tool definition for `ToolCallCleanStop` so the exchange is
-    /// coherent — a response returning `tool_use` for a request that offered
-    /// no tools is not a stream Anthropic would ever produce.
+    /// Carries a tool definition for both served tool scenarios
+    /// (`ToolCallCleanStop` and `ThinkingToolCallCleanStop`) so the exchange
+    /// is coherent — a response returning `tool_use` for a request that
+    /// offered no tools would not be a coherent exchange.
     /// `FragmentedToolName` is this subject's other tool scenario, but it is
     /// declined and so never reaches this function.
     fn request(scenario: Scenario) -> ModelRequest {
@@ -2279,8 +2349,9 @@ mod anthropic {
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
             // The name is set once, whole, in the `content_block_start`
-            // `tool_use` block; there is no second event it could be split
-            // across.
+            // `tool_use` block. That is so in each committed fixture with a
+            // `tool_use` block, including the three SMA-840 captures. No
+            // `ContentBlockDelta` variant (`sse.rs`) has a name field.
             if scenario == Scenario::FragmentedToolName {
                 return Outcome::Declined("name arrives whole in content_block_start");
             }
@@ -2440,7 +2511,8 @@ mod anthropic {
 /// SMA-827 (PR #373) later added a second capture with `functionCall` parts,
 /// `parallel_signed.sse`. It agrees with points 1-3 below: each call has an
 /// `id`, `"STOP"` arrives on a separate last chunk with
-/// `"parts":[{"text":""}]`, and `thoughtSignature` is a sibling of `functionCall`.
+/// `"parts":[{"text":""}]`, and `thoughtSignature` is a sibling of
+/// `functionCall`.
 ///
 /// This settles the question the module previously flagged as open:
 ///
@@ -2563,7 +2635,8 @@ mod gemini {
     /// One text delta, carrying `usageMetadata`. Matches
     /// `multi_chunk_usage_emits_usage_per_chunk`'s first chunk
     /// (`crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:91-92`,
-    /// HAND-AUTHORED): a content-only candidate (no `finishReason`) with `usageMetadata` as a
+    /// HAND-AUTHORED): a content-only candidate (no `finishReason`) with
+    /// `usageMetadata` as a
     /// top-level sibling of `candidates` — see the module doc's "`usageMetadata`
     /// appears on every chunk" section for why this replaced an earlier,
     /// usage-free version of this helper.
@@ -2622,7 +2695,8 @@ mod gemini {
     /// frame, and the live capture (module doc, "Live capture") itself ended
     /// at bare EOF with no `[DONE]` either. `CleanStop` below is the first
     /// thing in this codebase that ever sends Gemini a `[DONE]` sentinel and
-    /// checks what the driver does with it. Grounded directly in the driver's own string comparison
+    /// checks what the driver does with it. Grounded directly in the
+    /// driver's own string comparison
     /// rather than a capture; the bytes are the same `data: [DONE]\n\n`
     /// terminator `openai_chat` and `litellm` send, since `model.rs` checks
     /// nothing about the frame besides its `data` field.
