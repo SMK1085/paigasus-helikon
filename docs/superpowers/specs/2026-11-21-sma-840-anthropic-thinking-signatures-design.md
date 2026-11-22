@@ -120,6 +120,11 @@ What the probe shows:
   `thinking, text A, tool_use, thinking, text B, tool_use` goes back as
   `thinking, text AB, tool_use, thinking, tool_use`. Probe finding 4 shows the API does not check
   order.
+
+  > **Correction (SMA-854, 2026-11-22):** this is wrong for blocks before a thinking block. A changed
+  > block before a thinking block in the same message makes the API drop that block
+  > (`prefix_binding_mismatch`). SMA-854 sends each text block at its own position. See
+  > `2026-11-22-anthropic-per-text-block-positions-design.md`.
 - A change to core. Core keeps one `Reasoning` part per message for display. The request translator
   does not read it.
 
