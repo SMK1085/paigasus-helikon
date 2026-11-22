@@ -1,9 +1,10 @@
 //! Live smoke tests. Ignored by default; run with `-- --ignored`.
 //!
 //! Developer API: set `GEMINI_API_KEY` (+ optional `GEMINI_MODEL_ID`; the default is
-//! `gemini-3.8-flash`).
+//! `DEFAULT_MODEL_ID`, `gemini-3.8-flash`).
 //! Vertex (feature `vertex-adc`): set `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`
-//! with working ADC.
+//! with working ADC. Vertex uses the same default id. That default is not
+//! live-tested on Vertex.
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
@@ -11,11 +12,14 @@ use paigasus_helikon_core::{
 };
 use paigasus_helikon_providers_gemini::GeminiModel;
 
+/// The model id that the live tests use when `GEMINI_MODEL_ID` is not set.
+const DEFAULT_MODEL_ID: &str = "gemini-3.8-flash";
+
 fn dev_model() -> Option<GeminiModel> {
     let _ = std::env::var("GEMINI_API_KEY")
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
         .ok()?;
-    let id = std::env::var("GEMINI_MODEL_ID").unwrap_or_else(|_| "gemini-3.8-flash".into());
+    let id = std::env::var("GEMINI_MODEL_ID").unwrap_or_else(|_| DEFAULT_MODEL_ID.into());
     GeminiModel::from_env(id).ok()
 }
 
@@ -39,7 +43,9 @@ async fn live_developer_text_turn() {
         .unwrap();
     let mut got_text = false;
     while let Some(ev) = s.next().await {
-        if let Ok(ModelEvent::TokenDelta { .. }) = ev {
+        // Unwrap each event so a streamed Err (for example HTTP 404) fails the
+        // test with its error text.
+        if let ModelEvent::TokenDelta { .. } = ev.unwrap() {
             got_text = true;
         }
     }
@@ -194,7 +200,7 @@ async fn live_vertex_text_turn() {
     if std::env::var("GOOGLE_CLOUD_PROJECT").is_err() {
         return;
     }
-    let id = std::env::var("GEMINI_MODEL_ID").unwrap_or_else(|_| "gemini-2.5-flash".into());
+    let id = std::env::var("GEMINI_MODEL_ID").unwrap_or_else(|_| DEFAULT_MODEL_ID.into());
     let model = GeminiModel::vertex_from_env(id).await.unwrap();
     let mut s = model
         .invoke(user("Say hi."), CancellationToken::new())
