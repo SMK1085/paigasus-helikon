@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "bd6f2ac8cc16",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-854-anthropic-stream-records-a-position-only-for",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bd/6f2ac8cc16/0/metadata.json",
+      "transcript": "/bd/6f2ac8cc16/0/full.jsonl",
+      "compact_transcript": "/bd/6f2ac8cc16/0/transcript.jsonl",
+      "content_hash": "/bd/6f2ac8cc16/0/content_hash.txt",
+      "prompt": "/bd/6f2ac8cc16/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 12,
+      "cache_creation_tokens": 24569,
+      "cache_read_tokens": 438896,
+      "output_tokens": 2850,
+      "api_call_count": 6
+    }
+  },
+  "redaction": {
+    "replacements": 64,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 64,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
