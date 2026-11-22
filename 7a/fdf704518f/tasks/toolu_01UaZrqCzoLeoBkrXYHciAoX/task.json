@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UaZrqCzoLeoBkrXYHciAoX",
+  "agent_id": "abdff490155f885be",
+  "subagent_type": "Explore",
+  "task_description": "Inventory capture sources for new shapes",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 139148,
+    "cache_read_tokens": 2513100,
+    "output_tokens": 23840,
+    "api_call_count": 29
+  },
+  "started_at": "2026-11-22T16:28:48.715384+01:00",
+  "completed_at": "2026-11-22T16:31:56.245164+01:00"
+}

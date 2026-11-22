@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_013xuTg6NNB1KdRKAbdB8P1H",
+  "agent_id": "a5bcb709be16fa304",
+  "subagent_type": "general-purpose",
+  "task_description": "Builder check on SMA-567 design",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 76703,
+    "cache_read_tokens": 258247,
+    "output_tokens": 3900,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-22T17:02:12.524088+01:00",
+  "completed_at": "2026-11-22T17:02:57.418894+01:00"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XhivDwuYxWtNUv8RZypb57",
+  "agent_id": "a567b0cc1a72084df",
+  "subagent_type": "feature-factory:spec-challenger",
+  "task_description": "Adversarial spec challenge SMA-567",
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 274866,
+    "cache_read_tokens": 10599434,
+    "output_tokens": 69243,
+    "api_call_count": 52
+  },
+  "started_at": "2026-11-22T17:02:12.793641+01:00",
+  "completed_at": "2026-11-22T17:16:08.614768+01:00"
+}
