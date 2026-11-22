@@ -137,17 +137,19 @@ If you set `JsonSchema` or `JsonObject` with `ToolChoice::None`, the result depe
 
 A tool can declare a provider tool type for the `anthropic` provider. For Claude models, the provider sends a typed entry for such a tool. The typed entry replaces the generic name, description and input schema.
 
-Only `memory_*` types use the typed entry. The provider sends `{"type": "memory_20250818", "name": "<tool name>"}`, with the extra fields from `with_params`. It removes `cache_control`. Other families and other type names get the generic schema.
+Only `memory_*` types use the typed entry. The provider sends `{"type": "memory_20250818", "name": "<tool name>"}`, with the extra fields from `with_params`. It removes `cache_control`. Only the first `anthropic` declaration of a tool counts. If it is not a `memory_*` type, the tool gets the generic schema. Other families also get the generic schema.
 
 Set `native_tool_types(false)` to send the generic schema for every tool:
 
 ```rust,ignore
-let model = BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+let model = BedrockModel::converse("us.anthropic.claude-sonnet-4-6")
     .native_tool_types(false)
     .build()?;
 ```
 
-Bedrock needs at least one tool in `toolConfig.tools`. When a request has only typed tools, the provider adds a placeholder tool. The placeholder has the reserved name `__paigasus_structured_output__`. Its description tells the model to never call it.
+Without a tool round in the history, the provider sends the typed entries in `additionalModelRequestFields`. It adds no placeholder.
+
+Bedrock needs a `toolConfig` with at least one tool when the history holds a tool call or a tool result. If the request then has only typed tools, the provider adds a placeholder tool to `toolConfig.tools`. The placeholder has the reserved name `__paigasus_structured_output__`. Its description tells the model to never call it.
 
 `ToolChoice::Required` after a tool round, with only typed tools, also allows a call to the placeholder. The agent answers such a call as an unknown tool.
 
