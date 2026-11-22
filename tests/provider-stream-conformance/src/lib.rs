@@ -56,6 +56,9 @@ pub enum Scenario {
     /// A signed thinking block, then one complete tool call, then a tool-use
     /// stop reason.
     ThinkingToolCallCleanStop,
+    /// Reasoning, then text, then one complete tool call, then a tool-use
+    /// stop reason. Provider-neutral: any reasoning channel serves it.
+    ReasoningCleanStop,
 }
 
 impl Scenario {
@@ -71,6 +74,7 @@ impl Scenario {
         Scenario::FragmentedToolName,
         Scenario::ToolCallCleanStop,
         Scenario::ThinkingToolCallCleanStop,
+        Scenario::ReasoningCleanStop,
     ];
 
     /// Whether this scenario's script must let the translator observe a stop
@@ -85,8 +89,23 @@ impl Scenario {
                 | Scenario::CancelAfterStopReason
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
         )
     }
+}
+
+/// One run of same-channel events, in wire order.
+///
+/// `ReasoningDelta`, `TokenDelta` and `ToolCallDelta` each map to one channel.
+/// Adjacent events of one channel merge into one run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    /// `ReasoningDelta` events.
+    Reasoning,
+    /// `TokenDelta` events.
+    Text,
+    /// `ToolCallDelta` events.
+    Tool,
 }
 
 /// A contract violation, classified. Ordering matters — see `classify`.
@@ -141,6 +160,16 @@ pub enum Violation {
         expected: FinishReason,
         /// What the stream actually emitted.
         observed: FinishReason,
+    },
+    /// The run order of the reasoning, text and tool channels differs from
+    /// the order that the subject's fixture declares. This is a check of
+    /// fidelity to the wire, not of the contract, which lets the channels
+    /// interleave freely.
+    ChannelOrderMismatch {
+        /// What the subject's `fixture_channel_order` declared.
+        expected: Vec<Channel>,
+        /// The runs the stream actually emitted.
+        observed: Vec<Channel>,
     },
     /// The stream did not terminate within the per-scenario timeout.
     Timeout,
@@ -216,15 +245,15 @@ pub trait StreamUnderTest {
     /// The `FinishReason` this subject's fixture for `scenario` declares, or
     /// `None` for scenarios that must not produce a `Finish` at all.
     ///
-    /// Exactly four scenarios end with a `Finish`, and the floor checks this
-    /// value for all four: `CleanStop`, `ToolCallCleanStop`,
-    /// `ThinkingToolCallCleanStop`, and `TruncatedAfterStopReason`, where
-    /// assertion 3 requires the buffered stop reason to be flushed at
-    /// end-of-stream. Every other scenario must return
-    /// `None` — a cancelled or errored stream withholds `Finish`, and a
+    /// Exactly five scenarios end with a `Finish`, and the floor checks this
+    /// value for all five: `CleanStop`, `ToolCallCleanStop`,
+    /// `ThinkingToolCallCleanStop`, `ReasoningCleanStop`, and
+    /// `TruncatedAfterStopReason`, where assertion 3 requires the buffered
+    /// stop reason to be flushed at end-of-stream. Every other scenario must
+    /// return `None` — a cancelled or errored stream withholds `Finish`, and a
     /// truncation with no stop reason observed never had one to emit.
     ///
-    /// The four differ in one way only: for the three clean stops a missing
+    /// The five differ in one way only: for the four clean stops a missing
     /// `Finish` fails the floor, whereas for `TruncatedAfterStopReason` it is
     /// `classify`'s `MissingFinish` (the SMA-531 shape). Either way, a `Finish`
     /// that *is* emitted must carry what this method declares.
@@ -234,6 +263,14 @@ pub trait StreamUnderTest {
     /// `CleanStop` ⇒ `Stop` would silently accept a fixture that had been
     /// transcribed with the wrong stop reason.
     fn fixture_finish_reason(&self, scenario: Scenario) -> Option<FinishReason>;
+
+    /// The run order of the reasoning, text and tool channels in this
+    /// subject's fixture for `scenario`, read from the capture. `None` means
+    /// that the subject makes no claim.
+    ///
+    /// `ReasoningCleanStop` requires `Some(..)`. For any scenario that returns
+    /// `Some(..)`, the floor compares the observed runs with it.
+    fn fixture_channel_order(&self, scenario: Scenario) -> Option<&'static [Channel]>;
 
     /// Serve `scenario` and return the subject's `Model::invoke` stream.
     async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome;
@@ -375,6 +412,7 @@ async fn assert_conforms_with(
             &drained.events,
             subject.fixture_tool_name(),
             subject.fixture_finish_reason(scenario),
+            subject.fixture_channel_order(scenario),
         ) {
             fail(
                 name,
@@ -573,6 +611,15 @@ async fn drain(
 /// error scenarios (cancellation scenarios included), and a `Usage` in
 /// `CleanStop`.
 ///
+/// `ReasoningCleanStop` has two more floors: at least one `ReasoningDelta`,
+/// and a declared channel order. When a subject declares a channel order
+/// (`channel_order`), the observed runs of `ReasoningDelta`, `TokenDelta` and
+/// `ToolCallDelta` must equal it, or the result is `ChannelOrderMismatch`.
+/// That check is about fidelity to the wire order, not about the contract: the
+/// contract lets the three channels interleave freely
+/// (`core/src/model.rs:56-57`). An empty delta still counts as a run, because a
+/// real wire can carry one and the translator passes it on.
+///
 /// The ticket proposed a floor that required `Usage` and `Finish` to be
 /// adjacent and terminal in `CleanStop`. That floor was replaced. It cannot see
 /// the Bedrock `metadata`/`messageStop` swap, because both orders give the same
@@ -590,6 +637,7 @@ fn floor_violation(
     events: &[Result<ModelEvent, ModelError>],
     tool_name: &str,
     finish_reason: Option<FinishReason>,
+    channel_order: Option<&[Channel]>,
 ) -> Option<Violation> {
     match scenario {
         Scenario::CleanStop
@@ -611,7 +659,8 @@ fn floor_violation(
         }
         Scenario::FragmentedToolName
         | Scenario::ToolCallCleanStop
-        | Scenario::ThinkingToolCallCleanStop => {
+        | Scenario::ThinkingToolCallCleanStop
+        | Scenario::ReasoningCleanStop => {
             if !events
                 .iter()
                 .any(|e| matches!(e, Ok(ModelEvent::ToolCallDelta { .. })))
@@ -649,6 +698,34 @@ fn floor_violation(
         return Some(Violation::InsufficientEvidence(
             "no call-scoped ProviderData: assertion 8 would pass vacuously",
         ));
+    }
+
+    if matches!(scenario, Scenario::ReasoningCleanStop) {
+        if !events
+            .iter()
+            .any(|e| matches!(e, Ok(ModelEvent::ReasoningDelta { .. })))
+        {
+            return Some(Violation::InsufficientEvidence(
+                "no ReasoningDelta: a reasoning scenario that emitted no reasoning passes the \
+                 channel-order check with no reasoning run in it",
+            ));
+        }
+        if channel_order.is_none() {
+            return Some(Violation::InsufficientEvidence(
+                "the subject declares no channel order for a reasoning scenario, so the \
+                 channel-order check would compare nothing",
+            ));
+        }
+    }
+
+    if let Some(expected) = channel_order {
+        let observed = channel_runs(events);
+        if observed != expected {
+            return Some(Violation::ChannelOrderMismatch {
+                expected: expected.to_vec(),
+                observed,
+            });
+        }
     }
 
     // `CancelAfterStopReason` is the one degradation with no other detector.
@@ -693,6 +770,7 @@ fn floor_violation(
             | Scenario::TruncatedAfterStopReason
             | Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop
     ) {
         // The first `Finish` on purpose: a second one is a `DuplicateFinish`,
         // which `classify` names precisely, and checking the reason on the
@@ -712,6 +790,7 @@ fn floor_violation(
                 Scenario::CleanStop
                     | Scenario::ToolCallCleanStop
                     | Scenario::ThinkingToolCallCleanStop
+                    | Scenario::ReasoningCleanStop
             ) =>
             {
                 return Some(Violation::InsufficientEvidence(
@@ -777,6 +856,26 @@ fn floor_violation(
     }
 
     None
+}
+
+/// The runs of same-channel events in `events`, in stream order. Every event
+/// that is not a `ReasoningDelta`, `TokenDelta` or `ToolCallDelta` is ignored,
+/// and adjacent events of one channel merge into one run. An empty delta
+/// counts like any other.
+fn channel_runs(events: &[Result<ModelEvent, ModelError>]) -> Vec<Channel> {
+    let mut runs: Vec<Channel> = Vec::new();
+    for event in events {
+        let channel = match event {
+            Ok(ModelEvent::ReasoningDelta { .. }) => Channel::Reasoning,
+            Ok(ModelEvent::TokenDelta { .. }) => Channel::Text,
+            Ok(ModelEvent::ToolCallDelta { .. }) => Channel::Tool,
+            _ => continue,
+        };
+        if runs.last() != Some(&channel) {
+            runs.push(channel);
+        }
+    }
+    runs
 }
 
 /// Which pinned table a comparison concerns.
@@ -912,6 +1011,7 @@ mod tests {
             Scenario::FragmentedToolName,
             Scenario::ToolCallCleanStop,
             Scenario::ThinkingToolCallCleanStop,
+            Scenario::ReasoningCleanStop,
         ] {
             match variant {
                 Scenario::CleanStop
@@ -923,7 +1023,8 @@ mod tests {
                 | Scenario::CancelAfterStopReason
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
-                | Scenario::ThinkingToolCallCleanStop => assert!(
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop => assert!(
                     Scenario::ALL.contains(&variant),
                     "{variant:?} is missing from Scenario::ALL"
                 ),
@@ -1002,14 +1103,53 @@ mod tests {
         "the scenario serves an anthropic thinking block",
     );
 
+    /// The pinned decline `openai/chat` has for the reasoning scenario.
+    const CHAT_REASONING_DECLINE: (Scenario, &str) = (
+        Scenario::ReasoningCleanStop,
+        "the Chat Completions wire carries no reasoning text",
+    );
+
+    /// The declines `bedrock` has in the pinned table.
+    const BEDROCK_DECLINES: &[(Scenario, &str)] = &[
+        (
+            Scenario::FragmentedToolName,
+            "name arrives whole in toolUse start",
+        ),
+        (
+            Scenario::CancelAfterStopReason,
+            "no observable event between MessageStop and Metadata",
+        ),
+        THINKING_DECLINE,
+    ];
+
+    /// The uncaptured pair `bedrock` has in the pinned table.
+    const BEDROCK_UNCAPTURED: &[(Scenario, &str)] =
+        &[(Scenario::ReasoningCleanStop, "no captured reasoning stream")];
+
+    /// The pinned (scenario, reason) pairs of one subject in one table.
+    type Pinned = &'static [(Scenario, &'static str)];
+
     impl Subject {
-        /// A subject that conforms on every scenario it serves. Like every
-        /// subject but `anthropic`, it declines `ThinkingToolCallCleanStop`.
+        /// A subject that conforms on every scenario it serves, and declines
+        /// or reports uncaptured exactly the pairs that the pinned tables
+        /// give for `name`. Only the names the tests use are known.
         fn conforming(name: &'static str) -> Self {
+            let (declines, uncaptured): (Pinned, Pinned) = match name {
+                "openai/chat" => (&[THINKING_DECLINE, CHAT_REASONING_DECLINE], &[]),
+                "anthropic" => (
+                    &[(
+                        Scenario::FragmentedToolName,
+                        "name arrives whole in content_block_start",
+                    )],
+                    &[],
+                ),
+                "bedrock" => (BEDROCK_DECLINES, BEDROCK_UNCAPTURED),
+                other => panic!("the mock subject has no pinned rows for {other:?}"),
+            };
             Self {
                 name,
-                declines: &[THINKING_DECLINE],
-                uncaptured: &[],
+                declines,
+                uncaptured,
                 pinned_uncaptured: &[],
                 gate: Gate::Parked,
                 holds_open: true,
@@ -1078,11 +1218,20 @@ mod tests {
                     FinishDecl::WrongOnTruncation => Some(FinishReason::ToolCalls),
                     _ => Some(FinishReason::Stop),
                 },
-                Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
-                    Some(FinishReason::ToolCalls)
-                }
+                Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop => Some(FinishReason::ToolCalls),
                 _ => None,
             }
+        }
+
+        fn fixture_channel_order(&self, scenario: Scenario) -> Option<&'static [Channel]> {
+            (scenario == Scenario::ReasoningCleanStop).then_some(&[
+                Channel::Reasoning,
+                Channel::Text,
+                Channel::Tool,
+            ]
+                as &'static [Channel])
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -1353,6 +1502,7 @@ mod tests {
             declines: &[
                 (Scenario::CleanStop, "did not feel like it"),
                 THINKING_DECLINE,
+                CHAT_REASONING_DECLINE,
             ],
             ..Subject::conforming("openai/chat")
         };
@@ -1449,7 +1599,7 @@ mod tests {
     #[should_panic(expected = "unexpected uncaptured")]
     async fn an_uncaptured_outcome_for_a_declined_pair_fails() {
         let subject = Subject {
-            declines: &[],
+            declines: &[CHAT_REASONING_DECLINE],
             uncaptured: &[(
                 Scenario::ThinkingToolCallCleanStop,
                 "the scenario serves an anthropic thinking block",
@@ -1475,6 +1625,7 @@ mod tests {
             &events,
             TOOL_NAME,
             Some(FinishReason::Stop),
+            None,
         );
         match violation {
             Some(Violation::InsufficientEvidence(text)) => {
@@ -1495,6 +1646,7 @@ mod tests {
             &events,
             TOOL_NAME,
             Some(FinishReason::Stop),
+            None,
         );
         match violation {
             Some(Violation::InsufficientEvidence(text)) => {
@@ -1502,5 +1654,118 @@ mod tests {
             }
             other => panic!("expected InsufficientEvidence, got {other:?}"),
         }
+    }
+
+    /// The declared run order of the conforming reasoning sequence.
+    const REASONING_ORDER: &[Channel] = &[Channel::Reasoning, Channel::Text, Channel::Tool];
+
+    /// A reasoning run that arrives after the text run is not the wire order
+    /// that the fixture declares.
+    #[test]
+    fn a_reasoning_run_after_the_text_run_fails() {
+        let mut events = conforming(Scenario::ReasoningCleanStop);
+        let reasoning = events
+            .iter()
+            .position(|e| matches!(e, Ok(ModelEvent::ReasoningDelta { .. })))
+            .expect("the conforming ReasoningCleanStop has a ReasoningDelta");
+        let moved = events.remove(reasoning);
+        let text = events
+            .iter()
+            .position(|e| matches!(e, Ok(ModelEvent::TokenDelta { .. })))
+            .expect("the conforming ReasoningCleanStop has a TokenDelta");
+        events.insert(text + 1, moved);
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            Some(REASONING_ORDER),
+        );
+        assert_eq!(
+            violation,
+            Some(Violation::ChannelOrderMismatch {
+                expected: vec![Channel::Reasoning, Channel::Text, Channel::Tool],
+                observed: vec![Channel::Text, Channel::Reasoning, Channel::Tool],
+            })
+        );
+    }
+
+    /// A reasoning scenario without a `ReasoningDelta` did not serve
+    /// reasoning at all.
+    #[test]
+    fn a_reasoning_scenario_without_reasoning_fails() {
+        let mut events = conforming(Scenario::ReasoningCleanStop);
+        events.retain(|e| !matches!(e, Ok(ModelEvent::ReasoningDelta { .. })));
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &events,
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            Some(REASONING_ORDER),
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("no ReasoningDelta"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// Without a declared order the channel-order check has nothing to
+    /// compare, so it would pass with no evidence.
+    #[test]
+    fn a_reasoning_scenario_without_a_declared_order_fails() {
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &conforming(Scenario::ReasoningCleanStop),
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            None,
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("declares no channel order"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// A pair that only `UNCAPTURED` pins cannot be reported as declined. Both
+    /// pinned checks must report it: `DECLINED` sees an unexpected decline,
+    /// and `UNCAPTURED` sees a stale row.
+    #[tokio::test]
+    async fn a_declined_outcome_for_an_uncaptured_pair_fails() {
+        let subject = Subject {
+            declines: &[
+                (
+                    Scenario::FragmentedToolName,
+                    "name arrives whole in toolUse start",
+                ),
+                (
+                    Scenario::CancelAfterStopReason,
+                    "no observable event between MessageStop and Metadata",
+                ),
+                THINKING_DECLINE,
+                (Scenario::ReasoningCleanStop, "no captured reasoning stream"),
+            ],
+            uncaptured: &[],
+            ..Subject::conforming("bedrock")
+        };
+        let joined = tokio::spawn(async move { assert_conforms(&subject).await }).await;
+        let panic = joined
+            .expect_err("a declined outcome for an uncaptured pair must panic")
+            .into_panic();
+        let message = panic
+            .downcast_ref::<String>()
+            .cloned()
+            .expect("the panic carries a formatted message");
+        assert!(
+            message.contains("unexpected decline of ReasoningCleanStop"),
+            "{message}"
+        );
+        assert!(
+            message.contains("ReasoningCleanStop is pinned as uncaptured"),
+            "{message}"
+        );
     }
 }

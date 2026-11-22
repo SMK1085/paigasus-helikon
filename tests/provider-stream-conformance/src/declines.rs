@@ -83,6 +83,19 @@ pub const DECLINED: &[(&str, Scenario, &str)] = &[
         Scenario::ThinkingToolCallCleanStop,
         "the scenario serves an anthropic thinking block",
     ),
+    // The request never turns thinking on, so the wire carries no thought
+    // parts.
+    (
+        "gemini",
+        Scenario::ReasoningCleanStop,
+        "the request never enables thought parts, so none arrive on the wire",
+    ),
+    // Chat Completions has no field for reasoning text.
+    (
+        "openai/chat",
+        Scenario::ReasoningCleanStop,
+        "the Chat Completions wire carries no reasoning text",
+    ),
 ];
 
 /// Every (subject, scenario) pair whose wire shape can occur for the provider
@@ -91,12 +104,33 @@ pub const DECLINED: &[(&str, Scenario, &str)] = &[
 ///
 /// Like [`DECLINED`], the suite checks it in both directions. A row closes only
 /// when a capture removes it or a reviewed edit moves it to [`DECLINED`].
-pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[];
+pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
+    // A reasoning stream can occur for each of these subjects, but no
+    // capture of one exists yet.
+    (
+        "bedrock",
+        Scenario::ReasoningCleanStop,
+        "no captured reasoning stream",
+        "SMA-858",
+    ),
+    (
+        "litellm",
+        Scenario::ReasoningCleanStop,
+        "no captured reasoning stream",
+        "SMA-858",
+    ),
+    (
+        "openai/responses",
+        Scenario::ReasoningCleanStop,
+        "no captured reasoning stream",
+        "SMA-858",
+    ),
+];
 
 /// The scenarios that [`UNCAPTURED`] may name. Moving an older scenario into
 /// the table needs a reviewed edit to this list.
 #[cfg(test)]
-const UNCAPTURED_SCENARIOS: &[Scenario] = &[];
+const UNCAPTURED_SCENARIOS: &[Scenario] = &[Scenario::ReasoningCleanStop];
 
 /// The subject names registered in `tests/conformance.rs` — one `mod` per
 /// subject, each holding a `StreamUnderTest` impl whose `name()` returns one

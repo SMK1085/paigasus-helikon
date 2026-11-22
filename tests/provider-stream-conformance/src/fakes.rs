@@ -147,13 +147,22 @@ impl Fake {
 /// observe a stop reason *and* the stream is neither cancelled nor errored —
 /// withholding `Finish` is what the contract requires in those two cases.
 pub(crate) fn conforming(scenario: Scenario) -> Vec<Result<ModelEvent, ModelError>> {
-    let mut events = vec![token("hi")];
+    let mut events = Vec::new();
+    if scenario == Scenario::ReasoningCleanStop {
+        // One reasoning run before the text run: the order the scenario
+        // declares (`Reasoning`, `Text`, `Tool`).
+        events.push(Ok(ModelEvent::ReasoningDelta {
+            text: "think".into(),
+        }));
+    }
+    events.push(token("hi"));
 
     if matches!(
         scenario,
         Scenario::FragmentedToolName
             | Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop
     ) {
         events.push(tool(Some(TOOL_NAME), "{\"city\":"));
         events.push(tool(None, "\"Berlin\"}"));
@@ -237,7 +246,8 @@ fn finish(scenario: Scenario) -> Result<ModelEvent, ModelError> {
         reason: match scenario {
             Scenario::FragmentedToolName
             | Scenario::ToolCallCleanStop
-            | Scenario::ThinkingToolCallCleanStop => FinishReason::ToolCalls,
+            | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop => FinishReason::ToolCalls,
             _ => FinishReason::Stop,
         },
     })
@@ -255,6 +265,7 @@ fn tool(name: Option<&str>, args_delta: &str) -> Result<ModelEvent, ModelError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Channel;
 
     /// Every fake must be rejected with its own classification. A suite whose
     /// checker cannot fail is the exact failure mode that let the OpenAI bug
@@ -366,8 +377,20 @@ mod tests {
     fn declared_finish_reason(scenario: Scenario) -> Option<FinishReason> {
         match scenario {
             Scenario::CleanStop | Scenario::TruncatedAfterStopReason => Some(FinishReason::Stop),
-            Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
-                Some(FinishReason::ToolCalls)
+            Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop
+            | Scenario::ReasoningCleanStop => Some(FinishReason::ToolCalls),
+            _ => None,
+        }
+    }
+
+    /// What a subject serving `conforming(scenario)` would declare as its
+    /// fixture's channel order. Written out by hand for the same reason as
+    /// [`declared_finish_reason`].
+    fn declared_channel_order(scenario: Scenario) -> Option<&'static [Channel]> {
+        match scenario {
+            Scenario::ReasoningCleanStop => {
+                Some(&[Channel::Reasoning, Channel::Text, Channel::Tool])
             }
             _ => None,
         }
@@ -386,6 +409,7 @@ mod tests {
                     &conforming(*scenario),
                     TOOL_NAME,
                     declared_finish_reason(*scenario),
+                    declared_channel_order(*scenario),
                 ),
                 None,
                 "{scenario:?}"
