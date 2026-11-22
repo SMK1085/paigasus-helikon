@@ -38,8 +38,9 @@ Non-goals:
   beta headers that some of them need.
 - The `InvokeModel` API with the Anthropic Messages body.
 - A per-model support list. The gate is the model family only.
-- `disable_parallel_tool_use`. Today's behaviour with parallel calls stays
-  (section 5.6).
+- `disable_parallel_tool_use` for a forced choice of a user tool. Today's
+  behaviour with parallel calls stays (section 5.6). The one exception is the
+  forced structured-output tool (section 5.6).
 
 Anti-goals (a failure even if the code works):
 
@@ -107,6 +108,7 @@ Terms in the table:
 | p20 | p5 + `placeholder` (old) + `tool_choice: {type: "none"}` | OK. `end_turn`, text answer. |
 | p21, p22 | Baseline without typed tools, two runs each: generic `memory` + `get_weather` with `toolChoice.tool = get_weather` (p21); generic `memory` + the synthesized tool with `toolChoice.tool = __paigasus_structured_output__` (p22) | OK. Each run gives the forced tool and a parallel `memory` call, the same as p18 and p19. |
 | p23 | p18 + `disable_parallel_tool_use: true` in `tool_choice` | OK. Only `get_weather`. |
+| p24 | p19 + `disable_parallel_tool_use: true` in `tool_choice`. Three runs. | OK. Each run gives only the synthesized tool. |
 | pc1 | turn 1, `typed` + `outputConfig.textFormat` (JSON schema `{capital}`), no `toolConfig`, on Sonnet 5.5 | OK. The model calls `memory`. |
 | pc2 | turn 2, `typed` + `placeholder` + the `outputConfig` of pc1, on Sonnet 5.5 | OK. `end_turn`, text `{"capital":"Paris"}`. |
 | pd1 | turn 2, `typed` + `tool_choice: {type: "any"}` + `placeholder` | OK. The model calls `memory`. |
@@ -255,7 +257,19 @@ is simpler than a rule per choice.
 When the request sends no typed tool, nothing changes.
 
 A forced choice lets the model add parallel calls to other tools. This is
-today's behaviour too (p21, p22), so the change keeps it.
+today's behaviour too (p21, p22), so the change keeps it for a forced user
+tool.
+
+Exception (added after the live tests, 2026-11-22): when the additional
+choice forces the synthesized structured-output tool, the provider adds
+`"disable_parallel_tool_use": true` to that `tool_choice`. Reason: with
+`synthesizing == true`, `stream.rs` rejects a response that also calls a
+real tool. The native memory protocol makes the model call `memory` first,
+so the live test of forced structured output with a typed memory tool failed
+on Sonnet 4.6 in 3 of 3 runs. p24 shows that the flag fixes it. A parallel
+call is never valid in this case, so the flag removes nothing that worked.
+The flag goes only in the additional `tool_choice`. A request without a typed
+tool does not change.
 
 Forced-tool path (`OutputPath::ForcedTool`), with a typed tool:
 
@@ -264,7 +278,7 @@ Forced-tool path (`OutputPath::ForcedTool`), with a typed tool:
 | `Auto` or no choice | `toolChoice: auto` or none | No choice. Auto is the default. |
 | `Required` | `toolChoice: any` | `tool_choice: {type: any}` |
 | `Tool { name }` | `toolChoice: tool` | `tool_choice: {type: tool, name}` |
-| Structured output (synthesized tool) | `toolChoice: tool` (synthesized) | `tool_choice: {type: tool, name: "__paigasus_structured_output__"}` |
+| Structured output (synthesized tool) | `toolChoice: tool` (synthesized) | `tool_choice: {type: tool, name: "__paigasus_structured_output__", disable_parallel_tool_use: true}` |
 | `None` | section 5.8 | section 5.8 |
 
 Native path (`OutputPath::Native`): the native path never forces a tool call,
