@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-gemini-v0.3.1...paigasus-helikon-providers-gemini-v0.3.2) - 2026-11-22
+
+### Fixed
+
+- *(providers)* SMA-565 remove the retired gemini 1.x and 2.x model ids ([#388](https://github.com/SMK1085/paigasus-helikon/pull/388))
+
 ### Upgrade notes
 
 - Gemini 1.x and 2.x models are not supported. The Developer API no longer serves them to new users.

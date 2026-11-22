@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.3.1...paigasus-helikon-providers-anthropic-v0.3.2) - 2026-11-22
+
+### Added
+
+- *(providers)* SMA-840 round trip anthropic thinking signatures and add effort ([#387](https://github.com/SMK1085/paigasus-helikon/pull/387))
+
 ## [0.3.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-anthropic-v0.3.0...paigasus-helikon-providers-anthropic-v0.3.1) - 2026-11-21
 
 ### Other
