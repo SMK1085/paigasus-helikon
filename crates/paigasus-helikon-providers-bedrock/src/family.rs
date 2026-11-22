@@ -26,6 +26,20 @@ pub enum ModelFamily {
     Unknown,
 }
 
+/// How a model family receives a `ToolChoice::None` request when the
+/// conversation already holds tool use or tool result blocks.
+// Used from Task 3 (translate::tool_choice_none); only tests call it until then.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolChoiceNoneStrategy {
+    /// Send the Anthropic `tool_choice: {"type": "none"}` request field.
+    AnthropicNoneField,
+    /// Replay the tool history as plain text, because the model rejects the
+    /// `tool_choice` field (probe P4 showed Nova rejects it; see the spec,
+    /// probe P9, section 3).
+    TextHistory,
+}
+
 impl ModelFamily {
     /// Detect the model family from a Bedrock model ID.
     ///
@@ -96,6 +110,20 @@ impl ModelFamily {
     /// Some Anthropic models reject it. See [`rejects_forced_tool_choice`].
     pub(crate) fn supports_forced_tool_choice(self) -> bool {
         matches!(self, Self::Anthropic | Self::Mistral | Self::AmazonNova)
+    }
+
+    /// Returns the strategy for a `ToolChoice::None` request that carries a
+    /// tool history.
+    ///
+    /// Only Anthropic models accept the `tool_choice: {"type": "none"}` field.
+    /// Other families get the history as text (probes P4 and P9, spec section 3).
+    // Used from Task 3 (translate::tool_choice_none); only tests call it until then.
+    #[allow(dead_code)]
+    pub(crate) fn tool_choice_none_strategy(self) -> ToolChoiceNoneStrategy {
+        match self {
+            Self::Anthropic => ToolChoiceNoneStrategy::AnthropicNoneField,
+            _ => ToolChoiceNoneStrategy::TextHistory,
+        }
     }
 }
 
@@ -224,5 +252,14 @@ mod tests {
         assert!(AmazonNova.supports_forced_tool_choice());
         assert!(!Llama.supports_forced_tool_choice());
         assert!(!AmazonTitan.supports_forced_tool_choice());
+    }
+
+    #[test]
+    fn tool_choice_none_strategy_per_family() {
+        use ToolChoiceNoneStrategy::*;
+        assert_eq!(Anthropic.tool_choice_none_strategy(), AnthropicNoneField);
+        for f in [AmazonNova, AmazonTitan, Llama, Mistral, Cohere, Unknown] {
+            assert_eq!(f.tool_choice_none_strategy(), TextHistory, "{f:?}");
+        }
     }
 }
