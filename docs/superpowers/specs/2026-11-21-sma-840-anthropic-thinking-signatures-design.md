@@ -89,6 +89,11 @@ What the probe shows:
    each round on run C, and about 250 to 300 on run B.
 4. Anthropic checks the signature. It does not check the block order or the thinking text. A block
    from one Claude 4.x model is accepted by another.
+
+   > **Correction (SMA-854, 2026-11-22):** the request does not fail on a changed order, but the
+   > replay order is important. With `drop_block`, a changed block before a thinking block in the
+   > same message makes the API drop that thinking block (`prefix_binding_mismatch`). See the
+   > correction note under "Non-goals".
 5. Not tested: thinking blocks on an earlier user turn's final answer (the run C final answer had
    no thinking), and whether a signature is bound to an organization or an API key.
 

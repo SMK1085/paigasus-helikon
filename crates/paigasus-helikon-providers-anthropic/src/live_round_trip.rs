@@ -597,12 +597,28 @@ async fn live_text_block_api_facts() {
         .iter()
         .position(|m| m["role"] == "assistant")
         .expect("the body has an assistant message");
+    // A zero-drop form must change nothing before a thinking block. In an
+    // interleaved response such as `[thinking, A, thinking, B, tool_use]`, an
+    // edit at the first text block or at the first thinking block lands before
+    // the second thinking block, and the API can drop that block. So each
+    // zero-drop edit goes after the last thinking block.
+    let last_thinking_idx = body["messages"][msg_idx]["content"]
+        .as_array()
+        .expect("content is an array")
+        .iter()
+        .rposition(|b| b["type"] == "thinking" || b["type"] == "redacted_thinking")
+        .expect("the assistant message has a thinking block");
     let text_idx = body["messages"][msg_idx]["content"]
         .as_array()
         .expect("content is an array")
         .iter()
-        .position(|b| b["type"] == "text")
-        .expect("the assistant message has a text block");
+        .rposition(|b| b["type"] == "text")
+        .filter(|&i| i > last_thinking_idx);
+    if text_idx.is_none() {
+        eprintln!(
+            "skipped whitespace_text and split_text: no text block comes after the last thinking block"
+        );
+    }
 
     let with_content = |edit: &dyn Fn(&mut Vec<serde_json::Value>)| {
         let mut b = body.clone();
@@ -617,45 +633,41 @@ async fn live_text_block_api_facts() {
     let text_before_thinking = with_content(&|c| {
         c.insert(0, json!({"type":"text","text":"Noted."}));
     });
-    let whitespace_text = with_content(&|c| {
-        c.insert(text_idx + 1, json!({"type":"text","text":"\n\n"}));
+    let whitespace_text = text_idx.map(|text_idx| {
+        with_content(&|c| {
+            c.insert(text_idx + 1, json!({"type":"text","text":"\n\n"}));
+        })
     });
-    let original_text = body["messages"][msg_idx]["content"][text_idx]["text"]
-        .as_str()
-        .expect("the text block has a string")
-        .to_owned();
-    let split_text = if original_text.chars().count() < 2 {
-        eprintln!("skipped split_text: the text has fewer than two chars");
-        None
-    } else {
+    let split_text = text_idx.and_then(|text_idx| {
+        let original_text = body["messages"][msg_idx]["content"][text_idx]["text"]
+            .as_str()
+            .expect("the text block has a string")
+            .to_owned();
+        if original_text.chars().count() < 2 {
+            eprintln!("skipped split_text: the text has fewer than two chars");
+            return None;
+        }
         let mut cut = original_text.len() / 2;
         while !original_text.is_char_boundary(cut) {
             cut -= 1;
         }
         if cut == 0 {
             eprintln!("skipped split_text: the first char takes more than half the bytes");
-            None
-        } else {
-            let (a, b) = original_text.split_at(cut);
-            Some(with_content(&|c| {
-                c[text_idx] = json!({"type":"text","text":a});
-                c.insert(text_idx + 1, json!({"type":"text","text":b}));
-            }))
+            return None;
         }
-    };
+        let (a, b) = original_text.split_at(cut);
+        Some(with_content(&|c| {
+            c[text_idx] = json!({"type":"text","text":a});
+            c.insert(text_idx + 1, json!({"type":"text","text":b}));
+        }))
+    });
     let whitespace_text_last = with_content(&|c| {
         c.push(json!({"type":"text","text":"\n"}));
     });
     // The replay can send a whitespace-only piece directly after a thinking
     // block, for example for `[thinking, "\n\n", thinking, "B"]`.
-    let thinking_idx = body["messages"][msg_idx]["content"]
-        .as_array()
-        .expect("content is an array")
-        .iter()
-        .position(|b| b["type"] == "thinking" || b["type"] == "redacted_thinking")
-        .expect("the assistant message has a thinking block");
     let whitespace_after_thinking = with_content(&|c| {
-        c.insert(thinking_idx + 1, json!({"type":"text","text":"\n\n"}));
+        c.insert(last_thinking_idx + 1, json!({"type":"text","text":"\n\n"}));
     });
 
     let n = count_dropped(&model, &text_before_thinking, "text_before_thinking").await;
@@ -665,8 +677,10 @@ async fn live_text_block_api_facts() {
     );
     let n = count_dropped(&model, &exact, "exact").await;
     assert_eq!(n, 0, "exact: {n} thinking_dropped entries");
-    let n = count_dropped(&model, &whitespace_text, "whitespace_text").await;
-    assert_eq!(n, 0, "whitespace_text: {n} thinking_dropped entries");
+    if let Some(whitespace_text) = whitespace_text {
+        let n = count_dropped(&model, &whitespace_text, "whitespace_text").await;
+        assert_eq!(n, 0, "whitespace_text: {n} thinking_dropped entries");
+    }
     let n = count_dropped(&model, &whitespace_text_last, "whitespace_text_last").await;
     assert_eq!(n, 0, "whitespace_text_last: {n} thinking_dropped entries");
     let n = count_dropped(

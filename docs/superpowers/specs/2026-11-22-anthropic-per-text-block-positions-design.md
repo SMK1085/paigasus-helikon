@@ -323,11 +323,14 @@ Consequences for the design:
 design depends on. It takes a real first turn through the crate, builds the
 second request with `build_body`, and sends six forms: exact, (e), (c), (f),
 `whitespace_text_last` (a `"\n"` text block as the last block of the message)
-and `whitespace_after_thinking` (a `"\n\n"` text block directly after the first
+and `whitespace_after_thinking` (a `"\n\n"` text block directly after the last
 thinking block). The last two are the whitespace-only shapes that probe 2 did
-not send. The test asserts that (e) reports a dropped thinking block (so the
-check is active and the test means something), and that the other five return
-HTTP 200 and report none. If the API rejects one of the two new shapes, the
+not send. Each zero-drop form edits the message only after its last thinking
+block, because an edit before a later thinking block can drop that block. (c)
+and (f) use the last text block. If no text block comes after the last thinking
+block, the test skips (c) and (f) and prints the reason. The test asserts that
+(e) reports a dropped thinking block (so the check is active and the test
+means something), and that the other five return HTTP 200 and report none. If the API rejects one of the two new shapes, the
 test fails, and the replay rule for whitespace-only pieces must change before
 release. The assertion messages hold no signature and no text, as the module
 doc requires. The test reads `input_transformations` from a non-streaming
