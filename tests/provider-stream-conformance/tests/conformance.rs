@@ -196,8 +196,8 @@ mod bedrock {
     /// `stream.rs` deliberately handles the reversed order too (`Metadata`
     /// before `MessageStop` emits `Usage` at once and `Finish` on the stop), so
     /// a fixture that put `metadata` first would still pass every other
-    /// assertion — while no longer covering the buffering path, which exists for the
-    /// order `messageStop` then `metadata`. Verified by mutation while
+    /// assertion — while no longer covering the buffering path, which exists
+    /// for the order `messageStop` then `metadata`. Verified by mutation while
     /// registering this subject: swapping the two left the suite green.
     ///
     /// The values (11/4/15 tokens, `latencyMs` 314) are arbitrary. No capture
