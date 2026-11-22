@@ -699,7 +699,7 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
         for (d, call_id) in data.iter().flatten() {
             match d {
                 // The stream writes a position for the first text block only.
-                AnthropicData::Text { index } if !text_seen => {
+                AnthropicData::Text { index, .. } if !text_seen => {
                     text_seen = true;
                     text_key = SortKey::At(u64::from(*index), 1);
                 }
@@ -1894,7 +1894,25 @@ mod thinking_round_trip_tests {
     }
 
     fn text_pos(i: u32) -> ContentPart {
-        part(AnthropicData::Text { index: i }, None)
+        part(
+            AnthropicData::Text {
+                index: i,
+                bytes: None,
+            },
+            None,
+        )
+    }
+
+    // Used by the split tests of the later SMA-854 tasks.
+    #[allow(dead_code)]
+    fn text_pos_bytes(i: u32, bytes: u64) -> ContentPart {
+        part(
+            AnthropicData::Text {
+                index: i,
+                bytes: Some(bytes),
+            },
+            None,
+        )
     }
 
     fn tool_pos(i: u32, id: &str) -> ContentPart {

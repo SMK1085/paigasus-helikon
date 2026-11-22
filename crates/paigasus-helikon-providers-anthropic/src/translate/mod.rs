@@ -497,7 +497,13 @@ mod tests {
                         },
                         None,
                     ),
-                    part(AnthropicData::Text { index: 1 }, None),
+                    part(
+                        AnthropicData::Text {
+                            index: 1,
+                            bytes: None,
+                        },
+                        None,
+                    ),
                     part(AnthropicData::ToolUse { index: 2 }, Some("c1")),
                 ],
                 agent: None,
