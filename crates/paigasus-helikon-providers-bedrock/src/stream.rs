@@ -78,6 +78,10 @@ pub struct StreamTranslator {
     synthesizing: bool,
     /// Whether the request used native structured output (`outputConfig`).
     native: bool,
+    /// Whether the request set `tool_choice` to `None`. A tool call is then an error.
+    forbid_tool_calls: bool,
+    /// `true` once a refused tool call produced its error.
+    refused_tool_call: bool,
     /// The content-block index of the synthesized tool's block (if any).
     synthesized_block_index: Option<i32>,
     /// `true` if at least one *real* (non-synthesized) tool block started.
@@ -110,6 +114,13 @@ impl StreamTranslator {
         self
     }
 
+    /// Tell the translator that the request set `tool_choice` to `None`.
+    /// A tool call from the model then becomes an error.
+    pub(crate) fn forbid_tool_calls(mut self, forbid: bool) -> Self {
+        self.forbid_tool_calls = forbid;
+        self
+    }
+
     /// Consume one `ConverseStreamOutput` event and return zero or more
     /// `ModelEvent`s (or `ModelError`s) produced by it.
     pub fn consume(&mut self, ev: ConverseStreamOutput) -> Vec<Result<ModelEvent, ModelError>> {
@@ -136,6 +147,17 @@ impl StreamTranslator {
                                 );
                             }
                             self.synthesized_block_index = Some(idx);
+                        } else if self.forbid_tool_calls {
+                            // Record no block: its deltas then emit nothing.
+                            // A second refused block at another index is
+                            // silent: the error is emitted once per stream.
+                            if !self.refused_tool_call {
+                                self.refused_tool_call = true;
+                                out.push(Err(ModelError::Other(anyhow::anyhow!(
+                                    "the model called a tool, but tool_choice is None"
+                                ))));
+                            }
+                            return out;
                         } else {
                             self.real_tool_fired = true;
                             // Emit the name-carrying delta immediately on block
@@ -280,7 +302,7 @@ impl StreamTranslator {
     pub(crate) fn finish(&mut self) -> Option<Result<ModelEvent, ModelError>> {
         self.pending_stop_reason
             .take()
-            .map(|reason| self.finish_events(reason).remove(0))
+            .and_then(|reason| self.finish_events(reason).into_iter().next())
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
@@ -291,6 +313,11 @@ impl StreamTranslator {
     /// `Err(ModelError::Other)` when both a real and the synthesized tool
     /// fired in synthesis mode.
     fn finish_events(&self, reason: StopReason) -> Vec<Result<ModelEvent, ModelError>> {
+        // A refused tool call already ended the stream with an error. As on the
+        // both-tools-fired path, the error replaces the terminal `Finish`.
+        if self.refused_tool_call {
+            return Vec::new();
+        }
         let finish = match reason {
             StopReason::EndTurn | StopReason::StopSequence => Ok(ModelEvent::Finish {
                 reason: FinishReason::Stop,
@@ -815,6 +842,77 @@ mod tests {
         let (texts, log) = run_anchor_captured(false);
         assert_eq!(texts, vec!["{\"answer\":", "42}"]);
         assert!(!log.contains("WARN"), "log: {log}");
+    }
+
+    #[test]
+    fn forbid_tool_calls_turns_a_tool_use_into_an_error() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_1", "get_balance"),
+            tool_delta(0, "{}"),
+            message_stop(StopReason::ToolUse),
+            metadata(3, 4, None),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert_eq!(out.len(), 2, "got {out:?}");
+        match &out[0] {
+            Err(e) => assert!(e.to_string().contains("tool_choice is None")),
+            other => panic!("expected Err first, got {other:?}"),
+        }
+        assert!(matches!(out[1], Ok(ModelEvent::Usage { .. })));
+        assert!(!out.iter().any(|r| matches!(
+            r,
+            Ok(ModelEvent::Finish { .. } | ModelEvent::ToolCallDelta { .. })
+        )));
+    }
+
+    #[test]
+    fn forbid_tool_calls_finish_at_eof_emits_no_finish() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_1", "get_balance"),
+            message_stop(StopReason::ToolUse),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert_eq!(out.len(), 1, "got {out:?}");
+        assert!(t.finish().is_none());
+    }
+
+    #[test]
+    fn tool_use_without_forbid_is_unchanged() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_1", "get_balance"),
+                tool_delta(0, "{}"),
+                message_stop(StopReason::ToolUse),
+            ],
+        );
+        assert!(out.iter().all(|r| r.is_ok()));
+        assert!(out
+            .iter()
+            .any(|r| matches!(r, Ok(ModelEvent::ToolCallDelta { .. }))));
+    }
+
+    #[test]
+    fn forbid_tool_calls_allows_the_synthesized_anchor() {
+        let mut t = StreamTranslator::new(true).forbid_tool_calls(true);
+        let mut out = Vec::new();
+        for ev in [
+            tool_use_start(0, "tu_synth", SYNTHESIZED_TOOL_NAME),
+            tool_delta(0, "{\"a\":1}"),
+            message_stop(StopReason::ToolUse),
+        ] {
+            out.extend(t.consume(ev));
+        }
+        assert!(out.iter().all(|r| r.is_ok()), "got {out:?}");
+        assert!(out
+            .iter()
+            .any(|r| matches!(r, Ok(ModelEvent::TokenDelta { .. }))));
     }
 
     /// synthesizing=true: synthesized tool + a real tool → ModelError::Other.

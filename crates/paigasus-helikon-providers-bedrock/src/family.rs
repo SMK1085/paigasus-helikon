@@ -26,6 +26,18 @@ pub enum ModelFamily {
     Unknown,
 }
 
+/// How a model family receives a `ToolChoice::None` request when the
+/// conversation already holds tool use or tool result blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolChoiceNoneStrategy {
+    /// Send the Anthropic `tool_choice: {"type": "none"}` request field.
+    AnthropicNoneField,
+    /// Replay the tool history as plain text. Nova rejects the field (P4).
+    /// The other families are not known to accept it, so they get the text
+    /// history as a conservative default.
+    TextHistory,
+}
+
 impl ModelFamily {
     /// Detect the model family from a Bedrock model ID.
     ///
@@ -96,6 +108,23 @@ impl ModelFamily {
     /// Some Anthropic models reject it. See [`rejects_forced_tool_choice`].
     pub(crate) fn supports_forced_tool_choice(self) -> bool {
         matches!(self, Self::Anthropic | Self::Mistral | Self::AmazonNova)
+    }
+
+    /// Returns the strategy for a `ToolChoice::None` request that carries a
+    /// tool history.
+    ///
+    /// Only Anthropic models accept the `tool_choice: {"type": "none"}` field.
+    /// Other families get the history as text (probes P4 and P9, spec section 3).
+    pub(crate) fn tool_choice_none_strategy(self) -> ToolChoiceNoneStrategy {
+        match self {
+            Self::Anthropic => ToolChoiceNoneStrategy::AnthropicNoneField,
+            Self::AmazonNova
+            | Self::AmazonTitan
+            | Self::Llama
+            | Self::Mistral
+            | Self::Cohere
+            | Self::Unknown => ToolChoiceNoneStrategy::TextHistory,
+        }
     }
 }
 
@@ -224,5 +253,14 @@ mod tests {
         assert!(AmazonNova.supports_forced_tool_choice());
         assert!(!Llama.supports_forced_tool_choice());
         assert!(!AmazonTitan.supports_forced_tool_choice());
+    }
+
+    #[test]
+    fn tool_choice_none_strategy_per_family() {
+        use ToolChoiceNoneStrategy::*;
+        assert_eq!(Anthropic.tool_choice_none_strategy(), AnthropicNoneField);
+        for f in [AmazonNova, AmazonTitan, Llama, Mistral, Cohere, Unknown] {
+            assert_eq!(f.tool_choice_none_strategy(), TextHistory, "{f:?}");
+        }
     }
 }

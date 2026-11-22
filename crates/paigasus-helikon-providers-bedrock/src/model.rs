@@ -3,6 +3,7 @@
 //! Wraps an `Arc<Config>` so that the model handle is `Clone + Send + Sync`
 //! and the `BoxStream` returned by `invoke` can be `'static + Send`.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -10,11 +11,12 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use paigasus_helikon_core::{
-    CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest,
+    CancellationToken, Model, ModelCapabilities, ModelError, ModelEvent, ModelRequest, ToolChoice,
 };
 
 use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamOutput;
 use aws_sdk_bedrockruntime::Client;
+use aws_smithy_types::Document;
 
 use crate::builder::Config;
 use crate::error::{map_sdk_error, send_failure, SendFailure};
@@ -38,6 +40,21 @@ pub struct BedrockModel {
     pub(crate) policy: Arc<ForcedChoicePolicy>,
 }
 
+/// The `additionalModelRequestFields` document of a request, if it needs one.
+fn additional_fields(p: &PreparedConverse) -> Option<Document> {
+    let mut fields: HashMap<String, Document> = HashMap::new();
+    if p.tool_choice_none {
+        fields.insert(
+            "tool_choice".to_owned(),
+            Document::Object(HashMap::from([(
+                "type".to_owned(),
+                Document::String("none".to_owned()),
+            )])),
+        );
+    }
+    (!fields.is_empty()).then_some(Document::Object(fields))
+}
+
 /// Send one `ConverseStream` request.
 ///
 /// The error keeps the flag that tells the fallback whether the service
@@ -46,6 +63,7 @@ fn send_converse_stream(
     client: &Client,
     p: PreparedConverse,
 ) -> impl Future<Output = Result<ConverseStreamOutput, SendFailure>> {
+    let additional = additional_fields(&p);
     let fluent = client
         .converse_stream()
         .model_id(&p.model_id)
@@ -57,7 +75,8 @@ fn send_converse_stream(
         })
         .set_tool_config(p.tool_config)
         .set_inference_config(p.inference_config)
-        .set_output_config(p.output_config);
+        .set_output_config(p.output_config)
+        .set_additional_model_request_fields(additional);
     // fluent.send() returns SdkError<_, HttpResponse>, so send_failure can
     // read the Retry-After header.
     async move { fluent.send().await.map_err(send_failure) }
@@ -83,6 +102,7 @@ impl Model for BedrockModel {
         // translation failure — before we open any network connection).
         let first = build_request(&self.config, &request, self.policy.path())?;
 
+        let forbid = matches!(request.model_settings.tool_choice, Some(ToolChoice::None));
         let config = Arc::clone(&self.config);
         let policy = Arc::clone(&self.policy);
         let client = self.config.client.clone();
@@ -124,7 +144,9 @@ impl Model for BedrockModel {
             };
 
             let mut receiver = output.stream;
-            let mut translator = StreamTranslator::new(synthesizing).native(native);
+            let mut translator = StreamTranslator::new(synthesizing)
+                .native(native)
+                .forbid_tool_calls(forbid);
 
             loop {
                 let next = tokio::select! {
@@ -543,5 +565,36 @@ mod tests {
             .unwrap_or_else(|e| panic!("output must be valid JSON ({e}); got: {text}"));
         assert!(v["operation"].is_string(), "operation: {v}");
         eprintln!("[live] final output path: {:?}", model.policy.path());
+    }
+
+    // ── additional_fields ─────────────────────────────────────────────────────
+
+    fn plain_prepared() -> crate::translate::PreparedConverse {
+        use paigasus_helikon_core::{ContentPart, Item};
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "hi".to_owned(),
+            }],
+        }];
+        let cfg = crate::builder::offline_config("anthropic.claude-3-5-sonnet-20241022-v2:0");
+        crate::translate::build_request(&cfg, &req, crate::policy::OutputPath::ForcedTool).unwrap()
+    }
+
+    #[test]
+    fn additional_fields_carry_the_none_flag() {
+        let mut p = plain_prepared();
+        assert!(additional_fields(&p).is_none());
+        p.tool_choice_none = true;
+        assert_eq!(
+            additional_fields(&p),
+            Some(Document::Object(HashMap::from([(
+                "tool_choice".to_owned(),
+                Document::Object(HashMap::from([(
+                    "type".to_owned(),
+                    Document::String("none".to_owned()),
+                )])),
+            )])))
+        );
     }
 }

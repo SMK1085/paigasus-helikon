@@ -125,6 +125,14 @@ When a model's family does not support forced-tool-choice, a `JsonSchema` respon
 
 Reasoning content surfaced by the model (e.g. Claude extended-thinking responses) is delivered as `ModelEvent::ReasoningDelta` in the stream — no extra configuration is required on this provider.
 
+### `ToolChoice::None` after a tool round
+
+A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. For Claude models, the provider sends tool specs for the tools that the history uses. It also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. For other model families, the provider sends the tool history as text and sends no tool configuration. If the model calls a tool, the stream gives an error.
+
+On families other than Claude, the model can write text that looks like a tool call, for example `[tool call ...]`. This is text, not a tool call. On Claude, a prompt that asks for a tool call can get an empty answer.
+
+If you set `JsonSchema` or `JsonObject` with `ToolChoice::None`, the result depends on the model. On the native path (Claude Sonnet 5.5 and Opus 5.5), the provider keeps the hidden anchor tool. For other Claude models, Mistral and Nova, the provider gives a conflict error. For Llama, Titan, Cohere and unknown models, the provider gives no error. It uses the `ToolChoice::None` handling above and sends no structured output, so the response is text.
+
 ## Credentials and TLS
 
 - **Credential chain:** the standard AWS credential chain — environment variables, `~/.aws/credentials`/`~/.aws/config`, SSO, IMDS, ECS task role, etc. — via `aws-config`. The chain is **lazy**: credential failures surface at `invoke()` time, not at construction.
