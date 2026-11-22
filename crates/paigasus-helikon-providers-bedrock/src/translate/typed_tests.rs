@@ -183,6 +183,18 @@ fn snap_typed_tool_choice_typed_name() {
 }
 
 #[test]
+fn typed_forced_user_tool_has_no_parallel_flag() {
+    let mut req = first_turn(vec![memory_tool()]);
+    req.model_settings.tool_choice = Some(ToolChoice::Tool {
+        name: "memory".to_owned(),
+    });
+    let w = to_wire_json(&forced(&cfg(FORCED_ID), &req).unwrap());
+    let choice = &w["additionalModelRequestFields"]["tool_choice"];
+    assert_eq!(choice, &json!({"type": "tool", "name": "memory"}));
+    assert!(choice.get("disable_parallel_tool_use").is_none());
+}
+
+#[test]
 fn typed_tool_choice_generic_name() {
     let mut req = first_turn(vec![memory_tool(), balance_tool()]);
     req.model_settings.tool_choice = Some(ToolChoice::Tool {
@@ -228,7 +240,11 @@ fn snap_typed_structured_output() {
     assert!(w["toolConfig"]["toolChoice"].is_null());
     assert_eq!(
         w["additionalModelRequestFields"]["tool_choice"],
-        json!({"type": "tool", "name": SYNTHESIZED_TOOL_NAME})
+        json!({
+            "type": "tool",
+            "name": SYNTHESIZED_TOOL_NAME,
+            "disable_parallel_tool_use": true
+        })
     );
     assert_eq!(w["synthesizing"], json!(true));
     assert_json_snapshot!(w);

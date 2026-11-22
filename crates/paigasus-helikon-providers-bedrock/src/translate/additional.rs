@@ -15,6 +15,10 @@ pub(crate) enum AdditionalToolChoice {
     Any,
     /// `{"type": "tool", "name": ...}`: the model must call the named tool.
     Tool(String),
+    /// Like `Tool`, for the synthesized structured-output tool. It adds
+    /// `"disable_parallel_tool_use": true`, because the stream translator
+    /// rejects a response that also calls a real tool.
+    Synthesized(String),
 }
 
 /// The fields that the provider sends in `additionalModelRequestFields`.
@@ -38,6 +42,9 @@ impl AdditionalFields {
                 AdditionalToolChoice::None => json!({"type": "none"}),
                 AdditionalToolChoice::Any => json!({"type": "any"}),
                 AdditionalToolChoice::Tool(name) => json!({"type": "tool", "name": name}),
+                AdditionalToolChoice::Synthesized(name) => {
+                    json!({"type": "tool", "name": name, "disable_parallel_tool_use": true})
+                }
             };
             fields.insert("tool_choice".to_owned(), value);
         }
@@ -48,7 +55,11 @@ impl AdditionalFields {
     pub(crate) fn is_forced(&self) -> bool {
         matches!(
             self.tool_choice,
-            Some(AdditionalToolChoice::Any | AdditionalToolChoice::Tool(_))
+            Some(
+                AdditionalToolChoice::Any
+                    | AdditionalToolChoice::Tool(_)
+                    | AdditionalToolChoice::Synthesized(_)
+            )
         )
     }
 }
@@ -94,6 +105,21 @@ mod tests {
         }
         .to_value();
         assert_eq!(v, Some(json!({"tools": [{"a":1}, {"b":2}]})));
+    }
+
+    #[test]
+    fn synthesized_choice_disables_parallel_calls() {
+        let v = AdditionalFields {
+            tools: vec![],
+            tool_choice: Some(AdditionalToolChoice::Synthesized("out".into())),
+        };
+        assert_eq!(
+            v.to_value(),
+            Some(json!({"tool_choice": {
+                "type": "tool", "name": "out", "disable_parallel_tool_use": true
+            }}))
+        );
+        assert!(v.is_forced());
     }
 
     #[test]

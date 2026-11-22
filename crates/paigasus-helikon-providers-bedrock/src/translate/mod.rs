@@ -304,7 +304,9 @@ pub(crate) fn build_request(
     let mut additional = AdditionalFields::default();
     let effective_tc = if typed {
         additional.tool_choice = if synthesizing {
-            Some(AdditionalToolChoice::Tool(SYNTHESIZED_TOOL_NAME.to_owned()))
+            Some(AdditionalToolChoice::Synthesized(
+                SYNTHESIZED_TOOL_NAME.to_owned(),
+            ))
         } else if family.supports_forced_tool_choice() {
             match req.model_settings.tool_choice.as_ref() {
                 Some(ToolChoice::Required) => Some(AdditionalToolChoice::Any),

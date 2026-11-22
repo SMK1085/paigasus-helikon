@@ -5,6 +5,7 @@ expression: w
 {
   "additionalModelRequestFields": {
     "tool_choice": {
+      "disable_parallel_tool_use": true,
       "name": "__paigasus_structured_output__",
       "type": "tool"
     },
