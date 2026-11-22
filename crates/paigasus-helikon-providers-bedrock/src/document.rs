@@ -2,7 +2,8 @@
 //!
 //! The [`aws_smithy_types::Document`] type is a recursive JSON-like value
 //! enum used as the `input` field in Bedrock `ToolUseBlock`s. This module
-//! provides a converter from [`serde_json::Value`].
+//! provides converters in both directions: [`value_to_document`] and
+//! [`document_to_value`].
 //!
 //! Note: `arbitrary_precision` is **not** enabled in this workspace. All
 //! number conversion goes through the `as_u64`/`as_i64`/`as_f64` accessors.
@@ -41,6 +42,34 @@ pub(crate) fn value_to_document(v: &Value) -> Document {
             }
             Document::Object(out)
         }
+    }
+}
+
+/// Convert an [`aws_smithy_types::Document`] into a [`serde_json::Value`].
+///
+/// - [`Number::PosInt`] becomes `u64`, [`Number::NegInt`] becomes `i64`.
+/// - A non-finite [`Number::Float`] becomes `Value::Null`, because JSON has
+///   no NaN or infinity.
+/// - Object keys come out sorted, because `serde_json`'s `preserve_order`
+///   feature is off and its `Map` is a sorted `BTreeMap`.
+// Only tests call this until a later SMA-833 task renders tool-call inputs.
+#[allow(dead_code)]
+pub(crate) fn document_to_value(d: &Document) -> Value {
+    match d {
+        Document::Null => Value::Null,
+        Document::Bool(b) => Value::Bool(*b),
+        Document::String(s) => Value::String(s.clone()),
+        Document::Number(Number::PosInt(u)) => Value::Number((*u).into()),
+        Document::Number(Number::NegInt(i)) => Value::Number((*i).into()),
+        Document::Number(Number::Float(f)) => {
+            serde_json::Number::from_f64(*f).map_or(Value::Null, Value::Number)
+        }
+        Document::Array(arr) => Value::Array(arr.iter().map(document_to_value).collect()),
+        Document::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), document_to_value(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -91,5 +120,25 @@ mod tests {
         let Document::Object(m) = d else { panic!() };
         assert!(matches!(m.get("a"), Some(Document::Array(a)) if a.len() == 1));
         assert!(matches!(m.get("b"), Some(Document::Object(o)) if o.is_empty()));
+    }
+
+    #[test]
+    fn document_to_value_round_trips_nested_values() {
+        let v = json!({"b": [1, -2, 1.5, null, true], "a": {"z": "x", "y": {}}});
+        assert_eq!(document_to_value(&value_to_document(&v)), v);
+    }
+
+    #[test]
+    fn document_to_value_sorts_object_keys() {
+        let v = json!({"zeta": 1, "alpha": 2, "mid": 3});
+        let s = serde_json::to_string(&document_to_value(&value_to_document(&v))).unwrap();
+        assert_eq!(s, r#"{"alpha":2,"mid":3,"zeta":1}"#);
+    }
+
+    #[test]
+    fn document_to_value_maps_non_finite_float_to_null() {
+        use aws_smithy_types::Number;
+        let d = Document::Number(Number::Float(f64::NAN));
+        assert_eq!(document_to_value(&d), Value::Null);
     }
 }
