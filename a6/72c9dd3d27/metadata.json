@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "a672c9dd3d27",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-565-gemini-live-tests-default-to-gemini-25-flash",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-gemini/src/translate/mod.rs",
+    "crates/paigasus-helikon-providers-gemini/src/translate/request.rs",
+    "crates/paigasus-helikon-providers-gemini/src/translate/snapshots/paigasus_helikon_providers_gemini__translate__snap__snap_parallel_same_name_tool_calls.snap",
+    "crates/paigasus-helikon-providers-gemini/src/translate/snapshots/paigasus_helikon_providers_gemini__translate__snap__snap_tool_call_and_result.snap"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a6/72c9dd3d27/0/metadata.json",
+      "transcript": "/a6/72c9dd3d27/0/full.jsonl",
+      "compact_transcript": "/a6/72c9dd3d27/0/transcript.jsonl",
+      "content_hash": "/a6/72c9dd3d27/0/content_hash.txt",
+      "prompt": "/a6/72c9dd3d27/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 192959,
+    "cache_read_tokens": 2983700,
+    "output_tokens": 7780,
+    "api_call_count": 15,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "redaction": {
+    "replacements": 39,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 39,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
