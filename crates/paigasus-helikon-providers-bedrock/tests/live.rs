@@ -33,7 +33,8 @@
 
 use futures_util::StreamExt;
 use paigasus_helikon_core::{
-    CancellationToken, ContentPart, Item, Model, ModelEvent, ModelRequest, ResponseFormat, ToolDef,
+    CancellationToken, ContentPart, FinishReason, Item, Model, ModelEvent, ModelRequest,
+    ResponseFormat, ToolChoice, ToolDef,
 };
 use paigasus_helikon_providers_bedrock::BedrockModel;
 
@@ -535,6 +536,97 @@ async fn whitespace_only_system_is_absent() {
             user("Say hi."),
         ],
         vec![],
+    )
+    .await;
+}
+
+// ── tool_choice None after a tool round (SMA-833) ─────────────────────────────
+
+/// Send a request with a tool history and `ToolChoice::None`. Assert that the
+/// stream has no error, no tool call and no `ToolCalls` finish. Return the text.
+async fn tool_choice_none_round(model_id: &str, final_user_turn: &str) -> String {
+    let model = BedrockModel::from_env(model_id)
+        .await
+        .expect("from_env should succeed");
+
+    let mut req = ModelRequest::new();
+    req.messages = vec![
+        user("What is the weather in Paris? Use the tool."),
+        Item::AssistantMessage {
+            content: vec![ContentPart::ToolUse {
+                call_id: "t1".to_owned(),
+                name: "get_weather".to_owned(),
+                args: serde_json::json!({"city": "Paris"}),
+            }],
+            agent: None,
+        },
+        tool_result("t1", "18 C, sunny"),
+        user(final_user_turn),
+    ];
+    req.tools = vec![ToolDef::new(
+        "get_weather",
+        "Get the weather for a city",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+        }),
+    )];
+    req.model_settings.tool_choice = Some(ToolChoice::None);
+    req.model_settings.max_output_tokens = Some(1024);
+
+    let mut s = model
+        .invoke(req, CancellationToken::new())
+        .await
+        .expect("invoke should succeed");
+
+    let mut text = String::new();
+    let mut errors = Vec::new();
+    let mut tool_deltas = 0usize;
+    let mut finish = None;
+    while let Some(ev) = s.next().await {
+        match ev {
+            Ok(ModelEvent::TokenDelta { text: t, .. }) => text.push_str(&t),
+            Ok(ModelEvent::ToolCallDelta { .. }) => tool_deltas += 1,
+            Ok(ModelEvent::Finish { reason }) => finish = Some(reason),
+            Ok(_) => {}
+            Err(e) => errors.push(format!("{e:?}")),
+        }
+    }
+    eprintln!("[live] text={text:?} finish={finish:?}");
+    assert!(errors.is_empty(), "stream must not fail: {errors:?}");
+    assert_eq!(tool_deltas, 0, "the model must not call a tool");
+    assert_ne!(
+        finish,
+        Some(FinishReason::ToolCalls),
+        "finish reason must not be ToolCalls"
+    );
+    text
+}
+
+/// `ToolChoice::None` after a tool round: the model answers in text.
+#[tokio::test]
+#[ignore]
+async fn tool_choice_none_after_tool_round_answers_in_text() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    let text =
+        tool_choice_none_round(&model_id, "Summarize the weather result in one sentence.").await;
+    assert!(!text.trim().is_empty(), "the answer text must not be empty");
+}
+
+/// `ToolChoice::None` after a tool round: a request for a new tool call makes
+/// no tool call. Empty text is allowed.
+#[tokio::test]
+#[ignore]
+async fn tool_choice_none_after_tool_round_makes_no_tool_call() {
+    let Some(model_id) = skip_if_missing_env() else {
+        return;
+    };
+    tool_choice_none_round(
+        &model_id,
+        "Now also check the weather in Berlin, then answer.",
     )
     .await;
 }

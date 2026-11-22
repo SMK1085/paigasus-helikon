@@ -121,6 +121,10 @@ Bedrock rejects these shapes with its own error: maps (`HashMap`, or `additional
 
 On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Tool` with a name that is not a defined tool is still an error. `ToolChoice::Required` with no tools and no response format is still an error. With a structured response format, the crate omits it with a warning.
 
+### `ToolChoice::None` after a tool round
+
+A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. Claude models get tool specs for the tools that the history uses. The crate also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. Other model families get the tool history as text and no tool configuration. The provider fails the stream if the model still calls a tool.
+
 When a model's family does not support forced-tool-choice, a `JsonSchema` response format degrades silently to a text response; no error is returned.
 
 Reasoning content surfaced by the model (e.g. Claude extended-thinking responses) is delivered as `ModelEvent::ReasoningDelta` in the stream — no extra configuration is required on this provider.
