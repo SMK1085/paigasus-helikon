@@ -11,6 +11,10 @@
 //! Claude Sonnet 5.5 returns thinking blocks with empty text. No test here
 //! needs a non-empty thinking text.
 //!
+//! `live_text_block_api_facts` checks the API facts of the SMA-854 design: a
+//! text block before a thinking block drops it, and a whitespace-only or split
+//! text block after it does not.
+//!
 //! The tests live in `src/` so that they can call `build_body`. No assertion
 //! message holds a signature or a redacted value. A message holds lengths and
 //! counts only.
@@ -514,4 +518,135 @@ async fn live_interleaved_beta_thinks_again() {
         "turn 2 has no thinking Block part. Run B saw one in turn 2 once, \
          and the model can skip thinking by chance, so run this test again"
     );
+}
+
+/// Send one non-streaming body. Returns the count of `thinking_dropped`
+/// entries in `input_transformations`.
+async fn count_dropped(model: &AnthropicModel, body: &serde_json::Value, name: &str) -> usize {
+    let response = model
+        .cfg
+        .http
+        .post(crate::http::messages_url(&model.cfg))
+        .headers(crate::http::build_headers(&model.cfg))
+        .json(body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("{name}: the request failed to send: {e}"));
+    let status = response.status();
+    assert_eq!(status.as_u16(), 200, "{name}: the HTTP status is {status}");
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .unwrap_or_else(|e| panic!("{name}: the response is not JSON: {e}"));
+    value
+        .get("input_transformations")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("thinking_dropped"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// The API facts of the SMA-854 design. A text block before a thinking block
+/// drops the thinking block. A whitespace-only text block, or a split text
+/// block, after it does not.
+#[tokio::test]
+#[ignore]
+async fn live_text_block_api_facts() {
+    use serde_json::json;
+    if !has_key() {
+        return;
+    }
+    let model = make_model(None);
+    let first = first_request(BASE_PROMPT);
+    let turn1 = run_turn(&model, first.clone(), "turn 1").await;
+    assert!(
+        !tool_calls(&turn1.items).is_empty(),
+        "turn 1 has no tool call ({} items)",
+        turn1.items.len()
+    );
+    assert!(
+        !signatures(&blocks_of_items(&turn1.items)).is_empty(),
+        "turn 1 has no thinking signature ({} items)",
+        turn1.items.len()
+    );
+    let has_text = turn1.items.iter().any(|item| match item {
+        Item::AssistantMessage { content, .. } => content
+            .iter()
+            .any(|p| matches!(p, ContentPart::Text { text } if !text.is_empty())),
+        _ => false,
+    });
+    assert!(
+        has_text,
+        "turn 1 has no non-empty text in an assistant message"
+    );
+
+    let mut body = build_body(&model.cfg, &second_request(&first, &turn1.items))
+        .expect("the turn 2 request translates")
+        .body;
+    body["stream"] = json!(false);
+
+    let msg_idx = body["messages"]
+        .as_array()
+        .expect("messages is an array")
+        .iter()
+        .position(|m| m["role"] == "assistant")
+        .expect("the body has an assistant message");
+    let text_idx = body["messages"][msg_idx]["content"]
+        .as_array()
+        .expect("content is an array")
+        .iter()
+        .position(|b| b["type"] == "text")
+        .expect("the assistant message has a text block");
+
+    let with_content = |edit: &dyn Fn(&mut Vec<serde_json::Value>)| {
+        let mut b = body.clone();
+        let content = b["messages"][msg_idx]["content"]
+            .as_array_mut()
+            .expect("content is an array");
+        edit(content);
+        b
+    };
+
+    let exact = body.clone();
+    let text_before_thinking = with_content(&|c| {
+        c.insert(0, json!({"type":"text","text":"Noted."}));
+    });
+    let whitespace_text = with_content(&|c| {
+        c.insert(text_idx + 1, json!({"type":"text","text":"\n\n"}));
+    });
+    let original_text = body["messages"][msg_idx]["content"][text_idx]["text"]
+        .as_str()
+        .expect("the text block has a string")
+        .to_owned();
+    let split_text = if original_text.chars().count() < 2 {
+        eprintln!("skipped split_text: the text has fewer than two chars");
+        None
+    } else {
+        let mut cut = original_text.len() / 2;
+        while !original_text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let (a, b) = original_text.split_at(cut);
+        Some(with_content(&|c| {
+            c[text_idx] = json!({"type":"text","text":a});
+            c.insert(text_idx + 1, json!({"type":"text","text":b}));
+        }))
+    };
+
+    let n = count_dropped(&model, &text_before_thinking, "text_before_thinking").await;
+    assert!(
+        n >= 1,
+        "the prefix check is not active; the other results mean nothing"
+    );
+    let n = count_dropped(&model, &exact, "exact").await;
+    assert_eq!(n, 0, "exact: {n} thinking_dropped entries");
+    let n = count_dropped(&model, &whitespace_text, "whitespace_text").await;
+    assert_eq!(n, 0, "whitespace_text: {n} thinking_dropped entries");
+    if let Some(split_text) = split_text {
+        let n = count_dropped(&model, &split_text, "split_text").await;
+        assert_eq!(n, 0, "split_text: {n} thinking_dropped entries");
+    }
 }
