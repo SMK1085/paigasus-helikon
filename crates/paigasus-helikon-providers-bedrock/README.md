@@ -121,13 +121,17 @@ Bedrock rejects these shapes with its own error: maps (`HashMap`, or `additional
 
 On this path, `JsonObject` degrades to text. User tools stay callable when `JsonSchema` is set. The crate omits `ToolChoice::Required` and `ToolChoice::Tool` with a warning. `ToolChoice::Tool` with a name that is not a defined tool is still an error. `ToolChoice::Required` with no tools and no response format is still an error. With a structured response format, the crate omits it with a warning.
 
-### `ToolChoice::None` after a tool round
-
-A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. Claude models get tool specs for the tools that the history uses. The crate also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. Other model families get the tool history as text and no tool configuration. The provider fails the stream if the model still calls a tool.
-
 When a model's family does not support forced-tool-choice, a `JsonSchema` response format degrades silently to a text response; no error is returned.
 
 Reasoning content surfaced by the model (e.g. Claude extended-thinking responses) is delivered as `ModelEvent::ReasoningDelta` in the stream — no extra configuration is required on this provider.
+
+### `ToolChoice::None` after a tool round
+
+A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. For Claude models, the provider sends tool specs for the tools that the history uses. It also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. For other model families, the provider sends the tool history as text and sends no tool configuration. If the model calls a tool, the stream gives an error.
+
+On families other than Claude, the model can write text that looks like a tool call, for example `[tool call ...]`. This is text, not a tool call. On Claude, a prompt that asks for a tool call can get an empty answer.
+
+With `JsonSchema` or `JsonObject`, the request does not use this path. On the native path (Claude Sonnet 5.5 and Opus 5.5), the provider keeps the hidden anchor tool. On the forced-tool path, the combination stays a conflict error.
 
 ## Credentials and TLS
 

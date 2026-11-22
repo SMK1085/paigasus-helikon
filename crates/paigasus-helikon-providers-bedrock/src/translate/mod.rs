@@ -205,7 +205,8 @@ pub(crate) fn build_request(
     }
 
     // Guard: ResponseFormat::JsonSchema / JsonObject + ToolChoice::None → conflict.
-    // Synthesis requires injecting a tool; ToolChoice::None suppresses toolConfig entirely.
+    // With None the crate cannot force the synthesized tool, so the structured
+    // format conflicts with None.
     let none_choice = matches!(
         req.model_settings.tool_choice.as_ref(),
         Some(ToolChoice::None),
