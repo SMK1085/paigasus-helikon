@@ -22,8 +22,10 @@ fi
 THINKING="${THINKING:-$DEFAULT_THINKING}"
 BETA="${BETA-$DEFAULT_BETA}"
 EXTRA="${EXTRA:-{\}}"
-OUT="${OUT:-$(cd "$(dirname "$0")" && pwd)/probe-840-out}"
-mkdir -p "$OUT"
+# The raw files hold signatures. Write them to a new private directory, never to an old one.
+umask 077
+OUT="$(mktemp -d "${TMPDIR:-/tmp}/sma-840-probe.XXXXXX")" || exit 1
+chmod 700 "$OUT"
 REDACT_TRIGGER="ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253D5E2D82641AC0E52CC2876CB"
 
 TOOLS='[
@@ -86,6 +88,7 @@ variant() { # $1=name, $2=messages json, $3=thinking json or "null", $4=model (o
   jq -n --argjson tools "$TOOLS" --argjson msgs "$2" --argjson th "$3" --argjson extra "$EXTRA" --arg m "$m" '
     {model:$m, max_tokens:8000, tools:$tools, messages:$msgs} + $extra + (if $th==null then {} else {thinking:$th} end)' > "$OUT/$1.req.json"
   local code; code="$(call "$OUT/$1.req.json" "$OUT/$1.resp.json" "$m")"
+  LAST_HTTP="$code"
   printf '%-34s HTTP %s  stop=%s  blocks=%s  %s\n' "$1" "$code" \
     "$(jq -r '.stop_reason // "-"' "$OUT/$1.resp.json")" \
     "$(jq -r '[.content[]?.type] | join(",")' "$OUT/$1.resp.json")" \
@@ -108,8 +111,8 @@ M2() { jq -n --argjson u "$U1" --argjson a "$1" --argjson r "$R1" '$u + [{role:"
 echo "== second turns (non-streamed)"
 variant 3-real-as-received "$(M2 "$B1")" "$THINKING"
 variant 4-no-thinking-blocks-enabled "$(M2 "$(echo "$B1" | jq -c "$STRIP")")" "$THINKING"
-variant 5-no-thinking-blocks-disabled "$(M2 "$(echo "$B1" | jq -c "$STRIP")")" null
-variant 6-thinking-kept-disabled "$(M2 "$B1")" null
+variant 5-no-thinking-blocks-omitted "$(M2 "$(echo "$B1" | jq -c "$STRIP")")" null
+variant 6-thinking-kept-omitted "$(M2 "$B1")" null
 variant 7-tampered-signature "$(M2 "$(echo "$B1" | jq -c 'map(if .type=="thinking" then .signature = (.signature[0:-6] + "AAAAAA") else . end)')")" "$THINKING"
 variant 8-tool-use-before-thinking "$(M2 "$(echo "$B1" | jq -c '[.[] | select(.type=="tool_use")] + [.[] | select(.type!="tool_use")]')")" "$THINKING"
 variant 9-thinking-text-edited "$(M2 "$(echo "$B1" | jq -c 'map(if .type=="thinking" then .thinking = (.thinking + " ") else . end)')")" "$THINKING"
@@ -128,9 +131,10 @@ if [ "$(echo "$R2" | jq length)" -gt 0 ]; then
   M3() { jq -n --argjson m2 "$(M2 "$1")" --argjson a "$2" --argjson r "$R2" '$m2 + [{role:"assistant", content:$a}, {role:"user", content:$r}]'; }
   echo "== third turns (non-streamed)"
   variant 12-turn3-real "$(M3 "$B1" "$B2")" "$THINKING"
+  HTTP12="$LAST_HTTP"
   variant 13-turn3-first-thinking-stripped "$(M3 "$(echo "$B1" | jq -c "$STRIP")" "$B2")" "$THINKING"
   variant 14-turn3-last-thinking-stripped "$(M3 "$B1" "$(echo "$B2" | jq -c "$STRIP")")" "$THINKING"
-  variant 15-turn3-all-stripped-disabled "$(M3 "$(echo "$B1" | jq -c "$STRIP")" "$(echo "$B2" | jq -c "$STRIP")")" null
+  variant 15-turn3-all-stripped-omitted "$(M3 "$(echo "$B1" | jq -c "$STRIP")" "$(echo "$B2" | jq -c "$STRIP")")" null
   # 18. Compaction case: the full history with thinking blocks, to a model with no thinking, no thinking setting.
   if [ -n "${NOTHINK_MODEL:-}" ]; then
     variant "18-nothink-model-$NOTHINK_MODEL" "$(M3 "$B1" "$B2")" null "$NOTHINK_MODEL"
@@ -138,10 +142,15 @@ if [ "$(echo "$R2" | jq length)" -gt 0 ]; then
     echo "18-nothink-model                   skipped (set NOTHINK_MODEL)"
   fi
   # 19. A final answer with its thinking kept, then a new user question.
-  FINAL="$(jq -c '.content // []' "$OUT/12-turn3-real.resp.json")"
-  M4="$(jq -n --argjson m3 "$(M3 "$B1" "$B2")" --argjson a "$FINAL" '$m3 + [{role:"assistant", content:$a}, {role:"user", content:"Thanks. Now do the same for Rome."}]')"
-  variant 19-final-answer-kept-then-user "$M4" "$THINKING"
-  variant 20-final-answer-stripped-then-user "$(echo "$M4" | jq -c '.[-2].content |= [.[] | select(.type!="thinking" and .type!="redacted_thinking")]')" "$THINKING"
+  # Run 19 and 20 only when 12-turn3-real returned HTTP 200 and a nonempty final answer.
+  FINAL="$(jq -c '.content // []' "$OUT/12-turn3-real.resp.json" 2>/dev/null)"
+  if [ "$HTTP12" = 200 ] && [ -n "$FINAL" ] && [ "$(echo "$FINAL" | jq length 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+    M4="$(jq -n --argjson m3 "$(M3 "$B1" "$B2")" --argjson a "$FINAL" '$m3 + [{role:"assistant", content:$a}, {role:"user", content:"Thanks. Now do the same for Rome."}]')"
+    variant 19-final-answer-kept-then-user "$M4" "$THINKING"
+    variant 20-final-answer-stripped-then-user "$(echo "$M4" | jq -c '.[-2].content |= [.[] | select(.type!="thinking" and .type!="redacted_thinking")]')" "$THINKING"
+  else
+    echo "19/20 skipped: 12-turn3-real did not return HTTP 200 with a nonempty final answer"
+  fi
   # 21. A thinking-only assistant message (a hand-off transcript), then a user message.
   THONLY="$(echo "$B1" | jq -c '[.[] | select(.type=="thinking" or .type=="redacted_thinking")]')"
   if [ "$(echo "$THONLY" | jq length)" -gt 0 ]; then
@@ -165,3 +174,4 @@ else
   echo "17-redacted-round-trip             skipped (no tool call)"
 fi
 echo "== raw files in $OUT (they hold signatures: do not commit them)"
+echo "output directory: $OUT"
