@@ -33,7 +33,7 @@ from translator code.
 
 - No new live captures in this change. Option (A) of the brainstorm was rejected.
 - No behaviour change to a provider, except a fix for a conformance failure that the suite finds
-  (SMA-533 design §9 applies without change), and the Bedrock decision in §6.6.
+  (SMA-533 design §9 applies without change). Option B (§6.6) keeps Bedrock unchanged.
 - No new subject.
 - G3 does not cover arguments of two calls that interleave on the wire (the SMA-550 / SMA-566
   bug class). Gemini, the only captured subject, sends each call whole in its own chunk. A capture
@@ -173,9 +173,10 @@ Add the three scenarios to `Scenario::ALL`, `expects_stop_reason`, `fakes::confo
 These rules need no fixture knowledge, so they go in `classify` and run on every scenario.
 
 **Assertion 9: nothing after `Err`** (G1). Any event, `Ok` or `Err`, after the first `Err` is a
-violation: `Violation::EventAfterError`. Order inside `classify`: after assertion 6
-(`FinishAfterError`), so that the more specific name wins for a `Finish` after an `Err`. The exact
-form of the rule depends on the decision in §6.6.
+violation: `Violation::EventAfterError`, with one exception: a `Usage` after an `Err` is allowed
+(§6.6, option B). Order inside `classify`: after assertion 6 (`FinishAfterError`), so that the
+more specific name wins for a `Finish` after an `Err`. A positive test shows that `Err, Usage`
+passes.
 
 **Assertion 10: tool arguments parse as JSON** (G4). Runs only when the stream contains a
 `Finish`. A truncated, errored or cancelled stream can correctly end in the middle of the
@@ -304,9 +305,10 @@ test code. It must decode the header block, not copy the encoder.
 - Replace the "do not reorder it casually" prose in the `metadata()` doc (`conformance.rs`,
   near lines 168-181) with a pointer to the check. Keep the reason in the prose.
 
-### 6.6 OPEN: the contract for events after an `Err`
+### 6.6 The contract for events after an `Err` (decided: option B)
 
-This needs Sven's decision before implementation (§3.3). The options:
+Sven chose option B on 2026-11-22. The reason: the tokens were consumed, so the `Usage` is real
+billing data. The options were:
 
 - **A. An `Err` is terminal without exception.** Add to the `Model::invoke` ordering list, after
   "`Finish` is the terminal event; nothing follows it.":
@@ -318,6 +320,10 @@ This needs Sven's decision before implementation (§3.3). The options:
   changes. Assertion 9 is strict.
 - **B. An `Err` is terminal, except for a trailing `Usage`.** The sentence allows `Usage` events
   after an `Err` and nothing else. Assertion 9 exempts `Usage`. Bedrock does not change.
+  **Chosen.** The sentence to add to the `Model::invoke` ordering list is:
+
+  > - An `Err` item is terminal for every event except `Usage`: implementations MUST NOT yield
+  >   any item after an `Err` other than `Usage` snapshots for the same response.
 
 In both cases, add a translator-level test in `providers-bedrock`, because no conformance scenario
 reaches this path.
@@ -434,8 +440,7 @@ Other documentation:
 - The SMA-533 design is not edited. This design is the record.
 - Book: only the contract change in §6.6.
 - READMEs: no change. The suite is not a published crate. The only published-crate change is a
-  doc sentence in `core` (and, with option A, a Bedrock behaviour change that no README
-  describes). This is a deliberate decision, not a skip.
+  doc sentence in `core`. This is a deliberate decision, not a skip.
 
 ## 7. Handling failures that the suite finds
 
@@ -465,6 +470,7 @@ pass. The probe confirms this. Any surprise goes to Sven before the work continu
 3. Each new fixture cites captured traffic (§6.9).
 4. The Bedrock wire-order check runs on every Bedrock script with both frames, and a unit test
    shows that it fails on a swapped list.
-5. The §6.6 decision is implemented, with a translator-level Bedrock test.
+5. The §6.6 option B is implemented: the contract sentence, the `Usage` exemption in assertion 9,
+   and a translator-level Bedrock test that pins `Err` then `Usage` and nothing else.
 6. Every CI gate in `CLAUDE.md` is green, including `test` on all three operating systems.
 7. Three follow-up Linear issues exist and `UNCAPTURED` cites them.
