@@ -13,13 +13,13 @@ use paigasus_helikon_core::{ModelError, ModelRequest, ResponseFormat, ToolChoice
 
 use crate::builder::Config;
 use crate::policy::NativeNotice;
-use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
+use crate::translate::additional::AdditionalFields;
 use crate::translate::native_schema::native_output_schema;
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::synthesize;
 use crate::translate::schema::Ruleset;
 use crate::translate::tool_choice_none::{apply_tool_choice_none, has_tool_round};
-use crate::translate::tools::tool_specs;
+use crate::translate::tools::{partition_tools, tool_specs};
 use crate::translate::{
     assemble_tool_config, build_inference_config, check_tool_name, required_without_tools_error,
     PreparedConverse,
@@ -50,6 +50,7 @@ pub(crate) fn build_native(
 ) -> Result<PreparedConverse, ModelError> {
     let family = cfg.family;
     let ruleset = Ruleset::for_family(family);
+    let set = partition_tools(&req.tools, ruleset, cfg.sends_typed_tools())?;
     let rf = req.model_settings.response_format.as_ref();
     let tool_choice = req.model_settings.tool_choice.as_ref();
     let mut notices = Vec::new();
@@ -75,19 +76,15 @@ pub(crate) fn build_native(
     // User tools. `ToolChoice::None` sends no user tools, unless the history
     // holds a tool round and the request is not structured. Then the family
     // strategy decides. A structured request keeps the anchor below.
-    let mut tool_choice_none = false;
+    let mut additional = AdditionalFields::default();
     let mut all_tools: Vec<Tool> = if matches!(tool_choice, Some(ToolChoice::None)) {
         if structured {
             Vec::new()
         } else {
-            let outcome = apply_tool_choice_none(
-                std::mem::take(&mut translated.messages),
-                &req.tools,
-                family,
-                ruleset,
-            )?;
+            let outcome =
+                apply_tool_choice_none(std::mem::take(&mut translated.messages), &set, family)?;
             translated.messages = outcome.messages;
-            tool_choice_none = outcome.tool_choice_none;
+            additional = outcome.additional;
             outcome.tools
         }
     } else {
@@ -148,10 +145,7 @@ pub(crate) fn build_native(
         synthesizing,
         output_config,
         notices,
-        additional: AdditionalFields {
-            tools: vec![],
-            tool_choice: tool_choice_none.then_some(AdditionalToolChoice::None),
-        },
+        additional,
     })
 }
 

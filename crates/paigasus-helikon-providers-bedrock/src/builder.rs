@@ -68,8 +68,6 @@ pub(crate) struct Config {
     pub(crate) max_output_default: Option<u32>,
     /// Send the typed `memory_*` tool entry for a tool that declares one.
     /// Set via [`BedrockModelBuilder::native_tool_types`].
-    // Read from Task 2 on; remove the allow then.
-    #[allow(dead_code)]
     pub(crate) native_tool_types: bool,
 }
 
@@ -78,8 +76,6 @@ impl Config {
     ///
     /// The gate needs `native_tool_types` and an Anthropic family. This is the
     /// only place that decides it.
-    // Used from Task 2 on; remove the allow then.
-    #[allow(dead_code)]
     pub(crate) fn sends_typed_tools(&self) -> bool {
         self.native_tool_types && self.family == ModelFamily::Anthropic
     }

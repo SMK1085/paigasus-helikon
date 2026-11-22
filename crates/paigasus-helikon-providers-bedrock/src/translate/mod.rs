@@ -20,12 +20,12 @@ use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
 use crate::builder::Config;
 use crate::family::ModelFamily; // used by translate_tool_choice
 use crate::policy::{NativeNotice, OutputPath};
-use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
+use crate::translate::additional::AdditionalFields;
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
 use crate::translate::tool_choice_none::apply_tool_choice_none;
-use crate::translate::tools::tool_specs;
+use crate::translate::tools::{partition_tools, tool_specs};
 
 /// A fully-assembled Bedrock Converse request, ready to send.
 ///
@@ -188,6 +188,7 @@ pub(crate) fn build_request(
     }
     let family = cfg.family;
     let ruleset = Ruleset::for_family(family);
+    let set = partition_tools(&req.tools, ruleset, cfg.sends_typed_tools())?;
 
     // Guard: ResponseFormat::JsonSchema / JsonObject + ToolChoice::Tool → conflict.
     let synthesizing_rf = matches!(
@@ -226,7 +227,7 @@ pub(crate) fn build_request(
     // (a none field for Anthropic models, a text history for the others).
     if none_choice {
         let translated = items_to_messages(&req.messages)?;
-        let outcome = apply_tool_choice_none(translated.messages, &req.tools, family, ruleset)?;
+        let outcome = apply_tool_choice_none(translated.messages, &set, family)?;
         let tool_config = assemble_tool_config(outcome.tools, None)?;
         let inference_config = build_inference_config(req, cfg);
         return Ok(PreparedConverse {
@@ -238,12 +239,7 @@ pub(crate) fn build_request(
             synthesizing: false,
             output_config: None,
             notices: Vec::new(),
-            additional: AdditionalFields {
-                tools: vec![],
-                tool_choice: outcome
-                    .tool_choice_none
-                    .then_some(AdditionalToolChoice::None),
-            },
+            additional: outcome.additional,
         });
     }
 
@@ -571,7 +567,7 @@ mod tests {
     }
 
     fn none_choice_of(p: &PreparedConverse) -> bool {
-        p.additional.tool_choice == Some(AdditionalToolChoice::None)
+        p.additional.tool_choice == Some(crate::translate::additional::AdditionalToolChoice::None)
     }
 
     fn assert_no_forced_choice(p: &PreparedConverse) {
@@ -1655,6 +1651,53 @@ mod tests {
         assert_eq!(
             forced["additionalModelRequestFields"],
             native["additionalModelRequestFields"]
+        );
+    }
+
+    #[test]
+    fn none_shape_is_the_same_on_both_paths_with_typed_tool() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![
+            user_text("remember this"),
+            Item::AssistantMessage {
+                content: vec![ContentPart::ToolUse {
+                    call_id: "tu_1".to_owned(),
+                    name: "memory".to_owned(),
+                    args: json!({"command": "view", "path": "/memories"}),
+                }],
+                agent: None,
+            },
+            Item::ToolResult {
+                call_id: "tu_1".to_owned(),
+                content: vec![ContentPart::Text {
+                    text: "empty".to_owned(),
+                }],
+            },
+        ];
+        req.tools = vec![ToolDef::new("memory", "memory", json!({"type": "object"}))
+            .with_provider_types(vec![paigasus_helikon_core::ProviderToolType::new(
+                "anthropic",
+                "memory_20250818",
+            )])];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let cfg = haiku55_cfg();
+        let forced = to_wire_json(&build_request(&cfg, &req, OutputPath::ForcedTool).unwrap());
+        let native = to_wire_json(&build_request(&cfg, &req, OutputPath::Native).unwrap());
+        assert_eq!(forced["toolConfig"], native["toolConfig"]);
+        assert_eq!(
+            forced["additionalModelRequestFields"],
+            native["additionalModelRequestFields"]
+        );
+        assert_eq!(
+            tool_names(&forced),
+            vec!["__paigasus_structured_output__".to_owned()]
+        );
+        assert_eq!(
+            forced["additionalModelRequestFields"],
+            json!({
+                "tools": [{"type": "memory_20250818", "name": "memory"}],
+                "tool_choice": {"type": "none"}
+            })
         );
     }
 

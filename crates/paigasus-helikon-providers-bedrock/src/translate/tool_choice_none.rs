@@ -9,13 +9,13 @@ use std::collections::HashSet;
 use aws_sdk_bedrockruntime::types::{
     ContentBlock, Message, Tool, ToolInputSchema, ToolResultContentBlock, ToolSpecification,
 };
-use paigasus_helikon_core::{ModelError, ToolDef};
+use paigasus_helikon_core::ModelError;
 use serde_json::json;
 
 use crate::document::{document_to_value, value_to_document};
 use crate::family::{ModelFamily, ToolChoiceNoneStrategy};
-use crate::translate::schema::Ruleset;
-use crate::translate::tools::tool_specs;
+use crate::translate::additional::{AdditionalFields, AdditionalToolChoice};
+use crate::translate::tools::{placeholder_spec, ToolSet};
 
 /// Description of a tool spec that is derived from the history.
 const DERIVED_DESCRIPTION: &str = "A tool that this conversation used earlier.";
@@ -36,41 +36,45 @@ pub(crate) struct NoneOutcome {
     pub(crate) messages: Vec<Message>,
     /// The tools for the `toolConfig`. Empty when no `toolConfig` is needed.
     pub(crate) tools: Vec<Tool>,
-    /// `true` when the request must carry `tool_choice: {"type": "none"}`.
-    pub(crate) tool_choice_none: bool,
+    /// The typed tool entries and the tool choice for
+    /// `additionalModelRequestFields`.
+    pub(crate) additional: AdditionalFields,
 }
 
 fn unchanged(messages: Vec<Message>) -> NoneOutcome {
     NoneOutcome {
         messages,
         tools: Vec::new(),
-        tool_choice_none: false,
+        additional: AdditionalFields::default(),
     }
 }
 
 /// Apply `ToolChoice::None` to the messages and tools, per model family.
 ///
 /// - No tool round: nothing changes.
-/// - `AnthropicNoneField`: the `toolConfig` holds the user tools and one
-///   derived spec for each tool name in the history that is not yet listed.
-///   The request must then carry the `tool_choice` none field.
+/// - `AnthropicNoneField`: the `toolConfig` holds the generic user tools and
+///   one derived spec for each tool name in the history that is not yet
+///   listed. A typed tool name gets no derived spec. When the request has
+///   typed tools, `additional` holds their entries. A placeholder spec fills
+///   an empty `toolConfig`. The request then carries the `tool_choice` none
+///   field.
 /// - `TextHistory`: each tool block becomes a text block.
 ///
 /// # Errors
-/// The errors of [`tool_specs`], when the history holds a tool round.
+/// The error of [`placeholder_spec`], when the request has only typed tools.
 pub(crate) fn apply_tool_choice_none(
     messages: Vec<Message>,
-    user_tools: &[ToolDef],
+    tools: &ToolSet,
     family: ModelFamily,
-    ruleset: Ruleset,
 ) -> Result<NoneOutcome, ModelError> {
     if !has_tool_round(&messages) {
         return Ok(unchanged(messages));
     }
     match family.tool_choice_none_strategy() {
         ToolChoiceNoneStrategy::AnthropicNoneField => {
-            let mut specs = tool_specs(user_tools, ruleset)?;
+            let mut specs = tools.generic.clone();
             let mut seen: HashSet<String> = specs.iter().map(|s| s.name().to_owned()).collect();
+            seen.extend(tools.typed.iter().map(|t| t.name.clone()));
             for message in &messages {
                 for block in message.content() {
                     let ContentBlock::ToolUse(tu) = block else {
@@ -90,13 +94,20 @@ pub(crate) fn apply_tool_choice_none(
                     }
                 }
             }
-            if specs.is_empty() {
+            let mut additional = AdditionalFields::default();
+            if tools.has_typed() {
+                if specs.is_empty() {
+                    specs.push(placeholder_spec()?);
+                }
+                additional.tools = tools.typed_entries();
+            } else if specs.is_empty() {
                 return Ok(unchanged(messages));
             }
+            additional.tool_choice = Some(AdditionalToolChoice::None);
             Ok(NoneOutcome {
                 messages,
                 tools: specs.into_iter().map(Tool::ToolSpec).collect(),
-                tool_choice_none: true,
+                additional,
             })
         }
         ToolChoiceNoneStrategy::TextHistory => {
@@ -182,7 +193,9 @@ fn history_as_text(messages: Vec<Message>) -> (Vec<Message>, bool) {
 mod tests {
     use super::*;
     use crate::translate::request::items_to_messages;
-    use paigasus_helikon_core::{ContentPart, Item};
+    use crate::translate::schema::Ruleset;
+    use crate::translate::tools::partition_tools;
+    use paigasus_helikon_core::{ContentPart, Item, ProviderToolType, ToolDef};
 
     fn user_text(s: &str) -> Item {
         Item::UserMessage {
@@ -250,14 +263,32 @@ mod tests {
         tools: &[ToolDef],
         family: ModelFamily,
     ) -> Result<NoneOutcome, ModelError> {
-        apply_tool_choice_none(msgs, tools, family, Ruleset::Strict)
+        let set = partition_tools(tools, Ruleset::Strict, false)?;
+        apply_tool_choice_none(msgs, &set, family)
+    }
+
+    fn none_set(out: &NoneOutcome) -> bool {
+        out.additional.tool_choice == Some(AdditionalToolChoice::None)
+    }
+
+    fn memory_def() -> ToolDef {
+        ToolDef::new("memory", "d", json!({"type": "object"}))
+            .with_provider_types(vec![ProviderToolType::new("anthropic", "memory_20250818")])
+    }
+
+    fn typed_set(tools: &[ToolDef]) -> ToolSet {
+        partition_tools(tools, Ruleset::Strict, true).unwrap()
+    }
+
+    fn memory_entry() -> serde_json::Value {
+        json!({"type": "memory_20250818", "name": "memory"})
     }
 
     #[test]
     fn claude_keeps_user_tools_and_sets_flag() {
         let msgs = history("get_balance", json!({}), "ok");
         let out = apply(msgs.clone(), &[def("get_balance")], ModelFamily::Anthropic).unwrap();
-        assert!(out.tool_choice_none);
+        assert!(none_set(&out));
         assert_eq!(names(&out.tools), ["get_balance"]);
         assert_eq!(out.messages, msgs);
     }
@@ -266,7 +297,7 @@ mod tests {
     fn claude_derives_spec_from_history() {
         let msgs = history("get_balance", json!({}), "ok");
         let out = apply(msgs, &[], ModelFamily::Anthropic).unwrap();
-        assert!(out.tool_choice_none);
+        assert!(none_set(&out));
         assert_eq!(names(&out.tools), ["get_balance"]);
         let Tool::ToolSpec(s) = &out.tools[0] else {
             panic!()
@@ -303,7 +334,7 @@ mod tests {
         let msgs = history("__paigasus_structured_output__", json!({}), "ok");
         let out = apply(msgs, &[], ModelFamily::Anthropic).unwrap();
         assert_eq!(names(&out.tools), ["__paigasus_structured_output__"]);
-        assert!(out.tool_choice_none);
+        assert!(none_set(&out));
     }
 
     #[test]
@@ -324,9 +355,49 @@ mod tests {
             .unwrap()
             .messages;
         let out = apply(msgs.clone(), &[], ModelFamily::Anthropic).unwrap();
-        assert!(!out.tool_choice_none);
+        assert!(!none_set(&out));
         assert!(out.tools.is_empty());
         assert_eq!(out.messages, msgs);
+    }
+
+    #[test]
+    fn typed_only_memory_history_gives_placeholder_and_none() {
+        let msgs = history("memory", json!({"command": "view"}), "ok");
+        let set = typed_set(&[memory_def()]);
+        let out = apply_tool_choice_none(msgs, &set, ModelFamily::Anthropic).unwrap();
+        assert_eq!(names(&out.tools), ["__paigasus_structured_output__"]);
+        assert_eq!(out.additional.tools, vec![memory_entry()]);
+        assert_eq!(out.additional.tool_choice, Some(AdditionalToolChoice::None));
+    }
+
+    #[test]
+    fn typed_name_gets_no_derived_spec() {
+        let msgs = history("memory", json!({"command": "view"}), "ok");
+        let set = typed_set(&[memory_def(), def("get_balance")]);
+        let out = apply_tool_choice_none(msgs, &set, ModelFamily::Anthropic).unwrap();
+        assert_eq!(names(&out.tools), ["get_balance"]);
+        assert_eq!(out.additional.tools, vec![memory_entry()]);
+        assert!(none_set(&out));
+    }
+
+    #[test]
+    fn typed_tools_without_tool_round_send_nothing() {
+        let msgs = items_to_messages(&[user_text("hi")]).unwrap().messages;
+        let set = typed_set(&[memory_def()]);
+        let out = apply_tool_choice_none(msgs, &set, ModelFamily::Anthropic).unwrap();
+        assert!(out.tools.is_empty());
+        assert_eq!(out.additional, AdditionalFields::default());
+    }
+
+    #[test]
+    fn text_history_family_ignores_typed_set() {
+        let msgs = history("get_balance", json!({}), "ok");
+        let set = partition_tools(&[memory_def()], Ruleset::Strict, false).unwrap();
+        let out = apply_tool_choice_none(msgs, &set, ModelFamily::AmazonNova).unwrap();
+        assert!(!none_set(&out));
+        assert!(out.tools.is_empty());
+        assert_eq!(out.additional, AdditionalFields::default());
+        assert!(!has_tool_round(&out.messages));
     }
 
     #[test]
@@ -334,7 +405,7 @@ mod tests {
         for family in [ModelFamily::AmazonNova, ModelFamily::Llama] {
             let msgs = history("get_balance", json!({"account_id": "acc_123"}), "$1,234.56");
             let out = apply(msgs, &[def("get_balance")], family).unwrap();
-            assert!(!out.tool_choice_none);
+            assert!(!none_set(&out));
             assert!(out.tools.is_empty());
             assert!(!has_tool_round(&out.messages));
             let t = texts(&out.messages);
@@ -364,13 +435,8 @@ mod tests {
     fn no_tool_round_is_unchanged() {
         for family in [ModelFamily::Anthropic, ModelFamily::AmazonNova] {
             let msgs = items_to_messages(&[user_text("hi")]).unwrap().messages;
-            let out = apply(
-                msgs.clone(),
-                &[def("__paigasus_structured_output__")],
-                family,
-            )
-            .unwrap();
-            assert!(!out.tool_choice_none);
+            let out = apply(msgs.clone(), &[def("get_balance")], family).unwrap();
+            assert!(!none_set(&out));
             assert!(out.tools.is_empty());
             assert_eq!(out.messages, msgs);
         }

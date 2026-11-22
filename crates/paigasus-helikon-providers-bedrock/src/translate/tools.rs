@@ -44,8 +44,6 @@ pub(crate) struct ToolSet {
     pub(crate) typed: Vec<TypedTool>,
 }
 
-// remove in Task 3/4: the helpers have no non-test caller yet.
-#[allow(dead_code)]
 impl ToolSet {
     /// Whether the request has at least one typed tool.
     pub(crate) fn has_typed(&self) -> bool {
@@ -53,11 +51,15 @@ impl ToolSet {
     }
 
     /// Whether the request has at least one tool of any kind.
+    // remove in Task 4: no non-test caller yet.
+    #[allow(dead_code)]
     pub(crate) fn has_any(&self) -> bool {
         !self.generic.is_empty() || !self.typed.is_empty()
     }
 
     /// Whether `name` is the name of a typed tool.
+    // remove in Task 4: no non-test caller yet.
+    #[allow(dead_code)]
     pub(crate) fn is_typed_name(&self, name: &str) -> bool {
         self.typed.iter().any(|t| t.name == name)
     }
@@ -169,7 +171,6 @@ pub(crate) fn tool_specs(
 ///
 /// # Errors
 /// Returns [`ModelError::Other`] when the SDK builder rejects the spec.
-#[allow(dead_code)] // remove in Task 4: no non-test caller yet.
 pub(crate) fn placeholder_spec() -> Result<ToolSpecification, ModelError> {
     tracing::debug!(
         target: "paigasus::bedrock::translate",
@@ -388,7 +389,10 @@ mod tests {
         let spec = placeholder_spec().unwrap();
         assert_eq!(spec.name(), SYNTHESIZED_TOOL_NAME);
         assert_eq!(spec.description(), Some(PLACEHOLDER_DESCRIPTION));
-        assert!(spec.input_schema().unwrap().is_json());
+        let Some(ToolInputSchema::Json(doc)) = spec.input_schema() else {
+            panic!("not a json schema");
+        };
+        assert_eq!(*doc, value_to_document(&json!({"type": "object"})));
     }
 
     #[test]
