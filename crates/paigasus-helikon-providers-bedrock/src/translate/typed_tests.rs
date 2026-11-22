@@ -327,6 +327,7 @@ fn native_json_object_after_memory_round_uses_placeholder() {
     let w = to_wire_json(&p);
     assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
     assert_eq!(w["synthesizing"], json!(false));
+    assert!(w["outputConfig"].is_null(), "{w:#}");
     assert_eq!(
         w["additionalModelRequestFields"]["tools"],
         json!([typed_entry()])
@@ -361,6 +362,23 @@ fn native_auto_with_typed_tool_sends_no_choice() {
     req.model_settings.tool_choice = Some(ToolChoice::Auto);
     let w = to_wire_json(&native(&cfg(NATIVE_ID), &req).unwrap());
     assert!(w["toolConfig"]["toolChoice"].is_null());
+    assert_eq!(
+        w["additionalModelRequestFields"]["tools"],
+        json!([typed_entry()])
+    );
+    assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
+}
+
+#[test]
+fn native_gate_closed_requests_are_unchanged() {
+    let plain = ToolDef::new("memory", "Memory", json!({"type": "object"}));
+    let mut closed = cfg(NATIVE_ID);
+    closed.native_tool_types = false;
+    let typed_req = round(vec![memory_tool(), balance_tool()]);
+    let plain_req = round(vec![plain, balance_tool()]);
+    let a = to_wire_json(&native(&closed, &typed_req).unwrap());
+    let b = to_wire_json(&native(&closed, &plain_req).unwrap());
+    assert_eq!(a, b);
 }
 
 #[test]
