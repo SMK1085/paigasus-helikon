@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.1...paigasus-helikon-core-v0.8.2) - 2026-11-22
+
+### Other
+
+- *(providers)* SMA-567 extend the stream conformance suite to reasoning, parallel and zero-argument tool calls ([#392](https://github.com/SMK1085/paigasus-helikon/pull/392))
+
 ## [0.8.1](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-core-v0.8.0...paigasus-helikon-core-v0.8.1) - 2026-11-21
 
 ### Fixed

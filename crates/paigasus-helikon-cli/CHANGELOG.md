@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.52](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-cli-v0.1.51...paigasus-helikon-cli-v0.1.52) - 2026-11-22
+
+### Other
+
+- updated the following local packages: paigasus-helikon-core, paigasus-helikon-evals, paigasus-helikon-runtime-tokio, paigasus-helikon-mcp, paigasus-helikon-providers-anthropic, paigasus-helikon-providers-openai
+
 ## [0.1.51](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-cli-v0.1.50...paigasus-helikon-cli-v0.1.51) - 2026-11-22
 
 ### Other
