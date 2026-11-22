@@ -61,12 +61,13 @@ These live in `paigasus_helikon::core` (re-exported from
   end-of-stream when a stop reason was observed, and MUST NOT emit it on
   truncation with no stop reason observed, on cancellation, or after a
   mid-stream error.
-  Implementations that cannot honor cancellation MUST still terminate the
-  stream when the `CancellationToken` fires, ending it without emitting
-  `Finish`. Both rules restate `Model::invoke`'s existing public contract
-  here, where third-party implementors will look for them.
   An `Err` item is also terminal: after an `Err`, implementations MUST NOT
   yield any item other than `Usage` snapshots for the same response.
+  Implementations that cannot honor cancellation MUST still terminate the
+  stream when the `CancellationToken` fires, ending it without emitting
+  `Finish`. The `Finish` and cancellation rules restate `Model::invoke`'s
+  existing public contract here, where third-party implementors will look
+  for them.
 - `ModelCapabilities` — the per-instance capability flags below.
 - `ModelError` — `Unavailable`, `RateLimited`, `ContextLengthExceeded`,
   `Refused`, `Transport`, `Other`. The loop does **not** auto-retry on these.

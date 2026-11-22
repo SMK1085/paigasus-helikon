@@ -7,7 +7,7 @@
 //!
 //! These fakes exercise the **checker**, not the HTTP path: `run` builds the
 //! event vector in memory and classifies it, so no server, no transport and no
-//! provider crate is involved. The floors and the decline cross-check in
+//! provider crate is involved. The floors and the decline and uncaptured cross-checks in
 //! `assert_conforms` are therefore not on this path — a fake can never be
 //! rejected by a floor instead of by the classification it is written to
 //! trigger.
@@ -21,8 +21,9 @@ pub(crate) const TOOL_NAME: &str = "get_weather";
 /// The tool name of the zero-argument scenario's one call.
 pub(crate) const ZERO_ARG_TOOL_NAME: &str = "get_current_time";
 
-/// The `call_id` every tool-bearing fake uses. The tests pin the reported
-/// violation against this exact string, so it is shared rather than repeated.
+/// The first `call_id` of every tool-bearing fake; the parallel fake also uses
+/// `c2`. The tests pin the reported violation against this exact string, so it
+/// is shared rather than repeated.
 const CALL_ID: &str = "c1";
 
 /// The second `call_id` of the parallel fake.

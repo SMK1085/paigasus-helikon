@@ -478,6 +478,20 @@ mod tests {
         );
     }
 
+    /// A second `Err` is also an event after the first one (assertion 9).
+    #[test]
+    fn a_second_err_is_a_violation() {
+        let evs = vec![
+            token("hi"),
+            Err(ModelError::Unavailable),
+            Err(ModelError::Unavailable),
+        ];
+        assert_eq!(
+            classify(&evs, Scenario::ErrorMidGeneration, false),
+            Some(Violation::EventAfterError)
+        );
+    }
+
     /// A `Finish` after an `Err` keeps the more specific name (assertion 6).
     #[test]
     fn finish_after_err_keeps_its_own_name() {

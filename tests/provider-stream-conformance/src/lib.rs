@@ -8,6 +8,9 @@
 //! production translator together — not a reimplementation of either.
 //!
 //! See `docs/superpowers/specs/2026-08-19-sma-533-stream-conformance-design.md`.
+//! The SMA-567 design,
+//! `docs/superpowers/specs/2026-11-22-sma-567-stream-conformance-extensions-design.md`,
+//! records assertions 9 and 10, the added floors and the `UNCAPTURED` table.
 #![forbid(unsafe_code)]
 
 mod check;
@@ -309,9 +312,8 @@ pub trait StreamUnderTest {
     /// wire order, read from the capture.
     ///
     /// `ReasoningCleanStop`, `ParallelToolCallCleanStop` and
-    /// `ZeroArgToolCallCleanStop` require a non-empty
-    /// list. Every other scenario returns `&[]`. For a scenario with a
-    /// non-empty list, the floor reads the declared tool names from it instead
+    /// `ZeroArgToolCallCleanStop` require a non-empty list. Every other
+    /// scenario returns `&[]`. For a scenario with a non-empty list, the floor reads the declared tool names from it instead
     /// of from [`StreamUnderTest::fixture_tool_name`], and it compares the
     /// observed calls with it by name and by parsed arguments.
     fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall];
@@ -506,7 +508,7 @@ async fn assert_conforms_with(
     assert!(
         problems.is_empty(),
         "conformance: {name} — the observed decline or uncaptured set does not match the \
-         pinned DECLINED or UNCAPTURED table (spec §6.2, §6.4):\n{}",
+         pinned DECLINED or UNCAPTURED table (SMA-533 design §6.2, SMA-567 design §6.4):\n{}",
         problems.join("\n")
     );
 }
@@ -649,8 +651,9 @@ async fn drain(
 /// `InsufficientEvidence`, which is the wrong diagnosis for a stream that
 /// emitted too much.
 ///
-/// The one exception is the `Err` count, because `classify` has no rule for a
-/// stream that errors twice and would otherwise let it through unremarked.
+/// The `Err` floor follows the same rule. It reports only a missing `Err` in
+/// an error scenario. A second `Err` is left to assertion 9
+/// (`EventAfterError`), which classifies it.
 ///
 /// Two further floors report missing evidence only: no `Err` outside the two
 /// error scenarios (cancellation scenarios included), and a `Usage` in
@@ -675,8 +678,8 @@ async fn drain(
 /// so that assertion 10 reports it under its exact `call_id`.
 /// `ReasoningCleanStop`, `ParallelToolCallCleanStop` and
 /// `ZeroArgToolCallCleanStop` must declare a non-empty list.
-/// `ParallelToolCallCleanStop` also requires two or more
-/// distinct non-blank `call_id`s.
+/// `ParallelToolCallCleanStop` also requires two or more distinct non-blank
+/// `call_id`s.
 ///
 /// The ticket proposed a floor that required `Usage` and `Finish` to be
 /// adjacent and terminal in `CleanStop`. That floor was replaced. It cannot see
@@ -925,7 +928,10 @@ fn floor_violation(
         }
     }
 
-    // Outside the two error scenarios no `Err` is expected. Without this, a
+    // Outside the two error scenarios no `Err` is expected. This is a fidelity
+    // floor on the scripts, stricter than the contract: a translator may
+    // legally turn a truncated body into an `Err`, but the scripts of the
+    // clean scenarios do not do so. Without this, a
     // script that errors in a clean scenario would reach `classify` looking
     // like an error-scenario shape (the SMA-533 section 6 claim that a
     // truncated body "will not be mis-reported as" an error depends on it).
@@ -957,12 +963,11 @@ fn floor_violation(
     if matches!(
         scenario,
         Scenario::ErrorMidGeneration | Scenario::ErrorAfterStopReason
-    ) && events.iter().filter(|e| e.is_err()).count() != 1
+    ) && !events.iter().any(Result::is_err)
     {
         return Some(Violation::InsufficientEvidence(
-            "an error scenario must yield exactly one Err: none means the aborted body was \
-             read as a clean end-of-stream, more than one means the stream kept going after \
-             it failed",
+            "an error scenario must yield an Err: none means the aborted body was read as a \
+             clean end-of-stream",
         ));
     }
 
@@ -1992,6 +1997,47 @@ mod tests {
         }
     }
 
+    /// A reasoning scenario without declared calls compares nothing.
+    #[test]
+    fn a_reasoning_scenario_without_declared_calls_fails() {
+        let violation = crate::floor_violation(
+            Scenario::ReasoningCleanStop,
+            &conforming(Scenario::ReasoningCleanStop),
+            TOOL_NAME,
+            Some(FinishReason::ToolCalls),
+            Some(REASONING_ORDER),
+            &[],
+        );
+        match violation {
+            Some(Violation::InsufficientEvidence(text)) => {
+                assert!(text.contains("declares no calls"), "{text}")
+            }
+            other => panic!("expected InsufficientEvidence, got {other:?}"),
+        }
+    }
+
+    /// The error floor reports only a missing `Err`. A second `Err` is left to
+    /// assertion 9, so the floor does not mask its `EventAfterError` diagnosis.
+    #[test]
+    fn a_second_err_in_an_error_scenario_passes_the_floor() {
+        let events = vec![
+            Ok(ModelEvent::TokenDelta {
+                text: "hi".to_owned(),
+            }),
+            Err(ModelError::Unavailable),
+            Err(ModelError::Unavailable),
+        ];
+        let violation = crate::floor_violation(
+            Scenario::ErrorMidGeneration,
+            &events,
+            TOOL_NAME,
+            None,
+            None,
+            &[],
+        );
+        assert_eq!(violation, None);
+    }
+
     /// The calls that the conforming parallel sequence carries, in order.
     const PARALLEL_CALLS: &[ExpectedCall] = &[
         ExpectedCall {
@@ -2071,7 +2117,7 @@ mod tests {
         let violation = crate::floor_violation(
             Scenario::ZeroArgToolCallCleanStop,
             &events,
-            TOOL_NAME,
+            crate::fakes::ZERO_ARG_TOOL_NAME,
             Some(FinishReason::ToolCalls),
             None,
             ZERO_ARG_CALLS,

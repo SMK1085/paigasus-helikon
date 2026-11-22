@@ -20,8 +20,8 @@
 //! 1. **Decline and uncaptured reasons are literal strings**, copied by hand
 //!    from `src/declines.rs`. A subject that looked its reasons up from
 //!    `DECLINED` or `UNCAPTURED` would satisfy that table's two-directional
-//!    cross-check by construction,
-//!    which is exactly the drift the table exists to catch.
+//!    cross-check by construction, which is exactly the drift the table exists
+//!    to catch.
 //! 2. **`encodes_stop_reason` is measured from the bytes about to be served**,
 //!    never restated from `Scenario::expects_stop_reason`. Restating it
 //!    compares the harness's expectation with itself. See the Bedrock impl for
@@ -217,14 +217,14 @@ mod bedrock {
     }
 
     /// The scripted response for one scenario, or `None` for a scenario this
-    /// subject declines.
+    /// subject declines or has no capture for (an uncaptured scenario).
     ///
     /// Each script is the same Converse stream cut at a different point, so the
     /// scenarios differ only in what the client gets to observe — which is
     /// exactly the distinction the suite is checking.
     ///
-    /// Returning an `Option` rather than panicking on the declined scenarios is
-    /// what lets [`Bedrock::encodes_stop_reason`] call this for *every*
+    /// Returning an `Option` rather than panicking on the declined or uncaptured
+    /// scenarios is what lets [`Bedrock::encodes_stop_reason`] call this for *every*
     /// scenario and measure the bytes.
     fn script(scenario: Scenario) -> Option<Script> {
         // The prefix every text script shares: the opening event and two
@@ -931,7 +931,8 @@ mod openai_chat {
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
-    /// declines, like `bedrock::script`.
+    /// declines, like `bedrock::script`, and for the scenarios that it has no
+    /// capture for (uncaptured).
     fn script(scenario: Scenario) -> Option<Script> {
         // The two-delta opening every text scenario shares. The content is
         // arbitrary (as in `bedrock::opening`); the envelope is what is
@@ -1515,7 +1516,7 @@ mod litellm {
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
-    /// declines.
+    /// declines, and for the scenarios that it has no capture for (uncaptured).
     fn script(scenario: Scenario) -> Option<Script> {
         // The two-delta opening every text scenario shares, matching
         // `text_then_trailing_usage.txt`'s two content chunks (the second
@@ -2204,8 +2205,10 @@ mod anthropic {
     }
 
     /// One `thinking_delta`. Envelope matches `thinking_text_tool_use.txt`
-    /// (CAPTURED), for example line 48; the text itself is arbitrary. The
-    /// capture sends 15 `thinking_delta` events; the script sends one.
+    /// (CAPTURED), for example line 48. The `ReasoningCleanStop` script sends
+    /// the captured run C text, all 15 deltas. The text of
+    /// `ThinkingToolCallCleanStop` is arbitrary, and that script sends one
+    /// delta.
     fn thinking_delta(thinking: &str) -> Vec<u8> {
         frame(
             "content_block_delta",
@@ -2443,10 +2446,11 @@ mod anthropic {
     }
 
     /// The scripted response for one scenario, or `None` for
-    /// `FragmentedToolName`, which this subject declines.
+    /// `FragmentedToolName`, which this subject declines, or for a scenario
+    /// that it has no capture for (uncaptured).
     ///
-    /// Returning an `Option` rather than panicking on the declined scenario is
-    /// what lets [`Anthropic::encodes_stop_reason`] call this for *every*
+    /// Returning an `Option` rather than panicking on the declined or
+    /// uncaptured scenarios is what lets [`Anthropic::encodes_stop_reason`] call this for *every*
     /// scenario and measure the bytes — see `bedrock::script`'s doc for the
     /// same pattern.
     fn script(scenario: Scenario) -> Option<Script> {
@@ -3285,10 +3289,11 @@ mod gemini {
     }
 
     /// The scripted response for one scenario, or `None` for
-    /// `FragmentedToolName`, which this subject declines.
+    /// `FragmentedToolName`, which this subject declines, or for a scenario
+    /// that it has no capture for (uncaptured).
     ///
-    /// Returning an `Option` rather than panicking on the declined scenario is
-    /// what lets [`Gemini::encodes_stop_reason`] call this for *every*
+    /// Returning an `Option` rather than panicking on the declined or
+    /// uncaptured scenarios is what lets [`Gemini::encodes_stop_reason`] call this for *every*
     /// scenario and measure the bytes — see `bedrock::script`'s doc for the
     /// same pattern.
     fn script(scenario: Scenario) -> Option<Script> {
@@ -4032,7 +4037,8 @@ mod openai_responses {
     }
 
     /// The scripted response for one scenario, or `None` for the four this
-    /// subject declines — see the module doc's "Why this subject declines
+    /// subject declines or for a scenario that it has no capture for
+    /// (uncaptured) — see the module doc's "Why this subject declines
     /// four scenarios" section. Returning an `Option` rather than panicking
     /// on a declined scenario is what lets
     /// [`OpenAiResponses::encodes_stop_reason`] call this for *every*

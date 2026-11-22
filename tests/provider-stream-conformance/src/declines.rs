@@ -1,4 +1,5 @@
-//! The pinned decline set.
+//! The pinned decline set (`DECLINED`) and the pinned uncaptured set
+//! (`UNCAPTURED`).
 
 use crate::Scenario;
 
@@ -206,8 +207,8 @@ const UNCAPTURED_SCENARIOS: &[Scenario] = &[
 /// subject, each holding a `StreamUnderTest` impl whose `name()` returns one
 /// of these strings.
 ///
-/// [`DECLINED`] is checked against this list because a typo'd subject name in
-/// the table would otherwise be silently invisible: `assert_declines_match`
+/// [`DECLINED`] and [`UNCAPTURED`] are checked against this list because a typo'd subject name in
+/// the table would otherwise be silently invisible: `pinned_problems`
 /// only ever runs with a real subject's name, filtering [`DECLINED`] down to
 /// the rows for that one subject. A row naming a subject that does not exist
 /// never matches that filter for *any* real subject, so it is never checked
