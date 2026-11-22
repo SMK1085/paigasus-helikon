@@ -290,6 +290,8 @@ mod bedrock {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -449,7 +451,8 @@ mod bedrock {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
         }
 
@@ -494,6 +497,11 @@ mod bedrock {
                 // of them exists (SMA-859).
                 Scenario::ParallelToolCallCleanStop => {
                     return Outcome::Uncaptured("no captured parallel tool-call stream")
+                }
+                // A zero-argument tool call can occur on this wire, but no
+                // capture of one exists (SMA-860).
+                Scenario::ZeroArgToolCallCleanStop => {
+                    return Outcome::Uncaptured("no captured zero-argument tool-call stream")
                 }
                 _ => {}
             }
@@ -939,6 +947,8 @@ mod openai_chat {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -1038,7 +1048,8 @@ mod openai_chat {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
         }
 
@@ -1065,6 +1076,11 @@ mod openai_chat {
             // fixture of them is hand-authored, not captured (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture of
+            // one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -1517,6 +1533,8 @@ mod litellm {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -1612,7 +1630,8 @@ mod litellm {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
         }
 
@@ -1640,6 +1659,11 @@ mod litellm {
             // them exists (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture of
+            // one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -2530,6 +2554,8 @@ mod anthropic {
             }
             // Not served — see the reason in `Anthropic::stream`.
             Scenario::ParallelToolCallCleanStop => return None,
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -2650,7 +2676,9 @@ mod anthropic {
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason => None,
                 // Declined or uncaptured; never reached.
-                Scenario::FragmentedToolName | Scenario::ParallelToolCallCleanStop => None,
+                Scenario::FragmentedToolName
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
         }
 
@@ -2674,7 +2702,8 @@ mod anthropic {
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ParallelToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
         }
 
@@ -2695,7 +2724,8 @@ mod anthropic {
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ParallelToolCallCleanStop => &[],
+                | Scenario::ParallelToolCallCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => &[],
             }
         }
 
@@ -2711,6 +2741,11 @@ mod anthropic {
             // `parallel_tool_use.txt` has no capture behind it (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture of
+            // one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -3302,22 +3337,20 @@ mod gemini {
             // only chunk 0 carries a `thoughtSignature`. Chunk 3 holds an
             // empty text part with `"finishReason": "STOP"`. The body ended at
             // bare EOF, so no `[DONE]` is sent, and the buffered stop reason
-            // is flushed by the bare-EOF arm. The edits, all of them:
+            // is flushed by the bare-EOF arm.
             //
-            // 1. The SMA-827 work replaced the real signature with the
-            //    placeholder `SIG_A` in the source file. This script sends
-            //    the file as it is.
-            // 2. The blank separator lines of the file become the `\n\n`
-            //    of each frame.
+            // No edits: the body is the file, byte for byte. The file already
+            // holds the placeholder `SIG_A`.
             //
-            // Every payload is otherwise sent byte for byte, spacing
-            // included. So the stop chunk writes `"finishReason": "STOP"`
-            // with a space, and `FINISH_REASON_MARKERS` accepts that form.
+            // The stop chunk writes `"finishReason": "STOP"` with a space, and
+            // `FINISH_REASON_MARKERS` accepts that form.
             Scenario::ParallelToolCallCleanStop => (
                 PARALLEL_SIGNED.iter().map(|p| captured_frame(p)).collect(),
                 None,
                 Ending::Clean,
             ),
+            // Not served — see the reason in `stream`.
+            Scenario::ZeroArgToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -3446,10 +3479,11 @@ mod gemini {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason => None,
-                // Declined; never reached.
+                // Declined or uncaptured; never reached.
                 Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop => None,
+                | Scenario::ReasoningCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => None,
             }
         }
 
@@ -3476,7 +3510,8 @@ mod gemini {
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop => &[],
+                | Scenario::ReasoningCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => &[],
             }
         }
 
@@ -3489,6 +3524,11 @@ mod gemini {
             }
             if scenario == Scenario::ThinkingToolCallCleanStop {
                 return Outcome::Declined("the scenario serves an anthropic thinking block");
+            }
+            // A zero-argument tool call can occur on this wire, but no capture
+            // of one exists (SMA-860).
+            if scenario == Scenario::ZeroArgToolCallCleanStop {
+                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
             // `request` never sets a thinking configuration, so no thought
             // parts arrive on the wire.
@@ -3865,6 +3905,46 @@ mod openai_responses {
         }))
     }
 
+    /// The five events of `responses_tool_call_zero_args.txt`
+    /// (`crates/paigasus-helikon-providers-openai/tests/fixtures/`), as
+    /// `(event name, data payload)` pairs, byte for byte, in file order. See
+    /// the `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_EVENTS: [(&str, &str); 5] = [
+        (
+            "response.output_item.added",
+            r##"{"type":"response.output_item.added","item":{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"in_progress","arguments":"","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"},"output_index":0,"sequence_number":2}"##,
+        ),
+        (
+            "response.function_call_arguments.delta",
+            r##"{"type":"response.function_call_arguments.delta","delta":"{}","item_id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","obfuscation":"EzdgyuuAsmTPs2","output_index":0,"sequence_number":3}"##,
+        ),
+        (
+            "response.function_call_arguments.done",
+            r##"{"type":"response.function_call_arguments.done","arguments":"{}","item_id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","output_index":0,"sequence_number":4}"##,
+        ),
+        (
+            "response.output_item.done",
+            r##"{"type":"response.output_item.done","item":{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"completed","arguments":"{}","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"},"output_index":0,"sequence_number":5}"##,
+        ),
+        (
+            "response.completed",
+            r##"{"type":"response.completed","response":{"id":"resp_0ce0b75b3b84617f006a89d167d25487d28d2a332550e69d61","object":"response","created_at":1787416935,"status":"completed","background":false,"completed_at":1787416937,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-4o-mini-2024-07-18","moderation":null,"output":[{"id":"fc_0ce0b75b3b84617f006a89d169347087d288c7d58999a8f93d","type":"function_call","status":"completed","arguments":"{}","call_id":"call_8xWY1dceitU93bp87yBo1ocG","name":"get_current_time"}],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"in_memory","reasoning":{"context":null,"effort":null,"summary":null},"safety_identifier":null,"service_tier":"default","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"required","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[{"type":"function","description":"Return the current server time. Takes no arguments.","name":"get_current_time","output_schema":null,"parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false},"strict":true}],"top_logprobs":0,"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":57,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":59},"user":null,"metadata":{}},"sequence_number":6}"##,
+        ),
+    ];
+
+    /// The one call of [`ZERO_ARG_EVENTS`]: the tool name and the literal `{}`
+    /// that the API streams as its arguments.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// One captured SSE frame: `event: {event}\ndata: {payload}\n\n`. The
+    /// `event:` line is kept, as in the file.
+    fn captured_frame(event: &str, payload: &str) -> Vec<u8> {
+        format!("event: {event}\ndata: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario, or `None` for the four this
     /// subject declines — see the module doc's "Why this subject declines
     /// four scenarios" section. Returning an `Option` rather than panicking
@@ -3959,6 +4039,30 @@ mod openai_responses {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
+            // `responses_tool_call_zero_args.txt`, CAPTURED against the real
+            // OpenAI Responses API (`gpt-4o-mini-2024-07-18`, 2026-08-22) with
+            // one zero-argument strict tool and `tool_choice: "required"`.
+            // The file is a regression pin for SMA-562: the API streams exactly
+            // one `function_call_arguments.delta`, and it carries the literal
+            // `{}`. Five events: `output_item.added`, the `{}` delta,
+            // `function_call_arguments.done`, `output_item.done` and
+            // `response.completed`. The file's own edits from the raw capture
+            // were: it drops `response.created` and `response.in_progress`,
+            // and it adds no `data: [DONE]`.
+            //
+            // Edits made here: none to any payload. This script sends the five
+            // `event:` and `data:` payloads byte for byte
+            // ([`ZERO_ARG_EVENTS`]). The only change is the framing: the
+            // file's header comment lines are not sent, and each pair becomes
+            // one `event:`/`data:` frame that ends with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_EVENTS
+                    .iter()
+                    .map(|(event, payload)| captured_frame(event, payload))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -3991,6 +4095,19 @@ mod openai_responses {
                     "type": "object",
                     "properties": { "city": { "type": "string" } },
                     "required": ["city"]
+                }),
+            )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool of the capture: no arguments, as its schema says.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": false
                 }),
             )];
         }
@@ -4041,7 +4158,9 @@ mod openai_responses {
             // `bedrock::fixture_finish_reason` for why.
             match scenario {
                 Scenario::CleanStop => Some(FinishReason::Stop),
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 Scenario::TruncatedMidGeneration
                 | Scenario::ErrorMidGeneration
                 | Scenario::CancelMidGeneration => None,
@@ -4062,9 +4181,25 @@ mod openai_responses {
             None
         }
 
-        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
-            // This subject serves no scenario that declares calls.
-            &[]
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            // Exhaustive on purpose, with no `_` arm — see
+            // `bedrock::fixture_finish_reason` for why.
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                Scenario::CleanStop
+                | Scenario::TruncatedAfterStopReason
+                | Scenario::TruncatedMidGeneration
+                | Scenario::ErrorMidGeneration
+                | Scenario::ErrorAfterStopReason
+                | Scenario::CancelMidGeneration
+                | Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
+                | Scenario::ReasoningCleanStop
+                | Scenario::ParallelToolCallCleanStop => &[],
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {

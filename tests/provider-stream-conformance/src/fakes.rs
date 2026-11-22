@@ -18,6 +18,9 @@ use paigasus_helikon_core::{FinishReason, ModelError, ModelEvent};
 /// The tool name every tool-bearing fake declares.
 pub(crate) const TOOL_NAME: &str = "get_weather";
 
+/// The tool name of the zero-argument scenario's one call.
+pub(crate) const ZERO_ARG_TOOL_NAME: &str = "get_current_time";
+
 /// The `call_id` every tool-bearing fake uses. The tests pin the reported
 /// violation against this exact string, so it is shared rather than repeated.
 const CALL_ID: &str = "c1";
@@ -176,6 +179,10 @@ pub(crate) fn conforming(scenario: Scenario) -> Vec<Result<ModelEvent, ModelErro
         events.push(tool(CALL_ID, Some(TOOL_NAME), "{\"city\":\"Berlin\"}"));
         events.push(tool(SECOND_CALL_ID, Some(TOOL_NAME), "{\"city\":\"Rome\"}"));
     }
+    if scenario == Scenario::ZeroArgToolCallCleanStop {
+        // One call with the literal `{}` delta that the API streams.
+        events.push(tool(CALL_ID, Some(ZERO_ARG_TOOL_NAME), "{}"));
+    }
     if scenario == Scenario::ThinkingToolCallCleanStop {
         // The position record of the tool call, scoped to the fake call.
         events.push(Ok(ModelEvent::ProviderData {
@@ -257,7 +264,8 @@ fn finish(scenario: Scenario) -> Result<ModelEvent, ModelError> {
             | Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
             | Scenario::ReasoningCleanStop
-            | Scenario::ParallelToolCallCleanStop => FinishReason::ToolCalls,
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop => FinishReason::ToolCalls,
             _ => FinishReason::Stop,
         },
     })
@@ -394,7 +402,8 @@ mod tests {
             Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
             | Scenario::ReasoningCleanStop
-            | Scenario::ParallelToolCallCleanStop => Some(FinishReason::ToolCalls),
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop => Some(FinishReason::ToolCalls),
             _ => None,
         }
     }
@@ -417,7 +426,8 @@ mod tests {
             | Scenario::FragmentedToolName
             | Scenario::ToolCallCleanStop
             | Scenario::ThinkingToolCallCleanStop
-            | Scenario::ParallelToolCallCleanStop => None,
+            | Scenario::ParallelToolCallCleanStop
+            | Scenario::ZeroArgToolCallCleanStop => None,
         }
     }
 
@@ -440,6 +450,10 @@ mod tests {
                     args: "{\"city\":\"Rome\"}",
                 },
             ],
+            Scenario::ZeroArgToolCallCleanStop => &[ExpectedCall {
+                name: "get_current_time",
+                args: "{}",
+            }],
             Scenario::CleanStop
             | Scenario::TruncatedAfterStopReason
             | Scenario::TruncatedMidGeneration
