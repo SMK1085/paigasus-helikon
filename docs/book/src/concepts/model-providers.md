@@ -234,6 +234,49 @@ For an ARN, detection uses the resource ID, which is the text after the last
 `/`. An opaque ARN, such as an application inference profile ARN, gives
 `Unknown`.
 
+#### Opaque model IDs
+
+Some model IDs do not name the model. Examples are application inference
+profile ARNs, provisioned-throughput ARNs and custom-model ARNs. Detection
+gives `Unknown` for these IDs. Use `BedrockModelBuilder::family` to set the
+family yourself.
+
+```rust,ignore
+use paigasus_helikon::bedrock::{BedrockModel, ModelFamily};
+
+let model = BedrockModel::converse(arn)
+    .sdk_config(&sdk_cfg)
+    .family(ModelFamily::Anthropic)
+    .build()?;
+```
+
+The override has the full effect of a detected family. It sets the default
+capabilities and the request translation. It also controls how the provider
+sends `ToolChoice`, and which requests fail locally. These local failures apply to `ResponseFormat::JsonSchema` or
+`JsonObject` with `ToolChoice::Tool` or `ToolChoice::None`. They also apply to
+`ToolChoice::Tool` with an undefined name. `ToolChoice::Required` fails locally
+when the request has no tools and no `JsonSchema` or `JsonObject` format. Each
+of these formats adds a synthesized tool. The `from_env` constructor cannot take the override. Use the
+builder.
+
+The `.capabilities(...)` method changes only the flags that `capabilities()`
+reports. It does not change the request. The `.capabilities(...)` value wins
+over the defaults of the family.
+
+Set the family of the model that the profile uses.
+
+The static rule for Claude Sonnet 5.5 and Opus 5.5 reads the model ID. An opaque
+ARN does not contain the model name, so the rule does not apply. A profile on
+one of these models works as follows. The first structured-output request sends
+a forced tool choice. Bedrock rejects it once. After one rejection, the handle
+uses native output. On the native path, the provider omits
+`ToolChoice::Required` and `ToolChoice::Tool` and logs a warning.
+
+A request that fails locally does not change the handle. If several first
+requests run at the same time on one handle, Bedrock rejects each of them. A new
+handle sends the rejected request again. Build one handle and clone it. This
+recovery is not verified live for application inference profiles.
+
 Reasoning content surfaced by the model (e.g. extended-thinking responses from
 Claude) is delivered as `ModelEvent::ReasoningDelta` in the stream — no extra
 configuration is required on this provider.

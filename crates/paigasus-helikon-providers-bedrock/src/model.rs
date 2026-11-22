@@ -481,4 +481,67 @@ mod tests {
             .unwrap_or_else(|e| panic!("output must be valid JSON ({e}); got: {text}"));
         assert!(v["operation"].is_string(), "operation: {v}");
     }
+
+    /// Live test for an application inference profile ARN with a family override.
+    ///
+    /// Set `BEDROCK_PROFILE_ARN` to the ARN of a profile that wraps an
+    /// Anthropic model. Then run `cargo test -p paigasus-helikon-providers-bedrock
+    /// live_profile_arn -- --ignored --nocapture`. The dev account has no
+    /// profile today, so this test has not run.
+    #[tokio::test]
+    #[ignore]
+    async fn live_profile_arn_with_family_override() {
+        use paigasus_helikon_core::{ContentPart, Item, ResponseFormat};
+
+        let arn = match std::env::var("BEDROCK_PROFILE_ARN") {
+            Ok(v) if !v.is_empty() => v,
+            _ => {
+                eprintln!("[live] BEDROCK_PROFILE_ARN not set - skipping profile live test.");
+                return;
+            }
+        };
+        let cfg = aws_config::defaults(BehaviorVersion::v2026_11_17())
+            .load()
+            .await;
+        let model = BedrockModel::converse(&arn)
+            .sdk_config(&cfg)
+            .family(crate::ModelFamily::Anthropic)
+            .build()
+            .expect("build");
+
+        let mut req = ModelRequest::new();
+        req.messages = vec![Item::UserMessage {
+            content: vec![ContentPart::Text {
+                text: "Give a transaction: deposit of 100 USD.".to_owned(),
+            }],
+        }];
+        req.model_settings.response_format = Some(ResponseFormat::JsonSchema {
+            name: "Transaction".to_owned(),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "operation": { "type": "string" },
+                    "amount": { "type": "number" }
+                },
+                "required": ["operation", "amount"]
+            }),
+            strict: false,
+        });
+        req.model_settings.max_output_tokens = Some(256);
+
+        let mut s = model
+            .invoke(req, CancellationToken::new())
+            .await
+            .expect("invoke should succeed");
+        let mut text = String::new();
+        while let Some(ev) = s.next().await {
+            if let ModelEvent::TokenDelta { text: t } = ev.expect("no stream error") {
+                text.push_str(&t);
+            }
+        }
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("output must be valid JSON ({e}); got: {text}"));
+        assert!(v["operation"].is_string(), "operation: {v}");
+        eprintln!("[live] final output path: {:?}", model.policy.path());
+    }
 }

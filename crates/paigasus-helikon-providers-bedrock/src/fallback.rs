@@ -325,4 +325,50 @@ mod tests {
         let sent = res.expect("the fallback send succeeds");
         assert!(!sent.synthesizing);
     }
+
+    const PROFILE_ARN: &str =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6";
+
+    #[test]
+    fn rule_b_recovers_on_built_handle_with_family_override() {
+        let model = crate::BedrockModel::converse(PROFILE_ARN)
+            .client(crate::builder::offline_client())
+            .family(ModelFamily::Anthropic)
+            .build()
+            .unwrap();
+        let (res, wires) = drive(
+            &model.policy,
+            &model.config,
+            &transaction_request(),
+            vec![Err(rejected()), Ok(())],
+        );
+        assert!(res.is_ok());
+        assert_eq!(wires.len(), 2);
+        assert_forced(&wires[0]);
+        assert!(wires[1].get("outputConfig").is_some(), "{:#}", wires[1]);
+        assert!(
+            wires[1]["toolConfig"]["toolChoice"].is_null(),
+            "{:#}",
+            wires[1]
+        );
+        assert_eq!(model.policy.path(), OutputPath::Native);
+    }
+
+    #[test]
+    fn opaque_arn_without_override_sends_one_request() {
+        let model = crate::BedrockModel::converse(PROFILE_ARN)
+            .client(crate::builder::offline_client())
+            .build()
+            .unwrap();
+        let (res, wires) = drive(
+            &model.policy,
+            &model.config,
+            &transaction_request(),
+            vec![Ok(())],
+        );
+        assert!(res.is_ok());
+        assert_eq!(wires.len(), 1);
+        assert!(wires[0]["toolConfig"].is_null(), "{:#}", wires[0]);
+        assert_eq!(model.policy.path(), OutputPath::ForcedTool);
+    }
 }

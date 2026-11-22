@@ -35,8 +35,12 @@ pub(crate) struct ForcedChoicePolicy {
 
 impl ForcedChoicePolicy {
     /// Make a policy. The static rule comes from the model id.
+    /// It applies only when `family` supports a forced tool choice.
     pub(crate) fn new(model_id: &str, family: ModelFamily) -> Self {
-        Self::with_rule(rejects_forced_tool_choice(model_id), family)
+        Self::with_rule(
+            family.supports_forced_tool_choice() && rejects_forced_tool_choice(model_id),
+            family,
+        )
     }
 
     /// Make a policy with no static rule.

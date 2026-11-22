@@ -5,8 +5,10 @@
 //! forced tool choice and use native output (`outputConfig`). On these models
 //! `ResponseFormat::JsonObject` degrades to text.
 //!
-//! Returns conservative defaults for unknown families; callers may override
-//! via [`crate::BedrockModelBuilder::capabilities`].
+//! Unknown families get conservative defaults. To choose the family for an
+//! opaque model ID, use [`crate::BedrockModelBuilder::family`]. The
+//! [`crate::BedrockModelBuilder::capabilities`] method changes only the
+//! reported flags.
 
 use crate::family::ModelFamily;
 use paigasus_helikon_core::ModelCapabilities;
