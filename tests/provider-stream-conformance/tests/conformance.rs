@@ -191,11 +191,12 @@ mod bedrock {
     /// capture records that a real Bedrock stream sends `metadata` after
     /// `messageStop`.
     ///
-    /// **This ordering is not self-enforcing, so do not reorder it casually.**
+    /// **This ordering is not self-enforced by the translator.**
+    /// `assert_message_stop_before_metadata` enforces it for every script.
     /// `stream.rs` deliberately handles the reversed order too (`Metadata`
     /// before `MessageStop` emits `Usage` at once and `Finish` on the stop), so
-    /// a fixture that put `metadata` first would still pass every assertion —
-    /// while no longer covering the buffering path, which exists for the
+    /// a fixture that put `metadata` first would still pass every other
+    /// assertion — while no longer covering the buffering path, which exists for the
     /// order `messageStop` then `metadata`. Verified by mutation while
     /// registering this subject: swapping the two left the suite green.
     ///
@@ -521,6 +522,55 @@ mod bedrock {
         }
     }
 
+    /// The `:event-type` of each frame, in order.
+    ///
+    /// Each chunk is decoded with the SDK's own frame decoder, so the check
+    /// reads what the client reads. A chunk that does not decode as one
+    /// complete frame panics.
+    fn event_types(chunks: &[Vec<u8>]) -> Vec<String> {
+        use aws_smithy_eventstream::frame::{DecodedFrame, MessageFrameDecoder};
+
+        chunks
+            .iter()
+            .map(|chunk| {
+                let mut decoder = MessageFrameDecoder::new();
+                let message = match decoder
+                    .decode_frame(chunk.as_slice())
+                    .expect("a frame this module wrote must decode")
+                {
+                    DecodedFrame::Complete(message) => message,
+                    DecodedFrame::Incomplete => panic!("each chunk must be one complete frame"),
+                };
+                message
+                    .headers()
+                    .iter()
+                    .find(|h| h.name().as_str() == ":event-type")
+                    .expect("every frame carries an :event-type header")
+                    .value()
+                    .as_string()
+                    .expect(":event-type is a string header")
+                    .as_str()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// Panic when a `metadata` frame comes before a `messageStop` frame.
+    ///
+    /// Bedrock sends `messageStop` first. `stream.rs` accepts both orders, so
+    /// no other assertion notices a fixture in the wrong order.
+    fn assert_message_stop_before_metadata(chunks: &[Vec<u8>]) {
+        let types = event_types(chunks);
+        let stop = types.iter().position(|t| t == MESSAGE_STOP_EVENT_TYPE);
+        let meta = types.iter().position(|t| t == "metadata");
+        if let (Some(stop), Some(meta)) = (stop, meta) {
+            assert!(
+                meta > stop,
+                "metadata before messageStop: metadata at {meta}, messageStop at {stop} in {types:?}"
+            );
+        }
+    }
+
     /// Whether `haystack` contains `needle` as a contiguous byte run.
     ///
     /// `[u8]` has no `contains(&[u8])`, and pulling in a dependency for one
@@ -560,6 +610,42 @@ mod bedrock {
                  reason for scripts that encode none"
             );
         }
+    }
+
+    /// The check must fail on the reversed order, or it guards nothing.
+    #[test]
+    #[should_panic(expected = "metadata before messageStop")]
+    fn a_swapped_metadata_and_message_stop_is_caught() {
+        let mut chunks = vec![message_stop("end_turn"), metadata()];
+        chunks.reverse();
+        assert_message_stop_before_metadata(&chunks);
+    }
+
+    /// No Bedrock script may put `metadata` before `messageStop`.
+    #[test]
+    fn every_bedrock_script_keeps_message_stop_before_metadata() {
+        let mut checked = Vec::new();
+        for &scenario in Scenario::ALL {
+            let Some(script) = script(scenario) else {
+                continue;
+            };
+            let types = event_types(&script.chunks);
+            if types.iter().any(|t| t == MESSAGE_STOP_EVENT_TYPE)
+                && types.iter().any(|t| t == "metadata")
+            {
+                assert_message_stop_before_metadata(&script.chunks);
+                checked.push(scenario);
+            }
+        }
+        assert!(
+            checked.len() >= 2,
+            "expected at least two scripts with both frames, checked {checked:?}"
+        );
+        assert!(checked.contains(&Scenario::CleanStop), "{checked:?}");
+        assert!(
+            checked.contains(&Scenario::ToolCallCleanStop),
+            "{checked:?}"
+        );
     }
 
     #[tokio::test]
