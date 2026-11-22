@@ -1664,11 +1664,14 @@ mod litellm {
 /// Every envelope shape below is transcribed from a fixture committed in
 /// `crates/paigasus-helikon-providers-anthropic/tests/fixtures/`, cited on the
 /// helper or script arm that builds it. Each fixture header states its label.
-/// Only one fixture that a helper copies is CAPTURED:
-/// `thinking_text_tool_use.txt`. All the others are HAND-AUTHORED. The
-/// `message_start`, `message_delta` and `tool_use` helpers copy HAND-AUTHORED
-/// shapes. The header of `text_only.txt` lists the keys that the SMA-840
-/// captures carry and those shapes do not.
+/// The CAPTURED fixtures that this module copies from are the three SMA-840
+/// captures: `thinking_text_tool_use.txt`, `empty_thinking_tool_use.txt` and
+/// `redacted_thinking_tool_use.txt`. All the others are HAND-AUTHORED. The
+/// `input_json_delta` values ([`CAPTURED_ARGS`]) come from all three
+/// captures. The thinking helpers come from `thinking_text_tool_use.txt`. The
+/// `message_start`, `message_delta` and `tool_use_start` helpers copy
+/// HAND-AUTHORED shapes. The header of `text_only.txt` lists the keys that the
+/// SMA-840 captures carry and those shapes do not.
 ///
 /// - `text_only.txt` — HAND-AUTHORED (SMA-317, PR #33). The source of its
 ///   shapes is not recorded. The baseline: `message_start` (including its
@@ -1710,27 +1713,34 @@ mod litellm {
 ///   carries a different `message_start` id and one delta where the other
 ///   has two — again *before* its own in-band `error` frame.
 /// - `parallel_tool_use.txt` and `tool_use_then_continuation.txt` — both
-///   HAND-AUTHORED (SMA-317, PR #33). The `tool_use` envelope: a
-///   `content_block_start` carrying the whole `id` and `name` together,
-///   followed by exactly one `input_json_delta` carrying the whole argument
-///   JSON. Grounds [`tool_use_start`], [`input_json_delta`], and
-///   `ToolCallCleanStop`'s script. In the `tool_use` envelope, the SMA-840
-///   captures differ in two ways (the headers of both files): their tool
-///   `content_block_start` also carries `"caller":{"type":"direct"}`, and
-///   they split the argument JSON
-///   (see "`ToolCallCleanStop` never splits `input_json_delta`" below).
+///   HAND-AUTHORED (SMA-317, PR #33). The `tool_use` block start: a
+///   `content_block_start` carrying the whole `id` and `name` together.
+///   Grounds [`tool_use_start`]. These files send the whole argument JSON in
+///   one `input_json_delta`. The tool scripts do not copy that part. They
+///   send the captured split instead (see "Tool scripts send the captured
+///   split `input_json_delta`" below). The SMA-840 captures also differ in
+///   the block start (the headers of both files): their tool
+///   `content_block_start` also carries `"caller":{"type":"direct"}`.
 /// - `thinking_text_tool_use.txt` — CAPTURED (transcribed, SMA-840, PR #387):
 ///   probe run C, turn 1, `claude-sonnet-4-5`, on 2026-11-21. Its header
 ///   records one change: the real signature is replaced with `SIG_FAKE_1`. A
 ///   signed thinking block before a `tool_use` block. Grounds
 ///   [`thinking_start`] (`"thinking":"","signature":""`), [`thinking_delta`],
-///   [`signature_delta`] (fake value `SIG_FAKE_1`) and
-///   `ThinkingToolCallCleanStop`'s script. The fixture holds a text block
+///   [`signature_delta`] (fake value `SIG_FAKE_1`), [`CAPTURED_ARGS`] (lines
+///   143-153) and `ThinkingToolCallCleanStop`'s script. The fixture holds a
+///   text block
 ///   between the thinking block and the tool call. The script leaves it out,
 ///   so the tool call sits at index 1. [`tool_use_start_at`],
 ///   [`input_json_delta_at`] and [`content_block_stop_at`] carry that index.
 ///   The script also leaves out other parts of the capture. See the
 ///   `ThinkingToolCallCleanStop` arm in [`script`] for the list.
+/// - `empty_thinking_tool_use.txt` and `redacted_thinking_tool_use.txt` —
+///   both CAPTURED (transcribed, SMA-840, PR #387). Each sends the same four
+///   `input_json_delta` values as `thinking_text_tool_use.txt`
+///   (`empty_thinking_tool_use.txt` lines 94-104,
+///   `redacted_thinking_tool_use.txt` lines 95-105). Grounds
+///   [`CAPTURED_ARGS`] together with `thinking_text_tool_use.txt`. No other
+///   shape in this module comes from these two files.
 ///
 /// `body_cut_inside_message_stop.txt` (HAND-AUTHORED, SMA-531, PR #200) and
 /// `thinking_then_text.txt` (HAND-AUTHORED, SMA-317, PR #33) were read
@@ -1741,11 +1751,11 @@ mod litellm {
 /// `ThinkingToolCallCleanStop`, uses the CAPTURED `thinking_text_tool_use.txt`
 /// instead.
 ///
-/// SMA-840 (PR #387) also added four fixtures that no helper in this module
-/// copies a shape from:
-/// `empty_thinking_tool_use.txt` and `redacted_thinking_tool_use.txt` (both
-/// CAPTURED), and `interleaved_thinking.txt` and
-/// `unsigned_thinking_tool_use.txt` (both HAND-AUTHORED).
+/// SMA-840 (PR #387) also added two fixtures that no helper in this module
+/// copies a shape from: `interleaved_thinking.txt` and
+/// `unsigned_thinking_tool_use.txt` (both HAND-AUTHORED). They split the
+/// argument JSON differently from the captures, so they are not a source for
+/// [`CAPTURED_ARGS`].
 ///
 /// # Why `Ending::Abort` and not the fixtures' own `error` event
 ///
@@ -1802,7 +1812,7 @@ mod litellm {
 /// which already match for both (see `scan_finds_only_a_populated_stop_reason`'s
 /// own doc for the full argument).
 ///
-/// # `ToolCallCleanStop` never splits `input_json_delta`
+/// # Tool scripts send the captured split `input_json_delta`
 ///
 /// The two HAND-AUTHORED SMA-317 tool-call fixtures (`parallel_tool_use.txt`,
 /// `tool_use_then_continuation.txt`) carry one tool call's whole argument
@@ -1812,18 +1822,19 @@ mod litellm {
 /// 143-153, `empty_thinking_tool_use.txt` lines 94-104 and
 /// `redacted_thinking_tool_use.txt` lines 95-105.
 ///
-/// Unlike `bedrock`/`openai_chat`/`litellm`, this module does not split the
-/// arguments across two calls to its delta helper to *additionally* prove
-/// "not more than one delta carries the name". It sends one whole
-/// `input_json_delta`, the shape of the HAND-AUTHORED files. So its tool
-/// scripts do not show the captured split. The SMA-845 audit labels sources
-/// and does not change this test data
-/// (`docs/superpowers/specs/2026-11-21-sma-845-fixture-provenance-audit-design.md`,
-/// the "Data changes" section, lines 410-423, and line 339).
-/// A single `input_json_delta` still fully exercises assertion 7's
-/// "exactly one, not zero" on this shape: the translator's `name_emitted` flag
-/// starts `false`, so the one delta this script sends is the one that must
-/// carry the name.
+/// Both tool scripts (`ToolCallCleanStop` and `ThinkingToolCallCleanStop`)
+/// send the captured shape: the four [`CAPTURED_ARGS`] values, in order, one
+/// `input_json_delta` each. Like `bedrock`/`openai_chat`/`litellm`, this
+/// module therefore sends more than one argument delta for one call.
+///
+/// The translator gives the name to the first `input_json_delta` of a call,
+/// also when its `partial_json` is empty (`stream.rs`'s `InputJsonDelta`
+/// arm). The three fragments after it carry no name. Two checks guard this
+/// shape. The harness floor "no ToolCallDelta carried the tool name" fails
+/// when no delta carries the name. Assertion 7 fails when more than one delta
+/// carries it: a translator that names every delta reports a count of 4. The
+/// suite does not check WHICH delta carries the name. A translator that
+/// skipped the empty delta and named the first fragment would still pass.
 mod anthropic {
     use super::*;
     use paigasus_helikon_providers_anthropic::AnthropicModel;
@@ -1846,6 +1857,16 @@ mod anthropic {
     /// CAPTURED `thinking_text_tool_use.txt` has an id with the prefix
     /// `toolu_`.
     const TOOL_USE_ID: &str = "tu_conformance_0";
+
+    /// The four `input_json_delta` values that each of the three CAPTURED
+    /// SMA-840 fixtures sends for its tool call, in order. The first one is
+    /// empty. All three captures send the same bytes:
+    /// `thinking_text_tool_use.txt` lines 143-153,
+    /// `empty_thinking_tool_use.txt` lines 94-104 and
+    /// `redacted_thinking_tool_use.txt` lines 95-105. Joined, they are
+    /// `{"city": "Paris"}`. The two HAND-AUTHORED SMA-840 fixtures split the
+    /// arguments differently and are not a source.
+    const CAPTURED_ARGS: &[&str] = &["", "{\"city\"", ": \"Pari", "s\"}"];
 
     /// The substring that appears in a chunk if and only if it carries a
     /// *populated* `stop_reason`.
@@ -2062,12 +2083,10 @@ mod anthropic {
         )
     }
 
-    /// One `input_json_delta`, carrying a whole argument JSON, as the
-    /// HAND-AUTHORED SMA-317 fixtures do. The SMA-840 captures split it. See
-    /// the module doc's "`ToolCallCleanStop` never splits `input_json_delta`"
-    /// section for
-    /// why this is never called twice for one call in this module, unlike its
-    /// siblings' tool-argument helpers.
+    /// One `input_json_delta`, carrying one fragment of a call's argument
+    /// JSON. The tool scripts call it once for each [`CAPTURED_ARGS`] value,
+    /// as the SMA-840 captures send them. See the module doc's "Tool scripts
+    /// send the captured split `input_json_delta`" section.
     fn input_json_delta(partial_json: &str) -> Vec<u8> {
         input_json_delta_at(0, partial_json)
     }
@@ -2193,25 +2212,23 @@ mod anthropic {
             // Declined — see `Anthropic::stream`.
             Scenario::FragmentedToolName => return None,
             // A whole tool call: the name arrives with the block start
-            // (`tool_use_start`), the whole argument JSON arrives on one
-            // `input_json_delta`, as in the HAND-AUTHORED SMA-317 fixtures
-            // (the SMA-840 captures split it; see the module doc's "never
-            // splits" section), then a `tool_use` stop reason and its usage,
-            // then `message_stop`. Matches `parallel_tool_use.txt`'s
-            // single-call shape.
-            Scenario::ToolCallCleanStop => (
-                vec![
-                    message_start(),
-                    tool_use_start(TOOL_USE_ID, TOOL_NAME),
-                    input_json_delta("{\"city\":\"Berlin\"}"),
+            // (`tool_use_start`, the HAND-AUTHORED `parallel_tool_use.txt`
+            // shape). The arguments arrive as the four `CAPTURED_ARGS`
+            // values, one `input_json_delta` each, as the SMA-840 captures
+            // send them (see the module doc's "Tool scripts send the captured
+            // split `input_json_delta`" section). Then a `tool_use` stop
+            // reason and its usage, then `message_stop`.
+            Scenario::ToolCallCleanStop => {
+                let mut chunks = vec![message_start(), tool_use_start(TOOL_USE_ID, TOOL_NAME)];
+                chunks.extend(CAPTURED_ARGS.iter().map(|a| input_json_delta(a)));
+                chunks.extend([
                     content_block_stop(),
                     message_delta("tool_use", 18),
                     message_stop(),
-                ],
-                None,
-                Ending::Clean,
-            ),
-            // A signed thinking block at index 0, then one whole tool call at
+                ]);
+                (chunks, None, Ending::Clean)
+            }
+            // A signed thinking block at index 0, then one tool call at
             // index 1, then a `tool_use` stop reason. Event shapes are
             // transcribed from `thinking_text_tool_use.txt`: the thinking
             // `content_block_start` with `"thinking":"","signature":""`, a
@@ -2222,28 +2239,30 @@ mod anthropic {
             // next index (1). The `tool_use` events are the same as in
             // `ToolCallCleanStop`. The script also differs from the capture
             // in these ways: no `ping` event; one `thinking_delta`, not 15;
-            // no `caller` key on the tool block; one whole `input_json_delta`,
-            // not an empty one and three fragments. `message_start` and
+            // no `caller` key on the tool block. The four `input_json_delta`
+            // values are the capture's own (`CAPTURED_ARGS`, lines 143-153),
+            // at index 1 in place of 2. `message_start` and
             // `message_delta` use the HAND-AUTHORED `text_only.txt` keys,
             // not the capture's. The translator then emits a call-scoped
             // `ProviderData` position for the tool call, and assertion 8
             // checks it against the streamed call.
-            Scenario::ThinkingToolCallCleanStop => (
-                vec![
+            Scenario::ThinkingToolCallCleanStop => {
+                let mut chunks = vec![
                     message_start(),
                     thinking_start(),
                     thinking_delta("I need the weather."),
                     signature_delta("SIG_FAKE_1"),
                     content_block_stop(),
                     tool_use_start_at(1, TOOL_USE_ID, TOOL_NAME),
-                    input_json_delta_at(1, "{\"city\":\"Berlin\"}"),
+                ];
+                chunks.extend(CAPTURED_ARGS.iter().map(|a| input_json_delta_at(1, a)));
+                chunks.extend([
                     content_block_stop_at(1),
                     message_delta("tool_use", 18),
                     message_stop(),
-                ],
-                None,
-                Ending::Clean,
-            ),
+                ]);
+                (chunks, None, Ending::Clean)
+            }
         };
 
         Some(Script {
@@ -2266,7 +2285,7 @@ mod anthropic {
         let mut req = ModelRequest::new();
         req.messages = vec![Item::UserMessage {
             content: vec![ContentPart::Text {
-                text: "What is the weather in Berlin?".into(),
+                text: "What is the weather in Paris?".into(),
             }],
         }];
         if matches!(
@@ -2417,10 +2436,7 @@ mod anthropic {
             ("content_block_stop", content_block_stop()),
             ("message_stop", message_stop()),
             ("tool_use start", tool_use_start(TOOL_USE_ID, TOOL_NAME)),
-            (
-                "input_json_delta",
-                input_json_delta("{\"city\":\"Berlin\"}"),
-            ),
+            ("input_json_delta", input_json_delta(CAPTURED_ARGS[1])),
             ("thinking start", thinking_start()),
             ("thinking delta", thinking_delta("I need the weather.")),
             ("signature delta", signature_delta("SIG_FAKE_1")),
