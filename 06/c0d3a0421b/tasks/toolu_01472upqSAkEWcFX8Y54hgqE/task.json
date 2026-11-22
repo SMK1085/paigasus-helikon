@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01472upqSAkEWcFX8Y54hgqE",
+  "agent_id": "af9b6f51d481b55ed",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement effort setting for SMA-840",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 92328,
+    "cache_read_tokens": 635707,
+    "output_tokens": 6864,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-22T08:35:06.133652+01:00",
+  "completed_at": "2026-11-22T08:36:25.387682+01:00"
+}

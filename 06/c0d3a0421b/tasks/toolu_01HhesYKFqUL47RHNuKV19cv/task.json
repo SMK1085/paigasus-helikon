@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HhesYKFqUL47RHNuKV19cv",
+  "agent_id": "add59d35e294d7d49",
+  "subagent_type": "general-purpose",
+  "task_description": "Review effort setting change",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 68373,
+    "cache_read_tokens": 249879,
+    "output_tokens": 2646,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-22T08:36:41.004345+01:00",
+  "completed_at": "2026-11-22T08:37:03.877526+01:00"
+}

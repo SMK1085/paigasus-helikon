@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "06c0d3a0421b",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-840-anthropic-provider-drops-thinking-signatures",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/src/settings.rs",
+    "docs/book/src/concepts/model-providers.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/06/c0d3a0421b/0/metadata.json",
+      "transcript": "/06/c0d3a0421b/0/full.jsonl",
+      "compact_transcript": "/06/c0d3a0421b/0/transcript.jsonl",
+      "content_hash": "/06/c0d3a0421b/0/content_hash.txt",
+      "prompt": "/06/c0d3a0421b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 7079,
+    "cache_read_tokens": 1397598,
+    "output_tokens": 3233,
+    "api_call_count": 9,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 41730,
+      "cache_read_tokens": 110335,
+      "output_tokens": 830,
+      "api_call_count": 2
+    }
+  },
+  "redaction": {
+    "replacements": 403,
+    "layers": {
+      "betterleaks": 8,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 24,
+      "credentialed_uri": 0,
+      "entropy": 371,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
