@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "3e032295fabb",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-565-gemini-live-tests-default-to-gemini-25-flash",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-gemini/tests/live.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3e/032295fabb/0/metadata.json",
+      "transcript": "/3e/032295fabb/0/full.jsonl",
+      "compact_transcript": "/3e/032295fabb/0/transcript.jsonl",
+      "content_hash": "/3e/032295fabb/0/content_hash.txt",
+      "prompt": "/3e/032295fabb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 2594,
+    "cache_read_tokens": 455401,
+    "output_tokens": 2037,
+    "api_call_count": 2
+  },
+  "redaction": {
+    "replacements": 41,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 41,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
