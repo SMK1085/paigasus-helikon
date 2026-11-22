@@ -1190,6 +1190,11 @@ mod round_trip {
         // The fixture holds two messages; split it at each `message_start`.
         let mut parts: Vec<String> = Vec::new();
         for line in continuation.lines() {
+            // Skip SSE comment lines (the provenance header) and the blank
+            // line that ends the header, so they never start a part.
+            if line.starts_with(':') || (parts.is_empty() && line.is_empty()) {
+                continue;
+            }
             if line == "event: message_start" || parts.is_empty() {
                 parts.push(String::new());
             }
