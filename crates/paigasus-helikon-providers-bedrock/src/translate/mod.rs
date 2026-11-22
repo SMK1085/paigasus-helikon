@@ -1264,7 +1264,6 @@ mod tests {
         let p = build(&sonnet55_cfg(), &req).unwrap();
         assert_no_forced_choice(&p);
         assert!(p.synthesizing);
-        assert!(!p.tool_choice_none);
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
         assert!(w["toolConfig"]["toolChoice"].is_null());
@@ -1374,6 +1373,7 @@ mod tests {
         let p = build(&sonnet55_cfg(), &req).unwrap();
         assert_no_forced_choice(&p);
         assert!(p.synthesizing);
+        assert!(!p.tool_choice_none);
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
         assert!(w["toolConfig"]["toolChoice"].is_null());
