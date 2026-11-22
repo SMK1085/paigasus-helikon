@@ -111,7 +111,9 @@ In `stream.rs` tests (use the existing helpers `start`, `stop`, `block`,
 
 - [ ] **Step 2: run the tests, and check that they fail**
 
-Run: `cargo test -p paigasus-helikon-providers-anthropic --lib provider_data stream`
+Run: `cargo test -p paigasus-helikon-providers-anthropic --lib provider_data`, then
+`cargo test -p paigasus-helikon-providers-anthropic --lib stream` (cargo accepts
+one test-name filter per command).
 Expected: compile error (`bytes` field missing), or FAIL.
 
 - [ ] **Step 3: implement**

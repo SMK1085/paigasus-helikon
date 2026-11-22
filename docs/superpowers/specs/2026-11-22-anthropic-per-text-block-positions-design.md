@@ -119,8 +119,12 @@ The split happens late, so that the drop paths see one text block as today.
 3. In `WireMessage::into_value`, after `drop_thinking_without_own_block` and
    before `sort_groups`, expand each text block that still has a slot and a
    split plan. Each piece becomes its own `text` block with its own key. A
-   whitespace-only piece **is sent**: the probe shows that the API accepts it
-   in an assistant message that is not the last one, and keeps the thinking.
+   whitespace-only piece **is sent**. Probe (c) showed that the API accepts
+   one after a text block, before a `tool_use` block, in an assistant message
+   that is not the last one, and keeps the thinking. A whitespace-only piece
+   directly after a thinking block, and one as the last block of such a
+   message, were not probed. The live test `live_text_block_api_facts` checks
+   both shapes (`whitespace_after_thinking`, `whitespace_text_last`).
    An empty piece (`bytes: 0`) gives no block, because the API rejects an
    empty text block with HTTP 400 (probe). A block with no slot does not
    expand, so it stays one joined block.
@@ -298,7 +302,9 @@ Probe 2 (neutral prompt of `live_round_trip.rs`, first response
 Consequences for the design:
 
 - (e) confirms the bug mechanism.
-- (c) lets the fix send a whitespace-only piece.
+- (c) lets the fix send a whitespace-only piece after a text block. The live
+  test also checks one directly after a thinking block, and one as the last
+  block of the message.
 - (d) forbids an empty piece.
 - (f) shows that separate adjacent text blocks after a thinking block are safe.
 - The comment on `is_blank` in `request.rs` ("The API rejects empty and
@@ -315,11 +321,22 @@ Consequences for the design:
 
 `live_round_trip.rs` gets one ignored live test that checks the API facts this
 design depends on. It takes a real first turn through the crate, builds the
-second request with `build_body`, and sends four forms: exact, (e), (c) and (f).
-It asserts that (e) reports a dropped thinking block (so the check is active
-and the test means something), and that the other three report none. The
-assertion messages hold no signature and no text, as the module doc requires.
-How the test reads `input_transformations` is left to the plan.
+second request with `build_body`, and sends six forms: exact, (e), (c), (f),
+`whitespace_text_last` (a `"\n"` text block as the last block of the message)
+and `whitespace_after_thinking` (a `"\n\n"` text block directly after the first
+thinking block). The last two are the whitespace-only shapes that probe 2 did
+not send. The test asserts that (e) reports a dropped thinking block (so the
+check is active and the test means something), and that the other five return
+HTTP 200 and report none. If the API rejects one of the two new shapes, the
+test fails, and the replay rule for whitespace-only pieces must change before
+release. The assertion messages hold no signature and no text, as the module
+doc requires. The test reads `input_transformations` from a non-streaming
+response.
+
+Live run on 2026-11-22 (`claude-sonnet-5-5`): `live_text_block_api_facts`
+passed, so both new whitespace-only shapes keep the thinking.
+`live_thinking_round_trip` and `live_thinking_round_trip_enabled` also passed on
+the new code.
 
 ## Left to the builder
 
