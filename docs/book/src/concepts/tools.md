@@ -136,7 +136,7 @@ A tool can declare at most one entry for each provider. The default is an empty 
 
 A tool wrapper must forward `provider_types` from the tool that it wraps. If the wrapper does not forward it, the typed entry is lost and the provider gets the generic schema.
 
-Anthropic is the only provider that uses this declaration now. It sends `{"type": "memory_20250818", "name": "memory"}` for the memory tool. OpenAI, Gemini, Bedrock and LiteLLM send the generic schema. See [Model Providers](./model-providers.md).
+Anthropic uses this declaration. Bedrock also uses it, for Claude models and `memory_*` types. Both send `{"type": "memory_20250818", "name": "memory"}` for the memory tool. OpenAI, Gemini and LiteLLM send the generic schema. See [Model Providers](./model-providers.md).
 
 ## Registering tools with `tools!`
 

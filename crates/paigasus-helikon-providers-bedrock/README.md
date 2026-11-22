@@ -133,6 +133,26 @@ On families other than Claude, the model can write text that looks like a tool c
 
 If you set `JsonSchema` or `JsonObject` with `ToolChoice::None`, the result depends on the model. On the native path (Claude Sonnet 5.5 and Opus 5.5), the provider keeps the hidden anchor tool. For other Claude models, Mistral and Nova, the provider gives a conflict error. For Llama, Titan, Cohere and unknown models, the provider gives no error. It uses the `ToolChoice::None` handling above and sends no structured output, so the response is text.
 
+### Provider tool types
+
+A tool can declare a provider tool type for the `anthropic` provider. For Claude models, the provider sends a typed entry for such a tool. The typed entry replaces the generic name, description and input schema.
+
+Only `memory_*` types use the typed entry. The provider sends `{"type": "memory_20250818", "name": "<tool name>"}`, with the extra fields from `with_params`. It removes `cache_control`. Other families and other type names get the generic schema.
+
+Set `native_tool_types(false)` to send the generic schema for every tool:
+
+```rust,ignore
+let model = BedrockModel::converse("anthropic.claude-3-5-sonnet-20241022-v2:0")
+    .native_tool_types(false)
+    .build()?;
+```
+
+Bedrock needs at least one tool in `toolConfig.tools`. When a request has only typed tools, the provider adds a placeholder tool. The placeholder has the reserved name `__paigasus_structured_output__`. Its description tells the model to never call it.
+
+`ToolChoice::Required` after a tool round, with only typed tools, also allows a call to the placeholder. The agent answers such a call as an unknown tool.
+
+With typed tools, a forced structured-output request does not allow parallel tool calls in that turn. The provider sends `disable_parallel_tool_use: true` for that request.
+
 ## Credentials and TLS
 
 - **Credential chain:** the standard AWS credential chain — environment variables, `~/.aws/credentials`/`~/.aws/config`, SSO, IMDS, ECS task role, etc. — via `aws-config`. The chain is **lazy**: credential failures surface at `invoke()` time, not at construction.
