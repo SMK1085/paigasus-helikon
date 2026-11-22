@@ -23,7 +23,7 @@ const AUTH_ENV_KEYS: [&str; 2] = ["LITELLM_API_KEY", "LITELLM_PROXY_API_KEY"];
 /// captured. The chunk order follows the captured P1 trace in the SMA-451
 /// design (Appendix B): a content delta, a finish chunk, then `[DONE]`. The
 /// body drops the `id`, `object`, `created` and `model` keys and has no usage
-/// chunk. The text "hi" is invented. Use
+/// chunk. The text "hi" is not from a capture. Use
 /// `tests/fixtures/text_then_trailing_usage.txt` for a full captured tail.
 fn sse_ok() -> ResponseTemplate {
     ResponseTemplate::new(200)
@@ -255,8 +255,9 @@ async fn success_status_with_non_sse_content_type_yields_a_single_classified_err
             ResponseTemplate::new(200)
                 .insert_header("content-type", "application/json")
                 // HAND-AUTHORED under SMA-451 (PR #199), not captured. This
-                // is a non-streaming `chat.completion` shape with invented
-                // values. The source of the shape is not recorded.
+                // is a non-streaming `chat.completion` shape with values
+                // that are not from a capture. The source of the shape is not
+                // recorded.
                 .set_body_raw(
                     r#"{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}"#,
                     "application/json",
@@ -302,9 +303,9 @@ async fn unrelated_error_body_mentioning_context_window_is_not_misclassified() {
             ResponseTemplate::new(400)
                 .insert_header("content-type", "application/json")
                 // HAND-AUTHORED under SMA-451 (PR #199), not captured. The
-                // `prompt_echo` key is invented to hold the words "context
-                // window" in a body that is not a context-length error. No
-                // capture of this shape is recorded.
+                // `prompt_echo` key is not from a capture. It holds the words
+                // "context window" in a body that is not a context-length
+                // error. No capture of this shape is recorded.
                 .set_body_raw(
                     r#"{"prompt_echo":"please discuss expanding the context window of the office"}"#,
                     "application/json",
@@ -346,7 +347,7 @@ async fn rate_limit_carries_retry_after() {
                 // SMA-451 design (Appendix B): `type` is `throttling_error`
                 // and `code` is the HTTP status as a string. The full
                 // captured bytes are not recorded. The `retry-after` header
-                // value 2 is invented.
+                // value 2 is not from a capture.
                 .set_body_raw(
                     r#"{"error":{"message":"litellm.RateLimitError: mock","type":"throttling_error","code":"429"}}"#,
                     "application/json",

@@ -1,6 +1,7 @@
 : Provenance: HAND-AUTHORED under SMA-451 (PR #199), not captured from the
-: wire. The envelope (`id`, `object`, `created`, `model`) is copied from
-: `text_then_trailing_usage.txt` (the id is `chatcmpl-2`). The stream ends
+: wire. The `object`, `created` and `model` values match
+: `text_then_trailing_usage.txt`. Its envelope is not recorded as captured.
+: The id of this file is `chatcmpl-2`. The stream ends
 : with no finish chunk and no `[DONE]` on purpose. The test uses it as a
 : premature end of the stream. No capture of this case is recorded.
 

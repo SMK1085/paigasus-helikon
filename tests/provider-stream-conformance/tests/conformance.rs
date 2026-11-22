@@ -566,20 +566,19 @@ mod bedrock {
 ///   with no `name` key.
 /// - `crates/paigasus-helikon-providers-litellm/tests/fixtures/tool_call_stream_fragmented_name.txt`
 ///   — CAPTURED from LiteLLM 1.98.0 over a hand-written fake upstream
-///   (SMA-547, PR #204). Only the LiteLLM serialization is captured; the ids
-///   and the name split are authored input. It holds a name split across two
-///   deltas that BOTH arrive after the `id`. Per the design spec's §6
-///   provenance note, this is
-///   the capture `FragmentedToolName`'s shape must be drawn from — the note
+///   (SMA-547, PR #204). Only the LiteLLM serialization is captured; the ids,
+///   the name split and the argument split are authored input. It holds a
+///   name split across two deltas that BOTH arrive after the `id`. Per the
+///   design spec's §6 provenance note, this is the capture `FragmentedToolName`'s shape must be drawn from — the note
 ///   requires the committed **shape**, not byte-identical values; see
 ///   "`FragmentedToolName` deliberately never completes" below for exactly
 ///   what this module substitutes (the "id resolves late" variant has no
 ///   capture anywhere in the repo and is not built here).
 ///
 /// `chat_content_filter.txt` and `chat_text_usage_trailing_empty_choices.txt`
-/// (both HAND-AUTHORED) were read but contribute no shape this module needs: this subject serves
-/// only `Stop` and `ToolCalls` finish reasons, and the empty-`choices` usage
-/// variant is a second encoding of the same trailing-usage envelope already
+/// (both HAND-AUTHORED) were read but contribute no shape this module needs:
+/// this subject serves only `Stop` and `ToolCalls` finish reasons, and the
+/// empty-`choices` usage variant is a second encoding of the same trailing-usage envelope already
 /// covered by `chat_text_usage_trailing.txt`.
 ///
 /// # `FragmentedToolName` deliberately never completes
@@ -2440,8 +2439,8 @@ mod anthropic {
 ///
 /// SMA-827 (PR #373) later added a second capture with `functionCall` parts,
 /// `parallel_signed.sse`. It agrees with points 1-3 below: each call has an
-/// `id`, `"STOP"` arrives on a separate last chunk with `"parts":[{"text":""}]`,
-/// and `thoughtSignature` is a sibling of `functionCall`.
+/// `id`, `"STOP"` arrives on a separate last chunk with
+/// `"parts":[{"text":""}]`, and `thoughtSignature` is a sibling of `functionCall`.
 ///
 /// This settles the question the module previously flagged as open:
 ///
@@ -2564,8 +2563,7 @@ mod gemini {
     /// One text delta, carrying `usageMetadata`. Matches
     /// `multi_chunk_usage_emits_usage_per_chunk`'s first chunk
     /// (`crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:91-92`,
-    /// HAND-AUTHORED):
-    /// a content-only candidate (no `finishReason`) with `usageMetadata` as a
+    /// HAND-AUTHORED): a content-only candidate (no `finishReason`) with `usageMetadata` as a
     /// top-level sibling of `candidates` — see the module doc's "`usageMetadata`
     /// appears on every chunk" section for why this replaced an earlier,
     /// usage-free version of this helper.
@@ -2584,7 +2582,9 @@ mod gemini {
     /// A chunk carrying a `content.parts` text part, a populated
     /// `finishReason`, AND `usageMetadata` in the SAME event — Gemini's
     /// defining shape (task brief point 2): there is no separate trailing
-    /// usage event the way there is for `openai_chat`/`litellm`. Matches
+    /// usage event the way there is for `openai_chat`/`litellm`. Both
+    /// recorded captures show the same: usage rides on each chunk (module doc,
+    /// "`usageMetadata` appears on every chunk"). Matches
     /// `gemini_streaming.rs`'s `text_then_finish` fixture (`:42`) and
     /// `multi_chunk_usage_emits_usage_per_chunk`'s second chunk (`:93-94`)
     /// when called with non-empty `text`. Both bodies are HAND-AUTHORED.
@@ -2620,9 +2620,9 @@ mod gemini {
     /// own comparison and a header note in `parallel_signed.sse` (which says
     /// the file has no `[DONE]` line), never a captured or scripted SSE
     /// frame, and the live capture (module doc, "Live capture") itself ended
-    /// at bare EOF with no `[DONE]` either. `CleanStop` below is the first thing in this codebase
-    /// that ever sends Gemini a `[DONE]` sentinel and checks what the driver
-    /// does with it. Grounded directly in the driver's own string comparison
+    /// at bare EOF with no `[DONE]` either. `CleanStop` below is the first
+    /// thing in this codebase that ever sends Gemini a `[DONE]` sentinel and
+    /// checks what the driver does with it. Grounded directly in the driver's own string comparison
     /// rather than a capture; the bytes are the same `data: [DONE]\n\n`
     /// terminator `openai_chat` and `litellm` send, since `model.rs` checks
     /// nothing about the frame besides its `data` field.
@@ -3130,7 +3130,8 @@ mod openai_responses {
     /// `content_index`/`delta`, no `logprobs` key — the translator does not
     /// read it and every committed fixture omits it).
     ///
-    /// Changed from the fixture: `sequence_number` is 0, not the frame's own number.
+    /// Changed from the fixture: `sequence_number` is 0, not the frame's
+    /// own number.
     fn text_delta(text: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.output_text.delta",
@@ -3147,7 +3148,8 @@ mod openai_responses {
     /// `responses_reasoning_then_text.txt`'s `response.completed` event
     /// shape.
     ///
-    /// Changed from the fixture: `sequence_number` is 0, not the frame's own number.
+    /// Changed from the fixture: `sequence_number` is 0, not the frame's
+    /// own number.
     fn completed(output: serde_json::Value, input_tokens: u32, output_tokens: u32) -> Vec<u8> {
         frame(json!({
             "type": "response.completed",
@@ -3177,7 +3179,8 @@ mod openai_responses {
     /// `event: response.output_item.added` frame) field-for-field — this is
     /// what registers `ResponsesTranslator::item_to_call`.
     ///
-    /// Changed from the fixture: `sequence_number` is 0, not the frame's own number.
+    /// Changed from the fixture: `sequence_number` is 0, not the frame's
+    /// own number.
     fn output_item_added(item_id: &str, call_id: &str, name: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.output_item.added",
@@ -3201,7 +3204,8 @@ mod openai_responses {
     /// `city`, `":"`, `Berlin`, `"}` split rather than one whole-argument
     /// frame.
     ///
-    /// Changed from the fixture: `sequence_number` is 0, not the frame's own number.
+    /// Changed from the fixture: `sequence_number` is 0, not the frame's
+    /// own number.
     fn function_call_arguments_delta(item_id: &str, delta: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.function_call_arguments.delta",
@@ -3218,7 +3222,8 @@ mod openai_responses {
     /// the translator (`consume`'s `other` arm), included here purely so the
     /// script is the stream the capture claims it is.
     ///
-    /// Changed from the fixture: `sequence_number` is 0, not the frame's own number.
+    /// Changed from the fixture: `sequence_number` is 0, not the frame's
+    /// own number.
     fn function_call_arguments_done(item_id: &str, arguments: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.function_call_arguments.done",
@@ -3240,7 +3245,8 @@ mod openai_responses {
     /// which is the property the double-emit dedup guarantees, and worth
     /// noticing if this suite ever goes red on a duplicated tool call.
     ///
-    /// Changed from the fixture: `sequence_number` is 0, not the frame's own number.
+    /// Changed from the fixture: `sequence_number` is 0, not the frame's
+    /// own number.
     fn output_item_done(item_id: &str, call_id: &str, name: &str, arguments: &str) -> Vec<u8> {
         frame(json!({
             "type": "response.output_item.done",
