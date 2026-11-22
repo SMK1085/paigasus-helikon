@@ -250,7 +250,7 @@ Do not start phase B until `gh pr list --state merged --search SMA-840` shows th
 
 - [ ] **Step 1: Rebase** with `git fetch origin && git rebase origin/main`. Resolve conflicts in `conformance.rs` by keeping both sides' content (SMA-840's new Anthropic text and this branch's non-Anthropic edits).
 - [ ] **Step 2: Re-run the walker test.** Expected: FAIL on the five SMA-840 fixtures (not allowlisted) plus the nine allowlisted Anthropic files, which still fail as expected. This confirms the test sees the new files.
-- [ ] **Step 3: Make the loader skip `:` lines.** In `no_thinking_turn_writes_no_provider_data`, skip each line that starts with `:` before the split logic. This is a test-only edit (spec, Constraints).
+- [ ] **Step 3: Make the loader skip `:` lines.** In `no_thinking_turn_writes_no_provider_data`, skip each line that starts with `:` before the split logic. While no part has started, also skip blank lines: the blank line that ends the header would otherwise start an empty first part. This is a test-only edit (spec, Constraints).
 - [ ] **Step 4: Verify** `cargo test -p paigasus-helikon-providers-anthropic` (PASS) and `cargo test -p paigasus-helikon-provider-stream-conformance` (PASS).
 - [ ] **Step 5: Commit** with `test(providers): SMA-845 let the no-thinking turn test skip fixture comment lines`.
 
