@@ -59,7 +59,7 @@
 Run: `cargo test -p paigasus-helikon-workspace-lints --lib fixture_header`
 Expected: FAIL (`check` not defined).
 
-- [ ] **Step 3: Implement `check`.** Rules: the first line must start with `: Provenance: `, else `MissingProvenanceLine`. The text after that prefix must start with `CAPTURED` or `HAND-AUTHORED`, else `UnknownLabel`. Each later line up to (not including) the first line that starts with `event:` or `data:` must start with `:` or be empty, else `NonCommentHeaderLine`. Give the module a `//!` doc that cites `CONTRIBUTING.md` → "Wire-format fixtures" and SMA-845, and `///` docs on each pub item.
+- [ ] **Step 3: Implement `check`.** Rules: the first line must start with `: Provenance: `, else `MissingProvenanceLine`. The text after that prefix must start with `CAPTURED` or `HAND-AUTHORED`, followed by the end of the line, a space, `.`, `,` or `:`, else `UnknownLabel` (so `CAPTUREDX` fails). Each later line up to (not including) the first line that starts with `event:` or `data:` must start with `:` or be empty, else `NonCommentHeaderLine`. Give the module a `//!` doc that cites `CONTRIBUTING.md` → "Wire-format fixtures" and SMA-845, and `///` docs on each pub item.
 
 - [ ] **Step 4: Run the unit tests**
 
