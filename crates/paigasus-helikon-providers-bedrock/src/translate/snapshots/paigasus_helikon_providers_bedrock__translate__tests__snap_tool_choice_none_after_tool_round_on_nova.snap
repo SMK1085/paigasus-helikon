@@ -1,0 +1,37 @@
+---
+source: crates/paigasus-helikon-providers-bedrock/src/translate/mod.rs
+expression: w
+---
+{
+  "inferenceConfig": null,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What's my balance?"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "[tool call tu_1: get_balance {\"account_id\":\"acc_123\"}]"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "[tool result tu_1: \"$1,234.56\"]"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "modelId": "global.amazon.nova-2-lite-v1:0",
+  "synthesizing": false,
+  "system": [],
+  "toolConfig": null
+}

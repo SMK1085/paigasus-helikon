@@ -18,7 +18,6 @@ use crate::translate::schema::Ruleset;
 use crate::translate::tools::tool_specs;
 
 /// Description of a tool spec that is derived from the history.
-#[cfg_attr(not(test), expect(dead_code))] // SMA-833: wired into build_request and build_native later
 const DERIVED_DESCRIPTION: &str = "A tool that this conversation used earlier.";
 
 /// Returns `true` when a message holds a tool call or a tool result.
@@ -32,7 +31,6 @@ pub(crate) fn has_tool_round(messages: &[Message]) -> bool {
 
 /// The result of [`apply_tool_choice_none`].
 #[derive(Debug)]
-#[cfg_attr(not(test), expect(dead_code))] // SMA-833: wired into build_request and build_native later
 pub(crate) struct NoneOutcome {
     /// The messages to send.
     pub(crate) messages: Vec<Message>,
@@ -42,7 +40,6 @@ pub(crate) struct NoneOutcome {
     pub(crate) tool_choice_none: bool,
 }
 
-#[cfg_attr(not(test), expect(dead_code))] // SMA-833: wired into build_request and build_native later
 fn unchanged(messages: Vec<Message>) -> NoneOutcome {
     NoneOutcome {
         messages,
@@ -61,7 +58,6 @@ fn unchanged(messages: Vec<Message>) -> NoneOutcome {
 ///
 /// # Errors
 /// The errors of [`tool_specs`], when the history holds a tool round.
-#[cfg_attr(not(test), expect(dead_code))] // SMA-833: wired into build_request and build_native later
 pub(crate) fn apply_tool_choice_none(
     messages: Vec<Message>,
     user_tools: &[ToolDef],
@@ -117,7 +113,6 @@ pub(crate) fn apply_tool_choice_none(
 }
 
 /// Build a spec for a tool name from the history.
-#[cfg_attr(not(test), expect(dead_code))] // SMA-833: wired into build_request and build_native later
 fn derived_spec(
     name: &str,
 ) -> Result<ToolSpecification, aws_smithy_types::error::operation::BuildError> {
@@ -131,7 +126,6 @@ fn derived_spec(
 }
 
 /// Replace each tool block with a text block. Returns the flag "changed".
-#[cfg_attr(not(test), expect(dead_code))] // SMA-833: wired into build_request and build_native later
 fn history_as_text(messages: Vec<Message>) -> (Vec<Message>, bool) {
     let mut changed = false;
     let out = messages

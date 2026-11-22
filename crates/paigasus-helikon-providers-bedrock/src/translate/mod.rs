@@ -22,6 +22,7 @@ use crate::policy::{NativeNotice, OutputPath};
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::{synthesize, Synthesized};
 use crate::translate::schema::Ruleset;
+use crate::translate::tool_choice_none::apply_tool_choice_none;
 use crate::translate::tools::tool_specs;
 
 /// A fully-assembled Bedrock Converse request, ready to send.
@@ -49,6 +50,8 @@ pub(crate) struct PreparedConverse {
     /// The changes of meaning that the native path made to the request.
     /// The forced-tool path always leaves this empty.
     pub(crate) notices: Vec<NativeNotice>,
+    /// Send the Anthropic `tool_choice: none` field in `additionalModelRequestFields`.
+    pub(crate) tool_choice_none: bool,
 }
 
 impl PreparedConverse {
@@ -215,19 +218,24 @@ pub(crate) fn build_request(
     }
 
     // ToolChoice::None means the model MUST NOT call any tool this turn.
-    // Omit toolConfig entirely (do not send user tools either).
+    // Without a tool round in the history, omit toolConfig entirely. With a
+    // tool round, Converse needs a toolConfig, so the family strategy decides
+    // (a none field for Anthropic models, a text history for the others).
     if none_choice {
         let translated = items_to_messages(&req.messages)?;
+        let outcome = apply_tool_choice_none(translated.messages, &req.tools, family, ruleset)?;
+        let tool_config = assemble_tool_config(outcome.tools, None)?;
         let inference_config = build_inference_config(req, cfg);
         return Ok(PreparedConverse {
             model_id: cfg.model_id.clone(),
             system: translated.system,
-            messages: translated.messages,
-            tool_config: None,
+            messages: outcome.messages,
+            tool_config,
             inference_config,
             synthesizing: false,
             output_config: None,
             notices: Vec::new(),
+            tool_choice_none: outcome.tool_choice_none,
         });
     }
 
@@ -289,6 +297,7 @@ pub(crate) fn build_request(
         synthesizing,
         output_config: None,
         notices: Vec::new(),
+        tool_choice_none: false,
     })
 }
 
@@ -296,7 +305,7 @@ pub(crate) fn build_request(
 ///
 /// Returns `None` when the family does not support forced tool choice (the
 /// `tool_choice` field is omitted from the request). `ToolChoice::None` is
-/// handled before this function is called (it suppresses `toolConfig` entirely).
+/// handled before this function.
 fn translate_tool_choice(tc: &ToolChoice, family: ModelFamily) -> Option<BedrockToolChoice> {
     match tc {
         ToolChoice::Auto => Some(BedrockToolChoice::Auto(AutoToolChoice::builder().build())),
@@ -312,7 +321,7 @@ fn translate_tool_choice(tc: &ToolChoice, family: ModelFamily) -> Option<Bedrock
             Some(BedrockToolChoice::Any(AnyToolChoice::builder().build()))
         }
         ToolChoice::None => {
-            // ToolChoice::None is handled early in build_request; unreachable here.
+            // ToolChoice::None is handled before this function; unreachable here.
             None
         }
         ToolChoice::Tool { name } => {
@@ -483,6 +492,12 @@ pub(crate) fn to_wire_json(p: &PreparedConverse) -> serde_json::Value {
         "inferenceConfig": inference_config,
         "synthesizing": p.synthesizing,
     });
+
+    // Extra request fields: present only when set, so the other snapshots do
+    // not change.
+    if p.tool_choice_none {
+        wire["additionalModelRequestFields"] = json!({"tool_choice": {"type": "none"}});
+    }
 
     // Output config: the key is present only on the native path, so the
     // forced-tool snapshots do not change.
@@ -1249,6 +1264,7 @@ mod tests {
         let p = build(&sonnet55_cfg(), &req).unwrap();
         assert_no_forced_choice(&p);
         assert!(p.synthesizing);
+        assert!(!p.tool_choice_none);
         let w = to_wire_json(&p);
         assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
         assert!(w["toolConfig"]["toolChoice"].is_null());
@@ -1526,5 +1542,135 @@ mod tests {
     #[test]
     fn snap_forced_path_kept_on_haiku_5_5() {
         assert_json_snapshot!(assert_forced_path_kept("global.anthropic.claude-haiku-5-5"));
+    }
+
+    // ── ToolChoice::None with a tool history (SMA-833) ────────────────────────
+
+    fn nova_cfg() -> Config {
+        make_cfg("global.amazon.nova-2-lite-v1:0")
+    }
+
+    fn haiku55_cfg() -> Config {
+        make_cfg("global.anthropic.claude-haiku-5-5")
+    }
+
+    fn none_after_tool_round() -> ModelRequest {
+        let mut req = ModelRequest::new();
+        req.messages = tool_round_history();
+        req.tools = vec![get_balance_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        req
+    }
+
+    #[test]
+    fn snap_forced_path_tool_choice_none_after_tool_round_on_claude() {
+        let p = build(&haiku55_cfg(), &none_after_tool_round()).unwrap();
+        assert!(p.tool_choice_none);
+        assert!(!p.synthesizing);
+        let w = to_wire_json(&p);
+        assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
+        assert!(w["toolConfig"]["toolChoice"].is_null());
+        assert_eq!(
+            w["additionalModelRequestFields"],
+            json!({"tool_choice": {"type": "none"}})
+        );
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn snap_tool_choice_none_after_tool_round_on_nova() {
+        let p = build(&nova_cfg(), &none_after_tool_round()).unwrap();
+        assert!(!p.tool_choice_none);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"].is_null());
+        assert!(w.get("additionalModelRequestFields").is_none());
+        let texts: Vec<String> = w["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m["content"].as_array().unwrap().iter())
+            .filter_map(|b| b["text"].as_str().map(str::to_owned))
+            .collect();
+        assert!(
+            texts.contains(&r#"[tool call tu_1: get_balance {"account_id":"acc_123"}]"#.to_owned())
+        );
+        assert!(texts.contains(&r#"[tool result tu_1: "$1,234.56"]"#.to_owned()));
+        assert_json_snapshot!(w);
+    }
+
+    #[test]
+    fn native_tool_choice_none_after_tool_round_on_claude() {
+        let p = build(&sonnet55_cfg(), &none_after_tool_round()).unwrap();
+        assert!(p.tool_choice_none);
+        assert!(p.output_config.is_none());
+        let w = to_wire_json(&p);
+        assert_eq!(tool_names(&w), vec!["get_balance".to_owned()]);
+        assert!(w.get("outputConfig").is_none());
+    }
+
+    #[test]
+    fn native_json_object_tool_choice_none_keeps_anchor() {
+        let mut req = none_after_tool_round();
+        req.model_settings.response_format = Some(ResponseFormat::JsonObject);
+        let p = build(&sonnet55_cfg(), &req).unwrap();
+        assert!(p.synthesizing);
+        assert!(!p.tool_choice_none);
+        let w = to_wire_json(&p);
+        assert_eq!(tool_names(&w), vec![SYNTHESIZED_TOOL_NAME.to_owned()]);
+    }
+
+    #[test]
+    fn native_text_history_through_build_native_on_nova() {
+        let p = native::build_native(&nova_cfg(), &none_after_tool_round()).unwrap();
+        assert!(!p.tool_choice_none);
+        let w = to_wire_json(&p);
+        assert!(w["toolConfig"].is_null());
+        assert!(!crate::translate::tool_choice_none::has_tool_round(
+            &p.messages
+        ));
+    }
+
+    #[test]
+    fn none_shape_is_the_same_on_both_paths() {
+        let req = none_after_tool_round();
+        let cfg = haiku55_cfg();
+        let forced = to_wire_json(&build_request(&cfg, &req, OutputPath::ForcedTool).unwrap());
+        let native = to_wire_json(&build_request(&cfg, &req, OutputPath::Native).unwrap());
+        assert_eq!(forced["toolConfig"], native["toolConfig"]);
+        assert_eq!(
+            forced["additionalModelRequestFields"],
+            native["additionalModelRequestFields"]
+        );
+    }
+
+    #[test]
+    fn none_without_tool_round_keeps_shape_on_nova() {
+        let mut req = ModelRequest::new();
+        req.messages = vec![user_text("hi")];
+        req.tools = vec![get_balance_tool()];
+        req.model_settings.tool_choice = Some(ToolChoice::None);
+        let p = build(&nova_cfg(), &req).unwrap();
+        assert!(!p.tool_choice_none);
+        assert!(to_wire_json(&p)["toolConfig"].is_null());
+    }
+
+    #[test]
+    fn other_tool_choices_never_set_the_flag() {
+        let choices = [
+            None,
+            Some(ToolChoice::Auto),
+            Some(ToolChoice::Required),
+            Some(ToolChoice::Tool {
+                name: "get_balance".to_owned(),
+            }),
+        ];
+        for cfg in [claude_cfg(), sonnet55_cfg()] {
+            for tc in &choices {
+                let mut req = none_after_tool_round();
+                req.model_settings.tool_choice = tc.clone();
+                let p = build(&cfg, &req).unwrap();
+                assert!(!p.tool_choice_none, "{tc:?}");
+            }
+        }
     }
 }

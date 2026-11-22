@@ -17,7 +17,7 @@ use crate::translate::native_schema::native_output_schema;
 use crate::translate::request::items_to_messages;
 use crate::translate::response_format::synthesize;
 use crate::translate::schema::Ruleset;
-use crate::translate::tool_choice_none::has_tool_round;
+use crate::translate::tool_choice_none::{apply_tool_choice_none, has_tool_round};
 use crate::translate::tools::tool_specs;
 use crate::translate::{
     assemble_tool_config, build_inference_config, check_tool_name, required_without_tools_error,
@@ -30,6 +30,9 @@ use crate::translate::{
 /// - `JsonObject` degrades to text, because native output cannot express a
 ///   free-form object.
 /// - `ToolChoice::Required` and `ToolChoice::Tool` are omitted. `Auto` stays.
+/// - `ToolChoice::None` without a structured format, after a tool round: the
+///   family strategy of `apply_tool_choice_none` decides the tools and the
+///   history.
 /// - After a tool round with no user tools, the synthesized tool is sent as a
 ///   `toolConfig` anchor without a `toolChoice`, because Bedrock needs a
 ///   `toolConfig` when the history holds a tool call or a tool result.
@@ -50,7 +53,7 @@ pub(crate) fn build_native(
     let tool_choice = req.model_settings.tool_choice.as_ref();
     let mut notices = Vec::new();
 
-    let translated = items_to_messages(&req.messages)?;
+    let mut translated = items_to_messages(&req.messages)?;
 
     // Response format.
     let structured = matches!(
@@ -68,9 +71,24 @@ pub(crate) fn build_native(
         _ => None,
     };
 
-    // User tools. `ToolChoice::None` sends no user tools.
+    // User tools. `ToolChoice::None` sends no user tools, unless the history
+    // holds a tool round and the request is not structured. Then the family
+    // strategy decides. A structured request keeps the anchor below.
+    let mut tool_choice_none = false;
     let mut all_tools: Vec<Tool> = if matches!(tool_choice, Some(ToolChoice::None)) {
-        Vec::new()
+        if structured {
+            Vec::new()
+        } else {
+            let outcome = apply_tool_choice_none(
+                std::mem::take(&mut translated.messages),
+                &req.tools,
+                family,
+                ruleset,
+            )?;
+            translated.messages = outcome.messages;
+            tool_choice_none = outcome.tool_choice_none;
+            outcome.tools
+        }
     } else {
         tool_specs(&req.tools, ruleset)?
             .into_iter()
@@ -129,6 +147,7 @@ pub(crate) fn build_native(
         synthesizing,
         output_config,
         notices,
+        tool_choice_none,
     })
 }
 

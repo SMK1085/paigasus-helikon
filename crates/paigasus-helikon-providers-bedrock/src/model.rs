@@ -3,6 +3,7 @@
 //! Wraps an `Arc<Config>` so that the model handle is `Clone + Send + Sync`
 //! and the `BoxStream` returned by `invoke` can be `'static + Send`.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use paigasus_helikon_core::{
 
 use aws_sdk_bedrockruntime::operation::converse_stream::ConverseStreamOutput;
 use aws_sdk_bedrockruntime::Client;
+use aws_smithy_types::Document;
 
 use crate::builder::Config;
 use crate::error::{map_sdk_error, send_failure, SendFailure};
@@ -38,6 +40,21 @@ pub struct BedrockModel {
     pub(crate) policy: Arc<ForcedChoicePolicy>,
 }
 
+/// The `additionalModelRequestFields` document of a request, if it needs one.
+fn additional_fields(p: &PreparedConverse) -> Option<Document> {
+    let mut fields: HashMap<String, Document> = HashMap::new();
+    if p.tool_choice_none {
+        fields.insert(
+            "tool_choice".to_owned(),
+            Document::Object(HashMap::from([(
+                "type".to_owned(),
+                Document::String("none".to_owned()),
+            )])),
+        );
+    }
+    (!fields.is_empty()).then_some(Document::Object(fields))
+}
+
 /// Send one `ConverseStream` request.
 ///
 /// The error keeps the flag that tells the fallback whether the service
@@ -46,6 +63,7 @@ fn send_converse_stream(
     client: &Client,
     p: PreparedConverse,
 ) -> impl Future<Output = Result<ConverseStreamOutput, SendFailure>> {
+    let additional = additional_fields(&p);
     let fluent = client
         .converse_stream()
         .model_id(&p.model_id)
@@ -57,7 +75,8 @@ fn send_converse_stream(
         })
         .set_tool_config(p.tool_config)
         .set_inference_config(p.inference_config)
-        .set_output_config(p.output_config);
+        .set_output_config(p.output_config)
+        .set_additional_model_request_fields(additional);
     // fluent.send() returns SdkError<_, HttpResponse>, so send_failure can
     // read the Retry-After header.
     async move { fluent.send().await.map_err(send_failure) }
