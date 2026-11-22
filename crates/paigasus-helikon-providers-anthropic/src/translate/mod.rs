@@ -1279,8 +1279,8 @@ mod round_trip {
         ]
     }
 
-    #[test]
-    fn two_text_blocks_join_at_first_text_position() {
+    /// The events of `[Th0, Text "A"(1), tu_x(2), Th3, Text "B"(4), tu_y(5)]`.
+    fn two_text_blocks_events() -> Vec<AnthropicEvent> {
         let mut events = Vec::new();
         events.extend(thinking_block(0, "SIG_FAKE_1"));
         events.extend(text_block(1, "A"));
@@ -1289,11 +1289,14 @@ mod round_trip {
         events.extend(text_block(4, "B"));
         events.extend(tool_block(5, "tu_y"));
         events.push(AnthropicEvent::MessageStop);
-        let items = items_of(&translate_events(events));
-        let body = turn2_body(&items);
-        let content = assistant_content(&body);
-        let blocks = content.as_array().unwrap();
-        let shape: Vec<(String, String)> = blocks
+        events
+    }
+
+    /// `(type, signature or text or id)` for each block of `content`.
+    fn shape_of(content: &Value) -> Vec<(String, String)> {
+        content
+            .as_array()
+            .unwrap()
             .iter()
             .map(|b| {
                 let kind = b["type"].as_str().unwrap().to_owned();
@@ -1304,18 +1307,88 @@ mod round_trip {
                 };
                 (kind, key)
             })
-            .collect();
-        let want: Vec<(String, String)> = [
+            .collect()
+    }
+
+    fn shape(want: &[(&str, &str)]) -> Vec<(String, String)> {
+        want.iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn two_text_blocks_go_back_at_their_own_positions() {
+        let items = items_of(&translate_events(two_text_blocks_events()));
+        let body = turn2_body(&items);
+        let content = assistant_content(&body);
+        let want = shape(&[
             ("thinking", "SIG_FAKE_1"),
-            ("text", "AB"),
+            ("text", "A"),
             ("tool_use", "tu_x"),
             ("thinking", "SIG_FAKE_2"),
+            ("text", "B"),
             ("tool_use", "tu_y"),
-        ]
-        .iter()
-        .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
-        .collect();
-        assert_eq!(shape, want, "{body}");
+        ]);
+        assert_eq!(shape_of(&content), want, "{body}");
+    }
+
+    /// The synthesized structured-output tool sends its JSON as text, so
+    /// the text is longer than the sum of the text blocks. The replay falls
+    /// back to one joined text block.
+    #[test]
+    fn structured_output_text_falls_back() {
+        let mut events = Vec::new();
+        events.extend(thinking_block(0, "SIG_FAKE_1"));
+        events.extend(text_block(1, "A"));
+        events.extend(thinking_block(2, "SIG_FAKE_2"));
+        events.push(start(
+            3,
+            ContentBlockHead::ToolUse {
+                id: "tu_synth".to_owned(),
+                name: crate::translate::response_format::SYNTHESIZED_TOOL_NAME.to_owned(),
+                input: json!({}),
+            },
+        ));
+        events.push(delta(
+            3,
+            ContentBlockDelta::InputJsonDelta {
+                partial_json: "{}".to_owned(),
+            },
+        ));
+        events.push(stop(3));
+        events.extend(text_block(4, "B"));
+        events.push(AnthropicEvent::MessageStop);
+        let mut t = MessageTranslator::new(true);
+        let mut out = Vec::new();
+        for e in events {
+            for item in t.consume(e).unwrap() {
+                out.push(item.unwrap());
+            }
+        }
+        out.extend(t.finish().map(Result::unwrap));
+        // A later user turn, so that the assistant message is not the last
+        // one and keeps its thinking blocks.
+        let mut messages = vec![user_q()];
+        messages.extend(items_of(&out));
+        messages.push(user_q());
+        let body = body_of(messages);
+        let content = assistant_content(&body);
+        let texts: Vec<&Value> = content
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["type"] == "text")
+            .collect();
+        assert_eq!(texts.len(), 1, "one joined text block: {body}");
+        assert_eq!(
+            shape_of(&content),
+            shape(&[
+                ("thinking", "SIG_FAKE_1"),
+                ("text", "A{}B"),
+                ("thinking", "SIG_FAKE_2"),
+            ]),
+            "{body}"
+        );
     }
 
     /// Record a user turn and the items through a session, then project.
@@ -1341,12 +1414,21 @@ mod round_trip {
 
     #[test]
     fn session_projection_round_trip() {
-        for fixture in [
-            include_str!("../../tests/fixtures/thinking_text_tool_use.txt"),
-            include_str!("../../tests/fixtures/interleaved_thinking.txt"),
-        ] {
-            let (items, _) = turn_items(fixture);
-            let direct = assistant_content(&turn2_body(&items));
+        let cases = [
+            turn_items(include_str!(
+                "../../tests/fixtures/thinking_text_tool_use.txt"
+            ))
+            .0,
+            turn_items(include_str!(
+                "../../tests/fixtures/interleaved_thinking.txt"
+            ))
+            .0,
+            // SMA-854: the session keeps `bytes`, so the projected body
+            // splits the text as the direct body does.
+            items_of(&translate_events(two_text_blocks_events())),
+        ];
+        for (case, items) in cases.iter().enumerate() {
+            let direct = assistant_content(&turn2_body(items));
             assert!(
                 direct
                     .as_array()
@@ -1355,8 +1437,17 @@ mod round_trip {
                     .any(|b| b["type"] == "thinking"),
                 "direct body must carry thinking: {direct}"
             );
-            let projected = body_of(session_messages(&items));
+            let projected = body_of(session_messages(items));
             assert_eq!(assistant_content(&projected), direct, "{projected}");
+            if case == 2 {
+                let texts = direct
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|b| b["type"] == "text")
+                    .count();
+                assert_eq!(texts, 2, "the projected body splits: {projected}");
+            }
         }
     }
 }

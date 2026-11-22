@@ -6,10 +6,14 @@
 //!
 //! SMA-840: an assistant message can hold `ProviderData` parts of this crate.
 //! They carry the `thinking` and `redacted_thinking` blocks of the response,
-//! and the positions of its first `text` block and its `tool_use` blocks. The
+//! and the positions of each `text` block and each `tool_use` block. The
 //! translator sends the blocks back and puts the blocks of each source
 //! message in their response order. A history with no such part builds as
 //! before.
+//!
+//! SMA-854: core joins the text blocks of a response into one text part.
+//! When the text positions record their byte counts, the translator cuts the
+//! joined text back into one `text` block for each position.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -84,11 +88,19 @@ struct WireBlock {
     value: Value,
     /// `None` for a block that does not move in the final sort.
     slot: Option<Slot>,
+    /// The text pieces of a splittable message (SMA-854), each with its own
+    /// key. They are not blocks until [`expand_pieces`] runs, so the keep
+    /// rule and the item decisions do not see them.
+    pieces: Vec<(SortKey, String)>,
 }
 
 impl WireBlock {
     fn plain(value: Value) -> Self {
-        Self { value, slot: None }
+        Self {
+            value,
+            slot: None,
+            pieces: Vec::new(),
+        }
     }
 
     fn kind(&self) -> &str {
@@ -120,6 +132,7 @@ impl WireMessage {
 
     fn into_value(mut self) -> Value {
         drop_thinking_without_own_block(&mut self.content);
+        expand_pieces(&mut self.content);
         sort_groups(&mut self.content);
         let content: Vec<Value> = self.content.into_iter().map(|b| b.value).collect();
         json!({"role": self.role, "content": content})
@@ -379,7 +392,11 @@ impl Translator {
                     "name": name,
                     "input": args,
                 });
-                self.push_tool_uses(vec![WireBlock { value, slot }]);
+                self.push_tool_uses(vec![WireBlock {
+                    value,
+                    slot,
+                    pieces: Vec::new(),
+                }]);
             }
             Item::ToolResult { call_id, content } => {
                 self.last_item_dropped = false;
@@ -566,6 +583,35 @@ fn drop_thinking_without_own_block(content: &mut Vec<WireBlock>) {
     }
 }
 
+/// Turn the text pieces into `text` blocks (SMA-854).
+///
+/// Only a block that still has its slot expands. A text block is replaced by
+/// its pieces. A thinking block stays, and its pieces go right after it. A
+/// block with no slot lost its thinking, or is in the last assistant message,
+/// so its pieces are dropped and a text block stays one joined block.
+fn expand_pieces(content: &mut Vec<WireBlock>) {
+    if content.iter().all(|b| b.pieces.is_empty()) {
+        return;
+    }
+    let mut out = Vec::with_capacity(content.len());
+    for mut block in content.drain(..) {
+        let pieces = std::mem::take(&mut block.pieces);
+        let Some(slot) = block.slot.filter(|_| !pieces.is_empty()) else {
+            out.push(block);
+            continue;
+        };
+        if block.is_thinking() {
+            out.push(block);
+        }
+        out.extend(pieces.into_iter().map(|(key, text)| WireBlock {
+            value: json!({"type": "text", "text": text}),
+            slot: Some(Slot { key, ..slot }),
+            pieces: Vec::new(),
+        }));
+    }
+    *content = out;
+}
+
 /// Put the blocks of each group back in response order.
 ///
 /// For each group, take the positions its blocks have in the message, sort
@@ -620,7 +666,10 @@ fn round_is_answered(messages: &[WireMessage], results: &[Value]) -> bool {
         .all(|b| results.iter().any(|r| r["tool_use_id"] == b.value["id"]))
 }
 
-/// The API rejects empty and whitespace-only text blocks.
+/// The API rejects an empty text block (HTTP 400). The SMA-854 probe showed
+/// that it accepts a whitespace-only text block in an assistant message that
+/// is not the last one. This filter still drops both, except for the split
+/// pieces of `assistant_blocks`.
 fn is_blank(text: &str) -> bool {
     text.trim().is_empty()
 }
@@ -679,7 +728,6 @@ fn user_blocks(content: &[ContentPart]) -> Vec<Value> {
 }
 
 /// Why a message with two or more `Text` positions does not split.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SplitRefusal {
     /// A position has no recorded byte count.
@@ -695,7 +743,6 @@ enum SplitRefusal {
 }
 
 /// One piece: the content-block index and the byte range in the joined text.
-#[allow(dead_code)]
 type Cut = (u32, std::ops::Range<usize>);
 
 /// Plans how to cut the joined text into one piece for each `Text` position.
@@ -705,7 +752,6 @@ type Cut = (u32, std::ops::Range<usize>);
 /// positions of the message. The result has one cut for each position, in
 /// part order, and it includes empty cuts. The function does not slice the
 /// text and does not panic.
-#[allow(dead_code)]
 fn split_plan(
     text: &str,
     positions: &[(u32, Option<u64>)],
@@ -758,32 +804,46 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
         needs_tool_use: false,
     });
     let mut text_key = SortKey::BeforeFirstToolUse;
+    // The `(index, bytes)` of each text position in part order, and the
+    // indexes of the other positions (SMA-854).
+    let mut text_positions: Vec<(u32, Option<u64>)> = Vec::new();
+    let mut other_indexes: Vec<u32> = Vec::new();
     if let Some(source) = &mut source {
-        let mut text_seen = false;
         for (d, call_id) in data.iter().flatten() {
             match d {
-                // The stream writes a position for the first text block only.
-                AnthropicData::Text { index, .. } if !text_seen => {
-                    text_seen = true;
-                    text_key = SortKey::At(u64::from(*index), 1);
+                // The stream writes a position for each text block. The
+                // joined text gets the key of the first one.
+                AnthropicData::Text { index, bytes } => {
+                    if text_positions.is_empty() {
+                        text_key = SortKey::At(u64::from(*index), 1);
+                    }
+                    text_positions.push((*index, *bytes));
                 }
-                AnthropicData::ToolUse { index } => match call_id {
-                    Some(id) => source
-                        .tool_positions
-                        .entry((*id).to_owned())
-                        .or_default()
-                        .push_back(u64::from(*index)),
-                    None => tracing::debug!(
-                        target: "paigasus::anthropic::translate",
-                        index = *index,
-                        "skipping anthropic tool_use position with no call id",
-                    ),
-                },
-                _ => {}
+                AnthropicData::Block { index, .. } => other_indexes.push(*index),
+                AnthropicData::ToolUse { index } => {
+                    other_indexes.push(*index);
+                    match call_id {
+                        Some(id) => source
+                            .tool_positions
+                            .entry((*id).to_owned())
+                            .or_default()
+                            .push_back(u64::from(*index)),
+                        None => tracing::debug!(
+                            target: "paigasus::anthropic::translate",
+                            index = *index,
+                            "skipping anthropic tool_use position with no call id",
+                        ),
+                    }
+                }
             }
         }
         source.needs_tool_use = !source.tool_positions.is_empty();
     }
+    let pieces = if source.is_some() && text_positions.len() >= 2 {
+        text_pieces(content, &text_positions, &other_indexes)
+    } else {
+        None
+    };
     let base = source.as_ref().map(|s| s.slot(SortKey::BeforeFirstToolUse));
     let slot = |key| base.map(|base| Slot { key, ..base });
     let mut blocks = Vec::new();
@@ -791,10 +851,13 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
         match part {
             ContentPart::Text { text } if is_blank(text) => {}
             // Core joins the text of a turn into one part. Each text block
-            // of the group gets the same key, so the blocks stay in order.
+            // of the group gets the key of the first text position, so the
+            // blocks stay in order. A splittable message carries its pieces
+            // in this block (SMA-854).
             ContentPart::Text { text } => blocks.push(WireBlock {
                 value: json!({"type": "text", "text": text}),
                 slot: slot(text_key),
+                pieces: Vec::new(),
             }),
             ContentPart::ToolUse {
                 call_id,
@@ -813,6 +876,7 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
                         "input": args,
                     }),
                     slot,
+                    pieces: Vec::new(),
                 });
             }
             // The thinking text travels in the `ProviderData` block part.
@@ -829,13 +893,84 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
                     blocks.push(WireBlock {
                         value: block.to_wire(),
                         slot: slot(SortKey::At(u64::from(*index), 1)),
+                        pieces: Vec::new(),
                     });
                 }
             }
             _ => {}
         }
     }
+    if let Some(pieces) = pieces {
+        // A non-blank joined text has its own block, which carries the
+        // pieces. A blank joined text has no block, because a blank block
+        // would change the item decisions of `Translator::step`. Then the
+        // first thinking block carries the pieces, and they go with it when
+        // it is dropped. With no thinking block, the pieces are discarded.
+        let carrier = match blocks.iter().position(|b| b.kind() == "text") {
+            Some(at) => Some(at),
+            None => blocks.iter().position(WireBlock::is_thinking),
+        };
+        if let Some(at) = carrier {
+            blocks[at].pieces = pieces;
+        }
+    }
     (blocks, source)
+}
+
+/// The text pieces of a splittable message, each with its own key, or `None`
+/// when the message builds one joined text block (SMA-854).
+///
+/// The message has two or more text positions. The debug lines hold the
+/// reason and the lengths only, never the text.
+fn text_pieces(
+    content: &[ContentPart],
+    positions: &[(u32, Option<u64>)],
+    other_indexes: &[u32],
+) -> Option<Vec<(SortKey, String)>> {
+    let texts: Vec<&str> = content
+        .iter()
+        .filter_map(|p| match p {
+            ContentPart::Text { text } if !text.is_empty() => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let text = match texts.as_slice() {
+        [] => return None,
+        [text] => *text,
+        _ => {
+            tracing::debug!(
+                target: "paigasus::anthropic::translate",
+                reason = "several text parts",
+                positions = positions.len(),
+                text_bytes = texts.iter().map(|t| t.len()).sum::<usize>(),
+                "anthropic text does not split; one joined block",
+            );
+            return None;
+        }
+    };
+    let cuts = match split_plan(text, positions, other_indexes) {
+        Ok(cuts) => cuts,
+        Err(reason) => {
+            tracing::debug!(
+                target: "paigasus::anthropic::translate",
+                ?reason,
+                positions = positions.len(),
+                text_bytes = text.len(),
+                "anthropic text does not split; one joined block",
+            );
+            return None;
+        }
+    };
+    // The API rejects an empty text block, so an empty piece gives no block.
+    // `split_plan` checked every range. If a slice still fails, the message
+    // builds one joined block, so that no piece of the text is lost.
+    cuts.into_iter()
+        .filter(|(_, range)| !range.is_empty())
+        .map(|(index, range)| {
+            text.get(range)
+                .map(|piece| (SortKey::At(u64::from(index), 1), piece.to_owned()))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1967,8 +2102,6 @@ mod thinking_round_trip_tests {
         )
     }
 
-    // Used by the split tests of the later SMA-854 tasks.
-    #[allow(dead_code)]
     fn text_pos_bytes(i: u32, bytes: u64) -> ContentPart {
         part(
             AnthropicData::Text {
@@ -3064,6 +3197,398 @@ mod thinking_round_trip_tests {
                 umsg(vec![tr("replacement"), wtext("next")]),
             ])
         );
+    }
+
+    // SMA-854: each text block goes back at its own position.
+
+    /// The same items with no `bytes` on any text position. This is the
+    /// form that joins all text at the first text position.
+    fn no_bytes(items: &[Item]) -> Vec<Item> {
+        items
+            .iter()
+            .map(|item| match item {
+                Item::AssistantMessage { content, agent } => Item::AssistantMessage {
+                    content: content
+                        .iter()
+                        .map(|p| match provider_data::from_part(p) {
+                            Some((AnthropicData::Text { index, .. }, call_id)) => {
+                                part(AnthropicData::Text { index, bytes: None }, call_id)
+                            }
+                            _ => p.clone(),
+                        })
+                        .collect(),
+                    agent: agent.clone(),
+                },
+                other => other.clone(),
+            })
+            .collect()
+    }
+
+    /// `[user q, asst(parts), a result for each call, user next]`.
+    fn turn(parts: Vec<ContentPart>, calls: &[&str]) -> Vec<Item> {
+        let mut items = vec![user("q"), asst(parts)];
+        items.extend(calls.iter().map(|id| result(id)));
+        items.push(user("next"));
+        items
+    }
+
+    /// The issue shape `[Th0, text(1), Th2, text(3), tu_1(4)]` with the text
+    /// `t` and the two text positions `p1` and `p3`.
+    fn two_piece_turn(t: &str, p1: ContentPart, p3: ContentPart) -> Vec<Item> {
+        turn(
+            vec![
+                text(t),
+                thinking(0, "", "SIG_FAKE_1"),
+                p1,
+                thinking(2, "", "SIG_FAKE_2"),
+                p3,
+                use_part("tu_1"),
+                tool_pos(4, "tu_1"),
+            ],
+            &["tu_1"],
+        )
+    }
+
+    /// The assistant message of the issue shape, split into `a` and `b`.
+    fn split_two(a: &str, b: &str) -> Value {
+        amsg(vec![
+            wthinking("", "SIG_FAKE_1"),
+            wtext(a),
+            wthinking("", "SIG_FAKE_2"),
+            wtext(b),
+            tu("tu_1"),
+        ])
+    }
+
+    /// The assistant message of the issue shape, with one joined text at
+    /// the first text position.
+    fn joined_two(t: &str) -> Value {
+        amsg(vec![
+            wthinking("", "SIG_FAKE_1"),
+            wtext(t),
+            wthinking("", "SIG_FAKE_2"),
+            tu("tu_1"),
+        ])
+    }
+
+    /// Assert that `bad` builds as with no `bytes`, and that `control` splits
+    /// into `a` and `b`.
+    fn assert_falls_back(bad: &[Item], control: &[Item], a: &str, b: &str) {
+        let out = messages(bad);
+        assert_eq!(out, messages(&no_bytes(bad)), "bad data must not split");
+        let control = messages(control);
+        assert_eq!(control[1], split_two(a, b), "the control must split");
+        assert_ne!(out, control, "the control must differ from the fallback");
+    }
+
+    #[test]
+    fn split_replay_restores_the_issue_example() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("AB"),
+                thinking(0, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 1),
+                thinking(2, "", "SIG_FAKE_2"),
+                text_pos_bytes(3, 1),
+                use_part("tu_1"),
+                tool_pos(4, "tu_1"),
+            ]),
+            result("tu_1"),
+            user("next"),
+        ];
+        assert_eq!(
+            messages(&items),
+            json!([
+                utext("q"),
+                split_two("A", "B"),
+                umsg(vec![tr("tu_1"), wtext("next")]),
+            ])
+        );
+    }
+
+    #[test]
+    fn text_before_first_thinking_splits() {
+        let items = turn(
+            vec![
+                text("AB"),
+                thinking(1, "", "SIG_FAKE_1"),
+                text_pos_bytes(0, 1),
+                text_pos_bytes(2, 1),
+                use_part("tu_1"),
+                tool_pos(3, "tu_1"),
+            ],
+            &["tu_1"],
+        );
+        assert_eq!(
+            messages(&items)[1],
+            amsg(vec![
+                wtext("A"),
+                wthinking("", "SIG_FAKE_1"),
+                wtext("B"),
+                tu("tu_1"),
+            ])
+        );
+    }
+
+    #[test]
+    fn empty_first_text_block_moves_text_to_its_own_position() {
+        let items = turn(
+            vec![
+                text("B"),
+                thinking(0, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 0),
+                use_part("tu_x"),
+                tool_pos(2, "tu_x"),
+                thinking(3, "", "SIG_FAKE_2"),
+                text_pos_bytes(4, 1),
+                use_part("tu_y"),
+                tool_pos(5, "tu_y"),
+            ],
+            &["tu_x", "tu_y"],
+        );
+        assert_eq!(
+            messages(&items)[1],
+            amsg(vec![
+                wthinking("", "SIG_FAKE_1"),
+                tu("tu_x"),
+                wthinking("", "SIG_FAKE_2"),
+                wtext("B"),
+                tu("tu_y"),
+            ])
+        );
+    }
+
+    #[test]
+    fn multi_byte_pieces_split() {
+        let items = turn(
+            vec![
+                text("éü"),
+                thinking(2, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 2),
+                text_pos_bytes(3, 2),
+                use_part("tu_1"),
+                tool_pos(4, "tu_1"),
+            ],
+            &["tu_1"],
+        );
+        assert_eq!(
+            messages(&items)[1],
+            amsg(vec![
+                wtext("é"),
+                wthinking("", "SIG_FAKE_1"),
+                wtext("ü"),
+                tu("tu_1"),
+            ])
+        );
+    }
+
+    #[test]
+    fn whitespace_piece_is_sent() {
+        let items = two_piece_turn("\n\nB", text_pos_bytes(1, 2), text_pos_bytes(3, 1));
+        assert_eq!(messages(&items)[1], split_two("\n\n", "B"));
+    }
+
+    #[test]
+    fn missing_bytes_falls_back() {
+        let bad = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos(3));
+        assert_eq!(messages(&bad)[1], joined_two("AB"));
+        let control = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(3, 1));
+        assert_falls_back(&bad, &control, "A", "B");
+    }
+
+    #[test]
+    fn sum_mismatch_falls_back() {
+        let bad = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(3, 2));
+        assert_eq!(messages(&bad)[1], joined_two("AB"));
+        let control = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(3, 1));
+        assert_falls_back(&bad, &control, "A", "B");
+    }
+
+    #[test]
+    fn cut_inside_char_falls_back() {
+        let bad = two_piece_turn("éü", text_pos_bytes(1, 1), text_pos_bytes(3, 3));
+        assert_eq!(messages(&bad)[1], joined_two("éü"));
+        let control = two_piece_turn("éü", text_pos_bytes(1, 2), text_pos_bytes(3, 2));
+        assert_falls_back(&bad, &control, "é", "ü");
+    }
+
+    #[test]
+    fn not_increasing_falls_back() {
+        // The first text position is index 3, so the joined text goes there.
+        let bad = two_piece_turn("AB", text_pos_bytes(3, 1), text_pos_bytes(1, 1));
+        assert_eq!(
+            messages(&bad)[1],
+            amsg(vec![
+                wthinking("", "SIG_FAKE_1"),
+                wthinking("", "SIG_FAKE_2"),
+                wtext("AB"),
+                tu("tu_1"),
+            ])
+        );
+        let control = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(3, 1));
+        assert_falls_back(&bad, &control, "A", "B");
+    }
+
+    #[test]
+    fn index_collision_falls_back() {
+        // Index 2 is the second thinking block.
+        let bad = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(2, 1));
+        assert_eq!(messages(&bad)[1], joined_two("AB"));
+        let control = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(3, 1));
+        assert_falls_back(&bad, &control, "A", "B");
+    }
+
+    #[test]
+    fn huge_bytes_falls_back_without_panic() {
+        let control = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(3, 1));
+        let bad = two_piece_turn("AB", text_pos_bytes(1, u64::MAX), text_pos_bytes(3, 1));
+        assert_eq!(messages(&bad)[1], joined_two("AB"));
+        assert_falls_back(&bad, &control, "A", "B");
+        let bad = two_piece_turn("AB", text_pos_bytes(1, 1), text_pos_bytes(3, u64::MAX));
+        assert_eq!(messages(&bad)[1], joined_two("AB"));
+        assert_falls_back(&bad, &control, "A", "B");
+    }
+
+    #[test]
+    fn two_text_parts_fall_back() {
+        let parts = |texts: Vec<ContentPart>| {
+            let mut parts = texts;
+            parts.extend([
+                thinking(0, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 1),
+                thinking(2, "", "SIG_FAKE_2"),
+                text_pos_bytes(3, 1),
+                use_part("tu_1"),
+                tool_pos(4, "tu_1"),
+            ]);
+            turn(parts, &["tu_1"])
+        };
+        let bad = parts(vec![text("A"), text("B")]);
+        assert_eq!(
+            messages(&bad)[1],
+            amsg(vec![
+                wthinking("", "SIG_FAKE_1"),
+                wtext("A"),
+                wtext("B"),
+                wthinking("", "SIG_FAKE_2"),
+                tu("tu_1"),
+            ])
+        );
+        let control = parts(vec![text("AB")]);
+        assert_falls_back(&bad, &control, "A", "B");
+        // An empty text part does not count: the message still splits.
+        let with_empty = parts(vec![text(""), text("AB")]);
+        assert_eq!(messages(&with_empty)[1], split_two("A", "B"));
+    }
+
+    #[test]
+    fn whitespace_joined_text_expands_when_thinking_is_kept() {
+        let items = two_piece_turn(" \n", text_pos_bytes(1, 1), text_pos_bytes(3, 1));
+        assert_eq!(messages(&items)[1], split_two(" ", "\n"));
+    }
+
+    #[test]
+    fn whitespace_joined_text_does_not_change_the_item_decisions() {
+        // The calls are lost: a plain user turn follows, with no result.
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text(" \n"),
+                thinking(0, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 1),
+                thinking(2, "", "SIG_FAKE_2"),
+                text_pos_bytes(3, 1),
+                tool_pos(4, "tu_1"),
+            ]),
+            user("next"),
+        ];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+        // A whitespace-only item with no call, as the last item.
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("  "),
+                thinking(0, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 1),
+                thinking(2, "", "SIG_FAKE_2"),
+                text_pos_bytes(3, 1),
+            ]),
+        ];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+    }
+
+    #[test]
+    fn split_data_hand_off_builds_as_without_anthropic() {
+        let response = |sig_a: &str, sig_b: &str, call: &str| {
+            asst(vec![
+                reasoning("r"),
+                text("AB"),
+                thinking(0, "r", sig_a),
+                text_pos_bytes(1, 1),
+                thinking(2, "r", sig_b),
+                text_pos_bytes(3, 1),
+                tool_pos(4, call),
+            ])
+        };
+        let items = vec![
+            user("q"),
+            response("SIG_FAKE_1", "SIG_FAKE_2", "tu_1"),
+            response("SIG_FAKE_3", "SIG_FAKE_4", "tu_2"),
+            user(HANDOFF),
+        ];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+    }
+
+    #[test]
+    fn split_data_lost_calls_builds_as_without_anthropic() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                reasoning("r"),
+                text("AB"),
+                thinking(0, "r", "SIG_FAKE_1"),
+                text_pos_bytes(1, 1),
+                thinking(2, "r", "SIG_FAKE_2"),
+                text_pos_bytes(3, 1),
+                tool_pos(4, "gone_a"),
+                tool_pos(5, "gone_b"),
+            ]),
+            user("q2"),
+            asst(vec![text("done")]),
+            user("q3"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(out[1], amsg(vec![wtext("AB")]));
+    }
+
+    #[test]
+    fn split_data_last_assistant_message_builds_as_without_anthropic() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text("AB"),
+                thinking(0, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 1),
+                thinking(2, "", "SIG_FAKE_2"),
+                text_pos_bytes(3, 1),
+            ]),
+        ];
+        let out = translate_messages(&items);
+        let base = translate_messages(&without_anthropic(&items));
+        assert_eq!(out.messages, base.messages);
+        assert_eq!(out.messages, json!([utext("q"), amsg(vec![wtext("AB")])]));
+        assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
     }
 }
 
