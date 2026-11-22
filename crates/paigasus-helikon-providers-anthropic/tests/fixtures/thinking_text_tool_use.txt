@@ -1,4 +1,37 @@
-: transcribed from the SMA-840 probe run C (claude-sonnet-4-5); signature replaced
+: Provenance: CAPTURED from the Anthropic Messages API, streamed, on
+: 2026-11-21, under SMA-840 (PR #387). This is probe run C, turn 1, model
+: claude-sonnet-4-5. The response names claude-sonnet-4-5-20250929. Run C used
+: thinking {"type":"enabled","budget_tokens":2048} and no beta header (the
+: SMA-840 design,
+: docs/superpowers/specs/2026-11-21-sma-840-anthropic-thinking-signatures-design.md,
+: lines 27 and 37-38). The capture file was
+: probe-840-c-claude-sonnet-4-5/1-turn1.sse (the SMA-840 plan,
+: docs/superpowers/plans/2026-11-21-sma-840-anthropic-thinking-signatures.md,
+: line 171).
+:
+: The probe script is
+: docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh. It
+: posts to https://api.anthropic.com/v1/messages (line 42). The repo holds
+: only the version that PR #387 merged. The record does not say whether the
+: run used that exact version.
+:
+: Edits from the raw capture. The raw capture is not kept in the repo, because
+: it holds real signatures (the SMA-840 design, lines 29-32).
+:
+: Removed: not recorded. The plan says to keep all events (line 171). The
+: record does not say whether the capture had trailing spaces inside data:
+: lines. The plan says to remove them (the SMA-840 plan, line 169).
+:
+: Added: this header. Until SMA-845 it was one comment line (the plan, line
+: 167). No other added line is recorded. The plan says to keep every other
+: byte of a transcribed event (lines 169-170).
+:
+: Changed: the real signature is replaced with SIG_FAKE_1 (the plan, lines
+: 167-169). On the 4.5 models a real signature has 528 to 732 characters (the
+: design, lines 46-47). No other change is recorded.
+:
+: The ping data line has a space after each colon. The other data lines have
+: no space after a key colon. The record does not say why.
 
 event: message_start
 data: {"type":"message_start","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_011ChGZ7F3NWW9KiPZPYPzWL","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":687,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":3,"service_tier":"standard","inference_geo":"not_available","speed":"standard"},"diagnostics":null}}

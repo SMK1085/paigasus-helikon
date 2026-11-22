@@ -8,18 +8,8 @@ use paigasus_helikon_workspace_lints::fixture_header::check;
 
 /// Fixtures that do not yet pass `check`, as repo-relative paths.
 ///
-/// This list may only shrink. Phase B of SMA-845 empties it.
-const ALLOWLIST: &[&str] = &[
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/body_cut_inside_message_stop.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/eof_after_message_delta.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/eof_mid_content_block.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/error_after_message_delta.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/parallel_tool_use.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/stream_error.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/text_only.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/thinking_then_text.txt",
-    "crates/paigasus-helikon-providers-anthropic/tests/fixtures/tool_use_then_continuation.txt",
-];
+/// This list may only shrink. Phase B of SMA-845 emptied it.
+const ALLOWLIST: &[&str] = &[];
 
 /// Repo root, derived from this crate's manifest directory.
 fn repo_root() -> PathBuf {
