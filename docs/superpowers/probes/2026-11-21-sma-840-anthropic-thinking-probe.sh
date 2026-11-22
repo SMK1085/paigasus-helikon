@@ -143,14 +143,17 @@ if [ "$(echo "$R2" | jq length)" -gt 0 ]; then
     echo "18-nothink-model                   skipped (set NOTHINK_MODEL)"
   fi
   # 19. A final answer with its thinking kept, then a new user question.
-  # Run 19 and 20 only when 12-turn3-real returned HTTP 200 and a nonempty text answer.
+  # Run 19 and 20 only when 12-turn3-real returned HTTP 200, stop_reason end_turn, no tool_use block and a nonempty text answer.
   FINAL="$(jq -c '.content // []' "$OUT/12-turn3-real.resp.json" 2>/dev/null)"
-  if [ "$HTTP12" = 200 ] && [ "$(echo "$FINAL" | jq '[.[] | select(.type=="text" and (.text | length) > 0)] | length' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+  STOP12="$(jq -r '.stop_reason // ""' "$OUT/12-turn3-real.resp.json" 2>/dev/null)"
+  if [ "$HTTP12" = 200 ] && [ "$STOP12" = end_turn ] \
+    && [ "$(echo "$FINAL" | jq '[.[] | select(.type=="tool_use")] | length' 2>/dev/null)" = 0 ] \
+    && [ "$(echo "$FINAL" | jq '[.[] | select(.type=="text" and (.text | length) > 0)] | length' 2>/dev/null)" -gt 0 ] 2>/dev/null; then
     M4="$(jq -n --argjson m3 "$(M3 "$B1" "$B2")" --argjson a "$FINAL" '$m3 + [{role:"assistant", content:$a}, {role:"user", content:"Thanks. Now do the same for Rome."}]')"
     variant 19-final-answer-kept-then-user "$M4" "$THINKING"
     variant 20-final-answer-stripped-then-user "$(echo "$M4" | jq -c '.[-2].content |= [.[] | select(.type!="thinking" and .type!="redacted_thinking")]')" "$THINKING"
   else
-    echo "19/20 skipped: 12-turn3-real did not return HTTP 200 with a nonempty text answer"
+    echo "19/20 skipped: 12-turn3-real did not end with a final text answer (HTTP 200, end_turn, no tool_use)"
   fi
   # 21. A thinking-only assistant message (a hand-off transcript), then a user message.
   THONLY="$(echo "$B1" | jq -c '[.[] | select(.type=="thinking" or .type=="redacted_thinking")]')"
