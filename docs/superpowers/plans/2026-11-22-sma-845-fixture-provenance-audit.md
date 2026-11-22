@@ -215,7 +215,14 @@ Expected: PASS, no warnings.
 - [ ] **Step 1: Data-unchanged check.** For each fixture changed on this branch, run this with `bash` (not zsh):
 
 ```bash
-strip() { awk 'f || (!/^:/ && !/^$/) { f=1; print }'; }
+# Byte-preserving: drop only the leading `:`/blank lines; keep every later byte,
+# including a missing or added final newline.
+strip() { python3 -I -c 'import sys
+d = sys.stdin.buffer.read().splitlines(keepends=True)
+i = 0
+while i < len(d) and (d[i].startswith(b":") or d[i].strip(b"\r\n") == b""):
+    i += 1
+sys.stdout.buffer.write(b"".join(d[i:]))'; }
 for f in $(git diff --name-only origin/main -- 'crates/*/tests/fixtures/*'); do
   cmp -s <(git show "origin/main:$f" | strip) <(strip < "$f") || echo "DATA CHANGED: $f"
 done
