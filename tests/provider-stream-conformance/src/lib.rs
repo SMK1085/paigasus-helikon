@@ -124,6 +124,12 @@ pub enum Violation {
         /// The `call_id` that no streamed tool call used.
         call_id: String,
     },
+    /// A call's concatenated `args_delta` did not parse as JSON on a stream
+    /// that carried a `Finish` (assertion 10).
+    ToolArgsNotJson {
+        /// The call whose arguments did not parse.
+        call_id: String,
+    },
     /// The stream did not produce the minimum evidence its scenario requires,
     /// so the assertions would have passed vacuously.
     InsufficientEvidence(&'static str),

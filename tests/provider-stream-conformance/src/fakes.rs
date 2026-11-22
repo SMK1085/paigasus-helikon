@@ -54,6 +54,8 @@ pub enum Fake {
     /// Tool-call deltas that never carry a name, which is what the "exactly
     /// one" tightening of assertion 7 exists to catch.
     NoNamedDelta,
+    /// Truncated tool arguments on a stream that finishes (assertion 10).
+    ArgsNotJson,
     /// A sequence that satisfies every assertion for the given scenario.
     Conforming,
 }
@@ -127,6 +129,9 @@ impl Fake {
                         (Some("weather"), "\"Berlin\"}"),
                     ],
                 );
+            }
+            Fake::ArgsNotJson => {
+                replace_tool_deltas(&mut events, &[(Some(TOOL_NAME), "{\"city\":")]);
             }
             Fake::NoNamedDelta => {
                 replace_tool_deltas(&mut events, &[(None, "{\"city\":\"Berlin\"}")]);
@@ -307,6 +312,13 @@ mod tests {
                 Scenario::ToolCallCleanStop,
                 Violation::ProviderDataUnknownCall {
                     call_id: "x".into(),
+                },
+            ),
+            (
+                Fake::ArgsNotJson,
+                Scenario::ToolCallCleanStop,
+                Violation::ToolArgsNotJson {
+                    call_id: "c1".into(),
                 },
             ),
             (

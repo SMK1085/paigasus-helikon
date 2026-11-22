@@ -155,6 +155,50 @@ pub fn classify(
         }
     }
 
+    // Assertion 10: on a stream that carries a `Finish`, each call's
+    // concatenated `args_delta` must parse as JSON. Blank (after trimming)
+    // arguments mean an empty object, and any JSON value conforms, because
+    // Gemini emits `null`. A stream without a `Finish` is truncated, so
+    // half-open arguments are expected there. A blank-id group that holds
+    // other than one name is an ambiguous merge of several calls; consumers
+    // refuse it, so it is not parsed here. Groups keep first-seen order.
+    if events
+        .iter()
+        .any(|e| matches!(e, Ok(ModelEvent::Finish { .. })))
+    {
+        let mut args: Vec<(String, String)> = Vec::new();
+        for event in events {
+            if let Ok(ModelEvent::ToolCallDelta {
+                call_id,
+                args_delta,
+                ..
+            }) = event
+            {
+                match args.iter_mut().find(|(id, _)| id == call_id) {
+                    Some((_, text)) => text.push_str(args_delta),
+                    None => args.push((call_id.clone(), args_delta.clone())),
+                }
+            }
+        }
+        for (call_id, text) in &args {
+            if call_id.is_empty()
+                && name_counts
+                    .iter()
+                    .find(|(id, _)| id.is_empty())
+                    .is_some_and(|(_, count)| *count != 1)
+            {
+                continue;
+            }
+            let trimmed = text.trim();
+            let source = if trimmed.is_empty() { "{}" } else { trimmed };
+            if serde_json::from_str::<serde_json::Value>(source).is_err() {
+                return Some(Violation::ToolArgsNotJson {
+                    call_id: call_id.clone(),
+                });
+            }
+        }
+    }
+
     None
 }
 
@@ -441,6 +485,77 @@ mod tests {
         assert_eq!(
             classify(&evs, Scenario::ErrorAfterStopReason, false),
             Some(Violation::FinishAfterError)
+        );
+    }
+
+    /// Finish with `ToolCalls`, for the assertion 10 tests.
+    fn tool_finish() -> Result<ModelEvent, ModelError> {
+        Ok(ModelEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        })
+    }
+
+    /// Assertion 10: truncated arguments on a finished stream.
+    #[test]
+    fn truncated_args_are_a_violation() {
+        let evs = vec![tool("c1", Some("get_weather"), "{\"city\":"), tool_finish()];
+        assert_eq!(
+            classify(&evs, Scenario::ToolCallCleanStop, false),
+            Some(Violation::ToolArgsNotJson {
+                call_id: "c1".into()
+            })
+        );
+    }
+
+    /// Blank arguments are an empty object.
+    #[test]
+    fn blank_args_conform() {
+        let evs = vec![tool("c1", Some("get_weather"), ""), tool_finish()];
+        assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
+    /// Whitespace-only arguments are blank.
+    #[test]
+    fn whitespace_args_conform() {
+        let evs = vec![tool("c1", Some("get_weather"), "  "), tool_finish()];
+        assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
+    /// Any JSON value conforms, not only an object (Gemini's shape).
+    #[test]
+    fn non_object_json_conforms() {
+        let evs = vec![tool("c1", Some("get_weather"), "null"), tool_finish()];
+        assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
+    /// A stream without a `Finish` is not parsed.
+    #[test]
+    fn truncated_args_without_finish_conform() {
+        let evs = vec![tool("c1", Some("get_weather"), "{\"city\":")];
+        assert_eq!(
+            classify(&evs, Scenario::TruncatedMidGeneration, false),
+            None
+        );
+    }
+
+    /// A blank-id group with two names is ambiguous and is not parsed.
+    #[test]
+    fn blank_id_group_with_two_names_is_not_parsed() {
+        let evs = vec![
+            tool("", Some("a"), "{}"),
+            tool("", Some("b"), "{}"),
+            tool_finish(),
+        ];
+        assert_eq!(classify(&evs, Scenario::ToolCallCleanStop, false), None);
+    }
+
+    /// A blank-id group with one name is parsed.
+    #[test]
+    fn blank_id_group_with_one_name_is_parsed() {
+        let evs = vec![tool("", Some("a"), "{"), tool_finish()];
+        assert_eq!(
+            classify(&evs, Scenario::ToolCallCleanStop, false),
+            Some(Violation::ToolArgsNotJson { call_id: "".into() })
         );
     }
 }
