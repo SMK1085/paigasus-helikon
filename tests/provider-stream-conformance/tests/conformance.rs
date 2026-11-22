@@ -570,8 +570,8 @@ mod bedrock {
 ///   the name split and the argument split are authored input. It holds a
 ///   name split across two deltas that BOTH arrive after the `id`. Per the
 ///   design spec's §6 provenance note, this is the capture
-///   `FragmentedToolName`'s shape must be drawn from — the note
-///   requires the committed **shape**, not byte-identical values; see
+///   `FragmentedToolName`'s shape must be drawn from — the note requires the
+///   committed **shape**, not byte-identical values; see
 ///   "`FragmentedToolName` deliberately never completes" below for exactly
 ///   what this module substitutes (the "id resolves late" variant has no
 ///   capture anywhere in the repo and is not built here).
@@ -580,8 +580,7 @@ mod bedrock {
 /// (both HAND-AUTHORED) were read but contribute no shape this module needs:
 /// this subject serves only `Stop` and `ToolCalls` finish reasons, and the
 /// empty-`choices` usage variant is a second encoding of the same
-/// trailing-usage envelope already
-/// covered by `chat_text_usage_trailing.txt`.
+/// trailing-usage envelope already covered by `chat_text_usage_trailing.txt`.
 ///
 /// # `FragmentedToolName` deliberately never completes
 ///
@@ -1714,9 +1713,10 @@ mod litellm {
 ///   `content_block_start` carrying the whole `id` and `name` together,
 ///   followed by exactly one `input_json_delta` carrying the whole argument
 ///   JSON. Grounds [`tool_use_start`], [`input_json_delta`], and
-///   `ToolCallCleanStop`'s script. The SMA-840 captures differ in two ways
-///   (the headers of both files): their tool `content_block_start` also
-///   carries `"caller":{"type":"direct"}`, and they split the argument JSON
+///   `ToolCallCleanStop`'s script. In the `tool_use` envelope, the SMA-840
+///   captures differ in two ways (the headers of both files): their tool
+///   `content_block_start` also carries `"caller":{"type":"direct"}`, and
+///   they split the argument JSON
 ///   (see "`ToolCallCleanStop` never splits `input_json_delta`" below).
 /// - `thinking_text_tool_use.txt` — CAPTURED (transcribed, SMA-840, PR #387):
 ///   probe run C, turn 1, `claude-sonnet-4-5`, on 2026-11-21. Its header
@@ -1749,11 +1749,10 @@ mod litellm {
 /// `stream_error.txt` and `error_after_message_delta.txt` both encode an
 /// in-band `event: error` SSE frame. Both files are HAND-AUTHORED. None of
 /// the three SMA-840 captures has an `error` event, and the headers of both
-/// files say that no capture supports it. The translator parses that frame
-/// as `AnthropicEvent::Error`,
-/// and `stream.rs`'s `consume` turns it into `Err(ModelError::…)`. That
-/// path is already exercised directly against
-/// the translator by the crate's own
+/// files say that no capture supports it. The translator parses that frame as
+/// `AnthropicEvent::Error`, and `stream.rs`'s `consume` turns it into
+/// `Err(ModelError::…)`. That path is already exercised directly against the
+/// translator by the crate's own
 /// `stream_error_overloaded_terminates_with_unavailable` and
 /// `error_after_buffered_stop_reason_emits_no_finish` tests.
 ///
@@ -1764,9 +1763,9 @@ mod litellm {
 /// suite testing the property it exists to test (the driver's `tokio::select!`
 /// cancel/error arms in `model.rs`, and specifically that a buffered stop
 /// reason is discarded rather than flushed when the transport fails) the same
-/// way across every subject, rather than re-deriving Anthropic's in-band error
-/// shape a second time in a different harness. Functionally the two
-/// mechanisms are indistinguishable to this driver either way: `model.rs`'s
+/// way across every subject, rather than re-deriving the HAND-AUTHORED
+/// in-band error shape a second time in a different harness. Functionally the
+/// two mechanisms are indistinguishable to this driver either way: `model.rs`'s
 /// `Some(Err(e)) => { yield Err(...); return; }` arm returns as soon as it
 /// observes *any* transport-level error, before it would ever get to parse a
 /// subsequent `error` frame.
@@ -1817,7 +1816,7 @@ mod litellm {
 /// scripts do not show the captured split. The SMA-845 audit labels sources
 /// and does not change this test data
 /// (`docs/superpowers/specs/2026-11-21-sma-845-fixture-provenance-audit-design.md`,
-/// lines 339 and 412).
+/// the "Data changes" section, lines 410-423, and line 339).
 /// A single `input_json_delta` still fully exercises assertion 7's
 /// "exactly one, not zero" on this shape: the translator's `name_emitted` flag
 /// starts `false`, so the one delta this script sends is the one that must
@@ -1830,7 +1829,10 @@ mod anthropic {
     /// example in the task brief (`AnthropicModel::messages("claude-3-5-sonnet-latest")`).
     const MODEL_ID: &str = "claude-3-5-sonnet-latest";
 
-    /// The tool name every tool-call fixture declares.
+    /// The tool name that `tool_use_then_continuation.txt` declares. The
+    /// other tool fixtures use other names: `a` and `b` in
+    /// `parallel_tool_use.txt`, and `lookup_city_code` or `weather_by_code`
+    /// in the SMA-840 fixtures.
     const TOOL_NAME: &str = "get_weather";
 
     /// `id` for the single tool call in the tool fixture. Not claimed to match
@@ -1871,8 +1873,9 @@ mod anthropic {
         format!("event: {event}\ndata: {payload}\n\n").into_bytes()
     }
 
-    /// `message_start`, which opens every Anthropic stream and is the event
-    /// the translator reads its initial `Usage` from
+    /// `message_start`, which opens each fixture in this crate, including
+    /// the three SMA-840 captures. It is the event the translator reads its
+    /// initial `Usage` from
     /// (`stream.rs`'s `MessageStart` arm).
     ///
     /// Matches `text_only.txt`'s opening event (HAND-AUTHORED), including the
@@ -1880,7 +1883,7 @@ mod anthropic {
     /// [`STOP_REASON_MARKER`] must not match. The CAPTURED
     /// `thinking_text_tool_use.txt` also sends that null. Its `message_start`
     /// carries more keys than this one; the header of `text_only.txt` lists
-    /// them. The token counts are this module's own values.
+    /// them. The token counts are the same as in `text_only.txt` (line 49).
     fn message_start() -> Vec<u8> {
         frame(
             "message_start",
@@ -2057,9 +2060,9 @@ mod anthropic {
     }
 
     /// One `input_json_delta`, carrying a whole argument JSON, as the
-    /// HAND-AUTHORED SMA-317 fixtures do. The SMA-840 captures split it.
-    /// See the module
-    /// doc's "`ToolCallCleanStop` never splits `input_json_delta`" section for
+    /// HAND-AUTHORED SMA-317 fixtures do. The SMA-840 captures split it. See
+    /// the module doc's "`ToolCallCleanStop` never splits `input_json_delta`"
+    /// section for
     /// why this is never called twice for one call in this module, unlike its
     /// siblings' tool-argument helpers.
     fn input_json_delta(partial_json: &str) -> Vec<u8> {
@@ -2636,8 +2639,8 @@ mod gemini {
     /// `multi_chunk_usage_emits_usage_per_chunk`'s first chunk
     /// (`crates/paigasus-helikon-providers-gemini/tests/gemini_streaming.rs:91-92`,
     /// HAND-AUTHORED): a content-only candidate (no `finishReason`) with
-    /// `usageMetadata` as a
-    /// top-level sibling of `candidates` — see the module doc's "`usageMetadata`
+    /// `usageMetadata` as a top-level sibling of `candidates` — see the module
+    /// doc's "`usageMetadata`
     /// appears on every chunk" section for why this replaced an earlier,
     /// usage-free version of this helper.
     fn text_delta(text: &str, prompt_tokens: u32, candidates_tokens: u32) -> Vec<u8> {
@@ -2695,9 +2698,9 @@ mod gemini {
     /// frame, and the live capture (module doc, "Live capture") itself ended
     /// at bare EOF with no `[DONE]` either. `CleanStop` below is the first
     /// thing in this codebase that ever sends Gemini a `[DONE]` sentinel and
-    /// checks what the driver does with it. Grounded directly in the
-    /// driver's own string comparison
-    /// rather than a capture; the bytes are the same `data: [DONE]\n\n`
+    /// checks what the driver does with it. Grounded directly in the driver's
+    /// own string comparison rather than a capture; the bytes are the same
+    /// `data: [DONE]\n\n`
     /// terminator `openai_chat` and `litellm` send, since `model.rs` checks
     /// nothing about the frame besides its `data` field.
     fn done() -> Vec<u8> {
