@@ -678,6 +678,70 @@ fn user_blocks(content: &[ContentPart]) -> Vec<Value> {
         .collect()
 }
 
+/// Why a message with two or more `Text` positions does not split.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SplitRefusal {
+    /// A position has no recorded byte count.
+    MissingBytes,
+    /// The block indexes do not strictly increase.
+    NotIncreasing,
+    /// A text index is also the index of a non-text block.
+    IndexCollision,
+    /// The byte counts do not add up to the length of the text.
+    SumMismatch,
+    /// A cut falls inside a multi-byte character.
+    NotCharBoundary,
+}
+
+/// One piece: the content-block index and the byte range in the joined text.
+#[allow(dead_code)]
+type Cut = (u32, std::ops::Range<usize>);
+
+/// Plans how to cut the joined text into one piece for each `Text` position.
+///
+/// `positions` holds the `(index, bytes)` of each `Text` position, in part
+/// order. `other_indexes` holds the indexes of the `Block` and `ToolUse`
+/// positions of the message. The result has one cut for each position, in
+/// part order, and it includes empty cuts. The function does not slice the
+/// text and does not panic.
+#[allow(dead_code)]
+fn split_plan(
+    text: &str,
+    positions: &[(u32, Option<u64>)],
+    other_indexes: &[u32],
+) -> Result<Vec<Cut>, SplitRefusal> {
+    if positions.iter().any(|(_, bytes)| bytes.is_none()) {
+        return Err(SplitRefusal::MissingBytes);
+    }
+    if positions.windows(2).any(|pair| pair[1].0 <= pair[0].0) {
+        return Err(SplitRefusal::NotIncreasing);
+    }
+    if positions
+        .iter()
+        .any(|(index, _)| other_indexes.contains(index))
+    {
+        return Err(SplitRefusal::IndexCollision);
+    }
+    let mut cuts: Vec<Cut> = Vec::with_capacity(positions.len());
+    let mut start: usize = 0;
+    for (index, bytes) in positions {
+        let len = bytes
+            .and_then(|b| usize::try_from(b).ok())
+            .ok_or(SplitRefusal::SumMismatch)?;
+        let end = start.checked_add(len).ok_or(SplitRefusal::SumMismatch)?;
+        cuts.push((*index, start..end));
+        start = end;
+    }
+    if start != text.len() {
+        return Err(SplitRefusal::SumMismatch);
+    }
+    if cuts.iter().any(|(_, r)| !text.is_char_boundary(r.end)) {
+        return Err(SplitRefusal::NotCharBoundary);
+    }
+    Ok(cuts)
+}
+
 /// The blocks of one `AssistantMessage`, and its source state.
 ///
 /// The source state is `Some` only when at least one part of this crate is
@@ -2999,6 +3063,89 @@ mod thinking_round_trip_tests {
                 amsg(vec![tu("replacement"), wtext("t")]),
                 umsg(vec![tr("replacement"), wtext("next")]),
             ])
+        );
+    }
+}
+
+#[cfg(test)]
+mod split_plan_tests {
+    use super::{split_plan, SplitRefusal};
+
+    #[test]
+    fn splits_in_part_order() {
+        assert_eq!(
+            split_plan("AB", &[(1, Some(1)), (3, Some(1))], &[0, 2, 4]),
+            Ok(vec![(1, 0..1), (3, 1..2)])
+        );
+    }
+
+    #[test]
+    fn multi_byte_split() {
+        assert_eq!(
+            split_plan("éü", &[(1, Some(2)), (3, Some(2))], &[]),
+            Ok(vec![(1, 0..2), (3, 2..4)])
+        );
+    }
+
+    #[test]
+    fn empty_piece_keeps_its_cut() {
+        assert_eq!(
+            split_plan("B", &[(1, Some(0)), (4, Some(1))], &[]),
+            Ok(vec![(1, 0..0), (4, 0..1)])
+        );
+    }
+
+    #[test]
+    fn missing_bytes_refuses() {
+        assert_eq!(
+            split_plan("AB", &[(1, None), (3, Some(1))], &[]),
+            Err(SplitRefusal::MissingBytes)
+        );
+        // Control: the same text splits with bytes present.
+        assert!(split_plan("AB", &[(1, Some(1)), (3, Some(1))], &[]).is_ok());
+    }
+
+    #[test]
+    fn not_increasing_refuses() {
+        assert_eq!(
+            split_plan("AB", &[(3, Some(1)), (1, Some(1))], &[]),
+            Err(SplitRefusal::NotIncreasing)
+        );
+        assert_eq!(
+            split_plan("AB", &[(1, Some(1)), (1, Some(1))], &[]),
+            Err(SplitRefusal::NotIncreasing)
+        );
+    }
+
+    #[test]
+    fn index_collision_refuses() {
+        assert_eq!(
+            split_plan("AB", &[(1, Some(1)), (2, Some(1))], &[2]),
+            Err(SplitRefusal::IndexCollision)
+        );
+    }
+
+    #[test]
+    fn sum_mismatch_refuses() {
+        assert_eq!(
+            split_plan("ABC", &[(1, Some(1)), (3, Some(1))], &[]),
+            Err(SplitRefusal::SumMismatch)
+        );
+    }
+
+    #[test]
+    fn overflow_refuses_without_panic() {
+        assert_eq!(
+            split_plan("AB", &[(1, Some(u64::MAX)), (3, Some(3))], &[]),
+            Err(SplitRefusal::SumMismatch)
+        );
+    }
+
+    #[test]
+    fn cut_inside_a_char_refuses() {
+        assert_eq!(
+            split_plan("éü", &[(1, Some(1)), (3, Some(3))], &[]),
+            Err(SplitRefusal::NotCharBoundary)
         );
     }
 }
