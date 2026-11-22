@@ -261,6 +261,13 @@ mod tests {
         assert!(wires[0]["toolConfig"]["toolChoice"].is_null());
         // The second request is on the native path.
         assert!(wires[1]["additionalModelRequestFields"]["tool_choice"].is_null());
+        // The native retry still sends the typed tool entry.
+        assert_eq!(
+            wires[1]["additionalModelRequestFields"]["tools"],
+            json!([{"type": "memory_20250818", "name": "memory"}]),
+            "{:#}",
+            wires[1]
+        );
         assert_eq!(policy.path(), OutputPath::Native);
         assert!(res.is_ok());
     }

@@ -127,7 +127,7 @@ Reasoning content surfaced by the model (e.g. Claude extended-thinking responses
 
 ### `ToolChoice::None` after a tool round
 
-A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. For Claude models, the provider sends tool specs for the tools that the history uses. It also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. For other model families, the provider sends the tool history as text and sends no tool configuration. If the model calls a tool, the stream gives an error.
+A request can set `ToolChoice::None` when the history has tool calls. Bedrock needs a tool configuration for such a history. For Claude models, the provider sends tool specs for the tools that the history uses. A typed tool goes to `additionalModelRequestFields.tools` and gets no derived spec (see [Provider tool types](#provider-tool-types)). The provider also sends the Anthropic field `tool_choice: none` in `additionalModelRequestFields`. For other model families, the provider sends the tool history as text and sends no tool configuration. If the model calls a tool, the stream gives an error.
 
 On families other than Claude, the model can write text that looks like a tool call, for example `[tool call ...]`. This is text, not a tool call. On Claude, a prompt that asks for a tool call can get an empty answer.
 
@@ -135,7 +135,7 @@ If you set `JsonSchema` or `JsonObject` with `ToolChoice::None`, the result depe
 
 ### Provider tool types
 
-A tool can declare a provider tool type for the `anthropic` provider. For Claude models, the provider sends a typed entry for such a tool. The typed entry replaces the generic name, description and input schema.
+A tool can declare a provider tool type for the `anthropic` provider. For Claude models, the provider sends a typed entry for such a tool. The typed entry replaces the generic tool spec. It has no description and no input schema.
 
 Only `memory_*` types use the typed entry. The provider sends `{"type": "memory_20250818", "name": "<tool name>"}`, with the extra fields from `with_params`. It removes `cache_control`. Only the first `anthropic` declaration of a tool counts. If it is not a `memory_*` type, the tool gets the generic schema. Other families also get the generic schema.
 

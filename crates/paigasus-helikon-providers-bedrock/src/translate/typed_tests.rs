@@ -1,4 +1,4 @@
-//! Tests for typed (native Anthropic) tools on the forced-tool path.
+//! Tests for typed (native Anthropic) tools on the forced-tool and native output paths.
 
 use insta::assert_json_snapshot;
 use paigasus_helikon_core::{

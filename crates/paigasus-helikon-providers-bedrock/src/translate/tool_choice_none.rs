@@ -61,7 +61,6 @@ fn unchanged(messages: Vec<Message>) -> NoneOutcome {
 ///   field.
 /// - `TextHistory`: each tool block becomes a text block.
 ///
-/// # Errors
 /// The tools are split only when the strategy sends them. A request without a
 /// tool round, or a text-history family, never validates the tool names.
 ///
