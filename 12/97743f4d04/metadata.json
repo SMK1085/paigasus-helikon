@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "1297743f4d04",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-822-move-the-sqlx-sqlite-feature-out-of-the",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/12/97743f4d04/0/metadata.json",
+      "transcript": "/12/97743f4d04/0/full.jsonl",
+      "compact_transcript": "/12/97743f4d04/0/transcript.jsonl",
+      "content_hash": "/12/97743f4d04/0/content_hash.txt",
+      "prompt": "/12/97743f4d04/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 12158,
+    "cache_read_tokens": 2731148,
+    "output_tokens": 4631,
+    "api_call_count": 13,
+    "subagent_tokens": {
+      "input_tokens": 10,
+      "cache_creation_tokens": 43968,
+      "cache_read_tokens": 306762,
+      "output_tokens": 1907,
+      "api_call_count": 5
+    }
+  },
+  "redaction": {
+    "replacements": 41,
+    "layers": {
+      "betterleaks": 6,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 4,
+      "entropy": 35,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

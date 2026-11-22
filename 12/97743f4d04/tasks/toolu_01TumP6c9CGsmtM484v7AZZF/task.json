@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01TumP6c9CGsmtM484v7AZZF",
+  "agent_id": "a40c075608a7d78fd",
+  "subagent_type": "general-purpose",
+  "task_description": "Final-review fix wave SMA-822",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 54739,
+    "cache_read_tokens": 367015,
+    "output_tokens": 2620,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-22T16:31:22.560631+01:00",
+  "completed_at": "2026-11-22T16:31:49.251563+01:00"
+}
