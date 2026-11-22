@@ -118,7 +118,7 @@ OpenAI does not use provider tool types. It sends the generic schema for every t
 Reached as `paigasus_helikon::anthropic::AnthropicModel` behind the `anthropic`
 feature. Covers the Messages API. The builder reads `ANTHROPIC_API_KEY` from the
 environment, and the crate also exports the Anthropic-specific settings types
-`CacheStrategy` and `ExtendedThinking`.
+`CacheStrategy`, `ExtendedThinking` and `Effort`.
 
 ```rust
 use paigasus_helikon::anthropic::AnthropicModel;

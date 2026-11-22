@@ -66,8 +66,8 @@ pub enum ExtendedThinking {
 /// `output_config: { effort: "<level>" }`.
 ///
 /// The default of the builder sends no effort. The model then uses its own
-/// default. For example, `claude-sonnet-5-5` has the default `medium`. At a
-/// low effort, adaptive thinking can skip thinking on a short task. A higher
+/// default. For example, `claude-sonnet-5-5` has the default `medium`. At `medium` or a
+/// lower effort, adaptive thinking can skip thinking on a short task. A higher
 /// effort makes thinking more likely. Some models reject the field. Set it
 /// only for a model that supports effort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
