@@ -129,7 +129,7 @@ Use the same construction that the existing builder tests use (`anthropic_overri
 
 - [ ] **Step 2: Run the tests and see them fail**
 
-Run: `cargo test -p paigasus-helikon-providers-bedrock --lib additional builder`
+Run: `cargo test -p paigasus-helikon-providers-bedrock --lib additional`, then the same command with `builder`
 Expected: compile errors (the types and method do not exist).
 
 - [ ] **Step 3: Implement**
@@ -392,7 +392,7 @@ Tests only. They fix the behaviour that the spec states as fact.
 
 - [ ] **Step 2: Run the tests**
 
-Run: `cargo test -p paigasus-helikon-providers-bedrock --lib fallback stream`
+Run: `cargo test -p paigasus-helikon-providers-bedrock --lib fallback`, then the same command with `stream`
 Expected: PASS. If the fallback test fails, `has_forced_tool_choice` in Task 1 is wrong: fix it there.
 
 - [ ] **Step 3: Commit**

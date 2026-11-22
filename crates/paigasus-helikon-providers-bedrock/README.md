@@ -142,7 +142,9 @@ Only `memory_*` types use the typed entry. The provider sends `{"type": "memory_
 Set `native_tool_types(false)` to send the generic schema for every tool:
 
 ```rust,ignore
+// `sdk_cfg` is an `aws_config::SdkConfig`. See the explicit client example above.
 let model = BedrockModel::converse("us.anthropic.claude-sonnet-4-6")
+    .sdk_config(&sdk_cfg)
     .native_tool_types(false)
     .build()?;
 ```
