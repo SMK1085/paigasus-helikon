@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "5d193a876dfc",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-844-send-the-native-anthropic-memory-tool-type",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/5d/193a876dfc/0/metadata.json",
+      "transcript": "/5d/193a876dfc/0/full.jsonl",
+      "compact_transcript": "/5d/193a876dfc/0/transcript.jsonl",
+      "content_hash": "/5d/193a876dfc/0/content_hash.txt",
+      "prompt": "/5d/193a876dfc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 39694,
+    "cache_read_tokens": 2736609,
+    "output_tokens": 24867,
+    "api_call_count": 12,
+    "subagent_tokens": {
+      "input_tokens": 44,
+      "cache_creation_tokens": 61346,
+      "cache_read_tokens": 3868020,
+      "output_tokens": 49890,
+      "api_call_count": 22
+    }
+  },
+  "redaction": {
+    "replacements": 39,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 39,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
