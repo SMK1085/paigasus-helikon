@@ -131,7 +131,7 @@ A request can set `ToolChoice::None` when the history has tool calls. Bedrock ne
 
 On families other than Claude, the model can write text that looks like a tool call, for example `[tool call ...]`. This is text, not a tool call. On Claude, a prompt that asks for a tool call can get an empty answer.
 
-With `JsonSchema` or `JsonObject`, the request does not use this path. On the native path (Claude Sonnet 5.5 and Opus 5.5), the provider keeps the hidden anchor tool. On the forced-tool path, the combination stays a conflict error.
+If you set `JsonSchema` or `JsonObject` with `ToolChoice::None`, the result depends on the model. On the native path (Claude Sonnet 5.5 and Opus 5.5), the provider keeps the hidden anchor tool. For other Claude models, Mistral and Nova, the provider gives a conflict error. For Llama, Titan, Cohere and unknown models, the provider gives no error. It uses the `ToolChoice::None` handling above and sends no structured output, so the response is text.
 
 ## Credentials and TLS
 
