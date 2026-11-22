@@ -8,7 +8,8 @@
 # The script resolves the dependency graph only. It does not build anything.
 #
 # Why the absent case reads stderr: when a package is not in the graph,
-# cargo 1.99 exits 101 and prints `did not match any packages`. Older cargo
+# cargo 1.99 exits 101 and prints
+# ``package ID specification `libsqlite3-sys` did not match any packages``. Older cargo
 # exits 0 and prints `nothing to print`. The script accepts both forms.
 # Any other failure (for example a broken manifest) does not count as absent.
 
@@ -20,7 +21,7 @@ trap 'rm -f "$err_file"' EXIT
 
 # Run `cargo tree` for libsqlite3-sys. Sets: out, code, err.
 run_tree() {
-  out="$(cargo tree --color never "$@" -i libsqlite3-sys -e normal,build 2>"$err_file")"
+  out="$(cargo tree --color never --target all "$@" -i libsqlite3-sys -e normal,build 2>"$err_file")"
   code=$?
   err="$(cat "$err_file")"
 }
@@ -40,7 +41,7 @@ assert_absent() {
   shift
   run_tree "$@"
   if [ -z "$out" ] && {
-    { [ "$code" -ne 0 ] && [[ "$err" == *"did not match any packages"* ]]; } ||
+    { [ "$code" -ne 0 ] && [[ "$err" == *"specification \`libsqlite3-sys\` did not match any packages"* ]]; } ||
       { [ "$code" -eq 0 ] && [[ "$err" == *"nothing to print"* ]]; }
   }; then
     echo "ok: SQLite is absent from $label"
