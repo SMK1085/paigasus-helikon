@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.3.3...paigasus-helikon-providers-bedrock-v0.3.4) - 2026-11-22
+
+### Added
+
+- *(providers)* SMA-844 send the native memory tool type through bedrock ([#390](https://github.com/SMK1085/paigasus-helikon/pull/390))
+
 ## [0.3.3](https://github.com/SMK1085/paigasus-helikon/compare/paigasus-helikon-providers-bedrock-v0.3.2...paigasus-helikon-providers-bedrock-v0.3.3) - 2026-11-22
 
 ### Added
