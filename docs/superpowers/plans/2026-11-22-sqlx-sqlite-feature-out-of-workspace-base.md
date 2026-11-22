@@ -138,13 +138,15 @@ cargo build -p paigasus-helikon --no-default-features --features sessions-postgr
 git diff --exit-code "$(git merge-base origin/main HEAD)" -- Cargo.lock
 ```
 
-- [ ] **Step 5: Mutation checks (revert each with `git checkout -- <file>` on that file only)**
+- [ ] **Step 5: Mutation checks (commit first, then revert each with `git checkout -- <file>`)**
+
+Do the Step 9 commit before this step. The root `Cargo.toml` and the `evals` `Cargo.toml` carry the Step 1 edits, so a `git checkout` before the commit would erase them. After the commit, `git checkout -- <file>` on the one mutated file restores the committed fix.
 
 1. Put `"sqlite"` back into the root `sqlx` features → guard fails on both absent checks, both present checks pass.
 2. Set the facade feature `sessions-postgres = ["dep:paigasus-helikon-sessions-postgres", "dep:paigasus-helikon-sessions-sqlite"]` in `crates/paigasus-helikon/Cargo.toml:52` → guard fails only on `facade[sessions-postgres]`.
 3. Remove `features = ["sqlite"]` from `evals` → guard fails only on `evals[trace-sqlite]`.
 
-After all three: `git status --short` shows only the Step 1–2 files as modified, and the guard passes again.
+After all three: `git status --short` shows no modified tracked files, and the guard passes again.
 
 - [ ] **Step 6: Check the packaged manifests**
 
@@ -169,7 +171,7 @@ npx markdownlint-cli2
 
 Expected: all pass. (`sessions-it` runs in CI.)
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Commit (run it after Step 4, before Step 5)**
 
 ```bash
 git add Cargo.toml crates/paigasus-helikon-sessions-sqlite/Cargo.toml crates/paigasus-helikon-evals/Cargo.toml crates/paigasus-helikon-sessions-postgres/Cargo.toml crates/paigasus-helikon-sessions-postgres/CHANGELOG.md
