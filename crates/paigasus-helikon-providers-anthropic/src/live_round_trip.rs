@@ -4,6 +4,9 @@
 //! Optional: `ANTHROPIC_LIVE_MODEL_ID` (default `claude-sonnet-5-5`, used with
 //! `ExtendedThinking::Adaptive`). Optional: `ANTHROPIC_LIVE_ENABLED_MODEL_ID`
 //! (default `claude-haiku-4-5`, used with `ExtendedThinking::Enabled`).
+//! Optional: `ANTHROPIC_LIVE_INTERLEAVED_MODEL_ID` (default `claude-opus-4-5`,
+//! used with `ExtendedThinking::Enabled` and the interleaved beta; Haiku 4.5
+//! ignores this beta).
 //!
 //! Claude Sonnet 5.5 returns thinking blocks with empty text. No test here
 //! needs a non-empty thinking text.
@@ -52,6 +55,11 @@ fn enabled_model_id() -> String {
     std::env::var("ANTHROPIC_LIVE_ENABLED_MODEL_ID").unwrap_or_else(|_| "claude-haiku-4-5".into())
 }
 
+fn interleaved_model_id() -> String {
+    std::env::var("ANTHROPIC_LIVE_INTERLEAVED_MODEL_ID")
+        .unwrap_or_else(|_| "claude-opus-4-5".into())
+}
+
 /// The default model with adaptive thinking and the effort `max`. In a probe,
 /// `claude-sonnet-5-5` skipped thinking on this short task at `medium` and at
 /// `high`, and it thought at `max`.
@@ -65,13 +73,13 @@ fn make_model(beta: Option<&str>) -> AnthropicModel {
     builder.build().expect("the model builds from the env key")
 }
 
-/// A model from before 4.6 with enabled thinking. Adaptive thinking turns on
-/// interleaved thinking by itself on 4.6 and later, so the interleaved beta
-/// has a meaning only on this path. The redacted test also runs here, because
-/// on `claude-sonnet-5-5` the trigger string gives a normal thinking block.
-fn make_enabled_model(beta: Option<&str>) -> AnthropicModel {
+/// A model from before 4.6 with enabled thinking. The redacted test runs here,
+/// because on `claude-sonnet-5-5` the trigger string gives a normal thinking
+/// block. The default model is Haiku 4.5. Haiku 4.5 ignores the interleaved
+/// beta, so the interleaved test passes its own model.
+fn make_enabled_model(model_id: String, beta: Option<&str>) -> AnthropicModel {
     let mut builder =
-        AnthropicModel::messages(enabled_model_id()).extended_thinking(ExtendedThinking::Enabled {
+        AnthropicModel::messages(model_id).extended_thinking(ExtendedThinking::Enabled {
             budget_tokens: 2048,
         });
     if let Some(beta) = beta {
@@ -256,7 +264,7 @@ async fn live_thinking_round_trip_enabled() {
     if !has_key() {
         return;
     }
-    thinking_round_trip(&make_enabled_model(None)).await;
+    thinking_round_trip(&make_enabled_model(enabled_model_id(), None)).await;
 }
 
 /// A hand-off changes `system` between the two requests. The prefix check
@@ -292,6 +300,17 @@ async fn live_changed_system_drops_block_and_succeeds() {
 
     let mut second = second_request(&first, &turn1.items);
     second.messages[0] = system("You are the second agent. Answer in one sentence.");
+    let body = build_body(&model.cfg, &second)
+        .expect("the turn 2 request translates")
+        .body
+        .to_string();
+    for sig in &sigs {
+        assert!(
+            body.contains(sig.as_str()),
+            "the turn 2 body does not hold a signature of turn 1 (length {})",
+            sig.len()
+        );
+    }
     let turn2 = run_turn(&model, second, "turn 2 with a changed system").await;
     assert_turn_ok(&turn2, "turn 2 with a changed system");
 }
@@ -448,7 +467,7 @@ async fn live_redacted_round_trip() {
     if !has_key() {
         return;
     }
-    let model = make_enabled_model(None);
+    let model = make_enabled_model(enabled_model_id(), None);
     let first = first_request(&format!("{REDACT_TRIGGER} {BASE_PROMPT}"));
     let turn1 = run_turn(&model, first.clone(), "turn 1").await;
     let redacted = redacted_data(&blocks_of_items(&turn1.items));
@@ -485,7 +504,11 @@ async fn live_interleaved_beta_thinks_again() {
     if !has_key() {
         return;
     }
-    let items = thinking_round_trip(&make_enabled_model(Some(INTERLEAVED_BETA))).await;
+    let items = thinking_round_trip(&make_enabled_model(
+        interleaved_model_id(),
+        Some(INTERLEAVED_BETA),
+    ))
+    .await;
     assert!(
         !blocks_of_items(&items).is_empty(),
         "turn 2 has no thinking Block part. Run B saw one in turn 2 once, \
