@@ -56,6 +56,33 @@ pub const DECLINED: &[(&str, Scenario, &str)] = &[
         Scenario::CancelAfterStopReason,
         "stop reason and Finish are the same event",
     ),
+    // The scenario serves an Anthropic thinking block, which no other
+    // subject has.
+    (
+        "gemini",
+        Scenario::ThinkingToolCallCleanStop,
+        "the scenario serves an anthropic thinking block",
+    ),
+    (
+        "bedrock",
+        Scenario::ThinkingToolCallCleanStop,
+        "the scenario serves an anthropic thinking block",
+    ),
+    (
+        "litellm",
+        Scenario::ThinkingToolCallCleanStop,
+        "the scenario serves an anthropic thinking block",
+    ),
+    (
+        "openai/chat",
+        Scenario::ThinkingToolCallCleanStop,
+        "the scenario serves an anthropic thinking block",
+    ),
+    (
+        "openai/responses",
+        Scenario::ThinkingToolCallCleanStop,
+        "the scenario serves an anthropic thinking block",
+    ),
 ];
 
 /// The subject names registered in `tests/conformance.rs` — one `mod` per

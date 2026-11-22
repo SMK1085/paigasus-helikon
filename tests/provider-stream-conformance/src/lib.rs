@@ -53,6 +53,9 @@ pub enum Scenario {
     FragmentedToolName,
     /// One complete tool call followed by a tool-use stop reason.
     ToolCallCleanStop,
+    /// A signed thinking block, then one complete tool call, then a tool-use
+    /// stop reason.
+    ThinkingToolCallCleanStop,
 }
 
 impl Scenario {
@@ -67,6 +70,7 @@ impl Scenario {
         Scenario::CancelAfterStopReason,
         Scenario::FragmentedToolName,
         Scenario::ToolCallCleanStop,
+        Scenario::ThinkingToolCallCleanStop,
     ];
 
     /// Whether this scenario's script must let the translator observe a stop
@@ -80,6 +84,7 @@ impl Scenario {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelAfterStopReason
                 | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop
         )
     }
 }
@@ -196,14 +201,15 @@ pub trait StreamUnderTest {
     /// The `FinishReason` this subject's fixture for `scenario` declares, or
     /// `None` for scenarios that must not produce a `Finish` at all.
     ///
-    /// Exactly three scenarios end with a `Finish`, and the floor checks this
-    /// value for all three: `CleanStop`, `ToolCallCleanStop`, and
-    /// `TruncatedAfterStopReason`, where assertion 3 requires the buffered stop
-    /// reason to be flushed at end-of-stream. Every other scenario must return
+    /// Exactly four scenarios end with a `Finish`, and the floor checks this
+    /// value for all four: `CleanStop`, `ToolCallCleanStop`,
+    /// `ThinkingToolCallCleanStop`, and `TruncatedAfterStopReason`, where
+    /// assertion 3 requires the buffered stop reason to be flushed at
+    /// end-of-stream. Every other scenario must return
     /// `None` — a cancelled or errored stream withholds `Finish`, and a
     /// truncation with no stop reason observed never had one to emit.
     ///
-    /// The three differ in one way only: for the two clean stops a missing
+    /// The four differ in one way only: for the three clean stops a missing
     /// `Finish` fails the floor, whereas for `TruncatedAfterStopReason` it is
     /// `classify`'s `MissingFinish` (the SMA-531 shape). Either way, a `Finish`
     /// that *is* emitted must carry what this method declares.
@@ -539,7 +545,9 @@ fn floor_violation(
                 ));
             }
         }
-        Scenario::FragmentedToolName | Scenario::ToolCallCleanStop => {
+        Scenario::FragmentedToolName
+        | Scenario::ToolCallCleanStop
+        | Scenario::ThinkingToolCallCleanStop => {
             if !events
                 .iter()
                 .any(|e| matches!(e, Ok(ModelEvent::ToolCallDelta { .. })))
@@ -558,6 +566,25 @@ fn floor_violation(
                 ));
             }
         }
+    }
+
+    // Assertion 8 checks every call-scoped `ProviderData` against the streamed
+    // calls. With none in the stream it passes with no evidence, so this
+    // scenario requires at least one.
+    if matches!(scenario, Scenario::ThinkingToolCallCleanStop)
+        && !events.iter().any(|e| {
+            matches!(
+                e,
+                Ok(ModelEvent::ProviderData {
+                    call_id: Some(_),
+                    ..
+                })
+            )
+        })
+    {
+        return Some(Violation::InsufficientEvidence(
+            "no call-scoped ProviderData: assertion 8 would pass vacuously",
+        ));
     }
 
     // `CancelAfterStopReason` is the one degradation with no other detector.
@@ -598,7 +625,10 @@ fn floor_violation(
 
     if matches!(
         scenario,
-        Scenario::CleanStop | Scenario::TruncatedAfterStopReason | Scenario::ToolCallCleanStop
+        Scenario::CleanStop
+            | Scenario::TruncatedAfterStopReason
+            | Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop
     ) {
         // The first `Finish` on purpose: a second one is a `DuplicateFinish`,
         // which `classify` names precisely, and checking the reason on the
@@ -613,7 +643,13 @@ fn floor_violation(
             // 3 — the SMA-531 shape — which `classify` reports as
             // `MissingFinish`; a floor here would mask the one bug class that
             // scenario exists to catch behind `InsufficientEvidence`.
-            None if matches!(scenario, Scenario::CleanStop | Scenario::ToolCallCleanStop) => {
+            None if matches!(
+                scenario,
+                Scenario::CleanStop
+                    | Scenario::ToolCallCleanStop
+                    | Scenario::ThinkingToolCallCleanStop
+            ) =>
+            {
                 return Some(Violation::InsufficientEvidence(
                     "no Finish: a clean stop that never terminated proves nothing about \
                      terminality",
@@ -763,6 +799,7 @@ mod tests {
             Scenario::CancelAfterStopReason,
             Scenario::FragmentedToolName,
             Scenario::ToolCallCleanStop,
+            Scenario::ThinkingToolCallCleanStop,
         ] {
             match variant {
                 Scenario::CleanStop
@@ -773,7 +810,8 @@ mod tests {
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason
                 | Scenario::FragmentedToolName
-                | Scenario::ToolCallCleanStop => assert!(
+                | Scenario::ToolCallCleanStop
+                | Scenario::ThinkingToolCallCleanStop => assert!(
                     Scenario::ALL.contains(&variant),
                     "{variant:?} is missing from Scenario::ALL"
                 ),
@@ -841,12 +879,20 @@ mod tests {
         held: Mutex<Vec<oneshot::Receiver<()>>>,
     }
 
+    /// The pinned decline every subject but `anthropic` has for the thinking
+    /// scenario.
+    const THINKING_DECLINE: (Scenario, &str) = (
+        Scenario::ThinkingToolCallCleanStop,
+        "the scenario serves an anthropic thinking block",
+    );
+
     impl Subject {
-        /// A subject that conforms on every scenario and declines none.
+        /// A subject that conforms on every scenario it serves. Like every
+        /// subject but `anthropic`, it declines `ThinkingToolCallCleanStop`.
         fn conforming(name: &'static str) -> Self {
             Self {
                 name,
-                declines: &[],
+                declines: &[THINKING_DECLINE],
                 gate: Gate::Parked,
                 holds_open: true,
                 substitute: None,
@@ -914,7 +960,9 @@ mod tests {
                     FinishDecl::WrongOnTruncation => Some(FinishReason::ToolCalls),
                     _ => Some(FinishReason::Stop),
                 },
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 _ => None,
             }
         }
@@ -1026,6 +1074,33 @@ mod tests {
         let subject = Subject {
             substitute: Some((Scenario::FragmentedToolName, Box::new(renamed))),
             ..Subject::conforming("openai/chat")
+        };
+        assert_conforms(&subject).await;
+    }
+
+    /// The thinking scenario exists so that assertion 8 runs against a
+    /// call-scoped `ProviderData`. A stream with none passes assertion 8 with
+    /// no evidence, so the floor must reject it.
+    #[tokio::test]
+    #[should_panic(expected = "no call-scoped ProviderData")]
+    async fn a_thinking_scenario_without_call_scoped_provider_data_fails_its_floor() {
+        let no_provider_data = || {
+            vec![Ok(ModelEvent::ToolCallDelta {
+                call_id: "c1".into(),
+                name: Some(TOOL_NAME.into()),
+                args_delta: "{}".into(),
+            })]
+        };
+        let subject = Subject {
+            declines: &[(
+                Scenario::FragmentedToolName,
+                "name arrives whole in content_block_start",
+            )],
+            substitute: Some((
+                Scenario::ThinkingToolCallCleanStop,
+                Box::new(no_provider_data),
+            )),
+            ..Subject::conforming("anthropic")
         };
         assert_conforms(&subject).await;
     }
@@ -1154,7 +1229,10 @@ mod tests {
     #[should_panic(expected = "unexpected decline of CleanStop")]
     async fn an_unpinned_decline_fails() {
         let subject = Subject {
-            declines: &[(Scenario::CleanStop, "did not feel like it")],
+            declines: &[
+                (Scenario::CleanStop, "did not feel like it"),
+                THINKING_DECLINE,
+            ],
             ..Subject::conforming("openai/chat")
         };
         assert_conforms(&subject).await;
@@ -1168,10 +1246,13 @@ mod tests {
     #[should_panic(expected = "CancelAfterStopReason is pinned as declined")]
     async fn a_pinned_decline_that_stopped_happening_fails() {
         let subject = Subject {
-            declines: &[(
-                Scenario::FragmentedToolName,
-                "name arrives whole in toolUse start",
-            )],
+            declines: &[
+                (
+                    Scenario::FragmentedToolName,
+                    "name arrives whole in toolUse start",
+                ),
+                THINKING_DECLINE,
+            ],
             ..Subject::conforming("bedrock")
         };
         assert_conforms(&subject).await;
@@ -1189,6 +1270,7 @@ mod tests {
                     Scenario::CancelAfterStopReason,
                     "no observable event between MessageStop and Metadata",
                 ),
+                THINKING_DECLINE,
             ],
             ..Subject::conforming("bedrock")
         };

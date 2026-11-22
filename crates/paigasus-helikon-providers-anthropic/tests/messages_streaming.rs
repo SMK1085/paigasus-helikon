@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use paigasus_helikon_core::{
     CancellationToken, ContentPart, FinishReason, Item, Model, ModelError, ModelEvent, ModelRequest,
 };
-use paigasus_helikon_providers_anthropic::AnthropicModel;
+use paigasus_helikon_providers_anthropic::{AnthropicModel, PROVIDER_DATA_KEY};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Respond, ResponseTemplate};
 
@@ -361,4 +361,34 @@ async fn error_after_buffered_stop_reason_emits_no_finish() {
         matches!(events.last().unwrap(), Err(ModelError::Unavailable)),
         "the in-band error must be terminal, got {events:#?}"
     );
+}
+
+fn count_provider_data(oks: &[ModelEvent]) -> usize {
+    oks.iter()
+        .filter(|e| matches!(e, ModelEvent::ProviderData { provider, .. } if provider == PROVIDER_DATA_KEY))
+        .count()
+}
+
+#[tokio::test]
+async fn redacted_thinking_stream_keeps_blocks() {
+    let server = MockServer::start().await;
+    let fixture = include_str!("fixtures/redacted_thinking_tool_use.txt");
+    let events = run_stream(&server, fixture).await;
+    let oks: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
+
+    // Two redacted blocks, the text position and the tool_use position.
+    assert_eq!(count_provider_data(&oks), 4, "got {oks:#?}");
+    assert_exactly_one_terminal_finish(&oks);
+}
+
+#[tokio::test]
+async fn thinking_text_tool_use_stream_emits_provider_data() {
+    let server = MockServer::start().await;
+    let fixture = include_str!("fixtures/thinking_text_tool_use.txt");
+    let events = run_stream(&server, fixture).await;
+    let oks: Vec<_> = events.into_iter().map(|r| r.unwrap()).collect();
+
+    // One thinking block, the text position and the tool_use position.
+    assert_eq!(count_provider_data(&oks), 3, "got {oks:#?}");
+    assert_exactly_one_terminal_finish(&oks);
 }

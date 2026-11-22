@@ -273,7 +273,7 @@ also counting `Item::System` running-summary text (necessary so the
 post-compaction count is measured correctly). `Item::ToolCall` name and args
 (compact JSON) also contribute, as does `ContentPart::ToolUse` `.name` + `.args`
 (the equivalent nested-in-content form emitted by Anthropic-style providers).
-Image and audio source parts contribute zero. `ContentPart::ProviderData` counts the length of its serialized `data`, because Gemini bills thought signatures as input tokens.
+Image and audio source parts contribute zero. `ContentPart::ProviderData` counts the length of its serialized `data`, because Gemini bills thought signatures as input tokens. Anthropic thinking blocks also add tokens: the next request sends them back, and Anthropic counts them as input. The estimate counts the stored provider data before translation. The translator can omit a thinking block, and the API can drop or strip a sent block. So the estimate can be higher than the billed input, and compaction can start earlier. The estimate is high for some models.
 The heuristic is deterministic and dependency-free. Swap it with a
 model-specific tokenizer by passing a custom `impl TokenCounter` to the builder.
 

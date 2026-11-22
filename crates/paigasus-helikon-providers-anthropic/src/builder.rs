@@ -4,10 +4,12 @@ use paigasus_helikon_core::ModelCapabilities;
 use reqwest::Url;
 
 use crate::capabilities::{self, ModelEntry};
-use crate::settings::{CacheStrategy, ExtendedThinking};
+use crate::settings::{CacheStrategy, Effort, ExtendedThinking};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+/// The beta header that the `block_binding` request field needs.
+pub(crate) const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
 /// Construction-time errors. Runtime errors flow through
 /// [`paigasus_helikon_core::ModelError`].
@@ -44,6 +46,7 @@ pub(crate) struct Config {
     pub(crate) cache_strategy: CacheStrategy,
     pub(crate) native_tool_types: bool,
     pub(crate) extended_thinking: ExtendedThinking,
+    pub(crate) effort: Option<Effort>,
     pub(crate) top_k: Option<u32>,
     pub(crate) max_output_default: u32,
     pub(crate) capabilities: ModelCapabilities,
@@ -69,6 +72,7 @@ pub struct AnthropicModelBuilder {
     cache_strategy: CacheStrategy,
     native_tool_types: bool,
     extended_thinking: ExtendedThinking,
+    effort: Option<Effort>,
     top_k: Option<u32>,
     capabilities_override: Option<ModelCapabilities>,
 }
@@ -85,6 +89,7 @@ impl AnthropicModelBuilder {
             cache_strategy: CacheStrategy::None,
             native_tool_types: true,
             extended_thinking: ExtendedThinking::Disabled,
+            effort: None,
             top_k: None,
             capabilities_override: None,
         }
@@ -148,6 +153,17 @@ impl AnthropicModelBuilder {
         self
     }
 
+    /// Effort level. Default: none. The provider then sends no effort and the
+    /// model uses its own default.
+    ///
+    /// On some models, for example `claude-sonnet-5-5` with the default
+    /// `medium`, adaptive thinking can skip thinking on a short task. A higher
+    /// effort makes thinking more likely. Some models reject this field.
+    pub fn effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
+        self
+    }
+
     /// Set the `top_k` sampling parameter. Anthropic-specific.
     pub fn top_k(mut self, k: u32) -> Self {
         self.top_k = Some(k);
@@ -194,10 +210,22 @@ impl AnthropicModelBuilder {
         let entry: ModelEntry = capabilities::lookup(&self.model_id);
         let capabilities = self.capabilities_override.unwrap_or(entry.caps);
 
-        let anthropic_beta = if self.beta_headers.is_empty() {
+        let mut betas = self.beta_headers;
+        if self.extended_thinking == ExtendedThinking::Adaptive {
+            // Adaptive thinking sends `block_binding`. The API accepts that
+            // field only with this beta header. Add it exactly once.
+            let present = betas
+                .iter()
+                .flat_map(|h| h.split(','))
+                .any(|b| b.trim() == THINKING_BINDING_BETA);
+            if !present {
+                betas.push(THINKING_BINDING_BETA.to_owned());
+            }
+        }
+        let anthropic_beta = if betas.is_empty() {
             None
         } else {
-            Some(self.beta_headers.join(","))
+            Some(betas.join(","))
         };
 
         let http = self.http_client.unwrap_or_default();
@@ -213,6 +241,7 @@ impl AnthropicModelBuilder {
             cache_strategy: self.cache_strategy,
             native_tool_types: self.native_tool_types,
             extended_thinking: self.extended_thinking,
+            effort: self.effort,
             top_k: self.top_k,
             max_output_default: entry.max_output_default,
             capabilities,
@@ -315,6 +344,70 @@ mod tests {
         assert_eq!(
             c.anthropic_beta.as_deref(),
             Some("prompt-caching-2024-07-31,max-tokens-3-5-sonnet-2024-07-15"),
+        );
+    }
+
+    fn beta_of(t: ExtendedThinking, user: &[&str]) -> Option<String> {
+        let _g = env_lock().lock().unwrap();
+        let prev = save_and_set_env(Some("sk-x"));
+        let mut b = AnthropicModelBuilder::new("claude-sonnet-5-5").extended_thinking(t);
+        for u in user {
+            b = b.beta(*u);
+        }
+        let c = b.build_config().unwrap();
+        restore_env(prev);
+        c.anthropic_beta
+    }
+
+    #[test]
+    fn adaptive_adds_binding_beta_once() {
+        assert_eq!(
+            beta_of(ExtendedThinking::Adaptive, &[]).as_deref(),
+            Some("thinking-binding-controls-2026-08-01"),
+        );
+    }
+
+    #[test]
+    fn adaptive_does_not_duplicate_user_binding_beta() {
+        assert_eq!(
+            beta_of(
+                ExtendedThinking::Adaptive,
+                &["thinking-binding-controls-2026-08-01"]
+            )
+            .as_deref(),
+            Some("thinking-binding-controls-2026-08-01"),
+        );
+        assert_eq!(
+            beta_of(
+                ExtendedThinking::Adaptive,
+                &["a-beta,thinking-binding-controls-2026-08-01"]
+            )
+            .as_deref(),
+            Some("a-beta,thinking-binding-controls-2026-08-01"),
+        );
+    }
+
+    #[test]
+    fn adaptive_joins_binding_beta_with_user_betas() {
+        assert_eq!(
+            beta_of(ExtendedThinking::Adaptive, &["a-beta", "b-beta"]).as_deref(),
+            Some("a-beta,b-beta,thinking-binding-controls-2026-08-01"),
+        );
+    }
+
+    #[test]
+    fn enabled_and_disabled_add_no_binding_beta() {
+        assert!(beta_of(
+            ExtendedThinking::Enabled {
+                budget_tokens: 2048
+            },
+            &[]
+        )
+        .is_none());
+        assert!(beta_of(ExtendedThinking::Disabled, &[]).is_none());
+        assert_eq!(
+            beta_of(ExtendedThinking::Disabled, &["a-beta"]).as_deref(),
+            Some("a-beta"),
         );
     }
 

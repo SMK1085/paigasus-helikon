@@ -261,6 +261,8 @@ mod bedrock {
             ),
             // Declined — see the reasons in `Bedrock::stream`.
             Scenario::CancelAfterStopReason | Scenario::FragmentedToolName => return None,
+            // Declined — the scenario serves an anthropic thinking block.
+            Scenario::ThinkingToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -416,7 +418,9 @@ mod bedrock {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelMidGeneration => None,
                 // Declined; never reached.
-                Scenario::CancelAfterStopReason | Scenario::FragmentedToolName => None,
+                Scenario::CancelAfterStopReason
+                | Scenario::FragmentedToolName
+                | Scenario::ThinkingToolCallCleanStop => None,
             }
         }
 
@@ -437,6 +441,9 @@ mod bedrock {
                     return Outcome::Declined(
                         "no observable event between MessageStop and Metadata",
                     )
+                }
+                Scenario::ThinkingToolCallCleanStop => {
+                    return Outcome::Declined("the scenario serves an anthropic thinking block")
                 }
                 _ => {}
             }
@@ -765,9 +772,9 @@ mod openai_chat {
 
     /// The scripted response for one scenario.
     ///
-    /// Every scenario is served — `openai/chat` declines none — so unlike
-    /// `bedrock::script` this returns a bare [`Script`], not an `Option`.
-    fn script(scenario: Scenario) -> Script {
+    /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
+    /// declines, like `bedrock::script`.
+    fn script(scenario: Scenario) -> Option<Script> {
         // The two-delta opening every text scenario shares. The content is
         // arbitrary (as in `bedrock::opening`); the envelope is what is
         // grounded — see `text_delta`.
@@ -861,14 +868,16 @@ mod openai_chat {
                 ];
                 (chunks, None, Ending::Clean)
             }
+            // Declined — the scenario serves an anthropic thinking block.
+            Scenario::ThinkingToolCallCleanStop => return None,
         };
 
-        Script {
+        Some(Script {
             content_type: "text/event-stream",
             chunks,
             gate_after,
             ending,
-        }
+        })
     }
 
     /// The request driven through `Model::invoke`.
@@ -926,9 +935,13 @@ mod openai_chat {
             // module doc and `bedrock::encodes_stop_reason` for why that
             // restatement would make the harness's cross-check dead code.
             script(scenario)
-                .chunks
-                .iter()
-                .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
+                .map(|script| {
+                    script
+                        .chunks
+                        .iter()
+                        .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
+                })
+                .unwrap_or(false)
         }
 
         fn fixture_tool_name(&self) -> &'static str {
@@ -953,12 +966,18 @@ mod openai_chat {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason
-                | Scenario::FragmentedToolName => None,
+                | Scenario::FragmentedToolName
+                | Scenario::ThinkingToolCallCleanStop => None,
             }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
-            let script = script(scenario);
+            if scenario == Scenario::ThinkingToolCallCleanStop {
+                return Outcome::Declined("the scenario serves an anthropic thinking block");
+            }
+
+            let script =
+                script(scenario).expect("a scenario this subject serves must have a script");
             let mut server = PacedServer::start(script).await;
             let gate = server.take_gate();
             let model = build_model_against(&server.base_url());
@@ -1288,9 +1307,9 @@ mod litellm {
 
     /// The scripted response for one scenario.
     ///
-    /// Every scenario is served — `litellm` declines none — so this returns a
-    /// bare [`Script`], not an `Option`.
-    fn script(scenario: Scenario) -> Script {
+    /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
+    /// declines.
+    fn script(scenario: Scenario) -> Option<Script> {
         // The two-delta opening every text scenario shares, matching
         // `text_then_trailing_usage.txt`'s two content chunks.
         let opening = || vec![text_delta("Hel"), text_delta("lo")];
@@ -1385,14 +1404,16 @@ mod litellm {
                 ];
                 (chunks, None, Ending::Clean)
             }
+            // Declined — the scenario serves an anthropic thinking block.
+            Scenario::ThinkingToolCallCleanStop => return None,
         };
 
-        Script {
+        Some(Script {
             content_type: "text/event-stream",
             chunks,
             gate_after,
             ending,
-        }
+        })
     }
 
     /// The request driven through `Model::invoke`.
@@ -1448,9 +1469,13 @@ mod litellm {
             // module doc and `bedrock::encodes_stop_reason` for why that
             // restatement would make the harness's cross-check dead code.
             script(scenario)
-                .chunks
-                .iter()
-                .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
+                .map(|script| {
+                    script
+                        .chunks
+                        .iter()
+                        .any(|chunk| contains(chunk, FINISH_REASON_MARKER))
+                })
+                .unwrap_or(false)
         }
 
         fn fixture_tool_name(&self) -> &'static str {
@@ -1473,12 +1498,18 @@ mod litellm {
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason
-                | Scenario::FragmentedToolName => None,
+                | Scenario::FragmentedToolName
+                | Scenario::ThinkingToolCallCleanStop => None,
             }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
-            let script = script(scenario);
+            if scenario == Scenario::ThinkingToolCallCleanStop {
+                return Outcome::Declined("the scenario serves an anthropic thinking block");
+            }
+
+            let script =
+                script(scenario).expect("a scenario this subject serves must have a script");
             let mut server = PacedServer::start(script).await;
             let gate = server.take_gate();
             let model = build_model_against(&server.base_url());
@@ -1620,6 +1651,13 @@ mod litellm {
 ///   `name` together, followed by exactly one `input_json_delta` carrying the
 ///   whole argument JSON. Grounds [`tool_use_start`], [`input_json_delta`],
 ///   and `ToolCallCleanStop`'s script.
+/// - `thinking_text_tool_use.txt` — a signed thinking block before a
+///   `tool_use` block. Grounds [`thinking_start`] (`"thinking":"","signature":""`),
+///   [`thinking_delta`], [`signature_delta`] (fake value `SIG_FAKE_1`) and
+///   `ThinkingToolCallCleanStop`'s script. The fixture holds a text block
+///   between the thinking block and the tool call. The script leaves it out,
+///   so the tool call sits at index 1. [`tool_use_start_at`],
+///   [`input_json_delta_at`] and [`content_block_stop_at`] carry that index.
 ///
 /// `body_cut_inside_message_stop.txt` and `thinking_then_text.txt` were read
 /// but contribute no shape this module needs: the former is a byte-level cut
@@ -1802,9 +1840,56 @@ mod anthropic {
     /// (`AnthropicEvent::ContentBlockStop { .. }` only logs); included because
     /// a real stream closes every block it opens.
     fn content_block_stop() -> Vec<u8> {
+        content_block_stop_at(0)
+    }
+
+    /// `content_block_stop` for the block at `index`. The thinking scenario
+    /// has two blocks, so its second block closes at index 1.
+    fn content_block_stop_at(index: u32) -> Vec<u8> {
         frame(
             "content_block_stop",
-            json!({ "type": "content_block_stop", "index": 0 }),
+            json!({ "type": "content_block_stop", "index": index }),
+        )
+    }
+
+    /// `content_block_start` opening a thinking block, with the empty
+    /// `thinking` and empty `signature` the fixture
+    /// `thinking_text_tool_use.txt` sends. The signature arrives later, in a
+    /// `signature_delta`.
+    fn thinking_start() -> Vec<u8> {
+        frame(
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": { "type": "thinking", "thinking": "", "signature": "" }
+            }),
+        )
+    }
+
+    /// One `thinking_delta`. Envelope matches `thinking_text_tool_use.txt`;
+    /// the text itself is arbitrary.
+    fn thinking_delta(thinking: &str) -> Vec<u8> {
+        frame(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "thinking_delta", "thinking": thinking }
+            }),
+        )
+    }
+
+    /// The `signature_delta` that closes a thinking block's content. The
+    /// fixture carries the fake value `SIG_FAKE_1`; so does this script.
+    fn signature_delta(signature: &str) -> Vec<u8> {
+        frame(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "signature_delta", "signature": signature }
+            }),
         )
     }
 
@@ -1842,11 +1927,17 @@ mod anthropic {
     /// `input_json_delta` — which is why `FragmentedToolName` is declined for
     /// this subject: the name arrives whole, in this one event.
     fn tool_use_start(call_id: &str, name: &str) -> Vec<u8> {
+        tool_use_start_at(0, call_id, name)
+    }
+
+    /// [`tool_use_start`] for the block at `index`. In the thinking scenario
+    /// the thinking block holds index 0, so the tool call sits at index 1.
+    fn tool_use_start_at(index: u32, call_id: &str, name: &str) -> Vec<u8> {
         frame(
             "content_block_start",
             json!({
                 "type": "content_block_start",
-                "index": 0,
+                "index": index,
                 "content_block": { "type": "tool_use", "id": call_id, "name": name, "input": {} }
             }),
         )
@@ -1857,11 +1948,16 @@ mod anthropic {
     /// why this is never called twice for one call in this module, unlike its
     /// siblings' tool-argument helpers.
     fn input_json_delta(partial_json: &str) -> Vec<u8> {
+        input_json_delta_at(0, partial_json)
+    }
+
+    /// [`input_json_delta`] for the block at `index`.
+    fn input_json_delta_at(index: u32, partial_json: &str) -> Vec<u8> {
         frame(
             "content_block_delta",
             json!({
                 "type": "content_block_delta",
-                "index": 0,
+                "index": index,
                 "delta": { "type": "input_json_delta", "partial_json": partial_json }
             }),
         )
@@ -1993,6 +2089,34 @@ mod anthropic {
                 None,
                 Ending::Clean,
             ),
+            // A signed thinking block at index 0, then one whole tool call at
+            // index 1, then a `tool_use` stop reason. Event shapes are
+            // transcribed from `thinking_text_tool_use.txt`: the thinking
+            // `content_block_start` with `"thinking":"","signature":""`, a
+            // `thinking_delta`, the `signature_delta` with the fake value
+            // `SIG_FAKE_1`, and the `content_block_stop`. The fixture also
+            // holds a text block between the thinking block and the tool call.
+            // This script leaves that block out, so the tool call takes the
+            // next index (1). The `tool_use` events are the same as in
+            // `ToolCallCleanStop`. The translator then emits a call-scoped
+            // `ProviderData` position for the tool call, and assertion 8
+            // checks it against the streamed call.
+            Scenario::ThinkingToolCallCleanStop => (
+                vec![
+                    message_start(),
+                    thinking_start(),
+                    thinking_delta("I need the weather."),
+                    signature_delta("SIG_FAKE_1"),
+                    content_block_stop(),
+                    tool_use_start_at(1, TOOL_USE_ID, TOOL_NAME),
+                    input_json_delta_at(1, "{\"city\":\"Berlin\"}"),
+                    content_block_stop_at(1),
+                    message_delta("tool_use", 18),
+                    message_stop(),
+                ],
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -2017,7 +2141,10 @@ mod anthropic {
                 text: "What is the weather in Berlin?".into(),
             }],
         }];
-        if matches!(scenario, Scenario::ToolCallCleanStop) {
+        if matches!(
+            scenario,
+            Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop
+        ) {
             req.tools = vec![ToolDef::new(
                 TOOL_NAME,
                 "Look up the current weather for a city.",
@@ -2083,7 +2210,9 @@ mod anthropic {
                 }
                 // `"tool_use"` maps to `FinishReason::ToolCalls` when no
                 // structured-output synthesis is in play.
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -2163,6 +2292,9 @@ mod anthropic {
                 "input_json_delta",
                 input_json_delta("{\"city\":\"Berlin\"}"),
             ),
+            ("thinking start", thinking_start()),
+            ("thinking delta", thinking_delta("I need the weather.")),
+            ("signature delta", signature_delta("SIG_FAKE_1")),
         ] {
             assert!(
                 !contains(&frame, STOP_REASON_MARKER),
@@ -2586,6 +2718,8 @@ mod gemini {
                 None,
                 Ending::Clean,
             ),
+            // Declined — the scenario serves an anthropic thinking block.
+            Scenario::ThinkingToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -2692,7 +2826,7 @@ mod gemini {
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason => None,
                 // Declined; never reached.
-                Scenario::FragmentedToolName => None,
+                Scenario::FragmentedToolName | Scenario::ThinkingToolCallCleanStop => None,
             }
         }
 
@@ -2702,6 +2836,9 @@ mod gemini {
             // split across.
             if scenario == Scenario::FragmentedToolName {
                 return Outcome::Declined("name arrives whole in functionCall");
+            }
+            if scenario == Scenario::ThinkingToolCallCleanStop {
+                return Outcome::Declined("the scenario serves an anthropic thinking block");
             }
 
             let script =
@@ -3112,6 +3249,8 @@ mod openai_responses {
                 ];
                 (chunks, None, Ending::Clean)
             }
+            // Declined — the scenario serves an anthropic thinking block.
+            Scenario::ThinkingToolCallCleanStop => return None,
         };
 
         Some(Script {
@@ -3202,7 +3341,8 @@ mod openai_responses {
                 Scenario::TruncatedAfterStopReason
                 | Scenario::ErrorAfterStopReason
                 | Scenario::CancelAfterStopReason
-                | Scenario::FragmentedToolName => None,
+                | Scenario::FragmentedToolName
+                | Scenario::ThinkingToolCallCleanStop => None,
             }
         }
 
@@ -3222,6 +3362,9 @@ mod openai_responses {
                 // there is no second event a fragment could split across.
                 Scenario::FragmentedToolName => {
                     return Outcome::Declined("name arrives whole in output_item.added")
+                }
+                Scenario::ThinkingToolCallCleanStop => {
+                    return Outcome::Declined("the scenario serves an anthropic thinking block")
                 }
                 _ => {}
             }

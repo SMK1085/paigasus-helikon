@@ -125,10 +125,20 @@ pub(crate) fn conforming(scenario: Scenario) -> Vec<Result<ModelEvent, ModelErro
 
     if matches!(
         scenario,
-        Scenario::FragmentedToolName | Scenario::ToolCallCleanStop
+        Scenario::FragmentedToolName
+            | Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop
     ) {
         events.push(tool(Some(TOOL_NAME), "{\"city\":"));
         events.push(tool(None, "\"Berlin\"}"));
+    }
+    if scenario == Scenario::ThinkingToolCallCleanStop {
+        // The position record of the tool call, scoped to the fake call.
+        events.push(Ok(ModelEvent::ProviderData {
+            provider: "test".into(),
+            call_id: Some(CALL_ID.into()),
+            data: serde_json::json!({ "kind": "tool_use" }),
+        }));
     }
 
     let errored = matches!(
@@ -199,7 +209,9 @@ fn usage() -> Result<ModelEvent, ModelError> {
 fn finish(scenario: Scenario) -> Result<ModelEvent, ModelError> {
     Ok(ModelEvent::Finish {
         reason: match scenario {
-            Scenario::FragmentedToolName | Scenario::ToolCallCleanStop => FinishReason::ToolCalls,
+            Scenario::FragmentedToolName
+            | Scenario::ToolCallCleanStop
+            | Scenario::ThinkingToolCallCleanStop => FinishReason::ToolCalls,
             _ => FinishReason::Stop,
         },
     })
@@ -309,7 +321,9 @@ mod tests {
     fn declared_finish_reason(scenario: Scenario) -> Option<FinishReason> {
         match scenario {
             Scenario::CleanStop | Scenario::TruncatedAfterStopReason => Some(FinishReason::Stop),
-            Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+            Scenario::ToolCallCleanStop | Scenario::ThinkingToolCallCleanStop => {
+                Some(FinishReason::ToolCalls)
+            }
             _ => None,
         }
     }

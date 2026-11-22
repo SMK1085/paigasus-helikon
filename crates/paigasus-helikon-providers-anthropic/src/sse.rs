@@ -22,10 +22,7 @@ pub(crate) enum AnthropicEvent {
         delta: ContentBlockDelta,
     },
     #[serde(rename = "content_block_stop")]
-    ContentBlockStop {
-        #[allow(dead_code)]
-        index: u32,
-    },
+    ContentBlockStop { index: u32 },
     #[serde(rename = "message_delta")]
     MessageDelta {
         delta: MessageDeltaPayload,
@@ -60,7 +57,14 @@ pub(crate) enum ContentBlockHead {
     #[serde(rename = "text")]
     Text,
     #[serde(rename = "thinking")]
-    Thinking,
+    Thinking {
+        #[serde(default)]
+        thinking: String,
+        #[serde(default)]
+        signature: String,
+    },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -80,10 +84,7 @@ pub(crate) enum ContentBlockDelta {
     #[serde(rename = "thinking_delta")]
     ThinkingDelta { thinking: String },
     #[serde(rename = "signature_delta")]
-    SignatureDelta {
-        #[allow(dead_code)]
-        signature: String,
-    },
+    SignatureDelta { signature: String },
     #[serde(rename = "input_json_delta")]
     InputJsonDelta { partial_json: String },
 }
@@ -201,6 +202,47 @@ mod tests {
             AnthropicEvent::MessageDelta { delta, usage } => {
                 assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
                 assert_eq!(usage.unwrap().output_tokens, 42);
+            }
+            other => panic!("wrong variant {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserializes_redacted_thinking_head() {
+        let v = json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "redacted_thinking", "data": "REDACTED_FAKE_1"}
+        });
+        let e: AnthropicEvent = serde_json::from_value(v).unwrap();
+        match e {
+            AnthropicEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockHead::RedactedThinking { data },
+            } => assert_eq!(data, "REDACTED_FAKE_1"),
+            other => panic!("wrong variant {other:?}"),
+        }
+    }
+
+    #[test]
+    fn thinking_head_without_signature_defaults_to_empty() {
+        let v = json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""}
+        });
+        let e: AnthropicEvent = serde_json::from_value(v).unwrap();
+        match e {
+            AnthropicEvent::ContentBlockStart {
+                content_block:
+                    ContentBlockHead::Thinking {
+                        thinking,
+                        signature,
+                    },
+                ..
+            } => {
+                assert_eq!(thinking, "");
+                assert_eq!(signature, "");
             }
             other => panic!("wrong variant {other:?}"),
         }

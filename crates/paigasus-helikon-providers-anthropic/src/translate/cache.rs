@@ -54,10 +54,16 @@ pub(crate) fn apply_cache_strategy(
         if let Some(arr) = messages.as_array_mut() {
             if let Some(last_msg) = arr.last_mut() {
                 if let Some(blocks) = last_msg["content"].as_array_mut() {
-                    if let Some(last_block) = blocks.last_mut() {
-                        if let Some(obj) = last_block.as_object_mut() {
-                            obj.insert("cache_control".to_owned(), mark());
-                        }
+                    // A thinking block must not carry a breakpoint. Use the
+                    // last other block of the message, or set no breakpoint.
+                    let target = blocks.iter_mut().rev().find(|b| {
+                        !matches!(
+                            b.get("type").and_then(Value::as_str),
+                            Some("thinking" | "redacted_thinking")
+                        )
+                    });
+                    if let Some(obj) = target.and_then(Value::as_object_mut) {
+                        obj.insert("cache_control".to_owned(), mark());
                     }
                 }
             }
@@ -153,5 +159,41 @@ mod tests {
         apply_cache_strategy(CacheStrategy::LastTurn, None, &mut tools, &mut messages);
         assert!(messages[0]["content"][0].get("cache_control").is_none());
         assert_eq!(messages[1]["content"][0]["cache_control"], mark());
+    }
+
+    #[test]
+    fn last_turn_skips_trailing_thinking_block() {
+        let mut tools = json!([]);
+        let mut messages = json!([{"role": "assistant", "content": [
+            {"type": "text", "text": "a"},
+            {"type": "thinking", "thinking": "t", "signature": "SIG_FAKE_1"},
+        ]}]);
+        apply_cache_strategy(CacheStrategy::LastTurn, None, &mut tools, &mut messages);
+        assert_eq!(messages[0]["content"][0]["cache_control"], mark());
+        assert!(messages[0]["content"][1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn last_turn_skips_trailing_redacted_block() {
+        let mut tools = json!([]);
+        let mut messages = json!([{"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "n", "input": {}},
+            {"type": "redacted_thinking", "data": "REDACTED_FAKE_1"},
+        ]}]);
+        apply_cache_strategy(CacheStrategy::LastTurn, None, &mut tools, &mut messages);
+        assert_eq!(messages[0]["content"][0]["cache_control"], mark());
+        assert!(messages[0]["content"][1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn last_turn_with_only_thinking_blocks_sets_no_breakpoint() {
+        let mut tools = json!([]);
+        let mut messages = json!([{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "t", "signature": "SIG_FAKE_1"},
+            {"type": "redacted_thinking", "data": "REDACTED_FAKE_1"},
+        ]}]);
+        apply_cache_strategy(CacheStrategy::LastTurn, None, &mut tools, &mut messages);
+        assert!(messages[0]["content"][0].get("cache_control").is_none());
+        assert!(messages[0]["content"][1].get("cache_control").is_none());
     }
 }

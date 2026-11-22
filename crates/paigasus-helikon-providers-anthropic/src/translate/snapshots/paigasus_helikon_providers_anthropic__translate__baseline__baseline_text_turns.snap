@@ -1,0 +1,38 @@
+---
+source: crates/paigasus-helikon-providers-anthropic/src/translate/mod.rs
+expression: "baseline_body(&default_cfg(), items)"
+---
+{
+  "max_tokens": 32768,
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "q",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": [
+        {
+          "text": "a",
+          "type": "text"
+        }
+      ],
+      "role": "assistant"
+    },
+    {
+      "content": [
+        {
+          "text": "r",
+          "type": "text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-6",
+  "stream": true
+}

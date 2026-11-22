@@ -118,7 +118,7 @@ OpenAI does not use provider tool types. It sends the generic schema for every t
 Reached as `paigasus_helikon::anthropic::AnthropicModel` behind the `anthropic`
 feature. Covers the Messages API. The builder reads `ANTHROPIC_API_KEY` from the
 environment, and the crate also exports the Anthropic-specific settings types
-`CacheStrategy` and `ExtendedThinking`.
+`CacheStrategy`, `ExtendedThinking` and `Effort`.
 
 ```rust
 use paigasus_helikon::anthropic::AnthropicModel;
@@ -130,6 +130,18 @@ let model = AnthropicModel::messages("claude-sonnet-4-6").build()?;
 yields a `Result<AnthropicModel, BuildError>`.
 
 Anthropic uses provider tool types. If a tool declares an `anthropic` type, the adapter sends the typed entry, for example `{"type": "memory_20250818", "name": "memory"}`, with no description and no input schema. To turn this off, call `native_tool_types(false)` on the builder. The adapter then sends the generic schema. See [Provider tool types](./tools.md#provider-tool-types).
+
+Anthropic thinking blocks round trip through provider data. The stream keeps each `thinking` and `redacted_thinking` block as a `ContentPart::ProviderData` part with the key `PROVIDER_DATA_KEY` (`"anthropic"`). The next request sends the eligible blocks back unchanged, and only with `Adaptive` or `Enabled`. The shape of the `data` is private.
+
+- The beta `interleaved-thinking-2025-05-14` has an effect only on models with manual interleaving, with `ExtendedThinking::Enabled`. These models are Claude Opus 4.5, Sonnet 4.5 and earlier Claude 4 models. Add `.beta("interleaved-thinking-2025-05-14")` to let the model think again after a tool result. Claude Haiku 4.5 ignores the beta. `Adaptive` interleaves by itself.
+- With `ExtendedThinking::Disabled` (the default), the provider sends no thinking block back. On a model that thinks by default, for example `claude-sonnet-5-5`, set `ExtendedThinking::Adaptive` to keep the reasoning between tool calls. The provider then also sends `drop_block`.
+- `claude-sonnet-5-5` needs `ExtendedThinking::Adaptive`.
+- With `ExtendedThinking::Adaptive`, the provider sends `block_binding.prefix_mismatch_behavior = "drop_block"` and the beta header `thinking-binding-controls-2026-08-01`. If the history before a thinking block changed, the API drops that block and every later thinking block. The model loses that reasoning. The request does not fail. Examples are a hand-off with other `system` text or tools, and an edit of an earlier message.
+- With `ExtendedThinking::Enabled`, the provider sends no binding. Use `Enabled` only on models that do not run the prefix check, for example `claude-haiku-4-5`. Claude Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and Fable reject `Enabled`.
+- The default sends no effort, and the model uses its own default. On some models, for example `claude-sonnet-5-5` with the default `medium`, adaptive thinking can skip thinking on a short task. A higher effort makes thinking more likely. In a test, `claude-sonnet-5-5` skipped thinking on a short tool task at `medium` and at `high`, and it thought at `max`. To set the effort, call `.effort(Effort::Max)` on the builder. The provider then sends `output_config: { effort: "max" }`. Some models reject this field, so set it only for a model that supports effort.
+- Measured on Claude Sonnet 4.5 and Opus 4.5 with `Enabled { budget_tokens: 2048 }`, each round sent about 100 more input tokens without the beta header, and about 250 to 300 with it.
+- If Anthropic rejects one block, each later request of the session fails. To recover, remove every part with `provider == PROVIDER_DATA_KEY` from the stored history.
+- The thinking text is stored two times. A host that removes `Reasoning` must also remove these parts. If a host removes these parts, the SDK cannot send the thinking blocks back.
 
 ### Bedrock — `paigasus-helikon-providers-bedrock`
 

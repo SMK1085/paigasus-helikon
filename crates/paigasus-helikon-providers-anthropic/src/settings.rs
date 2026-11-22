@@ -25,16 +25,35 @@ pub enum CacheStrategy {
 /// Configuration for Anthropic extended/adaptive thinking.
 ///
 /// **Model compatibility:**
-/// - Claude Opus 4.7 rejects `Enabled { .. }` (400). Use `Adaptive`.
-/// - Sonnet/Opus 4.6 accept both but recommend `Adaptive`.
-/// - Older Claude 4 (4.5, 4.1) accept `Enabled` and recommend it.
+/// - `Enabled { .. }` works only on models before Claude 4.6, for example
+///   `claude-haiku-4-5`. It is deprecated on Opus 4.6 and Sonnet 4.6.
+/// - Claude Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and Fable
+///   reject `Enabled { .. }` with a 400 error. Use `Adaptive`.
+/// - Newer models run a prefix check on each thinking block. The signature
+///   records the `system` text, the tools, and all messages before the block.
+///
+/// **Prefix check.** With `Adaptive`, the provider sends
+/// `block_binding.prefix_mismatch_behavior = "drop_block"` and the
+/// `thinking-binding-controls-2026-08-01` beta header. Sometimes the history
+/// before a thinking block changed. An example is a hand-off with other
+/// `system` text or tools. Another example is an edit of an earlier message.
+/// Then the API drops that block and every later thinking block. The model
+/// loses that reasoning. The request does not fail.
+///
+/// With `Enabled`, the provider sends no binding. A changed prefix can then
+/// fail with a 400 error on a model that runs the check. Use `Enabled` only
+/// on models that do not run the check.
 ///
 /// Anthropic requires `budget_tokens < max_tokens` for `Enabled` but
 /// documents no absolute minimum; this crate does not enforce one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtendedThinking {
-    /// No `thinking` field in the request.
+    /// No `thinking` field in the request. The provider sends no thinking
+    /// block back. On a model that thinks by default, for example
+    /// `claude-sonnet-5-5`, set [`ExtendedThinking::Adaptive`] to keep the
+    /// reasoning between tool calls. The provider then also sends
+    /// `drop_block`.
     #[default]
     Disabled,
     /// `thinking: { type: "enabled", budget_tokens: N }`.
@@ -42,8 +61,45 @@ pub enum ExtendedThinking {
         /// Maximum tokens the model may spend on internal reasoning.
         budget_tokens: u32,
     },
-    /// `thinking: { type: "adaptive" }`. Model picks the budget.
+    /// `thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } }`.
+    /// The model picks the budget. The provider adds the binding beta header.
     Adaptive,
+}
+
+/// Effort level of the model. The provider sends it as
+/// `output_config: { effort: "<level>" }`.
+///
+/// The default of the builder sends no effort. The model then uses its own
+/// default. For example, `claude-sonnet-5-5` has the default `medium`. At `medium` or a
+/// lower effort, adaptive thinking can skip thinking on a short task. A higher
+/// effort makes thinking more likely. Some models reject the field. Set it
+/// only for a model that supports effort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Effort {
+    /// `"low"`. The model spends the least effort.
+    Low,
+    /// `"medium"`. This is the default of some models.
+    Medium,
+    /// `"high"`. The model thinks more often and more deeply.
+    High,
+    /// `"xhigh"`. A level above `High`.
+    XHigh,
+    /// `"max"`. The model spends the most effort.
+    Max,
+}
+
+impl Effort {
+    /// The wire string of the level.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
 }
 
 #[cfg(test)]
