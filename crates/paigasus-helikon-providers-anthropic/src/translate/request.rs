@@ -549,8 +549,21 @@ fn drop_thinking_without_own_block(content: &mut Vec<WireBlock>) {
             _ => true,
         })
         .collect();
+    // A source that loses its thinking also loses its sort slots. Its blocks
+    // then keep the plain order, as without Anthropic metadata.
+    let lost: Vec<usize> = content
+        .iter()
+        .zip(&keep)
+        .filter(|(b, kept)| !**kept && b.is_thinking())
+        .filter_map(|(b, _)| b.slot.map(|s| s.group))
+        .collect();
     let mut keep = keep.into_iter();
     content.retain(|_| keep.next().unwrap_or(true));
+    for block in content.iter_mut() {
+        if block.slot.is_some_and(|s| lost.contains(&s.group)) {
+            block.slot = None;
+        }
+    }
 }
 
 /// Put the blocks of each group back in response order.
@@ -2940,5 +2953,34 @@ mod thinking_round_trip_tests {
         assert_eq!(out.system, Some(Value::String("s1\ns2".to_owned())));
         assert_eq!(out.messages, json!([utext("q"), utext("r")]));
         assert!(!out.trailing_message_dropped);
+    }
+
+    /// A source that loses its thinking also loses its sort slots. The saved
+    /// positions name a call that is gone, so the thinking block is dropped.
+    /// The text must not move before the replacement call.
+    #[test]
+    fn source_that_loses_thinking_keeps_plain_block_order() {
+        let items = vec![
+            user("q"),
+            asst(vec![
+                thinking(0, "r", "SIG_FAKE_1"),
+                use_part("replacement"),
+                text("t"),
+                text_pos(1),
+                tool_pos(2, "gone"),
+            ]),
+            result("replacement"),
+            user("next"),
+        ];
+        let out = messages(&items);
+        assert_eq!(out, messages(&without_anthropic(&items)));
+        assert_eq!(
+            out,
+            json!([
+                utext("q"),
+                amsg(vec![tu("replacement"), wtext("t")]),
+                umsg(vec![tr("replacement"), wtext("next")]),
+            ])
+        );
     }
 }

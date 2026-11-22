@@ -5,7 +5,7 @@ pub(crate) mod request;
 pub(crate) mod response_format;
 pub(crate) mod tools;
 
-use paigasus_helikon_core::{ModelError, ModelRequest, ToolChoice};
+use paigasus_helikon_core::{ContentPart, Item, ModelError, ModelRequest, ToolChoice};
 use serde_json::{json, Value};
 
 use crate::builder::Config;
@@ -13,6 +13,27 @@ use crate::settings::ExtendedThinking;
 use response_format::{
     synthesize_for_response_format, validate_conflict, validate_tool_names, Synthesized,
 };
+
+/// Copy of `items` without the `ProviderData` parts of this crate.
+fn strip_own_provider_data(items: &[Item]) -> Vec<Item> {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::AssistantMessage { content, agent } => Item::AssistantMessage {
+                content: content
+                    .iter()
+                    .filter(|p| {
+                        !matches!(p, ContentPart::ProviderData { provider, .. }
+                            if provider == crate::PROVIDER_DATA_KEY)
+                    })
+                    .cloned()
+                    .collect(),
+                agent: agent.clone(),
+            },
+            other => other.clone(),
+        })
+        .collect()
+}
 
 /// Built request body + whether the stream translator should be in synthesis mode.
 #[derive(Debug)]
@@ -31,7 +52,16 @@ pub(crate) fn build_body(cfg: &Config, req: &ModelRequest) -> Result<PreparedReq
     )
     .map_err(|m| ModelError::Other(anyhow::anyhow!(m)))?;
 
-    let translated = request::translate_messages(&req.messages);
+    // With `Disabled`, the provider sends no thinking block back. The
+    // history then builds as if it had no provider data of this crate.
+    let stripped;
+    let messages = if cfg.extended_thinking == ExtendedThinking::Disabled {
+        stripped = strip_own_provider_data(&req.messages);
+        &stripped
+    } else {
+        &req.messages
+    };
+    let translated = request::translate_messages(messages);
     if translated.messages.as_array().is_none_or(|a| a.is_empty()) {
         return Err(ModelError::Other(anyhow::anyhow!(
             "no message with content to send (empty or whitespace-only text and unsupported parts are not sent)"
@@ -440,6 +470,94 @@ mod tests {
         }
     }
 
+    /// A history with thinking blocks and position parts of this crate.
+    fn history_with_blocks() -> Vec<Item> {
+        use crate::provider_data::{part, AnthropicData, ThinkingBlock};
+        vec![
+            user_text("q"),
+            Item::AssistantMessage {
+                content: vec![
+                    ContentPart::Text {
+                        text: "t".to_owned(),
+                    },
+                    ContentPart::ToolUse {
+                        call_id: "c1".to_owned(),
+                        name: "ping".to_owned(),
+                        args: serde_json::json!({}),
+                    },
+                    part(
+                        AnthropicData::Block {
+                            index: 0,
+                            block: ThinkingBlock::Thinking {
+                                thinking: "r".to_owned(),
+                                signature: "SIG_FAKE_1".to_owned(),
+                            },
+                        },
+                        None,
+                    ),
+                    part(AnthropicData::Text { index: 1 }, None),
+                    part(AnthropicData::ToolUse { index: 2 }, Some("c1")),
+                ],
+                agent: None,
+            },
+            Item::ToolResult {
+                call_id: "c1".to_owned(),
+                content: vec![ContentPart::Text {
+                    text: "pong".to_owned(),
+                }],
+            },
+            user_text("next"),
+        ]
+    }
+
+    fn messages_with(t: ExtendedThinking, history: Vec<Item>) -> Value {
+        let mut cfg = cfg();
+        cfg.extended_thinking = t;
+        let mut req = ModelRequest::new();
+        req.messages = history;
+        build_body(&cfg, &req).unwrap().body["messages"].clone()
+    }
+
+    fn has_thinking(messages: &Value) -> bool {
+        messages.to_string().contains("\"type\":\"thinking\"")
+    }
+
+    #[test]
+    fn disabled_sends_no_thinking_block_and_keeps_old_order() {
+        let history = history_with_blocks();
+        let plain: Vec<Item> = history
+            .iter()
+            .map(|i| match i {
+                Item::AssistantMessage { content, agent } => Item::AssistantMessage {
+                    content: content
+                        .iter()
+                        .filter(|p| !matches!(p, ContentPart::ProviderData { .. }))
+                        .cloned()
+                        .collect(),
+                    agent: agent.clone(),
+                },
+                other => other.clone(),
+            })
+            .collect();
+        let out = messages_with(ExtendedThinking::Disabled, history);
+        assert!(!has_thinking(&out), "{out}");
+        assert_eq!(out, messages_with(ExtendedThinking::Disabled, plain));
+    }
+
+    #[test]
+    fn adaptive_and_enabled_send_the_thinking_block() {
+        for t in [
+            ExtendedThinking::Adaptive,
+            ExtendedThinking::Enabled {
+                budget_tokens: 2048,
+            },
+        ] {
+            let out = messages_with(t, history_with_blocks());
+            assert!(has_thinking(&out), "{t:?}: {out}");
+            assert!(out.to_string().contains("SIG_FAKE_1"), "{t:?}: {out}");
+        }
+    }
+
     #[test]
     fn extended_thinking_adaptive_emits_adaptive_payload() {
         let mut cfg = cfg();
@@ -819,9 +937,11 @@ mod round_trip {
         SessionRecorder,
     };
 
+    /// `Adaptive`, because `Disabled` sends no thinking block back.
     fn cfg() -> Config {
         AnthropicModelBuilder::new("claude-sonnet-4-6")
             .api_key("sk-test")
+            .extended_thinking(ExtendedThinking::Adaptive)
             .build_config()
             .unwrap()
     }
@@ -1024,7 +1144,11 @@ mod round_trip {
         ));
         assert!(!has_provider_data(&items), "{items:?}");
         let body = turn2_body(&items);
-        assert!(!body.to_string().contains("\"thinking\":"), "{body}");
+        // The request field `thinking` is set by `Adaptive`; the blocks are not.
+        assert!(
+            !body["messages"].to_string().contains("\"thinking\":"),
+            "{body}"
+        );
         assert!(
             !assistant_content(&body)
                 .as_array()
