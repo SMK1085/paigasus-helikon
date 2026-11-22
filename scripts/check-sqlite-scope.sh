@@ -67,6 +67,8 @@ assert_absent() {
       { [ "$code" -eq 0 ] && [[ "$err" == *"nothing to print"* ]]; }
   }; then
     echo "ok: SQLite is absent from $label"
+  elif [ -z "$out" ]; then
+    report_failure "The SQLite absent check for $label failed, but cargo printed no tree. Cargo's output did not match a known \"absent\" message. The cargo output format may have changed. Update the accepted messages in scripts/check-sqlite-scope.sh. Exit code: $code. Stderr: $err"
   else
     report_failure "SQLite reached $label. Keep \`sqlite\` out of the root \`sqlx\` features and enable it only in the crate that uses it (SMA-822)."
   fi
