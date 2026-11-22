@@ -363,3 +363,7 @@ Sven chose Option A. With `ExtendedThinking::Adaptive`, the provider sends `bloc
 Sven rejected two other options. A prefix hash is complex and needs a byte-exact copy of the request prefix. Documentation only leaves the 400 error in place for hand-offs.
 
 With `Adaptive`, a changed prefix costs the model its earlier reasoning. The request does not fail.
+
+### Addendum: effort setting
+
+The live tests on `claude-sonnet-5-5` with `ExtendedThinking::Adaptive` failed 3 of 6, because turn 1 had no thinking block. This model has the default effort `medium`, and at `medium` it can skip thinking on a short task. Probes with `output_config: { effort: "high" }` got thinking every time. Sven chose to add an `effort` builder option (`Effort`) in this PR. The default sends no effort.
