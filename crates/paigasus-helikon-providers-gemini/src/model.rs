@@ -204,12 +204,12 @@ mod tests {
 
     #[test]
     fn getters() {
-        let m = GeminiModel::developer("gemini-2.5-flash")
+        let m = GeminiModel::developer("gemini-3.8-flash")
             .api_key("k")
             .build()
             .unwrap();
         assert_eq!(m.provider(), "gemini");
-        assert_eq!(m.model(), "gemini-2.5-flash");
+        assert_eq!(m.model(), "gemini-3.8-flash");
         assert!(m.capabilities().streaming);
     }
 }
