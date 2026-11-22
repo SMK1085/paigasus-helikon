@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "41735af64745",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-840-anthropic-provider-drops-thinking-signatures",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/41/735af64745/0/metadata.json",
+      "transcript": "/41/735af64745/0/full.jsonl",
+      "compact_transcript": "/41/735af64745/0/transcript.jsonl",
+      "content_hash": "/41/735af64745/0/content_hash.txt",
+      "prompt": "/41/735af64745/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 22,
+      "cache_creation_tokens": 61063,
+      "cache_read_tokens": 1068372,
+      "output_tokens": 10023,
+      "api_call_count": 11
+    }
+  },
+  "redaction": {
+    "replacements": 441,
+    "layers": {
+      "betterleaks": 8,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 24,
+      "credentialed_uri": 0,
+      "entropy": 409,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
