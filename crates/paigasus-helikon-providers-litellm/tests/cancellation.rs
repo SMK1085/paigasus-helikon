@@ -19,6 +19,10 @@ async fn cancel_before_response_yields_an_empty_stream() {
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
                 .set_delay(Duration::from_secs(30))
+                // HAND-AUTHORED under SMA-451 (PR #199), not captured. The
+                // body is only the `[DONE]` line that ends the captured P1
+                // trace in the SMA-451 design (Appendix B). The test never
+                // reads it, because it cancels during the 30 s delay.
                 .set_body_raw("data: [DONE]\n\n", "text/event-stream"),
         )
         .mount(&server)

@@ -1,7 +1,23 @@
-: Provenance: HAND-AUTHORED. The trailing-usage envelope matches the live
-: capture in chat_text_usage_trailing.txt; the parallel tool-call payload is
-: hand-built because a keyless LiteLLM mock cannot emit streamed tool calls
-: (mock_tool_calls is ignored on the proxy's streaming path).
+: Provenance: HAND-AUTHORED under SMA-316 (PR #30), not captured from the
+: wire. SMA-522 (PR #197) changed it. The SMA-522 design says that a keyless
+: LiteLLM mock cannot emit streamed tool calls, because `mock_tool_calls` is
+: ignored on the proxy streaming path (Appendix A.3).
+:
+: The source of the tool-call delta shape (two calls interleaved by `index`,
+: with the arguments split over several deltas) is not recorded. The SMA-316
+: plan calls the file hand-authored.
+:
+: What follows the capture, and what does not. The finish chunk, the
+: separate trailing usage chunk and `[DONE]` follow the LiteLLM capture in
+: chat_text_usage_trailing.txt. The envelope does not follow it. The usage
+: chunk here has the keys `id`, `object`, `created`, `model`; the capture has
+: `id`, `created`, `model`, `object`. This file has no
+: `completion_tokens_details`. The values `id` "x", `created` 1700000000 and
+: model "gpt-4o" are not from a capture. The usage chunk keeps the proxy
+: form `"choices":[{"index":0,"delta":{}}]`, not `"choices":[]`.
+:
+: History. SMA-316 (PR #30) wrote this file with `usage` on the finish
+: chunk. SMA-522 (PR #197) moved `usage` to its own trailing chunk.
 data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"a","arguments":""}}]}}]}
 
 data: {"id":"x","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"c2","type":"function","function":{"name":"b","arguments":""}}]}}]}

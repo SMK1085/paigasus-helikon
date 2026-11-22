@@ -24,6 +24,11 @@ fn user(text: &str) -> Item {
 }
 
 /// Minimal JSON for a `response.output_text.delta` event (all required fields).
+///
+/// HAND-AUTHORED, not captured. Its shape copies the
+/// `response.output_text.delta` line of `fixtures/responses_reasoning_then_text.txt`,
+/// which is HAND-AUTHORED (SMA-316). The ids `msg_01` and `output_index` 0 are
+/// not from a capture.
 fn text_delta_event(seq: u64, delta: &str) -> String {
     format!(
         r#"{{"type":"response.output_text.delta","sequence_number":{seq},"item_id":"msg_01","output_index":0,"content_index":0,"delta":"{delta}"}}"#
@@ -36,6 +41,11 @@ fn text_delta_event(seq: u64, delta: &str) -> String {
 /// `Response` requires: `created_at`, `id`, `model`, `object`, `output[]`, `status`.
 /// `ResponseUsage` requires: `input_tokens`, `input_tokens_details.cached_tokens`,
 /// `output_tokens`, `output_tokens_details.reasoning_tokens`, `total_tokens`.
+///
+/// HAND-AUTHORED, not captured. Its shape copies the `response.completed`
+/// line of `fixtures/responses_reasoning_then_text.txt`, which is
+/// HAND-AUTHORED (SMA-316). The captured `response.completed` in
+/// `fixtures/responses_tool_call.txt` (CAPTURED) has more keys.
 fn completed_event(seq: u64, input_tokens: u32, output_tokens: u32) -> String {
     let total = input_tokens + output_tokens;
     format!(
@@ -45,6 +55,11 @@ fn completed_event(seq: u64, input_tokens: u32, output_tokens: u32) -> String {
 
 /// SSE wire representation of the given data events; no `[DONE]` sentinel,
 /// because the Responses API ends the stream on the terminal event (SMA-585).
+///
+/// HAND-AUTHORED framing: a `data: ` line and a blank line for each event.
+/// It follows the framing of the HAND-AUTHORED `fixtures/responses_*.txt`
+/// files. The CAPTURED `fixtures/responses_tool_call.txt` also has `event:`
+/// lines; this helper sends none.
 fn sse(events: &[String]) -> String {
     let mut out = String::new();
     for event in events {

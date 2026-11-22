@@ -12,6 +12,16 @@ const SYSTEM: &str = "You are a helpful assistant in a verbose tone. \
                      Always answer concisely with units. \
                      Use the available tools when relevant.";
 
+/// HAND-AUTHORED, not captured. The SMA-317 plan (PR #33) contains this body
+/// (`docs/superpowers/plans/2026-05-26-sma-317-anthropic-provider.md`, line
+/// 4526). No source for its shape is recorded. It has the event types of
+/// `fixtures/text_only.txt` (also HAND-AUTHORED) in the same order, with one
+/// `text_delta` where that file has two. Its `message_start`
+/// carries only `usage`, with no `id`, `model`, `role` or `stop_reason`. The
+/// usage key names `cache_creation_input_tokens` and `cache_read_input_tokens`
+/// are also in the CAPTURED `fixtures/thinking_text_tool_use.txt` (line 39).
+/// That capture sends them in the opposite order and with more keys. The
+/// token counts are test inputs.
 fn turn(input: u32, cache_creation: u32, cache_read: u32, output: u32) -> String {
     format!(
         "event: message_start\n\

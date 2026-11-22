@@ -3,6 +3,8 @@
 //! Internal, never published. See
 //! `docs/superpowers/specs/2026-08-19-sma-543-tracing-target-design.md`.
 
+pub mod fixture_header;
+
 use std::collections::BTreeSet;
 
 /// One `target =` / `parent =` argument found inside a `tracing` macro.

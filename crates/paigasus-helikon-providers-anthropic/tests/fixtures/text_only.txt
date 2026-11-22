@@ -1,3 +1,50 @@
+: Provenance: HAND-AUTHORED under SMA-317 (PR #33), not captured from the
+: wire.
+:
+: Source of the shapes: not recorded. The SMA-317 design records only
+: "Hand-authored — they double as wire-format documentation"
+: (docs/superpowers/specs/2026-05-26-sma-317-anthropic-provider-design.md,
+: line 465).
+: The SMA-840 captures are from 2026-11-21. PR #33 merged on 2026-05-26. So
+: the captures are not the source of this file.
+:
+: Later comparison with the SMA-840 transcriptions (2026-11-21). This is a
+: comparison, not a source. The comparison set is two files in this directory
+: from SMA-840 (PR #387): empty_thinking_tool_use.txt (run A,
+: claude-sonnet-5-5) and thinking_text_tool_use.txt (run C,
+: claude-sonnet-4-5). The two files have the same keys for each event type.
+: The comparison inherits the edit lists in their headers. Nobody has checked
+: those lists against a raw capture. For each event type in this file, every
+: key is compared in both directions.
+:
+: - message_start: the captures also carry message.container,
+:   message.stop_sequence, message.stop_details, message.diagnostics,
+:   usage.cache_creation (with ephemeral_5m_input_tokens and
+:   ephemeral_1h_input_tokens), usage.service_tier, usage.inference_geo and
+:   usage.speed. This file has no key that the captures do not have. The
+:   captures put model first in message. This file puts it after content. The
+:   captures put cache_creation_input_tokens before cache_read_input_tokens.
+:   This file has the opposite order. The captures send output_tokens 7 (run
+:   A) and 3 (run C). This file sends 0.
+: - content_block_start (text), text_delta, content_block_stop and
+:   message_stop: the keys and their order are the same.
+: - message_delta: the captures also carry delta.stop_details,
+:   delta.container, usage.input_tokens, usage.cache_creation_input_tokens,
+:   usage.cache_read_input_tokens and usage.output_tokens_details
+:   (thinking_tokens). This file carries only usage.output_tokens.
+: - ping: each capture sends a ping event after its first content_block_start.
+:   This file has no ping event.
+: - Values: the id msg_01, the model claude-sonnet-4-6 and the token counts
+:   have no recorded source.
+: - No capture: stop_reason "end_turn". Both captures stop with "tool_use".
+: - No capture: a turn without thinking. Both captures start with a thinking
+:   block.
+:
+: The SMA-531 files eof_after_message_delta.txt,
+: body_cut_inside_message_stop.txt and eof_mid_content_block.txt are cut
+: copies of this file: their data bytes are prefixes of it. This comparison
+: applies to them too.
+
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6","stop_reason":null,"usage":{"input_tokens":12,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":0}}}
 

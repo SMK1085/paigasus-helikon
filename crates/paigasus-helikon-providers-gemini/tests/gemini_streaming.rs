@@ -37,6 +37,8 @@ async fn run(sse: &'static str) -> Vec<Result<ModelEvent, ModelError>> {
 
 #[tokio::test]
 async fn text_then_finish() {
+    // HAND-AUTHORED, not captured. Added by SMA-449 (PR #122). The source of
+    // this body is not recorded.
     let evs = run("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"a\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1}}\n\n").await;
     assert!(matches!(evs.first().unwrap(), Ok(ModelEvent::TokenDelta { text }) if text == "a"));
     assert!(evs.iter().any(|e| matches!(
@@ -49,6 +51,8 @@ async fn text_then_finish() {
 
 #[tokio::test]
 async fn blocked_prompt_refused() {
+    // HAND-AUTHORED, not captured. Added by SMA-449 (PR #122). The source of
+    // this body is not recorded.
     let evs = run("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}\n\n").await;
     assert!(matches!(
         evs.first().unwrap(),
@@ -58,6 +62,8 @@ async fn blocked_prompt_refused() {
 
 #[tokio::test]
 async fn truncated_stream_no_finish() {
+    // HAND-AUTHORED, not captured. Added by SMA-449 (PR #122). The source of
+    // this body is not recorded.
     let evs =
         run("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}\n\n")
             .await;
@@ -76,6 +82,8 @@ async fn truncated_stream_no_finish() {
 /// contract documented in `ModelEvent::Usage`.
 #[tokio::test]
 async fn multi_chunk_usage_emits_usage_per_chunk() {
+    // HAND-AUTHORED, not captured. Added by SMA-449 (PR #122). The source of
+    // these two bodies is not recorded.
     // Two SSE events, both carrying usageMetadata.
     // Chunk 1: text "a" + usage (promptTokens=1, candidateTokens=1).
     // Chunk 2: text "b" + STOP finishReason + usage (promptTokens=1, candidateTokens=2).
@@ -100,7 +108,9 @@ async fn multi_chunk_usage_emits_usage_per_chunk() {
     );
 }
 
-/// A real capture of three parallel calls: only the first part is signed.
+/// Streams `fixtures/parallel_signed.sse`, a CAPTURED fixture (SMA-827, PR
+/// #373) with the real signature replaced by `SIG_A`. Only the first part is
+/// signed. The fixture header lists what is not recorded about its edits.
 #[tokio::test]
 async fn parallel_signed_fixture_emits_provider_data_per_call() {
     let evs = run(include_str!("fixtures/parallel_signed.sse")).await;

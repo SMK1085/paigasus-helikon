@@ -1,4 +1,54 @@
-: transcribed from the SMA-840 probe run C (claude-sonnet-4-5); redacted data replaced; redacted blocks 2 to 13 removed; text index 14 changed to 2 and tool_use index 15 changed to 3
+: Provenance: CAPTURED from the Anthropic Messages API, streamed, on
+: 2026-11-21, under SMA-840 (PR #387). This is probe run C, model
+: claude-sonnet-4-5. The response names claude-sonnet-4-5-20250929. Run C used
+: thinking {"type":"enabled","budget_tokens":2048} and no beta header (the
+: SMA-840 design,
+: docs/superpowers/specs/2026-11-21-sma-840-anthropic-thinking-signatures-design.md,
+: lines 27 and 37-38). The capture file was
+: probe-840-c-claude-sonnet-4-5/16-redacted.sse (the SMA-840 plan,
+: docs/superpowers/plans/2026-11-21-sma-840-anthropic-thinking-signatures.md,
+: line 173). The prompt held the documented test trigger string for redacted
+: thinking (the design, lines 48-51).
+:
+: The probe script is
+: docs/superpowers/probes/2026-11-21-sma-840-anthropic-thinking-probe.sh. It
+: posts to https://api.anthropic.com/v1/messages (line 42). The repo holds
+: only the version that PR #387 merged. The record does not say whether the
+: run used that exact version. The merged script's defaults (lines 19-24) are
+: not the run A or run C settings. So the run set environment overrides, or
+: used an earlier version. This is an inference.
+:
+: Edits from the raw capture. The raw capture is not kept in the repo, because
+: it holds real signatures (the SMA-840 design, lines 29-32).
+:
+: Removed: the redacted_thinking blocks with index 2 to 13 (the plan, lines
+: 173-176). Each such block is a content_block_start event and a
+: content_block_stop event, with no delta (the design, lines 48-49). So the
+: raw response had 14 redacted blocks, index 0 to 13. This is an inference
+: from the plan. The plan, line 82, says that run C produced 15 redacted
+: blocks. The record does not say which run C response that count is from. The
+: design says that runs B and C produced 14 or 15 redacted blocks in one
+: response (line 50). The record does not say whether the capture had trailing
+: spaces inside data: lines. The plan says to remove them (the SMA-840 plan,
+: line 169).
+:
+: Added: this header. Until SMA-845 it was one comment line (the plan, line
+: 167). No other added line is recorded. The plan says to keep every other
+: byte of a transcribed event (lines 169-170).
+:
+: Changed: the data of the two kept redacted blocks is replaced with
+: REDACTED_FAKE_1 and REDACTED_FAKE_2 (the plan, lines 167-169). A real data
+: value has 384 to 440 characters (the design, line 50). The text block index
+: changed from 14 to 2, and the tool_use block index from 15 to 3 (the plan,
+: lines 175-176). No other change is recorded. No edit to the usage values is
+: recorded. So they are expected to count the removed blocks too. This is an
+: inference.
+:
+: The ping data line has a space after each colon. The other data lines have
+: no space after a key colon. The record does not say why.
+:
+: SMA-845 leaves this file out of the key comparison for the hand-authored
+: fixtures, because of these structural edits.
 
 event: message_start
 data: {"type":"message_start","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_011ChGZ9obzWZ7LYwui6V4g3","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":744,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":4,"service_tier":"standard","inference_geo":"not_available","speed":"standard"},"diagnostics":null}}

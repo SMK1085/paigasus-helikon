@@ -22,6 +22,16 @@ impl Respond for CapturingResponder {
     }
 }
 
+/// HAND-AUTHORED, not captured. The SMA-317 plan (PR #33) contains this body
+/// (`docs/superpowers/plans/2026-05-26-sma-317-anthropic-provider.md`, line
+/// 4718). No source for its shape is recorded. Its one tool block has the
+/// shape of each tool block in `fixtures/parallel_tool_use.txt` (also
+/// HAND-AUTHORED): one `content_block_start` and one whole `input_json_delta`.
+/// Its `message_start` carries only `usage.input_tokens`. The CAPTURED
+/// `fixtures/thinking_text_tool_use.txt` differs (lines 141-153): its tool
+/// block also carries `"caller":{"type":"direct"}`, and it sends an empty
+/// `input_json_delta` and then the JSON in three fragments. The id `tu_s` and
+/// the token counts have no recorded source.
 fn synth_tool_use_stream() -> String {
     format!(
         "event: message_start\n\

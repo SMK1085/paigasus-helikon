@@ -78,7 +78,11 @@
 :    here. Don't read its absence from this file as evidence OpenAI omits
 :    it.
 :
-: Added: nothing.
+: Added: not recorded. No raw copy of the 2026-08-20 capture is kept in
+: the repo or in any spec or plan (SMA-585 design). So this part cannot be
+: checked against it. The current file has no line
+: that is known to be added. A sentinel line that SMA-585 removed is
+: described in the CORRECTION below.
 :
 : Changed: the JSON key order of this file differs from the later
 : captures. This file puts `type` and `sequence_number` first, and

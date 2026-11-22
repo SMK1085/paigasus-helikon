@@ -7,6 +7,26 @@
 : shape. See the SMA-547 design doc, section "Evidence".
 :
 : Normal shape: the whole function name arrives in the delta carrying the id.
+:
+: Record: SMA-547 (PR #204), design "Evidence" section. The capture date is
+: not recorded. The `created` value 1786999072 in this file decodes to
+: 2026-08-17, which is the date of the SMA-547 design. This is an inference.
+:
+: The fake upstream was an uncommitted, hand-written list of frames (SMA-547
+: design lines 105-107). So the ids, the split of the name and the split of
+: the arguments are authored input. Only the serialization by LiteLLM is
+: captured.
+:
+: Edits from the raw capture. The harness and the raw output are not kept.
+:
+: Removed: not recorded.
+: Added: not recorded.
+: Changed: not recorded.
+: The design says the captures are "reproduced verbatim as the fixtures"
+: (line 55). It does not record the raw output of this normal shape. The
+: "Captured frames" section (lines 109-115) lists only the fragmented shape.
+: The config (lines 76-81) defines only the model `shape-fragment`, not
+: `shape-normal`.
 
 data: {"id":"chatcmpl-fake","created":1786999072,"model":"shape-normal","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_abc","function":{"arguments":"","name":"get_weather"},"type":"function","index":0}]}}]}
 

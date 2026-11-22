@@ -27,11 +27,15 @@ fn user_msg(text: &str) -> Item {
 async fn happy_path_text_completion() {
     let server = MockServer::start().await;
 
-    // SSE body: a content-delta chunk, then a finish chunk, then a SEPARATE
-    // trailing chunk carrying usage — the shape real OpenAI-compatible
-    // servers emit with `stream_options.include_usage: true`. Captured from
-    // LiteLLM; see the spec's Appendix A. async-openai requires `id`,
-    // `created`, `model`, and `object` on every chunk.
+    // Provenance: HAND-AUTHORED, not captured. The chunk order (content
+    // chunk, finish chunk, a separate trailing usage chunk, `[DONE]`) follows
+    // the LiteLLM proxy capture in fixtures/chat_text_usage_trailing.txt
+    // (CAPTURED with named reconstructed parts; SMA-522, PR #197). The
+    // envelope values (`id` "x", `created` 1, model "gpt-4o") are not from a
+    // capture. The first chunk sends `"finish_reason":null`. No recorded
+    // capture sends that key; the capture has no `finish_reason` key on
+    // chunks that do not finish. async-openai requires `id`, `created`,
+    // `model`, and `object` on every chunk.
     let body = concat!(
         "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",",
         "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
@@ -104,6 +108,8 @@ async fn happy_path_text_completion() {
 async fn rate_limited_response_maps_to_rate_limited_or_other() {
     let server = MockServer::start().await;
 
+    // Provenance: HAND-AUTHORED, not captured. The SMA-316 plan (PR #30)
+    // contains this body. No source for its shape is recorded.
     let body =
         r#"{"error":{"message":"rate limit exceeded","type":"rate_limit_error","code":"429"}}"#;
     Mock::given(method("POST"))
