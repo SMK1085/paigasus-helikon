@@ -596,6 +596,7 @@ async fn tool_choice_none_round(model_id: &str, final_user_turn: &str) -> String
     eprintln!("[live] text={text:?} finish={finish:?}");
     assert!(errors.is_empty(), "stream must not fail: {errors:?}");
     assert_eq!(tool_deltas, 0, "the model must not call a tool");
+    assert!(finish.is_some(), "stream must end with a Finish event");
     assert_ne!(
         finish,
         Some(FinishReason::ToolCalls),
