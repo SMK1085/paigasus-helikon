@@ -1415,19 +1415,28 @@ mod round_trip {
     #[test]
     fn session_projection_round_trip() {
         let cases = [
-            turn_items(include_str!(
-                "../../tests/fixtures/thinking_text_tool_use.txt"
-            ))
-            .0,
-            turn_items(include_str!(
-                "../../tests/fixtures/interleaved_thinking.txt"
-            ))
-            .0,
-            // SMA-854: the session keeps `bytes`, so the projected body
-            // splits the text as the direct body does.
-            items_of(&translate_events(two_text_blocks_events())),
+            (
+                turn_items(include_str!(
+                    "../../tests/fixtures/thinking_text_tool_use.txt"
+                ))
+                .0,
+                false,
+            ),
+            (
+                turn_items(include_str!(
+                    "../../tests/fixtures/interleaved_thinking.txt"
+                ))
+                .0,
+                false,
+            ),
+            (
+                // SMA-854: the session keeps `bytes`, so the projected body
+                // splits the text as the direct body does.
+                items_of(&translate_events(two_text_blocks_events())),
+                true,
+            ),
         ];
-        for (case, items) in cases.iter().enumerate() {
+        for (items, expect_split) in &cases {
             let direct = assistant_content(&turn2_body(items));
             assert!(
                 direct
@@ -1439,7 +1448,7 @@ mod round_trip {
             );
             let projected = body_of(session_messages(items));
             assert_eq!(assistant_content(&projected), direct, "{projected}");
-            if case == 2 {
+            if *expect_split {
                 let texts = direct
                     .as_array()
                     .unwrap()

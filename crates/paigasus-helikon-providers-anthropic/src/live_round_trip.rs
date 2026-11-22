@@ -551,7 +551,8 @@ async fn count_dropped(model: &AnthropicModel, body: &serde_json::Value, name: &
 
 /// The API facts of the SMA-854 design. A text block before a thinking block
 /// drops the thinking block. A whitespace-only text block, or a split text
-/// block, after it does not.
+/// block, after it does not. A whitespace-only text block as the last block
+/// of a non-last assistant message does not drop it either.
 #[tokio::test]
 #[ignore]
 async fn live_text_block_api_facts() {
@@ -629,12 +630,20 @@ async fn live_text_block_api_facts() {
         while !original_text.is_char_boundary(cut) {
             cut -= 1;
         }
-        let (a, b) = original_text.split_at(cut);
-        Some(with_content(&|c| {
-            c[text_idx] = json!({"type":"text","text":a});
-            c.insert(text_idx + 1, json!({"type":"text","text":b}));
-        }))
+        if cut == 0 {
+            eprintln!("skipped split_text: the first char takes more than half the bytes");
+            None
+        } else {
+            let (a, b) = original_text.split_at(cut);
+            Some(with_content(&|c| {
+                c[text_idx] = json!({"type":"text","text":a});
+                c.insert(text_idx + 1, json!({"type":"text","text":b}));
+            }))
+        }
     };
+    let whitespace_text_last = with_content(&|c| {
+        c.push(json!({"type":"text","text":"\n"}));
+    });
 
     let n = count_dropped(&model, &text_before_thinking, "text_before_thinking").await;
     assert!(
@@ -645,6 +654,8 @@ async fn live_text_block_api_facts() {
     assert_eq!(n, 0, "exact: {n} thinking_dropped entries");
     let n = count_dropped(&model, &whitespace_text, "whitespace_text").await;
     assert_eq!(n, 0, "whitespace_text: {n} thinking_dropped entries");
+    let n = count_dropped(&model, &whitespace_text_last, "whitespace_text_last").await;
+    assert_eq!(n, 0, "whitespace_text_last: {n} thinking_dropped entries");
     if let Some(split_text) = split_text {
         let n = count_dropped(&model, &split_text, "split_text").await;
         assert_eq!(n, 0, "split_text: {n} thinking_dropped entries");

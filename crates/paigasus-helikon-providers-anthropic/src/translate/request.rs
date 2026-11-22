@@ -667,9 +667,9 @@ fn round_is_answered(messages: &[WireMessage], results: &[Value]) -> bool {
 }
 
 /// The API rejects an empty text block (HTTP 400). The SMA-854 probe showed
-/// that it accepts a whitespace-only text block in an assistant message that
-/// is not the last one. This filter still drops both, except for the split
-/// pieces of `assistant_blocks`.
+/// that it accepts a whitespace-only text block before a `tool_use` block in
+/// an assistant message that is not the last one. This filter still drops
+/// both, except for whitespace-only split pieces of `assistant_blocks`.
 fn is_blank(text: &str) -> bool {
     text.trim().is_empty()
 }
@@ -839,7 +839,13 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
         }
         source.needs_tool_use = !source.tool_positions.is_empty();
     }
-    let pieces = if source.is_some() && text_positions.len() >= 2 {
+    // Split only when a thinking block is sent. Else the message builds as
+    // before SMA-854 (spec Goal 3).
+    let has_block = data
+        .iter()
+        .flatten()
+        .any(|(d, _)| matches!(d, AnthropicData::Block { .. }));
+    let pieces = if source.is_some() && has_block && text_positions.len() >= 2 {
         text_pieces(content, &text_positions, &other_indexes)
     } else {
         None
@@ -906,6 +912,8 @@ fn assistant_blocks(content: &[ContentPart], group: usize) -> (Vec<WireBlock>, O
         // would change the item decisions of `Translator::step`. Then the
         // first thinking block carries the pieces, and they go with it when
         // it is dropped. With no thinking block, the pieces are discarded.
+        // `text_pieces` required exactly one non-empty text part, so the one
+        // text block is the right carrier.
         let carrier = match blocks.iter().position(|b| b.kind() == "text") {
             Some(at) => Some(at),
             None => blocks.iter().position(WireBlock::is_thinking),
@@ -3522,6 +3530,47 @@ mod thinking_round_trip_tests {
         let base = translate_messages(&without_anthropic(&items));
         assert_eq!(out.messages, base.messages);
         assert_eq!(out.trailing_message_dropped, base.trailing_message_dropped);
+    }
+
+    #[test]
+    fn positions_without_thinking_do_not_split() {
+        let parts = |p1: ContentPart, p3: ContentPart| {
+            vec![text("AB"), p1, p3, use_part("tu_1"), tool_pos(4, "tu_1")]
+        };
+        let out = messages(&turn(
+            parts(text_pos_bytes(1, 1), text_pos_bytes(3, 1)),
+            &["tu_1"],
+        ));
+        let base = messages(&turn(parts(text_pos(1), text_pos(3)), &["tu_1"]));
+        assert_eq!(out, base);
+        assert_eq!(
+            out[1],
+            amsg(vec![wtext("AB"), tu("tu_1")]),
+            "no thinking block: one joined text block: {out}"
+        );
+        // Control: with the two thinking blocks the same text splits.
+        let mut control = parts(text_pos_bytes(1, 1), text_pos_bytes(3, 1));
+        control.insert(1, thinking(0, "", "SIG_FAKE_1"));
+        control.insert(3, thinking(2, "", "SIG_FAKE_2"));
+        let out = messages(&turn(control, &["tu_1"]));
+        assert_eq!(out[1], split_two("A", "B"), "{out}");
+    }
+
+    #[test]
+    fn pieces_do_not_count_in_the_keep_rule() {
+        // No tool positions, and the message is not the last one.
+        let items = vec![
+            user("q"),
+            asst(vec![
+                text(" \n"),
+                thinking(0, "", "SIG_FAKE_1"),
+                text_pos_bytes(1, 1),
+                thinking(2, "", "SIG_FAKE_2"),
+                text_pos_bytes(3, 1),
+            ]),
+            user("next"),
+        ];
+        assert_eq!(messages(&items), messages(&without_anthropic(&items)));
     }
 
     #[test]
