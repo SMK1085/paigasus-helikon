@@ -49,7 +49,11 @@ pub enum CacheStrategy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtendedThinking {
-    /// No `thinking` field in the request.
+    /// No `thinking` field in the request. The provider sends no thinking
+    /// block back. On a model that thinks by default, for example
+    /// `claude-sonnet-5-5`, set [`ExtendedThinking::Adaptive`] to keep the
+    /// reasoning between tool calls. The provider then also sends
+    /// `drop_block`.
     #[default]
     Disabled,
     /// `thinking: { type: "enabled", budget_tokens: N }`.
