@@ -29,14 +29,14 @@
     }
   },
   "redaction": {
-    "replacements": 126,
+    "replacements": 127,
     "layers": {
       "betterleaks": 0,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 0,
       "credentialed_uri": 0,
-      "entropy": 126,
+      "entropy": 127,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
@@ -218,6 +218,37 @@
       "collapse": {
         "target": "tool_pair",
         "label": "Skill: feature-factory:open-pr",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01DZ1g5jigRzfMadQZhVGs6u",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "feature-factory:coderabbit-loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "8bed406b160d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1911,
+        "end": 1912,
+        "entry_ids": [
+          "0d070d66-4506-4f1a-9d26-e2a7d549090c"
+        ],
+        "tool_use_id": "toolu_01DZ1g5jigRzfMadQZhVGs6u"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DZ1g5jigRzfMadQZhVGs6u"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: feature-factory:coderabbit-loop",
         "default_collapsed": true
       }
     }
