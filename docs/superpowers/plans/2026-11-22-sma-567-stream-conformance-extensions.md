@@ -71,8 +71,8 @@ it before every task. Section numbers below (§) refer to it.
 
   Each issue's acceptance criteria says that it closes only when its `UNCAPTURED` rows are removed,
   by a capture or by a reviewed move to `DECLINED`.
-- [ ] **Step 2:** Record the three identifiers in this plan, in place of `SMA-R`, `SMA-P` and
-  `SMA-Z` below.
+- [x] **Step 2:** Recorded: reasoning `SMA-858`, parallel `SMA-859`, zero-arg `SMA-860`. Replaced
+  `SMA-860` below.
 
 ### Task 1: `Outcome::Uncaptured` and the `UNCAPTURED` table
 
@@ -271,7 +271,7 @@ it before every task. Section numbers below (§) refer to it.
     `Outcome::Uncaptured("no captured reasoning stream")`.
   - Every subject returns `None` from `fixture_channel_order` for all other scenarios.
 
-  Add the two `DECLINED` rows and the three `UNCAPTURED` rows (follow-up `SMA-R`).
+  Add the two `DECLINED` rows and the three `UNCAPTURED` rows (follow-up `SMA-858`).
 - [ ] **Step 5:** Run the suite test command. Expected: all pass (stop rule applies).
 - [ ] **Step 6: Commit** `test(providers): SMA-567 add a reasoning channel-order scenario`.
 
@@ -326,7 +326,7 @@ it before every task. Section numbers below (§) refer to it.
     `Outcome::Uncaptured("no captured parallel tool-call stream")`.
   - Every subject returns `&[]` from `fixture_calls` for all other scenarios.
 
-  Add the five `UNCAPTURED` rows (follow-up `SMA-P`).
+  Add the five `UNCAPTURED` rows (follow-up `SMA-859`).
 - [ ] **Step 5:** Run the suite test command. Expected: all pass (stop rule applies).
 - [ ] **Step 6: Commit** `test(providers): SMA-567 add a parallel tool-call scenario`.
 
@@ -358,7 +358,7 @@ it before every task. Section numbers below (§) refer to it.
   - `anthropic`, `bedrock`, `gemini`, `litellm` and `openai/chat` return
     `Outcome::Uncaptured("no captured zero-argument tool-call stream")`.
 
-  Add the five `UNCAPTURED` rows (follow-up `SMA-Z`).
+  Add the five `UNCAPTURED` rows (follow-up `SMA-860`).
 - [ ] **Step 5:** Run the suite test command. Expected: all pass (stop rule applies).
 - [ ] **Step 6: Commit** `test(providers): SMA-567 add a zero-argument tool-call scenario`.
 
