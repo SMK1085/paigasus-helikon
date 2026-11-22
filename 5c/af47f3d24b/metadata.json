@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "5caf47f3d24b",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-567-extend-the-stream-conformance-suite-to",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/superpowers/specs/2026-11-22-sma-567-stream-conformance-extensions-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5c/af47f3d24b/0/metadata.json",
+      "transcript": "/5c/af47f3d24b/0/full.jsonl",
+      "compact_transcript": "/5c/af47f3d24b/0/transcript.jsonl",
+      "content_hash": "/5c/af47f3d24b/0/content_hash.txt",
+      "prompt": "/5c/af47f3d24b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 1832,
+    "cache_read_tokens": 636130,
+    "output_tokens": 2695,
+    "api_call_count": 3,
+    "subagent_tokens": {
+      "input_tokens": 90,
+      "cache_creation_tokens": 150574,
+      "cache_read_tokens": 10132889,
+      "output_tokens": 66634,
+      "api_call_count": 45
+    }
+  },
+  "redaction": {
+    "replacements": 31,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 31,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
