@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_016h9yMgyUJbvmWUyA97H3N7",
+  "agent_id": "a826f23d6a188f32f",
+  "task_description": "Watch main CI and release PR",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 77766,
+    "cache_read_tokens": 864095,
+    "output_tokens": 4097,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-21T22:13:17.633649+01:00",
+  "completed_at": "2026-11-21T23:27:30.732862+01:00"
+}

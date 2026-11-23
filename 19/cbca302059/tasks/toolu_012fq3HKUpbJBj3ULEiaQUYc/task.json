@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_012fq3HKUpbJBj3ULEiaQUYc",
+  "agent_id": "ac22a962d44e9eee9",
+  "task_description": "Verify release publish to crates.io",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 78278,
+    "cache_read_tokens": 939853,
+    "output_tokens": 6729,
+    "api_call_count": 14
+  },
+  "started_at": "2026-11-21T23:01:49.025911+01:00",
+  "completed_at": "2026-11-21T23:11:01.753103+01:00"
+}

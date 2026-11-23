@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01DXWJk7rpPLnjYLgZCS8zft",
+  "agent_id": "afe6bf8a474e53851",
+  "task_description": "Watch CI and CodeRabbit on bf4965e6",
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 91240,
+    "cache_read_tokens": 2061978,
+    "output_tokens": 12127,
+    "api_call_count": 27
+  },
+  "started_at": "2026-11-21T21:45:43.586552+01:00",
+  "completed_at": "2026-11-21T21:53:30.205523+01:00"
+}

@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01HitfRxf9wMQTup4o4YBHQK",
+  "agent_id": "a23ea6d439225cad4",
+  "task_description": "Add native anchor-call warn",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 88005,
+    "cache_read_tokens": 707595,
+    "output_tokens": 6642,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-21T21:43:29.947933+01:00",
+  "completed_at": "2026-11-21T21:44:42.999746+01:00"
+}
