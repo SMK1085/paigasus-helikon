@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01E94arCHDi7mq6MQCanGsFr",
+  "agent_id": "a824a813f9b69c077",
+  "subagent_type": "general-purpose",
+  "task_description": "Finish the rebase onto SMA-861",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 120117,
+    "cache_read_tokens": 2079835,
+    "output_tokens": 10807,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-22T20:36:42.846158+01:00",
+  "completed_at": "2026-11-22T20:39:15.088643+01:00"
+}

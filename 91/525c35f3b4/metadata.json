@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.13.1",
+  "checkpoint_id": "91525c35f3b4",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 16,
+  "files_touched": [
+    ".worktrees/sma-567/tests/provider-stream-conformance/src/lib.rs",
+    ".worktrees/sma-567/tests/provider-stream-conformance/tests/conformance.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/525c35f3b4/0/metadata.json",
+      "transcript": "/91/525c35f3b4/0/full.jsonl",
+      "compact_transcript": "/91/525c35f3b4/0/transcript.jsonl",
+      "content_hash": "/91/525c35f3b4/0/content_hash.txt",
+      "prompt": "/91/525c35f3b4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 160,
+    "cache_creation_tokens": 55977,
+    "cache_read_tokens": 27185304,
+    "output_tokens": 27053,
+    "api_call_count": 62,
+    "subagent_tokens": {
+      "input_tokens": 44,
+      "cache_creation_tokens": 120117,
+      "cache_read_tokens": 2079835,
+      "output_tokens": 10807,
+      "api_call_count": 21
+    }
+  },
+  "redaction": {
+    "replacements": 146,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 146,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
