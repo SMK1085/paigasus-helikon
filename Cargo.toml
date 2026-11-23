@@ -103,7 +103,7 @@ url                   = "2"
 utoipa                = { version = "6.0.0", default-features = false, features = ["macros", "axum_extras"] }
 uuid                  = { version = "1.23.4", default-features = false, features = ["v4"] }
 dom_smoothie          = "0.19"
-htmd                  = "0.5"
+htmd                  = "0.6"
 wiremock              = "0.6"
 rcgen                 = "0.14"
 tokio-rustls          = "0.26"
