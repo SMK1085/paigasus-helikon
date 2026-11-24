@@ -1,0 +1,4 @@
+{"messages":[{"role":"user","content":[{"text":"What time is it?"}]}],
+ "toolConfig":{"tools":[{"toolSpec":{"name":"get_current_time","description":"Return the current server time. Takes no arguments.","inputSchema":{"json":{"type":"object","properties":{}}}}}],
+  "toolChoice":{"tool":{"name":"get_current_time"}}},
+ "inferenceConfig":{"maxTokens":256}}

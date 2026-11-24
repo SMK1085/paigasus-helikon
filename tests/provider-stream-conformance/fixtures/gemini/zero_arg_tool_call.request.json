@@ -1,0 +1,3 @@
+{"contents":[{"role":"user","parts":[{"text":"What time is it?"}]}],
+ "tools":[{"functionDeclarations":[{"name":"get_current_time","description":"Return the current server time. Takes no arguments.","parameters":{"type":"object","properties":{}}}]}],
+ "toolConfig":{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["get_current_time"]}}}
