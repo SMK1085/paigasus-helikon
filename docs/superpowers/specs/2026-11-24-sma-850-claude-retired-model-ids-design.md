@@ -42,6 +42,32 @@ A direct `bedrock-runtime converse` call (`maxTokens=5`) gave these results:
 So "retired" is correct for every Claude 3.x id, including the ones whose
 profile is still listed.
 
+### Haiku 5.5 capabilities (evidence for the new `KNOWN_MODELS` row)
+
+| Flag | Evidence |
+| --- | --- |
+| streaming, tools | Models overview: "All current models support … vision, and tool use." The live run in Verification 5 (`messages_smoke`) streams on this id. |
+| parallel tool calls | Live Bedrock probe, 2026-11-24: one response held two `toolUse` blocks (Paris, Tokyo), stop reason `tool_use`. |
+| structured output | SMA-839 live probe: `outputConfig` gave valid JSON on Haiku 5.5. Verification 5 runs `structured_output_smoke` on this id. The Anthropic docs say nothing for this model. |
+| vision | Models overview (quote above); the Haiku 5.5 page lists "Text and images → text". |
+| reasoning | Haiku 5.5 page: "Adaptive thinking is on by default." Live Bedrock probe with `{"type":"adaptive"}`: a `reasoningContent` block, then a `text` block. |
+| prompt caching | Haiku 5.5 page lists cache prices and "The minimum cacheable prompt length is 512 tokens." |
+| `max_output_default` 32768 | Sven's call, the same as the other current rows. The documented maximum is 128K tokens. |
+
+Haiku 5.5 rejects `thinking: {type: "enabled"}` with a 400 error (live Bedrock
+probe, and the thinking docs table). The docs list `Enabled` as accepted on
+Haiku 4.5, Opus 4.5 and Sonnet 4.5, and as deprecated on Opus 4.6 and Sonnet
+4.6. Haiku 4.5 is **Active** in the deprecation table. Opus 4.5 is deprecated
+(2026-11-23) and retires on 2027-01-22. So Haiku 4.5 stays the crate's
+`Enabled` example, and its row stays.
+
+Docs: platform.claude.com `build-with-claude/thinking`,
+`build-with-claude/extended-thinking`, `models/overview`,
+`models/haiku-5-5/overview`, `about-claude/model-deprecations` (read
+2026-11-24).
+
+### Bedrock id rules
+
 The only id-based behaviour rule in the Bedrock crate is
 `family::rejects_forced_tool_choice` (`family.rs:147`). It matches
 `claude-sonnet-5-5` and `claude-opus-5-5` only. `ForcedChoicePolicy::new`
@@ -80,9 +106,19 @@ request `model` field (`translate/mod.rs:98`).
    row reports the conservative capability set, which `.with_capabilities()`
    overrides.
 3. `KNOWN_MODELS` in the Anthropic crate loses its 8 Claude 3.x and 3.5 rows and
-   their two section comments. The Claude 4 rows stay unchanged.
-4. Every test that uses a 3.x id as an arbitrary string uses a current 4.x id
+   their two section comments. It gains one row, `claude-haiku-5-5`, with
+   streaming, tools, parallel tool calls, structured output, vision, reasoning
+   and prompt caching, and `max_output_default` 32768 (Sven decided this at the
+   spec gate; evidence in the Facts section). The Claude 4 rows, Haiku 4.5
+   included, stay unchanged.
+4. Every test that uses a 3.x id as an arbitrary string uses a current id
    instead, so no test changes its code path (see "Test ids").
+4a. The two plain Anthropic live tests that name `claude-haiku-4-5`
+   (`tests/live.rs:41` and `:65`) name `claude-haiku-5-5`. They send no
+   `thinking` field, so Haiku 5.5 thinks adaptively by default. If the text
+   turn (`max_output_tokens` 64) ends with no text because thinking used the
+   budget, raise that limit to 1024 and record it in the PR body. Any other
+   failure is a stop. The `Enabled`-thinking tests and docs keep Haiku 4.5.
 5. `family.rs` keeps every parsing case: base id with a version suffix, the
    `us.`, `apac.` and `us-gov.` prefixes, the foundation-model ARN and the
    inference-profile ARN. Only the model part of each id changes.
@@ -132,10 +168,9 @@ The shorter ids let rustfmt join lines (for example `builder.rs:466-467` and
 
 ## Capability tests (Anthropic crate)
 
-- `haiku_3_5_has_no_vision` goes. In its place, `haiku_4_5_has_the_smaller_output_default`
-  pins properties the row really has: `max_output_default` is 8192, and
-  `vision` and `prompt_caching` are `true`. It does **not** assert `reasoning`
-  (see the non-goal about the Haiku 4.5 row).
+- `haiku_3_5_has_no_vision` goes. In its place, `haiku_5_5_row_matches_the_observed_capabilities`
+  pins the new row: the seven flags of Goal 3 are `true`, and
+  `max_output_default` is 32768.
 - `old_3_sonnet_lacks_prompt_caching` goes. No current row lacks prompt caching,
   and `unknown_id_falls_through_to_conservative_defaults` already pins the
   all-negative case.
@@ -152,14 +187,15 @@ a stop: report it. No `.snap.new` file stays in the tree.
 
 ## Non-goals
 
-- No new `KNOWN_MODELS` rows for the Claude 5 family. Today `claude-sonnet-5-5`
-  gets the conservative set (`max_tokens` 4096) although the Anthropic README
-  names it.
-- No change to the Haiku 4.5 row. It has no `reasoning` flag, but the crate's
-  own live test (`live_round_trip.rs:59-61`) uses Haiku 4.5 with extended
-  thinking, so the flag is probably wrong.
-- These two capability gaps go in the next providers follow-up sweep. They are
-  listed in the PR body.
+- No other new `KNOWN_MODELS` rows. Today `claude-sonnet-5-5` and the other
+  Claude 5 ids get the conservative set (`max_tokens` 4096), although the
+  Anthropic README names `claude-sonnet-5-5`.
+- No change to the Haiku 4.5 row. It has no `reasoning` flag, but the docs list
+  `Enabled` thinking as accepted on Haiku 4.5, so the flag is probably wrong.
+- No change to the interleaved-beta live test, which uses the deprecated
+  `claude-opus-4-5` (`live_round_trip.rs:7`).
+- These three gaps go in the next providers follow-up sweep. They are listed
+  in the PR body.
 - No change to the LEGACY `claude-sonnet-4-5` ids that offline tests already
   use as parsing cases. They are not Claude 3.x, and they are not user-facing.
 - No statement about the Anthropic use-case form for new Bedrock accounts. We
@@ -216,6 +252,9 @@ a stop: report it. No `.snap.new` file stays in the tree.
   ids already had 4096). A user who still calls such a model can set
   `max_output_tokens` per request and `.with_capabilities()` on the builder, or
   stay on 0.3.5.
+- The same CHANGELOG entry says, under `### Added` or in the note: a
+  `claude-haiku-5-5` row with its capabilities and a `max_tokens` default of
+  32768.
 - The squash commit body repeats the upgrade note, because release-plz writes
   only commit subjects to the CHANGELOG.
 - The book and the READMEs change in the same PR (user-facing).
