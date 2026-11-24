@@ -45,14 +45,14 @@
     "subagent_tokens_complete": true
   },
   "redaction": {
-    "replacements": 272,
+    "replacements": 309,
     "layers": {
       "betterleaks": 0,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 10,
       "credentialed_uri": 0,
-      "entropy": 268,
+      "entropy": 305,
       "key_context": 0,
       "provider_token": 0,
       "shell_stdin": 0
@@ -110,6 +110,37 @@
       "collapse": {
         "target": "tool_pair",
         "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01J7VYbbn5hyU2R3Eyi9D9VR",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "32840a6bd820",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 647,
+        "end": 648,
+        "entry_ids": [
+          "27019886-3c83-4932-882a-b8b37b813d3c"
+        ],
+        "tool_use_id": "toolu_01J7VYbbn5hyU2R3Eyi9D9VR"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01J7VYbbn5hyU2R3Eyi9D9VR"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
         "default_collapsed": true
       }
     }
