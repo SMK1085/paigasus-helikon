@@ -25,7 +25,7 @@ cannot be invoked on demand.
 | --- | --- |
 | `anthropic.claude-sonnet-5-5`, `global.anthropic.claude-sonnet-5-5` | ACTIVE |
 | `anthropic.claude-sonnet-4-6`, `us.`/`global.` profiles | ACTIVE |
-| `anthropic.claude-haiku-4-5-20251001-v1:0`, `us.`/`global.` profiles | ACTIVE |
+| `anthropic.claude-haiku-5-5`, `us.`/`global.` profiles | ACTIVE |
 | `anthropic.claude-sonnet-4-5-20250929-v1:0` | LEGACY |
 | `us.anthropic.claude-3-haiku-…`, `us.anthropic.claude-3-sonnet-…` profiles | ACTIVE profile, model not listed |
 
@@ -36,6 +36,8 @@ A direct `bedrock-runtime converse` call (`maxTokens=5`) gave these results:
 | `anthropic.claude-3-5-sonnet-20241022-v2:0` | `ResourceNotFoundException`: "This model version has reached the end of its life." |
 | `us.anthropic.claude-3-haiku-20240307-v1:0` | the same `ResourceNotFoundException` text, although the profile is listed ACTIVE |
 | `global.anthropic.claude-sonnet-5-5` | HTTP 200, text "Ok" |
+| `us.anthropic.claude-haiku-5-5`, `global.anthropic.claude-haiku-5-5` | HTTP 200, text "ok" |
+| `anthropic.claude-haiku-5-5` (bare id) | `ValidationException`: on-demand throughput is not supported, use an inference profile |
 
 So "retired" is correct for every Claude 3.x id, including the ones whose
 profile is still listed.
@@ -54,7 +56,7 @@ request `model` field (`translate/mod.rs:98`).
 | AC1: every user-facing example names a current id that works on a new account | Goals 1 and 2 change every Bedrock example that names a 3.x or LEGACY id. Every Anthropic example already names a current id (`claude-sonnet-4-6`, `claude-sonnet-5-5`, `claude-haiku-4-5`). | Verification 1, 4 and 5. The "new account" part is **not** tested: all live runs use an existing dev account. The PR body says so. |
 | AC2: no retired 3.x id stays outside `docs/superpowers/` | Goals 1, 3 and 4 | Verification 1 |
 | AC3: capability rows for retired models are removed | Goal 3 | Verification 1 and 2 |
-| AC4: the replacement ids are verified live | Bedrock: the Facts table, and Verification 3 and 4. Anthropic API: Verification 5. | See Verification 5 for the open decision. |
+| AC4: the replacement ids are verified live | Bedrock: the Facts table, and Verification 3 and 4. Anthropic API: Verification 5. | The live test output of Verification 4 and 5. |
 
 ## Goals
 
@@ -63,7 +65,7 @@ request `model` field (`translate/mod.rs:98`).
    `src/lib.rs:11`, `src/builder.rs:42`, `:57` and `:388` (rustdoc), and
    `docs/book/src/concepts/model-providers.md:171` and `:507`.
    Two detection examples are different:
-   - The `family.rs:57` doctest uses `anthropic.claude-haiku-4-5-20251001-v1:0`.
+   - The `family.rs:57` doctest uses `anthropic.claude-haiku-5-5`.
      Line 61 already asserts `global.anthropic.claude-sonnet-5-5`, so the
      doctest keeps a bare-id case.
    - The book's prefix example (`model-providers.md:246`, today the LEGACY
@@ -98,18 +100,24 @@ change behaviour, not only the id.
 | Site | Old id | New id |
 | --- | --- | --- |
 | Bedrock offline tests (`builder.rs`, `fallback.rs`, `model.rs`, `translate/mod.rs`) | `anthropic.claude-3-5-sonnet-20241022-v2:0` | `anthropic.claude-sonnet-4-6` |
-| `family.rs:164` (base id with version suffix) | `anthropic.claude-3-5-sonnet-20241022-v2:0` | `anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `family.rs:164` (bare base id) | `anthropic.claude-3-5-sonnet-20241022-v2:0` | `anthropic.claude-haiku-5-5` |
 | `family.rs:165` (`us.` profile) | `us.anthropic.claude-3-7-sonnet-20250219-v1:0` | `us.anthropic.claude-sonnet-4-6` |
-| `family.rs:166` (`apac.` prefix) | `apac.anthropic.claude-3-5-sonnet-20241022-v2:0` | `apac.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `family.rs:221` (`us-gov.` prefix) | `us-gov.anthropic.claude-3-5-sonnet-20240620-v1:0` | `us-gov.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `family.rs:237` (foundation-model ARN) | `…/anthropic.claude-3-5-sonnet-20241022-v2:0` | `…/anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `family.rs:166` (`apac.` prefix) | `apac.anthropic.claude-3-5-sonnet-20241022-v2:0` | `apac.anthropic.claude-haiku-5-5` |
+| `family.rs:221` (`us-gov.` prefix) | `us-gov.anthropic.claude-3-5-sonnet-20240620-v1:0` | `us-gov.anthropic.claude-haiku-5-5` |
+| `family.rs:237` (foundation-model ARN) | `…/anthropic.claude-3-5-sonnet-20241022-v2:0` | `…/anthropic.claude-haiku-5-5` |
 | `family.rs:239` (inference-profile ARN) | `…/us.anthropic.claude-3-5-sonnet-20241022-v2:0` | `…/us.anthropic.claude-sonnet-4-6` |
 | Conformance Bedrock (`src/eventstream.rs:118`, `tests/conformance.rs:373`) | `anthropic.claude-3-5-sonnet-20240620-v1:0` | `anthropic.claude-sonnet-4-6` |
 | Conformance Anthropic `MODEL_ID` (`tests/conformance.rs:2042`) | `claude-3-5-sonnet-latest` | `claude-sonnet-4-6` |
 
-My call: the `family.rs` cases use the Haiku 4.5 id where the old case had a
-version suffix, so the `-v1:0` shape stays covered. `us-gov.` with Haiku 4.5 is
-a parsing case only. It does not claim that GovCloud serves this model.
+Sven decided at the spec gate: a Haiku test id is Haiku 5.5, not Haiku 4.5.
+`claude-haiku-5-5` does not match `rejects_forced_tool_choice` (`family.rs:153`
+matches Sonnet 5.5 and Opus 5.5 only, and the test at `family.rs:196` pins
+`global.anthropic.claude-haiku-5-5` as `false`). So no test changes its path.
+
+The Haiku 5.5 id has no version suffix. The `-v1:0` shape stays covered by the
+other cases in the same tests (for example `amazon.nova-pro-v1:0` and
+`us.anthropic.claude-sonnet-4-5-20250929-v1:0`). `us-gov.` with Haiku 5.5 is a
+parsing case only. It does not claim that GovCloud serves this model.
 
 The conformance doc comment at `conformance.rs:2040-2041` cites "the task
 brief". Replace it with: "Uses a current id from `KNOWN_MODELS`. The suite reads
@@ -187,12 +195,15 @@ a stop: report it. No `.snap.new` file stays in the tree.
    appear. On this id, every forced-choice request takes the native path. A
    failed test is a failure. If a test fails, run it once more. If it fails
    again, stop and report.
-5. Anthropic API: `ANTHROPIC_API_KEY` is not set in the agent shell. **Open
-   decision for Sven at the spec gate:** either export a key, and the builder
-   runs `cargo test -p paigasus-helikon-providers-anthropic -- --ignored
-   --nocapture` (both the `live` test target and the `live_round_trip` lib
-   tests), or accept that AC4 is met on the Bedrock side only. The PR body
-   records which one happened.
+5. Anthropic API: Sven decided at the spec gate that the key comes from the
+   repository `.env` file. The agent may not read `.env`, so Sven copies it
+   into the worktree (or exports `ANTHROPIC_API_KEY` into the session). The
+   tests do not load `.env` themselves. Then run
+   `cargo test -p paigasus-helikon-providers-anthropic -- --ignored --nocapture`.
+   This covers both the `live` test target and the `live_round_trip` lib tests.
+   Every test must pass, and no test may skip for a missing key. If a test
+   fails, run it once more. If it fails again, stop and report. The `.env` copy
+   is git-ignored and must not be committed.
 
 ## Release
 
