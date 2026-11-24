@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KdZVcm6kkfxdPCjwemSN9K",
+  "agent_id": "a12aa775372f90942",
+  "subagent_type": "general-purpose",
+  "task_description": "Builder check on SMA-860 spec",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 91369,
+    "cache_read_tokens": 232585,
+    "output_tokens": 1735,
+    "api_call_count": 4
+  },
+  "started_at": "2026-11-24T22:00:57.106851+01:00",
+  "completed_at": "2026-11-24T22:01:16.088804+01:00"
+}
