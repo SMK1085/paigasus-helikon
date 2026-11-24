@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "0ec22e0ebe66",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-860-capture-a-zero-argument-tool-call-stream-for",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw",
+    "tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.request.json",
+    "tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw",
+    "tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.request.json",
+    "tests/provider-stream-conformance/fixtures/gemini/zero_arg_tool_call.raw",
+    "tests/provider-stream-conformance/fixtures/gemini/zero_arg_tool_call.request.json",
+    "tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.litellm_config.yaml",
+    "tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.raw",
+    "tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.request.json",
+    "tests/provider-stream-conformance/fixtures/openai_chat/zero_arg_tool_call.raw",
+    "tests/provider-stream-conformance/fixtures/openai_chat/zero_arg_tool_call.request.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0e/c22e0ebe66/0/metadata.json",
+      "transcript": "/0e/c22e0ebe66/0/full.jsonl",
+      "compact_transcript": "/0e/c22e0ebe66/0/transcript.jsonl",
+      "content_hash": "/0e/c22e0ebe66/0/content_hash.txt",
+      "prompt": "/0e/c22e0ebe66/0/prompt.txt"
+    }
+  ],
+  "redaction": {
+    "replacements": 272,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 10,
+      "credentialed_uri": 0,
+      "entropy": 268,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
