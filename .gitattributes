@@ -24,6 +24,13 @@ crates/paigasus-helikon-providers-openai/tests/fixtures/*.txt text eol=lf
 # as the binary rule below.
 tests/provider-stream-conformance/fixtures/**/*.txt text eol=lf
 
+# Raw stream-conformance captures (SMA-860): each `.raw` file is a response
+# body exactly as the wire sent it, with no header, so that its SHA-256
+# matches the record in its guard test. The Gemini capture uses CRLF line
+# endings, and any eol translation would change those bytes. Listed before
+# the bedrock `binary` rule, which must stay last.
+tests/provider-stream-conformance/fixtures/**/*.raw binary
+
 # Gemini SSE fixtures (SMA-827): split on literal newlines by tests, so pin LF.
 crates/paigasus-helikon-providers-gemini/tests/fixtures/*.sse text eol=lf
 
