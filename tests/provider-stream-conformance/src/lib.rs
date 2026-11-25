@@ -1368,7 +1368,7 @@ mod tests {
                         Scenario::FragmentedToolName,
                         "name arrives whole in content_block_start",
                     )],
-                    &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+                    &[PARALLEL_UNCAPTURED],
                 ),
                 "bedrock" => (BEDROCK_DECLINES, BEDROCK_UNCAPTURED),
                 other => panic!("the mock subject has no pinned rows for {other:?}"),

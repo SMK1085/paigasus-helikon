@@ -163,12 +163,6 @@ pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
     // A zero-argument tool call can occur for each of these subjects, but
     // only `openai/responses` has a capture of one.
     (
-        "anthropic",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
-    (
         "bedrock",
         Scenario::ZeroArgToolCallCleanStop,
         "no captured zero-argument tool-call stream",

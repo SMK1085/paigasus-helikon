@@ -2172,7 +2172,9 @@ mod litellm {
 /// The three tool scripts (`ToolCallCleanStop`, `ThinkingToolCallCleanStop`
 /// and `ReasoningCleanStop`) send the captured shape: the four
 /// [`CAPTURED_ARGS`] values, in order, one `input_json_delta` each. Like `bedrock`/`openai_chat`/`litellm`, this
-/// module therefore sends more than one argument delta for one call.
+/// module therefore sends more than one argument delta for one call. The
+/// fourth tool script, `ZeroArgToolCallCleanStop`, is the exception. It sends
+/// the capture byte for byte: one `input_json_delta` with `partial_json: ""`.
 ///
 /// The translator gives the name to the first `input_json_delta` of a call,
 /// also when its `partial_json` is empty (`stream.rs`'s `InputJsonDelta`
@@ -2594,6 +2596,52 @@ mod anthropic {
         )
     }
 
+    /// The seven events of `fixtures/anthropic/zero_arg_tool_call.raw`, as
+    /// `(event name, data payload)` pairs, byte for byte, in file order. Each
+    /// payload keeps the spaces before its closing `}`. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_EVENTS: [(&str, &str); 7] = [
+        (
+            "message_start",
+            r##"{"type":"message_start","message":{"model":"claude-haiku-5-5","id":"msg_011ChNQ3Tog5cJ6yjFuLDgND","type":"message","role":"assistant","content":[],"container":null,"stop_reason":null,"stop_sequence":null,"stop_details":null,"usage":{"input_tokens":485,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":11,"service_tier":"standard","inference_geo":"global","speed":"standard"},"diagnostics":null}      }"##,
+        ),
+        (
+            "content_block_start",
+            r##"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01RJqBrxUZ8pUUbgZAKYM8T5","name":"get_current_time","input":{},"caller":{"type":"direct"}}     }"##,
+        ),
+        ("ping", r##"{"type": "ping"}"##),
+        (
+            "content_block_delta",
+            r##"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}    }"##,
+        ),
+        (
+            "content_block_stop",
+            r##"{"type":"content_block_stop","index":0}"##,
+        ),
+        (
+            "message_delta",
+            r##"{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"container":null},"usage":{"input_tokens":485,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":11,"output_tokens_details":{"thinking_tokens":0}}               }"##,
+        ),
+        ("message_stop", r##"{"type":"message_stop"  }"##),
+    ];
+
+    /// The one call of [`ZERO_ARG_EVENTS`]: the tool name and empty arguments.
+    /// The wire sends one `partial_json` of `""`, which the floors read as
+    /// `{}`.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/anthropic/zero_arg_tool_call.raw");
+
+    /// One captured SSE frame: `event: {event}\ndata: {payload}\n\n`. The
+    /// `event:` line is kept, as in the file.
+    fn captured_frame(event: &str, payload: &str) -> Vec<u8> {
+        format!("event: {event}\ndata: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario, or `None` for
     /// `FragmentedToolName`, which this subject declines, or for a scenario
     /// that it has no capture for (uncaptured).
@@ -2793,8 +2841,29 @@ mod anthropic {
             }
             // Not served — see the reason in `Anthropic::stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/anthropic/zero_arg_tool_call.raw`, CAPTURED from the
+            // Anthropic Messages API (`https://api.anthropic.com/v1/messages`,
+            // `anthropic-version: 2023-06-01`, `claude-haiku-5-5`) on
+            // 2026-11-24 at 20:38:59 UTC, with one zero-argument tool and a
+            // forced `tool_choice`. The wire sent one `input_json_delta` with
+            // `partial_json: ""`. The `content_block_start` carries
+            // `"input":{}`, which the translator ignores. The floors read the
+            // blank arguments as `{}`. Seven events: `message_start`,
+            // `content_block_start`, `ping`, `content_block_delta`,
+            // `content_block_stop`, `message_delta` and `message_stop`.
+            //
+            // Edits made here: none to any payload. This script sends the
+            // seven `event:` and `data:` payloads byte for byte
+            // ([`ZERO_ARG_EVENTS`]). Each pair becomes one frame that ends
+            // with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_EVENTS
+                    .iter()
+                    .map(|(event, payload)| captured_frame(event, payload))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -2847,6 +2916,17 @@ mod anthropic {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         req
     }
@@ -2906,7 +2986,8 @@ mod anthropic {
                 // Run C's `message_delta` carries `"tool_use"` too.
                 Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ReasoningCleanStop => Some(FinishReason::ToolCalls),
+                | Scenario::ReasoningCleanStop
+                | Scenario::ZeroArgToolCallCleanStop => Some(FinishReason::ToolCalls),
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -2915,9 +2996,7 @@ mod anthropic {
                 | Scenario::CancelMidGeneration
                 | Scenario::CancelAfterStopReason => None,
                 // Declined or uncaptured; never reached.
-                Scenario::FragmentedToolName
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                Scenario::FragmentedToolName | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -2953,6 +3032,8 @@ mod anthropic {
                 // Run C's one call (`thinking_text_tool_use.txt`, lines
                 // 106-118).
                 Scenario::ReasoningCleanStop => RUN_C_CALLS,
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
                 Scenario::CleanStop
                 | Scenario::TruncatedAfterStopReason
                 | Scenario::TruncatedMidGeneration
@@ -2963,8 +3044,7 @@ mod anthropic {
                 | Scenario::FragmentedToolName
                 | Scenario::ToolCallCleanStop
                 | Scenario::ThinkingToolCallCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => &[],
+                | Scenario::ParallelToolCallCleanStop => &[],
             }
         }
 
@@ -2980,11 +3060,6 @@ mod anthropic {
             // `parallel_tool_use.txt` has no capture behind it (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture of
-            // one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -3047,6 +3122,10 @@ mod anthropic {
             ("message_stop", message_stop()),
             ("tool_use start", tool_use_start(TOOL_USE_ID, TOOL_NAME)),
             ("input_json_delta", input_json_delta(CAPTURED_ARGS[1])),
+            (
+                "zero-arg input_json_delta",
+                captured_frame(ZERO_ARG_EVENTS[3].0, ZERO_ARG_EVENTS[3].1),
+            ),
             ("thinking start", thinking_start()),
             ("thinking delta", thinking_delta("I need the weather.")),
             ("signature delta", signature_delta("SIG_FAKE_1")),
@@ -3068,6 +3147,26 @@ mod anthropic {
                  a literal \"stop_reason\":null, and the marker must not match that null value."
             );
         }
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED from the Anthropic Messages API at
+    /// `https://api.anthropic.com/v1/messages` with the header
+    /// `anthropic-version: 2023-06-01`. The model is `claude-haiku-5-5`. The
+    /// capture ran on 2026-11-24 at 20:38:59 UTC. The file is
+    /// `fixtures/anthropic/zero_arg_tool_call.raw`. It is 1364 bytes. Its
+    /// SHA-256 is
+    /// `b6114d956d7d80a6b315fcd2f6866fff8c776e9ebbed846c8ab7ccf9093dd86e`.
+    /// Finding: the wire sends one `input_json_delta` with `partial_json: ""`.
+    /// The `content_block_start` carries `"input":{}`.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 7);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]
