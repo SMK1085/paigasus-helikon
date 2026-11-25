@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.13.4",
+  "checkpoint_id": "4d4b1cb08432",
+  "strategy": "manual-commit",
+  "branch": "feature/sma-863-anthropic-and-bedrock-emit-no-toolcalldelta",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "crates/paigasus-helikon-providers-anthropic/src/stream.rs",
+    "crates/paigasus-helikon-providers-bedrock/src/stream.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4d/4b1cb08432/0/metadata.json",
+      "transcript": "/4d/4b1cb08432/0/full.jsonl",
+      "compact_transcript": "/4d/4b1cb08432/0/transcript.jsonl",
+      "content_hash": "/4d/4b1cb08432/0/content_hash.txt",
+      "prompt": "/4d/4b1cb08432/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 27834,
+    "cache_read_tokens": 5479908,
+    "output_tokens": 10897,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 50,
+      "cache_creation_tokens": 325423,
+      "cache_read_tokens": 2179945,
+      "output_tokens": 21555,
+      "api_call_count": 24
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 57,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 57,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
