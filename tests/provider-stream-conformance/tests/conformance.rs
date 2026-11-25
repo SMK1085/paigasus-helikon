@@ -822,8 +822,8 @@ mod bedrock {
 ///   `happy_path_text_completion` fixture body — HAND-AUTHORED. It is the
 ///   source of the explicit `"finish_reason":null` that [`text_delta`] sends
 ///   on each content delta. The recorded `api.openai.com` capture
-///   (SMA-860) also sends that key on its content-bearing chunks. The
-///   LiteLLM captures omit it. The null is exactly the shape
+///   (SMA-860) sends that key on its tool-call chunks. It has no text
+///   content delta. The LiteLLM captures omit it. The null is exactly the shape
 ///   [`OpenAiChat::encodes_stop_reason`]'s marker must not match.
 /// - `crates/paigasus-helikon-providers-openai/tests/fixtures/chat_parallel_tool_calls.txt`
 ///   — HAND-AUTHORED (SMA-316, PR #30). The tool-call envelope: `id`/`name`
@@ -938,8 +938,9 @@ mod openai_chat {
     /// `chat_text_usage_trailing.txt`. The explicit `"finish_reason":null`
     /// comes from `tests/chat_wire.rs`'s `happy_path_text_completion` body,
     /// which is HAND-AUTHORED. The recorded `api.openai.com` capture
-    /// (SMA-860) also sends this key on its content-bearing chunks.
-    /// `chat_text_usage_trailing.txt` and the LiteLLM captures omit it.
+    /// (SMA-860) sends this key on its tool-call chunks. It has no text
+    /// content delta. `chat_text_usage_trailing.txt` and the LiteLLM
+    /// captures omit it.
     /// The null stays on purpose. It is the frame
     /// `scan_finds_only_a_populated_finish_reason` uses to prove the marker
     /// does not fire on a null value.
