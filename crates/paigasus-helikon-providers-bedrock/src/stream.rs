@@ -50,6 +50,9 @@ enum BlockState {
         /// appears only in that first delta; subsequent deltas set it to
         /// `None`).
         name_emitted: bool,
+        /// `true` for the structured-output anchor block. It never emits a
+        /// `ToolCallDelta`; its input is remapped to `TokenDelta`s.
+        synthesized: bool,
     },
 }
 
@@ -92,7 +95,6 @@ pub struct StreamTranslator {
     /// `true` once a `Metadata` event has been processed.
     metadata_seen: bool,
     /// `true` once a terminal event (`Finish` or an `Err`) was produced.
-    // Read by the ContentBlockStop arm (SMA-863 Task 5).
     terminal_emitted: bool,
 }
 
@@ -132,7 +134,26 @@ impl StreamTranslator {
         match ev {
             // ── events that produce no output ─────────────────────────────────
             ConverseStreamOutput::MessageStart(_) => {}
-            ConverseStreamOutput::ContentBlockStop(_) => {}
+
+            // ── content block stop ────────────────────────────────────────────
+            ConverseStreamOutput::ContentBlockStop(e) => {
+                // After a terminal event nothing may follow it.
+                if self.terminal_emitted {
+                    return out;
+                }
+                let idx = e.content_block_index();
+                if let Some(event) = self.emit_unnamed(idx) {
+                    if let ModelEvent::ToolCallDelta { call_id, .. } = &event {
+                        tracing::debug!(
+                            target: "paigasus::bedrock::stream",
+                            idx,
+                            %call_id,
+                            "toolUse block closed with no input delta; emitting its name",
+                        );
+                    }
+                    out.push(Ok(event));
+                }
+            }
 
             // ── content block start ───────────────────────────────────────────
             ConverseStreamOutput::ContentBlockStart(e) => {
@@ -164,19 +185,19 @@ impl StreamTranslator {
                             return out;
                         } else {
                             self.real_tool_fired = true;
-                            // Emit the name-carrying delta immediately on block
-                            // start (mirrors the Anthropic provider's behaviour
-                            // of emitting name on the first input-json delta).
-                            // We *don't* emit here — we wait for the first
-                            // tool-input delta so the call_id→state map is
-                            // consistent.
+                            // The name goes out with the first input delta,
+                            // or at the block stop when no delta came
+                            // (SMA-863). Nothing is emitted at the start, so
+                            // the call_id→state map stays consistent.
                         }
+                        let synthesized = self.synthesizing && name == SYNTHESIZED_TOOL_NAME;
                         self.blocks.insert(
                             idx,
                             BlockState::ToolUse {
                                 call_id,
                                 name,
                                 name_emitted: false,
+                                synthesized,
                             },
                         );
                     }
@@ -208,6 +229,7 @@ impl StreamTranslator {
                             call_id,
                             name,
                             name_emitted,
+                            ..
                         }) = self.blocks.get_mut(&idx)
                         {
                             let emit_name = if *name_emitted {
@@ -312,11 +334,36 @@ impl StreamTranslator {
 
     // ── private helpers ───────────────────────────────────────────────────────
 
+    /// Build the zero-delta `ToolCallDelta` for the tool block at `idx`.
+    ///
+    /// Returns `Some` only when the block is a non-synthesized `ToolUse` whose
+    /// name has not gone out yet, and then sets `name_emitted`. The block stays
+    /// in the map so a late delta still finds it.
+    fn emit_unnamed(&mut self, idx: i32) -> Option<ModelEvent> {
+        match self.blocks.get_mut(&idx) {
+            Some(BlockState::ToolUse {
+                call_id,
+                name,
+                name_emitted,
+                synthesized,
+            }) if !*name_emitted && !*synthesized => {
+                *name_emitted = true;
+                Some(ModelEvent::ToolCallDelta {
+                    call_id: call_id.clone(),
+                    name: Some(name.clone()),
+                    args_delta: String::new(),
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Translate a `StopReason` into the terminal event(s).
     ///
     /// Returns a single `Ok(Finish{..})` in normal cases, or a single
     /// `Err(ModelError::Other)` when both a real and the synthesized tool
-    /// fired in synthesis mode.
+    /// fired in synthesis mode. It sets `terminal_emitted` when it returns a
+    /// non-empty `Vec`.
     fn finish_events(&mut self, reason: StopReason) -> Vec<Result<ModelEvent, ModelError>> {
         // A refused tool call already ended the stream with an error. As on the
         // both-tools-fired path, the error replaces the terminal `Finish`.
@@ -976,9 +1023,9 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    /// ContentBlockStop → no events emitted.
+    /// ContentBlockStop of a block that never started → no events emitted.
     #[test]
-    fn content_block_stop_produces_no_events() {
+    fn content_block_stop_of_unknown_block_produces_no_events() {
         let out = run(false, vec![content_block_stop(0)]);
         assert!(out.is_empty());
     }
@@ -1098,6 +1145,223 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Collect the `ToolCallDelta`s of a run as `(name, args_delta)`.
+    fn tool_deltas(out: &[Result<ModelEvent, ModelError>]) -> Vec<(Option<String>, String)> {
+        out.iter()
+            .filter_map(|r| match r {
+                Ok(ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                }) => Some((name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed.
+    #[test]
+    fn tool_use_without_delta_emits_name_at_block_stop() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert!(out.iter().all(Result::is_ok), "{out:?}");
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(matches!(
+            out[0].as_ref().unwrap(),
+            ModelEvent::ToolCallDelta { call_id, name: Some(n), args_delta }
+                if call_id == "tu_1" && n == "get_current_time" && args_delta.is_empty()
+        ));
+        assert!(matches!(out[1].as_ref().unwrap(), ModelEvent::Usage { .. }));
+        assert!(matches!(
+            out[2].as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::ToolCalls
+        ));
+    }
+
+    /// The captured shape: one empty input delta, then the stop. One name only.
+    /// This is the capture zero_arg_tool_call.raw (SMA-860) as a unit test.
+    #[test]
+    fn captured_empty_delta_still_gives_one_name() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                tool_delta(0, ""),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(tool_call_names(&out), vec!["get_current_time".to_owned()]);
+        assert_eq!(
+            tool_deltas(&out),
+            vec![(Some("get_current_time".to_owned()), String::new())]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the stop reason set to max_tokens.
+    #[test]
+    fn block_stop_with_max_tokens_gives_named_call_then_length() {
+        let out = run(
+            false,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                message_stop(StopReason::MaxTokens),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(
+            tool_deltas(&out),
+            vec![(Some("get_current_time".to_owned()), String::new())]
+        );
+        assert!(matches!(
+            out.last().unwrap().as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::Length
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.raw (SMA-860)
+    /// with the one empty input delta removed and the tool renamed to the synthesized anchor.
+    #[test]
+    fn synthesized_tool_without_delta_emits_no_tool_call_delta() {
+        let out = run(
+            true,
+            vec![
+                message_start(),
+                tool_use_start(0, "tu_s", SYNTHESIZED_TOOL_NAME),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert!(
+            !out.iter()
+                .any(|r| matches!(r, Ok(ModelEvent::ToolCallDelta { .. }))),
+            "{out:?}"
+        );
+        assert!(matches!(
+            out.last().unwrap().as_ref().unwrap(),
+            ModelEvent::Finish { reason } if *reason == FinishReason::Stop
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with the block stop sent twice.
+    #[test]
+    fn repeated_block_stop_gives_one_name() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                content_block_stop(0),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(
+            tool_deltas(&out),
+            vec![(Some("get_current_time".to_owned()), String::new())]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with a block stop after the terminal event.
+    #[test]
+    fn block_stop_after_terminal_emits_nothing() {
+        let mut t = StreamTranslator::new(false);
+        t.consume(tool_use_start(0, "tu_1", "get_current_time"));
+        t.consume(message_stop(StopReason::ToolUse));
+        t.consume(metadata(10, 5, None));
+        assert!(t.terminal_emitted);
+        assert!(t.consume(content_block_stop(0)).is_empty());
+
+        let mut t = StreamTranslator::new(true);
+        for ev in [
+            tool_use_start(0, "tu_synth", SYNTHESIZED_TOOL_NAME),
+            tool_use_start(1, "tu_real", "search"),
+            message_stop(StopReason::ToolUse),
+            metadata(1, 1, None),
+        ] {
+            t.consume(ev);
+        }
+        assert!(t.terminal_emitted);
+        assert!(t.consume(content_block_stop(1)).is_empty());
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with a second tool block that has an input delta.
+    #[test]
+    fn parallel_calls_one_without_delta() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_a", "a"),
+                tool_delta(0, "{}"),
+                content_block_stop(0),
+                tool_use_start(1, "tu_b", "b"),
+                content_block_stop(1),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(tool_call_names(&out), vec!["a".to_owned(), "b".to_owned()]);
+        assert_eq!(
+            tool_deltas(&out),
+            vec![
+                (Some("a".to_owned()), "{}".to_owned()),
+                (Some("b".to_owned()), String::new()),
+            ]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with `tool_choice` set to `None`.
+    #[test]
+    fn forbid_tool_calls_block_stop_after_refusal_emits_nothing() {
+        let mut t = StreamTranslator::new(false).forbid_tool_calls(true);
+        let first = t.consume(tool_use_start(0, "tu_1", "t"));
+        assert!(matches!(first.as_slice(), [Err(_)]), "{first:?}");
+        assert!(t.consume(content_block_stop(0)).is_empty());
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with an input delta sent after the block stop.
+    #[test]
+    fn delta_after_block_stop_carries_no_name() {
+        let out = run(
+            false,
+            vec![
+                tool_use_start(0, "tu_1", "get_current_time"),
+                content_block_stop(0),
+                tool_delta(0, "{}"),
+                message_stop(StopReason::ToolUse),
+                metadata(10, 5, None),
+            ],
+        );
+        assert_eq!(
+            tool_deltas(&out),
+            vec![
+                (Some("get_current_time".to_owned()), String::new()),
+                (None, "{}".to_owned()),
+            ]
+        );
     }
 
     /// A typed memory call on a native structured request is a normal tool
