@@ -27,7 +27,31 @@ enum BlockState {
         call_id: String,
         name: String,
         name_emitted: bool,
+        /// Args from the block start `input`, used only when no delta follows.
+        start_args: String,
+        /// Whether this block is the synthesized structured-output tool.
+        synthesized: bool,
     },
+}
+
+/// The args a zero-delta tool call carries: the start `input` when it is a
+/// JSON object with at least one key, else an empty string.
+fn start_args(input: &serde_json::Value) -> String {
+    match input {
+        serde_json::Value::Object(map) if !map.is_empty() => {
+            serde_json::to_string(input).unwrap_or_default()
+        }
+        _ => String::new(),
+    }
+}
+
+/// The one event that names a tool call that got no input delta.
+fn emit_unnamed(call_id: &str, name: &str, start_args: &str) -> ModelEvent {
+    ModelEvent::ToolCallDelta {
+        call_id: call_id.to_owned(),
+        name: Some(name.to_owned()),
+        args_delta: start_args.to_owned(),
+    }
 }
 
 /// State machine for one streaming response.
@@ -121,8 +145,9 @@ impl MessageTranslator {
                     self.blocks
                         .insert(index, BlockState::RedactedThinking { data });
                 }
-                ContentBlockHead::ToolUse { id, name, .. } => {
-                    if self.synthesizing_output && name == SYNTHESIZED_TOOL_NAME {
+                ContentBlockHead::ToolUse { id, name, input } => {
+                    let synthesized = self.synthesizing_output && name == SYNTHESIZED_TOOL_NAME;
+                    if synthesized {
                         self.synthesized_tool_index = Some(index);
                     } else {
                         self.other_tool_fired = true;
@@ -133,6 +158,8 @@ impl MessageTranslator {
                             call_id: id,
                             name,
                             name_emitted: false,
+                            start_args: start_args(&input),
+                            synthesized,
                         },
                     );
                 }
@@ -178,6 +205,7 @@ impl MessageTranslator {
                         call_id,
                         name,
                         name_emitted,
+                        ..
                     }) = self.blocks.get_mut(&index)
                     {
                         let (emit_name, call_id_out) = if *name_emitted {
@@ -289,10 +317,21 @@ impl MessageTranslator {
             ),
             BlockState::ToolUse {
                 call_id,
+                name,
                 name_emitted,
-                ..
+                start_args,
+                synthesized,
             } => {
-                if name_emitted && Some(index) != self.synthesized_tool_index {
+                if !name_emitted && !synthesized {
+                    tracing::debug!(
+                        target: "paigasus::anthropic::stream",
+                        index,
+                        %call_id,
+                        "tool_use block closed with no input delta; emitting its name",
+                    );
+                    out.push(Ok(emit_unnamed(&call_id, &name, &start_args)));
+                }
+                if !synthesized {
                     self.position(
                         AnthropicData::ToolUse { index }.into_event(Some(call_id)),
                         out,
@@ -1202,7 +1241,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_use_without_input_json_delta_gets_no_position() {
+    fn tool_use_without_input_json_delta_gets_a_position() {
         let mut t = MessageTranslator::new(false);
         let events = run(
             &mut t,
@@ -1216,8 +1255,254 @@ mod tests {
         );
         assert_eq!(
             provider_data(&events),
-            vec![(block(0, "", "SIG_FAKE_1"), None)]
+            vec![
+                (block(0, "", "SIG_FAKE_1"), None),
+                (AnthropicData::ToolUse { index: 1 }, Some("tu_1".to_owned())),
+            ]
         );
+    }
+
+    fn tool_head_with_input(id: &str, name: &str, input: serde_json::Value) -> ContentBlockHead {
+        ContentBlockHead::ToolUse {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            input,
+        }
+    }
+
+    fn message_delta(reason: &str) -> AnthropicEvent {
+        AnthropicEvent::MessageDelta {
+            delta: MessageDeltaPayload {
+                stop_reason: Some(reason.to_owned()),
+            },
+            usage: None,
+        }
+    }
+
+    /// Every `ToolCallDelta` as `(call_id, name, args_delta)`, in order.
+    fn call_deltas(events: &[ModelEvent]) -> Vec<(String, Option<String>, String)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ModelEvent::ToolCallDelta {
+                    call_id,
+                    name,
+                    args_delta,
+                } => Some((call_id.clone(), name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn tool_use_without_input_json_delta_emits_name_at_block_stop() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "get_current_time")),
+                stop(0),
+                message_delta("tool_use"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        assert_eq!(
+            call_deltas(&events),
+            vec![(
+                "tu_1".to_owned(),
+                Some("get_current_time".to_owned()),
+                String::new()
+            )]
+        );
+        let delta_pos = events
+            .iter()
+            .position(|e| matches!(e, ModelEvent::ToolCallDelta { .. }))
+            .unwrap();
+        let finish_pos = events
+            .iter()
+            .position(|e| matches!(e, ModelEvent::Finish { .. }))
+            .unwrap();
+        assert!(delta_pos < finish_pos);
+        assert_eq!(finish_pos, events.len() - 1);
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::ToolCalls
+            })
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn captured_empty_delta_still_gives_one_name() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "get_current_time")),
+                json_delta(0, ""),
+                stop(0),
+                message_delta("tool_use"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        let deltas = call_deltas(&events);
+        assert_eq!(deltas.iter().filter(|d| d.1.is_some()).count(), 1);
+        assert_eq!(deltas.len(), 1);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn block_stop_with_max_tokens_gives_named_call_then_length() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_1", "get_current_time")),
+                stop(0),
+                message_delta("max_tokens"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        assert_eq!(call_deltas(&events).len(), 1);
+        assert!(call_deltas(&events)[0].1.is_some());
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::Length
+            })
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn synthesized_tool_without_delta_emits_no_tool_call_delta() {
+        let mut t = MessageTranslator::new(true);
+        let events = run(
+            &mut t,
+            vec![
+                message_start(5, None),
+                start(0, tool_head("tu_s", SYNTHESIZED_TOOL_NAME)),
+                stop(0),
+                message_delta("tool_use"),
+                AnthropicEvent::MessageStop,
+            ],
+        );
+        assert!(call_deltas(&events).is_empty());
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, ModelEvent::TokenDelta { .. })));
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finish {
+                reason: FinishReason::Stop
+            })
+        ));
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn start_input_with_keys_is_sent_as_args() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(
+                    0,
+                    tool_head_with_input("tu_1", "search", serde_json::json!({"q": "x"})),
+                ),
+                stop(0),
+            ],
+        );
+        let deltas = call_deltas(&events);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].2, r#"{"q":"x"}"#);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn start_input_is_ignored_when_deltas_follow() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(
+                    0,
+                    tool_head_with_input("tu_1", "search", serde_json::json!({"q": "x"})),
+                ),
+                json_delta(0, r#"{"q":"y"}"#),
+                stop(0),
+            ],
+        );
+        let deltas = call_deltas(&events);
+        let joined: String = deltas.iter().map(|d| d.2.as_str()).collect();
+        assert_eq!(joined, r#"{"q":"y"}"#);
+        assert_eq!(deltas.iter().filter(|d| d.1.is_some()).count(), 1);
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn parallel_calls_one_without_delta() {
+        let mut t = MessageTranslator::new(false);
+        let events = run(
+            &mut t,
+            vec![
+                start(0, tool_head("tu_a", "a")),
+                json_delta(0, "{}"),
+                start(1, tool_head("tu_b", "b")),
+                stop(0),
+                stop(1),
+            ],
+        );
+        let named: Vec<(String, String)> = call_deltas(&events)
+            .into_iter()
+            .filter_map(|d| d.1.map(|n| (d.0, n)))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("tu_a".to_owned(), "a".to_owned()),
+                ("tu_b".to_owned(), "b".to_owned())
+            ]
+        );
+    }
+
+    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
+    /// (SMA-860) with the one empty input delta removed.
+    #[test]
+    fn non_object_start_input_gives_blank_args() {
+        for input in [serde_json::json!(null), serde_json::json!("x")] {
+            let mut t = MessageTranslator::new(false);
+            let events = run(
+                &mut t,
+                vec![
+                    start(0, tool_head_with_input("tu_1", "search", input)),
+                    stop(0),
+                ],
+            );
+            let deltas = call_deltas(&events);
+            assert_eq!(deltas.len(), 1);
+            assert_eq!(deltas[0].2, "");
+        }
     }
 
     #[test]

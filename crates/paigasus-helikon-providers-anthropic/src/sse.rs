@@ -70,7 +70,6 @@ pub(crate) enum ContentBlockHead {
         id: String,
         name: String,
         #[serde(default)]
-        #[allow(dead_code)]
         input: Value,
     },
 }
