@@ -100,9 +100,10 @@ use serde_json::json;
 /// each fixture with the same encoder the SDK itself uses, so the frame bytes
 /// come from the SDK's own encoder while the fixture stays readable as JSON.
 /// The captured stream is the one exception. Its `.raw` file holds the wire
-/// bytes. The suite decodes the file and encodes the frames again with
-/// `eventstream::frame_raw`, and `zero_arg_events_are_the_capture_frames`
-/// compares the payload bytes.
+/// bytes. The script encodes [`ZERO_ARG_EVENTS`] with
+/// `eventstream::frame_raw`. The guard test
+/// `zero_arg_events_are_the_capture_frames` decodes the file and compares the
+/// payload bytes.
 mod bedrock {
     use super::*;
 
@@ -276,9 +277,11 @@ mod bedrock {
     /// The scripted response for one scenario, or `None` for a scenario this
     /// subject declines or has no capture for (an uncaptured scenario).
     ///
-    /// Each script is the same Converse stream cut at a different point, so the
-    /// scenarios differ only in what the client gets to observe — which is
-    /// exactly the distinction the suite is checking.
+    /// Each hand-authored script is the same Converse stream cut at a
+    /// different point, so those scenarios differ only in what the client gets
+    /// to observe — which is exactly the distinction the suite is checking.
+    /// `ZeroArgToolCallCleanStop` is the exception. It is a different,
+    /// captured stream.
     ///
     /// Returning an `Option` rather than panicking on the declined or uncaptured
     /// scenarios is what lets [`Bedrock::encodes_stop_reason`] call this for *every*
@@ -765,7 +768,9 @@ mod bedrock {
     /// `https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-haiku-5-5/converse-stream`
     /// with `curl --aws-sigv4`. The model is the inference profile
     /// `eu.anthropic.claude-haiku-5-5`. The capture ran on 2026-11-24 at
-    /// 20:39:45 UTC. The file is `fixtures/bedrock/zero_arg_tool_call.raw`. It
+    /// 20:39:45 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/bedrock/zero_arg_tool_call.request.json`.
+    /// The file is `fixtures/bedrock/zero_arg_tool_call.raw`. It
     /// is 1250 bytes. Its SHA-256 is
     /// `9196618e83783e261b5a3997d81a8cb343ff58bb1c560bff611a53c0d6a98b04`.
     /// Finding: the tool call has one `toolUse.input` delta with the empty
@@ -1467,7 +1472,8 @@ mod openai_chat {
 ///
 /// Every envelope shape below is transcribed from a fixture committed in
 /// `crates/paigasus-helikon-providers-litellm/tests/fixtures/`, cited on the
-/// helper that builds it:
+/// helper that builds it. The one exception is the last bullet. It names a
+/// capture that this test crate owns:
 ///
 /// - `text_then_trailing_usage.txt` — CAPTURED with named reconstructed
 ///   parts, from LiteLLM 1.97.0 with a keyless `mock_response` (SMA-451,
@@ -1495,6 +1501,10 @@ mod openai_chat {
 /// - `truncated_no_finish.txt` — HAND-AUTHORED (SMA-451, PR #199). Grounds
 ///   the shape "content delta(s), then the body simply ends" with no
 ///   `finish_reason` chunk anywhere. No capture of this case is recorded.
+/// - `tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.raw`
+///   — CAPTURED (LiteLLM 1.98.0 proxy, 2026-11-24). `ZeroArgToolCallCleanStop`
+///   sends all six `data:` values byte for byte ([`ZERO_ARG_CHUNKS`]). The
+///   request and the proxy config sit next to it.
 ///
 /// `unknown_finish_reason.txt` (HAND-AUTHORED) was read but contributes no
 /// shape this module needs: this subject serves only `Stop` and `ToolCalls`
@@ -2110,8 +2120,11 @@ mod litellm {
     /// `ghcr.io/berriai/litellm@sha256:3a1980074ff2ac13883e0ffee1bebec345d8addd004be251079cee173b0e8305`
     /// at `/v1/chat/completions`. The wire `model` is the proxy alias
     /// `zero-arg-anthropic`. The upstream model is `anthropic/claude-haiku-5-5`.
-    /// The capture ran on 2026-11-24 at 20:59:06 UTC. The request and the
-    /// proxy config are in `fixtures/litellm/`. The file is 1739 bytes. Its
+    /// The capture ran on 2026-11-24 at 20:59:06 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.request.json`.
+    /// The proxy config is
+    /// `tests/provider-stream-conformance/fixtures/litellm/zero_arg_tool_call.litellm_config.yaml`.
+    /// The file is 1739 bytes. Its
     /// SHA-256 is
     /// `b81bc790cdcf6a93e1ef6e8391a353a344d95549ef08a412ee0f7c1f241552c7`.
     /// Finding: the proxy streams the arguments as the deltas `""`, `""` and
@@ -2149,10 +2162,14 @@ mod litellm {
 ///
 /// Every envelope shape below is transcribed from a fixture committed in
 /// `crates/paigasus-helikon-providers-anthropic/tests/fixtures/`, cited on the
-/// helper or script arm that builds it. Each fixture header states its label.
+/// helper or script arm that builds it. The last bullet is the one exception.
+/// It names a capture that this test crate owns. Each fixture header states
+/// its label.
 /// The CAPTURED fixtures that this module copies from are the three SMA-840
-/// captures: `thinking_text_tool_use.txt`, `empty_thinking_tool_use.txt` and
-/// `redacted_thinking_tool_use.txt`. All the others are HAND-AUTHORED. The
+/// captures (`thinking_text_tool_use.txt`, `empty_thinking_tool_use.txt` and
+/// `redacted_thinking_tool_use.txt`) and the SMA-860 capture
+/// `fixtures/anthropic/zero_arg_tool_call.raw` in this test crate. All the
+/// others are HAND-AUTHORED. The
 /// `input_json_delta` values ([`CAPTURED_ARGS`]) come from all three
 /// captures. The thinking helpers come from `thinking_text_tool_use.txt`. The
 /// `message_start`, `message_delta` and `tool_use_start` helpers copy
@@ -2233,6 +2250,10 @@ mod litellm {
 ///   `redacted_thinking_tool_use.txt` lines 95-105). Grounds
 ///   [`CAPTURED_ARGS`] together with `thinking_text_tool_use.txt`. No other
 ///   shape in this module comes from these two files.
+/// - `tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw`
+///   — CAPTURED (`claude-haiku-5-5`, 2026-11-24). `ZeroArgToolCallCleanStop`
+///   sends the whole file byte for byte ([`ZERO_ARG_EVENTS`] lists its seven
+///   events). The request sits next to it.
 ///
 /// `body_cut_inside_message_stop.txt` (HAND-AUTHORED, SMA-531, PR #200) and
 /// `thinking_then_text.txt` (HAND-AUTHORED, SMA-317, PR #33) were read
@@ -3299,8 +3320,9 @@ mod anthropic {
     /// Provenance: CAPTURED from the Anthropic Messages API at
     /// `https://api.anthropic.com/v1/messages` with the header
     /// `anthropic-version: 2023-06-01`. The model is `claude-haiku-5-5`. The
-    /// capture ran on 2026-11-24 at 20:38:59 UTC. The file is
-    /// `fixtures/anthropic/zero_arg_tool_call.raw`. It is 1364 bytes. Its
+    /// capture ran on 2026-11-24 at 20:38:59 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.request.json`.
+    /// The file is `fixtures/anthropic/zero_arg_tool_call.raw`. It is 1364 bytes. Its
     /// SHA-256 is
     /// `b6114d956d7d80a6b315fcd2f6866fff8c776e9ebbed846c8ab7ccf9093dd86e`.
     /// Finding: the wire sends one `input_json_delta` with `partial_json: ""`.
@@ -3446,7 +3468,7 @@ mod anthropic {
 /// capture above contradicts that shape directly: its first chunk carries
 /// `usageMetadata` despite having no `finishReason` at all.
 /// `parallel_signed.sse` shows the same: each of its four chunks carries
-/// `usageMetadata`. In both recorded captures, usage is on every chunk, not
+/// `usageMetadata`. So do both chunks of `zero_arg_tool_call.raw`. In all three recorded captures, usage is on every chunk, not
 /// only the terminal one. `multi_chunk_usage_emits_usage_per_chunk`'s first
 /// chunk (already cited above) has the same shape, but it is HAND-AUTHORED
 /// and is not evidence of wire behaviour. [`text_delta`] now sets
@@ -3589,8 +3611,9 @@ mod gemini {
     /// The whole capture file, to check the script against.
     const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/gemini/zero_arg_tool_call.raw");
 
-    /// One SSE frame: `data: {payload}\n\n`. Both recorded Gemini captures
-    /// (the module doc's "Live capture" and `parallel_signed.sse`) have bare
+    /// One SSE frame: `data: {payload}\n\n`. All three recorded Gemini captures
+    /// (the module doc's "Live capture", `parallel_signed.sse` and
+    /// `zero_arg_tool_call.raw`) have bare
     /// `data:` frames with no `event:` line, and so does every inline body
     /// cited above.
     fn frame(payload: serde_json::Value) -> Vec<u8> {
@@ -3671,7 +3694,7 @@ mod gemini {
 
     /// `id`, the whole function `name`, the whole argument JSON, and
     /// `thoughtSignature`, all in one `functionCall` part, plus
-    /// `usageMetadata`. In both recorded captures each `functionCall` part
+    /// `usageMetadata`. In all three recorded captures each `functionCall` part
     /// arrives whole in one chunk, and the translator reads it from one part
     /// (see the module doc's "why `FragmentedToolName` is declined" section).
     ///
@@ -4005,7 +4028,7 @@ mod gemini {
                 }
                 // `"STOP"` maps to `FinishReason::ToolCalls` once
                 // `saw_function_call` is set, which `tool_call_chunk` sets.
-                // In both recorded captures the finish chunk after a tool
+                // In all three recorded captures the finish chunk after a tool
                 // call carries `"STOP"`, not a tool-specific value. The
                 // translator derives `ToolCalls` purely from having seen a
                 // `functionCall` part earlier in the stream, not from a
@@ -4163,7 +4186,9 @@ mod gemini {
     /// Provenance: CAPTURED from the Gemini Developer API at
     /// `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse`.
     /// The model is `gemini-3.8-flash`. The capture ran on 2026-11-24 at
-    /// 21:14:44 UTC. The file is `fixtures/gemini/zero_arg_tool_call.raw`. It
+    /// 21:14:44 UTC. The request is
+    /// `tests/provider-stream-conformance/fixtures/gemini/zero_arg_tool_call.request.json`.
+    /// The file is `fixtures/gemini/zero_arg_tool_call.raw`. It
     /// is 1383 bytes. Its SHA-256 is
     /// `45271e2e2c96d08f183bec5251811498fee18b74c3cbfc92f9a2fc7c35542624`.
     /// Findings: the wire uses CRLF line endings. The call has `"args": {}`,
