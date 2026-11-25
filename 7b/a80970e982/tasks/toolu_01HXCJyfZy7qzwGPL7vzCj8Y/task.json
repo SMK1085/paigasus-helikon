@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HXCJyfZy7qzwGPL7vzCj8Y",
+  "agent_id": "a66e84ad49c56f28e",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement Task 5: bedrock block-stop emit",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 91763,
+    "cache_read_tokens": 581849,
+    "output_tokens": 7877,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-25T21:56:01.24608+01:00",
+  "completed_at": "2026-11-25T21:57:02.39203+01:00"
+}
