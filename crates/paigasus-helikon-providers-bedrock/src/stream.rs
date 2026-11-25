@@ -149,7 +149,7 @@ impl StreamTranslator {
                     if let ModelEvent::ToolCallDelta { call_id, .. } = &event {
                         tracing::debug!(
                             target: "paigasus::bedrock::stream",
-                            idx,
+                            index = idx,
                             %call_id,
                             "toolUse block closed with no input delta; emitting its name",
                         );
@@ -166,7 +166,8 @@ impl StreamTranslator {
                         let call_id = tu.tool_use_id().to_owned();
                         let name = tu.name().to_owned();
 
-                        if self.synthesizing && name == SYNTHESIZED_TOOL_NAME {
+                        let synthesized = self.synthesizing && name == SYNTHESIZED_TOOL_NAME;
+                        if synthesized {
                             if self.native && self.synthesized_block_index.is_none() {
                                 tracing::warn!(
                                     target: "paigasus::bedrock::stream",
@@ -193,7 +194,6 @@ impl StreamTranslator {
                             // (SMA-863). Nothing is emitted at the start, so
                             // the call_id→state map stays consistent.
                         }
-                        let synthesized = self.synthesizing && name == SYNTHESIZED_TOOL_NAME;
                         self.blocks.insert(
                             idx,
                             BlockState::ToolUse {
@@ -326,6 +326,10 @@ impl StreamTranslator {
     /// Returns an empty `Vec` if the stream already emitted its terminal event
     /// through the normal `Metadata`→`Finish` path.
     ///
+    /// It can also return safety-net `ToolCallDelta`s, ahead of the terminal
+    /// event, that name a tool block left open when the stream ended. It
+    /// returns an empty `Vec` after a refused tool call.
+    ///
     /// **Call this only on the EOF path, not on the cancellation path.**
     /// Cancellation must end the stream without emitting `Finish`.
     pub(crate) fn finish(&mut self) -> Vec<Result<ModelEvent, ModelError>> {
@@ -439,7 +443,7 @@ impl StreamTranslator {
                     if let ModelEvent::ToolCallDelta { call_id, .. } = &delta {
                         tracing::warn!(
                             target: "paigasus::bedrock::stream",
-                            idx,
+                            index = idx,
                             %call_id,
                             "terminal tool_use with an unclosed block that sent no name; emitting its name",
                         );
@@ -1097,7 +1101,7 @@ mod tests {
             "expected Finish(Stop), got {terminal:?}"
         );
 
-        // A second call must return None (idempotent drain).
+        // A second call must return empty (idempotent drain).
         assert!(
             t.finish().is_empty(),
             "finish() must return empty after the pending reason was drained"
@@ -1105,9 +1109,9 @@ mod tests {
     }
 
     /// When the normal `Metadata`→`Finish` path has already fired,
-    /// `finish()` must return `None` (nothing left to flush).
+    /// `finish()` must return empty (nothing left to flush).
     #[test]
-    fn finish_returns_none_after_normal_metadata_path() {
+    fn finish_returns_empty_after_normal_metadata_path() {
         let mut t = StreamTranslator::new(false);
         t.consume(message_stop(StopReason::EndTurn));
         // Metadata arrives — translator drains pending_stop_reason internally.
@@ -1115,7 +1119,7 @@ mod tests {
         // out should contain Usage + Finish.
         assert_eq!(out.len(), 2);
 
-        // finish() must now return None — nothing is pending.
+        // finish() must now return empty — nothing is pending.
         assert!(
             t.finish().is_empty(),
             "finish() must return empty when Metadata already drained the pending reason"

@@ -389,6 +389,9 @@ impl MessageTranslator {
     /// A second `message_delta` can re-arm the buffer after `message_stop`
     /// already emitted, and that must not produce a second terminal event.
     ///
+    /// It can also return safety-net `ToolCallDelta`s, ahead of the terminal
+    /// event, that name a tool block left open when the stream ended.
+    ///
     /// **Clean-EOF path only.** Never call this on the cancellation or
     /// transport-error paths — see `model.rs`.
     pub(crate) fn finish(&mut self) -> Vec<Result<ModelEvent, ModelError>> {
@@ -889,7 +892,7 @@ mod tests {
 
     /// Truncation before any stop reason: never reported as a clean `Stop`.
     #[test]
-    fn finish_is_none_when_no_stop_reason_observed() {
+    fn finish_is_empty_when_no_stop_reason_observed() {
         let mut t = MessageTranslator::new(false);
         let _ = t.consume(message_start(10, None)).unwrap();
         let _ = t.consume(AnthropicEvent::ContentBlockStart {
@@ -905,7 +908,7 @@ mod tests {
     /// The well-formed path: `message_stop` already emitted, so the EOF flush
     /// is a no-op — and stays one on a repeated call.
     #[test]
-    fn finish_is_none_after_message_stop_drained_it() {
+    fn finish_is_empty_after_message_stop_drained_it() {
         let mut t = MessageTranslator::new(false);
         let _ = t.consume(message_start(10, None)).unwrap();
         let _ = t
@@ -1284,6 +1287,8 @@ mod tests {
         );
     }
 
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from a thinking
+    /// block followed by a tool block with no input delta.
     #[test]
     fn tool_use_without_input_json_delta_gets_a_position() {
         let mut t = MessageTranslator::new(false);
@@ -1380,9 +1385,9 @@ mod tests {
         ));
     }
 
-    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
+    /// Transcribed by hand from the captured stream in
     /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
-    /// (SMA-860) with the one empty input delta removed.
+    /// (SMA-860), including its one empty input delta.
     #[test]
     fn captured_empty_delta_still_gives_one_name() {
         let mut t = MessageTranslator::new(false);
@@ -1404,7 +1409,8 @@ mod tests {
 
     /// HAND-AUTHORED: no capture shows this wire shape. Derived from
     /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
-    /// (SMA-860) with the one empty input delta removed.
+    /// (SMA-860) with the one empty input delta removed and the stop reason
+    /// changed to `max_tokens`.
     #[test]
     fn block_stop_with_max_tokens_gives_named_call_then_length() {
         let mut t = MessageTranslator::new(false);
@@ -1456,9 +1462,8 @@ mod tests {
         ));
     }
 
-    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
-    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
-    /// (SMA-860) with the one empty input delta removed.
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with a non-empty `input` object in the block start.
     #[test]
     fn start_input_with_keys_is_sent_as_args() {
         let mut t = MessageTranslator::new(false);
@@ -1477,9 +1482,9 @@ mod tests {
         assert_eq!(deltas[0].2, r#"{"q":"x"}"#);
     }
 
-    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
-    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
-    /// (SMA-860) with the one empty input delta removed.
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with a non-empty `input` object in the block start and
+    /// an input delta after it.
     #[test]
     fn start_input_is_ignored_when_deltas_follow() {
         let mut t = MessageTranslator::new(false);
@@ -1500,9 +1505,9 @@ mod tests {
         assert_eq!(deltas.iter().filter(|d| d.1.is_some()).count(), 1);
     }
 
-    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
-    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
-    /// (SMA-860) with the one empty input delta removed.
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with two tool blocks, one with an input delta and one
+    /// without.
     #[test]
     fn parallel_calls_one_without_delta() {
         let mut t = MessageTranslator::new(false);
@@ -1529,9 +1534,8 @@ mod tests {
         );
     }
 
-    /// HAND-AUTHORED: no capture shows this wire shape. Derived from
-    /// tests/provider-stream-conformance/fixtures/anthropic/zero_arg_tool_call.raw
-    /// (SMA-860) with the one empty input delta removed.
+    /// HAND-AUTHORED: no capture shows this wire shape. Built from the
+    /// zero-delta stream with a `null` or string `input` in the block start.
     #[test]
     fn non_object_start_input_gives_blank_args() {
         for input in [serde_json::json!(null), serde_json::json!("x")] {
