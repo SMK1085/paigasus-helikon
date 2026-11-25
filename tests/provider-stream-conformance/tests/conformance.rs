@@ -369,12 +369,10 @@ mod bedrock {
             )))
             .build();
 
-        paigasus_helikon_providers_bedrock::BedrockModel::converse(
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
-        )
-        .sdk_config(&sdk_config)
-        .build()
-        .expect("bedrock model should build from a static SdkConfig")
+        paigasus_helikon_providers_bedrock::BedrockModel::converse("anthropic.claude-sonnet-4-6")
+            .sdk_config(&sdk_config)
+            .build()
+            .expect("bedrock model should build from a static SdkConfig")
     }
 
     /// See the module-level docs on this file for the fixture provenance rules
@@ -2037,9 +2035,10 @@ mod anthropic {
     use super::*;
     use paigasus_helikon_providers_anthropic::AnthropicModel;
 
-    /// The model id `build_model_against` requests. Matches the constructor
-    /// example in the task brief (`AnthropicModel::messages("claude-3-5-sonnet-latest")`).
-    const MODEL_ID: &str = "claude-3-5-sonnet-latest";
+    /// Uses a current id from `KNOWN_MODELS`. The suite reads neither the
+    /// model capabilities nor the request body, so this id only has to be
+    /// one the crate accepts.
+    const MODEL_ID: &str = "claude-sonnet-4-6";
 
     /// The tool name that `tool_use_then_continuation.txt` declares. The
     /// other tool fixtures use other names: `a` and `b` in
