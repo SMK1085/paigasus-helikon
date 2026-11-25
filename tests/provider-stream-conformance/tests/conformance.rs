@@ -37,7 +37,7 @@
 //! decodes the payload as a JSON object.
 
 use paigasus_helikon_core::{
-    CancellationToken, ContentPart, FinishReason, Item, Model, ModelRequest, ToolDef,
+    CancellationToken, ContentPart, FinishReason, Item, Model, ModelRequest, ToolChoice, ToolDef,
 };
 use paigasus_helikon_provider_stream_conformance::{
     assert_conforms, eventstream::frame, Channel, Ending, ExpectedCall, Outcome, PacedServer,
@@ -928,6 +928,32 @@ mod openai_chat {
         }))
     }
 
+    /// The five `data:` values of `fixtures/openai_chat/zero_arg_tool_call.raw`,
+    /// byte for byte, in file order. The last is `[DONE]`. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance.
+    const ZERO_ARG_CHUNKS: [&str; 5] = [
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_XHHS5dpxrpSbtNSmMIlKra2i","type":"function","function":{"name":"get_current_time","arguments":""}}],"refusal":null},"finish_reason":null}],"usage":null,"obfuscation":"ljR0UWZNjpG"}"##,
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}],"usage":null,"obfuscation":"e4rivpQ9NuI"}"##,
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":null,"obfuscation":"2HaYtdPdrxy"}"##,
+        r##"{"id":"chatcmpl-EnraJW4db12yTP2Ifkbz1kycatHzr","object":"chat.completion.chunk","created":1795552759,"model":"gpt-5-mini-2025-08-07","service_tier":"default","system_fingerprint":null,"choices":[],"usage":{"prompt_tokens":128,"completion_tokens":148,"total_tokens":276,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":128,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}},"obfuscation":"T"}"##,
+        r##"[DONE]"##,
+    ];
+
+    /// The one call of [`ZERO_ARG_CHUNKS`]: the tool name and the literal `{}`
+    /// that the API streams as its arguments.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/openai_chat/zero_arg_tool_call.raw");
+
+    /// One captured SSE frame: `data: {payload}\n\n`.
+    fn captured_frame(payload: &str) -> Vec<u8> {
+        format!("data: {payload}\n\n").into_bytes()
+    }
+
     /// The scripted response for one scenario.
     ///
     /// Returns `None` for `ThinkingToolCallCleanStop`, which this subject
@@ -1034,8 +1060,22 @@ mod openai_chat {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/openai_chat/zero_arg_tool_call.raw`, CAPTURED against
+            // the real OpenAI Chat Completions API (`gpt-5-mini`, wire model
+            // `gpt-5-mini-2025-08-07`, 2026-11-24 20:39:21 UTC) with one
+            // zero-argument tool and a forced `tool_choice` (request:
+            // `fixtures/openai_chat/zero_arg_tool_call.request.json`). The API
+            // streams the arguments as `""` and then as the literal `{}`.
+            // Five frames: the tool-call start, the `{}` delta, the finish
+            // chunk, the usage chunk and `[DONE]`.
+            //
+            // Edits made here: none to any payload. The script sends the five
+            // `data:` values byte for byte ([`ZERO_ARG_CHUNKS`]). Each one
+            // becomes one `data:` frame that ends with a blank line.
+            Scenario::ZeroArgToolCallCleanStop => {
+                let chunks = ZERO_ARG_CHUNKS.iter().map(|p| captured_frame(p)).collect();
+                (chunks, None, Ending::Clean)
+            }
         };
 
         Some(Script {
@@ -1071,6 +1111,17 @@ mod openai_chat {
                     "required": ["city"]
                 }),
             )];
+        }
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
         }
         req
     }
@@ -1121,7 +1172,9 @@ mod openai_chat {
                 Scenario::CleanStop | Scenario::TruncatedAfterStopReason => {
                     Some(FinishReason::Stop)
                 }
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely, and so — per the module doc's
                 // "FragmentedToolName deliberately never completes" section —
@@ -1135,8 +1188,7 @@ mod openai_chat {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -1146,9 +1198,12 @@ mod openai_chat {
             None
         }
 
-        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
-            // This subject serves no scenario that declares calls.
-            &[]
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                _ => &[],
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -1163,11 +1218,6 @@ mod openai_chat {
             // fixture of them is hand-authored, not captured (SMA-859).
             if scenario == Scenario::ParallelToolCallCleanStop {
                 return Outcome::Uncaptured("no captured parallel tool-call stream");
-            }
-            // A zero-argument tool call can occur on this wire, but no capture of
-            // one exists (SMA-860).
-            if scenario == Scenario::ZeroArgToolCallCleanStop {
-                return Outcome::Uncaptured("no captured zero-argument tool-call stream");
             }
 
             let script =
@@ -1214,6 +1264,7 @@ mod openai_chat {
                 tool_call_name_fragment("weather"),
             ),
             ("tool_call args", tool_call_args("{\"city\":\"Berlin\"}")),
+            ("zero-arg tool chunk", captured_frame(ZERO_ARG_CHUNKS[1])),
         ] {
             assert!(
                 !contains(&frame, FINISH_REASON_MARKER),
@@ -1223,6 +1274,25 @@ mod openai_chat {
                  value."
             );
         }
+    }
+
+    /// The script is the capture, byte for byte.
+    ///
+    /// Provenance: CAPTURED against `https://api.openai.com/v1/chat/completions`
+    /// with `gpt-5-mini` (wire model `gpt-5-mini-2025-08-07`) on 2026-11-24
+    /// at 20:39:21 UTC. The request is
+    /// `fixtures/openai_chat/zero_arg_tool_call.request.json`. The file is
+    /// 1618 bytes. Its SHA-256 is
+    /// `5c5e74ac372aa0f954e89801c0addb62592a1ae02ad3c36b427b4d24f56d8cf2`.
+    /// Finding: the API streams the arguments as the delta `""` and then as
+    /// the delta `"{}"`.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_script_is_the_capture_byte_for_byte() {
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(script.chunks.len(), 5);
+        assert_eq!(script.chunks.concat(), ZERO_ARG_RAW);
     }
 
     #[tokio::test]

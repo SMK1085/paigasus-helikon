@@ -1361,7 +1361,7 @@ mod tests {
             let (declines, uncaptured): (Pinned, Pinned) = match name {
                 "openai/chat" => (
                     &[THINKING_DECLINE, CHAT_REASONING_DECLINE],
-                    &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+                    &[PARALLEL_UNCAPTURED],
                 ),
                 "anthropic" => (
                     &[(
@@ -1823,11 +1823,7 @@ mod tests {
     #[should_panic(expected = "is pinned as uncaptured")]
     async fn a_pinned_uncaptured_pair_that_stopped_happening_fails() {
         let subject = Subject {
-            pinned_uncaptured: &[
-                (Scenario::CleanStop, "no capture yet"),
-                PARALLEL_UNCAPTURED,
-                ZERO_ARG_UNCAPTURED,
-            ],
+            pinned_uncaptured: &[(Scenario::CleanStop, "no capture yet"), PARALLEL_UNCAPTURED],
             ..Subject::conforming("openai/chat")
         };
         conforms_with_pinned(&subject).await;
@@ -1858,7 +1854,6 @@ mod tests {
                     "the scenario serves an anthropic thinking block",
                 ),
                 PARALLEL_UNCAPTURED,
-                ZERO_ARG_UNCAPTURED,
             ],
             ..Subject::conforming("openai/chat")
         };
