@@ -99,8 +99,8 @@ request `model` field (`translate/mod.rs:98`).
      `global.anthropic.claude-sonnet-5-5`.
 2. The Bedrock README and the book Bedrock section get two sentences, one idea
    each: "The example uses a cross-region inference profile id (`global.`).
-   Current Claude models on Bedrock need an inference profile id in place of a
-   bare `anthropic.` id." Then a third sentence: "Claude 3.x models are not
+   In `us-east-1`, current Claude models on Bedrock need an inference profile id
+   in place of a bare `anthropic.` id." Then a third sentence: "Claude 3.x models are not
    supported." The Anthropic README and the book Anthropic section get the
    same support sentence, and one sentence that an id with no `KNOWN_MODELS`
    row reports the conservative capability set, which `.with_capabilities()`

@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The example uses a cross-region inference profile id (`global.`). Current Claude models on Bedrock need an inference profile id in place of a bare `anthropic.` id. Claude 3.x models are not supported.
+The example uses a cross-region inference profile id (`global.`). In `us-east-1`, current Claude models on Bedrock need an inference profile id in place of a bare `anthropic.` id. Claude 3.x models are not supported.
 
 For explicit client construction (useful in tests or when you already have an `aws_config::SdkConfig`):
 

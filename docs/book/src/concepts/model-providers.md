@@ -173,7 +173,7 @@ use paigasus_helikon::bedrock::BedrockModel;
 let model = BedrockModel::from_env("global.anthropic.claude-sonnet-5-5").await?;
 ```
 
-The example uses a cross-region inference profile id (`global.`). Current Claude models on Bedrock need an inference profile id in place of a bare `anthropic.` id. Claude 3.x models are not supported.
+The example uses a cross-region inference profile id (`global.`). In `us-east-1`, current Claude models on Bedrock need an inference profile id in place of a bare `anthropic.` id. Claude 3.x models are not supported.
 
 `from_env` is `async` because it may fetch IMDS or SSO tokens. The credential
 chain is **lazy** — auth failures surface at `invoke()` time, not here.
