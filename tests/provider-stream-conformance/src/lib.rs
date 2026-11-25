@@ -1323,13 +1323,6 @@ mod tests {
         "no captured parallel tool-call stream",
     );
 
-    /// The pinned uncaptured pair every mock subject has for the zero-argument
-    /// scenario.
-    const ZERO_ARG_UNCAPTURED: (Scenario, &str) = (
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-    );
-
     /// The declines `bedrock` has in the pinned table.
     const BEDROCK_DECLINES: &[(Scenario, &str)] = &[
         (
@@ -1347,7 +1340,6 @@ mod tests {
     const BEDROCK_UNCAPTURED: &[(Scenario, &str)] = &[
         (Scenario::ReasoningCleanStop, "no captured reasoning stream"),
         PARALLEL_UNCAPTURED,
-        ZERO_ARG_UNCAPTURED,
     ];
 
     /// The pinned (scenario, reason) pairs of one subject in one table.
@@ -2255,7 +2247,7 @@ mod tests {
                 THINKING_DECLINE,
                 (Scenario::ReasoningCleanStop, "no captured reasoning stream"),
             ],
-            uncaptured: &[PARALLEL_UNCAPTURED, ZERO_ARG_UNCAPTURED],
+            uncaptured: &[PARALLEL_UNCAPTURED],
             ..Subject::conforming("bedrock")
         };
         let joined = tokio::spawn(async move { assert_conforms(&subject).await }).await;

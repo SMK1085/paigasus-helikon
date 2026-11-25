@@ -160,14 +160,6 @@ pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
         "no captured parallel tool-call stream",
         "SMA-859",
     ),
-    // A zero-argument tool call can occur for each of these subjects, but
-    // only `openai/responses` has a capture of one.
-    (
-        "bedrock",
-        Scenario::ZeroArgToolCallCleanStop,
-        "no captured zero-argument tool-call stream",
-        "SMA-860",
-    ),
 ];
 
 /// The scenarios that [`UNCAPTURED`] may name. Moving an older scenario into

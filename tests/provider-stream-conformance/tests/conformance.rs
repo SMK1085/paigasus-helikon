@@ -40,8 +40,9 @@ use paigasus_helikon_core::{
     CancellationToken, ContentPart, FinishReason, Item, Model, ModelRequest, ToolChoice, ToolDef,
 };
 use paigasus_helikon_provider_stream_conformance::{
-    assert_conforms, eventstream::frame, Channel, Ending, ExpectedCall, Outcome, PacedServer,
-    Scenario, Script, StreamUnderTest,
+    assert_conforms,
+    eventstream::{decode_frames, frame, frame_raw},
+    Channel, Ending, ExpectedCall, Outcome, PacedServer, Scenario, Script, StreamUnderTest,
 };
 use serde_json::json;
 
@@ -50,13 +51,18 @@ use serde_json::json;
 ///
 /// # Fixture provenance
 ///
-/// Label: HAND-AUTHORED, from the vendored `aws-sdk-bedrockruntime` types and
-/// the translator's match arms. No helper here is a capture.
+/// Label: the `ZeroArgToolCallCleanStop` scenario is CAPTURED. Every other
+/// scenario is still HAND-AUTHORED, from the vendored `aws-sdk-bedrockruntime`
+/// types and the translator's match arms. One captured stream now exists, for
+/// the zero-argument scenario only. It is
+/// `fixtures/bedrock/zero_arg_tool_call.raw` (see [`ZERO_ARG_EVENTS`]). No
+/// helper function below is a capture.
 ///
-/// Bedrock is the one subject in this suite whose wire format is binary, and
-/// the repo holds no captured Bedrock traffic to transcribe. So — as the task
-/// brief directs when no capture exists — every event shape here is derived
-/// from two sources inside the workspace, and from nothing else:
+/// Bedrock is the one subject in this suite whose wire format is binary. The
+/// repo holds no captured Bedrock traffic for the other scenarios. So — as the
+/// task brief directs when no capture exists — every event shape of those
+/// scenarios is derived from two sources inside the workspace, and from
+/// nothing else:
 ///
 /// 1. **The translator's own match arms**, `providers-bedrock/src/stream.rs`.
 ///    Which `ConverseStreamOutput` variants matter, and what each one must
@@ -77,10 +83,12 @@ use serde_json::json;
 /// and not as a bad fixture.
 ///
 /// The two sources give the keys and the event names. They do not give the
-/// event order or the values. No capture records the order of the events in a
-/// Bedrock stream. The numeric values in `metadata()` are arbitrary.
+/// event order or the values. The one capture records the order of the events
+/// for a zero-argument tool call: `metadata` comes after `messageStop`. No
+/// capture records the order for the other scenarios. The numeric values in
+/// `metadata()` are arbitrary.
 ///
-/// # Why there are no `.bin` fixture files
+/// # Why the hand-authored scripts have no `.bin` fixture files
 ///
 /// A `vnd.amazon.eventstream` frame is a length-prefixed header block wrapped
 /// in two CRC-32s, so a checked-in `.bin` would be neither reviewable nor
@@ -88,6 +96,10 @@ use serde_json::json;
 /// anything. `eventstream::frame` exists precisely to avoid that: it encodes
 /// each fixture with the same encoder the SDK itself uses, so the frame bytes
 /// come from the SDK's own encoder while the fixture stays readable as JSON.
+/// The captured stream is the one exception. Its `.raw` file holds the wire
+/// bytes. The suite decodes the file and encodes the frames again with
+/// `eventstream::frame_raw`, and `zero_arg_events_are_the_capture_frames`
+/// compares the payload bytes.
 mod bedrock {
     use super::*;
 
@@ -113,7 +125,8 @@ mod bedrock {
     ///
     /// The translator ignores it (`ConverseStreamOutput::MessageStart(_) => {}`);
     /// it is here because the script models a Converse stream that opens with
-    /// `messageStart`. No capture records that a real stream sends it first.
+    /// `messageStart`. The zero-argument capture confirms that a real stream
+    /// sends it first.
     /// Key: `role` (`shape_message_start_event.rs`), value from
     /// `ConversationRole` (`_conversation_role.rs`: `"assistant"`).
     fn message_start() -> Vec<u8> {
@@ -168,8 +181,8 @@ mod bedrock {
 
     /// `contentBlockStop`, which closes a content block. Ignored by the
     /// translator (`ConverseStreamOutput::ContentBlockStop(_) => {}`), included
-    /// so that the script closes each block it opens. No capture records that
-    /// a real stream closes every block. Key: `contentBlockIndex`
+    /// so that the script closes each block it opens. The zero-argument
+    /// capture confirms that a real stream closes its block. Key: `contentBlockIndex`
     /// (`shape_content_block_stop_event.rs`).
     fn content_block_stop() -> Vec<u8> {
         frame("contentBlockStop", &json!({ "contentBlockIndex": 0 }))
@@ -187,9 +200,9 @@ mod bedrock {
 
     /// `metadata`, the only event carrying usage. The scripts send it **after**
     /// `messageStop`. The translator buffers the stop reason instead of
-    /// emitting `Finish` on the spot so that it can handle this order. No
-    /// capture records that a real Bedrock stream sends `metadata` after
-    /// `messageStop`.
+    /// emitting `Finish` on the spot so that it can handle this order. The
+    /// zero-argument capture records that a real Bedrock stream sends
+    /// `metadata` after `messageStop`.
     ///
     /// **This ordering is not self-enforced by the translator.**
     /// `assert_message_stop_before_metadata` enforces it for every script.
@@ -215,6 +228,47 @@ mod bedrock {
             }),
         )
     }
+
+    /// The six events of `fixtures/bedrock/zero_arg_tool_call.raw`, as
+    /// (`:event-type`, payload) pairs, byte for byte, in file order. See the
+    /// `ZeroArgToolCallCleanStop` arm of [`script`] for the provenance. Each
+    /// payload keeps its `"p"` padding field.
+    const ZERO_ARG_EVENTS: [(&str, &str); 6] = [
+        (
+            "messageStart",
+            r##"{"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY","role":"assistant"}"##,
+        ),
+        (
+            "contentBlockStart",
+            r##"{"contentBlockIndex":0,"p":"abcde","start":{"toolUse":{"name":"get_current_time","toolUseId":"tooluse_kiuoEhT6WJIVsi1t2fq6PV","type":"tool_use"}}}"##,
+        ),
+        (
+            "contentBlockDelta",
+            r##"{"contentBlockIndex":0,"delta":{"toolUse":{"input":""}},"p":"abcdefghijklmnopqrstuvwxyzABCDEFGH"}"##,
+        ),
+        (
+            "contentBlockStop",
+            r##"{"contentBlockIndex":0,"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123"}"##,
+        ),
+        (
+            "messageStop",
+            r##"{"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ","stopReason":"tool_use"}"##,
+        ),
+        (
+            "metadata",
+            r##"{"metrics":{"latencyMs":493},"p":"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX","usage":{"inputTokens":485,"outputTokens":11,"serverToolUsage":{},"totalTokens":496}}"##,
+        ),
+    ];
+
+    /// The one call of [`ZERO_ARG_EVENTS`]: the tool name and empty arguments.
+    /// The wire sends one `toolUse.input` delta with the empty string.
+    const ZERO_ARG_CALLS: &[ExpectedCall] = &[ExpectedCall {
+        name: "get_current_time",
+        args: "{}",
+    }];
+
+    /// The whole capture file, to check the script against.
+    const ZERO_ARG_RAW: &[u8] = include_bytes!("../fixtures/bedrock/zero_arg_tool_call.raw");
 
     /// The scripted response for one scenario, or `None` for a scenario this
     /// subject declines or has no capture for (an uncaptured scenario).
@@ -291,8 +345,29 @@ mod bedrock {
             Scenario::ReasoningCleanStop => return None,
             // Not served — see the reason in `stream`.
             Scenario::ParallelToolCallCleanStop => return None,
-            // Not served — see the reason in `stream`.
-            Scenario::ZeroArgToolCallCleanStop => return None,
+            // `fixtures/bedrock/zero_arg_tool_call.raw`, CAPTURED from the
+            // Bedrock Runtime `converse-stream` endpoint (inference profile
+            // `eu.anthropic.claude-haiku-5-5`, `eu-central-1`) on 2026-11-24
+            // at 20:39:45 UTC, with one zero-argument tool and a forced
+            // `tool_choice`. The stream has six events: `messageStart`,
+            // `contentBlockStart`, one `contentBlockDelta` with
+            // `toolUse.input` set to the empty string, `contentBlockStop`,
+            // `messageStop` and `metadata`. `metadata` comes after
+            // `messageStop`, so this capture records that order.
+            //
+            // Edits made here: the suite encodes the prelude, the header block
+            // and the CRCs again. The header order is `:message-type`,
+            // `:event-type`, `:content-type`. The capture has `:event-type`,
+            // `:content-type`, `:message-type`. The payload bytes are
+            // unchanged ([`ZERO_ARG_EVENTS`]).
+            Scenario::ZeroArgToolCallCleanStop => (
+                ZERO_ARG_EVENTS
+                    .iter()
+                    .map(|(event, payload)| frame_raw(event, payload.as_bytes()))
+                    .collect(),
+                None,
+                Ending::Clean,
+            ),
         };
 
         Some(Script {
@@ -317,6 +392,17 @@ mod bedrock {
                 text: "What is the weather in Berlin?".into(),
             }],
         }];
+        if scenario == Scenario::ZeroArgToolCallCleanStop {
+            // The tool and the forced choice of the capture.
+            req.tools = vec![ToolDef::new(
+                "get_current_time",
+                "Return the current server time. Takes no arguments.",
+                json!({ "type": "object", "properties": {} }),
+            )];
+            req.model_settings.tool_choice = Some(ToolChoice::Tool {
+                name: "get_current_time".into(),
+            });
+        }
         // `ToolCallCleanStop` only: `FragmentedToolName` is the subject's other
         // tool scenario, but it is declined and so never reaches this function.
         if matches!(scenario, Scenario::ToolCallCleanStop) {
@@ -440,7 +526,10 @@ mod bedrock {
                 // `"tool_use"` maps to `StopReason::ToolUse` and then to
                 // `FinishReason::ToolCalls`, since this request is not a
                 // structured-output synthesis.
-                Scenario::ToolCallCleanStop => Some(FinishReason::ToolCalls),
+                // The zero-argument capture's `messageStop` carries `"tool_use"`.
+                Scenario::ToolCallCleanStop | Scenario::ZeroArgToolCallCleanStop => {
+                    Some(FinishReason::ToolCalls)
+                }
                 // Truncated, errored and cancelled streams must withhold
                 // `Finish` entirely.
                 Scenario::TruncatedMidGeneration
@@ -452,8 +541,7 @@ mod bedrock {
                 | Scenario::FragmentedToolName
                 | Scenario::ThinkingToolCallCleanStop
                 | Scenario::ReasoningCleanStop
-                | Scenario::ParallelToolCallCleanStop
-                | Scenario::ZeroArgToolCallCleanStop => None,
+                | Scenario::ParallelToolCallCleanStop => None,
             }
         }
 
@@ -463,9 +551,13 @@ mod bedrock {
             None
         }
 
-        fn fixture_calls(&self, _scenario: Scenario) -> &'static [ExpectedCall] {
-            // This subject serves no scenario that declares calls.
-            &[]
+        fn fixture_calls(&self, scenario: Scenario) -> &'static [ExpectedCall] {
+            match scenario {
+                // The one call of the zero-argument capture.
+                Scenario::ZeroArgToolCallCleanStop => ZERO_ARG_CALLS,
+                // No other scenario this subject serves declares calls.
+                _ => &[],
+            }
         }
 
         async fn stream(&self, scenario: Scenario, cancel: CancellationToken) -> Outcome {
@@ -498,11 +590,6 @@ mod bedrock {
                 // of them exists (SMA-859).
                 Scenario::ParallelToolCallCleanStop => {
                     return Outcome::Uncaptured("no captured parallel tool-call stream")
-                }
-                // A zero-argument tool call can occur on this wire, but no
-                // capture of one exists (SMA-860).
-                Scenario::ZeroArgToolCallCleanStop => {
-                    return Outcome::Uncaptured("no captured zero-argument tool-call stream")
                 }
                 _ => {}
             }
@@ -603,6 +690,26 @@ mod bedrock {
             ("contentBlockDelta/toolUse", tool_use_delta("{\"city\":")),
             ("contentBlockStop", content_block_stop()),
             ("metadata", metadata()),
+            (
+                "zero-arg messageStart",
+                frame_raw(ZERO_ARG_EVENTS[0].0, ZERO_ARG_EVENTS[0].1.as_bytes()),
+            ),
+            (
+                "zero-arg contentBlockStart",
+                frame_raw(ZERO_ARG_EVENTS[1].0, ZERO_ARG_EVENTS[1].1.as_bytes()),
+            ),
+            (
+                "zero-arg contentBlockDelta",
+                frame_raw(ZERO_ARG_EVENTS[2].0, ZERO_ARG_EVENTS[2].1.as_bytes()),
+            ),
+            (
+                "zero-arg contentBlockStop",
+                frame_raw(ZERO_ARG_EVENTS[3].0, ZERO_ARG_EVENTS[3].1.as_bytes()),
+            ),
+            (
+                "zero-arg metadata",
+                frame_raw(ZERO_ARG_EVENTS[5].0, ZERO_ARG_EVENTS[5].1.as_bytes()),
+            ),
         ] {
             assert!(
                 !contains(&frame, marker),
@@ -646,6 +753,37 @@ mod bedrock {
             checked.contains(&Scenario::ToolCallCleanStop),
             "{checked:?}"
         );
+    }
+
+    /// The script is the capture: the same events, with the same payload
+    /// bytes.
+    ///
+    /// Provenance: CAPTURED from the Bedrock Runtime endpoint
+    /// `https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-haiku-5-5/converse-stream`
+    /// with `curl --aws-sigv4`. The model is the inference profile
+    /// `eu.anthropic.claude-haiku-5-5`. The capture ran on 2026-11-24 at
+    /// 20:39:45 UTC. The file is `fixtures/bedrock/zero_arg_tool_call.raw`. It
+    /// is 1250 bytes. Its SHA-256 is
+    /// `9196618e83783e261b5a3997d81a8cb343ff58bb1c560bff611a53c0d6a98b04`.
+    /// Finding: the tool call has one `toolUse.input` delta with the empty
+    /// string `""`.
+    ///
+    /// The suite encodes the frames again, so the test compares the decoded
+    /// events (type and payload bytes) and not the raw bytes.
+    ///
+    /// Removed: nothing. Added: nothing. Changed: nothing.
+    #[test]
+    fn zero_arg_events_are_the_capture_frames() {
+        let captured = decode_frames(ZERO_ARG_RAW);
+        let copied: Vec<(String, Vec<u8>)> = ZERO_ARG_EVENTS
+            .iter()
+            .map(|(e, p)| ((*e).to_owned(), p.as_bytes().to_vec()))
+            .collect();
+        assert_eq!(captured.len(), 6);
+        assert_eq!(copied, captured);
+
+        let script = script(Scenario::ZeroArgToolCallCleanStop).expect("served");
+        assert_eq!(decode_frames(&script.chunks.concat()), captured);
     }
 
     #[tokio::test]
