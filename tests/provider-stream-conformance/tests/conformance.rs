@@ -810,8 +810,9 @@ mod bedrock {
 ///
 /// Every envelope shape below is transcribed from a committed fixture in this
 /// workspace, cited on the helper that builds it. Each source is either a
-/// capture through a LiteLLM proxy or a hand-authored file. No capture of
-/// `api.openai.com` Chat Completions is recorded in the repo.
+/// capture through a LiteLLM proxy, a hand-authored file, or the recorded
+/// `api.openai.com` Chat Completions stream for the zero-argument call
+/// (SMA-860, `fixtures/openai_chat/zero_arg_tool_call.raw`).
 ///
 /// - `crates/paigasus-helikon-providers-openai/tests/fixtures/chat_text_usage_trailing.txt`
 ///   — CAPTURED with named reconstructed parts, through a LiteLLM proxy with
@@ -820,8 +821,9 @@ mod bedrock {
 /// - `crates/paigasus-helikon-providers-openai/tests/chat_wire.rs`'s
 ///   `happy_path_text_completion` fixture body — HAND-AUTHORED. It is the
 ///   source of the explicit `"finish_reason":null` that [`text_delta`] sends
-///   on each content delta. No recorded capture sends that key on a content
-///   delta: the LiteLLM captures omit it. The null is exactly the shape
+///   on each content delta. The recorded `api.openai.com` capture
+///   (SMA-860) also sends that key on its content-bearing chunks. The
+///   LiteLLM captures omit it. The null is exactly the shape
 ///   [`OpenAiChat::encodes_stop_reason`]'s marker must not match.
 /// - `crates/paigasus-helikon-providers-openai/tests/fixtures/chat_parallel_tool_calls.txt`
 ///   — HAND-AUTHORED (SMA-316, PR #30). The tool-call envelope: `id`/`name`
@@ -935,9 +937,10 @@ mod openai_chat {
     /// `choices[].delta.content`) matches the content-delta chunks in
     /// `chat_text_usage_trailing.txt`. The explicit `"finish_reason":null`
     /// comes from `tests/chat_wire.rs`'s `happy_path_text_completion` body,
-    /// which is HAND-AUTHORED. No recorded capture sends this key on a
-    /// content delta: `chat_text_usage_trailing.txt` and the LiteLLM captures
-    /// omit it. The null stays on purpose. It is the frame
+    /// which is HAND-AUTHORED. The recorded `api.openai.com` capture
+    /// (SMA-860) also sends this key on its content-bearing chunks.
+    /// `chat_text_usage_trailing.txt` and the LiteLLM captures omit it.
+    /// The null stays on purpose. It is the frame
     /// `scan_finds_only_a_populated_finish_reason` uses to prove the marker
     /// does not fire on a null value.
     ///

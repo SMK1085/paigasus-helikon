@@ -168,7 +168,6 @@ pub const UNCAPTURED: &[(&str, Scenario, &str, &str)] = &[
 const UNCAPTURED_SCENARIOS: &[Scenario] = &[
     Scenario::ReasoningCleanStop,
     Scenario::ParallelToolCallCleanStop,
-    Scenario::ZeroArgToolCallCleanStop,
 ];
 
 /// The subject names registered in `tests/conformance.rs` — one `mod` per

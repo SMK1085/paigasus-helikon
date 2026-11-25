@@ -64,7 +64,7 @@ pub enum Scenario {
     ReasoningCleanStop,
     /// Two or more complete tool calls, then a tool-use stop reason.
     ParallelToolCallCleanStop,
-    /// One complete tool call with no arguments (a `{}` delta), then a
+    /// One complete tool call with empty arguments (blank or `{}`), then a
     /// tool-use stop reason.
     ZeroArgToolCallCleanStop,
 }
